@@ -1,5 +1,6 @@
 """Main application window."""
 
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -152,6 +153,18 @@ class MainWindow(QMainWindow):
     """Main application window with drag-drop, detection, and preview."""
 
     VIDEO_EXTENSIONS = {".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v"}
+
+    @staticmethod
+    def _sanitize_filename(name: str) -> str:
+        """Sanitize a filename to prevent path traversal and invalid characters."""
+        # Remove path separators and other dangerous/invalid characters
+        sanitized = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name)
+        # Strip leading/trailing dots and spaces
+        sanitized = sanitized.strip(". ")
+        # Limit length
+        if len(sanitized) > 100:
+            sanitized = sanitized[:100]
+        return sanitized or "video"
 
     def __init__(self):
         super().__init__()
@@ -505,7 +518,7 @@ class MainWindow(QMainWindow):
         processor = FFmpegProcessor()
 
         output_path = Path(output_dir)
-        source_name = self.current_source.file_path.stem
+        source_name = self._sanitize_filename(self.current_source.file_path.stem)
         fps = self.current_source.fps
 
         self.progress_bar.setVisible(True)
@@ -547,7 +560,7 @@ class MainWindow(QMainWindow):
         # Get output file path
         default_name = "sequence_export.mp4"
         if self.current_source:
-            default_name = f"{self.current_source.file_path.stem}_remix.mp4"
+            default_name = f"{self._sanitize_filename(self.current_source.file_path.stem)}_remix.mp4"
 
         file_path, _ = QFileDialog.getSaveFileName(
             self,

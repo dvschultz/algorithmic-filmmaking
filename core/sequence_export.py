@@ -155,8 +155,12 @@ class SequenceExporter:
         # Create concat list file
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
             for path in segment_paths:
-                # Escape single quotes in path
-                escaped_path = str(path).replace("'", "'\\''")
+                # Validate path doesn't contain newlines (would break concat format)
+                path_str = str(path.resolve())
+                if "\n" in path_str or "\r" in path_str:
+                    raise ValueError(f"Invalid path with newline characters: {path}")
+                # Escape backslashes and single quotes for FFmpeg concat format
+                escaped_path = path_str.replace("\\", "\\\\").replace("'", "'\\''")
                 f.write(f"file '{escaped_path}'\n")
             concat_file = f.name
 
