@@ -1,0 +1,206 @@
+"""Clip browser with thumbnail grid view."""
+
+from pathlib import Path
+from typing import Optional
+
+from PySide6.QtWidgets import (
+    QWidget,
+    QVBoxLayout,
+    QScrollArea,
+    QGridLayout,
+    QLabel,
+    QFrame,
+)
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QPixmap
+
+from models.clip import Clip, Source
+
+
+class ClipThumbnail(QFrame):
+    """Individual clip thumbnail widget."""
+
+    clicked = Signal(object)  # Clip
+    double_clicked = Signal(object)  # Clip
+
+    def __init__(self, clip: Clip, source: Source):
+        super().__init__()
+        self.clip = clip
+        self.source = source
+        self.selected = False
+
+        self.setFrameStyle(QFrame.Panel | QFrame.Raised)
+        self.setLineWidth(2)
+        self.setFixedSize(180, 130)
+        self.setCursor(Qt.PointingHandCursor)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(2)
+
+        # Thumbnail image
+        self.thumbnail_label = QLabel()
+        self.thumbnail_label.setFixedSize(160, 90)
+        self.thumbnail_label.setAlignment(Qt.AlignCenter)
+        self.thumbnail_label.setStyleSheet("background-color: #333;")
+
+        if clip.thumbnail_path and clip.thumbnail_path.exists():
+            self._load_thumbnail(clip.thumbnail_path)
+        else:
+            self.thumbnail_label.setText("Loading...")
+
+        layout.addWidget(self.thumbnail_label)
+
+        # Duration label
+        duration = clip.duration_seconds(source.fps)
+        self.duration_label = QLabel(self._format_duration(duration))
+        self.duration_label.setAlignment(Qt.AlignCenter)
+        self.duration_label.setStyleSheet("font-size: 11px; color: #666;")
+        layout.addWidget(self.duration_label)
+
+        self._update_style()
+
+    def _load_thumbnail(self, path: Path):
+        """Load thumbnail image."""
+        pixmap = QPixmap(str(path))
+        if not pixmap.isNull():
+            scaled = pixmap.scaled(
+                160, 90,
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation
+            )
+            self.thumbnail_label.setPixmap(scaled)
+
+    def _format_duration(self, seconds: float) -> str:
+        """Format duration as MM:SS.ms"""
+        mins = int(seconds // 60)
+        secs = seconds % 60
+        return f"{mins}:{secs:05.2f}"
+
+    def set_selected(self, selected: bool):
+        """Set selection state."""
+        self.selected = selected
+        self._update_style()
+
+    def _update_style(self):
+        """Update visual style based on state."""
+        if self.selected:
+            self.setStyleSheet("""
+                ClipThumbnail {
+                    background-color: #4a90d9;
+                    border: 2px solid #2d6cb5;
+                }
+            """)
+        else:
+            self.setStyleSheet("""
+                ClipThumbnail {
+                    background-color: #f5f5f5;
+                    border: 1px solid #ddd;
+                }
+                ClipThumbnail:hover {
+                    background-color: #e8e8e8;
+                    border: 1px solid #bbb;
+                }
+            """)
+
+    def mousePressEvent(self, event):
+        self.clicked.emit(self.clip)
+
+    def mouseDoubleClickEvent(self, event):
+        self.double_clicked.emit(self.clip)
+
+
+class ClipBrowser(QWidget):
+    """Grid browser for viewing detected clips."""
+
+    clip_selected = Signal(object)  # Clip
+    clip_double_clicked = Signal(object)  # Clip
+
+    COLUMNS = 4
+
+    def __init__(self):
+        super().__init__()
+        self.thumbnails: list[ClipThumbnail] = []
+        self.selected_clips: set[str] = set()  # clip ids
+
+        self._setup_ui()
+
+    def _setup_ui(self):
+        """Set up the UI."""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        # Header
+        header = QLabel("Detected Scenes")
+        header.setStyleSheet("font-weight: bold; font-size: 14px; padding: 8px;")
+        layout.addWidget(header)
+
+        # Scroll area for thumbnails
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        # Container for grid
+        self.container = QWidget()
+        self.grid = QGridLayout(self.container)
+        self.grid.setSpacing(8)
+        self.grid.setContentsMargins(8, 8, 8, 8)
+
+        scroll.setWidget(self.container)
+        layout.addWidget(scroll)
+
+        # Placeholder for empty state
+        self.empty_label = QLabel("No scenes detected yet.\nDrop a video or click Import.")
+        self.empty_label.setAlignment(Qt.AlignCenter)
+        self.empty_label.setStyleSheet("color: #999; font-size: 12px;")
+        self.grid.addWidget(self.empty_label, 0, 0, 1, self.COLUMNS)
+
+    def add_clip(self, clip: Clip, source: Source):
+        """Add a clip to the browser."""
+        # Remove empty placeholder if present
+        if self.empty_label.isVisible():
+            self.empty_label.setVisible(False)
+
+        # Create thumbnail widget
+        thumb = ClipThumbnail(clip, source)
+        thumb.clicked.connect(self._on_thumbnail_clicked)
+        thumb.double_clicked.connect(self._on_thumbnail_double_clicked)
+
+        self.thumbnails.append(thumb)
+
+        # Add to grid
+        row = (len(self.thumbnails) - 1) // self.COLUMNS
+        col = (len(self.thumbnails) - 1) % self.COLUMNS
+        self.grid.addWidget(thumb, row, col)
+
+    def clear(self):
+        """Clear all clips."""
+        for thumb in self.thumbnails:
+            self.grid.removeWidget(thumb)
+            thumb.deleteLater()
+
+        self.thumbnails = []
+        self.selected_clips = set()
+        self.empty_label.setVisible(True)
+
+    def get_selected_clips(self) -> list[Clip]:
+        """Get list of selected clips."""
+        return [t.clip for t in self.thumbnails if t.clip.id in self.selected_clips]
+
+    def _on_thumbnail_clicked(self, clip: Clip):
+        """Handle thumbnail click."""
+        # Toggle selection
+        if clip.id in self.selected_clips:
+            self.selected_clips.remove(clip.id)
+        else:
+            self.selected_clips.add(clip.id)
+
+        # Update all thumbnail states
+        for thumb in self.thumbnails:
+            thumb.set_selected(thumb.clip.id in self.selected_clips)
+
+        self.clip_selected.emit(clip)
+
+    def _on_thumbnail_double_clicked(self, clip: Clip):
+        """Handle thumbnail double-click."""
+        self.clip_double_clicked.emit(clip)

@@ -1,0 +1,7 @@
+# Algorithmic Filmmaking - Pure Python MVP
+# Core dependencies for scene detection and video processing
+
+PySide6>=6.6
+scenedetect[opencv]>=0.6.4
+opencv-python>=4.8
+numpy>=1.24
