@@ -385,6 +385,7 @@ Add to Analyze tab:
 - [x] Cancellation works correctly
 - [x] Works on CPU without GPU
 - [x] Handles clips with no speech gracefully
+- [x] Shows clear error messages when faster-whisper not installed
 
 ## Future Enhancements (Out of Scope)
 
