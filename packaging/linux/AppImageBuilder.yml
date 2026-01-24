@@ -1,0 +1,70 @@
+version: 1
+
+script:
+  # Install Python dependencies into AppDir
+  - pip install --target="${APPDIR}/usr/lib/python3/site-packages" -r requirements.txt
+
+AppDir:
+  path: ./AppDir
+
+  app_info:
+    id: com.algorithmic-filmmaking.scene-ripper
+    name: Scene Ripper
+    icon: scene-ripper
+    version: !ENV ${VERSION:-0.1.0}
+    exec: usr/bin/python3
+    exec_args: "$APPDIR/usr/src/main.py $@"
+
+  apt:
+    arch: amd64
+    sources:
+      - sourceline: deb http://archive.ubuntu.com/ubuntu jammy main universe
+      - sourceline: deb http://archive.ubuntu.com/ubuntu jammy-updates main universe
+
+    include:
+      # Python runtime
+      - python3
+      - python3-pip
+      - python3-dev
+
+      # OpenGL/EGL for Qt
+      - libgl1
+      - libegl1
+      - libxcb-xinerama0
+
+      # GStreamer for Qt Multimedia
+      - gstreamer1.0-plugins-good
+      - gstreamer1.0-plugins-bad
+      - gstreamer1.0-libav
+      - gstreamer1.0-gl
+
+      # Qt platform plugins
+      - libxkbcommon0
+
+  files:
+    include:
+      - usr/src/
+
+    exclude:
+      - usr/share/doc
+      - usr/share/man
+      - usr/share/info
+
+  runtime:
+    env:
+      PYTHONPATH: "${APPDIR}/usr/lib/python3/site-packages"
+      QT_PLUGIN_PATH: "${APPDIR}/usr/lib/x86_64-linux-gnu/qt6/plugins"
+      GST_PLUGIN_PATH: "${APPDIR}/usr/lib/x86_64-linux-gnu/gstreamer-1.0"
+
+  test:
+    fedora-30:
+      image: fedora:30
+      command: ./AppRun --help
+    ubuntu-22.04:
+      image: ubuntu:22.04
+      command: ./AppRun --help
+
+AppImage:
+  arch: x86_64
+  update-information: guess
+  sign-key: None

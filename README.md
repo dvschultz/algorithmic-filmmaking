@@ -120,10 +120,43 @@ numpy>=1.24
 yt-dlp>=2024.1
 ```
 
-Plus FFmpeg installed via system package manager:
-- macOS: `brew install ffmpeg`
-- Ubuntu: `sudo apt install ffmpeg`
-- Windows: Download from ffmpeg.org
+### System Dependencies
+
+**macOS:**
+```bash
+brew install ffmpeg
+```
+
+**Linux (Ubuntu/Debian):**
+```bash
+# FFmpeg and Qt multimedia backend (GStreamer)
+sudo apt install ffmpeg \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad \
+    gstreamer1.0-plugins-ugly \
+    gstreamer1.0-libav
+```
+
+**Linux (Fedora):**
+```bash
+sudo dnf install ffmpeg \
+    gstreamer1-plugins-good \
+    gstreamer1-plugins-bad-free \
+    gstreamer1-plugins-ugly-free \
+    gstreamer1-libav
+```
+
+**Linux (Arch):**
+```bash
+sudo pacman -S ffmpeg \
+    gst-plugins-good \
+    gst-plugins-bad \
+    gst-plugins-ugly \
+    gst-libav
+```
+
+**Windows:**
+Download FFmpeg from [ffmpeg.org](https://ffmpeg.org/download.html) and add to PATH
 
 ## Roadmap
 

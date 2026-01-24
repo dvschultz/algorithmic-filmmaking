@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Scene Ripper
+GenericName=Video Scene Detector
+Comment=Automatic scene detection and algorithmic video remixing
+Exec=scene-ripper %F
+Icon=scene-ripper
+Terminal=false
+Categories=AudioVideo;Video;
+MimeType=video/mp4;video/x-matroska;video/webm;video/quicktime;video/x-msvideo;video/mpeg;
+Keywords=video;scene;detection;editing;remix;
+StartupNotify=true
