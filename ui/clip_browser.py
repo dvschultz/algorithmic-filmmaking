@@ -18,7 +18,7 @@ from PySide6.QtCore import Qt, Signal, QMimeData, QPoint
 from PySide6.QtGui import QPixmap, QDrag, QPainter, QColor
 
 from models.clip import Clip, Source
-from core.analysis.color import get_primary_hue
+from core.analysis.color import get_primary_hue, classify_color_palette, get_palette_display_name, COLOR_PALETTES
 from core.analysis.shots import get_display_name, SHOT_TYPES
 
 
@@ -242,6 +242,7 @@ class ClipBrowser(QWidget):
         self._drag_enabled = False
         self._source_lookup: dict[str, Source] = {}  # clip_id -> Source
         self._current_filter = "All"  # Current shot type filter
+        self._current_color_filter = "All"  # Current color palette filter
 
         self._setup_ui()
 
@@ -261,7 +262,7 @@ class ClipBrowser(QWidget):
         header_layout.addStretch()
 
         # Shot type filter dropdown
-        filter_label = QLabel("Filter:")
+        filter_label = QLabel("Shot:")
         filter_label.setStyleSheet("font-size: 12px; color: #666;")
         header_layout.addWidget(filter_label)
 
@@ -271,6 +272,20 @@ class ClipBrowser(QWidget):
         self.filter_combo.setFixedWidth(100)
         self.filter_combo.currentTextChanged.connect(self._on_filter_changed)
         header_layout.addWidget(self.filter_combo)
+
+        header_layout.addSpacing(8)
+
+        # Color palette filter dropdown
+        color_label = QLabel("Color:")
+        color_label.setStyleSheet("font-size: 12px; color: #666;")
+        header_layout.addWidget(color_label)
+
+        self.color_filter_combo = QComboBox()
+        color_filter_options = ["All"] + [get_palette_display_name(cp) for cp in COLOR_PALETTES]
+        self.color_filter_combo.addItems(color_filter_options)
+        self.color_filter_combo.setFixedWidth(80)
+        self.color_filter_combo.currentTextChanged.connect(self._on_color_filter_changed)
+        header_layout.addWidget(self.color_filter_combo)
 
         header_layout.addSpacing(16)
 
@@ -391,8 +406,13 @@ class ClipBrowser(QWidget):
                 break
 
     def _on_filter_changed(self, filter_option: str):
-        """Handle filter dropdown change."""
+        """Handle shot type filter dropdown change."""
         self._current_filter = filter_option
+        self._rebuild_grid()
+
+    def _on_color_filter_changed(self, filter_option: str):
+        """Handle color palette filter dropdown change."""
+        self._current_color_filter = filter_option
         self._rebuild_grid()
 
     def _on_sort_changed(self, sort_option: str):
@@ -448,13 +468,22 @@ class ClipBrowser(QWidget):
             thumb.setVisible(True)
 
     def _matches_filter(self, thumb: ClipThumbnail) -> bool:
-        """Check if a thumbnail matches the current filter."""
-        if self._current_filter == "All":
-            return True
+        """Check if a thumbnail matches both the shot type and color filters (AND logic)."""
+        # Check shot type filter
+        if self._current_filter != "All":
+            shot_type = thumb.clip.shot_type
+            if not shot_type:
+                return False
+            if get_display_name(shot_type) != self._current_filter:
+                return False
 
-        shot_type = thumb.clip.shot_type
-        if not shot_type:
-            return False
+        # Check color palette filter
+        if self._current_color_filter != "All":
+            colors = thumb.clip.dominant_colors
+            if not colors:
+                return False
+            palette = classify_color_palette(colors)
+            if get_palette_display_name(palette) != self._current_color_filter:
+                return False
 
-        # Compare display names
-        return get_display_name(shot_type) == self._current_filter
+        return True
