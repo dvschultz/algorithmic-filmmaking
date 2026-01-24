@@ -34,6 +34,7 @@ from core.thumbnail import ThumbnailGenerator
 from core.downloader import VideoDownloader
 from core.sequence_export import SequenceExporter, ExportConfig
 from core.dataset_export import export_dataset, DatasetExportConfig
+from core.edl_export import export_edl, EDLExportConfig
 from core.analysis.color import extract_dominant_colors
 from core.analysis.shots import classify_shot_type
 from core.settings import Settings, load_settings, save_settings
@@ -378,16 +379,26 @@ class MainWindow(QMainWindow):
         # File menu
         file_menu = menu_bar.addMenu("&File")
 
-        # Import action
-        import_action = QAction("&Import Video...", self)
-        import_action.setShortcut(QKeySequence.Open)
-        import_action.triggered.connect(self._on_import_click)
-        file_menu.addAction(import_action)
+        # Import submenu
+        import_menu = file_menu.addMenu("&Import")
 
-        # Import URL action
-        import_url_action = QAction("Import from &URL...", self)
+        import_video_action = QAction("&Video...", self)
+        import_video_action.setShortcut(QKeySequence.Open)
+        import_video_action.triggered.connect(self._on_import_click)
+        import_menu.addAction(import_video_action)
+
+        import_url_action = QAction("From &URL...", self)
         import_url_action.triggered.connect(self._on_import_url_click)
-        file_menu.addAction(import_url_action)
+        import_menu.addAction(import_url_action)
+
+        file_menu.addSeparator()
+
+        # Export EDL action
+        self.export_edl_action = QAction("Export &EDL...", self)
+        self.export_edl_action.setToolTip("Export timeline as Edit Decision List for NLE import")
+        self.export_edl_action.setEnabled(False)
+        self.export_edl_action.triggered.connect(self._on_export_edl_click)
+        file_menu.addAction(self.export_edl_action)
 
         file_menu.addSeparator()
 
@@ -469,6 +480,8 @@ class MainWindow(QMainWindow):
         self.sequence_tab.export_requested.connect(self._on_sequence_export_click)
         # Update Render tab when sequence changes (clips added/removed/generated)
         self.sequence_tab.timeline.sequence_changed.connect(self._update_render_tab_sequence_info)
+        # Update EDL export menu item when sequence changes
+        self.sequence_tab.timeline.sequence_changed.connect(self._on_sequence_changed)
 
         # Render tab signals
         self.render_tab.export_sequence_requested.connect(self._on_sequence_export_click)
@@ -819,6 +832,13 @@ class MainWindow(QMainWindow):
         # Don't seek during playback - playhead is driven by video position
         if not self._is_playing:
             self.sequence_tab.video_player.seek_to(time_seconds)
+
+    def _on_sequence_changed(self):
+        """Handle sequence modification."""
+        # Update Export EDL menu item state
+        sequence = self.sequence_tab.timeline.get_sequence()
+        has_clips = sequence.duration_frames > 0
+        self.export_edl_action.setEnabled(has_clips)
 
     # --- Playback methods ---
 
@@ -1182,6 +1202,67 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(False)
         self.sequence_tab.timeline.export_btn.setEnabled(True)
         QMessageBox.critical(self, "Export Error", f"Failed to export sequence: {error}")
+
+    def _on_export_edl_click(self):
+        """Export the timeline sequence as an EDL file."""
+        sequence = self.sequence_tab.timeline.get_sequence()
+        all_clips = sequence.get_all_clips()
+
+        if not all_clips:
+            QMessageBox.information(
+                self, "Export EDL", "No clips in timeline to export"
+            )
+            return
+
+        # Get output file path
+        default_name = "sequence.edl"
+        if self.current_source:
+            default_name = f"{self._sanitize_filename(self.current_source.file_path.stem)}_timeline.edl"
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export EDL",
+            str(Path.home() / default_name),
+            "Edit Decision List (*.edl);;All Files (*)",
+        )
+        if not file_path:
+            return
+
+        output_path = Path(file_path)
+        if not output_path.suffix.lower() == ".edl":
+            output_path = output_path.with_suffix(".edl")
+
+        # Build sources dictionary
+        sources = {}
+        if self.current_source:
+            sources[self.current_source.id] = self.current_source
+
+        # Build clips dictionary
+        clips = {}
+        for clip in self.clips:
+            if self.current_source:
+                clips[clip.id] = (clip, self.current_source)
+
+        config = EDLExportConfig(
+            output_path=output_path,
+            title=sequence.name or "Scene Ripper Export",
+        )
+
+        # EDL export is fast, no need for worker thread
+        success = export_edl(
+            sequence=sequence,
+            sources=sources,
+            clips=clips,
+            config=config,
+            progress_callback=lambda p, m: self.status_bar.showMessage(m),
+        )
+
+        if success:
+            self.status_bar.showMessage(f"EDL exported to {output_path.name}")
+            # Open containing folder
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(output_path.parent)))
+        else:
+            QMessageBox.warning(self, "Export EDL", "Failed to export EDL file")
 
     def closeEvent(self, event):
         """Clean up workers and timers before closing."""
