@@ -2,8 +2,11 @@
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 import uuid
+
+if TYPE_CHECKING:
+    from core.transcription import TranscriptSegment
 
 
 @dataclass
@@ -37,6 +40,7 @@ class Clip:
     thumbnail_path: Optional[Path] = None
     dominant_colors: Optional[list[tuple[int, int, int]]] = None  # RGB tuples
     shot_type: Optional[str] = None  # e.g., "wide", "medium", "close-up"
+    transcript: Optional[list["TranscriptSegment"]] = None  # Speech transcription segments
 
     @property
     def duration_frames(self) -> int:
@@ -53,3 +57,9 @@ class Clip:
     def duration_seconds(self, fps: float) -> float:
         """Get duration in seconds."""
         return self.duration_frames / fps
+
+    def get_transcript_text(self) -> str:
+        """Get full transcript text from all segments."""
+        if not self.transcript:
+            return ""
+        return " ".join(seg.text for seg in self.transcript)

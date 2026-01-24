@@ -89,6 +89,11 @@ class Settings:
     export_resolution: str = "original"  # original, 1080p, 720p, 480p
     export_fps: str = "original"  # original, 24, 30, 60
 
+    # Transcription settings
+    transcription_model: str = "small.en"  # tiny.en, small.en, medium.en, large-v3
+    transcription_language: str = "en"  # en, auto, or specific language code
+    auto_transcribe: bool = True  # Auto-transcribe on detection
+
     def get_quality_preset(self) -> dict:
         """Get FFmpeg parameters for current quality setting."""
         return QUALITY_PRESETS.get(self.export_quality, QUALITY_PRESETS["medium"])
@@ -158,6 +163,16 @@ def load_settings() -> Settings:
         if qsettings.contains("export/fps"):
             settings.export_fps = qsettings.value("export/fps")
 
+        # Load transcription settings
+        if qsettings.contains("transcription/model"):
+            settings.transcription_model = qsettings.value("transcription/model")
+        if qsettings.contains("transcription/language"):
+            settings.transcription_language = qsettings.value("transcription/language")
+        if qsettings.contains("transcription/auto_transcribe"):
+            settings.auto_transcribe = (
+                qsettings.value("transcription/auto_transcribe") == "true"
+            )
+
         logger.info("Settings loaded successfully")
 
     except Exception as e:
@@ -203,6 +218,14 @@ def save_settings(settings: Settings) -> bool:
         qsettings.setValue("export/quality", settings.export_quality)
         qsettings.setValue("export/resolution", settings.export_resolution)
         qsettings.setValue("export/fps", settings.export_fps)
+
+        # Save transcription settings
+        qsettings.setValue("transcription/model", settings.transcription_model)
+        qsettings.setValue("transcription/language", settings.transcription_language)
+        qsettings.setValue(
+            "transcription/auto_transcribe",
+            "true" if settings.auto_transcribe else "false",
+        )
 
         qsettings.sync()
         logger.info("Settings saved successfully")

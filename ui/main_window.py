@@ -247,6 +247,53 @@ class ShotTypeWorker(QThread):
         logger.info("ShotTypeWorker.run() COMPLETED")
 
 
+class TranscriptionWorker(QThread):
+    """Background worker for transcribing clips using faster-whisper."""
+
+    progress = Signal(int, int)  # current, total
+    transcript_ready = Signal(str, list)  # clip_id, segments (list of TranscriptSegment)
+    finished = Signal()
+
+    def __init__(self, clips: list[Clip], source: Source, model_name: str = "small.en", language: str = "en"):
+        super().__init__()
+        self.clips = clips
+        self.source = source
+        self.model_name = model_name
+        self.language = language
+        self._cancelled = False
+        logger.debug("TranscriptionWorker created")
+
+    def cancel(self):
+        """Request cancellation of the transcription."""
+        logger.info("TranscriptionWorker.cancel() called")
+        self._cancelled = True
+
+    def run(self):
+        logger.info("TranscriptionWorker.run() STARTING")
+        from core.transcription import transcribe_clip
+
+        total = len(self.clips)
+        for i, clip in enumerate(self.clips):
+            if self._cancelled:
+                logger.info("TranscriptionWorker cancelled")
+                break
+            try:
+                segments = transcribe_clip(
+                    self.source.file_path,
+                    clip.start_time(self.source.fps),
+                    clip.end_time(self.source.fps),
+                    self.model_name,
+                    self.language,
+                )
+                self.transcript_ready.emit(clip.id, segments)
+            except Exception as e:
+                logger.warning(f"Transcription failed for {clip.id}: {e}")
+            self.progress.emit(i + 1, total)
+        logger.info("TranscriptionWorker.run() emitting finished signal")
+        self.finished.emit()
+        logger.info("TranscriptionWorker.run() COMPLETED")
+
+
 class MainWindow(QMainWindow):
     """Main application window with drag-drop, detection, and preview."""
 
@@ -290,12 +337,14 @@ class MainWindow(QMainWindow):
         self.export_worker: Optional[SequenceExportWorker] = None
         self.color_worker: Optional[ColorAnalysisWorker] = None
         self.shot_type_worker: Optional[ShotTypeWorker] = None
+        self.transcription_worker: Optional[TranscriptionWorker] = None
 
         # Guards to prevent duplicate signal handling
         self._detection_finished_handled = False
         self._thumbnails_finished_handled = False
         self._color_analysis_finished_handled = False
         self._shot_type_finished_handled = False
+        self._transcription_finished_handled = False
 
         logger.info("Setting up UI...")
         self._setup_ui()
@@ -437,6 +486,7 @@ class MainWindow(QMainWindow):
             self.export_worker,
             self.color_worker,
             self.shot_type_worker,
+            self.transcription_worker,
         ]
         return any(w and w.isRunning() for w in workers)
 
@@ -472,6 +522,7 @@ class MainWindow(QMainWindow):
 
         # Analyze tab signals
         self.analyze_tab.detect_requested.connect(self._on_detect_from_tab)
+        self.analyze_tab.transcribe_requested.connect(self._on_transcribe_from_tab)
         self.analyze_tab.clip_dragged_to_timeline.connect(self._on_clip_dragged_to_timeline)
 
         # Sequence tab signals
@@ -512,6 +563,49 @@ class MainWindow(QMainWindow):
             return
         # Start detection with the provided threshold
         self._start_detection(threshold)
+
+    def _on_transcribe_from_tab(self):
+        """Handle manual transcription request from Analyze tab."""
+        if not self.current_source or not self.clips:
+            return
+
+        # Reset transcription guard
+        self._transcription_finished_handled = False
+
+        # Update UI state
+        self.analyze_tab.set_transcribing(True)
+
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 100)
+        self.status_bar.showMessage(f"Transcribing speech for {len(self.clips)} scenes...")
+
+        logger.info("Creating TranscriptionWorker (manual)...")
+        self.transcription_worker = TranscriptionWorker(
+            self.clips,
+            self.current_source,
+            self.settings.transcription_model,
+            self.settings.transcription_language,
+        )
+        self.transcription_worker.progress.connect(self._on_transcription_progress)
+        self.transcription_worker.transcript_ready.connect(self._on_transcript_ready)
+        self.transcription_worker.finished.connect(self._on_manual_transcription_finished, Qt.UniqueConnection)
+        logger.info("Starting TranscriptionWorker (manual)...")
+        self.transcription_worker.start()
+
+    @Slot()
+    def _on_manual_transcription_finished(self):
+        """Handle manual transcription completion."""
+        logger.info("=== MANUAL TRANSCRIPTION FINISHED ===")
+
+        # Guard against duplicate calls
+        if self._transcription_finished_handled:
+            logger.warning("_on_manual_transcription_finished already handled, ignoring duplicate call")
+            return
+        self._transcription_finished_handled = True
+
+        self.progress_bar.setVisible(False)
+        self.analyze_tab.set_transcribing(False)
+        self.status_bar.showMessage(f"Transcription complete - {len(self.clips)} clips")
 
     # Drag and drop handlers
     def dragEnterEvent(self, event: QDragEnterEvent):
@@ -619,6 +713,7 @@ class MainWindow(QMainWindow):
         self._thumbnails_finished_handled = False
         self._color_analysis_finished_handled = False
         self._shot_type_finished_handled = False
+        self._transcription_finished_handled = False
 
         # Update Analyze tab state
         self.analyze_tab.set_detecting(True)
@@ -742,9 +837,11 @@ class MainWindow(QMainWindow):
                 self.shot_type_worker.finished.connect(self._on_shot_type_finished, Qt.UniqueConnection)
                 self.shot_type_worker.start()
             else:
-                self.progress_bar.setVisible(False)
-                self.status_bar.showMessage(f"Ready - {len(self.clips)} scenes detected")
+                # Skip shot type too, mark as handled and maybe start transcription
+                self._shot_type_finished_handled = True
+                self._maybe_start_transcription()
         else:
+            # No clips - nothing to do
             self.progress_bar.setVisible(False)
             self.status_bar.showMessage(f"Ready - {len(self.clips)} scenes detected")
 
@@ -786,8 +883,9 @@ class MainWindow(QMainWindow):
             self.shot_type_worker.start()
             logger.info("ShotTypeWorker started")
         else:
-            self.progress_bar.setVisible(False)
-            self.status_bar.showMessage(f"Ready - {len(self.clips)} scenes detected")
+            # Skip shot type, mark as handled and maybe start transcription
+            self._shot_type_finished_handled = True
+            self._maybe_start_transcription()
 
     def _on_shot_type_progress(self, current: int, total: int):
         """Handle shot type classification progress."""
@@ -815,6 +913,57 @@ class MainWindow(QMainWindow):
         self._shot_type_finished_handled = True
 
         logger.info(f"Shot type worker running: {self.shot_type_worker.isRunning() if self.shot_type_worker else 'None'}")
+
+        # Start transcription (if enabled in settings)
+        self._maybe_start_transcription()
+
+    def _maybe_start_transcription(self):
+        """Start transcription if auto_transcribe is enabled."""
+        if self.clips and self.current_source and self.settings.auto_transcribe:
+            self.status_bar.showMessage(f"Transcribing speech for {len(self.clips)} scenes...")
+            logger.info("Creating TranscriptionWorker...")
+            self.transcription_worker = TranscriptionWorker(
+                self.clips,
+                self.current_source,
+                self.settings.transcription_model,
+                self.settings.transcription_language,
+            )
+            self.transcription_worker.progress.connect(self._on_transcription_progress)
+            self.transcription_worker.transcript_ready.connect(self._on_transcript_ready)
+            self.transcription_worker.finished.connect(self._on_transcription_finished, Qt.UniqueConnection)
+            logger.info("Starting TranscriptionWorker...")
+            self.transcription_worker.start()
+            logger.info("TranscriptionWorker started")
+        else:
+            self.progress_bar.setVisible(False)
+            self.status_bar.showMessage(f"Ready - {len(self.clips)} scenes detected")
+
+    def _on_transcription_progress(self, current: int, total: int):
+        """Handle transcription progress."""
+        self.progress_bar.setValue(int((current / total) * 100))
+
+    def _on_transcript_ready(self, clip_id: str, segments: list):
+        """Handle transcript ready for a clip."""
+        # Update the clip model
+        clip = self.clips_by_id.get(clip_id)
+        if clip:
+            clip.transcript = segments
+            # Update Analyze tab clip browser
+            self.analyze_tab.update_clip_transcript(clip_id, segments)
+            logger.debug(f"Clip {clip_id}: transcribed {len(segments)} segments")
+
+    @Slot()
+    def _on_transcription_finished(self):
+        """Handle all transcription completed."""
+        logger.info("=== TRANSCRIPTION FINISHED ===")
+
+        # Guard against duplicate calls
+        if self._transcription_finished_handled:
+            logger.warning("_on_transcription_finished already handled, ignoring duplicate call")
+            return
+        self._transcription_finished_handled = True
+
+        logger.info(f"Transcription worker running: {self.transcription_worker.isRunning() if self.transcription_worker else 'None'}")
         self.progress_bar.setVisible(False)
         self.status_bar.showMessage(f"Ready - {len(self.clips)} scenes detected")
 
@@ -1271,6 +1420,7 @@ class MainWindow(QMainWindow):
             ("export", self.export_worker),
             ("color", self.color_worker),
             ("shot_type", self.shot_type_worker),
+            ("transcription", self.transcription_worker),
         ]
 
         for name, worker in workers:

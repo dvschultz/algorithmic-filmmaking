@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QApplication,
     QComboBox,
+    QLineEdit,
 )
 from PySide6.QtCore import Qt, Signal, QMimeData, QPoint
 from PySide6.QtGui import QPixmap, QDrag, QPainter, QColor
@@ -85,8 +86,15 @@ class ClipThumbnail(QFrame):
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(2)
 
+        # Thumbnail container (for overlay positioning)
+        self.thumb_container = QWidget()
+        self.thumb_container.setFixedSize(160, 90)
+        thumb_layout = QVBoxLayout(self.thumb_container)
+        thumb_layout.setContentsMargins(0, 0, 0, 0)
+        thumb_layout.setSpacing(0)
+
         # Thumbnail image
-        self.thumbnail_label = QLabel()
+        self.thumbnail_label = QLabel(self.thumb_container)
         self.thumbnail_label.setFixedSize(160, 90)
         self.thumbnail_label.setAlignment(Qt.AlignCenter)
         self.thumbnail_label.setStyleSheet("background-color: #333;")
@@ -96,7 +104,23 @@ class ClipThumbnail(QFrame):
         else:
             self.thumbnail_label.setText("Loading...")
 
-        layout.addWidget(self.thumbnail_label)
+        # Transcript overlay (positioned on top of thumbnail)
+        self.transcript_overlay = QLabel(self.thumb_container)
+        self.transcript_overlay.setFixedSize(160, 90)
+        self.transcript_overlay.setAlignment(Qt.AlignCenter)
+        self.transcript_overlay.setWordWrap(True)
+        self.transcript_overlay.setStyleSheet(
+            "background-color: rgba(0, 0, 0, 0.85); "
+            "color: white; "
+            "font-size: 10px; "
+            "padding: 6px; "
+            "border-radius: 0px;"
+        )
+        self.transcript_overlay.setGeometry(0, 0, 160, 90)
+        self.transcript_overlay.setVisible(False)
+        self._update_transcript_overlay()
+
+        layout.addWidget(self.thumb_container)
 
         # Color swatch bar
         self.color_bar = ColorSwatchBar()
@@ -225,6 +249,35 @@ class ClipThumbnail(QFrame):
         self.shot_type_label.setText(get_display_name(shot_type))
         self.shot_type_label.setVisible(True)
 
+    def set_transcript(self, segments: list):
+        """Set the transcript segments for this clip."""
+        self.clip.transcript = segments
+        self._update_transcript_overlay()
+
+    def _update_transcript_overlay(self):
+        """Update the transcript overlay text."""
+        if self.clip.transcript:
+            # Get first ~100 chars of transcript
+            full_text = self.clip.get_transcript_text()
+            if len(full_text) > 100:
+                display_text = full_text[:100] + "..."
+            else:
+                display_text = full_text
+            self.transcript_overlay.setText(f'"{display_text}"')
+        else:
+            self.transcript_overlay.setText("")
+
+    def enterEvent(self, event):
+        """Show transcript overlay on hover if transcript exists."""
+        if self.clip.transcript and self.clip.get_transcript_text():
+            self.transcript_overlay.setVisible(True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        """Hide transcript overlay when not hovering."""
+        self.transcript_overlay.setVisible(False)
+        super().leaveEvent(event)
+
 
 class ClipBrowser(QWidget):
     """Grid browser for viewing detected clips."""
@@ -243,6 +296,7 @@ class ClipBrowser(QWidget):
         self._source_lookup: dict[str, Source] = {}  # clip_id -> Source
         self._current_filter = "All"  # Current shot type filter
         self._current_color_filter = "All"  # Current color palette filter
+        self._current_search_query = ""  # Current transcript search query
 
         self._setup_ui()
 
@@ -286,6 +340,20 @@ class ClipBrowser(QWidget):
         self.color_filter_combo.setFixedWidth(80)
         self.color_filter_combo.currentTextChanged.connect(self._on_color_filter_changed)
         header_layout.addWidget(self.color_filter_combo)
+
+        header_layout.addSpacing(8)
+
+        # Transcript search input
+        search_label = QLabel("Search:")
+        search_label.setStyleSheet("font-size: 12px; color: #666;")
+        header_layout.addWidget(search_label)
+
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Search transcripts...")
+        self.search_input.setFixedWidth(120)
+        self.search_input.setToolTip("Filter clips by transcript content")
+        self.search_input.textChanged.connect(self._on_search_changed)
+        header_layout.addWidget(self.search_input)
 
         header_layout.addSpacing(16)
 
@@ -405,6 +473,13 @@ class ClipBrowser(QWidget):
                 thumb.set_shot_type(shot_type)
                 break
 
+    def update_clip_transcript(self, clip_id: str, segments: list):
+        """Update the transcript for a specific clip thumbnail."""
+        for thumb in self.thumbnails:
+            if thumb.clip.id == clip_id:
+                thumb.set_transcript(segments)
+                break
+
     def _on_filter_changed(self, filter_option: str):
         """Handle shot type filter dropdown change."""
         self._current_filter = filter_option
@@ -413,6 +488,11 @@ class ClipBrowser(QWidget):
     def _on_color_filter_changed(self, filter_option: str):
         """Handle color palette filter dropdown change."""
         self._current_color_filter = filter_option
+        self._rebuild_grid()
+
+    def _on_search_changed(self, search_text: str):
+        """Handle transcript search input change."""
+        self._current_search_query = search_text.lower().strip()
         self._rebuild_grid()
 
     def _on_sort_changed(self, sort_option: str):
@@ -468,7 +548,7 @@ class ClipBrowser(QWidget):
             thumb.setVisible(True)
 
     def _matches_filter(self, thumb: ClipThumbnail) -> bool:
-        """Check if a thumbnail matches both the shot type and color filters (AND logic)."""
+        """Check if a thumbnail matches all filters (AND logic)."""
         # Check shot type filter
         if self._current_filter != "All":
             shot_type = thumb.clip.shot_type
@@ -484,6 +564,12 @@ class ClipBrowser(QWidget):
                 return False
             palette = classify_color_palette(colors)
             if get_palette_display_name(palette) != self._current_color_filter:
+                return False
+
+        # Check transcript search
+        if self._current_search_query:
+            transcript_text = thumb.clip.get_transcript_text().lower()
+            if self._current_search_query not in transcript_text:
                 return False
 
         return True
