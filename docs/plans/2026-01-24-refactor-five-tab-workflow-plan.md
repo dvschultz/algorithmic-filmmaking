@@ -167,12 +167,12 @@ class BaseTab(QWidget):
 **Goal**: Move import functionality to dedicated tab
 
 **Deliverables**:
-- [ ] Create `CollectTab` with import buttons and drop zone
-- [ ] Move "Import Video" button from toolbar
-- [ ] Move "Import URL" button and dialog from toolbar
-- [ ] Add drag-drop visual feedback
-- [ ] Show "No videos imported" empty state
-- [ ] After import, auto-switch to Analyze tab
+- [x] Create `CollectTab` with import buttons and drop zone
+- [x] Move "Import Video" button from toolbar
+- [x] Move "Import URL" button and dialog from toolbar
+- [x] Add drag-drop visual feedback
+- [x] Show "No videos imported" empty state
+- [x] After import, auto-switch to Analyze tab
 
 **UI Mockup**:
 ```

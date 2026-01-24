@@ -563,6 +563,11 @@ class MainWindow(QMainWindow):
 
     def _connect_signals(self):
         """Connect UI signals."""
+        # Collect tab signals
+        self.collect_tab.video_imported.connect(self._on_video_imported_from_tab)
+        self.collect_tab.download_requested.connect(self._on_download_requested_from_tab)
+
+        # Legacy component signals (clip browser, timeline, video player)
         self.clip_browser.clip_selected.connect(self._on_clip_selected)
         self.clip_browser.clip_double_clicked.connect(self._on_clip_double_clicked)
         self.clip_browser.clip_dragged_to_timeline.connect(self._on_clip_dragged_to_timeline)
@@ -576,6 +581,16 @@ class MainWindow(QMainWindow):
         # Video player signals for playback sync
         self.video_player.position_updated.connect(self._on_video_position_updated)
         self.video_player.player.playbackStateChanged.connect(self._on_video_state_changed)
+
+    def _on_video_imported_from_tab(self, path):
+        """Handle video import from Collect tab."""
+        self._load_video(path)
+        # Switch to Analyze tab after import
+        self.tab_widget.setCurrentIndex(1)  # Analyze tab
+
+    def _on_download_requested_from_tab(self, url: str):
+        """Handle download request from Collect tab."""
+        self._download_video(url)
 
     # Drag and drop handlers
     def dragEnterEvent(self, event: QDragEnterEvent):
@@ -663,6 +678,8 @@ class MainWindow(QMainWindow):
         if result.file_path and result.file_path.exists():
             self._load_video(result.file_path)
             self.status_bar.showMessage(f"Downloaded: {result.title}")
+            # Switch to Analyze tab after successful download
+            self.tab_widget.setCurrentIndex(1)  # Analyze tab
         else:
             QMessageBox.warning(self, "Download Error", "Download completed but file not found")
 
