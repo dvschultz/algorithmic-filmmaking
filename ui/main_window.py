@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMenuBar,
     QMenu,
+    QTabWidget,
 )
 from PySide6.QtCore import Qt, Signal, QThread, QMimeData, QUrl, QTimer, Slot
 from PySide6.QtGui import QDesktopServices, QKeySequence, QAction
@@ -47,6 +48,7 @@ from ui.clip_browser import ClipBrowser
 from ui.video_player import VideoPlayer
 from ui.timeline import TimelineWidget
 from ui.settings_dialog import SettingsDialog
+from ui.tabs import CollectTab, AnalyzeTab, GenerateTab, SequenceTab, RenderTab
 
 
 class DetectionWorker(QThread):
@@ -327,9 +329,53 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
 
-        # Top toolbar
+        # Top toolbar (kept for now, will migrate to tabs later)
         toolbar = self._create_toolbar()
         layout.addLayout(toolbar)
+
+        # Tab widget for workflow pages
+        self.tab_widget = QTabWidget()
+        self.tab_widget.currentChanged.connect(self._on_tab_changed)
+
+        # Create tabs
+        self.collect_tab = CollectTab()
+        self.analyze_tab = AnalyzeTab()
+        self.generate_tab = GenerateTab()
+        self.sequence_tab = SequenceTab()
+        self.render_tab = RenderTab()
+
+        # Add tabs
+        self.tab_widget.addTab(self.collect_tab, "Collect")
+        self.tab_widget.addTab(self.analyze_tab, "Analyze")
+        self.tab_widget.addTab(self.generate_tab, "Generate")
+        self.tab_widget.addTab(self.sequence_tab, "Sequence")
+        self.tab_widget.addTab(self.render_tab, "Render")
+
+        layout.addWidget(self.tab_widget)
+
+        # Legacy components (kept for now, will migrate to tabs in later phases)
+        # These are hidden but functional for backwards compatibility
+        self._setup_legacy_components(layout)
+
+        # Bottom: Progress bar (global, below tabs)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        layout.addWidget(self.progress_bar)
+
+        # Status bar
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
+        self.status_bar.showMessage("Drop a video file to begin")
+
+    def _setup_legacy_components(self, parent_layout):
+        """Set up legacy components for backwards compatibility.
+
+        These will be migrated to individual tabs in subsequent phases.
+        """
+        # Hidden container for legacy components
+        legacy_container = QWidget()
+        legacy_layout = QVBoxLayout(legacy_container)
+        legacy_layout.setContentsMargins(0, 0, 0, 0)
 
         # Main vertical splitter (content area + timeline)
         main_splitter = QSplitter(Qt.Vertical)
@@ -354,17 +400,32 @@ class MainWindow(QMainWindow):
         main_splitter.addWidget(self.timeline)
 
         main_splitter.setSizes([500, 250])
-        layout.addWidget(main_splitter)
+        legacy_layout.addWidget(main_splitter)
 
-        # Bottom: Progress bar
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setVisible(False)
-        layout.addWidget(self.progress_bar)
+        # Hide legacy container (functionality accessed via toolbar for now)
+        legacy_container.setVisible(False)
+        parent_layout.addWidget(legacy_container)
 
-        # Status bar
-        self.status_bar = QStatusBar()
-        self.setStatusBar(self.status_bar)
-        self.status_bar.showMessage("Drop a video file to begin")
+        # Store reference for later cleanup
+        self._legacy_container = legacy_container
+
+    def _on_tab_changed(self, index: int):
+        """Handle tab switching."""
+        # Get all tabs
+        tabs = [
+            self.collect_tab,
+            self.analyze_tab,
+            self.generate_tab,
+            self.sequence_tab,
+            self.render_tab,
+        ]
+
+        # Notify tabs of activation/deactivation
+        for i, tab in enumerate(tabs):
+            if i == index:
+                tab.on_tab_activated()
+            else:
+                tab.on_tab_deactivated()
 
     def _create_menu_bar(self):
         """Create the application menu bar."""
