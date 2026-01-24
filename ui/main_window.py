@@ -16,10 +16,8 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QWidget,
     QVBoxLayout,
-    QHBoxLayout,
     QFileDialog,
     QProgressBar,
-    QSplitter,
     QMessageBox,
     QStatusBar,
     QInputDialog,
@@ -39,9 +37,6 @@ from core.dataset_export import export_dataset, DatasetExportConfig
 from core.analysis.color import extract_dominant_colors
 from core.analysis.shots import classify_shot_type
 from core.settings import Settings, load_settings, save_settings
-from ui.clip_browser import ClipBrowser
-from ui.video_player import VideoPlayer
-from ui.timeline import TimelineWidget
 from ui.settings_dialog import SettingsDialog
 from ui.tabs import CollectTab, AnalyzeTab, GenerateTab, SequenceTab, RenderTab
 
@@ -103,8 +98,8 @@ class ThumbnailWorker(QThread):
                 )
                 clip.thumbnail_path = thumb_path
                 self.thumbnail_ready.emit(clip.id, str(thumb_path))
-            except Exception:
-                pass  # Skip failed thumbnails
+            except Exception as e:
+                logger.warning(f"Failed to generate thumbnail for clip {clip.id}: {e}")
 
             self.progress.emit(i + 1, total)
 
@@ -206,8 +201,8 @@ class ColorAnalysisWorker(QThread):
                 if clip.thumbnail_path and clip.thumbnail_path.exists():
                     colors = extract_dominant_colors(clip.thumbnail_path)
                     self.color_ready.emit(clip.id, colors)
-            except Exception:
-                pass  # Skip failed color extraction
+            except Exception as e:
+                logger.warning(f"Failed to extract colors for clip {clip.id}: {e}")
             self.progress.emit(i + 1, total)
         logger.info("ColorAnalysisWorker.run() emitting finished signal")
         self.finished.emit()
@@ -306,7 +301,7 @@ class MainWindow(QMainWindow):
         logger.info("Connecting signals...")
         self._connect_signals()
 
-        # Playback state (must be after _setup_ui so self.timeline exists)
+        # Playback state (must be after _setup_ui so tabs are initialized)
         logger.info("Setting up playback state...")
         self._is_playing = False
         self._current_playback_clip = None  # Currently playing SequenceClip
@@ -344,10 +339,6 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(self.tab_widget)
 
-        # Legacy components (kept for now, will migrate to tabs in later phases)
-        # These are hidden but functional for backwards compatibility
-        self._setup_legacy_components(layout)
-
         # Bottom: Progress bar (global, below tabs)
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
@@ -357,48 +348,6 @@ class MainWindow(QMainWindow):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Drop a video file to begin")
-
-    def _setup_legacy_components(self, parent_layout):
-        """Set up legacy components for backwards compatibility.
-
-        These will be migrated to individual tabs in subsequent phases.
-        """
-        # Hidden container for legacy components
-        legacy_container = QWidget()
-        legacy_layout = QVBoxLayout(legacy_container)
-        legacy_layout.setContentsMargins(0, 0, 0, 0)
-
-        # Main vertical splitter (content area + timeline)
-        main_splitter = QSplitter(Qt.Vertical)
-
-        # Top content area (horizontal splitter)
-        content_splitter = QSplitter(Qt.Horizontal)
-
-        # Left: Clip browser
-        self.clip_browser = ClipBrowser()
-        self.clip_browser.set_drag_enabled(True)  # Enable drag-drop
-        content_splitter.addWidget(self.clip_browser)
-
-        # Right: Video player
-        self.video_player = VideoPlayer()
-        content_splitter.addWidget(self.video_player)
-
-        content_splitter.setSizes([400, 600])
-        main_splitter.addWidget(content_splitter)
-
-        # Bottom: Timeline
-        self.timeline = TimelineWidget()
-        main_splitter.addWidget(self.timeline)
-
-        main_splitter.setSizes([500, 250])
-        legacy_layout.addWidget(main_splitter)
-
-        # Hide legacy container (functionality accessed via toolbar for now)
-        legacy_container.setVisible(False)
-        parent_layout.addWidget(legacy_container)
-
-        # Store reference for later cleanup
-        self._legacy_container = legacy_container
 
     def _on_tab_changed(self, index: int):
         """Handle tab switching."""
@@ -527,20 +476,12 @@ class MainWindow(QMainWindow):
         self.render_tab.export_all_clips_requested.connect(self._on_export_all_click)
         self.render_tab.export_dataset_requested.connect(self._on_export_dataset_click)
 
-        # Legacy component signals (clip browser, timeline, video player)
-        self.clip_browser.clip_selected.connect(self._on_clip_selected)
-        self.clip_browser.clip_double_clicked.connect(self._on_clip_double_clicked)
-        self.clip_browser.clip_dragged_to_timeline.connect(self._on_clip_dragged_to_timeline)
+        # Sequence tab timeline signals for playback sync
+        self.sequence_tab.timeline.playhead_changed.connect(self._on_timeline_playhead_changed)
 
-        # Timeline signals
-        self.timeline.playhead_changed.connect(self._on_timeline_playhead_changed)
-        self.timeline.export_requested.connect(self._on_sequence_export_click)
-        self.timeline.playback_requested.connect(self._on_playback_requested)
-        self.timeline.stop_requested.connect(self._on_stop_requested)
-
-        # Video player signals for playback sync
-        self.video_player.position_updated.connect(self._on_video_position_updated)
-        self.video_player.player.playbackStateChanged.connect(self._on_video_state_changed)
+        # Sequence tab video player signals for playback sync
+        self.sequence_tab.video_player.position_updated.connect(self._on_video_position_updated)
+        self.sequence_tab.video_player.player.playbackStateChanged.connect(self._on_video_state_changed)
 
     def _on_video_imported_from_tab(self, path):
         """Handle video import from Collect tab."""
@@ -594,17 +535,14 @@ class MainWindow(QMainWindow):
         """Load a video file."""
         self.current_source = Source(file_path=path)
         self.clips = []
-        self.clip_browser.clear()
-        self.video_player.load_video(path)
+        self.clips_by_id = {}
         self.status_bar.showMessage(f"Loaded: {path.name}")
         self.setWindowTitle(f"Scene Ripper - {path.name}")
 
-        # Update Analyze tab
+        # Update tabs with new source
         self.analyze_tab.set_source(self.current_source)
         self.analyze_tab.clear_clips()
         self.analyze_tab.set_sensitivity(self.settings.default_sensitivity)
-
-        # Update Sequence tab with source (for video player)
         self.sequence_tab.set_source(self.current_source)
 
     def _on_import_url_click(self):
@@ -741,8 +679,7 @@ class MainWindow(QMainWindow):
         """Handle individual thumbnail completion."""
         clip = self.clips_by_id.get(clip_id)
         if clip:
-            self.clip_browser.add_clip(clip, self.current_source)
-            # Also add to Analyze tab
+            # Add to Analyze tab (primary clip browser)
             self.analyze_tab.add_clip(clip, self.current_source)
 
     @Slot()
@@ -762,11 +699,8 @@ class MainWindow(QMainWindow):
         self.analyze_tab.set_clips(self.clips)
         self.analyze_tab.set_detecting(False)
 
-        # Make clips available for timeline remix
+        # Make clips available for timeline remix (via Sequence tab)
         if self.current_source and self.clips:
-            self.timeline.set_fps(self.current_source.fps)
-            self.timeline.set_available_clips(self.clips, self.current_source)
-            # Also update Sequence tab
             self.sequence_tab.set_clips_available(self.clips, self.current_source)
             # Update Render tab with clip count
             self.render_tab.set_detected_clips_count(len(self.clips))
@@ -811,9 +745,7 @@ class MainWindow(QMainWindow):
         clip = self.clips_by_id.get(clip_id)
         if clip:
             clip.dominant_colors = colors
-            # Update the browser thumbnail with colors
-            self.clip_browser.update_clip_colors(clip_id, colors)
-            # Also update Analyze tab
+            # Update Analyze tab clip browser
             self.analyze_tab.update_clip_colors(clip_id, colors)
 
     @Slot()
@@ -854,9 +786,7 @@ class MainWindow(QMainWindow):
         clip = self.clips_by_id.get(clip_id)
         if clip:
             clip.shot_type = shot_type
-            # Update the browser thumbnail with shot type
-            self.clip_browser.update_clip_shot_type(clip_id, shot_type)
-            # Also update Analyze tab
+            # Update Analyze tab clip browser
             self.analyze_tab.update_clip_shot_type(clip_id, shot_type)
             logger.debug(f"Clip {clip_id}: {shot_type} ({confidence:.2f})")
 
@@ -875,25 +805,10 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(False)
         self.status_bar.showMessage(f"Ready - {len(self.clips)} scenes detected")
 
-    def _on_clip_selected(self, clip: Clip):
-        """Handle clip selection in browser."""
-        if self.current_source:
-            start_time = clip.start_time(self.current_source.fps)
-            self.video_player.seek_to(start_time)
-
-    def _on_clip_double_clicked(self, clip: Clip):
-        """Handle clip double-click (play from clip start)."""
-        if self.current_source:
-            start_time = clip.start_time(self.current_source.fps)
-            end_time = clip.end_time(self.current_source.fps)
-            self.video_player.play_range(start_time, end_time)
-
     def _on_clip_dragged_to_timeline(self, clip: Clip):
         """Handle clip dragged from browser to timeline."""
         if self.current_source:
-            self.timeline.set_fps(self.current_source.fps)
-            self.timeline.add_clip(clip, self.current_source)
-            # Also add to Sequence tab timeline
+            # Add to Sequence tab timeline (primary source of truth)
             self.sequence_tab.add_clip_to_timeline(clip, self.current_source)
             self.status_bar.showMessage(f"Added clip to timeline")
             # Update Render tab with new sequence info
@@ -903,7 +818,7 @@ class MainWindow(QMainWindow):
         """Handle timeline playhead position change."""
         # Don't seek during playback - playhead is driven by video position
         if not self._is_playing:
-            self.video_player.seek_to(time_seconds)
+            self.sequence_tab.video_player.seek_to(time_seconds)
 
     # --- Playback methods ---
 
@@ -914,34 +829,34 @@ class MainWindow(QMainWindow):
             self._pause_playback()
             return
 
-        sequence = self.timeline.get_sequence()
+        sequence = self.sequence_tab.timeline.get_sequence()
         if sequence.duration_frames == 0:
             return  # Nothing to play
 
         self._is_playing = True
-        self.timeline.set_playing(True)
+        self.sequence_tab.timeline.set_playing(True)
 
         # Start playback from current position
         self._play_clip_at_frame(start_frame)
 
     def _play_clip_at_frame(self, frame: int):
         """Load and play the clip at given timeline frame."""
-        sequence = self.timeline.get_sequence()
+        sequence = self.sequence_tab.timeline.get_sequence()
 
         # Check if we're past the end of sequence
         if frame >= sequence.duration_frames:
             self._stop_playback()
             # Reset playhead to beginning
-            self.timeline.set_playhead_time(0)
+            self.sequence_tab.timeline.set_playhead_time(0)
             return
 
         # Get clip at current position
-        seq_clip, clip, source = self.timeline.get_clip_at_playhead()
+        seq_clip, clip, source = self.sequence_tab.timeline.get_clip_at_playhead()
 
         if not seq_clip:
             # No clip at this position (gap) - show black and advance via timer
             self._current_playback_clip = None
-            self.video_player.player.stop()  # Shows black
+            self.sequence_tab.video_player.player.stop()  # Shows black
             self._playback_timer.start()
             return
 
@@ -958,8 +873,8 @@ class MainWindow(QMainWindow):
         end_seconds = seq_clip.out_point / source.fps
 
         # Load source and play range
-        self.video_player.load_video(source.file_path)
-        self.video_player.play_range(source_seconds, end_seconds)
+        self.sequence_tab.video_player.load_video(source.file_path)
+        self.sequence_tab.video_player.play_range(source_seconds, end_seconds)
 
         # Start timer to monitor for clip transitions
         self._playback_timer.start()
@@ -970,14 +885,14 @@ class MainWindow(QMainWindow):
             self._playback_timer.stop()
             return
 
-        sequence = self.timeline.get_sequence()
-        current_time = self.timeline.get_playhead_time()
+        sequence = self.sequence_tab.timeline.get_sequence()
+        current_time = self.sequence_tab.timeline.get_playhead_time()
         current_frame = int(current_time * sequence.fps)
 
         # Check if we're past the end of sequence
         if current_frame >= sequence.duration_frames:
             self._stop_playback()
-            self.timeline.set_playhead_time(0)
+            self.sequence_tab.timeline.set_playhead_time(0)
             return
 
         if self._current_playback_clip:
@@ -985,7 +900,7 @@ class MainWindow(QMainWindow):
             if current_frame >= self._current_playback_clip.end_frame():
                 # Move to next position
                 next_frame = self._current_playback_clip.end_frame()
-                self.timeline.set_playhead_time(next_frame / sequence.fps)
+                self.sequence_tab.timeline.set_playhead_time(next_frame / sequence.fps)
                 self._play_clip_at_frame(next_frame)
         else:
             # In a gap - advance playhead manually
@@ -994,8 +909,8 @@ class MainWindow(QMainWindow):
             new_frame = int(new_time * sequence.fps)
 
             # Check if we've reached a clip
-            self.timeline.set_playhead_time(new_time)
-            seq_clip, _, _ = self.timeline.get_clip_at_playhead()
+            self.sequence_tab.timeline.set_playhead_time(new_time)
+            seq_clip, _, _ = self.sequence_tab.timeline.get_clip_at_playhead()
 
             if seq_clip:
                 # Found a clip - start playing it
@@ -1007,7 +922,7 @@ class MainWindow(QMainWindow):
             return
 
         seq_clip = self._current_playback_clip
-        clip_data = self.timeline._clip_lookup.get(seq_clip.source_clip_id)
+        clip_data = self.sequence_tab.timeline._clip_lookup.get(seq_clip.source_clip_id)
         if not clip_data:
             return
 
@@ -1021,10 +936,10 @@ class MainWindow(QMainWindow):
         # timeline_frame = start_frame + (source_frame - in_point)
         frame_offset = source_frame - seq_clip.in_point
         timeline_frame = seq_clip.start_frame + frame_offset
-        timeline_seconds = timeline_frame / self.timeline.sequence.fps
+        timeline_seconds = timeline_frame / self.sequence_tab.timeline.sequence.fps
 
         # Update playhead position
-        self.timeline.set_playhead_time(timeline_seconds)
+        self.sequence_tab.timeline.set_playhead_time(timeline_seconds)
 
     def _on_video_state_changed(self, state):
         """Handle video player state changes."""
@@ -1039,15 +954,17 @@ class MainWindow(QMainWindow):
             # Clip ended naturally - check if we should continue to next
             if self._current_playback_clip:
                 next_frame = self._current_playback_clip.end_frame()
-                self.timeline.set_playhead_time(next_frame / self.timeline.sequence.fps)
+                self.sequence_tab.timeline.set_playhead_time(
+                    next_frame / self.sequence_tab.timeline.sequence.fps
+                )
                 self._play_clip_at_frame(next_frame)
 
     def _pause_playback(self):
         """Pause playback."""
         self._is_playing = False
         self._playback_timer.stop()
-        self.video_player.player.pause()
-        self.timeline.set_playing(False)
+        self.sequence_tab.video_player.player.pause()
+        self.sequence_tab.timeline.set_playing(False)
 
     def _on_stop_requested(self):
         """Handle stop request from timeline."""
@@ -1058,12 +975,12 @@ class MainWindow(QMainWindow):
         self._is_playing = False
         self._playback_timer.stop()
         self._current_playback_clip = None
-        self.video_player.player.stop()
-        self.timeline.set_playing(False)
+        self.sequence_tab.video_player.player.stop()
+        self.sequence_tab.timeline.set_playing(False)
 
     def _on_export_click(self):
         """Export selected clips."""
-        selected = self.clip_browser.get_selected_clips()
+        selected = self.analyze_tab.clip_browser.get_selected_clips()
         if not selected:
             QMessageBox.information(self, "Export", "No clips selected")
             return
@@ -1212,16 +1129,24 @@ class MainWindow(QMainWindow):
             for clip in self.clips:
                 clips[clip.id] = (clip, self.current_source)
 
-        # Get quality settings
-        quality_preset = self.settings.get_quality_preset()
-        max_width, max_height = self.settings.get_resolution()
-        target_fps = self.settings.get_fps()
+        # Get quality settings from RenderTab UI (not global settings)
+        quality_setting = self.render_tab.get_quality_setting()
+        resolution = self.render_tab.get_resolution_setting()
+        target_fps = self.render_tab.get_fps_setting()
+
+        # Map quality string to preset
+        quality_presets = {
+            "high": {"crf": 18, "preset": "slow", "bitrate": "8M"},
+            "medium": {"crf": 23, "preset": "medium", "bitrate": "4M"},
+            "low": {"crf": 28, "preset": "fast", "bitrate": "2M"},
+        }
+        quality_preset = quality_presets.get(quality_setting, quality_presets["medium"])
 
         config = ExportConfig(
             output_path=output_path,
             fps=target_fps if target_fps else sequence.fps,
-            width=max_width,
-            height=max_height,
+            width=resolution[0] if resolution else None,
+            height=resolution[1] if resolution else None,
             crf=quality_preset["crf"],
             preset=quality_preset["preset"],
             video_bitrate=quality_preset["bitrate"],
@@ -1230,7 +1155,7 @@ class MainWindow(QMainWindow):
         # Start export in background
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 100)
-        self.timeline.export_btn.setEnabled(False)
+        self.sequence_tab.timeline.export_btn.setEnabled(False)
 
         self.export_worker = SequenceExportWorker(sequence, sources, clips, config)
         self.export_worker.progress.connect(self._on_sequence_export_progress)
@@ -1246,7 +1171,7 @@ class MainWindow(QMainWindow):
     def _on_sequence_export_finished(self, output_path: Path):
         """Handle sequence export completion."""
         self.progress_bar.setVisible(False)
-        self.timeline.export_btn.setEnabled(True)
+        self.sequence_tab.timeline.export_btn.setEnabled(True)
         self.status_bar.showMessage(f"Sequence exported to {output_path.name}")
 
         # Open containing folder
@@ -1255,7 +1180,7 @@ class MainWindow(QMainWindow):
     def _on_sequence_export_error(self, error: str):
         """Handle sequence export error."""
         self.progress_bar.setVisible(False)
-        self.timeline.export_btn.setEnabled(True)
+        self.sequence_tab.timeline.export_btn.setEnabled(True)
         QMessageBox.critical(self, "Export Error", f"Failed to export sequence: {error}")
 
     def closeEvent(self, event):
