@@ -189,10 +189,15 @@ def load_project(
     except (OSError, IOError) as e:
         raise ProjectLoadError(f"Failed to read project file: {e}")
 
-    # Validate version
+    # Validate version using semantic comparison
     version = data.get("version", "1.0")
-    if version > SCHEMA_VERSION:
-        logger.warning(f"Project file version {version} is newer than supported {SCHEMA_VERSION}")
+    try:
+        version_parts = tuple(int(x) for x in version.split("."))
+        schema_parts = tuple(int(x) for x in SCHEMA_VERSION.split("."))
+        if version_parts > schema_parts:
+            logger.warning(f"Project file version {version} is newer than supported {SCHEMA_VERSION}")
+    except (ValueError, AttributeError):
+        logger.warning(f"Invalid version format: {version}")
 
     # Use project file's parent as base for relative paths
     base_path = filepath.parent

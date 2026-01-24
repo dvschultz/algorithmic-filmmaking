@@ -60,13 +60,24 @@ class Source:
         Args:
             data: Dictionary from JSON
             base_path: Base directory to resolve relative paths against
+
+        Raises:
+            ValueError: If path traversal is detected (path escapes base_path)
         """
         file_path_str = data.get("file_path", "")
         file_path = Path(file_path_str)
 
         # Resolve relative path against base_path
         if base_path and not file_path.is_absolute():
-            file_path = (base_path / file_path).resolve()
+            resolved = (base_path / file_path).resolve()
+            # Security: Validate path doesn't escape base directory
+            try:
+                resolved.relative_to(base_path.resolve())
+            except ValueError:
+                raise ValueError(
+                    f"Path traversal detected: {file_path_str} escapes project directory"
+                )
+            file_path = resolved
 
         # If resolved path doesn't exist, try absolute fallback
         if not file_path.exists() and "_absolute_path" in data:

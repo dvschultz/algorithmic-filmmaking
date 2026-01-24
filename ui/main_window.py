@@ -1814,9 +1814,9 @@ class MainWindow(QMainWindow):
             if clip.transcript:
                 self.analyze_tab.update_clip_transcript(clip.id, clip.transcript)
 
-        # Restore sequence
+        # Restore sequence (pass clips for _clip_lookup population)
         if sequence:
-            self.sequence_tab.timeline.load_sequence(sequence, sources[0])
+            self.sequence_tab.timeline.load_sequence(sequence, sources[0], clips)
 
         # Restore UI state
         if "sensitivity" in ui_state:
