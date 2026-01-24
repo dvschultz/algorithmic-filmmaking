@@ -548,7 +548,7 @@ class MainWindow(QMainWindow):
             self.current_source.file_path, config
         )
         self.detection_worker.progress.connect(self._on_detection_progress)
-        self.detection_worker.finished.connect(self._on_detection_finished)
+        self.detection_worker.finished.connect(self._on_detection_finished, Qt.UniqueConnection)
         self.detection_worker.error.connect(self._on_detection_error)
         logger.info("Starting DetectionWorker...")
         self.detection_worker.start()

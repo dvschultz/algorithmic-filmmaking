@@ -1,7 +1,6 @@
 """Color extraction using k-means clustering."""
 
 from pathlib import Path
-from typing import Optional
 
 import cv2
 import numpy as np
@@ -103,18 +102,3 @@ def get_primary_hue(colors: list[tuple[int, int, int]]) -> float:
 
     hsv = rgb_to_hsv(colors[0])
     return hsv[0]
-
-
-def sort_colors_by_hue(
-    colors: list[tuple[int, int, int]],
-) -> list[tuple[int, int, int]]:
-    """
-    Sort colors by their hue value.
-
-    Args:
-        colors: List of RGB tuples
-
-    Returns:
-        Colors sorted by hue (red -> orange -> yellow -> green -> blue -> purple)
-    """
-    return sorted(colors, key=lambda c: rgb_to_hsv(c)[0])

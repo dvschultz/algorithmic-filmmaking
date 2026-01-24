@@ -66,6 +66,7 @@ class ThumbnailGenerator:
             cmd,
             capture_output=True,
             text=True,
+            timeout=60,  # 60 second timeout for thumbnail generation
         )
 
         if result.returncode != 0:

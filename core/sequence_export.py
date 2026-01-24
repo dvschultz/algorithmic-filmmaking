@@ -142,7 +142,7 @@ class SequenceExporter:
 
         cmd.append(str(output_path))
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         return result.returncode == 0
 
     def _concat_segments(
@@ -175,7 +175,7 @@ class SequenceExporter:
                 str(output_path),
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
             return result.returncode == 0
         finally:
             Path(concat_file).unlink(missing_ok=True)

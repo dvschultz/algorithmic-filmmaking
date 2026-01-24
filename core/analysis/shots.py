@@ -1,8 +1,8 @@
 """Shot type classification using CLIP zero-shot."""
 
 import logging
+import threading
 from pathlib import Path
-from typing import Optional
 
 from PIL import Image
 
@@ -27,21 +27,36 @@ SHOT_TYPE_DISPLAY = {
 # Lazy load models to avoid slow import
 _clip_model = None
 _clip_processor = None
+_clip_model_lock = threading.Lock()
+
+# Pin model revision for supply chain security
+_CLIP_MODEL_NAME = "openai/clip-vit-base-patch32"
+_CLIP_MODEL_REVISION = "e6a30b603a447e251fdaca1c3056b2a16cdfebeb"
 
 
 def _load_clip_model():
-    """Lazy load CLIP model and processor."""
+    """Lazy load CLIP model and processor (thread-safe)."""
     global _clip_model, _clip_processor
 
-    if _clip_model is None:
-        logger.info("Loading CLIP model...")
-        from transformers import CLIPProcessor, CLIPModel
+    # Fast path: already loaded
+    if _clip_model is not None:
+        return _clip_model, _clip_processor
 
-        # Use base CLIP model - good balance of speed and accuracy
-        model_name = "openai/clip-vit-base-patch32"
-        _clip_processor = CLIPProcessor.from_pretrained(model_name)
-        _clip_model = CLIPModel.from_pretrained(model_name)
-        logger.info("CLIP model loaded")
+    with _clip_model_lock:
+        # Double-check after acquiring lock
+        if _clip_model is None:
+            logger.info("Loading CLIP model...")
+            from transformers import CLIPProcessor, CLIPModel
+
+            # Use base CLIP model - good balance of speed and accuracy
+            # Pin revision for reproducibility and supply chain security
+            _clip_processor = CLIPProcessor.from_pretrained(
+                _CLIP_MODEL_NAME, revision=_CLIP_MODEL_REVISION
+            )
+            _clip_model = CLIPModel.from_pretrained(
+                _CLIP_MODEL_NAME, revision=_CLIP_MODEL_REVISION
+            )
+            logger.info("CLIP model loaded")
 
     return _clip_model, _clip_processor
 
@@ -106,8 +121,3 @@ def classify_shot_type(
 def get_display_name(shot_type: str) -> str:
     """Get human-readable display name for shot type."""
     return SHOT_TYPE_DISPLAY.get(shot_type, shot_type.title())
-
-
-def get_all_shot_types() -> list[str]:
-    """Get list of all valid shot types."""
-    return SHOT_TYPES.copy()
