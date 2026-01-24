@@ -16,6 +16,8 @@ from PySide6.QtWidgets import (
     QSplitter,
     QMessageBox,
     QStatusBar,
+    QInputDialog,
+    QLineEdit,
 )
 from PySide6.QtCore import Qt, Signal, QThread, QMimeData, QUrl
 from PySide6.QtGui import QDesktopServices
@@ -24,6 +26,7 @@ from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from models.clip import Source, Clip
 from core.scene_detect import SceneDetector, DetectionConfig
 from core.thumbnail import ThumbnailGenerator
+from core.downloader import VideoDownloader
 from ui.clip_browser import ClipBrowser
 from ui.video_player import VideoPlayer
 
@@ -85,6 +88,32 @@ class ThumbnailWorker(QThread):
         self.finished.emit()
 
 
+class DownloadWorker(QThread):
+    """Background worker for video downloads."""
+
+    progress = Signal(float, str)  # progress (0-100), status message
+    finished = Signal(object)  # DownloadResult
+    error = Signal(str)
+
+    def __init__(self, url: str):
+        super().__init__()
+        self.url = url
+
+    def run(self):
+        try:
+            downloader = VideoDownloader()
+            result = downloader.download(
+                self.url,
+                progress_callback=lambda p, m: self.progress.emit(p, m),
+            )
+            if result.success:
+                self.finished.emit(result)
+            else:
+                self.error.emit(result.error or "Download failed")
+        except Exception as e:
+            self.error.emit(str(e))
+
+
 class MainWindow(QMainWindow):
     """Main application window with drag-drop, detection, and preview."""
 
@@ -101,6 +130,7 @@ class MainWindow(QMainWindow):
         self.clips: list[Clip] = []
         self.detection_worker: Optional[DetectionWorker] = None
         self.thumbnail_worker: Optional[ThumbnailWorker] = None
+        self.download_worker: Optional[DownloadWorker] = None
 
         self._setup_ui()
         self._connect_signals()
@@ -147,6 +177,12 @@ class MainWindow(QMainWindow):
         self.import_btn = QPushButton("Import Video")
         self.import_btn.clicked.connect(self._on_import_click)
         toolbar.addWidget(self.import_btn)
+
+        # Import URL button
+        self.import_url_btn = QPushButton("Import URL")
+        self.import_url_btn.setToolTip("Download from YouTube or Vimeo")
+        self.import_url_btn.clicked.connect(self._on_import_url_click)
+        toolbar.addWidget(self.import_url_btn)
 
         # Sensitivity slider
         toolbar.addWidget(QLabel("Sensitivity:"))
@@ -233,6 +269,60 @@ class MainWindow(QMainWindow):
         self.export_all_btn.setEnabled(False)
         self.status_bar.showMessage(f"Loaded: {path.name}")
         self.setWindowTitle(f"Scene Ripper - {path.name}")
+
+    def _on_import_url_click(self):
+        """Handle import URL button click."""
+        url, ok = QInputDialog.getText(
+            self,
+            "Import from URL",
+            "Enter YouTube or Vimeo URL:",
+            QLineEdit.Normal,
+            "",
+        )
+        if ok and url.strip():
+            self._download_video(url.strip())
+
+    def _download_video(self, url: str):
+        """Start downloading a video from URL."""
+        # Disable buttons during download
+        self.import_btn.setEnabled(False)
+        self.import_url_btn.setEnabled(False)
+        self.detect_btn.setEnabled(False)
+
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 100)
+
+        self.download_worker = DownloadWorker(url)
+        self.download_worker.progress.connect(self._on_download_progress)
+        self.download_worker.finished.connect(self._on_download_finished)
+        self.download_worker.error.connect(self._on_download_error)
+        self.download_worker.start()
+
+    def _on_download_progress(self, progress: float, message: str):
+        """Handle download progress update."""
+        self.progress_bar.setValue(int(progress))
+        self.status_bar.showMessage(message)
+
+    def _on_download_finished(self, result):
+        """Handle download completion."""
+        self.progress_bar.setVisible(False)
+        self.import_btn.setEnabled(True)
+        self.import_url_btn.setEnabled(True)
+        self.detect_btn.setEnabled(True)
+
+        if result.file_path and result.file_path.exists():
+            self._load_video(result.file_path)
+            self.status_bar.showMessage(f"Downloaded: {result.title}")
+        else:
+            QMessageBox.warning(self, "Download Error", "Download completed but file not found")
+
+    def _on_download_error(self, error: str):
+        """Handle download error."""
+        self.progress_bar.setVisible(False)
+        self.import_btn.setEnabled(True)
+        self.import_url_btn.setEnabled(True)
+        self.detect_btn.setEnabled(True)
+        QMessageBox.critical(self, "Download Error", error)
 
     def _on_detect_click(self):
         """Handle detect button click."""
