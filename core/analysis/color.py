@@ -7,6 +7,17 @@ import numpy as np
 from sklearn.cluster import KMeans
 
 
+# Color palette constants
+COLOR_PALETTES = ["warm", "cool", "neutral", "vibrant"]
+
+COLOR_PALETTE_DISPLAY = {
+    "warm": "Warm",
+    "cool": "Cool",
+    "neutral": "Neutral",
+    "vibrant": "Vibrant",
+}
+
+
 def extract_dominant_colors(
     image_path: Path,
     n_colors: int = 5,
@@ -102,3 +113,72 @@ def get_primary_hue(colors: list[tuple[int, int, int]]) -> float:
 
     hsv = rgb_to_hsv(colors[0])
     return hsv[0]
+
+
+def classify_color_palette(colors: list[tuple[int, int, int]]) -> str:
+    """
+    Classify the color palette based on HSV analysis of dominant colors.
+
+    Classification logic:
+    - Warm: Hues in 0-60 or 300-360 range (reds, oranges, yellows)
+    - Cool: Hues in 180-300 range (blues, cyans, purples)
+    - Neutral: Low saturation (<0.2) across dominant colors
+    - Vibrant: High saturation (>0.6) across dominant colors
+
+    Args:
+        colors: List of RGB tuples sorted by frequency
+
+    Returns:
+        Color palette classification: "warm", "cool", "neutral", or "vibrant"
+    """
+    if not colors:
+        return "neutral"
+
+    # Analyze top 3 dominant colors (or fewer if not available)
+    analyze_count = min(3, len(colors))
+    hsv_colors = [rgb_to_hsv(c) for c in colors[:analyze_count]]
+
+    # Calculate weighted averages (more weight to dominant colors)
+    weights = [1.0, 0.5, 0.25][:analyze_count]
+    total_weight = sum(weights)
+
+    avg_saturation = sum(hsv[1] * w for hsv, w in zip(hsv_colors, weights)) / total_weight
+
+    # Check for neutral first (low saturation)
+    if avg_saturation < 0.2:
+        return "neutral"
+
+    # Check for vibrant (high saturation)
+    if avg_saturation > 0.6:
+        return "vibrant"
+
+    # Classify by hue (warm vs cool)
+    # Use the primary (most dominant) color's hue
+    primary_hue = hsv_colors[0][0]
+
+    # Warm: 0-60 (red-yellow) or 300-360 (magenta-red)
+    # Cool: 180-300 (cyan-magenta)
+    if (0 <= primary_hue <= 60) or (300 <= primary_hue <= 360):
+        return "warm"
+    elif 180 <= primary_hue <= 300:
+        return "cool"
+    else:
+        # Transitional hues (60-180): greens and yellow-greens
+        # Classify based on whether closer to warm or cool
+        if primary_hue < 120:
+            return "warm"
+        else:
+            return "cool"
+
+
+def get_palette_display_name(palette: str) -> str:
+    """
+    Get the display name for a color palette.
+
+    Args:
+        palette: Palette identifier (e.g., "warm", "cool")
+
+    Returns:
+        Human-readable display name
+    """
+    return COLOR_PALETTE_DISPLAY.get(palette, palette.title())

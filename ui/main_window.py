@@ -27,9 +27,11 @@ from PySide6.QtWidgets import (
     QStatusBar,
     QInputDialog,
     QLineEdit,
+    QMenuBar,
+    QMenu,
 )
 from PySide6.QtCore import Qt, Signal, QThread, QMimeData, QUrl, QTimer, Slot
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QDesktopServices, QKeySequence, QAction
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 
 from models.clip import Source, Clip
@@ -37,11 +39,14 @@ from core.scene_detect import SceneDetector, DetectionConfig
 from core.thumbnail import ThumbnailGenerator
 from core.downloader import VideoDownloader
 from core.sequence_export import SequenceExporter, ExportConfig
+from core.dataset_export import export_dataset, DatasetExportConfig
 from core.analysis.color import extract_dominant_colors
 from core.analysis.shots import classify_shot_type
+from core.settings import Settings, load_settings, save_settings
 from ui.clip_browser import ClipBrowser
 from ui.video_player import VideoPlayer
 from ui.timeline import TimelineWidget
+from ui.settings_dialog import SettingsDialog
 
 
 class DetectionWorker(QThread):
@@ -80,15 +85,16 @@ class ThumbnailWorker(QThread):
     thumbnail_ready = Signal(str, str)  # clip_id, thumbnail_path
     finished = Signal()
 
-    def __init__(self, source: Source, clips: list[Clip]):
+    def __init__(self, source: Source, clips: list[Clip], cache_dir: Path = None):
         super().__init__()
         self.source = source
         self.clips = clips
+        self.cache_dir = cache_dir
         logger.debug("ThumbnailWorker created")
 
     def run(self):
         logger.info("ThumbnailWorker.run() STARTING")
-        generator = ThumbnailGenerator()
+        generator = ThumbnailGenerator(cache_dir=self.cache_dir)
         total = len(self.clips)
 
         for i, clip in enumerate(self.clips):
@@ -277,6 +283,10 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1200, 800)
         self.setAcceptDrops(True)
 
+        # Load settings
+        self.settings = load_settings()
+        logger.info(f"Loaded settings: sensitivity={self.settings.default_sensitivity}")
+
         # State
         self.current_source: Optional[Source] = None
         self.clips: list[Clip] = []
@@ -310,6 +320,9 @@ class MainWindow(QMainWindow):
 
     def _setup_ui(self):
         """Set up the user interface."""
+        # Create menu bar
+        self._create_menu_bar()
+
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
@@ -353,6 +366,66 @@ class MainWindow(QMainWindow):
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Drop a video file to begin")
 
+    def _create_menu_bar(self):
+        """Create the application menu bar."""
+        menu_bar = self.menuBar()
+
+        # File menu
+        file_menu = menu_bar.addMenu("&File")
+
+        # Import action
+        import_action = QAction("&Import Video...", self)
+        import_action.setShortcut(QKeySequence.Open)
+        import_action.triggered.connect(self._on_import_click)
+        file_menu.addAction(import_action)
+
+        # Import URL action
+        import_url_action = QAction("Import from &URL...", self)
+        import_url_action.triggered.connect(self._on_import_url_click)
+        file_menu.addAction(import_url_action)
+
+        file_menu.addSeparator()
+
+        # Settings action (Preferences on macOS)
+        settings_action = QAction("&Settings...", self)
+        settings_action.setShortcut(QKeySequence("Ctrl+,"))
+        settings_action.setMenuRole(QAction.PreferencesRole)  # macOS standard
+        settings_action.triggered.connect(self._on_settings_click)
+        file_menu.addAction(settings_action)
+
+        file_menu.addSeparator()
+
+        # Quit action
+        quit_action = QAction("&Quit", self)
+        quit_action.setShortcut(QKeySequence.Quit)
+        quit_action.setMenuRole(QAction.QuitRole)
+        quit_action.triggered.connect(self.close)
+        file_menu.addAction(quit_action)
+
+    def _on_settings_click(self):
+        """Open the settings dialog."""
+        dialog = SettingsDialog(self.settings, self)
+        if dialog.exec() == SettingsDialog.Accepted:
+            self.settings = dialog.get_settings()
+            save_settings(self.settings)
+            self._apply_settings()
+            self.status_bar.showMessage("Settings saved")
+            logger.info("Settings updated and saved")
+
+    def _apply_settings(self):
+        """Apply current settings to the UI and components."""
+        # Update sensitivity slider and label
+        sensitivity_value = int(self.settings.default_sensitivity * 10)
+        self.sensitivity_slider.setValue(sensitivity_value)
+        self.sensitivity_label.setText(f"{self.settings.default_sensitivity:.1f}")
+
+        logger.info(
+            f"Settings applied: sensitivity={self.settings.default_sensitivity}, "
+            f"auto_colors={self.settings.auto_analyze_colors}, "
+            f"auto_shots={self.settings.auto_classify_shots}, "
+            f"quality={self.settings.export_quality}"
+        )
+
     def _create_toolbar(self) -> QHBoxLayout:
         """Create the top toolbar."""
         toolbar = QHBoxLayout()
@@ -373,12 +446,12 @@ class MainWindow(QMainWindow):
 
         self.sensitivity_slider = QSlider(Qt.Horizontal)
         self.sensitivity_slider.setRange(10, 100)  # 1.0 to 10.0
-        self.sensitivity_slider.setValue(30)  # Default 3.0
+        self.sensitivity_slider.setValue(int(self.settings.default_sensitivity * 10))
         self.sensitivity_slider.setMaximumWidth(150)
         self.sensitivity_slider.setToolTip("Lower = more scenes detected")
         toolbar.addWidget(self.sensitivity_slider)
 
-        self.sensitivity_label = QLabel("3.0")
+        self.sensitivity_label = QLabel(f"{self.settings.default_sensitivity:.1f}")
         self.sensitivity_slider.valueChanged.connect(
             lambda v: self.sensitivity_label.setText(f"{v/10:.1f}")
         )
@@ -403,6 +476,13 @@ class MainWindow(QMainWindow):
         self.export_all_btn.setEnabled(False)
         self.export_all_btn.clicked.connect(self._on_export_all_click)
         toolbar.addWidget(self.export_all_btn)
+
+        # Export dataset button
+        self.export_dataset_btn = QPushButton("Export Dataset")
+        self.export_dataset_btn.setToolTip("Export clip metadata to JSON")
+        self.export_dataset_btn.setEnabled(False)
+        self.export_dataset_btn.clicked.connect(self._on_export_dataset_click)
+        toolbar.addWidget(self.export_dataset_btn)
 
         return toolbar
 
@@ -580,7 +660,9 @@ class MainWindow(QMainWindow):
 
         # Start thumbnail generation
         logger.info("Creating ThumbnailWorker...")
-        self.thumbnail_worker = ThumbnailWorker(source, clips)
+        self.thumbnail_worker = ThumbnailWorker(
+            source, clips, cache_dir=self.settings.thumbnail_cache_dir
+        )
         self.thumbnail_worker.progress.connect(self._on_thumbnail_progress)
         self.thumbnail_worker.thumbnail_ready.connect(self._on_thumbnail_ready)
         self.thumbnail_worker.finished.connect(self._on_thumbnails_finished, Qt.UniqueConnection)
@@ -623,14 +705,15 @@ class MainWindow(QMainWindow):
         self.import_btn.setEnabled(True)
         self.export_btn.setEnabled(True)
         self.export_all_btn.setEnabled(True)
+        self.export_dataset_btn.setEnabled(True)
 
         # Make clips available for timeline remix
         if self.current_source and self.clips:
             self.timeline.set_fps(self.current_source.fps)
             self.timeline.set_available_clips(self.clips, self.current_source)
 
-        # Start color analysis
-        if self.clips:
+        # Start color analysis (if enabled in settings)
+        if self.clips and self.settings.auto_analyze_colors:
             self.status_bar.showMessage(f"Analyzing colors for {len(self.clips)} scenes...")
             logger.info("Creating ColorAnalysisWorker...")
             self.color_worker = ColorAnalysisWorker(self.clips)
@@ -640,6 +723,21 @@ class MainWindow(QMainWindow):
             logger.info("Starting ColorAnalysisWorker...")
             self.color_worker.start()
             logger.info("ColorAnalysisWorker started")
+        elif self.clips and not self.settings.auto_analyze_colors:
+            # Skip color analysis, go straight to shot type if enabled
+            # Mark color analysis as "handled" to avoid guard issues
+            self._color_analysis_finished_handled = True
+            if self.settings.auto_classify_shots:
+                self.status_bar.showMessage(f"Classifying shot types for {len(self.clips)} scenes...")
+                logger.info("Creating ShotTypeWorker (skipped color analysis)...")
+                self.shot_type_worker = ShotTypeWorker(self.clips)
+                self.shot_type_worker.progress.connect(self._on_shot_type_progress)
+                self.shot_type_worker.shot_type_ready.connect(self._on_shot_type_ready)
+                self.shot_type_worker.finished.connect(self._on_shot_type_finished, Qt.UniqueConnection)
+                self.shot_type_worker.start()
+            else:
+                self.progress_bar.setVisible(False)
+                self.status_bar.showMessage(f"Ready - {len(self.clips)} scenes detected")
         else:
             self.progress_bar.setVisible(False)
             self.status_bar.showMessage(f"Ready - {len(self.clips)} scenes detected")
@@ -670,8 +768,8 @@ class MainWindow(QMainWindow):
 
         logger.info(f"Color worker running: {self.color_worker.isRunning() if self.color_worker else 'None'}")
 
-        # Start shot type classification
-        if self.clips:
+        # Start shot type classification (if enabled in settings)
+        if self.clips and self.settings.auto_classify_shots:
             self.status_bar.showMessage(f"Classifying shot types for {len(self.clips)} scenes...")
             logger.info("Creating ShotTypeWorker...")
             self.shot_type_worker = ShotTypeWorker(self.clips)
@@ -910,6 +1008,55 @@ class MainWindow(QMainWindow):
             return
         self._export_clips(self.clips)
 
+    def _on_export_dataset_click(self):
+        """Export clip metadata to JSON file."""
+        if not self.current_source or not self.clips:
+            QMessageBox.information(self, "Export Dataset", "No clips available to export")
+            return
+
+        # Get default filename
+        source_name = self._sanitize_filename(self.current_source.file_path.stem)
+        default_name = f"{source_name}_dataset.json"
+
+        # Show save dialog
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Dataset",
+            default_name,
+            "JSON Files (*.json);;All Files (*)",
+        )
+        if not file_path:
+            return
+
+        output_path = Path(file_path)
+        if not output_path.suffix:
+            output_path = output_path.with_suffix(".json")
+
+        # Configure and export
+        config = DatasetExportConfig(
+            output_path=output_path,
+            include_thumbnails=True,
+            pretty_print=True,
+        )
+
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 100)
+
+        def on_progress(progress: float, message: str):
+            self.progress_bar.setValue(int(progress * 100))
+            self.status_bar.showMessage(message)
+
+        success = export_dataset(self.current_source, self.clips, config, on_progress)
+
+        self.progress_bar.setVisible(False)
+
+        if success:
+            self.status_bar.showMessage(f"Dataset exported to {output_path.name}")
+            # Open containing folder
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(output_path.parent)))
+        else:
+            QMessageBox.critical(self, "Export Error", "Failed to export dataset")
+
     def _export_clips(self, clips: list[Clip]):
         """Export clips to a folder."""
         if not self.current_source:
@@ -990,9 +1137,19 @@ class MainWindow(QMainWindow):
             for clip in self.clips:
                 clips[clip.id] = (clip, self.current_source)
 
+        # Get quality settings
+        quality_preset = self.settings.get_quality_preset()
+        max_width, max_height = self.settings.get_resolution()
+        target_fps = self.settings.get_fps()
+
         config = ExportConfig(
             output_path=output_path,
-            fps=sequence.fps,
+            fps=target_fps if target_fps else sequence.fps,
+            width=max_width,
+            height=max_height,
+            crf=quality_preset["crf"],
+            preset=quality_preset["preset"],
+            video_bitrate=quality_preset["bitrate"],
         )
 
         # Start export in background
