@@ -27,6 +27,7 @@ from models.clip import Source, Clip
 from core.scene_detect import SceneDetector, DetectionConfig
 from core.thumbnail import ThumbnailGenerator
 from core.downloader import VideoDownloader
+from core.sequence_export import SequenceExporter, ExportConfig
 from ui.clip_browser import ClipBrowser
 from ui.video_player import VideoPlayer
 from ui.timeline import TimelineWidget
@@ -115,6 +116,38 @@ class DownloadWorker(QThread):
             self.error.emit(str(e))
 
 
+class SequenceExportWorker(QThread):
+    """Background worker for sequence export."""
+
+    progress = Signal(float, str)  # progress (0-1), status message
+    finished = Signal(object)  # output path (Path)
+    error = Signal(str)
+
+    def __init__(self, sequence, sources, clips, config):
+        super().__init__()
+        self.sequence = sequence
+        self.sources = sources
+        self.clips = clips
+        self.config = config
+
+    def run(self):
+        try:
+            exporter = SequenceExporter()
+            success = exporter.export(
+                sequence=self.sequence,
+                sources=self.sources,
+                clips=self.clips,
+                config=self.config,
+                progress_callback=lambda p, m: self.progress.emit(p, m),
+            )
+            if success:
+                self.finished.emit(self.config.output_path)
+            else:
+                self.error.emit("Export failed")
+        except Exception as e:
+            self.error.emit(str(e))
+
+
 class MainWindow(QMainWindow):
     """Main application window with drag-drop, detection, and preview."""
 
@@ -132,6 +165,7 @@ class MainWindow(QMainWindow):
         self.detection_worker: Optional[DetectionWorker] = None
         self.thumbnail_worker: Optional[ThumbnailWorker] = None
         self.download_worker: Optional[DownloadWorker] = None
+        self.export_worker: Optional[SequenceExportWorker] = None
 
         self._setup_ui()
         self._connect_signals()
@@ -242,6 +276,7 @@ class MainWindow(QMainWindow):
 
         # Timeline signals
         self.timeline.playhead_changed.connect(self._on_timeline_playhead_changed)
+        self.timeline.export_requested.connect(self._on_sequence_export_click)
 
     # Drag and drop handlers
     def dragEnterEvent(self, event: QDragEnterEvent):
@@ -412,6 +447,11 @@ class MainWindow(QMainWindow):
         self.export_all_btn.setEnabled(True)
         self.status_bar.showMessage(f"Ready - {len(self.clips)} scenes detected")
 
+        # Make clips available for timeline remix
+        if self.current_source and self.clips:
+            self.timeline.set_fps(self.current_source.fps)
+            self.timeline.set_available_clips(self.clips, self.current_source)
+
     def _on_clip_selected(self, clip: Clip):
         """Handle clip selection in browser."""
         if self.current_source:
@@ -494,3 +534,74 @@ class MainWindow(QMainWindow):
 
         # Open the export folder in system file browser
         QDesktopServices.openUrl(QUrl.fromLocalFile(output_dir))
+
+    def _on_sequence_export_click(self):
+        """Export the timeline sequence to a single video file."""
+        sequence = self.timeline.get_sequence()
+        all_clips = sequence.get_all_clips()
+
+        if not all_clips:
+            QMessageBox.information(self, "Export Sequence", "No clips in timeline to export")
+            return
+
+        # Get output file path
+        default_name = "sequence_export.mp4"
+        if self.current_source:
+            default_name = f"{self.current_source.file_path.stem}_remix.mp4"
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Sequence",
+            default_name,
+            "Video Files (*.mp4);;All Files (*)",
+        )
+        if not file_path:
+            return
+
+        output_path = Path(file_path)
+        if not output_path.suffix:
+            output_path = output_path.with_suffix(".mp4")
+
+        # Build sources and clips dictionaries
+        sources = {}
+        clips = {}
+        if self.current_source:
+            sources[self.current_source.id] = self.current_source
+            for clip in self.clips:
+                clips[clip.id] = (clip, self.current_source)
+
+        config = ExportConfig(
+            output_path=output_path,
+            fps=sequence.fps,
+        )
+
+        # Start export in background
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 100)
+        self.timeline.export_btn.setEnabled(False)
+
+        self.export_worker = SequenceExportWorker(sequence, sources, clips, config)
+        self.export_worker.progress.connect(self._on_sequence_export_progress)
+        self.export_worker.finished.connect(self._on_sequence_export_finished)
+        self.export_worker.error.connect(self._on_sequence_export_error)
+        self.export_worker.start()
+
+    def _on_sequence_export_progress(self, progress: float, message: str):
+        """Handle sequence export progress update."""
+        self.progress_bar.setValue(int(progress * 100))
+        self.status_bar.showMessage(message)
+
+    def _on_sequence_export_finished(self, output_path: Path):
+        """Handle sequence export completion."""
+        self.progress_bar.setVisible(False)
+        self.timeline.export_btn.setEnabled(True)
+        self.status_bar.showMessage(f"Sequence exported to {output_path.name}")
+
+        # Open containing folder
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(output_path.parent)))
+
+    def _on_sequence_export_error(self, error: str):
+        """Handle sequence export error."""
+        self.progress_bar.setVisible(False)
+        self.timeline.export_btn.setEnabled(True)
+        QMessageBox.critical(self, "Export Error", f"Failed to export sequence: {error}")

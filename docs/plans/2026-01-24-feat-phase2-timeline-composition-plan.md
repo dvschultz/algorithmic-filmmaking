@@ -174,12 +174,12 @@ ui/main_window.py                # Wire up signals
 **Goal**: Generate sequences automatically
 
 **Deliverables**:
-- [ ] **Shuffle**: Random order, no same-source back-to-back
+- [x] **Shuffle**: Random order, no same-source back-to-back
 - [ ] **Similarity Chain**: Each clip similar to previous (greedy TSP)
 - [ ] **Building Energy**: Sort by motion intensity (requires optical flow)
-- [ ] Remix panel with algorithm selector
-- [ ] "Generate" button populates timeline
-- [ ] Configurable clip count / target duration
+- [x] Remix panel with algorithm selector
+- [x] "Generate" button populates timeline
+- [x] Configurable clip count / target duration
 
 **Files to create**:
 ```
@@ -234,12 +234,12 @@ def similarity_chain(clips, similarity_fn):
 **Goal**: Render timeline to video file
 
 **Deliverables**:
-- [ ] "Export Sequence" button
+- [x] "Export Sequence" button
 - [ ] Export dialog (format, quality, resolution)
-- [ ] FFmpeg concat demuxer for fast export
-- [ ] Re-encode option for mixed sources
-- [ ] Progress bar during export
-- [ ] Open output folder on completion
+- [x] FFmpeg concat demuxer for fast export
+- [x] Re-encode option for mixed sources
+- [x] Progress bar during export
+- [x] Open output folder on completion
 
 **Files to create/modify**:
 ```
@@ -294,16 +294,16 @@ core/ffmpeg.py               # Add concat_clips method
 
 ### Functional Requirements
 
-- [ ] Drag clips from browser to timeline
-- [ ] Reposition clips by dragging on timeline
+- [x] Drag clips from browser to timeline
+- [x] Reposition clips by dragging on timeline
 - [ ] Delete clips from timeline (Delete key or right-click)
-- [ ] Add/remove tracks
-- [ ] Zoom timeline (Ctrl+scroll)
-- [ ] Scrub playhead to preview position
+- [x] Add/remove tracks
+- [x] Zoom timeline (Ctrl+scroll)
+- [x] Scrub playhead to preview position
 - [ ] Play sequence in preview player
-- [ ] Generate sequence with "Shuffle" algorithm
+- [x] Generate sequence with "Shuffle" algorithm
 - [ ] Generate sequence with "Similarity" algorithm
-- [ ] Export sequence to MP4
+- [x] Export sequence to MP4
 
 ### Non-Functional Requirements
 

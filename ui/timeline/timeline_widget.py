@@ -16,6 +16,7 @@ from models.clip import Clip, Source
 from ui.timeline.timeline_scene import TimelineScene
 from ui.timeline.timeline_view import TimelineView
 from ui.timeline.playhead import Playhead
+from core.remix.shuffle import constrained_shuffle
 
 
 class TimelineWidget(QWidget):
@@ -25,6 +26,8 @@ class TimelineWidget(QWidget):
     playhead_changed = Signal(float)  # time in seconds
     clip_selected = Signal(str)  # clip_id
     sequence_changed = Signal()  # sequence was modified
+    generate_requested = Signal(str, int)  # algorithm, clip_count
+    export_requested = Signal()  # request to export sequence
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -32,6 +35,7 @@ class TimelineWidget(QWidget):
         self.sequence = Sequence()
         self._source_lookup = {}  # source_id -> Source
         self._clip_lookup = {}  # clip_id -> (Clip, Source)
+        self._available_clips = []  # (Clip, Source) tuples for remixing
         self._playhead = None
 
         self._setup_ui()
@@ -139,6 +143,8 @@ class TimelineWidget(QWidget):
         self.add_track_btn.clicked.connect(self._on_add_track)
         self.zoom_fit_btn.clicked.connect(self._on_zoom_fit)
         self.zoom_reset_btn.clicked.connect(self.view.reset_zoom)
+        self.generate_btn.clicked.connect(self._on_generate)
+        self.export_btn.clicked.connect(lambda: self.export_requested.emit())
 
     def _on_playhead_moved(self, time_seconds: float):
         """Handle playhead position change."""
@@ -165,6 +171,52 @@ class TimelineWidget(QWidget):
             self.view.set_zoom_to_fit(duration)
         else:
             self.view.reset_zoom()
+
+    def _on_generate(self):
+        """Handle Generate button click."""
+        algorithm = self.remix_combo.currentText().lower()
+        clip_count = self.clip_count_spin.value()
+
+        if not self._available_clips:
+            return
+
+        # Clear existing timeline
+        self.clear_timeline()
+
+        # Get clips to use (up to clip_count)
+        clips_to_use = self._available_clips[:clip_count]
+
+        if algorithm == "shuffle":
+            # Constrained shuffle - no same source back-to-back
+            shuffled = constrained_shuffle(
+                items=clips_to_use,
+                get_category=lambda x: x[1].id,  # x is (Clip, Source), category by source
+                max_consecutive=1,
+            )
+
+            # Add to timeline sequentially
+            current_frame = 0
+            for clip, source in shuffled:
+                self.add_clip(clip, source, track_index=0, start_frame=current_frame)
+                current_frame += clip.duration_frames
+
+        elif algorithm == "similarity":
+            # For now, just use order as-is (similarity requires feature extraction)
+            current_frame = 0
+            for clip, source in clips_to_use:
+                self.add_clip(clip, source, track_index=0, start_frame=current_frame)
+                current_frame += clip.duration_frames
+
+        elif algorithm == "building":
+            # For now, just use order as-is (building requires motion analysis)
+            current_frame = 0
+            for clip, source in clips_to_use:
+                self.add_clip(clip, source, track_index=0, start_frame=current_frame)
+                current_frame += clip.duration_frames
+
+        # Zoom to fit
+        self._on_zoom_fit()
+        self.sequence_changed.emit()
 
     def _rebuild_scene(self):
         """Rebuild scene from sequence data."""
@@ -293,3 +345,11 @@ class TimelineWidget(QWidget):
                     return (seq_clip, clip, source)
 
         return (None, None, None)
+
+    def set_available_clips(self, clips: list[Clip], source: Source):
+        """Set the available clips for remix generation."""
+        self._available_clips = [(clip, source) for clip in clips]
+        # Update clip count max
+        self.clip_count_spin.setMaximum(len(clips))
+        if self.clip_count_spin.value() > len(clips):
+            self.clip_count_spin.setValue(len(clips))
