@@ -29,6 +29,7 @@ from core.thumbnail import ThumbnailGenerator
 from core.downloader import VideoDownloader
 from ui.clip_browser import ClipBrowser
 from ui.video_player import VideoPlayer
+from ui.timeline import TimelineWidget
 
 
 class DetectionWorker(QThread):
@@ -145,19 +146,30 @@ class MainWindow(QMainWindow):
         toolbar = self._create_toolbar()
         layout.addLayout(toolbar)
 
-        # Main content area (splitter)
-        splitter = QSplitter(Qt.Horizontal)
+        # Main vertical splitter (content area + timeline)
+        main_splitter = QSplitter(Qt.Vertical)
+
+        # Top content area (horizontal splitter)
+        content_splitter = QSplitter(Qt.Horizontal)
 
         # Left: Clip browser
         self.clip_browser = ClipBrowser()
-        splitter.addWidget(self.clip_browser)
+        self.clip_browser.set_drag_enabled(True)  # Enable drag-drop
+        content_splitter.addWidget(self.clip_browser)
 
         # Right: Video player
         self.video_player = VideoPlayer()
-        splitter.addWidget(self.video_player)
+        content_splitter.addWidget(self.video_player)
 
-        splitter.setSizes([600, 600])
-        layout.addWidget(splitter)
+        content_splitter.setSizes([400, 600])
+        main_splitter.addWidget(content_splitter)
+
+        # Bottom: Timeline
+        self.timeline = TimelineWidget()
+        main_splitter.addWidget(self.timeline)
+
+        main_splitter.setSizes([500, 250])
+        layout.addWidget(main_splitter)
 
         # Bottom: Progress bar
         self.progress_bar = QProgressBar()
@@ -226,6 +238,10 @@ class MainWindow(QMainWindow):
         """Connect UI signals."""
         self.clip_browser.clip_selected.connect(self._on_clip_selected)
         self.clip_browser.clip_double_clicked.connect(self._on_clip_double_clicked)
+        self.clip_browser.clip_dragged_to_timeline.connect(self._on_clip_dragged_to_timeline)
+
+        # Timeline signals
+        self.timeline.playhead_changed.connect(self._on_timeline_playhead_changed)
 
     # Drag and drop handlers
     def dragEnterEvent(self, event: QDragEnterEvent):
@@ -408,6 +424,17 @@ class MainWindow(QMainWindow):
             start_time = clip.start_time(self.current_source.fps)
             end_time = clip.end_time(self.current_source.fps)
             self.video_player.play_range(start_time, end_time)
+
+    def _on_clip_dragged_to_timeline(self, clip: Clip):
+        """Handle clip dragged from browser to timeline."""
+        if self.current_source:
+            self.timeline.set_fps(self.current_source.fps)
+            self.timeline.add_clip(clip, self.current_source)
+            self.status_bar.showMessage(f"Added clip to timeline")
+
+    def _on_timeline_playhead_changed(self, time_seconds: float):
+        """Handle timeline playhead position change."""
+        self.video_player.seek_to(time_seconds)
 
     def _on_export_click(self):
         """Export selected clips."""

@@ -10,9 +10,10 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QLabel,
     QFrame,
+    QApplication,
 )
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import Qt, Signal, QMimeData, QPoint
+from PySide6.QtGui import QPixmap, QDrag
 
 from models.clip import Clip, Source
 
@@ -22,12 +23,15 @@ class ClipThumbnail(QFrame):
 
     clicked = Signal(object)  # Clip
     double_clicked = Signal(object)  # Clip
+    drag_started = Signal(object)  # Clip
 
-    def __init__(self, clip: Clip, source: Source):
+    def __init__(self, clip: Clip, source: Source, drag_enabled: bool = False):
         super().__init__()
         self.clip = clip
         self.source = source
         self.selected = False
+        self._drag_enabled = drag_enabled
+        self._drag_start_pos = None
 
         self.setFrameStyle(QFrame.Panel | QFrame.Raised)
         self.setLineWidth(2)
@@ -104,10 +108,42 @@ class ClipThumbnail(QFrame):
             """)
 
     def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._drag_start_pos = event.pos()
         self.clicked.emit(self.clip)
+
+    def mouseMoveEvent(self, event):
+        if not self._drag_enabled or not self._drag_start_pos:
+            return
+
+        # Check if drag threshold met
+        if (event.pos() - self._drag_start_pos).manhattanLength() < QApplication.startDragDistance():
+            return
+
+        # Start drag
+        drag = QDrag(self)
+        mime_data = QMimeData()
+        mime_data.setData("application/x-clip-id", self.clip.id.encode())
+        drag.setMimeData(mime_data)
+
+        # Set drag pixmap (thumbnail)
+        if self.thumbnail_label.pixmap():
+            drag.setPixmap(self.thumbnail_label.pixmap().scaled(80, 45, Qt.KeepAspectRatio))
+
+        # Execute drag
+        result = drag.exec_(Qt.CopyAction)
+        if result == Qt.CopyAction:
+            self.drag_started.emit(self.clip)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_start_pos = None
 
     def mouseDoubleClickEvent(self, event):
         self.double_clicked.emit(self.clip)
+
+    def set_drag_enabled(self, enabled: bool):
+        """Enable or disable dragging."""
+        self._drag_enabled = enabled
 
 
 class ClipBrowser(QWidget):
@@ -115,6 +151,7 @@ class ClipBrowser(QWidget):
 
     clip_selected = Signal(object)  # Clip
     clip_double_clicked = Signal(object)  # Clip
+    clip_dragged_to_timeline = Signal(object)  # Clip
 
     COLUMNS = 4
 
@@ -122,6 +159,8 @@ class ClipBrowser(QWidget):
         super().__init__()
         self.thumbnails: list[ClipThumbnail] = []
         self.selected_clips: set[str] = set()  # clip ids
+        self._drag_enabled = False
+        self._source_lookup: dict[str, Source] = {}  # clip_id -> Source
 
         self._setup_ui()
 
@@ -161,10 +200,14 @@ class ClipBrowser(QWidget):
         if self.empty_label.isVisible():
             self.empty_label.setVisible(False)
 
+        # Store source reference
+        self._source_lookup[clip.id] = source
+
         # Create thumbnail widget
-        thumb = ClipThumbnail(clip, source)
+        thumb = ClipThumbnail(clip, source, drag_enabled=self._drag_enabled)
         thumb.clicked.connect(self._on_thumbnail_clicked)
         thumb.double_clicked.connect(self._on_thumbnail_double_clicked)
+        thumb.drag_started.connect(self._on_drag_started)
 
         self.thumbnails.append(thumb)
 
@@ -181,7 +224,14 @@ class ClipBrowser(QWidget):
 
         self.thumbnails = []
         self.selected_clips = set()
+        self._source_lookup = {}
         self.empty_label.setVisible(True)
+
+    def set_drag_enabled(self, enabled: bool):
+        """Enable or disable dragging clips to timeline."""
+        self._drag_enabled = enabled
+        for thumb in self.thumbnails:
+            thumb.set_drag_enabled(enabled)
 
     def get_selected_clips(self) -> list[Clip]:
         """Get list of selected clips."""
@@ -204,3 +254,11 @@ class ClipBrowser(QWidget):
     def _on_thumbnail_double_clicked(self, clip: Clip):
         """Handle thumbnail double-click."""
         self.clip_double_clicked.emit(clip)
+
+    def _on_drag_started(self, clip: Clip):
+        """Handle clip drag to timeline."""
+        self.clip_dragged_to_timeline.emit(clip)
+
+    def get_source_for_clip(self, clip_id: str) -> Optional[Source]:
+        """Get the source for a clip by ID."""
+        return self._source_lookup.get(clip_id)
