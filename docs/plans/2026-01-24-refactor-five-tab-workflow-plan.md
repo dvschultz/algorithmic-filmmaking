@@ -241,8 +241,8 @@ class BaseTab(QWidget):
 **Goal**: Create placeholder for future algorithmic remix features
 
 **Deliverables**:
-- [ ] Create `GenerateTab` with "Coming Soon" message
-- [ ] Add brief description of planned features
+- [x] Create `GenerateTab` with "Coming Soon" message
+- [x] Add brief description of planned features
 - [ ] Disable tab when no clips detected
 
 **UI Mockup**:
@@ -271,11 +271,11 @@ class BaseTab(QWidget):
 **Goal**: Move timeline and playback to dedicated tab
 
 **Deliverables**:
-- [ ] Create `SequenceTab` with timeline and video player
-- [ ] Remove remix controls from TimelineWidget (for now)
-- [ ] Keep drag-from-Analyze functionality (cross-tab drag-drop)
-- [ ] Wire playback signals between timeline and player
-- [ ] Show "Drag clips from Analyze tab" when timeline empty
+- [x] Create `SequenceTab` with timeline and video player
+- [x] Remove remix controls from TimelineWidget (for now)
+- [x] Keep drag-from-Analyze functionality (cross-tab drag-drop)
+- [x] Wire playback signals between timeline and player
+- [x] Show "Drag clips from Analyze tab" when timeline empty
 
 **UI Mockup**:
 ```

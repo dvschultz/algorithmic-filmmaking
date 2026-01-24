@@ -571,6 +571,11 @@ class MainWindow(QMainWindow):
         self.analyze_tab.detect_requested.connect(self._on_detect_from_tab)
         self.analyze_tab.clip_dragged_to_timeline.connect(self._on_clip_dragged_to_timeline)
 
+        # Sequence tab signals
+        self.sequence_tab.playback_requested.connect(self._on_playback_requested)
+        self.sequence_tab.stop_requested.connect(self._on_stop_requested)
+        self.sequence_tab.export_requested.connect(self._on_sequence_export_click)
+
         # Legacy component signals (clip browser, timeline, video player)
         self.clip_browser.clip_selected.connect(self._on_clip_selected)
         self.clip_browser.clip_double_clicked.connect(self._on_clip_double_clicked)
@@ -831,6 +836,8 @@ class MainWindow(QMainWindow):
         if self.current_source and self.clips:
             self.timeline.set_fps(self.current_source.fps)
             self.timeline.set_available_clips(self.clips, self.current_source)
+            # Also update Sequence tab
+            self.sequence_tab.set_clips_available(self.clips, self.current_source)
 
         # Start color analysis (if enabled in settings)
         if self.clips and self.settings.auto_analyze_colors:
@@ -954,6 +961,8 @@ class MainWindow(QMainWindow):
         if self.current_source:
             self.timeline.set_fps(self.current_source.fps)
             self.timeline.add_clip(clip, self.current_source)
+            # Also add to Sequence tab timeline
+            self.sequence_tab.add_clip_to_timeline(clip, self.current_source)
             self.status_bar.showMessage(f"Added clip to timeline")
 
     def _on_timeline_playhead_changed(self, time_seconds: float):
