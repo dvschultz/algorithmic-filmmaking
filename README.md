@@ -1,1 +1,148 @@
-# algorithmic-filmmaking
+# Scene Ripper
+
+Automatic scene detection and algorithmic video remixing for filmmakers and video artists.
+
+## What It Does
+
+Scene Ripper analyzes video files to detect scene boundaries, displays them as browsable thumbnails, and lets you remix clips into new sequences using algorithmic composition.
+
+**Key Features:**
+- Automatic scene detection with adjustable sensitivity
+- Thumbnail grid browser with preview
+- Multi-track timeline for composition
+- Algorithmic remix (shuffle with constraints)
+- Export individual clips or complete sequences
+- YouTube/Vimeo URL import
+
+## Quick Start
+
+**Prerequisites:**
+- Python 3.11+
+- FFmpeg installed and in PATH
+
+**Install:**
+```bash
+# Clone the repo
+git clone <repo-url>
+cd algorithmic-filmmaking
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Verify FFmpeg
+ffmpeg -version
+```
+
+**Run:**
+```bash
+python main.py
+```
+
+**Basic Workflow:**
+1. Import a video file (drag-drop or Import button)
+2. Adjust sensitivity and click "Detect Scenes"
+3. Browse detected clips in the thumbnail grid
+4. Drag clips to the timeline to build a sequence
+5. Click "Export Sequence" to render the final video
+
+## Features
+
+### Scene Detection
+- PySceneDetect with AdaptiveDetector
+- Sensitivity slider (1.0 sensitive → 10.0 less sensitive)
+- Background processing keeps UI responsive
+- Progress reporting
+
+### Clip Browser
+- Thumbnail grid of detected scenes
+- Duration labels on each clip
+- Click to preview, double-click for full playback
+- Drag-drop to timeline
+
+### Timeline
+- Multi-track composition
+- Drag to reposition clips
+- Playhead synchronization with preview
+- Remix algorithms (Shuffle - no same-source consecutive)
+- "Generate" button for algorithmic sequencing
+
+### Export
+- Individual clip export (frame-accurate)
+- Batch export (all or selected)
+- Sequence export (timeline → single video)
+- Opens output folder on completion
+
+### URL Import
+- YouTube and Vimeo support via yt-dlp
+- Automatic scene detection after download
+
+## Project Structure
+
+```
+algorithmic-filmmaking/
+├── main.py              # Entry point
+├── requirements.txt     # Dependencies
+├── core/
+│   ├── scene_detect.py  # PySceneDetect wrapper
+│   ├── ffmpeg.py        # FFmpeg operations
+│   ├── thumbnail.py     # Thumbnail generation
+│   ├── downloader.py    # yt-dlp wrapper
+│   ├── sequence_export.py
+│   └── remix/
+│       └── shuffle.py   # Constrained shuffle
+├── models/
+│   ├── clip.py          # Source, Clip dataclasses
+│   └── sequence.py      # Sequence, Track, SequenceClip
+└── ui/
+    ├── main_window.py   # Main application window
+    ├── clip_browser.py  # Thumbnail grid
+    ├── video_player.py  # Preview player
+    └── timeline/        # Timeline components
+```
+
+## Technology Stack
+
+| Component | Technology |
+|-----------|------------|
+| UI Framework | PySide6 (Qt 6) |
+| Scene Detection | PySceneDetect |
+| Video Processing | FFmpeg |
+| Video Download | yt-dlp |
+| Computer Vision | OpenCV |
+
+## Requirements
+
+```
+PySide6>=6.6
+scenedetect[opencv]>=0.6.4
+opencv-python>=4.8
+numpy>=1.24
+yt-dlp>=2024.1
+```
+
+Plus FFmpeg installed via system package manager:
+- macOS: `brew install ffmpeg`
+- Ubuntu: `sudo apt install ffmpeg`
+- Windows: Download from ffmpeg.org
+
+## Roadmap
+
+**Complete:**
+- [x] Scene detection
+- [x] Thumbnail browser
+- [x] Video preview
+- [x] Individual clip export
+- [x] URL import (YouTube/Vimeo)
+- [x] Basic timeline
+- [x] Sequence export
+- [x] Shuffle remix algorithm
+
+**In Progress:**
+- [ ] Timeline playback preview
+- [ ] Similarity-based sequencing
+- [ ] Motion-based ordering
+
+**Future:**
+- [ ] Clip tagging (mood, motion, color)
+- [ ] FAISS vector similarity search
+- [ ] CLI for batch processing
