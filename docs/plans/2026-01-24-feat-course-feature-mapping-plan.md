@@ -13,19 +13,20 @@ This document maps every tool and technique from the ITP Algorithmic Filmmaking 
 
 | Week | Topic | Features Mapped | Built | Remaining |
 |------|-------|-----------------|-------|-----------|
-| 1 | Video Datasets | 5 | 4 | 1 |
-| 2 | Film Analysis | 7 | 2 | 5 |
-| 3 | Content Analysis | 11 | 0 | 11 |
+| 1 | Video Datasets | 5 | 5 | 0 |
+| 2 | Film Analysis | 7 | 5 | 2 |
+| 3 | Content Analysis | 11 | 1 | 10 |
 | 4 | Dialogue/Text | 3 | 0 | 3 |
 | 5 | Generative | 2 | 0 | 2 |
 | 6 | Audio/Rhythm | 3 | 0 | 3 |
-| **Total** | | **31** | **6** | **25** |
+| **Total** | | **31** | **11** | **20** |
 
-**Recommended Starting Points (High Impact, Lower Complexity):**
-1. 🎯 Color extraction + HSV sorting (Week 2)
-2. 🎯 Shot type classification (Week 2)
-3. 🎯 Whisper transcription (Week 4)
-4. 🎯 Beat detection (Week 6)
+**Last Updated:** 2026-01-24 (post PR #7 merge)
+
+**Recommended Next Steps (High Impact, Lower Complexity):**
+1. 🎯 Whisper transcription (Week 4) - P1
+2. 🎯 Beat detection (Week 6) - P1
+3. 🎯 Similarity chaining for Generate tab - P2
 
 ---
 
@@ -41,7 +42,7 @@ This document maps every tool and technique from the ITP Algorithmic Filmmaking 
 | URL import | yt-dlp | ✅ Built | - | YouTube/Vimeo with validation |
 | Random sequencing | Python shuffle | ✅ Built | - | Constrained shuffle algorithm |
 | Thumbnail generation | FFmpeg | ✅ Built | - | Mid-clip frame extraction |
-| **JSON dataset export** | Custom format | ⬜ Todo | P2 | Interoperable clip metadata format |
+| JSON dataset export | Custom format | ✅ Built | - | `core/dataset_export.py` |
 
 ### JSON Dataset Export (New Feature)
 
@@ -90,10 +91,10 @@ This document maps every tool and technique from the ITP Algorithmic Filmmaking 
 | Clip duration extraction | FFProbe | ✅ Built | - | Via scene detection |
 | **Duration visualization** | Matplotlib | ⬜ Todo | P3 | Bar chart of clip lengths |
 | **Dimension analysis** | FFProbe | ⬜ Todo | P3 | Detect mixed resolutions |
-| **Color extraction (k-means)** | sklearn | ⬜ Todo | P1 | 🎯 High impact |
-| **HSV color sorting** | Custom | ⬜ Todo | P1 | 🎯 High impact |
-| **Shot type classification** | Pre-trained model | ✅ Built | P1 | CLIP zero-shot |
-| Aspect ratio handling | FFmpeg | ⬜ Todo | P2 | Letterbox/pillarbox on export |
+| Color extraction (k-means) | sklearn | ✅ Built | - | `ColorAnalysisWorker` in main_window.py |
+| HSV color sorting | Custom | ✅ Built | - | Color sorting in remix options |
+| Shot type classification | Pre-trained model | ✅ Built | - | `ShotTypeWorker`, CLIP zero-shot |
+| Color palette filter | Custom | ✅ Built | - | Filter by dominant color |
 
 ### Color Extraction (High Priority)
 
@@ -175,7 +176,7 @@ def extract_colors(video_path: str, n_colors: int = 5) -> list[tuple]:
 | **Object detection (YOLO)** | YOLOv8 | ⬜ Todo | P2 | Count objects per clip |
 | **Frame captioning (BLIP2)** | BLIP-2 | ⬜ Todo | P2 | Text description per clip |
 | **Video captioning** | mPLUG-Owl | ⬜ Todo | P3 | Narrative description |
-| **EDL export** | Custom | ⬜ Todo | P2 | Premiere/Resolve import |
+| EDL export | Custom | ✅ Built | - | `core/edl_export.py`, PR #7 |
 | **Person detection** | YOLOv8/MediaPipe | ⬜ Todo | P2 | Count people per clip |
 | **Pose estimation** | MediaPipe/OpenPose | ⬜ Todo | P3 | Body pose matching |
 | **Face detection** | MediaPipe | ⬜ Todo | P3 | Face count, direction |
@@ -481,18 +482,18 @@ def generate_beat_sequence(clips: list, beat_times: list) -> list:
 
 ## Implementation Phases
 
-### Phase 3: Visual Analysis (Next Priority)
+### Phase 3: Visual Analysis ✅ COMPLETE
 
 **Goal**: Color and shot type analysis for intelligent sorting
 
 **Features**:
 - [x] Color extraction (k-means, 5 dominant colors)
 - [x] HSV color sorting in clip browser
-- [ ] Color palette filter
+- [x] Color palette filter
 - [x] Shot type classification
 - [x] Shot type filter in browser
 
-**Estimated Effort**: 2-3 weeks
+**Completed**: PR #3, PR #4
 
 ### Phase 4: Audio & Speech
 
@@ -528,7 +529,7 @@ def generate_beat_sequence(clips: list, beat_times: list) -> list:
 - [ ] Action classification
 - [ ] Pose estimation
 - [ ] Face direction matching
-- [ ] EDL export
+- [x] EDL export ✅
 - [ ] FCPXML export (Final Cut Pro)
 
 **Estimated Effort**: 3-4 weeks
@@ -538,7 +539,7 @@ def generate_beat_sequence(clips: list, beat_times: list) -> list:
 ## Feature Dependency Graph
 
 ```
-Phase 1 (Done)              Phase 2 (Done)           Phase 3 (Next)
+Phase 1 (Done)              Phase 2 (Done)           Phase 3 (Done)
 ┌──────────────┐           ┌──────────────┐         ┌──────────────┐
 │ Scene Detect │──────────>│ Timeline     │────────>│ Color        │
 │ Import       │           │ Shuffle      │         │ Analysis     │
@@ -572,25 +573,25 @@ Phase 1 (Done)              Phase 2 (Done)           Phase 3 (Next)
 |----------|---------|---------------|
 | PySceneDetect | Scene detection | `core/scene_detect.py` ✅ |
 | Random Sequencing | Shuffle algorithm | `core/remix/shuffle.py` ✅ |
-| JSON file creation | Dataset export | `core/export.py` (todo) |
+| JSON file creation | Dataset export | `core/dataset_export.py` ✅ |
 | Intro to FFMPEG | Clip extraction | `core/ffmpeg.py` ✅ |
-| FFProbe | Metadata extraction | `core/ffmpeg.py` (extend) |
-| Duration visualization | Duration chart | `ui/analysis/` (todo) |
-| Color extraction | K-means colors | `core/analysis/color.py` (todo) |
-| HSV Color Sorting | Color sort | `core/analysis/color.py` (todo) |
-| Shot Type classification | Shot classifier | `core/analysis/shots.py` ✅ |
-| Frame Classifier | ImageNet tags | `core/analysis/classify.py` (todo) |
-| Video Classifier (X-CLIP) | Zero-shot labels | `core/analysis/classify.py` (todo) |
-| Action Classification | Action tags | `core/analysis/actions.py` (todo) |
-| Object Detection (YOLO) | Object counts | `core/analysis/detection.py` (todo) |
-| Frame Captioning (BLIP2) | Clip descriptions | `core/analysis/caption.py` (todo) |
-| EDL File Export | NLE export | `core/export/edl.py` (todo) |
-| Person/Pose Detection | Body detection | `core/analysis/pose.py` (todo) |
-| Face Detection | Face detection | `core/analysis/face.py` (todo) |
-| Dialogue Extraction | Whisper | `core/analysis/speech.py` (todo) |
-| Sentence Similarity | Text embeddings | `core/analysis/embeddings.py` (todo) |
-| Rhythms | Beat detection | `core/audio/beats.py` (todo) |
-| Audioreactive | Energy matching | `core/audio/reactive.py` (todo) |
+| FFProbe | Metadata extraction | `core/ffmpeg.py` ✅ |
+| Duration visualization | Duration chart | (todo) |
+| Color extraction | K-means colors | `ui/main_window.py:ColorAnalysisWorker` ✅ |
+| HSV Color Sorting | Color sort | Remix options ✅ |
+| Shot Type classification | Shot classifier | `ui/main_window.py:ShotTypeWorker` ✅ |
+| Frame Classifier | ImageNet tags | (todo) |
+| Video Classifier (X-CLIP) | Zero-shot labels | (todo) |
+| Action Classification | Action tags | (todo) |
+| Object Detection (YOLO) | Object counts | (todo) |
+| Frame Captioning (BLIP2) | Clip descriptions | (todo) |
+| EDL File Export | NLE export | `core/edl_export.py` ✅ |
+| Person/Pose Detection | Body detection | (todo) |
+| Face Detection | Face detection | (todo) |
+| Dialogue Extraction | Whisper | (todo) - **P1 Priority** |
+| Sentence Similarity | Text embeddings | (todo) |
+| Rhythms | Beat detection | (todo) - **P1 Priority** |
+| Audioreactive | Energy matching | (todo) |
 
 ---
 
@@ -617,4 +618,5 @@ Phase 1 (Done)              Phase 2 (Done)           Phase 3 (Next)
 ---
 
 *Generated: 2026-01-24*
+*Last Updated: 2026-01-24 (post PR #7 merge)*
 *Source: ITP Algorithmic Filmmaking course curriculum*
