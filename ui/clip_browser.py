@@ -182,6 +182,11 @@ class ClipThumbnail(QFrame):
         self.selected = selected
         self._update_style()
 
+    def set_thumbnail(self, path: Path):
+        """Update the thumbnail image."""
+        self.clip.thumbnail_path = path
+        self._load_thumbnail(path)
+
     def _update_style(self):
         """Update visual style based on state."""
         if self.selected:
@@ -479,6 +484,13 @@ class ClipBrowser(QWidget):
         for thumb in self.thumbnails:
             if thumb.clip.id == clip_id:
                 thumb.set_transcript(segments)
+                break
+
+    def update_clip_thumbnail(self, clip_id: str, thumb_path: Path):
+        """Update the thumbnail image for a specific clip."""
+        for thumb in self.thumbnails:
+            if thumb.clip.id == clip_id:
+                thumb.set_thumbnail(thumb_path)
                 break
 
     def _on_filter_changed(self, filter_option: str):

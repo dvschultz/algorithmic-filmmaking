@@ -1862,16 +1862,28 @@ class MainWindow(QMainWindow):
         logger.info(f"Regenerating thumbnails for {len(clips_needing_thumbnails)} clips")
         self.status_bar.showMessage(f"Regenerating {len(clips_needing_thumbnails)} thumbnails...")
 
-        # Use existing ThumbnailWorker
-        self._thumbnails_finished_handled = False
+        # Use existing ThumbnailWorker with project-load-specific handlers
         self.thumbnail_worker = ThumbnailWorker(
             self.current_source,
             clips_needing_thumbnails,
             self.settings.thumbnail_cache_dir,
         )
-        self.thumbnail_worker.thumbnail_ready.connect(self._on_thumbnail_ready)
-        self.thumbnail_worker.finished.connect(self._on_thumbnails_finished, Qt.UniqueConnection)
+        # Use handlers that update existing clips instead of adding new ones
+        self.thumbnail_worker.thumbnail_ready.connect(self._on_project_thumbnail_ready)
+        self.thumbnail_worker.finished.connect(self._on_project_thumbnails_finished, Qt.UniqueConnection)
         self.thumbnail_worker.start()
+
+    def _on_project_thumbnail_ready(self, clip_id: str, thumb_path: str):
+        """Handle individual thumbnail during project load (update, don't add)."""
+        clip = self.clips_by_id.get(clip_id)
+        if clip:
+            clip.thumbnail_path = Path(thumb_path)
+            self.analyze_tab.update_clip_thumbnail(clip_id, Path(thumb_path))
+
+    def _on_project_thumbnails_finished(self):
+        """Handle thumbnails completed during project load (no analysis restart)."""
+        logger.info("Project thumbnail regeneration finished")
+        self.status_bar.showMessage("Project loaded - thumbnails regenerated", 3000)
 
     def _check_unsaved_changes(self) -> bool:
         """Check for unsaved changes and prompt user.

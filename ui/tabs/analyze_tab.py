@@ -224,6 +224,10 @@ class AnalyzeTab(BaseTab):
         """Update shot type for a clip."""
         self.clip_browser.update_clip_shot_type(clip_id, shot_type)
 
+    def update_clip_thumbnail(self, clip_id: str, thumb_path):
+        """Update thumbnail for a clip."""
+        self.clip_browser.update_clip_thumbnail(clip_id, thumb_path)
+
     def set_sensitivity(self, value: float):
         """Set the sensitivity slider value."""
         self.sensitivity_slider.setValue(int(value * 10))
