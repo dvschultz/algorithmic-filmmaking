@@ -14,24 +14,70 @@ Scene Ripper analyzes video files to detect scene boundaries, displays them as b
 - Export individual clips or complete sequences
 - YouTube/Vimeo URL import
 
-## Quick Start
+## Installation
 
-**Prerequisites:**
-- Python 3.11+
-- FFmpeg installed and in PATH
+### Linux
 
-**Install:**
+**Option 1: AppImage (Recommended)**
+
+Download the latest AppImage from [Releases](https://github.com/dvschultz/algorithmic-filmmaking/releases):
+
 ```bash
-# Clone the repo
-git clone <repo-url>
-cd algorithmic-filmmaking
+# Download (replace VERSION with actual version)
+wget https://github.com/dvschultz/algorithmic-filmmaking/releases/download/vVERSION/Scene_Ripper-VERSION-x86_64.AppImage
 
-# Install dependencies
+# Make executable and run
+chmod +x Scene_Ripper-*-x86_64.AppImage
+./Scene_Ripper-*-x86_64.AppImage
+```
+
+**Option 2: From Source**
+
+```bash
+# Install system dependencies first (see System Dependencies below)
+# Ubuntu/Debian:
+sudo apt install python3 python3-pip ffmpeg \
+    gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+    gstreamer1.0-plugins-ugly gstreamer1.0-libav
+
+# Clone and install
+git clone https://github.com/dvschultz/algorithmic-filmmaking.git
+cd algorithmic-filmmaking
 pip install -r requirements.txt
 
-# Verify FFmpeg
-ffmpeg -version
+# Run
+python main.py
 ```
+
+### macOS
+
+```bash
+# Install FFmpeg
+brew install ffmpeg
+
+# Clone and install
+git clone https://github.com/dvschultz/algorithmic-filmmaking.git
+cd algorithmic-filmmaking
+pip install -r requirements.txt
+
+# Run
+python main.py
+```
+
+### Windows
+
+1. Install Python 3.11+ from [python.org](https://python.org)
+2. Install FFmpeg from [ffmpeg.org](https://ffmpeg.org/download.html) and add to PATH
+3. Clone and run:
+
+```bash
+git clone https://github.com/dvschultz/algorithmic-filmmaking.git
+cd algorithmic-filmmaking
+pip install -r requirements.txt
+python main.py
+```
+
+## Quick Start
 
 **Run:**
 ```bash
@@ -169,6 +215,7 @@ Download FFmpeg from [ffmpeg.org](https://ffmpeg.org/download.html) and add to P
 - [x] Basic timeline
 - [x] Sequence export
 - [x] Shuffle remix algorithm
+- [x] Linux support (AppImage packaging)
 
 **In Progress:**
 - [ ] Timeline playback preview
