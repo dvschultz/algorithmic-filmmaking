@@ -32,7 +32,6 @@ class TimelineWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        self.sequence = Sequence()
         self._source_lookup = {}  # source_id -> Source
         self._clip_lookup = {}  # clip_id -> (Clip, Source)
         self._available_clips = []  # (Clip, Source) tuples for remixing
@@ -40,6 +39,11 @@ class TimelineWidget(QWidget):
 
         self._setup_ui()
         self._connect_signals()
+
+    @property
+    def sequence(self) -> Sequence:
+        """Get the sequence from the scene."""
+        return self.scene.sequence
 
     def _setup_ui(self):
         """Set up the UI layout."""
