@@ -224,7 +224,7 @@ On load, restore:
 Add to:
 - [x] `closeEvent()` - before app closes
 - [x] `_on_open_project()` - before loading another project
-- [ ] Any "New Project" action (not implemented - no New Project action exists)
+- [x] `_on_new_project()` - before creating new project
 
 ## Acceptance Criteria
 

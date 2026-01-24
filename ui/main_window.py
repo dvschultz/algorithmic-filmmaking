@@ -459,6 +459,11 @@ class MainWindow(QMainWindow):
         file_menu = menu_bar.addMenu("&File")
 
         # Project actions
+        new_project_action = QAction("&New Project", self)
+        new_project_action.setShortcut(QKeySequence.New)  # Cmd+N
+        new_project_action.triggered.connect(self._on_new_project)
+        file_menu.addAction(new_project_action)
+
         open_project_action = QAction("&Open Project...", self)
         open_project_action.setShortcut(QKeySequence.Open)  # Cmd+O
         open_project_action.triggered.connect(self._on_open_project)
@@ -1627,6 +1632,25 @@ class MainWindow(QMainWindow):
             return
 
         self._load_project_file(path)
+
+    def _on_new_project(self):
+        """Handle New Project action - reset to initial state."""
+        if not self._check_unsaved_changes():
+            return
+
+        # Clear all project state
+        self._clear_project_state()
+
+        # Reset project tracking
+        self.current_project_path = None
+        self.project_metadata = None
+        self._mark_clean()
+
+        # Update window title to default
+        self._update_window_title()
+
+        self.status_bar.showMessage("New project created", 3000)
+        logger.info("Created new project")
 
     def _on_open_project(self):
         """Handle Open Project action."""
