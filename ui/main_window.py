@@ -1829,7 +1829,7 @@ class MainWindow(QMainWindow):
         self._add_recent_project(filepath)
 
         # Update UI
-        self._update_export_edl_menu_state()
+        self._on_sequence_changed()  # Updates Export EDL menu state
         self._update_window_title()
         self.status_bar.showMessage(f"Project loaded: {filepath.name} ({len(clips)} clips)")
 
