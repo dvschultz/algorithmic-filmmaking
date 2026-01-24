@@ -17,7 +17,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QStatusBar,
 )
-from PySide6.QtCore import Qt, Signal, QThread, QMimeData
+from PySide6.QtCore import Qt, Signal, QThread, QMimeData, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 
 from models.clip import Source, Clip
@@ -373,6 +374,6 @@ class MainWindow(QMainWindow):
 
         self.progress_bar.setVisible(False)
         self.status_bar.showMessage(f"Exported {exported}/{len(clips)} clips to {output_dir}")
-        QMessageBox.information(
-            self, "Export Complete", f"Exported {exported} clips to:\n{output_dir}"
-        )
+
+        # Open the export folder in system file browser
+        QDesktopServices.openUrl(QUrl.fromLocalFile(output_dir))
