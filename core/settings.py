@@ -1,6 +1,8 @@
 """Application settings management using QSettings."""
 
 import logging
+import os
+import sys
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Optional
@@ -8,6 +10,37 @@ from typing import Optional
 from PySide6.QtCore import QSettings
 
 logger = logging.getLogger(__name__)
+
+
+def _get_videos_dir() -> Path:
+    """Get platform-appropriate videos directory.
+
+    - Linux: Uses XDG_VIDEOS_DIR or ~/Videos
+    - macOS: Uses ~/Movies
+    - Windows: Uses ~/Videos
+    """
+    if sys.platform == "linux":
+        # Check XDG_VIDEOS_DIR first (set by user-dirs.dirs)
+        xdg_videos = os.environ.get("XDG_VIDEOS_DIR")
+        if xdg_videos:
+            return Path(xdg_videos)
+        # Fallback to ~/Videos (common on most Linux distros)
+        return Path.home() / "Videos"
+    elif sys.platform == "darwin":
+        return Path.home() / "Movies"
+    else:
+        # Windows and others
+        return Path.home() / "Videos"
+
+
+def _get_default_download_dir() -> Path:
+    """Get platform-appropriate download directory for videos."""
+    return _get_videos_dir() / "Scene Ripper Downloads"
+
+
+def _get_default_export_dir() -> Path:
+    """Get platform-appropriate export directory."""
+    return _get_videos_dir()
 
 
 # Quality preset definitions
@@ -38,14 +71,12 @@ FPS_PRESETS = {
 class Settings:
     """Application settings with sensible defaults."""
 
-    # Paths
+    # Paths (use platform-appropriate defaults)
     thumbnail_cache_dir: Path = field(
         default_factory=lambda: Path.home() / ".cache" / "scene-ripper" / "thumbnails"
     )
-    download_dir: Path = field(
-        default_factory=lambda: Path.home() / "Movies" / "Scene Ripper Downloads"
-    )
-    export_dir: Path = field(default_factory=lambda: Path.home() / "Movies")
+    download_dir: Path = field(default_factory=_get_default_download_dir)
+    export_dir: Path = field(default_factory=_get_default_export_dir)
 
     # Detection defaults
     default_sensitivity: float = 3.0

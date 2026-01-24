@@ -1,0 +1,117 @@
+name: Linux Build
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number for AppImage'
+        required: false
+        default: '0.1.0'
+
+jobs:
+  test-linux:
+    name: Test on Ubuntu
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ffmpeg \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-ugly \
+            gstreamer1.0-libav \
+            libxcb-xinerama0 \
+            libegl1 \
+            libgl1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Verify FFmpeg
+        run: ffmpeg -version
+
+      - name: Run import test
+        run: |
+          python -c "from ui.main_window import MainWindow; print('MainWindow import: OK')"
+          python -c "from core.scene_detect import SceneDetector; print('SceneDetector import: OK')"
+          python -c "from core.settings import Settings; s = Settings(); print(f'Settings import: OK, download_dir={s.download_dir}')"
+
+      - name: Run unit tests
+        run: |
+          if [ -d "tests" ]; then
+            python -m pytest tests/ -v
+          else
+            echo "No tests directory found, skipping"
+          fi
+
+  build-appimage:
+    name: Build AppImage
+    runs-on: ubuntu-22.04
+    needs: test-linux
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install appimage-builder
+        run: |
+          pip install appimage-builder
+          # Install additional tools for AppImage creation
+          sudo apt-get update
+          sudo apt-get install -y \
+            patchelf \
+            desktop-file-utils \
+            libgdk-pixbuf2.0-dev \
+            fakeroot
+
+      - name: Build AppImage
+        run: |
+          cd packaging/linux
+          VERSION="${{ github.event.inputs.version || '0.1.0' }}"
+          ./build-appimage.sh "$VERSION"
+        continue-on-error: true
+
+      - name: Upload AppImage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Scene-Ripper-AppImage
+          path: |
+            *.AppImage
+            packaging/linux/*.AppImage
+          if-no-files-found: warn
+
+      - name: Upload build logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            appimage-builder-cache/
+            *.log
+          if-no-files-found: ignore
