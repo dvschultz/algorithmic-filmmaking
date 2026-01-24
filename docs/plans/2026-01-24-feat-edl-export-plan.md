@@ -271,13 +271,13 @@ Ensure RenderTab has access to sources and clips dictionaries (may already have 
 
 ## Acceptance Criteria
 
-- [ ] EDL export produces valid CMX 3600 format
+- [x] EDL export produces valid CMX 3600 format
 - [ ] Exported EDL imports correctly in DaVinci Resolve
 - [ ] Exported EDL imports correctly in Premiere Pro
-- [ ] Timecodes are frame-accurate
-- [ ] Source filenames are preserved in comments
-- [ ] Empty timeline shows appropriate message (no export)
-- [ ] Export opens containing folder on completion
+- [x] Timecodes are frame-accurate
+- [x] Source filenames are preserved in comments
+- [x] Empty timeline shows appropriate message (no export)
+- [x] Export opens containing folder on completion
 
 ## Testing
 
