@@ -150,6 +150,8 @@ class SequenceTab(BaseTab):
             self.timeline.set_fps(source.fps)
             self.timeline.set_available_clips(clips, source)
             self.state_stack.setCurrentIndex(self.STATE_TIMELINE)
+            # Ensure video player has the source loaded
+            self.video_player.load_video(source.file_path)
         else:
             self.state_stack.setCurrentIndex(self.STATE_NO_CLIPS)
 

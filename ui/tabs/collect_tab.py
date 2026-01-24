@@ -209,3 +209,14 @@ class CollectTab(BaseTab):
         )
         if ok and url.strip():
             self.download_requested.emit(url.strip())
+
+    # Public methods for MainWindow to call
+
+    def set_downloading(self, is_downloading: bool):
+        """Update UI state during download."""
+        self.drop_zone.setEnabled(not is_downloading)
+        self.url_btn.setEnabled(not is_downloading)
+        if is_downloading:
+            self.url_btn.setText("Downloading...")
+        else:
+            self.url_btn.setText("Import from URL...")

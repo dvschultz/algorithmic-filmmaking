@@ -17,9 +17,6 @@ from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
-    QPushButton,
-    QSlider,
-    QLabel,
     QFileDialog,
     QProgressBar,
     QSplitter,
@@ -27,8 +24,6 @@ from PySide6.QtWidgets import (
     QStatusBar,
     QInputDialog,
     QLineEdit,
-    QMenuBar,
-    QMenu,
     QTabWidget,
 )
 from PySide6.QtCore import Qt, Signal, QThread, QMimeData, QUrl, QTimer, Slot
@@ -329,10 +324,6 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
 
-        # Top toolbar (kept for now, will migrate to tabs later)
-        toolbar = self._create_toolbar()
-        layout.addLayout(toolbar)
-
         # Tab widget for workflow pages
         self.tab_widget = QTabWidget()
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
@@ -427,6 +418,10 @@ class MainWindow(QMainWindow):
             else:
                 tab.on_tab_deactivated()
 
+        # Update Render tab with current sequence info when switching to it
+        if index == 4:  # Render tab
+            self._update_render_tab_sequence_info()
+
     def _create_menu_bar(self):
         """Create the application menu bar."""
         menu_bar = self.menuBar()
@@ -499,10 +494,8 @@ class MainWindow(QMainWindow):
 
     def _apply_settings(self):
         """Apply current settings to the UI and components."""
-        # Update sensitivity slider and label
-        sensitivity_value = int(self.settings.default_sensitivity * 10)
-        self.sensitivity_slider.setValue(sensitivity_value)
-        self.sensitivity_label.setText(f"{self.settings.default_sensitivity:.1f}")
+        # Update sensitivity in Analyze tab
+        self.analyze_tab.set_sensitivity(self.settings.default_sensitivity)
 
         logger.info(
             f"Settings applied: sensitivity={self.settings.default_sensitivity}, "
@@ -510,66 +503,6 @@ class MainWindow(QMainWindow):
             f"auto_shots={self.settings.auto_classify_shots}, "
             f"quality={self.settings.export_quality}"
         )
-
-    def _create_toolbar(self) -> QHBoxLayout:
-        """Create the top toolbar."""
-        toolbar = QHBoxLayout()
-
-        # Import button
-        self.import_btn = QPushButton("Import Video")
-        self.import_btn.clicked.connect(self._on_import_click)
-        toolbar.addWidget(self.import_btn)
-
-        # Import URL button
-        self.import_url_btn = QPushButton("Import URL")
-        self.import_url_btn.setToolTip("Download from YouTube or Vimeo")
-        self.import_url_btn.clicked.connect(self._on_import_url_click)
-        toolbar.addWidget(self.import_url_btn)
-
-        # Sensitivity slider
-        toolbar.addWidget(QLabel("Sensitivity:"))
-
-        self.sensitivity_slider = QSlider(Qt.Horizontal)
-        self.sensitivity_slider.setRange(10, 100)  # 1.0 to 10.0
-        self.sensitivity_slider.setValue(int(self.settings.default_sensitivity * 10))
-        self.sensitivity_slider.setMaximumWidth(150)
-        self.sensitivity_slider.setToolTip("Lower = more scenes detected")
-        toolbar.addWidget(self.sensitivity_slider)
-
-        self.sensitivity_label = QLabel(f"{self.settings.default_sensitivity:.1f}")
-        self.sensitivity_slider.valueChanged.connect(
-            lambda v: self.sensitivity_label.setText(f"{v/10:.1f}")
-        )
-        toolbar.addWidget(self.sensitivity_label)
-
-        # Detect button
-        self.detect_btn = QPushButton("Detect Scenes")
-        self.detect_btn.setEnabled(False)
-        self.detect_btn.clicked.connect(self._on_detect_click)
-        toolbar.addWidget(self.detect_btn)
-
-        toolbar.addStretch()
-
-        # Export button
-        self.export_btn = QPushButton("Export Selected")
-        self.export_btn.setEnabled(False)
-        self.export_btn.clicked.connect(self._on_export_click)
-        toolbar.addWidget(self.export_btn)
-
-        # Export all button
-        self.export_all_btn = QPushButton("Export All")
-        self.export_all_btn.setEnabled(False)
-        self.export_all_btn.clicked.connect(self._on_export_all_click)
-        toolbar.addWidget(self.export_all_btn)
-
-        # Export dataset button
-        self.export_dataset_btn = QPushButton("Export Dataset")
-        self.export_dataset_btn.setToolTip("Export clip metadata to JSON")
-        self.export_dataset_btn.setEnabled(False)
-        self.export_dataset_btn.clicked.connect(self._on_export_dataset_click)
-        toolbar.addWidget(self.export_dataset_btn)
-
-        return toolbar
 
     def _connect_signals(self):
         """Connect UI signals."""
@@ -585,6 +518,8 @@ class MainWindow(QMainWindow):
         self.sequence_tab.playback_requested.connect(self._on_playback_requested)
         self.sequence_tab.stop_requested.connect(self._on_stop_requested)
         self.sequence_tab.export_requested.connect(self._on_sequence_export_click)
+        # Update Render tab when sequence changes (clips added/removed/generated)
+        self.sequence_tab.timeline.sequence_changed.connect(self._update_render_tab_sequence_info)
 
         # Render tab signals
         self.render_tab.export_sequence_requested.connect(self._on_sequence_export_click)
@@ -621,10 +556,8 @@ class MainWindow(QMainWindow):
         """Handle detection request from Analyze tab."""
         if not self.current_source:
             return
-        # Update sensitivity slider to match
-        self.sensitivity_slider.setValue(int(threshold * 10))
-        # Trigger detection
-        self._on_detect_click()
+        # Start detection with the provided threshold
+        self._start_detection(threshold)
 
     # Drag and drop handlers
     def dragEnterEvent(self, event: QDragEnterEvent):
@@ -663,9 +596,6 @@ class MainWindow(QMainWindow):
         self.clips = []
         self.clip_browser.clear()
         self.video_player.load_video(path)
-        self.detect_btn.setEnabled(True)
-        self.export_btn.setEnabled(False)
-        self.export_all_btn.setEnabled(False)
         self.status_bar.showMessage(f"Loaded: {path.name}")
         self.setWindowTitle(f"Scene Ripper - {path.name}")
 
@@ -673,6 +603,9 @@ class MainWindow(QMainWindow):
         self.analyze_tab.set_source(self.current_source)
         self.analyze_tab.clear_clips()
         self.analyze_tab.set_sensitivity(self.settings.default_sensitivity)
+
+        # Update Sequence tab with source (for video player)
+        self.sequence_tab.set_source(self.current_source)
 
     def _on_import_url_click(self):
         """Handle import URL button click."""
@@ -688,10 +621,8 @@ class MainWindow(QMainWindow):
 
     def _download_video(self, url: str):
         """Start downloading a video from URL."""
-        # Disable buttons during download
-        self.import_btn.setEnabled(False)
-        self.import_url_btn.setEnabled(False)
-        self.detect_btn.setEnabled(False)
+        # Update UI state
+        self.collect_tab.set_downloading(True)
 
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 100)
@@ -710,9 +641,7 @@ class MainWindow(QMainWindow):
     def _on_download_finished(self, result):
         """Handle download completion."""
         self.progress_bar.setVisible(False)
-        self.import_btn.setEnabled(True)
-        self.import_url_btn.setEnabled(True)
-        self.detect_btn.setEnabled(True)
+        self.collect_tab.set_downloading(False)
 
         if result.file_path and result.file_path.exists():
             self._load_video(result.file_path)
@@ -725,14 +654,12 @@ class MainWindow(QMainWindow):
     def _on_download_error(self, error: str):
         """Handle download error."""
         self.progress_bar.setVisible(False)
-        self.import_btn.setEnabled(True)
-        self.import_url_btn.setEnabled(True)
-        self.detect_btn.setEnabled(True)
+        self.collect_tab.set_downloading(False)
         QMessageBox.critical(self, "Download Error", error)
 
-    def _on_detect_click(self):
-        """Handle detect button click."""
-        logger.info("=== DETECT CLICK ===")
+    def _start_detection(self, threshold: float):
+        """Start scene detection with given threshold."""
+        logger.info("=== START DETECTION ===")
         if not self.current_source:
             return
 
@@ -742,16 +669,10 @@ class MainWindow(QMainWindow):
         self._color_analysis_finished_handled = False
         self._shot_type_finished_handled = False
 
-        # Disable buttons during detection
-        self.detect_btn.setEnabled(False)
-        self.import_btn.setEnabled(False)
-
         # Update Analyze tab state
         self.analyze_tab.set_detecting(True)
         self.analyze_tab.clear_clips()
 
-        # Get sensitivity from slider
-        threshold = self.sensitivity_slider.value() / 10.0
         config = DetectionConfig(threshold=threshold)
 
         # Start detection in background
@@ -809,8 +730,7 @@ class MainWindow(QMainWindow):
         """Handle detection error."""
         logger.error(f"=== DETECTION ERROR: {error} ===")
         self.progress_bar.setVisible(False)
-        self.detect_btn.setEnabled(True)
-        self.import_btn.setEnabled(True)
+        self.analyze_tab.set_detecting(False)
         QMessageBox.critical(self, "Detection Error", error)
 
     def _on_thumbnail_progress(self, current: int, total: int):
@@ -837,12 +757,6 @@ class MainWindow(QMainWindow):
         self._thumbnails_finished_handled = True
 
         logger.info(f"Thumbnail worker running: {self.thumbnail_worker.isRunning() if self.thumbnail_worker else 'None'}")
-
-        self.detect_btn.setEnabled(True)
-        self.import_btn.setEnabled(True)
-        self.export_btn.setEnabled(True)
-        self.export_all_btn.setEnabled(True)
-        self.export_dataset_btn.setEnabled(True)
 
         # Update Analyze tab with clips
         self.analyze_tab.set_clips(self.clips)
@@ -982,6 +896,8 @@ class MainWindow(QMainWindow):
             # Also add to Sequence tab timeline
             self.sequence_tab.add_clip_to_timeline(clip, self.current_source)
             self.status_bar.showMessage(f"Added clip to timeline")
+            # Update Render tab with new sequence info
+            self._update_render_tab_sequence_info()
 
     def _on_timeline_playhead_changed(self, time_seconds: float):
         """Handle timeline playhead position change."""
@@ -1253,9 +1169,17 @@ class MainWindow(QMainWindow):
         # Open the export folder in system file browser
         QDesktopServices.openUrl(QUrl.fromLocalFile(output_dir))
 
+    def _update_render_tab_sequence_info(self):
+        """Update the Render tab with current sequence information."""
+        sequence = self.sequence_tab.get_sequence()
+        all_clips = sequence.get_all_clips()
+        duration_seconds = sequence.duration_frames / sequence.fps if sequence.fps > 0 else 0
+        self.render_tab.set_sequence_info(duration_seconds, len(all_clips))
+
     def _on_sequence_export_click(self):
         """Export the timeline sequence to a single video file."""
-        sequence = self.timeline.get_sequence()
+        # Use the SequenceTab's timeline, not the legacy one
+        sequence = self.sequence_tab.get_sequence()
         all_clips = sequence.get_all_clips()
 
         if not all_clips:
