@@ -38,7 +38,7 @@ class FFmpegProcessor:
         start_seconds: float,
         duration_seconds: float,
         fps: float = 30.0,
-        copy_codec: bool = True,
+        accurate: bool = True,
     ) -> bool:
         """
         Extract a clip from a video file.
@@ -48,31 +48,44 @@ class FFmpegProcessor:
             output_path: Output clip file
             start_seconds: Start time in seconds
             duration_seconds: Duration in seconds
-            fps: Frame rate (used to avoid including extra frame)
-            copy_codec: If True, copy streams without re-encoding (faster)
+            fps: Frame rate (used for frame-accurate cutting)
+            accurate: If True, re-encode for frame-accurate cuts (slower but precise)
 
         Returns:
             True if successful
         """
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Subtract half a frame to avoid including the first frame of the next scene
-        # This compensates for FFmpeg's rounding behavior
+        # Calculate end time, subtract one frame to exclude first frame of next scene
         frame_duration = 1.0 / fps
-        adjusted_duration = duration_seconds - (frame_duration * 0.5)
+        end_seconds = start_seconds + duration_seconds - frame_duration
 
-        cmd = [
-            self.ffmpeg_path,
-            "-y",  # Overwrite output
-            "-ss", str(start_seconds),  # Seek to start
-            "-i", str(input_path),
-            "-t", str(adjusted_duration),  # Duration (adjusted)
-        ]
-
-        if copy_codec:
-            cmd.extend(["-c", "copy"])  # Copy without re-encoding
+        if accurate:
+            # Re-encode for frame-accurate cutting
+            # Use -ss before -i for fast seeking, then accurate cut
+            cmd = [
+                self.ffmpeg_path,
+                "-y",
+                "-ss", str(start_seconds),
+                "-i", str(input_path),
+                "-to", str(duration_seconds - frame_duration),  # Relative to seek point
+                "-c:v", "libx264",
+                "-preset", "fast",
+                "-crf", "18",  # High quality
+                "-c:a", "aac",
+                "-b:a", "192k",
+            ]
         else:
-            cmd.extend(["-c:v", "libx264", "-c:a", "aac"])
+            # Stream copy - fast but only keyframe-accurate
+            cmd = [
+                self.ffmpeg_path,
+                "-y",
+                "-ss", str(start_seconds),
+                "-i", str(input_path),
+                "-to", str(duration_seconds - frame_duration),
+                "-c", "copy",
+                "-avoid_negative_ts", "make_zero",
+            ]
 
         cmd.append(str(output_path))
 
