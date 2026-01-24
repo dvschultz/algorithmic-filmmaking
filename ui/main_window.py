@@ -1229,19 +1229,11 @@ class MainWindow(QMainWindow):
             return
 
         output_path = Path(file_path)
-        if not output_path.suffix.lower() == ".edl":
-            output_path = output_path.with_suffix(".edl")
 
         # Build sources dictionary
         sources = {}
         if self.current_source:
             sources[self.current_source.id] = self.current_source
-
-        # Build clips dictionary
-        clips = {}
-        for clip in self.clips:
-            if self.current_source:
-                clips[clip.id] = (clip, self.current_source)
 
         config = EDLExportConfig(
             output_path=output_path,
@@ -1252,7 +1244,6 @@ class MainWindow(QMainWindow):
         success = export_edl(
             sequence=sequence,
             sources=sources,
-            clips=clips,
             config=config,
             progress_callback=lambda p, m: self.status_bar.showMessage(m),
         )

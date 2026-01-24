@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from models.clip import Clip, Source
-from models.sequence import Sequence, SequenceClip
+from models.clip import Source
+from models.sequence import Sequence
 
 
 @dataclass
@@ -15,6 +15,11 @@ class EDLExportConfig:
     output_path: Path
     title: str = "Scene Ripper Export"
     drop_frame: bool = False
+
+
+def _sanitize_edl_string(value: str) -> str:
+    """Remove format-breaking characters from EDL field values."""
+    return value.replace("\n", " ").replace("\r", " ")[:255]
 
 
 def frames_to_timecode(frames: int, fps: float, drop_frame: bool = False) -> str:
@@ -41,7 +46,6 @@ def frames_to_timecode(frames: int, fps: float, drop_frame: bool = False) -> str
 def export_edl(
     sequence: Sequence,
     sources: dict[str, Source],
-    clips: dict[str, tuple],
     config: EDLExportConfig,
     progress_callback: Callable[[float, str], None] | None = None,
 ) -> bool:
@@ -50,7 +54,6 @@ def export_edl(
     Args:
         sequence: The sequence to export
         sources: Dict mapping source_id to Source
-        clips: Dict mapping clip_id to (Clip, Source)
         config: Export configuration
         progress_callback: Optional (progress_0_to_1, message) callback
 
@@ -63,7 +66,7 @@ def export_edl(
     lines = []
 
     # Header
-    lines.append(f"TITLE: {config.title}")
+    lines.append(f"TITLE: {_sanitize_edl_string(config.title)}")
     fcm = "DROP FRAME" if config.drop_frame else "NON-DROP FRAME"
     lines.append(f"FCM: {fcm}")
     lines.append("")
@@ -116,7 +119,7 @@ def export_edl(
         lines.append(event_line)
 
         # Source filename comment
-        lines.append(f"* FROM CLIP NAME: {source.filename}")
+        lines.append(f"* FROM CLIP NAME: {_sanitize_edl_string(source.filename)}")
         lines.append("")
 
     if progress_callback:
