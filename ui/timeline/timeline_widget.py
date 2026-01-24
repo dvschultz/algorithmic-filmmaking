@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QComboBox,
     QSpinBox,
+    QStyle,
 )
 from PySide6.QtCore import Qt, Signal
 
@@ -27,6 +28,8 @@ class TimelineWidget(QWidget):
     clip_selected = Signal(str)  # clip_id
     sequence_changed = Signal()  # sequence was modified
     export_requested = Signal()  # request to export sequence
+    playback_requested = Signal(int)  # start_frame
+    stop_requested = Signal()  # request to stop playback
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -73,6 +76,22 @@ class TimelineWidget(QWidget):
         label = QLabel("Timeline")
         label.setStyleSheet("font-weight: bold; color: #999;")
         toolbar.addWidget(label)
+
+        toolbar.addSpacing(16)
+
+        # Play button
+        self.play_btn = QPushButton()
+        self.play_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+        self.play_btn.setToolTip("Play sequence")
+        self.play_btn.setFixedSize(32, 28)
+        toolbar.addWidget(self.play_btn)
+
+        # Stop button
+        self.stop_btn = QPushButton()
+        self.stop_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaStop))
+        self.stop_btn.setToolTip("Stop playback")
+        self.stop_btn.setFixedSize(32, 28)
+        toolbar.addWidget(self.stop_btn)
 
         toolbar.addStretch()
 
@@ -148,6 +167,8 @@ class TimelineWidget(QWidget):
         self.zoom_reset_btn.clicked.connect(self.view.reset_zoom)
         self.generate_btn.clicked.connect(self._on_generate)
         self.export_btn.clicked.connect(lambda: self.export_requested.emit())
+        self.play_btn.clicked.connect(self._on_play_clicked)
+        self.stop_btn.clicked.connect(self._on_stop_clicked)
 
     def _on_playhead_moved(self, time_seconds: float):
         """Handle playhead position change."""
@@ -161,6 +182,24 @@ class TimelineWidget(QWidget):
         """Handle click on ruler to move playhead."""
         if self._playhead:
             self._playhead.set_time(time_seconds)
+
+    def _on_play_clicked(self):
+        """Request playback from current playhead position."""
+        frame = self._playhead.get_frame() if self._playhead else 0
+        self.playback_requested.emit(frame)
+
+    def _on_stop_clicked(self):
+        """Request playback stop."""
+        self.stop_requested.emit()
+
+    def set_playing(self, playing: bool):
+        """Update UI to reflect playback state."""
+        if playing:
+            self.play_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
+            self.play_btn.setToolTip("Pause sequence")
+        else:
+            self.play_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+            self.play_btn.setToolTip("Play sequence")
 
     def _on_add_track(self):
         """Add a new track."""
