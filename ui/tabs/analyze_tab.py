@@ -23,12 +23,14 @@ class AnalyzeTab(BaseTab):
 
     Signals:
         detect_requested: Emitted when detection is requested (threshold: float)
+        transcribe_requested: Emitted when manual transcription is requested
         clip_selected: Emitted when a clip is selected (clip: Clip)
         clip_double_clicked: Emitted when a clip is double-clicked (clip: Clip)
         clip_dragged_to_timeline: Emitted when a clip is dragged to timeline (clip: Clip)
     """
 
     detect_requested = Signal(float)  # threshold
+    transcribe_requested = Signal()  # manual transcription request
     clip_selected = Signal(object)  # Clip
     clip_double_clicked = Signal(object)  # Clip
     clip_dragged_to_timeline = Signal(object)  # Clip
@@ -107,6 +109,13 @@ class AnalyzeTab(BaseTab):
         self.detect_btn.clicked.connect(self._on_detect_click)
         controls.addWidget(self.detect_btn)
 
+        # Transcribe button
+        self.transcribe_btn = QPushButton("Transcribe")
+        self.transcribe_btn.setToolTip("Transcribe speech in all clips")
+        self.transcribe_btn.setEnabled(False)
+        self.transcribe_btn.clicked.connect(self._on_transcribe_click)
+        controls.addWidget(self.transcribe_btn)
+
         controls.addStretch()
 
         # Clip count label
@@ -146,6 +155,10 @@ class AnalyzeTab(BaseTab):
         threshold = self.sensitivity_slider.value() / 10.0
         self.detect_requested.emit(threshold)
 
+    def _on_transcribe_click(self):
+        """Handle transcribe button click."""
+        self.transcribe_requested.emit()
+
     def _on_clip_selected(self, clip):
         """Handle clip selection."""
         self.clip_selected.emit(clip)
@@ -184,8 +197,10 @@ class AnalyzeTab(BaseTab):
         if clips:
             self.clip_count_label.setText(f"{len(clips)} clips")
             self.state_stack.setCurrentIndex(self.STATE_CLIPS)
+            self.transcribe_btn.setEnabled(True)
         else:
             self.clip_count_label.setText("")
+            self.transcribe_btn.setEnabled(False)
             if self._current_source:
                 self.state_stack.setCurrentIndex(self.STATE_NO_CLIPS)
             else:
@@ -218,5 +233,21 @@ class AnalyzeTab(BaseTab):
         self.detect_btn.setEnabled(not is_detecting)
         if is_detecting:
             self.detect_btn.setText("Detecting...")
+            self.transcribe_btn.setEnabled(False)  # Disable during detection
         else:
             self.detect_btn.setText("Detect Scenes")
+            # Re-enable transcribe button if we have clips
+            self.transcribe_btn.setEnabled(bool(self._clips))
+
+    def set_transcribing(self, is_transcribing: bool):
+        """Update UI state during transcription."""
+        self.transcribe_btn.setEnabled(not is_transcribing and bool(self._clips))
+        self.detect_btn.setEnabled(not is_transcribing and self._current_source is not None)
+        if is_transcribing:
+            self.transcribe_btn.setText("Transcribing...")
+        else:
+            self.transcribe_btn.setText("Transcribe")
+
+    def update_clip_transcript(self, clip_id: str, segments: list):
+        """Update transcript for a clip."""
+        self.clip_browser.update_clip_transcript(clip_id, segments)

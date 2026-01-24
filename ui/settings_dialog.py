@@ -177,6 +177,9 @@ class SettingsDialog(QDialog):
             export_quality=settings.export_quality,
             export_resolution=settings.export_resolution,
             export_fps=settings.export_fps,
+            transcription_model=settings.transcription_model,
+            transcription_language=settings.transcription_language,
+            auto_transcribe=settings.auto_transcribe,
         )
 
         self.setWindowTitle("Settings")
@@ -333,6 +336,57 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(analysis_group)
 
+        # Transcription group
+        transcription_group = QGroupBox("Transcription")
+        transcription_layout = QVBoxLayout(transcription_group)
+
+        # Model selection
+        model_layout = QHBoxLayout()
+        model_layout.addWidget(QLabel("Whisper Model:"))
+
+        self.transcription_model_combo = QComboBox()
+        self.transcription_model_combo.addItems([
+            "tiny.en - Fast, basic accuracy (39MB)",
+            "small.en - Good balance (244MB)",
+            "medium.en - Better accuracy (769MB)",
+            "large-v3 - Best accuracy (1.5GB)",
+        ])
+        self.transcription_model_combo.setToolTip(
+            "Larger models are more accurate but slower.\n"
+            "Models are downloaded on first use."
+        )
+        model_layout.addWidget(self.transcription_model_combo)
+
+        transcription_layout.addLayout(model_layout)
+
+        # Language selection
+        lang_layout = QHBoxLayout()
+        lang_layout.addWidget(QLabel("Language:"))
+
+        self.transcription_lang_combo = QComboBox()
+        self.transcription_lang_combo.addItems([
+            "English",
+            "Auto-detect",
+        ])
+        self.transcription_lang_combo.setToolTip(
+            "Select 'Auto-detect' for multi-language content.\n"
+            "English is faster for English-only content."
+        )
+        lang_layout.addWidget(self.transcription_lang_combo)
+
+        lang_layout.addStretch()
+        transcription_layout.addLayout(lang_layout)
+
+        # Auto-transcribe checkbox
+        self.auto_transcribe_check = QCheckBox("Auto-transcribe after detection")
+        self.auto_transcribe_check.setToolTip(
+            "Automatically transcribe speech after scene detection completes.\n"
+            "Disable to manually trigger transcription from the Analyze tab."
+        )
+        transcription_layout.addWidget(self.auto_transcribe_check)
+
+        layout.addWidget(transcription_group)
+
         layout.addStretch()
         return tab
 
@@ -446,6 +500,19 @@ class SettingsDialog(QDialog):
         fps_map = {"original": 0, "24": 1, "30": 2, "60": 3}
         self.fps_combo.setCurrentIndex(fps_map.get(self.settings.export_fps, 0))
 
+        # Transcription
+        model_map = {"tiny.en": 0, "small.en": 1, "medium.en": 2, "large-v3": 3}
+        self.transcription_model_combo.setCurrentIndex(
+            model_map.get(self.settings.transcription_model, 1)
+        )
+
+        lang_map = {"en": 0, "auto": 1}
+        self.transcription_lang_combo.setCurrentIndex(
+            lang_map.get(self.settings.transcription_language, 0)
+        )
+
+        self.auto_transcribe_check.setChecked(self.settings.auto_transcribe)
+
     def _save_to_settings(self):
         """Save UI values to settings object."""
         # Paths
@@ -468,6 +535,15 @@ class SettingsDialog(QDialog):
 
         fps_values = ["original", "24", "30", "60"]
         self.settings.export_fps = fps_values[self.fps_combo.currentIndex()]
+
+        # Transcription
+        model_values = ["tiny.en", "small.en", "medium.en", "large-v3"]
+        self.settings.transcription_model = model_values[self.transcription_model_combo.currentIndex()]
+
+        lang_values = ["en", "auto"]
+        self.settings.transcription_language = lang_values[self.transcription_lang_combo.currentIndex()]
+
+        self.settings.auto_transcribe = self.auto_transcribe_check.isChecked()
 
     def _validate(self) -> tuple[bool, str]:
         """Validate all settings. Returns (is_valid, error_message)."""
@@ -576,4 +652,7 @@ class SettingsDialog(QDialog):
             or self.settings.export_quality != self.original_settings.export_quality
             or self.settings.export_resolution != self.original_settings.export_resolution
             or self.settings.export_fps != self.original_settings.export_fps
+            or self.settings.transcription_model != self.original_settings.transcription_model
+            or self.settings.transcription_language != self.original_settings.transcription_language
+            or self.settings.auto_transcribe != self.original_settings.auto_transcribe
         )
