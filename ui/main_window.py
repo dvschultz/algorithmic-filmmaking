@@ -1,8 +1,16 @@
 """Main application window."""
 
+import logging
 import re
 from pathlib import Path
 from typing import Optional
+
+# Set up logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 from PySide6.QtWidgets import (
     QMainWindow,
@@ -20,7 +28,7 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLineEdit,
 )
-from PySide6.QtCore import Qt, Signal, QThread, QMimeData, QUrl
+from PySide6.QtCore import Qt, Signal, QThread, QMimeData, QUrl, QTimer, Slot
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 
@@ -46,16 +54,21 @@ class DetectionWorker(QThread):
         super().__init__()
         self.video_path = video_path
         self.config = config
+        logger.debug("DetectionWorker created")
 
     def run(self):
+        logger.info("DetectionWorker.run() STARTING")
         try:
             detector = SceneDetector(self.config)
             source, clips = detector.detect_scenes_with_progress(
                 self.video_path,
                 lambda p, m: self.progress.emit(p, m),
             )
+            logger.info("DetectionWorker.run() emitting finished signal")
             self.finished.emit(source, clips)
+            logger.info("DetectionWorker.run() COMPLETED")
         except Exception as e:
+            logger.error(f"DetectionWorker.run() ERROR: {e}")
             self.error.emit(str(e))
 
 
@@ -70,8 +83,10 @@ class ThumbnailWorker(QThread):
         super().__init__()
         self.source = source
         self.clips = clips
+        logger.debug("ThumbnailWorker created")
 
     def run(self):
+        logger.info("ThumbnailWorker.run() STARTING")
         generator = ThumbnailGenerator()
         total = len(self.clips)
 
@@ -89,7 +104,9 @@ class ThumbnailWorker(QThread):
 
             self.progress.emit(i + 1, total)
 
+        logger.info("ThumbnailWorker.run() emitting finished signal")
         self.finished.emit()
+        logger.info("ThumbnailWorker.run() COMPLETED")
 
 
 class DownloadWorker(QThread):
@@ -167,15 +184,19 @@ class ColorAnalysisWorker(QThread):
         super().__init__()
         self.clips = clips
         self._cancelled = False
+        logger.debug("ColorAnalysisWorker created")
 
     def cancel(self):
         """Request cancellation of the color analysis."""
+        logger.info("ColorAnalysisWorker.cancel() called")
         self._cancelled = True
 
     def run(self):
+        logger.info("ColorAnalysisWorker.run() STARTING")
         total = len(self.clips)
         for i, clip in enumerate(self.clips):
             if self._cancelled:
+                logger.info("ColorAnalysisWorker cancelled")
                 break
             try:
                 if clip.thumbnail_path and clip.thumbnail_path.exists():
@@ -184,7 +205,9 @@ class ColorAnalysisWorker(QThread):
             except Exception:
                 pass  # Skip failed color extraction
             self.progress.emit(i + 1, total)
+        logger.info("ColorAnalysisWorker.run() emitting finished signal")
         self.finished.emit()
+        logger.info("ColorAnalysisWorker.run() COMPLETED")
 
 
 class MainWindow(QMainWindow):
@@ -204,8 +227,14 @@ class MainWindow(QMainWindow):
             sanitized = sanitized[:100]
         return sanitized or "video"
 
+    # Class-level counter to track instances
+    _instance_count = 0
+
     def __init__(self):
         super().__init__()
+        MainWindow._instance_count += 1
+        self._instance_id = MainWindow._instance_count
+        logger.info(f"=== MAINWINDOW INIT START (instance #{self._instance_id}) ===")
         self.setWindowTitle("Scene Ripper - Algorithmic Filmmaking")
         self.setMinimumSize(1200, 800)
         self.setAcceptDrops(True)
@@ -220,8 +249,23 @@ class MainWindow(QMainWindow):
         self.export_worker: Optional[SequenceExportWorker] = None
         self.color_worker: Optional[ColorAnalysisWorker] = None
 
+        # Guards to prevent duplicate signal handling
+        self._detection_finished_handled = False
+        self._thumbnails_finished_handled = False
+
+        logger.info("Setting up UI...")
         self._setup_ui()
+        logger.info("Connecting signals...")
         self._connect_signals()
+
+        # Playback state (must be after _setup_ui so self.timeline exists)
+        logger.info("Setting up playback state...")
+        self._is_playing = False
+        self._current_playback_clip = None  # Currently playing SequenceClip
+        self._playback_timer = QTimer(self)  # Parent to self for proper lifecycle
+        self._playback_timer.setInterval(33)  # ~30fps update rate
+        self._playback_timer.timeout.connect(self._on_playback_tick)
+        logger.info(f"=== MAINWINDOW INIT COMPLETE (instance #{self._instance_id}) ===")
 
     def _setup_ui(self):
         """Set up the user interface."""
@@ -330,6 +374,12 @@ class MainWindow(QMainWindow):
         # Timeline signals
         self.timeline.playhead_changed.connect(self._on_timeline_playhead_changed)
         self.timeline.export_requested.connect(self._on_sequence_export_click)
+        self.timeline.playback_requested.connect(self._on_playback_requested)
+        self.timeline.stop_requested.connect(self._on_stop_requested)
+
+        # Video player signals for playback sync
+        self.video_player.position_updated.connect(self._on_video_position_updated)
+        self.video_player.player.playbackStateChanged.connect(self._on_video_state_changed)
 
     # Drag and drop handlers
     def dragEnterEvent(self, event: QDragEnterEvent):
@@ -430,8 +480,13 @@ class MainWindow(QMainWindow):
 
     def _on_detect_click(self):
         """Handle detect button click."""
+        logger.info("=== DETECT CLICK ===")
         if not self.current_source:
             return
+
+        # Reset guards for new detection run
+        self._detection_finished_handled = False
+        self._thumbnails_finished_handled = False
 
         # Disable buttons during detection
         self.detect_btn.setEnabled(False)
@@ -445,21 +500,35 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 100)
 
+        logger.info("Creating DetectionWorker...")
         self.detection_worker = DetectionWorker(
             self.current_source.file_path, config
         )
         self.detection_worker.progress.connect(self._on_detection_progress)
         self.detection_worker.finished.connect(self._on_detection_finished)
         self.detection_worker.error.connect(self._on_detection_error)
+        logger.info("Starting DetectionWorker...")
         self.detection_worker.start()
+        logger.info("DetectionWorker started")
 
     def _on_detection_progress(self, progress: float, message: str):
         """Handle detection progress update."""
         self.progress_bar.setValue(int(progress * 100))
         self.status_bar.showMessage(message)
 
+    @Slot(object, list)
     def _on_detection_finished(self, source: Source, clips: list[Clip]):
         """Handle detection completion."""
+        logger.info("=== DETECTION FINISHED ===")
+
+        # Guard against duplicate calls
+        if self._detection_finished_handled:
+            logger.warning("_on_detection_finished already handled, ignoring duplicate call")
+            return
+        self._detection_finished_handled = True
+
+        logger.info(f"Detection worker running: {self.detection_worker.isRunning() if self.detection_worker else 'None'}")
+
         self.current_source = source
         self.clips = clips
         self.clips_by_id = {clip.id: clip for clip in clips}
@@ -467,14 +536,18 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(f"Found {len(clips)} scenes. Generating thumbnails...")
 
         # Start thumbnail generation
+        logger.info("Creating ThumbnailWorker...")
         self.thumbnail_worker = ThumbnailWorker(source, clips)
         self.thumbnail_worker.progress.connect(self._on_thumbnail_progress)
         self.thumbnail_worker.thumbnail_ready.connect(self._on_thumbnail_ready)
-        self.thumbnail_worker.finished.connect(self._on_thumbnails_finished)
+        self.thumbnail_worker.finished.connect(self._on_thumbnails_finished, Qt.UniqueConnection)
+        logger.info("Starting ThumbnailWorker...")
         self.thumbnail_worker.start()
+        logger.info("ThumbnailWorker started")
 
     def _on_detection_error(self, error: str):
         """Handle detection error."""
+        logger.error(f"=== DETECTION ERROR: {error} ===")
         self.progress_bar.setVisible(False)
         self.detect_btn.setEnabled(True)
         self.import_btn.setEnabled(True)
@@ -490,8 +563,19 @@ class MainWindow(QMainWindow):
         if clip:
             self.clip_browser.add_clip(clip, self.current_source)
 
+    @Slot()
     def _on_thumbnails_finished(self):
         """Handle all thumbnails completed."""
+        logger.info("=== THUMBNAILS FINISHED ===")
+
+        # Guard against duplicate calls
+        if self._thumbnails_finished_handled:
+            logger.warning("_on_thumbnails_finished already handled, ignoring duplicate call")
+            return
+        self._thumbnails_finished_handled = True
+
+        logger.info(f"Thumbnail worker running: {self.thumbnail_worker.isRunning() if self.thumbnail_worker else 'None'}")
+
         self.detect_btn.setEnabled(True)
         self.import_btn.setEnabled(True)
         self.export_btn.setEnabled(True)
@@ -505,11 +589,14 @@ class MainWindow(QMainWindow):
         # Start color analysis
         if self.clips:
             self.status_bar.showMessage(f"Analyzing colors for {len(self.clips)} scenes...")
+            logger.info("Creating ColorAnalysisWorker...")
             self.color_worker = ColorAnalysisWorker(self.clips)
             self.color_worker.progress.connect(self._on_color_progress)
             self.color_worker.color_ready.connect(self._on_color_ready)
-            self.color_worker.finished.connect(self._on_color_analysis_finished)
+            self.color_worker.finished.connect(self._on_color_analysis_finished, Qt.UniqueConnection)
+            logger.info("Starting ColorAnalysisWorker...")
             self.color_worker.start()
+            logger.info("ColorAnalysisWorker started")
         else:
             self.progress_bar.setVisible(False)
             self.status_bar.showMessage(f"Ready - {len(self.clips)} scenes detected")
@@ -529,6 +616,8 @@ class MainWindow(QMainWindow):
 
     def _on_color_analysis_finished(self):
         """Handle all color analysis completed."""
+        logger.info("=== COLOR ANALYSIS FINISHED ===")
+        logger.info(f"Color worker running: {self.color_worker.isRunning() if self.color_worker else 'None'}")
         self.progress_bar.setVisible(False)
         self.status_bar.showMessage(f"Ready - {len(self.clips)} scenes detected")
 
@@ -554,7 +643,165 @@ class MainWindow(QMainWindow):
 
     def _on_timeline_playhead_changed(self, time_seconds: float):
         """Handle timeline playhead position change."""
-        self.video_player.seek_to(time_seconds)
+        # Don't seek during playback - playhead is driven by video position
+        if not self._is_playing:
+            self.video_player.seek_to(time_seconds)
+
+    # --- Playback methods ---
+
+    def _on_playback_requested(self, start_frame: int):
+        """Start sequence playback from given frame."""
+        if self._is_playing:
+            # Toggle pause
+            self._pause_playback()
+            return
+
+        sequence = self.timeline.get_sequence()
+        if sequence.duration_frames == 0:
+            return  # Nothing to play
+
+        self._is_playing = True
+        self.timeline.set_playing(True)
+
+        # Start playback from current position
+        self._play_clip_at_frame(start_frame)
+
+    def _play_clip_at_frame(self, frame: int):
+        """Load and play the clip at given timeline frame."""
+        sequence = self.timeline.get_sequence()
+
+        # Check if we're past the end of sequence
+        if frame >= sequence.duration_frames:
+            self._stop_playback()
+            # Reset playhead to beginning
+            self.timeline.set_playhead_time(0)
+            return
+
+        # Get clip at current position
+        seq_clip, clip, source = self.timeline.get_clip_at_playhead()
+
+        if not seq_clip:
+            # No clip at this position (gap) - show black and advance via timer
+            self._current_playback_clip = None
+            self.video_player.player.stop()  # Shows black
+            self._playback_timer.start()
+            return
+
+        self._current_playback_clip = seq_clip
+
+        # Calculate source position
+        # frame_in_clip = where we are relative to clip start on timeline
+        frame_in_clip = frame - seq_clip.start_frame
+        # source_frame = in_point + offset into clip
+        source_frame = seq_clip.in_point + frame_in_clip
+        source_seconds = source_frame / source.fps
+
+        # Calculate end of this clip in source time
+        end_seconds = seq_clip.out_point / source.fps
+
+        # Load source and play range
+        self.video_player.load_video(source.file_path)
+        self.video_player.play_range(source_seconds, end_seconds)
+
+        # Start timer to monitor for clip transitions
+        self._playback_timer.start()
+
+    def _on_playback_tick(self):
+        """Called during playback to check for clip transitions and advance playhead in gaps."""
+        if not self._is_playing:
+            self._playback_timer.stop()
+            return
+
+        sequence = self.timeline.get_sequence()
+        current_time = self.timeline.get_playhead_time()
+        current_frame = int(current_time * sequence.fps)
+
+        # Check if we're past the end of sequence
+        if current_frame >= sequence.duration_frames:
+            self._stop_playback()
+            self.timeline.set_playhead_time(0)
+            return
+
+        if self._current_playback_clip:
+            # Playing a clip - check if we've moved past it
+            if current_frame >= self._current_playback_clip.end_frame():
+                # Move to next position
+                next_frame = self._current_playback_clip.end_frame()
+                self.timeline.set_playhead_time(next_frame / sequence.fps)
+                self._play_clip_at_frame(next_frame)
+        else:
+            # In a gap - advance playhead manually
+            # Advance by ~1 frame worth of time (33ms at 30fps)
+            new_time = current_time + (self._playback_timer.interval() / 1000.0)
+            new_frame = int(new_time * sequence.fps)
+
+            # Check if we've reached a clip
+            self.timeline.set_playhead_time(new_time)
+            seq_clip, _, _ = self.timeline.get_clip_at_playhead()
+
+            if seq_clip:
+                # Found a clip - start playing it
+                self._play_clip_at_frame(new_frame)
+
+    def _on_video_position_updated(self, position_ms: int):
+        """Sync timeline playhead to video position during playback."""
+        if not self._is_playing or not self._current_playback_clip:
+            return
+
+        seq_clip = self._current_playback_clip
+        clip_data = self.timeline._clip_lookup.get(seq_clip.source_clip_id)
+        if not clip_data:
+            return
+
+        _, source = clip_data
+
+        # Convert video position to source frame
+        source_seconds = position_ms / 1000.0
+        source_frame = int(source_seconds * source.fps)
+
+        # Calculate timeline frame
+        # timeline_frame = start_frame + (source_frame - in_point)
+        frame_offset = source_frame - seq_clip.in_point
+        timeline_frame = seq_clip.start_frame + frame_offset
+        timeline_seconds = timeline_frame / self.timeline.sequence.fps
+
+        # Update playhead position
+        self.timeline.set_playhead_time(timeline_seconds)
+
+    def _on_video_state_changed(self, state):
+        """Handle video player state changes."""
+        from PySide6.QtMultimedia import QMediaPlayer
+
+        logger.debug(f"Video state changed: {state}, is_playing: {self._is_playing}")
+
+        if not self._is_playing:
+            return
+
+        if state == QMediaPlayer.StoppedState:
+            # Clip ended naturally - check if we should continue to next
+            if self._current_playback_clip:
+                next_frame = self._current_playback_clip.end_frame()
+                self.timeline.set_playhead_time(next_frame / self.timeline.sequence.fps)
+                self._play_clip_at_frame(next_frame)
+
+    def _pause_playback(self):
+        """Pause playback."""
+        self._is_playing = False
+        self._playback_timer.stop()
+        self.video_player.player.pause()
+        self.timeline.set_playing(False)
+
+    def _on_stop_requested(self):
+        """Handle stop request from timeline."""
+        self._stop_playback()
+
+    def _stop_playback(self):
+        """Stop playback and reset state."""
+        self._is_playing = False
+        self._playback_timer.stop()
+        self._current_playback_clip = None
+        self.video_player.player.stop()
+        self.timeline.set_playing(False)
 
     def _on_export_click(self):
         """Export selected clips."""
@@ -687,23 +934,35 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "Export Error", f"Failed to export sequence: {error}")
 
     def closeEvent(self, event):
-        """Clean up workers before closing."""
+        """Clean up workers and timers before closing."""
+        logger.info("=== CLOSE EVENT ===")
+
+        # Stop playback timer
+        if self._playback_timer.isActive():
+            logger.info("Stopping playback timer")
+            self._playback_timer.stop()
+
         workers = [
-            self.detection_worker,
-            self.thumbnail_worker,
-            self.download_worker,
-            self.export_worker,
-            self.color_worker,
+            ("detection", self.detection_worker),
+            ("thumbnail", self.thumbnail_worker),
+            ("download", self.download_worker),
+            ("export", self.export_worker),
+            ("color", self.color_worker),
         ]
 
-        for worker in workers:
-            if worker and worker.isRunning():
-                # Try graceful cancellation if supported
-                if hasattr(worker, 'cancel'):
-                    worker.cancel()
-                # Wait up to 3 seconds for graceful shutdown
-                if not worker.wait(3000):
-                    worker.terminate()
-                    worker.wait(1000)
+        for name, worker in workers:
+            if worker:
+                logger.info(f"{name} worker running: {worker.isRunning()}")
+                if worker.isRunning():
+                    logger.info(f"Stopping {name} worker...")
+                    # Try graceful cancellation if supported
+                    if hasattr(worker, 'cancel'):
+                        worker.cancel()
+                    # Wait up to 3 seconds for graceful shutdown
+                    if not worker.wait(3000):
+                        logger.warning(f"{name} worker did not stop gracefully, terminating...")
+                        worker.terminate()
+                        worker.wait(1000)
+                    logger.info(f"{name} worker stopped")
 
         event.accept()

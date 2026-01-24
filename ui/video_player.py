@@ -12,13 +12,16 @@ from PySide6.QtWidgets import (
     QLabel,
     QStyle,
 )
-from PySide6.QtCore import Qt, QUrl, Slot
+from PySide6.QtCore import Qt, QUrl, Slot, Signal
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QVideoWidget
 
 
 class VideoPlayer(QWidget):
     """Video player with playback controls."""
+
+    # Signals
+    position_updated = Signal(int)  # position in milliseconds
 
     def __init__(self):
         super().__init__()
@@ -123,6 +126,7 @@ class VideoPlayer(QWidget):
     def _on_position_changed(self, position: int):
         """Handle position change."""
         self.position_slider.setValue(position)
+        self.position_updated.emit(position)
 
         # Update time label
         current = self._format_time(position)
