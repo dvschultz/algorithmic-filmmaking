@@ -576,6 +576,12 @@ class MainWindow(QMainWindow):
         self.sequence_tab.stop_requested.connect(self._on_stop_requested)
         self.sequence_tab.export_requested.connect(self._on_sequence_export_click)
 
+        # Render tab signals
+        self.render_tab.export_sequence_requested.connect(self._on_sequence_export_click)
+        self.render_tab.export_clips_requested.connect(self._on_export_click)
+        self.render_tab.export_all_clips_requested.connect(self._on_export_all_click)
+        self.render_tab.export_dataset_requested.connect(self._on_export_dataset_click)
+
         # Legacy component signals (clip browser, timeline, video player)
         self.clip_browser.clip_selected.connect(self._on_clip_selected)
         self.clip_browser.clip_double_clicked.connect(self._on_clip_double_clicked)
@@ -838,6 +844,8 @@ class MainWindow(QMainWindow):
             self.timeline.set_available_clips(self.clips, self.current_source)
             # Also update Sequence tab
             self.sequence_tab.set_clips_available(self.clips, self.current_source)
+            # Update Render tab with clip count
+            self.render_tab.set_detected_clips_count(len(self.clips))
 
         # Start color analysis (if enabled in settings)
         if self.clips and self.settings.auto_analyze_colors:

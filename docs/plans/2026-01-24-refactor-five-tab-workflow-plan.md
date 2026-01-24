@@ -305,14 +305,14 @@ class BaseTab(QWidget):
 **Goal**: Create export configuration and rendering interface
 
 **Deliverables**:
-- [ ] Create `RenderTab` with export settings
-- [ ] Add quality preset selector (High/Medium/Low)
-- [ ] Add resolution selector (Original/1080p/720p/480p)
-- [ ] Add "Export Sequence" button
-- [ ] Add "Export Selected Clips" button
-- [ ] Add "Export Dataset (JSON)" button
-- [ ] Show export progress in this tab
-- [ ] Disable when timeline is empty
+- [x] Create `RenderTab` with export settings
+- [x] Add quality preset selector (High/Medium/Low)
+- [x] Add resolution selector (Original/1080p/720p/480p)
+- [x] Add "Export Sequence" button
+- [x] Add "Export Selected Clips" button
+- [x] Add "Export Dataset (JSON)" button
+- [x] Show export progress in this tab
+- [x] Disable when timeline is empty
 
 **UI Mockup**:
 ```
