@@ -117,6 +117,7 @@ class ClipThumbnail(QFrame):
             "border-radius: 0px;"
         )
         self.transcript_overlay.setGeometry(0, 0, 160, 90)
+        self.transcript_overlay.raise_()  # Ensure overlay is on top
         self.transcript_overlay.setVisible(False)
         self._update_transcript_overlay()
 

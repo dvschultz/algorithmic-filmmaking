@@ -231,11 +231,13 @@ class AnalyzeTab(BaseTab):
     def set_detecting(self, is_detecting: bool):
         """Update UI state during detection."""
         self.detect_btn.setEnabled(not is_detecting)
-        self.transcribe_btn.setEnabled(False)  # Disable during detection
         if is_detecting:
             self.detect_btn.setText("Detecting...")
+            self.transcribe_btn.setEnabled(False)  # Disable during detection
         else:
             self.detect_btn.setText("Detect Scenes")
+            # Re-enable transcribe button if we have clips
+            self.transcribe_btn.setEnabled(bool(self._clips))
 
     def set_transcribing(self, is_transcribing: bool):
         """Update UI state during transcription."""
