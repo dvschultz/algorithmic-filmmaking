@@ -408,11 +408,23 @@ class MainWindow(QMainWindow):
         if dialog.exec() == SettingsDialog.Accepted:
             self.settings = dialog.get_settings()
             save_settings(self.settings)
-
-            # Update UI with new settings
-            self.sensitivity_slider.setValue(int(self.settings.default_sensitivity * 10))
+            self._apply_settings()
             self.status_bar.showMessage("Settings saved")
             logger.info("Settings updated and saved")
+
+    def _apply_settings(self):
+        """Apply current settings to the UI and components."""
+        # Update sensitivity slider and label
+        sensitivity_value = int(self.settings.default_sensitivity * 10)
+        self.sensitivity_slider.setValue(sensitivity_value)
+        self.sensitivity_label.setText(f"{self.settings.default_sensitivity:.1f}")
+
+        logger.info(
+            f"Settings applied: sensitivity={self.settings.default_sensitivity}, "
+            f"auto_colors={self.settings.auto_analyze_colors}, "
+            f"auto_shots={self.settings.auto_classify_shots}, "
+            f"quality={self.settings.export_quality}"
+        )
 
     def _create_toolbar(self) -> QHBoxLayout:
         """Create the top toolbar."""
