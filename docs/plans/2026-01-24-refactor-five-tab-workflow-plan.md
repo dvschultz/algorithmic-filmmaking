@@ -206,13 +206,13 @@ class BaseTab(QWidget):
 **Goal**: Move detection controls and clip browser to dedicated tab
 
 **Deliverables**:
-- [ ] Create `AnalyzeTab` with sensitivity slider and detect button
-- [ ] Embed existing `ClipBrowser` component
-- [ ] Embed `VideoPlayer` for clip preview
-- [ ] Wire `clip_selected` signal to video player seek
-- [ ] Wire `clip_double_clicked` to play clip range
-- [ ] Show "Import a video first" when no source
-- [ ] Show "Click Detect to find scenes" after import
+- [x] Create `AnalyzeTab` with sensitivity slider and detect button
+- [x] Embed existing `ClipBrowser` component
+- [x] Embed `VideoPlayer` for clip preview
+- [x] Wire `clip_selected` signal to video player seek
+- [x] Wire `clip_double_clicked` to play clip range
+- [x] Show "Import a video first" when no source
+- [x] Show "Click Detect to find scenes" after import
 
 **UI Mockup**:
 ```

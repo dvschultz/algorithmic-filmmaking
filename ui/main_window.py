@@ -567,6 +567,10 @@ class MainWindow(QMainWindow):
         self.collect_tab.video_imported.connect(self._on_video_imported_from_tab)
         self.collect_tab.download_requested.connect(self._on_download_requested_from_tab)
 
+        # Analyze tab signals
+        self.analyze_tab.detect_requested.connect(self._on_detect_from_tab)
+        self.analyze_tab.clip_dragged_to_timeline.connect(self._on_clip_dragged_to_timeline)
+
         # Legacy component signals (clip browser, timeline, video player)
         self.clip_browser.clip_selected.connect(self._on_clip_selected)
         self.clip_browser.clip_double_clicked.connect(self._on_clip_double_clicked)
@@ -591,6 +595,15 @@ class MainWindow(QMainWindow):
     def _on_download_requested_from_tab(self, url: str):
         """Handle download request from Collect tab."""
         self._download_video(url)
+
+    def _on_detect_from_tab(self, threshold: float):
+        """Handle detection request from Analyze tab."""
+        if not self.current_source:
+            return
+        # Update sensitivity slider to match
+        self.sensitivity_slider.setValue(int(threshold * 10))
+        # Trigger detection
+        self._on_detect_click()
 
     # Drag and drop handlers
     def dragEnterEvent(self, event: QDragEnterEvent):
@@ -634,6 +647,11 @@ class MainWindow(QMainWindow):
         self.export_all_btn.setEnabled(False)
         self.status_bar.showMessage(f"Loaded: {path.name}")
         self.setWindowTitle(f"Scene Ripper - {path.name}")
+
+        # Update Analyze tab
+        self.analyze_tab.set_source(self.current_source)
+        self.analyze_tab.clear_clips()
+        self.analyze_tab.set_sensitivity(self.settings.default_sensitivity)
 
     def _on_import_url_click(self):
         """Handle import URL button click."""
@@ -707,6 +725,10 @@ class MainWindow(QMainWindow):
         self.detect_btn.setEnabled(False)
         self.import_btn.setEnabled(False)
 
+        # Update Analyze tab state
+        self.analyze_tab.set_detecting(True)
+        self.analyze_tab.clear_clips()
+
         # Get sensitivity from slider
         threshold = self.sensitivity_slider.value() / 10.0
         config = DetectionConfig(threshold=threshold)
@@ -779,6 +801,8 @@ class MainWindow(QMainWindow):
         clip = self.clips_by_id.get(clip_id)
         if clip:
             self.clip_browser.add_clip(clip, self.current_source)
+            # Also add to Analyze tab
+            self.analyze_tab.add_clip(clip, self.current_source)
 
     @Slot()
     def _on_thumbnails_finished(self):
@@ -798,6 +822,10 @@ class MainWindow(QMainWindow):
         self.export_btn.setEnabled(True)
         self.export_all_btn.setEnabled(True)
         self.export_dataset_btn.setEnabled(True)
+
+        # Update Analyze tab with clips
+        self.analyze_tab.set_clips(self.clips)
+        self.analyze_tab.set_detecting(False)
 
         # Make clips available for timeline remix
         if self.current_source and self.clips:
@@ -846,6 +874,8 @@ class MainWindow(QMainWindow):
             clip.dominant_colors = colors
             # Update the browser thumbnail with colors
             self.clip_browser.update_clip_colors(clip_id, colors)
+            # Also update Analyze tab
+            self.analyze_tab.update_clip_colors(clip_id, colors)
 
     @Slot()
     def _on_color_analysis_finished(self):
@@ -887,6 +917,8 @@ class MainWindow(QMainWindow):
             clip.shot_type = shot_type
             # Update the browser thumbnail with shot type
             self.clip_browser.update_clip_shot_type(clip_id, shot_type)
+            # Also update Analyze tab
+            self.analyze_tab.update_clip_shot_type(clip_id, shot_type)
             logger.debug(f"Clip {clip_id}: {shot_type} ({confidence:.2f})")
 
     @Slot()
