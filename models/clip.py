@@ -36,6 +36,7 @@ class Clip:
     end_frame: int = 0
     thumbnail_path: Optional[Path] = None
     dominant_colors: Optional[list[tuple[int, int, int]]] = None  # RGB tuples
+    shot_type: Optional[str] = None  # e.g., "wide", "medium", "close-up"
 
     @property
     def duration_frames(self) -> int:

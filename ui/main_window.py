@@ -38,6 +38,7 @@ from core.thumbnail import ThumbnailGenerator
 from core.downloader import VideoDownloader
 from core.sequence_export import SequenceExporter, ExportConfig
 from core.analysis.color import extract_dominant_colors
+from core.analysis.shots import classify_shot_type
 from ui.clip_browser import ClipBrowser
 from ui.video_player import VideoPlayer
 from ui.timeline import TimelineWidget
@@ -210,6 +211,43 @@ class ColorAnalysisWorker(QThread):
         logger.info("ColorAnalysisWorker.run() COMPLETED")
 
 
+class ShotTypeWorker(QThread):
+    """Background worker for shot type classification using CLIP."""
+
+    progress = Signal(int, int)  # current, total
+    shot_type_ready = Signal(str, str, float)  # clip_id, shot_type, confidence
+    finished = Signal()
+
+    def __init__(self, clips: list[Clip]):
+        super().__init__()
+        self.clips = clips
+        self._cancelled = False
+        logger.debug("ShotTypeWorker created")
+
+    def cancel(self):
+        """Request cancellation of the shot type classification."""
+        logger.info("ShotTypeWorker.cancel() called")
+        self._cancelled = True
+
+    def run(self):
+        logger.info("ShotTypeWorker.run() STARTING")
+        total = len(self.clips)
+        for i, clip in enumerate(self.clips):
+            if self._cancelled:
+                logger.info("ShotTypeWorker cancelled")
+                break
+            try:
+                if clip.thumbnail_path and clip.thumbnail_path.exists():
+                    shot_type, confidence = classify_shot_type(clip.thumbnail_path)
+                    self.shot_type_ready.emit(clip.id, shot_type, confidence)
+            except Exception as e:
+                logger.warning(f"Shot type classification failed for {clip.id}: {e}")
+            self.progress.emit(i + 1, total)
+        logger.info("ShotTypeWorker.run() emitting finished signal")
+        self.finished.emit()
+        logger.info("ShotTypeWorker.run() COMPLETED")
+
+
 class MainWindow(QMainWindow):
     """Main application window with drag-drop, detection, and preview."""
 
@@ -248,10 +286,13 @@ class MainWindow(QMainWindow):
         self.download_worker: Optional[DownloadWorker] = None
         self.export_worker: Optional[SequenceExportWorker] = None
         self.color_worker: Optional[ColorAnalysisWorker] = None
+        self.shot_type_worker: Optional[ShotTypeWorker] = None
 
         # Guards to prevent duplicate signal handling
         self._detection_finished_handled = False
         self._thumbnails_finished_handled = False
+        self._color_analysis_finished_handled = False
+        self._shot_type_finished_handled = False
 
         logger.info("Setting up UI...")
         self._setup_ui()
@@ -487,6 +528,8 @@ class MainWindow(QMainWindow):
         # Reset guards for new detection run
         self._detection_finished_handled = False
         self._thumbnails_finished_handled = False
+        self._color_analysis_finished_handled = False
+        self._shot_type_finished_handled = False
 
         # Disable buttons during detection
         self.detect_btn.setEnabled(False)
@@ -614,10 +657,60 @@ class MainWindow(QMainWindow):
             # Update the browser thumbnail with colors
             self.clip_browser.update_clip_colors(clip_id, colors)
 
+    @Slot()
     def _on_color_analysis_finished(self):
         """Handle all color analysis completed."""
         logger.info("=== COLOR ANALYSIS FINISHED ===")
+
+        # Guard against duplicate calls
+        if self._color_analysis_finished_handled:
+            logger.warning("_on_color_analysis_finished already handled, ignoring duplicate call")
+            return
+        self._color_analysis_finished_handled = True
+
         logger.info(f"Color worker running: {self.color_worker.isRunning() if self.color_worker else 'None'}")
+
+        # Start shot type classification
+        if self.clips:
+            self.status_bar.showMessage(f"Classifying shot types for {len(self.clips)} scenes...")
+            logger.info("Creating ShotTypeWorker...")
+            self.shot_type_worker = ShotTypeWorker(self.clips)
+            self.shot_type_worker.progress.connect(self._on_shot_type_progress)
+            self.shot_type_worker.shot_type_ready.connect(self._on_shot_type_ready)
+            self.shot_type_worker.finished.connect(self._on_shot_type_finished, Qt.UniqueConnection)
+            logger.info("Starting ShotTypeWorker...")
+            self.shot_type_worker.start()
+            logger.info("ShotTypeWorker started")
+        else:
+            self.progress_bar.setVisible(False)
+            self.status_bar.showMessage(f"Ready - {len(self.clips)} scenes detected")
+
+    def _on_shot_type_progress(self, current: int, total: int):
+        """Handle shot type classification progress."""
+        self.progress_bar.setValue(int((current / total) * 100))
+
+    def _on_shot_type_ready(self, clip_id: str, shot_type: str, confidence: float):
+        """Handle shot type classification complete for a clip."""
+        # Update the clip model
+        clip = self.clips_by_id.get(clip_id)
+        if clip:
+            clip.shot_type = shot_type
+            # Update the browser thumbnail with shot type
+            self.clip_browser.update_clip_shot_type(clip_id, shot_type)
+            logger.debug(f"Clip {clip_id}: {shot_type} ({confidence:.2f})")
+
+    @Slot()
+    def _on_shot_type_finished(self):
+        """Handle all shot type classification completed."""
+        logger.info("=== SHOT TYPE CLASSIFICATION FINISHED ===")
+
+        # Guard against duplicate calls
+        if self._shot_type_finished_handled:
+            logger.warning("_on_shot_type_finished already handled, ignoring duplicate call")
+            return
+        self._shot_type_finished_handled = True
+
+        logger.info(f"Shot type worker running: {self.shot_type_worker.isRunning() if self.shot_type_worker else 'None'}")
         self.progress_bar.setVisible(False)
         self.status_bar.showMessage(f"Ready - {len(self.clips)} scenes detected")
 
@@ -948,6 +1041,7 @@ class MainWindow(QMainWindow):
             ("download", self.download_worker),
             ("export", self.export_worker),
             ("color", self.color_worker),
+            ("shot_type", self.shot_type_worker),
         ]
 
         for name, worker in workers:

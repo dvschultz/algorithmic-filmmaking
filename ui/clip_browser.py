@@ -19,6 +19,7 @@ from PySide6.QtGui import QPixmap, QDrag, QPainter, QColor
 
 from models.clip import Clip, Source
 from core.analysis.color import get_primary_hue
+from core.analysis.shots import get_display_name, SHOT_TYPES
 
 
 class ColorSwatchBar(QWidget):
@@ -77,7 +78,7 @@ class ClipThumbnail(QFrame):
 
         self.setFrameStyle(QFrame.Panel | QFrame.Raised)
         self.setLineWidth(2)
-        self.setFixedSize(180, 145)  # Increased height for color bar
+        self.setFixedSize(180, 160)  # Increased height for shot type label
         self.setCursor(Qt.PointingHandCursor)
 
         layout = QVBoxLayout(self)
@@ -103,12 +104,34 @@ class ClipThumbnail(QFrame):
             self.color_bar.set_colors(clip.dominant_colors)
         layout.addWidget(self.color_bar)
 
+        # Info row: duration and shot type
+        info_layout = QHBoxLayout()
+        info_layout.setContentsMargins(0, 0, 0, 0)
+        info_layout.setSpacing(4)
+
         # Duration label
         duration = clip.duration_seconds(source.fps)
         self.duration_label = QLabel(self._format_duration(duration))
-        self.duration_label.setAlignment(Qt.AlignCenter)
+        self.duration_label.setAlignment(Qt.AlignLeft)
         self.duration_label.setStyleSheet("font-size: 11px; color: #666;")
-        layout.addWidget(self.duration_label)
+        info_layout.addWidget(self.duration_label)
+
+        info_layout.addStretch()
+
+        # Shot type label
+        self.shot_type_label = QLabel()
+        self.shot_type_label.setAlignment(Qt.AlignRight)
+        self.shot_type_label.setStyleSheet(
+            "font-size: 10px; color: #fff; background-color: #666; "
+            "border-radius: 3px; padding: 1px 4px;"
+        )
+        if clip.shot_type:
+            self.shot_type_label.setText(get_display_name(clip.shot_type))
+        else:
+            self.shot_type_label.setVisible(False)
+        info_layout.addWidget(self.shot_type_label)
+
+        layout.addLayout(info_layout)
 
         self._update_style()
 
@@ -197,6 +220,11 @@ class ClipThumbnail(QFrame):
         """Set the dominant colors for this clip."""
         self.color_bar.set_colors(colors)
 
+    def set_shot_type(self, shot_type: str):
+        """Set the shot type for this clip."""
+        self.shot_type_label.setText(get_display_name(shot_type))
+        self.shot_type_label.setVisible(True)
+
 
 class ClipBrowser(QWidget):
     """Grid browser for viewing detected clips."""
@@ -213,6 +241,7 @@ class ClipBrowser(QWidget):
         self.selected_clips: set[str] = set()  # clip ids
         self._drag_enabled = False
         self._source_lookup: dict[str, Source] = {}  # clip_id -> Source
+        self._current_filter = "All"  # Current shot type filter
 
         self._setup_ui()
 
@@ -221,7 +250,7 @@ class ClipBrowser(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # Header with sort dropdown
+        # Header with filter and sort dropdowns
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(8, 8, 8, 4)
 
@@ -230,6 +259,20 @@ class ClipBrowser(QWidget):
         header_layout.addWidget(header_label)
 
         header_layout.addStretch()
+
+        # Shot type filter dropdown
+        filter_label = QLabel("Filter:")
+        filter_label.setStyleSheet("font-size: 12px; color: #666;")
+        header_layout.addWidget(filter_label)
+
+        self.filter_combo = QComboBox()
+        filter_options = ["All"] + [get_display_name(st) for st in SHOT_TYPES]
+        self.filter_combo.addItems(filter_options)
+        self.filter_combo.setFixedWidth(100)
+        self.filter_combo.currentTextChanged.connect(self._on_filter_changed)
+        header_layout.addWidget(self.filter_combo)
+
+        header_layout.addSpacing(16)
 
         # Sort dropdown
         sort_label = QLabel("Order:")
@@ -340,6 +383,18 @@ class ClipBrowser(QWidget):
                 thumb.set_colors(colors)
                 break
 
+    def update_clip_shot_type(self, clip_id: str, shot_type: str):
+        """Update the shot type for a specific clip thumbnail."""
+        for thumb in self.thumbnails:
+            if thumb.clip.id == clip_id:
+                thumb.set_shot_type(shot_type)
+                break
+
+    def _on_filter_changed(self, filter_option: str):
+        """Handle filter dropdown change."""
+        self._current_filter = filter_option
+        self._rebuild_grid()
+
     def _on_sort_changed(self, sort_option: str):
         """Handle sort dropdown change."""
         if sort_option == "Timeline":
@@ -373,13 +428,33 @@ class ClipBrowser(QWidget):
         self._rebuild_grid()
 
     def _rebuild_grid(self):
-        """Rebuild the grid layout with current thumbnail order."""
+        """Rebuild the grid layout with current thumbnail order and filter."""
         # Remove all thumbnails from grid
         for thumb in self.thumbnails:
             self.grid.removeWidget(thumb)
+            thumb.setVisible(False)
 
-        # Re-add in new order
-        for i, thumb in enumerate(self.thumbnails):
+        # Filter thumbnails based on current filter
+        visible_thumbs = []
+        for thumb in self.thumbnails:
+            if self._matches_filter(thumb):
+                visible_thumbs.append(thumb)
+
+        # Re-add visible thumbnails in order
+        for i, thumb in enumerate(visible_thumbs):
             row = i // self.COLUMNS
             col = i % self.COLUMNS
             self.grid.addWidget(thumb, row, col)
+            thumb.setVisible(True)
+
+    def _matches_filter(self, thumb: ClipThumbnail) -> bool:
+        """Check if a thumbnail matches the current filter."""
+        if self._current_filter == "All":
+            return True
+
+        shot_type = thumb.clip.shot_type
+        if not shot_type:
+            return False
+
+        # Compare display names
+        return get_display_name(shot_type) == self._current_filter
