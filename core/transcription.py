@@ -63,6 +63,25 @@ class TranscriptSegment:
     text: str
     confidence: float = 0.0
 
+    def to_dict(self) -> dict:
+        """Serialize to dictionary for JSON export."""
+        return {
+            "start_time": self.start_time,
+            "end_time": self.end_time,
+            "text": self.text,
+            "confidence": self.confidence,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "TranscriptSegment":
+        """Deserialize from dictionary."""
+        return cls(
+            start_time=data.get("start_time", 0.0),
+            end_time=data.get("end_time", 0.0),
+            text=data.get("text", ""),
+            confidence=data.get("confidence", 0.0),
+        )
+
 
 def get_model(model_name: str = "small.en"):
     """Get or load the Whisper model (lazy loading).

@@ -353,6 +353,31 @@ class TimelineWidget(QWidget):
         """Get the current sequence."""
         return self.sequence
 
+    def clear(self):
+        """Clear all clips and reset lookups."""
+        self.scene.clear_all_clips()
+        self._source_lookup.clear()
+        self._clip_lookup.clear()
+        self._available_clips.clear()
+        self._update_export_button()
+        self.sequence_changed.emit()
+
+    def load_sequence(self, sequence: Sequence, source: Source):
+        """Load a saved sequence.
+
+        Args:
+            sequence: The sequence to load
+            source: The source video (for lookups)
+        """
+        # Register the source
+        self._source_lookup[source.id] = source
+
+        # Set the sequence on the scene (this rebuilds all visuals)
+        self.scene.set_sequence(sequence)
+
+        self._update_export_button()
+        self.sequence_changed.emit()
+
     def set_playhead_time(self, time_seconds: float):
         """Set playhead position."""
         if self._playhead:

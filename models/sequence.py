@@ -34,6 +34,31 @@ class SequenceClip:
         """Get end frame on timeline."""
         return self.start_frame + self.duration_frames
 
+    def to_dict(self) -> dict:
+        """Serialize to dictionary for JSON export."""
+        return {
+            "id": self.id,
+            "source_clip_id": self.source_clip_id,
+            "source_id": self.source_id,
+            "track_index": self.track_index,
+            "start_frame": self.start_frame,
+            "in_point": self.in_point,
+            "out_point": self.out_point,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "SequenceClip":
+        """Deserialize from dictionary."""
+        return cls(
+            id=data.get("id", str(uuid.uuid4())),
+            source_clip_id=data.get("source_clip_id", ""),
+            source_id=data.get("source_id", ""),
+            track_index=data.get("track_index", 0),
+            start_frame=data.get("start_frame", 0),
+            in_point=data.get("in_point", 0),
+            out_point=data.get("out_point", 0),
+        )
+
 
 @dataclass
 class Track:
@@ -61,6 +86,27 @@ class Track:
             if clip.start_frame <= frame < clip.end_frame():
                 return clip
         return None
+
+    def to_dict(self) -> dict:
+        """Serialize to dictionary for JSON export."""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "clips": [clip.to_dict() for clip in self.clips],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Track":
+        """Deserialize from dictionary."""
+        clips = [
+            SequenceClip.from_dict(clip_data)
+            for clip_data in data.get("clips", [])
+        ]
+        return cls(
+            id=data.get("id", str(uuid.uuid4())),
+            name=data.get("name", "Video 1"),
+            clips=clips,
+        )
 
 
 @dataclass
@@ -112,3 +158,30 @@ class Sequence:
         for track in self.tracks:
             all_clips.extend(track.clips)
         return sorted(all_clips, key=lambda c: c.start_frame)
+
+    def to_dict(self) -> dict:
+        """Serialize to dictionary for JSON export."""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "fps": self.fps,
+            "tracks": [track.to_dict() for track in self.tracks],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Sequence":
+        """Deserialize from dictionary."""
+        tracks = [
+            Track.from_dict(track_data)
+            for track_data in data.get("tracks", [])
+        ]
+        seq = cls(
+            id=data.get("id", str(uuid.uuid4())),
+            name=data.get("name", "Untitled Sequence"),
+            fps=data.get("fps", 30.0),
+            tracks=tracks if tracks else [],  # Empty list to skip __post_init__ default
+        )
+        # If no tracks were loaded, ensure at least one exists
+        if not seq.tracks:
+            seq.tracks.append(Track(name="Video 1"))
+        return seq

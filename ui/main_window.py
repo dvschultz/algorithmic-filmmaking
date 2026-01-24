@@ -38,6 +38,13 @@ from core.edl_export import export_edl, EDLExportConfig
 from core.analysis.color import extract_dominant_colors
 from core.analysis.shots import classify_shot_type
 from core.settings import Settings, load_settings, save_settings
+from core.project import (
+    save_project,
+    load_project,
+    ProjectMetadata,
+    ProjectLoadError,
+    MissingSourceError,
+)
 from ui.settings_dialog import SettingsDialog
 from ui.tabs import CollectTab, AnalyzeTab, GenerateTab, SequenceTab, RenderTab
 
@@ -364,6 +371,11 @@ class MainWindow(QMainWindow):
         self._shot_type_finished_handled = False
         self._transcription_finished_handled = False
 
+        # Project state
+        self.current_project_path: Optional[Path] = None
+        self.project_metadata: Optional["ProjectMetadata"] = None
+        self._is_dirty: bool = False
+
         logger.info("Setting up UI...")
         self._setup_ui()
         logger.info("Connecting signals...")
@@ -446,11 +458,38 @@ class MainWindow(QMainWindow):
         # File menu
         file_menu = menu_bar.addMenu("&File")
 
+        # Project actions
+        new_project_action = QAction("&New Project", self)
+        new_project_action.setShortcut(QKeySequence.New)  # Cmd+N
+        new_project_action.triggered.connect(self._on_new_project)
+        file_menu.addAction(new_project_action)
+
+        open_project_action = QAction("&Open Project...", self)
+        open_project_action.setShortcut(QKeySequence.Open)  # Cmd+O
+        open_project_action.triggered.connect(self._on_open_project)
+        file_menu.addAction(open_project_action)
+
+        self.save_project_action = QAction("&Save Project", self)
+        self.save_project_action.setShortcut(QKeySequence.Save)  # Cmd+S
+        self.save_project_action.triggered.connect(self._on_save_project)
+        file_menu.addAction(self.save_project_action)
+
+        self.save_project_as_action = QAction("Save Project &As...", self)
+        self.save_project_as_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
+        self.save_project_as_action.triggered.connect(self._on_save_project_as)
+        file_menu.addAction(self.save_project_as_action)
+
+        # Recent Projects submenu
+        self.recent_projects_menu = file_menu.addMenu("Recent Pro&jects")
+        self._update_recent_projects_menu()
+
+        file_menu.addSeparator()
+
         # Import submenu
         import_menu = file_menu.addMenu("&Import")
 
         import_video_action = QAction("&Video...", self)
-        import_video_action.setShortcut(QKeySequence.Open)
+        import_video_action.setShortcut(QKeySequence("Ctrl+I"))
         import_video_action.triggered.connect(self._on_import_click)
         import_menu.addAction(import_video_action)
 
@@ -822,6 +861,8 @@ class MainWindow(QMainWindow):
         self.current_source = source
         self.clips = clips
         self.clips_by_id = {clip.id: clip for clip in clips}
+        self._mark_dirty()
+        self._update_window_title()
 
         self.status_bar.showMessage(f"Found {len(clips)} scenes. Generating thumbnails...")
 
@@ -922,6 +963,7 @@ class MainWindow(QMainWindow):
             clip.dominant_colors = colors
             # Update Analyze tab clip browser
             self.analyze_tab.update_clip_colors(clip_id, colors)
+            self._mark_dirty()
 
     @Slot()
     def _on_color_analysis_finished(self):
@@ -964,6 +1006,7 @@ class MainWindow(QMainWindow):
             clip.shot_type = shot_type
             # Update Analyze tab clip browser
             self.analyze_tab.update_clip_shot_type(clip_id, shot_type)
+            self._mark_dirty()
             logger.debug(f"Clip {clip_id}: {shot_type} ({confidence:.2f})")
 
     @Slot()
@@ -1026,6 +1069,7 @@ class MainWindow(QMainWindow):
             clip.transcript = segments
             # Update Analyze tab clip browser
             self.analyze_tab.update_clip_transcript(clip_id, segments)
+            self._mark_dirty()
             logger.debug(f"Clip {clip_id}: transcribed {len(segments)} segments")
 
     @Slot()
@@ -1049,6 +1093,7 @@ class MainWindow(QMainWindow):
             # Add to Sequence tab timeline (primary source of truth)
             self.sequence_tab.add_clip_to_timeline(clip, self.current_source)
             self.status_bar.showMessage(f"Added clip to timeline")
+            self._mark_dirty()
             # Update Render tab with new sequence info
             self._update_render_tab_sequence_info()
 
@@ -1480,9 +1525,394 @@ class MainWindow(QMainWindow):
         else:
             QMessageBox.warning(self, "Export EDL", "Failed to export EDL file")
 
+    # ==================== Project Save/Load ====================
+
+    def _mark_dirty(self):
+        """Mark the project as having unsaved changes."""
+        if not self._is_dirty:
+            self._is_dirty = True
+            self._update_window_title()
+
+    def _mark_clean(self):
+        """Mark the project as having no unsaved changes."""
+        self._is_dirty = False
+        self._update_window_title()
+
+    def _update_window_title(self):
+        """Update window title to reflect project state."""
+        base_title = "Scene Ripper"
+        if self.current_project_path:
+            title = f"{base_title} - {self.current_project_path.name}"
+        elif self.current_source:
+            title = f"{base_title} - {self.current_source.filename}"
+        else:
+            title = base_title
+
+        if self._is_dirty:
+            title += "*"
+
+        self.setWindowTitle(title)
+
+    def _get_recent_projects(self) -> list[str]:
+        """Get list of recent project paths from settings."""
+        from PySide6.QtCore import QSettings
+        qsettings = QSettings()
+        recent = qsettings.value("recent_projects", [])
+        if isinstance(recent, str):
+            return [recent] if recent else []
+        return list(recent) if recent else []
+
+    def _add_recent_project(self, path: Path):
+        """Add a project to the recent projects list."""
+        from PySide6.QtCore import QSettings
+        qsettings = QSettings()
+        recent = self._get_recent_projects()
+
+        path_str = str(path.resolve())
+        # Remove if already exists (to move to top)
+        if path_str in recent:
+            recent.remove(path_str)
+        # Add to front
+        recent.insert(0, path_str)
+        # Keep only last 10
+        recent = recent[:10]
+
+        qsettings.setValue("recent_projects", recent)
+        qsettings.sync()
+        self._update_recent_projects_menu()
+
+    def _update_recent_projects_menu(self):
+        """Update the Recent Projects submenu."""
+        self.recent_projects_menu.clear()
+        recent = self._get_recent_projects()
+
+        if not recent:
+            action = QAction("(No recent projects)", self)
+            action.setEnabled(False)
+            self.recent_projects_menu.addAction(action)
+            return
+
+        for path_str in recent:
+            path = Path(path_str)
+            action = QAction(path.name, self)
+            action.setToolTip(path_str)
+            action.triggered.connect(lambda checked, p=path: self._open_recent_project(p))
+            self.recent_projects_menu.addAction(action)
+
+        self.recent_projects_menu.addSeparator()
+        clear_action = QAction("Clear Recent", self)
+        clear_action.triggered.connect(self._clear_recent_projects)
+        self.recent_projects_menu.addAction(clear_action)
+
+    def _clear_recent_projects(self):
+        """Clear the recent projects list."""
+        from PySide6.QtCore import QSettings
+        qsettings = QSettings()
+        qsettings.setValue("recent_projects", [])
+        qsettings.sync()
+        self._update_recent_projects_menu()
+
+    def _open_recent_project(self, path: Path):
+        """Open a recent project file."""
+        if not path.exists():
+            QMessageBox.warning(
+                self,
+                "Project Not Found",
+                f"The project file no longer exists:\n{path}"
+            )
+            # Remove from recent list
+            from PySide6.QtCore import QSettings
+            qsettings = QSettings()
+            recent = self._get_recent_projects()
+            if str(path) in recent:
+                recent.remove(str(path))
+                qsettings.setValue("recent_projects", recent)
+                qsettings.sync()
+                self._update_recent_projects_menu()
+            return
+
+        self._load_project_file(path)
+
+    def _on_new_project(self):
+        """Handle New Project action - reset to initial state."""
+        if not self._check_unsaved_changes():
+            return
+
+        # Clear all project state
+        self._clear_project_state()
+
+        # Reset project tracking
+        self.current_project_path = None
+        self.project_metadata = None
+        self._mark_clean()
+
+        # Update window title to default
+        self._update_window_title()
+
+        self.status_bar.showMessage("New project created", 3000)
+        logger.info("Created new project")
+
+    def _on_open_project(self):
+        """Handle Open Project action."""
+        if not self._check_unsaved_changes():
+            return
+
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open Project",
+            str(Path.home()),
+            "Project Files (*.json);;All Files (*)",
+        )
+
+        if file_path:
+            self._load_project_file(Path(file_path))
+
+    def _on_save_project(self):
+        """Handle Save Project action."""
+        if self.current_project_path:
+            self._save_project_to_file(self.current_project_path)
+        else:
+            self._on_save_project_as()
+
+    def _on_save_project_as(self):
+        """Handle Save Project As action."""
+        default_name = "project.json"
+        if self.current_project_path:
+            default_path = str(self.current_project_path)
+        elif self.current_source:
+            default_path = str(self.current_source.file_path.parent / f"{self.current_source.file_path.stem}.json")
+        else:
+            default_path = str(Path.home() / default_name)
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Project As",
+            default_path,
+            "Project Files (*.json);;All Files (*)",
+        )
+
+        if file_path:
+            path = Path(file_path)
+            if not path.suffix:
+                path = path.with_suffix(".json")
+            self._save_project_to_file(path)
+
+    def _save_project_to_file(self, filepath: Path):
+        """Save project to the specified file."""
+        if not self.current_source:
+            QMessageBox.warning(
+                self,
+                "Save Project",
+                "No video source loaded. Import a video first."
+            )
+            return
+
+        self.status_bar.showMessage("Saving project...")
+
+        # Get sequence from timeline
+        sequence = self.sequence_tab.timeline.get_sequence()
+
+        # Get UI state
+        ui_state = {
+            "sensitivity": self.analyze_tab.sensitivity_slider.value() / 10.0,
+        }
+
+        # Create or update metadata
+        if self.project_metadata is None:
+            self.project_metadata = ProjectMetadata(name=filepath.stem)
+        else:
+            self.project_metadata.name = filepath.stem
+
+        success = save_project(
+            filepath=filepath,
+            sources=[self.current_source],
+            clips=self.clips,
+            sequence=sequence,
+            ui_state=ui_state,
+            metadata=self.project_metadata,
+        )
+
+        if success:
+            self.current_project_path = filepath
+            self._mark_clean()
+            self._add_recent_project(filepath)
+            self.status_bar.showMessage(f"Project saved: {filepath.name}")
+        else:
+            QMessageBox.warning(self, "Save Project", "Failed to save project")
+            self.status_bar.showMessage("Save failed")
+
+    def _load_project_file(self, filepath: Path):
+        """Load project from the specified file."""
+        self.status_bar.showMessage("Loading project...")
+
+        def handle_missing_source(missing_path: Path, source_id: str) -> Optional[Path]:
+            """Callback to handle missing source files."""
+            result = QMessageBox.question(
+                self,
+                "Missing Source Video",
+                f"Source video not found:\n{missing_path}\n\nWould you like to locate it?",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+            )
+
+            if result == QMessageBox.Yes:
+                new_path, _ = QFileDialog.getOpenFileName(
+                    self,
+                    f"Locate {missing_path.name}",
+                    str(missing_path.parent) if missing_path.parent.exists() else str(Path.home()),
+                    "Video Files (*.mp4 *.mkv *.mov *.avi *.webm *.m4v);;All Files (*)",
+                )
+                if new_path:
+                    return Path(new_path)
+                return None
+            elif result == QMessageBox.No:
+                return None  # Skip this source
+            else:
+                raise ProjectLoadError("Load cancelled by user")
+
+        try:
+            sources, clips, sequence, metadata, ui_state = load_project(
+                filepath,
+                missing_source_callback=handle_missing_source,
+            )
+        except ProjectLoadError as e:
+            QMessageBox.warning(self, "Load Project", f"Failed to load project:\n{e}")
+            self.status_bar.showMessage("Load failed")
+            return
+
+        if not sources:
+            QMessageBox.warning(
+                self,
+                "Load Project",
+                "No valid sources found in project."
+            )
+            self.status_bar.showMessage("Load failed - no sources")
+            return
+
+        # Clear existing state
+        self._clear_project_state()
+
+        # Restore source (single source for now)
+        self.current_source = sources[0]
+
+        # Restore clips
+        self.clips = clips
+        self.clips_by_id = {clip.id: clip for clip in clips}
+
+        # Update Collect tab with source info
+        self.collect_tab.set_import_status(
+            f"Loaded: {self.current_source.filename}",
+            f"{self.current_source.duration_seconds:.1f}s @ {self.current_source.fps}fps"
+        )
+
+        # Update Analyze tab
+        self.analyze_tab.set_source(self.current_source)
+        self.analyze_tab.clear_clips()
+        self.analyze_tab.set_clips(clips)
+
+        # Add clips to browser and queue thumbnail regeneration
+        for clip in clips:
+            self.analyze_tab.add_clip(clip, self.current_source)
+            # Update colors and shot type if present
+            if clip.dominant_colors:
+                self.analyze_tab.update_clip_colors(clip.id, clip.dominant_colors)
+            if clip.shot_type:
+                self.analyze_tab.update_clip_shot_type(clip.id, clip.shot_type)
+            if clip.transcript:
+                self.analyze_tab.update_clip_transcript(clip.id, clip.transcript)
+
+        # Restore sequence
+        if sequence:
+            self.sequence_tab.timeline.load_sequence(sequence, sources[0])
+
+        # Restore UI state
+        if "sensitivity" in ui_state:
+            self.analyze_tab.set_sensitivity(ui_state["sensitivity"])
+
+        # Store project state
+        self.current_project_path = filepath
+        self.project_metadata = metadata
+        self._mark_clean()
+        self._add_recent_project(filepath)
+
+        # Update UI
+        self._update_export_edl_menu_state()
+        self._update_window_title()
+        self.status_bar.showMessage(f"Project loaded: {filepath.name} ({len(clips)} clips)")
+
+        # Regenerate missing thumbnails
+        self._regenerate_missing_thumbnails()
+
+    def _clear_project_state(self):
+        """Clear current project state."""
+        self.current_source = None
+        self.clips = []
+        self.clips_by_id = {}
+        self.analyze_tab.clear_clips()
+        self.analyze_tab.set_source(None)
+        self.sequence_tab.timeline.clear()
+
+    def _regenerate_missing_thumbnails(self):
+        """Regenerate thumbnails for clips that don't have them."""
+        if not self.current_source or not self.clips:
+            return
+
+        # Check which clips need thumbnails
+        clips_needing_thumbnails = [
+            clip for clip in self.clips
+            if not clip.thumbnail_path or not clip.thumbnail_path.exists()
+        ]
+
+        if not clips_needing_thumbnails:
+            return
+
+        logger.info(f"Regenerating thumbnails for {len(clips_needing_thumbnails)} clips")
+        self.status_bar.showMessage(f"Regenerating {len(clips_needing_thumbnails)} thumbnails...")
+
+        # Use existing ThumbnailWorker
+        self._thumbnails_finished_handled = False
+        self.thumbnail_worker = ThumbnailWorker(
+            self.current_source,
+            clips_needing_thumbnails,
+            self.settings.thumbnail_cache_dir,
+        )
+        self.thumbnail_worker.thumbnail_ready.connect(self._on_thumbnail_ready)
+        self.thumbnail_worker.finished.connect(self._on_thumbnails_finished, Qt.UniqueConnection)
+        self.thumbnail_worker.start()
+
+    def _check_unsaved_changes(self) -> bool:
+        """Check for unsaved changes and prompt user.
+
+        Returns:
+            True if safe to proceed, False if user cancelled.
+        """
+        if not self._is_dirty:
+            return True
+
+        project_name = self.current_project_path.name if self.current_project_path else "Untitled"
+        result = QMessageBox.question(
+            self,
+            "Unsaved Changes",
+            f"Save changes to '{project_name}'?",
+            QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+            QMessageBox.Save,
+        )
+
+        if result == QMessageBox.Save:
+            self._on_save_project()
+            return not self._is_dirty  # True if save succeeded
+        elif result == QMessageBox.Discard:
+            return True
+        else:  # Cancel
+            return False
+
     def closeEvent(self, event):
         """Clean up workers and timers before closing."""
         logger.info("=== CLOSE EVENT ===")
+
+        # Check for unsaved changes
+        if not self._check_unsaved_changes():
+            event.ignore()
+            return
 
         # Stop playback timer
         if self._playback_timer.isActive():
