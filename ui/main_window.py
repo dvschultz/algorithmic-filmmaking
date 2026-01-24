@@ -1798,12 +1798,6 @@ class MainWindow(QMainWindow):
         self.clips = clips
         self.clips_by_id = {clip.id: clip for clip in clips}
 
-        # Update Collect tab with source info
-        self.collect_tab.set_import_status(
-            f"Loaded: {self.current_source.filename}",
-            f"{self.current_source.duration_seconds:.1f}s @ {self.current_source.fps}fps"
-        )
-
         # Update Analyze tab
         self.analyze_tab.set_source(self.current_source)
         self.analyze_tab.clear_clips()
