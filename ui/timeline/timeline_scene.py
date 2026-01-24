@@ -34,8 +34,8 @@ class TimelineScene(QGraphicsScene):
 
     def _setup_scene(self):
         """Initialize scene with default dimensions."""
-        self._update_scene_rect()
         self.setBackgroundBrush(QBrush(QColor("#1e1e1e")))
+        self.rebuild()  # Build track items for default sequence
 
     def _update_scene_rect(self):
         """Recalculate scene dimensions based on content."""
