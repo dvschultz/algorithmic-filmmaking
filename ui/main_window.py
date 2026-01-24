@@ -101,6 +101,11 @@ class DownloadWorker(QThread):
     def __init__(self, url: str):
         super().__init__()
         self.url = url
+        self._cancelled = False
+
+    def cancel(self):
+        """Request cancellation of the download."""
+        self._cancelled = True
 
     def run(self):
         try:
@@ -108,6 +113,7 @@ class DownloadWorker(QThread):
             result = downloader.download(
                 self.url,
                 progress_callback=lambda p, m: self.progress.emit(p, m),
+                cancel_check=lambda: self._cancelled,
             )
             if result.success:
                 self.finished.emit(result)
@@ -618,3 +624,24 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(False)
         self.timeline.export_btn.setEnabled(True)
         QMessageBox.critical(self, "Export Error", f"Failed to export sequence: {error}")
+
+    def closeEvent(self, event):
+        """Clean up workers before closing."""
+        workers = [
+            self.detection_worker,
+            self.thumbnail_worker,
+            self.download_worker,
+            self.export_worker,
+        ]
+
+        for worker in workers:
+            if worker and worker.isRunning():
+                # Try graceful cancellation if supported
+                if hasattr(worker, 'cancel'):
+                    worker.cancel()
+                # Wait up to 3 seconds for graceful shutdown
+                if not worker.wait(3000):
+                    worker.terminate()
+                    worker.wait(1000)
+
+        event.accept()

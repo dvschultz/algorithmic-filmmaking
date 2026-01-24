@@ -58,32 +58,3 @@ class TrackItem(QGraphicsRectItem):
             self.setBrush(QBrush(QColor("#3d3d4d")))
         else:
             self.setBrush(QBrush(QColor("#2d2d2d")))
-
-
-class TrackHeaderItem(QGraphicsRectItem):
-    """Header showing track name and controls."""
-
-    def __init__(
-        self,
-        track: Track,
-        track_index: int,
-        y_position: float,
-        height: float,
-        width: float = 80,
-    ):
-        super().__init__()
-
-        self.track = track
-        self.track_index = track_index
-
-        # Set geometry
-        self.setRect(0, y_position, width, height)
-
-        # Visual style
-        self.setBrush(QBrush(QColor("#333333")))
-        self.setPen(QPen(QColor("#444444"), 1))
-        self.setZValue(10)  # Above tracks
-
-        # Not movable
-        self.setFlag(QGraphicsItem.ItemIsSelectable, False)
-        self.setFlag(QGraphicsItem.ItemIsMovable, False)

@@ -1,7 +1,7 @@
 """Timeline scene holding all timeline items."""
 
 from PySide6.QtWidgets import QGraphicsScene
-from PySide6.QtCore import Signal, QRectF
+from PySide6.QtCore import Signal, QRectF, QTimer
 from PySide6.QtGui import QColor, QPen, QBrush
 
 from models.sequence import Sequence, Track, SequenceClip
@@ -29,6 +29,13 @@ class TimelineScene(QGraphicsScene):
         self._track_items = []  # TrackItem instances
         self._clip_items = {}  # clip_id -> ClipItem
         self._playhead = None
+
+        # Debounced zoom timer
+        self._pending_pps = None
+        self._zoom_timer = QTimer()
+        self._zoom_timer.setSingleShot(True)
+        self._zoom_timer.setInterval(16)  # ~60fps
+        self._zoom_timer.timeout.connect(self._apply_pending_zoom)
 
         self._setup_scene()
 
@@ -92,19 +99,53 @@ class TimelineScene(QGraphicsScene):
         self._update_scene_rect()
 
     def set_pixels_per_second(self, pps: float):
-        """Update zoom level and recalculate all positions."""
+        """Update zoom level with debouncing for smooth performance."""
+        self._pending_pps = pps
         self.pixels_per_second = pps
         self._update_scene_rect()
 
-        # Update all clip positions
-        for clip_item in self._clip_items.values():
-            clip_item.set_pixels_per_second(pps)
-
-        # Update playhead if exists
+        # Update playhead immediately (it's just one item)
         if self._playhead:
             self._playhead.set_pixels_per_second(pps)
 
+        # Debounce clip updates for smooth zoom
+        if not self._zoom_timer.isActive():
+            self._zoom_timer.start()
+
+    def _apply_pending_zoom(self):
+        """Apply pending zoom to all clip items."""
+        if self._pending_pps is None:
+            return
+
+        pps = self._pending_pps
+        self._pending_pps = None
+
+        # Only update visible items first if we have views
+        views = self.views()
+        if views:
+            visible_rect = views[0].mapToScene(
+                views[0].viewport().rect()
+            ).boundingRect()
+
+            # Update visible clips immediately
+            for clip_item in self._clip_items.values():
+                if clip_item.sceneBoundingRect().intersects(visible_rect):
+                    clip_item.set_pixels_per_second(pps)
+
+            # Schedule off-screen updates for next frame
+            QTimer.singleShot(0, lambda: self._update_offscreen_clips(pps, visible_rect))
+        else:
+            # No views, update all
+            for clip_item in self._clip_items.values():
+                clip_item.set_pixels_per_second(pps)
+
         self.update()
+
+    def _update_offscreen_clips(self, pps: float, visible_rect):
+        """Update clips that were off-screen during zoom."""
+        for clip_item in self._clip_items.values():
+            if not clip_item.sceneBoundingRect().intersects(visible_rect):
+                clip_item.set_pixels_per_second(pps)
 
     def get_track_at_y(self, y: float) -> int:
         """Get track index at y coordinate, or -1 if none."""

@@ -105,24 +105,3 @@ def _greedy_repair(
         remaining.remove(chosen)
 
     return result
-
-
-def shuffle_clips(
-    clips: list,
-    max_consecutive_same_source: int = 1,
-) -> list:
-    """
-    Shuffle clips ensuring no more than N consecutive clips from the same source.
-
-    Args:
-        clips: List of Clip objects with source_id attribute
-        max_consecutive_same_source: Maximum consecutive clips from same source
-
-    Returns:
-        Shuffled list of clips
-    """
-    return constrained_shuffle(
-        items=clips,
-        get_category=lambda clip: clip.source_id,
-        max_consecutive=max_consecutive_same_source,
-    )

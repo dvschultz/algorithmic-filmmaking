@@ -44,8 +44,9 @@ class ClipItem(QGraphicsRectItem):
         self._original_in_point = None
         self._original_out_point = None
 
+        self._thumbnail_loaded = False
+
         self._setup_item()
-        self._load_thumbnail()
 
     def _setup_item(self):
         """Configure item flags and appearance."""
@@ -58,7 +59,11 @@ class ClipItem(QGraphicsRectItem):
         self._update_appearance()
 
     def _load_thumbnail(self):
-        """Load thumbnail image if available."""
+        """Load thumbnail image if available (lazy - called when needed)."""
+        if self._thumbnail_loaded:
+            return
+        self._thumbnail_loaded = True
+
         if self.thumbnail_path:
             path = Path(self.thumbnail_path)
             if path.exists():
@@ -111,6 +116,10 @@ class ClipItem(QGraphicsRectItem):
         super().paint(painter, option, widget)
 
         rect = self.rect()
+
+        # Lazy load thumbnail on first paint (when visible)
+        if not self._thumbnail_loaded:
+            self._load_thumbnail()
 
         # Draw thumbnail if available
         if self._thumbnail_pixmap and not self._thumbnail_pixmap.isNull():

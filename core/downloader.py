@@ -4,6 +4,7 @@ import subprocess
 import shutil
 import re
 import json
+import time
 from pathlib import Path
 from typing import Callable, Optional
 from dataclasses import dataclass
@@ -106,7 +107,10 @@ class VideoDownloader:
             url,
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("Timed out getting video info (30 seconds)")
         if result.returncode != 0:
             raise RuntimeError(f"Failed to get video info: {result.stderr}")
 
@@ -122,6 +126,8 @@ class VideoDownloader:
         self,
         url: str,
         progress_callback: Optional[Callable[[float, str], None]] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
+        max_download_seconds: int = 3600,
     ) -> DownloadResult:
         """
         Download a video from URL.
@@ -129,6 +135,8 @@ class VideoDownloader:
         Args:
             url: Video URL (YouTube or Vimeo)
             progress_callback: Optional callback (progress 0-100, status message)
+            cancel_check: Optional callback that returns True to cancel download
+            max_download_seconds: Maximum download time before timeout (default 1 hour)
 
         Returns:
             DownloadResult with file path if successful
@@ -178,8 +186,22 @@ class VideoDownloader:
         )
 
         output_file = None
+        cancelled = False
+        timed_out = False
+        start_time = time.time()
+
         try:
             for line in process.stdout:
+                # Check for cancellation
+                if cancel_check and cancel_check():
+                    cancelled = True
+                    break
+
+                # Check for timeout
+                if time.time() - start_time > max_download_seconds:
+                    timed_out = True
+                    break
+
                 line = line.strip()
 
                 # Parse progress from yt-dlp output
@@ -202,7 +224,8 @@ class VideoDownloader:
                     if progress_callback:
                         progress_callback(95, "Merging audio and video...")
 
-            process.wait()
+            if not cancelled and not timed_out:
+                process.wait()
         finally:
             # Ensure subprocess is cleaned up even on exception
             if process.stdout:
@@ -214,6 +237,24 @@ class VideoDownloader:
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait()
+
+        if cancelled:
+            # Clean up partial download
+            if output_file and output_file.exists():
+                try:
+                    output_file.unlink()
+                except OSError:
+                    pass
+            return DownloadResult(success=False, error="Download cancelled")
+
+        if timed_out:
+            # Clean up partial download
+            if output_file and output_file.exists():
+                try:
+                    output_file.unlink()
+                except OSError:
+                    pass
+            return DownloadResult(success=False, error="Download timed out")
 
         if process.returncode != 0:
             return DownloadResult(
@@ -246,10 +287,24 @@ class VideoDownloader:
 
     def _sanitize_filename(self, name: str) -> str:
         """Sanitize a string for use as a filename."""
-        # Remove or replace problematic characters
-        sanitized = re.sub(r'[<>:"/\\|?*]', '', name)
+        # Remove control characters (0x00-0x1F)
+        sanitized = ''.join(c for c in name if c.isprintable())
+
+        # Remove filesystem-unsafe characters AND % (yt-dlp template char)
+        sanitized = re.sub(r'[<>:"/\\|?*%]', '', sanitized)
         sanitized = sanitized.strip('. ')
+
+        # Check for Windows reserved names
+        RESERVED = {'CON', 'PRN', 'AUX', 'NUL',
+                    'COM1', 'COM2', 'COM3', 'COM4', 'COM5',
+                    'COM6', 'COM7', 'COM8', 'COM9',
+                    'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5',
+                    'LPT6', 'LPT7', 'LPT8', 'LPT9'}
+        if sanitized.upper() in RESERVED:
+            sanitized = f"video_{sanitized}"
+
         # Limit length
         if len(sanitized) > 100:
             sanitized = sanitized[:100]
+
         return sanitized or "video"

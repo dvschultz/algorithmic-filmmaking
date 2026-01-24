@@ -16,7 +16,7 @@ from models.clip import Clip, Source
 from ui.timeline.timeline_scene import TimelineScene
 from ui.timeline.timeline_view import TimelineView
 from ui.timeline.playhead import Playhead
-from core.remix.shuffle import constrained_shuffle
+from core.remix import generate_sequence
 
 
 class TimelineWidget(QWidget):
@@ -26,7 +26,6 @@ class TimelineWidget(QWidget):
     playhead_changed = Signal(float)  # time in seconds
     clip_selected = Signal(str)  # clip_id
     sequence_changed = Signal()  # sequence was modified
-    generate_requested = Signal(str, int)  # algorithm, clip_count
     export_requested = Signal()  # request to export sequence
 
     def __init__(self, parent=None):
@@ -80,7 +79,7 @@ class TimelineWidget(QWidget):
         # Remix algorithm selector
         toolbar.addWidget(QLabel("Remix:"))
         self.remix_combo = QComboBox()
-        self.remix_combo.addItems(["Shuffle", "Similarity", "Building"])
+        self.remix_combo.addItems(["Shuffle", "Sequential"])
         self.remix_combo.setToolTip("Algorithm for generating sequences")
         self.remix_combo.setMinimumWidth(100)
         toolbar.addWidget(self.remix_combo)
@@ -178,45 +177,23 @@ class TimelineWidget(QWidget):
 
     def _on_generate(self):
         """Handle Generate button click."""
-        algorithm = self.remix_combo.currentText().lower()
-        clip_count = self.clip_count_spin.value()
-
         if not self._available_clips:
             return
+
+        algorithm = self.remix_combo.currentText().lower()
+        clip_count = self.clip_count_spin.value()
 
         # Clear existing timeline
         self.clear_timeline()
 
-        # Get clips to use (up to clip_count)
-        clips_to_use = self._available_clips[:clip_count]
+        # Generate sequence using core algorithm
+        sequenced = generate_sequence(algorithm, self._available_clips, clip_count)
 
-        if algorithm == "shuffle":
-            # Constrained shuffle - no same source back-to-back
-            shuffled = constrained_shuffle(
-                items=clips_to_use,
-                get_category=lambda x: x[1].id,  # x is (Clip, Source), category by source
-                max_consecutive=1,
-            )
-
-            # Add to timeline sequentially
-            current_frame = 0
-            for clip, source in shuffled:
-                self.add_clip(clip, source, track_index=0, start_frame=current_frame)
-                current_frame += clip.duration_frames
-
-        elif algorithm == "similarity":
-            # For now, just use order as-is (similarity requires feature extraction)
-            current_frame = 0
-            for clip, source in clips_to_use:
-                self.add_clip(clip, source, track_index=0, start_frame=current_frame)
-                current_frame += clip.duration_frames
-
-        elif algorithm == "building":
-            # For now, just use order as-is (building requires motion analysis)
-            current_frame = 0
-            for clip, source in clips_to_use:
-                self.add_clip(clip, source, track_index=0, start_frame=current_frame)
-                current_frame += clip.duration_frames
+        # Add to timeline sequentially
+        current_frame = 0
+        for clip, source in sequenced:
+            self.add_clip(clip, source, track_index=0, start_frame=current_frame)
+            current_frame += clip.duration_frames
 
         # Zoom to fit
         self._on_zoom_fit()

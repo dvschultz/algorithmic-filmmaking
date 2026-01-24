@@ -42,8 +42,6 @@ class Track:
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     name: str = "Video 1"
     clips: list[SequenceClip] = field(default_factory=list)
-    muted: bool = False
-    locked: bool = False
 
     def add_clip(self, clip: SequenceClip) -> None:
         """Add a clip to this track."""
@@ -101,13 +99,6 @@ class Sequence:
         track = Track(name=name or f"Video {track_num}")
         self.tracks.append(track)
         return track
-
-    def remove_track(self, track_id: str) -> Optional[Track]:
-        """Remove a track by ID. Returns removed track or None."""
-        for i, track in enumerate(self.tracks):
-            if track.id == track_id:
-                return self.tracks.pop(i)
-        return None
 
     def get_clip_at(self, track_index: int, frame: int) -> Optional[SequenceClip]:
         """Get clip at specific track and frame."""
