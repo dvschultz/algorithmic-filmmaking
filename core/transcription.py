@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 # Lazy load to avoid startup delay
 _model = None
 _model_name = None
+_faster_whisper_available = None
 
 # Available model configurations
 WHISPER_MODELS = {
@@ -20,6 +21,37 @@ WHISPER_MODELS = {
     "medium.en": {"size": "769MB", "speed": "~5x", "accuracy": "Better", "vram": "~2GB"},
     "large-v3": {"size": "1.5GB", "speed": "~2x", "accuracy": "Best", "vram": "~4GB"},
 }
+
+
+class TranscriptionError(Exception):
+    """Base exception for transcription errors."""
+    pass
+
+
+class FasterWhisperNotInstalledError(TranscriptionError):
+    """Raised when faster-whisper is not installed."""
+    def __init__(self):
+        super().__init__(
+            "faster-whisper is not installed. "
+            "Install it with: pip install faster-whisper"
+        )
+
+
+class ModelDownloadError(TranscriptionError):
+    """Raised when model download fails."""
+    pass
+
+
+def is_faster_whisper_available() -> bool:
+    """Check if faster-whisper is installed."""
+    global _faster_whisper_available
+    if _faster_whisper_available is None:
+        try:
+            import faster_whisper
+            _faster_whisper_available = True
+        except ImportError:
+            _faster_whisper_available = False
+    return _faster_whisper_available
 
 
 @dataclass
@@ -40,21 +72,35 @@ def get_model(model_name: str = "small.en"):
 
     Returns:
         Loaded WhisperModel instance
+
+    Raises:
+        FasterWhisperNotInstalledError: If faster-whisper is not installed
+        ModelDownloadError: If model download fails
     """
     global _model, _model_name
+
+    if not is_faster_whisper_available():
+        raise FasterWhisperNotInstalledError()
 
     if _model is None or _model_name != model_name:
         from faster_whisper import WhisperModel
 
         logger.info(f"Loading Whisper model: {model_name}")
-        # Use int8 quantization for CPU, auto-detect GPU
-        _model = WhisperModel(
-            model_name,
-            device="auto",  # auto-detect CPU/GPU
-            compute_type="int8",  # Use int8 for CPU efficiency
-        )
-        _model_name = model_name
-        logger.info(f"Whisper model loaded: {model_name}")
+        model_info = WHISPER_MODELS.get(model_name, {})
+        logger.info(f"Model size: {model_info.get('size', 'unknown')} - this may take a moment to download on first use")
+
+        try:
+            # Use int8 quantization for CPU, auto-detect GPU
+            _model = WhisperModel(
+                model_name,
+                device="auto",  # auto-detect CPU/GPU
+                compute_type="int8",  # Use int8 for CPU efficiency
+            )
+            _model_name = model_name
+            logger.info(f"Whisper model loaded: {model_name}")
+        except Exception as e:
+            logger.error(f"Failed to load Whisper model: {e}")
+            raise ModelDownloadError(f"Failed to load model '{model_name}': {e}") from e
 
     return _model
 

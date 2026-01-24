@@ -253,6 +253,7 @@ class TranscriptionWorker(QThread):
     progress = Signal(int, int)  # current, total
     transcript_ready = Signal(str, list)  # clip_id, segments (list of TranscriptSegment)
     finished = Signal()
+    error = Signal(str)  # error message
 
     def __init__(self, clips: list[Clip], source: Source, model_name: str = "small.en", language: str = "en"):
         super().__init__()
@@ -270,7 +271,12 @@ class TranscriptionWorker(QThread):
 
     def run(self):
         logger.info("TranscriptionWorker.run() STARTING")
-        from core.transcription import transcribe_clip
+        from core.transcription import (
+            transcribe_clip,
+            FasterWhisperNotInstalledError,
+            ModelDownloadError,
+            TranscriptionError,
+        )
 
         total = len(self.clips)
         for i, clip in enumerate(self.clips):
@@ -286,8 +292,20 @@ class TranscriptionWorker(QThread):
                     self.language,
                 )
                 self.transcript_ready.emit(clip.id, segments)
+            except FasterWhisperNotInstalledError as e:
+                logger.error(f"faster-whisper not installed: {e}")
+                self.error.emit(str(e))
+                break  # Stop processing - critical error
+            except ModelDownloadError as e:
+                logger.error(f"Model download failed: {e}")
+                self.error.emit(str(e))
+                break  # Stop processing - critical error
+            except TranscriptionError as e:
+                logger.warning(f"Transcription error for {clip.id}: {e}")
+                # Continue processing other clips for non-critical errors
             except Exception as e:
                 logger.warning(f"Transcription failed for {clip.id}: {e}")
+                # Continue processing other clips
             self.progress.emit(i + 1, total)
         logger.info("TranscriptionWorker.run() emitting finished signal")
         self.finished.emit()
@@ -569,6 +587,19 @@ class MainWindow(QMainWindow):
         if not self.current_source or not self.clips:
             return
 
+        # Check if faster-whisper is available
+        from core.transcription import is_faster_whisper_available, WHISPER_MODELS
+        if not is_faster_whisper_available():
+            QMessageBox.critical(
+                self,
+                "Transcription Unavailable",
+                "The faster-whisper package is not installed.\n\n"
+                "To enable transcription, install it with:\n"
+                "pip install faster-whisper\n\n"
+                "Then restart the application."
+            )
+            return
+
         # Reset transcription guard
         self._transcription_finished_handled = False
 
@@ -577,7 +608,13 @@ class MainWindow(QMainWindow):
 
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 100)
-        self.status_bar.showMessage(f"Transcribing speech for {len(self.clips)} scenes...")
+
+        # Show model info in status
+        model_info = WHISPER_MODELS.get(self.settings.transcription_model, {})
+        model_size = model_info.get("size", "unknown")
+        self.status_bar.showMessage(
+            f"Transcribing {len(self.clips)} clips using {self.settings.transcription_model} model ({model_size})..."
+        )
 
         logger.info("Creating TranscriptionWorker (manual)...")
         self.transcription_worker = TranscriptionWorker(
@@ -589,8 +626,36 @@ class MainWindow(QMainWindow):
         self.transcription_worker.progress.connect(self._on_transcription_progress)
         self.transcription_worker.transcript_ready.connect(self._on_transcript_ready)
         self.transcription_worker.finished.connect(self._on_manual_transcription_finished, Qt.UniqueConnection)
+        self.transcription_worker.error.connect(self._on_transcription_error)
         logger.info("Starting TranscriptionWorker (manual)...")
         self.transcription_worker.start()
+
+    def _on_transcription_error(self, error: str):
+        """Handle transcription error."""
+        logger.error(f"Transcription error: {error}")
+        self.progress_bar.setVisible(False)
+        self.analyze_tab.set_transcribing(False)
+
+        if "not installed" in error.lower():
+            QMessageBox.critical(
+                self,
+                "Transcription Error",
+                "The faster-whisper package is not installed.\n\n"
+                "Install it with: pip install faster-whisper"
+            )
+        elif "download" in error.lower() or "model" in error.lower():
+            QMessageBox.warning(
+                self,
+                "Model Download Error",
+                f"Failed to download or load the Whisper model:\n\n{error}\n\n"
+                "Check your internet connection and try again."
+            )
+        else:
+            QMessageBox.warning(
+                self,
+                "Transcription Error",
+                f"An error occurred during transcription:\n\n{error}"
+            )
 
     @Slot()
     def _on_manual_transcription_finished(self):
@@ -920,6 +985,16 @@ class MainWindow(QMainWindow):
     def _maybe_start_transcription(self):
         """Start transcription if auto_transcribe is enabled."""
         if self.clips and self.current_source and self.settings.auto_transcribe:
+            # Check if faster-whisper is available
+            from core.transcription import is_faster_whisper_available
+            if not is_faster_whisper_available():
+                logger.warning("Auto-transcription skipped: faster-whisper not installed")
+                self.progress_bar.setVisible(False)
+                self.status_bar.showMessage(
+                    f"Ready - {len(self.clips)} scenes (transcription unavailable - install faster-whisper)"
+                )
+                return
+
             self.status_bar.showMessage(f"Transcribing speech for {len(self.clips)} scenes...")
             logger.info("Creating TranscriptionWorker...")
             self.transcription_worker = TranscriptionWorker(
@@ -931,6 +1006,7 @@ class MainWindow(QMainWindow):
             self.transcription_worker.progress.connect(self._on_transcription_progress)
             self.transcription_worker.transcript_ready.connect(self._on_transcript_ready)
             self.transcription_worker.finished.connect(self._on_transcription_finished, Qt.UniqueConnection)
+            self.transcription_worker.error.connect(self._on_transcription_error)
             logger.info("Starting TranscriptionWorker...")
             self.transcription_worker.start()
             logger.info("TranscriptionWorker started")
