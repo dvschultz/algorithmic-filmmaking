@@ -463,6 +463,16 @@ class MainWindow(QMainWindow):
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
 
+        # View menu with tab shortcuts
+        view_menu = menu_bar.addMenu("&View")
+
+        tab_names = ["&Collect", "&Analyze", "&Generate", "&Sequence", "&Render"]
+        for i, name in enumerate(tab_names):
+            action = QAction(name, self)
+            action.setShortcut(QKeySequence(f"Ctrl+{i+1}"))
+            action.triggered.connect(lambda checked, idx=i: self.tab_widget.setCurrentIndex(idx))
+            view_menu.addAction(action)
+
     def _is_any_worker_running(self) -> bool:
         """Check if any background worker is currently running."""
         workers = [

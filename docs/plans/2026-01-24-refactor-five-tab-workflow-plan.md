@@ -352,13 +352,13 @@ class BaseTab(QWidget):
 **Goal**: Wire all cross-tab communication and polish UX
 
 **Deliverables**:
-- [ ] Connect Collect import → refresh Analyze tab
-- [ ] Connect detection complete → enable Generate/Sequence tabs
-- [ ] Connect Analyze clip drag → Sequence timeline add
-- [ ] Add tab enable/disable based on state
-- [ ] Add keyboard shortcuts for tab switching (Ctrl+1-5)
-- [ ] Test tab switching during background operations
-- [ ] Apply QThread guard pattern from documented learnings
+- [x] Connect Collect import → refresh Analyze tab
+- [x] Connect detection complete → enable Generate/Sequence tabs
+- [x] Connect Analyze clip drag → Sequence timeline add
+- [x] Add tab enable/disable based on state
+- [x] Add keyboard shortcuts for tab switching (Ctrl+1-5)
+- [x] Test tab switching during background operations
+- [x] Apply QThread guard pattern from documented learnings
 
 ## Acceptance Criteria
 
