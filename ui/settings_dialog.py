@@ -36,11 +36,48 @@ from core.settings import (
 logger = logging.getLogger(__name__)
 
 
+def is_network_or_cloud_path(path: Path) -> tuple[bool, str]:
+    """
+    Check if a path appears to be on network or cloud storage.
+    Returns (is_network_or_cloud, warning_message).
+    """
+    path_str = str(path).lower()
+
+    # Common cloud storage paths
+    cloud_indicators = [
+        ("dropbox", "Dropbox"),
+        ("onedrive", "OneDrive"),
+        ("google drive", "Google Drive"),
+        ("icloud", "iCloud Drive"),
+        ("box sync", "Box"),
+        ("pcloud", "pCloud"),
+    ]
+
+    for indicator, name in cloud_indicators:
+        if indicator in path_str:
+            return True, f"This path appears to be on {name}. Cloud storage may be slower and could cause sync issues."
+
+    # Network paths (macOS/Linux)
+    if path_str.startswith("/volumes/") and not path_str.startswith("/volumes/macintosh"):
+        return True, "This path appears to be on an external or network volume. Performance may vary."
+
+    # Check if path is on a network mount (Linux)
+    if path_str.startswith("/mnt/") or path_str.startswith("/media/"):
+        return True, "This path appears to be on a mounted volume. Performance may vary."
+
+    # Windows network paths
+    if path_str.startswith("\\\\") or path_str.startswith("//"):
+        return True, "This path appears to be a network share. Performance may vary."
+
+    return False, ""
+
+
 class PathSelector(QWidget):
     """Widget for selecting a directory path with browse button."""
 
     def __init__(self, label: str, tooltip: str = "", parent=None):
         super().__init__(parent)
+        self._base_tooltip = tooltip
         self._setup_ui(label, tooltip)
 
     def _setup_ui(self, label: str, tooltip: str):
@@ -61,6 +98,9 @@ class PathSelector(QWidget):
         self.browse_btn.clicked.connect(self._on_browse)
         layout.addWidget(self.browse_btn)
 
+        # Check for network paths when text changes
+        self.path_edit.textChanged.connect(self._check_path_warning)
+
     def _on_browse(self):
         current = self.path_edit.text()
         start_dir = current if Path(current).exists() else str(Path.home())
@@ -72,12 +112,36 @@ class PathSelector(QWidget):
         )
         if folder:
             self.path_edit.setText(folder)
+            self._check_path_warning()
 
     def get_path(self) -> Path:
         return Path(self.path_edit.text())
 
     def set_path(self, path: Path):
         self.path_edit.setText(str(path))
+
+    def set_enabled(self, enabled: bool):
+        """Enable or disable the path selector."""
+        self.path_edit.setEnabled(enabled)
+        self.browse_btn.setEnabled(enabled)
+        if not enabled:
+            self.path_edit.setToolTip(
+                f"{self._base_tooltip}\n\n⚠️ Cannot change while background operations are running."
+            )
+
+    def _check_path_warning(self):
+        """Check if path is on network/cloud and update tooltip with warning."""
+        path = self.get_path()
+        is_network, warning = is_network_or_cloud_path(path)
+
+        if is_network:
+            # Show warning style and update tooltip
+            self.path_edit.setStyleSheet("border: 1px solid #f0ad4e;")  # Warning orange
+            self.path_edit.setToolTip(f"{self._base_tooltip}\n\n⚠️ {warning}")
+        else:
+            # Reset to normal
+            self.path_edit.setStyleSheet("")
+            self.path_edit.setToolTip(self._base_tooltip)
 
     def validate(self) -> tuple[bool, str]:
         """Validate the path. Returns (is_valid, error_message)."""
@@ -90,9 +154,18 @@ class PathSelector(QWidget):
 class SettingsDialog(QDialog):
     """Modal dialog for editing application settings."""
 
-    def __init__(self, settings: Settings, parent=None):
+    def __init__(self, settings: Settings, paths_disabled: bool = False, parent=None):
+        """
+        Initialize the settings dialog.
+
+        Args:
+            settings: Current settings object
+            paths_disabled: If True, disable path settings (when operations are running)
+            parent: Parent widget
+        """
         super().__init__(parent)
         self.settings = settings
+        self._paths_disabled = paths_disabled
         self.original_settings = Settings(
             thumbnail_cache_dir=settings.thumbnail_cache_dir,
             download_dir=settings.download_dir,
@@ -112,6 +185,10 @@ class SettingsDialog(QDialog):
 
         self._setup_ui()
         self._load_settings()
+
+        # Disable paths if operations are running
+        if self._paths_disabled:
+            self._disable_path_settings()
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -328,6 +405,16 @@ class SettingsDialog(QDialog):
 
         layout.addStretch()
         return tab
+
+    def _disable_path_settings(self):
+        """Disable path-related settings when operations are running."""
+        self.cache_path.set_enabled(False)
+        self.download_path.set_enabled(False)
+        self.export_path.set_enabled(False)
+        self.clear_cache_btn.setEnabled(False)
+        self.clear_cache_btn.setToolTip(
+            "Cannot clear cache while background operations are running."
+        )
 
     def _load_settings(self):
         """Load current settings into UI controls."""
