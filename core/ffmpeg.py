@@ -37,6 +37,7 @@ class FFmpegProcessor:
         output_path: Path,
         start_seconds: float,
         duration_seconds: float,
+        fps: float = 30.0,
         copy_codec: bool = True,
     ) -> bool:
         """
@@ -47,6 +48,7 @@ class FFmpegProcessor:
             output_path: Output clip file
             start_seconds: Start time in seconds
             duration_seconds: Duration in seconds
+            fps: Frame rate (used to avoid including extra frame)
             copy_codec: If True, copy streams without re-encoding (faster)
 
         Returns:
@@ -54,12 +56,17 @@ class FFmpegProcessor:
         """
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # Subtract half a frame to avoid including the first frame of the next scene
+        # This compensates for FFmpeg's rounding behavior
+        frame_duration = 1.0 / fps
+        adjusted_duration = duration_seconds - (frame_duration * 0.5)
+
         cmd = [
             self.ffmpeg_path,
             "-y",  # Overwrite output
             "-ss", str(start_seconds),  # Seek to start
             "-i", str(input_path),
-            "-t", str(duration_seconds),  # Duration
+            "-t", str(adjusted_duration),  # Duration (adjusted)
         ]
 
         if copy_codec:

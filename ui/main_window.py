@@ -364,6 +364,7 @@ class MainWindow(QMainWindow):
                 output_path=output_file,
                 start_seconds=start,
                 duration_seconds=duration,
+                fps=fps,
             )
             if success:
                 exported += 1
