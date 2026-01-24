@@ -98,9 +98,16 @@ class TimelineWidget(QWidget):
         # Remix algorithm selector
         toolbar.addWidget(QLabel("Remix:"))
         self.remix_combo = QComboBox()
-        self.remix_combo.addItems(["Shuffle", "Sequential"])
+        self.remix_combo.addItems([
+            "Shuffle",
+            "Sequential",
+            "Color (HSV)",
+            "Shot Type",
+            "Duration (Long)",
+            "Duration (Short)",
+        ])
         self.remix_combo.setToolTip("Algorithm for generating sequences")
-        self.remix_combo.setMinimumWidth(100)
+        self.remix_combo.setMinimumWidth(120)
         toolbar.addWidget(self.remix_combo)
 
         # Clip count spinner
@@ -214,12 +221,23 @@ class TimelineWidget(QWidget):
         else:
             self.view.reset_zoom()
 
+    # Map display names to algorithm keys
+    ALGORITHM_MAP = {
+        "Shuffle": "shuffle",
+        "Sequential": "sequential",
+        "Color (HSV)": "color",
+        "Shot Type": "shot_type",
+        "Duration (Long)": "duration_long",
+        "Duration (Short)": "duration_short",
+    }
+
     def _on_generate(self):
         """Handle Generate button click."""
         if not self._available_clips:
             return
 
-        algorithm = self.remix_combo.currentText().lower()
+        display_name = self.remix_combo.currentText()
+        algorithm = self.ALGORITHM_MAP.get(display_name, "sequential")
         clip_count = self.clip_count_spin.value()
 
         # Clear existing timeline
