@@ -402,9 +402,23 @@ class MainWindow(QMainWindow):
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
 
+    def _is_any_worker_running(self) -> bool:
+        """Check if any background worker is currently running."""
+        workers = [
+            self.detection_worker,
+            self.thumbnail_worker,
+            self.download_worker,
+            self.export_worker,
+            self.color_worker,
+            self.shot_type_worker,
+        ]
+        return any(w and w.isRunning() for w in workers)
+
     def _on_settings_click(self):
         """Open the settings dialog."""
-        dialog = SettingsDialog(self.settings, self)
+        # Disable path settings if background operations are running
+        paths_disabled = self._is_any_worker_running()
+        dialog = SettingsDialog(self.settings, paths_disabled=paths_disabled, parent=self)
         if dialog.exec() == SettingsDialog.Accepted:
             self.settings = dialog.get_settings()
             save_settings(self.settings)
