@@ -29,6 +29,7 @@ from core.scene_detect import SceneDetector, DetectionConfig
 from core.thumbnail import ThumbnailGenerator
 from core.downloader import VideoDownloader
 from core.sequence_export import SequenceExporter, ExportConfig
+from core.analysis.color import extract_dominant_colors
 from ui.clip_browser import ClipBrowser
 from ui.video_player import VideoPlayer
 from ui.timeline import TimelineWidget
@@ -155,6 +156,37 @@ class SequenceExportWorker(QThread):
             self.error.emit(str(e))
 
 
+class ColorAnalysisWorker(QThread):
+    """Background worker for color extraction from thumbnails."""
+
+    progress = Signal(int, int)  # current, total
+    color_ready = Signal(str, list)  # clip_id, colors (list of RGB tuples)
+    finished = Signal()
+
+    def __init__(self, clips: list[Clip]):
+        super().__init__()
+        self.clips = clips
+        self._cancelled = False
+
+    def cancel(self):
+        """Request cancellation of the color analysis."""
+        self._cancelled = True
+
+    def run(self):
+        total = len(self.clips)
+        for i, clip in enumerate(self.clips):
+            if self._cancelled:
+                break
+            try:
+                if clip.thumbnail_path and clip.thumbnail_path.exists():
+                    colors = extract_dominant_colors(clip.thumbnail_path)
+                    self.color_ready.emit(clip.id, colors)
+            except Exception:
+                pass  # Skip failed color extraction
+            self.progress.emit(i + 1, total)
+        self.finished.emit()
+
+
 class MainWindow(QMainWindow):
     """Main application window with drag-drop, detection, and preview."""
 
@@ -181,10 +213,12 @@ class MainWindow(QMainWindow):
         # State
         self.current_source: Optional[Source] = None
         self.clips: list[Clip] = []
+        self.clips_by_id: dict[str, Clip] = {}  # For fast lookup
         self.detection_worker: Optional[DetectionWorker] = None
         self.thumbnail_worker: Optional[ThumbnailWorker] = None
         self.download_worker: Optional[DownloadWorker] = None
         self.export_worker: Optional[SequenceExportWorker] = None
+        self.color_worker: Optional[ColorAnalysisWorker] = None
 
         self._setup_ui()
         self._connect_signals()
@@ -428,6 +462,7 @@ class MainWindow(QMainWindow):
         """Handle detection completion."""
         self.current_source = source
         self.clips = clips
+        self.clips_by_id = {clip.id: clip for clip in clips}
 
         self.status_bar.showMessage(f"Found {len(clips)} scenes. Generating thumbnails...")
 
@@ -451,25 +486,51 @@ class MainWindow(QMainWindow):
 
     def _on_thumbnail_ready(self, clip_id: str, thumb_path: str):
         """Handle individual thumbnail completion."""
-        # Find clip and add to browser
-        for clip in self.clips:
-            if clip.id == clip_id:
-                self.clip_browser.add_clip(clip, self.current_source)
-                break
+        clip = self.clips_by_id.get(clip_id)
+        if clip:
+            self.clip_browser.add_clip(clip, self.current_source)
 
     def _on_thumbnails_finished(self):
         """Handle all thumbnails completed."""
-        self.progress_bar.setVisible(False)
         self.detect_btn.setEnabled(True)
         self.import_btn.setEnabled(True)
         self.export_btn.setEnabled(True)
         self.export_all_btn.setEnabled(True)
-        self.status_bar.showMessage(f"Ready - {len(self.clips)} scenes detected")
 
         # Make clips available for timeline remix
         if self.current_source and self.clips:
             self.timeline.set_fps(self.current_source.fps)
             self.timeline.set_available_clips(self.clips, self.current_source)
+
+        # Start color analysis
+        if self.clips:
+            self.status_bar.showMessage(f"Analyzing colors for {len(self.clips)} scenes...")
+            self.color_worker = ColorAnalysisWorker(self.clips)
+            self.color_worker.progress.connect(self._on_color_progress)
+            self.color_worker.color_ready.connect(self._on_color_ready)
+            self.color_worker.finished.connect(self._on_color_analysis_finished)
+            self.color_worker.start()
+        else:
+            self.progress_bar.setVisible(False)
+            self.status_bar.showMessage(f"Ready - {len(self.clips)} scenes detected")
+
+    def _on_color_progress(self, current: int, total: int):
+        """Handle color analysis progress."""
+        self.progress_bar.setValue(int((current / total) * 100))
+
+    def _on_color_ready(self, clip_id: str, colors: list):
+        """Handle color extraction complete for a clip."""
+        # Update the clip model
+        clip = self.clips_by_id.get(clip_id)
+        if clip:
+            clip.dominant_colors = colors
+            # Update the browser thumbnail with colors
+            self.clip_browser.update_clip_colors(clip_id, colors)
+
+    def _on_color_analysis_finished(self):
+        """Handle all color analysis completed."""
+        self.progress_bar.setVisible(False)
+        self.status_bar.showMessage(f"Ready - {len(self.clips)} scenes detected")
 
     def _on_clip_selected(self, clip: Clip):
         """Handle clip selection in browser."""
@@ -632,6 +693,7 @@ class MainWindow(QMainWindow):
             self.thumbnail_worker,
             self.download_worker,
             self.export_worker,
+            self.color_worker,
         ]
 
         for worker in workers:

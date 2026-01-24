@@ -35,6 +35,7 @@ class Clip:
     start_frame: int = 0
     end_frame: int = 0
     thumbnail_path: Optional[Path] = None
+    dominant_colors: Optional[list[tuple[int, int, int]]] = None  # RGB tuples
 
     @property
     def duration_frames(self) -> int:

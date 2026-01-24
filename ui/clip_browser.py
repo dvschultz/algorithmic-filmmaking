@@ -6,16 +6,58 @@ from typing import Optional
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
+    QHBoxLayout,
     QScrollArea,
     QGridLayout,
     QLabel,
     QFrame,
     QApplication,
+    QComboBox,
 )
 from PySide6.QtCore import Qt, Signal, QMimeData, QPoint
-from PySide6.QtGui import QPixmap, QDrag
+from PySide6.QtGui import QPixmap, QDrag, QPainter, QColor
 
 from models.clip import Clip, Source
+from core.analysis.color import get_primary_hue
+
+
+class ColorSwatchBar(QWidget):
+    """Widget that displays dominant colors as horizontal stripes."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.colors: list[tuple[int, int, int]] = []
+        self.setFixedSize(160, 10)
+
+    def set_colors(self, colors: list[tuple[int, int, int]]):
+        """Set the colors to display."""
+        self.colors = colors
+        self.update()
+
+    def paintEvent(self, event):
+        """Paint the color stripes."""
+        if not self.colors:
+            return
+
+        painter = QPainter(self)
+        width = self.width()
+        height = self.height()
+
+        # Calculate stripe width based on number of colors
+        n_colors = len(self.colors)
+        stripe_width = width / n_colors
+
+        for i, rgb in enumerate(self.colors):
+            color = QColor(rgb[0], rgb[1], rgb[2])
+            painter.fillRect(
+                int(i * stripe_width),
+                0,
+                int(stripe_width) + 1,  # +1 to avoid gaps
+                height,
+                color,
+            )
+
+        painter.end()
 
 
 class ClipThumbnail(QFrame):
@@ -35,7 +77,7 @@ class ClipThumbnail(QFrame):
 
         self.setFrameStyle(QFrame.Panel | QFrame.Raised)
         self.setLineWidth(2)
-        self.setFixedSize(180, 130)
+        self.setFixedSize(180, 145)  # Increased height for color bar
         self.setCursor(Qt.PointingHandCursor)
 
         layout = QVBoxLayout(self)
@@ -54,6 +96,12 @@ class ClipThumbnail(QFrame):
             self.thumbnail_label.setText("Loading...")
 
         layout.addWidget(self.thumbnail_label)
+
+        # Color swatch bar
+        self.color_bar = ColorSwatchBar()
+        if clip.dominant_colors:
+            self.color_bar.set_colors(clip.dominant_colors)
+        layout.addWidget(self.color_bar)
 
         # Duration label
         duration = clip.duration_seconds(source.fps)
@@ -145,6 +193,10 @@ class ClipThumbnail(QFrame):
         """Enable or disable dragging."""
         self._drag_enabled = enabled
 
+    def set_colors(self, colors: list[tuple[int, int, int]]):
+        """Set the dominant colors for this clip."""
+        self.color_bar.set_colors(colors)
+
 
 class ClipBrowser(QWidget):
     """Grid browser for viewing detected clips."""
@@ -169,15 +221,33 @@ class ClipBrowser(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # Header
-        header = QLabel("Detected Scenes")
-        header.setStyleSheet("font-weight: bold; font-size: 14px; padding: 8px;")
-        layout.addWidget(header)
+        # Header with sort dropdown
+        header_layout = QHBoxLayout()
+        header_layout.setContentsMargins(8, 8, 8, 4)
+
+        header_label = QLabel("Detected Scenes")
+        header_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+        header_layout.addWidget(header_label)
+
+        header_layout.addStretch()
+
+        # Sort dropdown
+        sort_label = QLabel("Order:")
+        sort_label.setStyleSheet("font-size: 12px; color: #666;")
+        header_layout.addWidget(sort_label)
+
+        self.sort_combo = QComboBox()
+        self.sort_combo.addItems(["Timeline", "Color", "Duration"])
+        self.sort_combo.setFixedWidth(100)
+        self.sort_combo.currentTextChanged.connect(self._on_sort_changed)
+        header_layout.addWidget(self.sort_combo)
+
+        layout.addLayout(header_layout)
 
         # Scroll area for thumbnails
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
         # Container for grid
         self.container = QWidget()
@@ -185,8 +255,8 @@ class ClipBrowser(QWidget):
         self.grid.setSpacing(8)
         self.grid.setContentsMargins(8, 8, 8, 8)
 
-        scroll.setWidget(self.container)
-        layout.addWidget(scroll)
+        self.scroll.setWidget(self.container)
+        layout.addWidget(self.scroll)
 
         # Placeholder for empty state
         self.empty_label = QLabel("No scenes detected yet.\nDrop a video or click Import.")
@@ -262,3 +332,54 @@ class ClipBrowser(QWidget):
     def get_source_for_clip(self, clip_id: str) -> Optional[Source]:
         """Get the source for a clip by ID."""
         return self._source_lookup.get(clip_id)
+
+    def update_clip_colors(self, clip_id: str, colors: list[tuple[int, int, int]]):
+        """Update the colors for a specific clip thumbnail."""
+        for thumb in self.thumbnails:
+            if thumb.clip.id == clip_id:
+                thumb.set_colors(colors)
+                break
+
+    def _on_sort_changed(self, sort_option: str):
+        """Handle sort dropdown change."""
+        if sort_option == "Timeline":
+            self._sort_by_timeline()
+        elif sort_option == "Color":
+            self._sort_by_color()
+        elif sort_option == "Duration":
+            self._sort_by_duration()
+
+    def _sort_by_timeline(self):
+        """Sort clips by timeline order (start frame)."""
+        self.thumbnails.sort(key=lambda t: t.clip.start_frame)
+        self._rebuild_grid()
+
+    def _sort_by_color(self):
+        """Sort clips by primary hue (HSV color wheel order)."""
+        def get_hue(thumb: ClipThumbnail) -> float:
+            if thumb.clip.dominant_colors:
+                return get_primary_hue(thumb.clip.dominant_colors)
+            return 0.0
+
+        self.thumbnails.sort(key=get_hue)
+        self._rebuild_grid()
+
+    def _sort_by_duration(self):
+        """Sort clips by duration (longest first)."""
+        self.thumbnails.sort(
+            key=lambda t: t.clip.duration_seconds(t.source.fps),
+            reverse=True,
+        )
+        self._rebuild_grid()
+
+    def _rebuild_grid(self):
+        """Rebuild the grid layout with current thumbnail order."""
+        # Remove all thumbnails from grid
+        for thumb in self.thumbnails:
+            self.grid.removeWidget(thumb)
+
+        # Re-add in new order
+        for i, thumb in enumerate(self.thumbnails):
+            row = i // self.COLUMNS
+            col = i % self.COLUMNS
+            self.grid.addWidget(thumb, row, col)
