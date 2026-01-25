@@ -364,9 +364,10 @@ class BulkDownloadWorker(QThread):
     video_error = Signal(str, str)  # video_id, error message
     all_finished = Signal()
 
-    def __init__(self, videos: list[YouTubeVideo], max_parallel: int = 2):
+    def __init__(self, videos: list[YouTubeVideo], download_dir: Path, max_parallel: int = 2):
         super().__init__()
         self.videos = videos
+        self.download_dir = download_dir
         self.max_parallel = max_parallel
         self._cancelled = False
         self._completed = 0
@@ -424,8 +425,8 @@ class BulkDownloadWorker(QThread):
 
     def _download_one(self, video: YouTubeVideo):
         """Download a single video."""
-        logger.debug(f"Starting download: {video.title} ({video.video_id})")
-        downloader = VideoDownloader()
+        logger.debug(f"Starting download: {video.title} ({video.video_id}) to {self.download_dir}")
+        downloader = VideoDownloader(download_dir=self.download_dir)
         result = downloader.download(
             video.youtube_url,
             cancel_check=lambda: self._cancelled,
@@ -1245,7 +1246,9 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(0)
 
         self.bulk_download_worker = BulkDownloadWorker(
-            videos, self.settings.youtube_parallel_downloads
+            videos,
+            download_dir=self.settings.download_dir,
+            max_parallel=self.settings.youtube_parallel_downloads,
         )
         self.bulk_download_worker.progress.connect(self._on_bulk_progress)
         self.bulk_download_worker.video_finished.connect(self._on_bulk_video_finished)
