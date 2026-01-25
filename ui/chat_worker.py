@@ -87,6 +87,26 @@ def _parse_tool_calls_from_text(content: str, available_tools: list[str]) -> tup
                 # Only extract one tool call per response to avoid duplicates
                 break
 
+    # Pattern 4: Model describes wanting to call a tool in plain English
+    # Handles: "I should call get_project_state" or "The get_project_state function"
+    if not tool_calls:
+        for tool_name in available_tools:
+            # Look for explicit mentions of calling/using the tool
+            intent_patterns = [
+                rf'\b(?:call|use|invoke|run|execute)\s+{re.escape(tool_name)}\b',
+                rf'\b{re.escape(tool_name)}\s+(?:function|tool)\s+(?:is\s+)?available\b',
+                rf'\bshould\s+(?:call|use)\s+{re.escape(tool_name)}\b',
+                rf'\bI\'ll\s+(?:call|use)\s+{re.escape(tool_name)}\b',
+            ]
+            for pattern in intent_patterns:
+                if re.search(pattern, content, re.IGNORECASE):
+                    logger.info(f"Detected intent to call tool '{tool_name}' from text")
+                    tool_calls.append(_create_tool_call(tool_name, {}))
+                    # For intent-based detection, don't modify content - let model see full response
+                    break
+            if tool_calls:
+                break
+
     # If we found tool calls, also check for common prefixes the model might add
     if tool_calls:
         # Remove common preambles
@@ -351,7 +371,7 @@ class ChatAgentWorker(QThread):
         # Fallback: If no tool calls via API but content looks like JSON tool calls,
         # parse them from the text. This handles models that output tool calls as text.
         if not tool_calls and content:
-            available_tools = list(tool_registry.keys())
+            available_tools = [t.name for t in tool_registry.all_tools()]
             parsed_calls, cleaned_content = _parse_tool_calls_from_text(content, available_tools)
 
             if parsed_calls:
