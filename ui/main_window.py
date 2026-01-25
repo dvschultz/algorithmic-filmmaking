@@ -936,6 +936,7 @@ class MainWindow(QMainWindow):
         self._chat_worker.text_chunk.connect(self.chat_panel.on_stream_chunk)
         self._chat_worker.tool_called.connect(self._on_chat_tool_called)
         self._chat_worker.tool_result.connect(self._on_chat_tool_result)
+        self._chat_worker.gui_tool_requested.connect(self._on_gui_tool_requested)
         self._chat_worker.complete.connect(self._on_chat_complete)
         self._chat_worker.error.connect(self._on_chat_error)
 
@@ -951,6 +952,57 @@ class MainWindow(QMainWindow):
         logger.info(f"Chat tool {name} completed: success={success}")
         if self._current_tool_indicator:
             self._current_tool_indicator.set_complete(success)
+
+    @Slot(str, dict, str)
+    def _on_gui_tool_requested(self, tool_name: str, args: dict, tool_call_id: str):
+        """Execute a GUI-modifying tool on the main thread.
+
+        This slot is called by ChatAgentWorker when a tool that modifies
+        GUI state needs to be executed. The tool runs on the main thread
+        to ensure thread safety with Qt.
+
+        Args:
+            tool_name: Name of the tool to execute
+            args: Tool arguments
+            tool_call_id: ID for tracking the tool call
+        """
+        from core.chat_tools import tools as tool_registry
+
+        logger.info(f"Executing GUI tool on main thread: {tool_name}")
+
+        tool = tool_registry.get(tool_name)
+        if not tool or not tool.modifies_gui_state:
+            # Invalid tool request
+            result = {
+                "tool_call_id": tool_call_id,
+                "name": tool_name,
+                "success": False,
+                "error": f"Tool '{tool_name}' is not a valid GUI tool"
+            }
+        else:
+            try:
+                # Inject project and execute
+                args["project"] = self.project
+                tool_result = tool.func(**args)
+                result = {
+                    "tool_call_id": tool_call_id,
+                    "name": tool_name,
+                    "success": True,
+                    "result": tool_result
+                }
+                logger.info(f"GUI tool {tool_name} completed successfully")
+            except Exception as e:
+                logger.exception(f"GUI tool execution failed: {tool_name}")
+                result = {
+                    "tool_call_id": tool_call_id,
+                    "name": tool_name,
+                    "success": False,
+                    "error": str(e)
+                }
+
+        # Send result back to worker thread
+        if self._chat_worker:
+            self._chat_worker.set_gui_tool_result(result)
 
     def _on_chat_complete(self, response: str, tool_history: list[dict]):
         """Handle chat completion with full history."""

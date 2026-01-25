@@ -32,6 +32,8 @@ class ChatAgentWorker(QThread):
     text_chunk = Signal(str)  # Streaming text chunk
     tool_called = Signal(str, dict)  # tool_name, arguments
     tool_result = Signal(str, dict, bool)  # tool_name, result, success
+    gui_tool_requested = Signal(str, dict, str)  # tool_name, args, tool_call_id (for main thread execution)
+    gui_tool_completed = Signal(str)  # tool_call_id (set by main thread when done)
     complete = Signal(str, list)  # final response text, tool_history
     error = Signal(str)  # error message
 
@@ -58,6 +60,11 @@ class ChatAgentWorker(QThread):
         self.project = project
         self.busy_check = busy_check
         self._stop_requested = False
+
+        # For GUI tool synchronization
+        import threading
+        self._gui_tool_event = threading.Event()
+        self._gui_tool_result: Optional[dict] = None
 
     def run(self):
         """Run the agent loop."""
@@ -124,6 +131,7 @@ class ChatAgentWorker(QThread):
 
                     name = tc.get("function", {}).get("name", "unknown")
                     args_str = tc.get("function", {}).get("arguments", "{}")
+                    tool_call_id = tc.get("id", "unknown")
 
                     try:
                         args = json.loads(args_str) if isinstance(args_str, str) else args_str
@@ -133,8 +141,36 @@ class ChatAgentWorker(QThread):
                     # Emit tool call signal
                     self.tool_called.emit(name, args)
 
-                    # Execute tool
-                    result = executor.execute(tc)
+                    # Check if this is a GUI-modifying tool
+                    tool_def = tool_registry.get(name)
+                    if tool_def and tool_def.modifies_gui_state:
+                        # Execute on main thread via signal/slot
+                        self._gui_tool_event.clear()
+                        self._gui_tool_result = None
+                        self.gui_tool_requested.emit(name, args, tool_call_id)
+
+                        # Wait for main thread to complete (with timeout)
+                        completed = self._gui_tool_event.wait(timeout=30.0)
+                        if not completed or self._stop_requested:
+                            result = {
+                                "tool_call_id": tool_call_id,
+                                "name": name,
+                                "success": False,
+                                "error": "Tool execution timed out or was cancelled"
+                            }
+                        elif self._gui_tool_result:
+                            result = self._gui_tool_result
+                        else:
+                            result = {
+                                "tool_call_id": tool_call_id,
+                                "name": name,
+                                "success": False,
+                                "error": "No result from GUI tool"
+                            }
+                    else:
+                        # Execute non-GUI tool directly in worker thread
+                        result = executor.execute(tc)
+
                     self.tool_result.emit(name, result, result.get("success", False))
 
                     # Add tool result to messages
@@ -288,3 +324,14 @@ NO PROJECT LOADED - The user should open or create a project first, or you can h
     def stop(self):
         """Request the worker to stop."""
         self._stop_requested = True
+        # Unblock any waiting GUI tool
+        self._gui_tool_event.set()
+
+    def set_gui_tool_result(self, result: dict):
+        """Called by main thread to provide GUI tool result.
+
+        Args:
+            result: Tool execution result dict
+        """
+        self._gui_tool_result = result
+        self._gui_tool_event.set()

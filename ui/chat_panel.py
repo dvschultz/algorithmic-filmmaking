@@ -7,7 +7,8 @@ Provides:
 - Streaming state management
 """
 
-from PySide6.QtCore import Qt, Signal, Slot, QTimer
+from PySide6.QtCore import Qt, Signal, Slot, QTimer, QEvent
+from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -151,9 +152,6 @@ class ChatPanel(QWidget):
 
     def eventFilter(self, obj, event):
         """Handle Enter key in input field."""
-        from PySide6.QtCore import QEvent
-        from PySide6.QtGui import QKeyEvent
-
         if obj == self.input_field and event.type() == QEvent.KeyPress:
             key_event = event
             if key_event.key() == Qt.Key_Return and not key_event.modifiers() & Qt.ShiftModifier:

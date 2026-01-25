@@ -21,6 +21,79 @@ from typing import Any, Callable, Optional, get_type_hints
 
 logger = logging.getLogger(__name__)
 
+
+def _validate_path(path_str: str, must_exist: bool = False, allow_relative: bool = False) -> tuple[bool, str, Optional[Path]]:
+    """Validate a file path for security.
+
+    Args:
+        path_str: Path string to validate
+        must_exist: Whether the path must exist
+        allow_relative: Whether to allow relative paths
+
+    Returns:
+        Tuple of (is_valid, error_message, resolved_path)
+    """
+    if not path_str:
+        return False, "Path cannot be empty", None
+
+    try:
+        path = Path(path_str)
+
+        # Resolve to absolute path
+        resolved = path.resolve()
+
+        # Check for absolute path requirement
+        if not allow_relative and not path.is_absolute():
+            return False, f"Only absolute paths are allowed: {path_str}", None
+
+        # Check for path traversal attempts (.. in original path)
+        if ".." in str(path):
+            return False, f"Path traversal not allowed: {path_str}", None
+
+        # Check existence if required
+        if must_exist and not resolved.exists():
+            return False, f"Path does not exist: {path_str}", None
+
+        # Ensure path is within user's home directory or common safe locations
+        home = Path.home()
+        safe_roots = [
+            home,
+            Path("/tmp").resolve(),  # Resolve symlinks (macOS: /tmp -> /private/tmp)
+            Path(tempfile.gettempdir()).resolve(),
+        ]
+
+        # On macOS, also allow /var/folders (temp), /Volumes (external drives), /private/tmp
+        import sys
+        if sys.platform == "darwin":
+            safe_roots.extend([
+                Path("/var/folders"),
+                Path("/Volumes"),
+                Path("/private/tmp"),
+            ])
+
+        is_safe = any(
+            _is_path_under(resolved, safe_root)
+            for safe_root in safe_roots
+        )
+
+        if not is_safe:
+            return False, f"Path must be within home directory or temp: {path_str}", None
+
+        return True, "", resolved
+
+    except Exception as e:
+        return False, f"Invalid path: {e}", None
+
+
+def _is_path_under(path: Path, root: Path) -> bool:
+    """Check if path is under root directory."""
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
 # Timeout values for CLI tools (in seconds)
 TOOL_TIMEOUTS = {
     "detect_scenes": 600,      # 10 minutes for large videos
@@ -339,13 +412,22 @@ def detect_scenes(
     output_path: Optional[str] = None
 ) -> dict:
     """Run scene detection via CLI."""
-    video = Path(video_path)
-    if not video.exists():
-        return {"error": f"Video file not found: {video_path}"}
+    # Validate video path
+    valid, error, video = _validate_path(video_path, must_exist=True)
+    if not valid:
+        return {"error": error}
 
-    # Default output path
+    if not video.is_file():
+        return {"error": f"Path is not a file: {video_path}"}
+
+    # Validate and set output path
     if output_path is None:
         output_path = str(video.with_suffix(".json"))
+    else:
+        valid, error, validated_output = _validate_path(output_path)
+        if not valid:
+            return {"error": f"Invalid output path: {error}"}
+        output_path = str(validated_output)
 
     cmd = [
         "scene_ripper", "detect", str(video),
@@ -432,6 +514,13 @@ def search_youtube(query: str, max_results: int = 10) -> dict:
 )
 def download_video(url: str, output_dir: Optional[str] = None) -> dict:
     """Download video via CLI."""
+    # Validate output directory if provided
+    if output_dir:
+        valid, error, validated_dir = _validate_path(output_dir)
+        if not valid:
+            return {"error": f"Invalid output directory: {error}"}
+        output_dir = str(validated_dir)
+
     cmd = ["scene_ripper", "download", url]
     if output_dir:
         cmd.extend(["--output-dir", output_dir])
@@ -473,7 +562,12 @@ def download_video(url: str, output_dir: Optional[str] = None) -> dict:
 )
 def analyze_colors(project_path: str) -> dict:
     """Run color analysis via CLI."""
-    cmd = ["scene_ripper", "analyze", "colors", project_path]
+    # Validate project path
+    valid, error, validated_path = _validate_path(project_path, must_exist=True)
+    if not valid:
+        return {"error": error}
+
+    cmd = ["scene_ripper", "analyze", "colors", str(validated_path)]
 
     try:
         result = subprocess.run(
@@ -504,7 +598,12 @@ def analyze_colors(project_path: str) -> dict:
 )
 def analyze_shots(project_path: str) -> dict:
     """Run shot classification via CLI."""
-    cmd = ["scene_ripper", "analyze", "shots", project_path]
+    # Validate project path
+    valid, error, validated_path = _validate_path(project_path, must_exist=True)
+    if not valid:
+        return {"error": error}
+
+    cmd = ["scene_ripper", "analyze", "shots", str(validated_path)]
 
     try:
         result = subprocess.run(
@@ -535,7 +634,12 @@ def analyze_shots(project_path: str) -> dict:
 )
 def transcribe(project_path: str, model: str = "small.en") -> dict:
     """Run transcription via CLI."""
-    cmd = ["scene_ripper", "transcribe", project_path, "--model", model]
+    # Validate project path
+    valid, error, validated_path = _validate_path(project_path, must_exist=True)
+    if not valid:
+        return {"error": error}
+
+    cmd = ["scene_ripper", "transcribe", str(validated_path), "--model", model]
 
     try:
         result = subprocess.run(
@@ -570,7 +674,17 @@ def export_clips(
     clip_ids: Optional[list[str]] = None
 ) -> dict:
     """Export clips via CLI."""
-    cmd = ["scene_ripper", "export", "clips", project_path, "--output-dir", output_dir]
+    # Validate project path
+    valid, error, validated_project = _validate_path(project_path, must_exist=True)
+    if not valid:
+        return {"error": f"Invalid project path: {error}"}
+
+    # Validate output directory
+    valid, error, validated_output = _validate_path(output_dir)
+    if not valid:
+        return {"error": f"Invalid output directory: {error}"}
+
+    cmd = ["scene_ripper", "export", "clips", str(validated_project), "--output-dir", str(validated_output)]
 
     if clip_ids:
         cmd.extend(["--clips", ",".join(clip_ids)])

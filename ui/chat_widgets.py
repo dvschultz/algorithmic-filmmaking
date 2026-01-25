@@ -6,7 +6,7 @@ Provides:
 - ToolIndicator: Shows tool execution status
 """
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout
 
 
@@ -74,7 +74,14 @@ class StreamingBubble(QFrame):
         """
         super().__init__(parent)
         self._text = ""
+        self._chunk_buffer = ""
         self._is_finished = False
+
+        # Timer for batched UI updates (every 100ms)
+        self._update_timer = QTimer(self)
+        self._update_timer.setInterval(100)
+        self._update_timer.timeout.connect(self._flush_buffer)
+
         self._setup_ui()
 
     def _setup_ui(self):
@@ -102,20 +109,41 @@ class StreamingBubble(QFrame):
     def append_text(self, chunk: str):
         """Append a chunk of text to the bubble.
 
+        Chunks are buffered and flushed to the UI periodically
+        for better performance with rapid streaming.
+
         Args:
             chunk: Text chunk from streaming response
         """
         if self._is_finished:
             return
 
-        self._text += chunk
-        # Use plain text during streaming for performance
+        self._chunk_buffer += chunk
+
+        # Start timer if not already running
+        if not self._update_timer.isActive():
+            self._update_timer.start()
+
+    def _flush_buffer(self):
+        """Flush buffered chunks to the label."""
+        if not self._chunk_buffer:
+            self._update_timer.stop()
+            return
+
+        self._text += self._chunk_buffer
+        self._chunk_buffer = ""
         self.label.setText(self._text)
 
     def finish(self):
         """Mark the bubble as finished and render final Markdown."""
         if self._is_finished:
             return
+
+        # Stop timer and flush any remaining buffer
+        self._update_timer.stop()
+        if self._chunk_buffer:
+            self._text += self._chunk_buffer
+            self._chunk_buffer = ""
 
         self._is_finished = True
         # Render final text as Markdown
@@ -129,7 +157,9 @@ class StreamingBubble(QFrame):
 
     def clear_text(self):
         """Clear the accumulated text."""
+        self._update_timer.stop()
         self._text = ""
+        self._chunk_buffer = ""
         self.label.setText("...")
         self._is_finished = False
         self.label.setTextFormat(Qt.PlainText)
