@@ -408,14 +408,22 @@ class ChatAgentWorker(QThread):
         Returns:
             Tuple of (content_text, tool_calls)
         """
+        from core.llm_client import ProviderType
+
         content = ""
         tool_calls = []
         display_buffer = ""  # Buffer for detecting JSON before displaying
         available_tools = [t.name for t in tool_registry.all_tools()]
 
+        # Don't pass tools to Ollama - LiteLLM forces JSON mode which breaks responses
+        # Instead, we rely on text-based tool parsing (the model outputs JSON in text)
+        use_tools = None
+        if self.config.provider != ProviderType.LOCAL:
+            use_tools = tool_registry.to_openai_format()
+
         async for chunk in client.stream_chat(
             messages,
-            tools=tool_registry.to_openai_format()
+            tools=use_tools
         ):
             if self._stop_requested:
                 break
@@ -520,6 +528,8 @@ class ChatAgentWorker(QThread):
         Returns:
             System prompt string
         """
+        from core.llm_client import ProviderType
+
         prompt = """You are an AI assistant for Scene Ripper, a video scene detection and editing tool.
 
 You help users create video projects by:
@@ -543,6 +553,33 @@ When the user wants to work with videos:
 
 Be helpful and proactive. If the user's request is unclear, ask clarifying questions.
 """
+
+        # For Ollama, include tool schemas in the prompt since we don't pass them via API
+        if self.config.provider == ProviderType.LOCAL:
+            prompt += """
+IMPORTANT: When you need to use a tool, output a JSON object with "name" and "arguments" fields.
+Example: {"name": "get_project_state", "arguments": {}}
+
+After receiving tool results, provide a comprehensive, well-structured response that:
+- Summarizes the key information clearly with bullet points or sections
+- Includes relevant details like durations, counts, and file names
+- Suggests logical next steps the user might want to take
+- Uses markdown formatting for readability
+
+Do NOT just output another tool call - explain what you found in detail.
+
+Available tools:
+"""
+            for tool in tool_registry.all_tools():
+                params = []
+                if tool.parameters.get("properties"):
+                    for param, info in tool.parameters["properties"].items():
+                        param_type = info.get("type", "string")
+                        required = param in tool.parameters.get("required", [])
+                        req_marker = " (required)" if required else ""
+                        params.append(f"    - {param}: {param_type}{req_marker}")
+                params_str = "\n".join(params) if params else "    (no parameters)"
+                prompt += f"\n- {tool.name}: {tool.description}\n{params_str}\n"
 
         if self.project:
             # Add project context
