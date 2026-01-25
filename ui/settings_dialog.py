@@ -342,6 +342,13 @@ class SettingsDialog(QDialog):
         )
         analysis_layout.addWidget(self.auto_shots_check)
 
+        self.auto_transcribe_check = QCheckBox("Transcribe speech after detection")
+        self.auto_transcribe_check.setToolTip(
+            "Automatically transcribe speech after scene detection completes.\n"
+            "Disable to manually trigger transcription from the Analyze tab."
+        )
+        analysis_layout.addWidget(self.auto_transcribe_check)
+
         note_label = QLabel("Note: Changes apply to future detections only")
         note_label.setStyleSheet(f"color: {theme().text_secondary}; font-style: italic;")
         analysis_layout.addWidget(note_label)
@@ -388,14 +395,6 @@ class SettingsDialog(QDialog):
 
         lang_layout.addStretch()
         transcription_layout.addLayout(lang_layout)
-
-        # Auto-transcribe checkbox
-        self.auto_transcribe_check = QCheckBox("Auto-transcribe after detection")
-        self.auto_transcribe_check.setToolTip(
-            "Automatically transcribe speech after scene detection completes.\n"
-            "Disable to manually trigger transcription from the Analyze tab."
-        )
-        transcription_layout.addWidget(self.auto_transcribe_check)
 
         layout.addWidget(transcription_group)
 
