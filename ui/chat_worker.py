@@ -640,7 +640,8 @@ CURRENT GUI STATE:
         if not result.get("success", False):
             return
 
-        data = result.get("data", result)
+        # ToolExecutor wraps the actual tool return value in "result" key
+        data = result.get("result", result)
 
         if tool_name == "search_youtube":
             # Emit signal with query and video results
