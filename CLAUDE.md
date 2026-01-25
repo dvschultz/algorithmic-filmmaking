@@ -55,6 +55,14 @@ Heavy operations (detection, thumbnails) run in `QThread` workers to keep UI res
 ### FFmpeg Safety
 Always use argument arrays, never shell interpolation. Validate paths before processing.
 
+### User Settings
+Always use paths and configuration from `core/settings.py` (loaded via `load_settings()`). Never hardcode paths or use defaults when a user-configurable setting exists:
+- `settings.download_dir` for video downloads
+- `settings.project_dir` for project files
+- `settings.cache_dir` for thumbnails and cache
+
+When adding new features that involve file paths, check if a relevant setting exists and use it. If not, consider adding one to the Settings dataclass.
+
 ## Testing
 
 ```bash
