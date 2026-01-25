@@ -1,0 +1,17 @@
+[project]
+name = "scene-ripper"
+version = "0.1.0"
+description = "Video scene detection and analysis tool"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+
+[project.scripts]
+scene_ripper = "cli.main:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["cli*", "core*", "models*", "ui*"]
