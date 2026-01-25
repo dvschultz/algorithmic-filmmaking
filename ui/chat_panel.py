@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QStyledItemDelegate,
     QStyleOptionViewItem,
     QTextEdit,
@@ -22,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ui.chat_widgets import MessageBubble, StreamingBubble, ToolIndicator
+from ui.chat_widgets import MessageBubble, StreamingBubble, ToolIndicator, ExamplePromptsWidget
 from core.settings import (
     get_anthropic_api_key,
     get_openai_api_key,
@@ -62,6 +63,7 @@ class ChatPanel(QWidget):
         self._is_streaming = False
         self._response_finished_handled = False
         self._current_bubble = None
+        self._example_prompts_visible = True
         self._setup_ui()
 
     def _setup_ui(self):
@@ -101,6 +103,7 @@ class ChatPanel(QWidget):
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.scroll_area.setStyleSheet("""
             QScrollArea {
                 border: 1px solid #d0d0d0;
@@ -115,6 +118,11 @@ class ChatPanel(QWidget):
         self.messages_layout.setSpacing(8)
         self.messages_layout.setContentsMargins(8, 8, 8, 8)
         self.scroll_area.setWidget(self.messages_widget)
+
+        # Example prompts (shown when chat is empty)
+        self.example_prompts = ExamplePromptsWidget()
+        self.example_prompts.prompt_clicked.connect(self._on_example_prompt_clicked)
+        self.messages_layout.addWidget(self.example_prompts)
 
         layout.addWidget(self.scroll_area, 1)
 
@@ -207,6 +215,15 @@ class ChatPanel(QWidget):
         self._set_streaming_state(False)
         self.add_assistant_message("*Cancelled*")
 
+    def _on_example_prompt_clicked(self, prompt_text: str):
+        """Handle example prompt click - fill input field."""
+        self.input_field.setText(prompt_text)
+        self.input_field.setFocus()
+        # Move cursor to end
+        cursor = self.input_field.textCursor()
+        cursor.movePosition(cursor.End)
+        self.input_field.setTextCursor(cursor)
+
     def _on_provider_changed(self, text: str):
         """Handle provider selection change."""
         # Map display name to provider key
@@ -233,12 +250,21 @@ class ChatPanel(QWidget):
         self.send_button.setVisible(not is_streaming)
         self.cancel_button.setVisible(is_streaming)
 
+        # Disable example prompts during streaming
+        if self._example_prompts_visible:
+            self.example_prompts.setEnabled(not is_streaming)
+
     def _add_user_message(self, text: str):
         """Add a user message bubble.
 
         Args:
             text: Message text
         """
+        # Hide example prompts after first message
+        if self._example_prompts_visible:
+            self.example_prompts.hide()
+            self._example_prompts_visible = False
+
         bubble = MessageBubble(text, is_user=True)
         self.messages_layout.addWidget(bubble)
         self._scroll_to_bottom()
@@ -282,6 +308,9 @@ class ChatPanel(QWidget):
 
     def _scroll_to_bottom(self):
         """Scroll the message area to the bottom."""
+        # Force layout update to recalculate sizes
+        self.messages_widget.updateGeometry()
+        self.messages_widget.adjustSize()
         QTimer.singleShot(50, lambda: self.scroll_area.verticalScrollBar().setValue(
             self.scroll_area.verticalScrollBar().maximum()
         ))
@@ -346,10 +375,18 @@ class ChatPanel(QWidget):
 
     def clear_messages(self):
         """Clear all messages from the chat."""
+        # Remove all widgets except the example prompts
         while self.messages_layout.count():
             item = self.messages_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+            widget = item.widget()
+            if widget and widget is not self.example_prompts:
+                widget.deleteLater()
+
+        # Restore example prompts
+        self.messages_layout.addWidget(self.example_prompts)
+        self.example_prompts.show()
+        self.example_prompts.reset_guard()
+        self._example_prompts_visible = True
 
     def set_provider(self, provider: str):
         """Set the selected provider.
