@@ -297,6 +297,7 @@ class ClipBrowser(QWidget):
     def __init__(self):
         super().__init__()
         self.thumbnails: list[ClipThumbnail] = []
+        self._thumbnail_by_id: dict[str, ClipThumbnail] = {}  # O(1) lookup by clip_id
         self.selected_clips: set[str] = set()  # clip ids
         self._drag_enabled = False
         self._source_lookup: dict[str, Source] = {}  # clip_id -> Source
@@ -412,6 +413,7 @@ class ClipBrowser(QWidget):
         thumb.drag_started.connect(self._on_drag_started)
 
         self.thumbnails.append(thumb)
+        self._thumbnail_by_id[clip.id] = thumb  # O(1) lookup
 
         # Add to grid
         row = (len(self.thumbnails) - 1) // self.COLUMNS
@@ -425,6 +427,7 @@ class ClipBrowser(QWidget):
             thumb.deleteLater()
 
         self.thumbnails = []
+        self._thumbnail_by_id = {}
         self.selected_clips = set()
         self._source_lookup = {}
         self.empty_label.setVisible(True)
@@ -446,9 +449,9 @@ class ClipBrowser(QWidget):
             thumb.deleteLater()
             # Remove from selection if selected
             self.selected_clips.discard(thumb.clip.id)
-            # Remove from source lookup
-            if thumb.clip.id in self._source_lookup:
-                del self._source_lookup[thumb.clip.id]
+            # Remove from lookups
+            self._thumbnail_by_id.pop(thumb.clip.id, None)
+            self._source_lookup.pop(thumb.clip.id, None)
 
         # Replace list in one operation (avoids O(n) list.remove() calls)
         if remove:
@@ -496,32 +499,28 @@ class ClipBrowser(QWidget):
         return self._source_lookup.get(clip_id)
 
     def update_clip_colors(self, clip_id: str, colors: list[tuple[int, int, int]]):
-        """Update the colors for a specific clip thumbnail."""
-        for thumb in self.thumbnails:
-            if thumb.clip.id == clip_id:
-                thumb.set_colors(colors)
-                break
+        """Update the colors for a specific clip thumbnail (O(1) lookup)."""
+        thumb = self._thumbnail_by_id.get(clip_id)
+        if thumb:
+            thumb.set_colors(colors)
 
     def update_clip_shot_type(self, clip_id: str, shot_type: str):
-        """Update the shot type for a specific clip thumbnail."""
-        for thumb in self.thumbnails:
-            if thumb.clip.id == clip_id:
-                thumb.set_shot_type(shot_type)
-                break
+        """Update the shot type for a specific clip thumbnail (O(1) lookup)."""
+        thumb = self._thumbnail_by_id.get(clip_id)
+        if thumb:
+            thumb.set_shot_type(shot_type)
 
     def update_clip_transcript(self, clip_id: str, segments: list):
-        """Update the transcript for a specific clip thumbnail."""
-        for thumb in self.thumbnails:
-            if thumb.clip.id == clip_id:
-                thumb.set_transcript(segments)
-                break
+        """Update the transcript for a specific clip thumbnail (O(1) lookup)."""
+        thumb = self._thumbnail_by_id.get(clip_id)
+        if thumb:
+            thumb.set_transcript(segments)
 
     def update_clip_thumbnail(self, clip_id: str, thumb_path: Path):
-        """Update the thumbnail image for a specific clip."""
-        for thumb in self.thumbnails:
-            if thumb.clip.id == clip_id:
-                thumb.set_thumbnail(thumb_path)
-                break
+        """Update the thumbnail image for a specific clip (O(1) lookup)."""
+        thumb = self._thumbnail_by_id.get(clip_id)
+        if thumb:
+            thumb.set_thumbnail(thumb_path)
 
     def _on_filter_changed(self, filter_option: str):
         """Handle shot type filter dropdown change."""

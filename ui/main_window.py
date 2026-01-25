@@ -2,6 +2,7 @@
 
 import logging
 import re
+from collections import deque
 from pathlib import Path
 from typing import Optional
 
@@ -360,7 +361,7 @@ class MainWindow(QMainWindow):
         self.clips: list[Clip] = []  # All clips from all analyzed sources
         self.clips_by_id: dict[str, Clip] = {}  # For fast lookup
         self.clips_by_source: dict[str, list[Clip]] = {}  # Clips organized by source ID
-        self._analyze_queue: list[Source] = []  # Queue for batch analysis
+        self._analyze_queue: deque[Source] = deque()  # Queue for batch analysis (O(1) popleft)
         self._analyze_queue_total: int = 0  # Total count for progress display
         self.detection_worker: Optional[DetectionWorker] = None
         self.thumbnail_worker: Optional[ThumbnailWorker] = None
@@ -604,6 +605,8 @@ class MainWindow(QMainWindow):
         self.sequence_tab.timeline.sequence_changed.connect(self._update_render_tab_sequence_info)
         # Update EDL export menu item when sequence changes
         self.sequence_tab.timeline.sequence_changed.connect(self._on_sequence_changed)
+        # Mark project dirty when sequence changes
+        self.sequence_tab.timeline.sequence_changed.connect(self._mark_dirty)
 
         # Render tab signals
         self.render_tab.export_sequence_requested.connect(self._on_sequence_export_click)
@@ -647,7 +650,7 @@ class MainWindow(QMainWindow):
             return
 
         # Queue all sources for batch analysis
-        self._analyze_queue = sources_to_analyze.copy()
+        self._analyze_queue = deque(sources_to_analyze)
         self._analyze_queue_total = len(sources_to_analyze)
         self._start_next_analysis()
 
@@ -659,8 +662,8 @@ class MainWindow(QMainWindow):
             self._analyze_queue_total = 0
             return
 
-        # Pop the next source from the queue
-        source = self._analyze_queue.pop(0)
+        # Pop the next source from the queue (O(1) with deque)
+        source = self._analyze_queue.popleft()
         remaining = len(self._analyze_queue)
         current = self._analyze_queue_total - remaining
 
@@ -939,6 +942,11 @@ class MainWindow(QMainWindow):
         """Start scene detection with given threshold."""
         logger.info("=== START DETECTION ===")
         if not self.current_source:
+            return
+
+        # Guard against concurrent detection
+        if self.detection_worker and self.detection_worker.isRunning():
+            logger.warning("Detection already in progress, ignoring request")
             return
 
         # Reset guards for new detection run
@@ -1671,16 +1679,11 @@ class MainWindow(QMainWindow):
             title=sequence.name or "Scene Ripper Export",
         )
 
-        # EDL export is fast, no need for worker thread
-        success = export_edl(
-            sequence=sequence,
-            sources=sources,
-            config=config,
-            progress_callback=lambda p, m: self.status_bar.showMessage(m),
-        )
+        self.status_bar.showMessage("Exporting EDL...")
+        success = export_edl(sequence, sources, config)
 
         if success:
-            self.status_bar.showMessage(f"EDL exported to {output_path.name}")
+            self.status_bar.showMessage(f"EDL exported to {output_path.name}", 5000)
             # Open containing folder
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(output_path.parent)))
         else:
@@ -2029,7 +2032,7 @@ class MainWindow(QMainWindow):
         self.clips = []
         self.clips_by_id = {}
         self.clips_by_source = {}
-        self._analyze_queue = []
+        self._analyze_queue = deque()
         self._analyze_queue_total = 0
         self.queue_label.setVisible(False)
         self.collect_tab.clear()

@@ -2,6 +2,8 @@
 
 import json
 import logging
+import os
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -135,14 +137,33 @@ def save_project(
     if ui_state:
         project_data["ui_state"] = ui_state
 
-    # Write to file
+    # Write to file atomically (write temp, then rename)
     if progress_callback:
         progress_callback(0.8, "Writing file...")
 
     try:
         filepath.parent.mkdir(parents=True, exist_ok=True)
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(project_data, f, indent=2, ensure_ascii=False)
+
+        # Write to a temp file in the same directory, then rename
+        # This ensures atomic write - file is never in a partial state
+        fd, temp_path = tempfile.mkstemp(
+            suffix=".tmp",
+            prefix=".project_",
+            dir=filepath.parent
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(project_data, f, indent=2, ensure_ascii=False)
+
+            # Atomic rename (POSIX guarantees this is atomic)
+            os.replace(temp_path, filepath)
+        except Exception:
+            # Clean up temp file on failure
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+            raise
 
         if progress_callback:
             progress_callback(1.0, "Project saved")
@@ -155,6 +176,63 @@ def save_project(
         if progress_callback:
             progress_callback(0, f"Save failed: {e}")
         return False
+
+
+def _validate_project_structure(data: dict) -> list[str]:
+    """Validate basic project file structure.
+
+    Args:
+        data: Parsed JSON data
+
+    Returns:
+        List of validation error messages (empty if valid)
+    """
+    errors = []
+
+    # Check required top-level fields
+    if not isinstance(data, dict):
+        errors.append("Project file must be a JSON object")
+        return errors
+
+    # Version is required
+    if "version" not in data:
+        errors.append("Missing required field: version")
+
+    # Sources must be a list
+    if "sources" in data and not isinstance(data["sources"], list):
+        errors.append("Field 'sources' must be a list")
+
+    # Clips must be a list
+    if "clips" in data and not isinstance(data["clips"], list):
+        errors.append("Field 'clips' must be a list")
+
+    # Sequence must be a dict or null
+    if "sequence" in data:
+        seq = data["sequence"]
+        if seq is not None and not isinstance(seq, dict):
+            errors.append("Field 'sequence' must be an object or null")
+
+    # Validate source entries have required fields
+    for i, source in enumerate(data.get("sources", [])):
+        if not isinstance(source, dict):
+            errors.append(f"sources[{i}] must be an object")
+            continue
+        if "id" not in source:
+            errors.append(f"sources[{i}] missing required field: id")
+        if "file_path" not in source:
+            errors.append(f"sources[{i}] missing required field: file_path")
+
+    # Validate clip entries have required fields
+    for i, clip in enumerate(data.get("clips", [])):
+        if not isinstance(clip, dict):
+            errors.append(f"clips[{i}] must be an object")
+            continue
+        if "id" not in clip:
+            errors.append(f"clips[{i}] missing required field: id")
+        if "source_id" not in clip:
+            errors.append(f"clips[{i}] missing required field: source_id")
+
+    return errors
 
 
 def load_project(
@@ -189,6 +267,13 @@ def load_project(
     except (OSError, IOError) as e:
         raise ProjectLoadError(f"Failed to read project file: {e}")
 
+    # Validate project structure
+    validation_errors = _validate_project_structure(data)
+    if validation_errors:
+        raise ProjectLoadError(
+            f"Invalid project file structure:\n  - " + "\n  - ".join(validation_errors)
+        )
+
     # Validate version using semantic comparison
     version = data.get("version", "1.0")
     try:
@@ -219,6 +304,13 @@ def load_project(
             if missing_source_callback:
                 new_path = missing_source_callback(source.file_path, source.id)
                 if new_path:
+                    # Validate the replacement path exists
+                    new_path = Path(new_path)
+                    if not new_path.exists():
+                        logger.warning(
+                            f"Replacement path does not exist: {new_path}, skipping source"
+                        )
+                        continue
                     source.file_path = new_path
                 else:
                     logger.warning(f"Skipping missing source: {source.file_path}")
@@ -249,6 +341,30 @@ def load_project(
     sequence = None
     if data.get("sequence"):
         sequence = Sequence.from_dict(data["sequence"])
+
+        # Validate SequenceClip references - remove clips that reference missing sources/clips
+        valid_clip_ids = {clip.id for clip in clips}
+        valid_source_ids = set(sources_by_id.keys())
+
+        for track in sequence.tracks:
+            invalid_clips = []
+            for seq_clip in track.clips:
+                # Check that referenced source exists
+                if seq_clip.source_id and seq_clip.source_id not in valid_source_ids:
+                    logger.warning(
+                        f"Removing sequence clip {seq_clip.id}: source {seq_clip.source_id} not found"
+                    )
+                    invalid_clips.append(seq_clip)
+                # Check that referenced clip exists
+                elif seq_clip.source_clip_id and seq_clip.source_clip_id not in valid_clip_ids:
+                    logger.warning(
+                        f"Removing sequence clip {seq_clip.id}: clip {seq_clip.source_clip_id} not found"
+                    )
+                    invalid_clips.append(seq_clip)
+
+            # Remove invalid clips from track
+            for invalid_clip in invalid_clips:
+                track.clips.remove(invalid_clip)
 
     # Load UI state
     ui_state = data.get("ui_state", {})
