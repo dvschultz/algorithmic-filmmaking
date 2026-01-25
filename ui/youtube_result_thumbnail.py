@@ -8,8 +8,10 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QWidget,
 )
-from PySide6.QtCore import Qt, Signal, Slot
-from PySide6.QtGui import QPixmap
+from typing import Optional
+
+from PySide6.QtCore import Qt, Signal, Slot, QUrl
+from PySide6.QtGui import QPixmap, QCloseEvent
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 
 from ui.theme import theme
@@ -21,11 +23,12 @@ class YouTubeResultThumbnail(QFrame):
 
     selection_changed = Signal(str, bool)  # video_id, selected
 
-    def __init__(self, video: YouTubeVideo, parent=None):
+    def __init__(self, video: YouTubeVideo, network_manager: QNetworkAccessManager, parent=None):
         super().__init__(parent)
         self.video = video
         self._selected = False
-        self._network_manager = None
+        self._network_manager = network_manager  # Shared manager from parent
+        self._pending_reply: Optional[QNetworkReply] = None
 
         self.setFixedSize(180, 140)
         self.setFrameStyle(QFrame.Panel | QFrame.Raised)
@@ -124,15 +127,17 @@ class YouTubeResultThumbnail(QFrame):
             self.thumbnail_label.setText("No thumbnail")
             return
 
-        self._network_manager = QNetworkAccessManager(self)
-        self._network_manager.finished.connect(self._on_thumbnail_loaded)
+        request = QNetworkRequest(QUrl(self.video.thumbnail_url))
+        self._pending_reply = self._network_manager.get(request)
+        self._pending_reply.finished.connect(self._on_thumbnail_loaded)
 
-        request = QNetworkRequest(self.video.thumbnail_url)
-        self._network_manager.get(request)
-
-    @Slot(QNetworkReply)
-    def _on_thumbnail_loaded(self, reply: QNetworkReply):
+    @Slot()
+    def _on_thumbnail_loaded(self):
         """Handle thumbnail download completion."""
+        reply = self._pending_reply
+        if reply is None:
+            return
+
         if reply.error() == QNetworkReply.NoError:
             data = reply.readAll()
             pixmap = QPixmap()
@@ -142,7 +147,15 @@ class YouTubeResultThumbnail(QFrame):
                     172, 97, Qt.KeepAspectRatio, Qt.SmoothTransformation
                 )
                 self.thumbnail_label.setPixmap(scaled)
+
         reply.deleteLater()
+        self._pending_reply = None
+
+    def closeEvent(self, event: QCloseEvent):
+        """Clean up pending network requests."""
+        if self._pending_reply and self._pending_reply.isRunning():
+            self._pending_reply.abort()
+        super().closeEvent(event)
 
     def _format_view_count(self, count: int) -> str:
         """Format view count with K/M suffixes."""

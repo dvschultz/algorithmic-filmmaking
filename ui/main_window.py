@@ -369,14 +369,13 @@ class BulkDownloadWorker(QThread):
         self.videos = videos
         self.download_dir = download_dir
         self.max_parallel = max_parallel
-        self._cancelled = False
-        self._completed = 0
         import threading
-        self._lock = threading.Lock()
+        self._cancel_event = threading.Event()
+        self._completed = 0
 
     def cancel(self):
         """Request cancellation."""
-        self._cancelled = True
+        self._cancel_event.set()
 
     def run(self):
         """Run parallel downloads."""
@@ -395,7 +394,7 @@ class BulkDownloadWorker(QThread):
 
             # Process completions
             for future in as_completed(future_to_video):
-                if self._cancelled:
+                if self._cancel_event.is_set():
                     logger.info("BulkDownloadWorker cancelled")
                     executor.shutdown(wait=False, cancel_futures=True)
                     break
@@ -414,11 +413,10 @@ class BulkDownloadWorker(QThread):
                     logger.exception(f"Download exception for '{video.title}': {e}")
                     self.video_error.emit(video.video_id, str(e))
 
-                with self._lock:
-                    self._completed += 1
-                    self.progress.emit(
-                        self._completed, total, f"Downloaded {self._completed}/{total}"
-                    )
+                self._completed += 1
+                self.progress.emit(
+                    self._completed, total, f"Downloaded {self._completed}/{total}"
+                )
 
         logger.info(f"BulkDownloadWorker finished: {self._completed}/{total} completed")
         self.all_finished.emit()
@@ -429,7 +427,7 @@ class BulkDownloadWorker(QThread):
         downloader = VideoDownloader(download_dir=self.download_dir)
         result = downloader.download(
             video.youtube_url,
-            cancel_check=lambda: self._cancelled,
+            cancel_check=self._cancel_event.is_set,
         )
         if result.success:
             logger.debug(f"Download finished: {video.title} -> {result.file_path}")

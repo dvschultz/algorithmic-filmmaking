@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QFrame,
 )
 from PySide6.QtCore import Qt, Signal, Slot, QPropertyAnimation, QEasingCurve, QTimer
+from PySide6.QtNetwork import QNetworkAccessManager
 
 from ui.theme import theme
 from ui.youtube_result_thumbnail import YouTubeResultThumbnail
@@ -37,6 +38,9 @@ class YouTubeSearchPanel(QWidget):
         self._thumbnails: list[YouTubeResultThumbnail] = []
         self._selected_videos: set[str] = set()  # video_ids
         self._columns = self.MIN_COLUMNS
+
+        # Shared network manager for thumbnail downloads (efficient resource usage)
+        self._network_manager = QNetworkAccessManager(self)
 
         self._setup_ui()
         self._connect_theme()
@@ -150,7 +154,7 @@ class YouTubeSearchPanel(QWidget):
         self._calculate_columns()
 
         for i, video in enumerate(videos):
-            thumb = YouTubeResultThumbnail(video)
+            thumb = YouTubeResultThumbnail(video, self._network_manager)
             thumb.selection_changed.connect(self._on_selection_changed)
             self._thumbnails.append(thumb)
 

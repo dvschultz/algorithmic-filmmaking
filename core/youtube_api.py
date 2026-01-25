@@ -181,6 +181,7 @@ class YouTubeSearchClient:
 
         except HttpError as e:
             self._handle_http_error(e)
+            raise  # Unreachable, but makes control flow explicit for type checkers
 
     def _get_thumbnail_url(self, snippet: dict) -> str:
         """Get best available thumbnail URL."""

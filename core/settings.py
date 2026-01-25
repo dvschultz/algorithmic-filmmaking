@@ -11,6 +11,39 @@ from PySide6.QtCore import QSettings
 
 logger = logging.getLogger(__name__)
 
+# Keyring service name for secure credential storage
+KEYRING_SERVICE = "com.scene-ripper.app"
+KEYRING_YOUTUBE_KEY = "youtube_api_key"
+
+
+def _get_api_key_from_keyring() -> str:
+    """Retrieve API key from system keyring."""
+    try:
+        import keyring
+        key = keyring.get_password(KEYRING_SERVICE, KEYRING_YOUTUBE_KEY)
+        return key or ""
+    except Exception as e:
+        logger.debug(f"Could not read from keyring: {e}")
+        return ""
+
+
+def _set_api_key_in_keyring(api_key: str) -> bool:
+    """Store API key in system keyring."""
+    try:
+        import keyring
+        if api_key:
+            keyring.set_password(KEYRING_SERVICE, KEYRING_YOUTUBE_KEY, api_key)
+        else:
+            # Delete the key if empty
+            try:
+                keyring.delete_password(KEYRING_SERVICE, KEYRING_YOUTUBE_KEY)
+            except keyring.errors.PasswordDeleteError:
+                pass  # Key didn't exist
+        return True
+    except Exception as e:
+        logger.warning(f"Could not write to keyring: {e}")
+        return False
+
 
 def _get_videos_dir() -> Path:
     """Get platform-appropriate videos directory.
@@ -186,8 +219,16 @@ def load_settings() -> Settings:
             settings.theme_preference = qsettings.value("appearance/theme_preference")
 
         # Load YouTube settings
-        if qsettings.contains("youtube/api_key"):
-            settings.youtube_api_key = qsettings.value("youtube/api_key")
+        # API key is stored securely in keyring, not QSettings
+        settings.youtube_api_key = _get_api_key_from_keyring()
+        # Migrate from old QSettings storage if present
+        if not settings.youtube_api_key and qsettings.contains("youtube/api_key"):
+            old_key = qsettings.value("youtube/api_key")
+            if old_key:
+                settings.youtube_api_key = old_key
+                _set_api_key_in_keyring(old_key)
+                qsettings.remove("youtube/api_key")  # Remove from insecure storage
+                logger.info("Migrated YouTube API key to secure keyring storage")
         if qsettings.contains("youtube/results_count"):
             settings.youtube_results_count = int(
                 qsettings.value("youtube/results_count")
@@ -255,7 +296,8 @@ def save_settings(settings: Settings) -> bool:
         qsettings.setValue("appearance/theme_preference", settings.theme_preference)
 
         # Save YouTube settings
-        qsettings.setValue("youtube/api_key", settings.youtube_api_key)
+        # API key goes to secure keyring, not QSettings
+        _set_api_key_in_keyring(settings.youtube_api_key)
         qsettings.setValue("youtube/results_count", settings.youtube_results_count)
         qsettings.setValue("youtube/parallel_downloads", settings.youtube_parallel_downloads)
 
