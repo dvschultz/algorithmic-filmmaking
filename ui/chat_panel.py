@@ -8,7 +8,7 @@ Provides:
 """
 
 from PySide6.QtCore import Qt, Signal, Slot, QTimer, QEvent
-from PySide6.QtGui import QKeyEvent, QStandardItem, QPalette, QColor
+from PySide6.QtGui import QKeyEvent, QStandardItem, QPalette, QColor, QTextCursor
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -222,7 +222,7 @@ class ChatPanel(QWidget):
         self.input_field.setFocus()
         # Move cursor to end
         cursor = self.input_field.textCursor()
-        cursor.movePosition(cursor.End)
+        cursor.movePosition(QTextCursor.MoveOperation.End)
         self.input_field.setTextCursor(cursor)
 
     def _on_provider_changed(self, text: str):
