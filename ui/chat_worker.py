@@ -42,52 +42,53 @@ def _parse_tool_calls_from_text(content: str, available_tools: list[str]) -> tup
     tool_calls = []
     cleaned_content = content
 
-    # Pattern 1: JSON object with "name" and "arguments" fields
-    # Handles: {"name": "tool_name", "arguments": {...}}
-    json_pattern = r'\{[^{}]*"name"\s*:\s*"([^"]+)"[^{}]*"arguments"\s*:\s*(\{[^{}]*\}|\[\])[^{}]*\}'
+    # Strategy 1: Direct tool name detection in JSON-like content
+    # Check if content contains "name": "known_tool_name"
+    for tool_name in available_tools:
+        # Check for JSON-style tool reference
+        name_patterns = [
+            f'"name"\\s*:\\s*"{tool_name}"',
+            f'"name":\\s*"{tool_name}"',
+            f"'name'\\s*:\\s*'{tool_name}'",
+        ]
+        for pattern in name_patterns:
+            if re.search(pattern, content):
+                logger.info(f"Found tool call for '{tool_name}' in JSON-like content")
 
-    # Pattern 2: Repeated/malformed JSON (model outputs same call multiple times)
-    # Handles: {"name": "x", "arguments": {},"name": "x", ...}
+                # Try to extract arguments
+                args = {}
+                args_pattern = rf'"arguments"\s*:\s*(\{{[^{{}}]*\}})'
+                args_match = re.search(args_pattern, content)
+                if args_match:
+                    try:
+                        args = json.loads(args_match.group(1))
+                    except json.JSONDecodeError:
+                        args = {}
 
-    # Pattern 3: Markdown code block with JSON
-    code_block_pattern = r'```(?:json)?\s*(\{[^`]+\})\s*```'
-
-    # First try to extract from code blocks
-    code_matches = re.findall(code_block_pattern, content, re.DOTALL)
-    for match in code_matches:
-        try:
-            parsed = json.loads(match)
-            if isinstance(parsed, dict) and "name" in parsed:
-                if parsed["name"] in available_tools:
-                    tool_calls.append(_create_tool_call(parsed["name"], parsed.get("arguments", {})))
-                    cleaned_content = cleaned_content.replace(f"```json\n{match}\n```", "")
-                    cleaned_content = cleaned_content.replace(f"```\n{match}\n```", "")
-        except json.JSONDecodeError:
-            pass
-
-    # If no code block matches, try direct JSON patterns
-    if not tool_calls:
-        # Try to find individual tool call objects
-        for match in re.finditer(json_pattern, content):
-            tool_name = match.group(1)
-            args_str = match.group(2)
-
-            if tool_name in available_tools:
-                try:
-                    args = json.loads(args_str) if args_str else {}
-                    tool_calls.append(_create_tool_call(tool_name, args))
-                    # Only clean the first occurrence to avoid over-cleaning
-                    if len(tool_calls) == 1:
-                        cleaned_content = content[:match.start()] + content[match.end():]
-                except json.JSONDecodeError:
-                    tool_calls.append(_create_tool_call(tool_name, {}))
-                    if len(tool_calls) == 1:
-                        cleaned_content = content[:match.start()] + content[match.end():]
-
-                # Only extract one tool call per response to avoid duplicates
+                tool_calls.append(_create_tool_call(tool_name, args))
+                # Clean the entire JSON blob from content
+                cleaned_content = ""  # Model only outputted JSON, nothing useful to show
                 break
+        if tool_calls:
+            break
 
-    # Pattern 4: Model describes wanting to call a tool in plain English
+    # Strategy 2: Markdown code block with JSON
+    if not tool_calls:
+        code_block_pattern = r'```(?:json)?\s*(\{[^`]+\})\s*```'
+        code_matches = re.findall(code_block_pattern, content, re.DOTALL)
+        for match in code_matches:
+            try:
+                parsed = json.loads(match)
+                if isinstance(parsed, dict) and "name" in parsed:
+                    if parsed["name"] in available_tools:
+                        tool_calls.append(_create_tool_call(parsed["name"], parsed.get("arguments", {})))
+                        cleaned_content = cleaned_content.replace(f"```json\n{match}\n```", "")
+                        cleaned_content = cleaned_content.replace(f"```\n{match}\n```", "")
+                        break
+            except json.JSONDecodeError:
+                pass
+
+    # Strategy 3: Model describes wanting to call a tool in plain English
     # Handles: "I should call get_project_state" or "The get_project_state function"
     if not tool_calls:
         for tool_name in available_tools:
@@ -102,24 +103,11 @@ def _parse_tool_calls_from_text(content: str, available_tools: list[str]) -> tup
                 if re.search(pattern, content, re.IGNORECASE):
                     logger.info(f"Detected intent to call tool '{tool_name}' from text")
                     tool_calls.append(_create_tool_call(tool_name, {}))
-                    # For intent-based detection, don't modify content - let model see full response
+                    # For intent-based detection, clear content since it's just reasoning
+                    cleaned_content = ""
                     break
             if tool_calls:
                 break
-
-    # If we found tool calls, also check for common prefixes the model might add
-    if tool_calls:
-        # Remove common preambles
-        preambles = [
-            r"I'll call the .* tool[.:]?\s*",
-            r"Let me .* for you[.:]?\s*",
-            r"Calling .*[.:]?\s*",
-            r"Using the .* function[.:]?\s*",
-        ]
-        for preamble in preambles:
-            cleaned_content = re.sub(preamble, "", cleaned_content, flags=re.IGNORECASE)
-
-        cleaned_content = cleaned_content.strip()
 
     # Deduplicate tool calls (some models repeat the same call)
     if len(tool_calls) > 1:
