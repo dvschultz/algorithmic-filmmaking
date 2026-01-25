@@ -5,6 +5,7 @@ from PySide6.QtCore import Signal, QRectF, QTimer
 from PySide6.QtGui import QColor, QPen, QBrush
 
 from models.sequence import Sequence, Track, SequenceClip
+from ui.theme import theme
 
 
 class TimelineScene(QGraphicsScene):
@@ -41,7 +42,7 @@ class TimelineScene(QGraphicsScene):
 
     def _setup_scene(self):
         """Initialize scene with default dimensions."""
-        self.setBackgroundBrush(QBrush(QColor("#1e1e1e")))
+        self.setBackgroundBrush(QBrush(theme().colors.qcolor('timeline_background')))
         self.rebuild()  # Build track items for default sequence
 
     def _update_scene_rect(self):

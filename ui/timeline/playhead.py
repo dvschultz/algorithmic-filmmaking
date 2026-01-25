@@ -8,6 +8,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QPointF
 from PySide6.QtGui import QPen, QBrush, QColor, QPolygonF
 
+from ui.theme import theme
+
 
 class PlayheadLine(QGraphicsLineItem):
     """Vertical line indicating current playback position."""
@@ -16,7 +18,7 @@ class PlayheadLine(QGraphicsLineItem):
         super().__init__(parent)
 
         self.setLine(0, 0, 0, height)
-        self.setPen(QPen(QColor("#ff4444"), 2))
+        self.setPen(QPen(theme().colors.qcolor('accent_red'), 2))
         self.setZValue(1000)  # Always on top
 
     def set_height(self, height: float):
@@ -44,7 +46,7 @@ class PlayheadHandle(QGraphicsPolygonItem):
             ]
         )
         self.setPolygon(triangle)
-        self.setBrush(QBrush(QColor("#ff4444")))
+        self.setBrush(QBrush(theme().colors.qcolor('accent_red')))
         self.setPen(QPen(Qt.NoPen))
         self.setZValue(1001)
 

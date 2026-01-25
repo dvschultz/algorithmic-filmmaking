@@ -4,6 +4,8 @@ from PySide6.QtWidgets import QGraphicsView
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPainter, QColor, QPen, QFont
 
+from ui.theme import theme
+
 
 class TimelineView(QGraphicsView):
     """Graphics view for the timeline with zoom and scroll support."""
@@ -44,11 +46,15 @@ class TimelineView(QGraphicsView):
         self.setAcceptDrops(True)
 
         # Style
-        self.setStyleSheet("""
-            QGraphicsView {
-                background-color: #1e1e1e;
+        self._update_style()
+
+    def _update_style(self):
+        """Update style based on current theme."""
+        self.setStyleSheet(f"""
+            QGraphicsView {{
+                background-color: {theme().timeline_background};
                 border: none;
-            }
+            }}
         """)
 
     def wheelEvent(self, event):
@@ -109,10 +115,10 @@ class TimelineView(QGraphicsView):
         ruler_rect = view_rect
         ruler_rect.setHeight(self._ruler_height)
         ruler_rect.setTop(0)
-        painter.fillRect(ruler_rect, QColor("#2a2a2a"))
+        painter.fillRect(ruler_rect, theme().colors.qcolor('timeline_ruler'))
 
         # Draw bottom border
-        painter.setPen(QPen(QColor("#444444"), 1))
+        painter.setPen(QPen(theme().colors.qcolor('timeline_ruler_border'), 1))
         painter.drawLine(
             int(view_rect.left()),
             self._ruler_height,
@@ -128,7 +134,7 @@ class TimelineView(QGraphicsView):
         start_time = max(0, int(view_rect.left() / self.pixels_per_second))
         end_time = int(view_rect.right() / self.pixels_per_second) + 1
 
-        painter.setPen(QColor("#888888"))
+        painter.setPen(theme().colors.qcolor('timeline_ruler_tick'))
         font = QFont()
         font.setPointSize(9)
         painter.setFont(font)
@@ -138,12 +144,12 @@ class TimelineView(QGraphicsView):
 
             if t % tick_interval == 0:
                 # Major tick
-                painter.setPen(QColor("#888888"))
+                painter.setPen(theme().colors.qcolor('timeline_ruler_tick'))
                 painter.drawLine(int(x), 20, int(x), self._ruler_height)
                 painter.drawText(int(x) + 3, 16, self._format_time(t))
             elif tick_interval <= 5 and t % (tick_interval // 2 or 1) == 0:
                 # Minor tick
-                painter.setPen(QColor("#555555"))
+                painter.setPen(theme().colors.qcolor('timeline_ruler_tick_minor'))
                 painter.drawLine(int(x), 25, int(x), self._ruler_height)
 
     def _calculate_tick_interval(self, seconds_visible: float) -> int:

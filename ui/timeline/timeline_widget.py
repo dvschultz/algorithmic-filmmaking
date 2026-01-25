@@ -17,6 +17,7 @@ from models.clip import Clip, Source
 from ui.timeline.timeline_scene import TimelineScene
 from ui.timeline.timeline_view import TimelineView
 from ui.timeline.playhead import Playhead
+from ui.theme import theme
 from core.remix import generate_sequence
 
 
@@ -74,7 +75,7 @@ class TimelineWidget(QWidget):
 
         # Timeline label
         label = QLabel("Timeline")
-        label.setStyleSheet("font-weight: bold; color: #999;")
+        label.setStyleSheet(f"font-weight: bold; color: {theme().text_muted};")
         toolbar.addWidget(label)
 
         toolbar.addSpacing(16)

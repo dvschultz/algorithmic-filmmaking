@@ -16,6 +16,8 @@ from PySide6.QtCore import Qt, QUrl, Slot, Signal
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QVideoWidget
 
+from ui.theme import theme
+
 
 class VideoPlayer(QWidget):
     """Video player with playback controls."""
@@ -41,10 +43,10 @@ class VideoPlayer(QWidget):
         header.setStyleSheet("font-weight: bold; font-size: 14px; padding: 8px;")
         layout.addWidget(header)
 
-        # Video widget
+        # Video widget (always black background for video)
         self.video_widget = QVideoWidget()
         self.video_widget.setMinimumSize(400, 300)
-        self.video_widget.setStyleSheet("background-color: #000;")
+        self.video_widget.setStyleSheet("background-color: #000000;")
         layout.addWidget(self.video_widget, 1)
 
         # Controls

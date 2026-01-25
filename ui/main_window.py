@@ -49,6 +49,7 @@ from core.project import (
 )
 from ui.settings_dialog import SettingsDialog
 from ui.tabs import CollectTab, CutTab, AnalyzeTab, GenerateTab, SequenceTab, RenderTab
+from ui.theme import theme
 
 
 class DetectionWorker(QThread):
@@ -348,11 +349,17 @@ class MainWindow(QMainWindow):
         logger.info(f"=== MAINWINDOW INIT START (instance #{self._instance_id}) ===")
         self.setWindowTitle("Scene Ripper - Algorithmic Filmmaking")
         self.setMinimumSize(1200, 800)
+        # Start at screen size
+        screen = self.screen().availableGeometry()
+        self.resize(screen.width(), screen.height())
         self.setAcceptDrops(True)
 
         # Load settings
         self.settings = load_settings()
         logger.info(f"Loaded settings: sensitivity={self.settings.default_sensitivity}")
+
+        # Apply theme preference from settings
+        theme().set_preference(self.settings.theme_preference)
 
         # State
         self.sources: list[Source] = []  # All sources in the library
@@ -443,7 +450,7 @@ class MainWindow(QMainWindow):
 
         # Queue indicator (permanent widget on right side)
         self.queue_label = QLabel("")
-        self.queue_label.setStyleSheet("color: #666; padding-right: 10px;")
+        self.queue_label.setStyleSheet(f"color: {theme().text_secondary}; padding-right: 10px;")
         self.queue_label.setVisible(False)
         self.status_bar.addPermanentWidget(self.queue_label)
 
@@ -583,11 +590,15 @@ class MainWindow(QMainWindow):
         # Update sensitivity in Cut tab
         self.cut_tab.set_sensitivity(self.settings.default_sensitivity)
 
+        # Apply theme preference
+        theme().set_preference(self.settings.theme_preference)
+
         logger.info(
             f"Settings applied: sensitivity={self.settings.default_sensitivity}, "
             f"auto_colors={self.settings.auto_analyze_colors}, "
             f"auto_shots={self.settings.auto_classify_shots}, "
-            f"quality={self.settings.export_quality}"
+            f"quality={self.settings.export_quality}, "
+            f"theme={self.settings.theme_preference}"
         )
 
     def _connect_signals(self):

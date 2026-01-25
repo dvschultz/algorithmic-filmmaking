@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 from PySide6.QtWidgets import QApplication
 from ui.main_window import MainWindow
+from ui.theme import theme
 
 
 def main():
@@ -30,6 +31,11 @@ def main():
 
     logger.info("Creating MainWindow...")
     window = MainWindow()
+
+    # Apply theme (uses saved preference from settings loaded in MainWindow)
+    logger.info("Applying initial theme...")
+    theme().apply_to_app()
+
     logger.info("Showing MainWindow...")
     window.show()
 

@@ -4,6 +4,8 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QFont
 
+from ui.theme import theme
+
 
 class BaseTab(QWidget):
     """Base class for all workflow tabs.
@@ -54,12 +56,12 @@ class BaseTab(QWidget):
         title_font.setPointSize(24)
         title_font.setBold(True)
         title_label.setFont(title_font)
-        title_label.setStyleSheet("color: #666;")
+        title_label.setStyleSheet(f"color: {theme().text_secondary};")
         title_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(title_label)
 
         message_label = QLabel(message)
-        message_label.setStyleSheet("color: #888;")
+        message_label.setStyleSheet(f"color: {theme().text_muted};")
         message_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(message_label)
 

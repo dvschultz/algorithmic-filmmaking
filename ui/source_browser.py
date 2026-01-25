@@ -19,6 +19,7 @@ from PySide6.QtGui import QFont, QDragEnterEvent, QDropEvent, QPalette
 
 from models.clip import Source
 from ui.source_thumbnail import SourceThumbnail
+from ui.theme import theme
 
 
 class AddVideoCard(QFrame):
@@ -37,7 +38,11 @@ class AddVideoCard(QFrame):
         self.setCursor(Qt.PointingHandCursor)
 
         self._setup_ui()
-        self._update_style(dragging=False)
+        self._apply_theme()
+
+        # Connect to theme changes
+        if theme().changed:
+            theme().changed.connect(self._apply_theme)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -64,54 +69,29 @@ class AddVideoCard(QFrame):
         self.sub_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.sub_label)
 
-    def _is_dark_mode(self) -> bool:
-        """Check if the application is in dark mode."""
-        palette = QApplication.palette()
-        bg_color = palette.color(QPalette.Window)
-        # Calculate luminance - dark mode if background is dark
-        luminance = (0.299 * bg_color.red() + 0.587 * bg_color.green() + 0.114 * bg_color.blue()) / 255
-        return luminance < 0.5
-
-    def _update_style(self, dragging: bool):
-        is_dark = self._is_dark_mode()
-
+    def _apply_theme(self, dragging: bool = False):
+        """Apply theme-aware styles."""
         if dragging:
-            self.setStyleSheet("""
-                AddVideoCard {
+            self.setStyleSheet(f"""
+                AddVideoCard {{
                     background-color: rgba(76, 175, 80, 0.1);
-                    border: 2px dashed #4CAF50;
-                }
+                    border: 2px dashed {theme().accent_green};
+                }}
             """)
-        elif is_dark:
-            # Dark mode colors
-            self.setStyleSheet("""
-                AddVideoCard {
-                    background-color: #3a3a3a;
-                    border: 2px dashed #555;
-                }
-                AddVideoCard:hover {
-                    background-color: #454545;
-                    border-color: #777;
-                }
-            """)
-            self.icon_label.setStyleSheet("color: #aaa;")
-            self.text_label.setStyleSheet("font-size: 12px; font-weight: bold; color: #aaa;")
-            self.sub_label.setStyleSheet("font-size: 10px; color: #888;")
         else:
-            # Light mode colors
-            self.setStyleSheet("""
-                AddVideoCard {
-                    background-color: #f0f0f0;
-                    border: 2px dashed #ccc;
-                }
-                AddVideoCard:hover {
-                    background-color: #e8e8e8;
-                    border-color: #999;
-                }
+            self.setStyleSheet(f"""
+                AddVideoCard {{
+                    background-color: {theme().card_background};
+                    border: 2px dashed {theme().border_primary};
+                }}
+                AddVideoCard:hover {{
+                    background-color: {theme().card_hover};
+                    border-color: {theme().border_focus};
+                }}
             """)
-            self.icon_label.setStyleSheet("color: #666;")
-            self.text_label.setStyleSheet("font-size: 12px; font-weight: bold; color: #666;")
-            self.sub_label.setStyleSheet("font-size: 10px; color: #999;")
+        self.icon_label.setStyleSheet(f"color: {theme().text_secondary};")
+        self.text_label.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {theme().text_secondary};")
+        self.sub_label.setStyleSheet(f"font-size: 10px; color: {theme().text_muted};")
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -134,15 +114,15 @@ class AddVideoCard(QFrame):
                     path = Path(url.toLocalFile())
                     if path.suffix.lower() in self.VIDEO_EXTENSIONS:
                         event.acceptProposedAction()
-                        self._update_style(dragging=True)
+                        self._apply_theme(dragging=True)
                         return
         event.ignore()
 
     def dragLeaveEvent(self, event):
-        self._update_style(dragging=False)
+        self._apply_theme(dragging=False)
 
     def dropEvent(self, event: QDropEvent):
-        self._update_style(dragging=False)
+        self._apply_theme(dragging=False)
         paths = []
         for url in event.mimeData().urls():
             if url.isLocalFile():

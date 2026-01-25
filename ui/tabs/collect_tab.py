@@ -16,6 +16,7 @@ from PySide6.QtCore import Signal
 from .base_tab import BaseTab
 from models.clip import Source
 from ui.source_browser import SourceBrowser
+from ui.theme import theme
 
 
 class CollectTab(BaseTab):
@@ -65,7 +66,7 @@ class CollectTab(BaseTab):
 
         # Video count label
         self.count_label = QLabel("0 videos")
-        self.count_label.setStyleSheet("color: #666;")
+        self.count_label.setStyleSheet(f"color: {theme().text_secondary};")
         toolbar.addWidget(self.count_label)
 
         toolbar.addStretch()

@@ -94,6 +94,9 @@ class Settings:
     transcription_language: str = "en"  # en, auto, or specific language code
     auto_transcribe: bool = True  # Auto-transcribe on detection
 
+    # Appearance
+    theme_preference: str = "system"  # system, light, dark
+
     def get_quality_preset(self) -> dict:
         """Get FFmpeg parameters for current quality setting."""
         return QUALITY_PRESETS.get(self.export_quality, QUALITY_PRESETS["medium"])
@@ -173,6 +176,10 @@ def load_settings() -> Settings:
                 qsettings.value("transcription/auto_transcribe") == "true"
             )
 
+        # Load appearance settings
+        if qsettings.contains("appearance/theme_preference"):
+            settings.theme_preference = qsettings.value("appearance/theme_preference")
+
         logger.info("Settings loaded successfully")
 
     except Exception as e:
@@ -226,6 +233,9 @@ def save_settings(settings: Settings) -> bool:
             "transcription/auto_transcribe",
             "true" if settings.auto_transcribe else "false",
         )
+
+        # Save appearance settings
+        qsettings.setValue("appearance/theme_preference", settings.theme_preference)
 
         qsettings.sync()
         logger.info("Settings saved successfully")

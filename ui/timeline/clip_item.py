@@ -11,6 +11,7 @@ from PySide6.QtCore import Qt, QRectF
 from PySide6.QtGui import QBrush, QColor, QPen, QPixmap, QPainter
 
 from models.sequence import SequenceClip
+from ui.theme import theme
 
 
 class ClipItem(QGraphicsRectItem):
@@ -83,11 +84,11 @@ class ClipItem(QGraphicsRectItem):
     def _update_appearance(self):
         """Update visual style."""
         if self.isSelected():
-            self.setBrush(QBrush(QColor("#5a9eff")))
-            self.setPen(QPen(QColor("#ffffff"), 2))
+            self.setBrush(QBrush(theme().colors.qcolor('timeline_clip_selected')))
+            self.setPen(QPen(theme().colors.qcolor('timeline_clip_selected_border'), 2))
         else:
-            self.setBrush(QBrush(QColor("#4a7dc9")))
-            self.setPen(QPen(QColor("#3a6db9"), 1))
+            self.setBrush(QBrush(theme().colors.qcolor('timeline_clip')))
+            self.setPen(QPen(theme().colors.qcolor('timeline_clip_border'), 1))
 
     def _frame_to_x(self, frame: int) -> float:
         """Convert frame number to x coordinate."""
@@ -129,7 +130,7 @@ class ClipItem(QGraphicsRectItem):
             painter.setOpacity(1.0)
 
         # Draw clip label
-        painter.setPen(QColor("#ffffff"))
+        painter.setPen(theme().colors.qcolor('text_inverted'))
         label = f"{self.seq_clip.duration_frames}f"
         painter.drawText(rect.adjusted(4, 4, -4, -4), Qt.AlignLeft | Qt.AlignBottom, label)
 

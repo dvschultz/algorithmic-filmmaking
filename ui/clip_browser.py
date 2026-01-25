@@ -21,6 +21,7 @@ from PySide6.QtGui import QPixmap, QDrag, QPainter, QColor
 from models.clip import Clip, Source
 from core.analysis.color import get_primary_hue, classify_color_palette, get_palette_display_name, COLOR_PALETTES
 from core.analysis.shots import get_display_name, SHOT_TYPES
+from ui.theme import theme
 
 
 class ColorSwatchBar(QWidget):
@@ -97,7 +98,7 @@ class ClipThumbnail(QFrame):
         self.thumbnail_label = QLabel(self.thumb_container)
         self.thumbnail_label.setFixedSize(160, 90)
         self.thumbnail_label.setAlignment(Qt.AlignCenter)
-        self.thumbnail_label.setStyleSheet("background-color: #333;")
+        self.thumbnail_label.setStyleSheet(f"background-color: {theme().thumbnail_background};")
 
         if clip.thumbnail_path and clip.thumbnail_path.exists():
             self._load_thumbnail(clip.thumbnail_path)
@@ -138,7 +139,7 @@ class ClipThumbnail(QFrame):
         duration = clip.duration_seconds(source.fps)
         self.duration_label = QLabel(self._format_duration(duration))
         self.duration_label.setAlignment(Qt.AlignLeft)
-        self.duration_label.setStyleSheet("font-size: 11px; color: #666;")
+        self.duration_label.setStyleSheet(f"font-size: 11px; color: {theme().text_muted};")
         info_layout.addWidget(self.duration_label)
 
         info_layout.addStretch()
@@ -147,7 +148,7 @@ class ClipThumbnail(QFrame):
         self.shot_type_label = QLabel()
         self.shot_type_label.setAlignment(Qt.AlignRight)
         self.shot_type_label.setStyleSheet(
-            "font-size: 10px; color: #fff; background-color: #666; "
+            f"font-size: 10px; color: {theme().text_inverted}; background-color: {theme().shot_type_badge}; "
             "border-radius: 3px; padding: 1px 4px;"
         )
         if clip.shot_type:
@@ -159,6 +160,10 @@ class ClipThumbnail(QFrame):
         layout.addLayout(info_layout)
 
         self._update_style()
+
+        # Connect to theme changes
+        if theme().changed:
+            theme().changed.connect(self._refresh_theme)
 
     def _load_thumbnail(self, path: Path):
         """Load thumbnail image."""
@@ -190,22 +195,22 @@ class ClipThumbnail(QFrame):
     def _update_style(self):
         """Update visual style based on state."""
         if self.selected:
-            self.setStyleSheet("""
-                ClipThumbnail {
-                    background-color: #4a90d9;
-                    border: 2px solid #2d6cb5;
-                }
+            self.setStyleSheet(f"""
+                ClipThumbnail {{
+                    background-color: {theme().accent_blue};
+                    border: 2px solid {theme().accent_blue_hover};
+                }}
             """)
         else:
-            self.setStyleSheet("""
-                ClipThumbnail {
-                    background-color: #f5f5f5;
-                    border: 1px solid #ddd;
-                }
-                ClipThumbnail:hover {
-                    background-color: #e8e8e8;
-                    border: 1px solid #bbb;
-                }
+            self.setStyleSheet(f"""
+                ClipThumbnail {{
+                    background-color: {theme().card_background};
+                    border: 1px solid {theme().card_border};
+                }}
+                ClipThumbnail:hover {{
+                    background-color: {theme().card_hover};
+                    border: 1px solid {theme().border_focus};
+                }}
             """)
 
     def mousePressEvent(self, event):
@@ -284,6 +289,20 @@ class ClipThumbnail(QFrame):
         self.transcript_overlay.setVisible(False)
         super().leaveEvent(event)
 
+    def _refresh_theme(self):
+        """Refresh all themed styles when theme changes."""
+        self._update_style()
+        # Update thumbnail background
+        self.thumbnail_label.setStyleSheet(f"background-color: {theme().thumbnail_background};")
+        # Update duration label
+        self.duration_label.setStyleSheet(f"font-size: 11px; color: {theme().text_muted};")
+        # Update shot type badge
+        if self.clip.shot_type:
+            self.shot_type_label.setStyleSheet(
+                f"font-size: 10px; color: {theme().text_inverted}; background-color: {theme().shot_type_badge}; "
+                "border-radius: 3px; padding: 1px 4px;"
+            )
+
 
 class ClipBrowser(QWidget):
     """Grid browser for viewing detected clips."""
@@ -324,7 +343,6 @@ class ClipBrowser(QWidget):
 
         # Shot type filter dropdown
         filter_label = QLabel("Shot:")
-        filter_label.setStyleSheet("font-size: 12px; color: #666;")
         header_layout.addWidget(filter_label)
 
         self.filter_combo = QComboBox()
@@ -338,7 +356,6 @@ class ClipBrowser(QWidget):
 
         # Color palette filter dropdown
         color_label = QLabel("Color:")
-        color_label.setStyleSheet("font-size: 12px; color: #666;")
         header_layout.addWidget(color_label)
 
         self.color_filter_combo = QComboBox()
@@ -352,7 +369,6 @@ class ClipBrowser(QWidget):
 
         # Transcript search input
         search_label = QLabel("Search:")
-        search_label.setStyleSheet("font-size: 12px; color: #666;")
         header_layout.addWidget(search_label)
 
         self.search_input = QLineEdit()
@@ -366,7 +382,6 @@ class ClipBrowser(QWidget):
 
         # Sort dropdown
         sort_label = QLabel("Order:")
-        sort_label.setStyleSheet("font-size: 12px; color: #666;")
         header_layout.addWidget(sort_label)
 
         self.sort_combo = QComboBox()
@@ -394,7 +409,6 @@ class ClipBrowser(QWidget):
         # Placeholder for empty state
         self.empty_label = QLabel("No scenes detected yet.\nDrop a video or click Import.")
         self.empty_label.setAlignment(Qt.AlignCenter)
-        self.empty_label.setStyleSheet("color: #999; font-size: 12px;")
         self.grid.addWidget(self.empty_label, 0, 0, 1, self.COLUMNS)
 
     def add_clip(self, clip: Clip, source: Source):

@@ -11,6 +11,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap
 
 from models.clip import Source
+from ui.theme import theme
 
 
 class SourceThumbnail(QFrame):
@@ -37,14 +38,14 @@ class SourceThumbnail(QFrame):
         self.thumbnail_label = QLabel()
         self.thumbnail_label.setFixedSize(160, 90)
         self.thumbnail_label.setAlignment(Qt.AlignCenter)
-        self.thumbnail_label.setStyleSheet("background-color: #333;")
+        self.thumbnail_label.setStyleSheet(f"background-color: {theme().thumbnail_background};")
 
         if source.thumbnail_path and source.thumbnail_path.exists():
             self._load_thumbnail(source.thumbnail_path)
         else:
             self.thumbnail_label.setText("No Preview")
             self.thumbnail_label.setStyleSheet(
-                "background-color: #333; color: #888; font-size: 11px;"
+                f"background-color: {theme().thumbnail_background}; color: {theme().text_muted}; font-size: 11px;"
             )
 
         layout.addWidget(self.thumbnail_label)
@@ -52,7 +53,7 @@ class SourceThumbnail(QFrame):
         # Filename label
         self.filename_label = QLabel(source.filename)
         self.filename_label.setAlignment(Qt.AlignCenter)
-        self.filename_label.setStyleSheet("font-size: 11px; color: #333;")
+        self.filename_label.setStyleSheet(f"font-size: 11px; color: {theme().text_primary};")
         self.filename_label.setWordWrap(True)
         self.filename_label.setMaximumHeight(30)
         # Truncate long filenames
@@ -70,6 +71,10 @@ class SourceThumbnail(QFrame):
         layout.addWidget(self.badge_label)
 
         self._update_style()
+
+        # Connect to theme changes
+        if theme().changed:
+            theme().changed.connect(self._refresh_theme)
 
     def _load_thumbnail(self, path: Path):
         """Load thumbnail image."""
@@ -97,13 +102,13 @@ class SourceThumbnail(QFrame):
         if self.source.analyzed:
             self.badge_label.setText("Analyzed")
             self.badge_label.setStyleSheet(
-                "font-size: 9px; color: #fff; background-color: #4CAF50; "
+                f"font-size: 9px; color: {theme().text_inverted}; background-color: {theme().badge_analyzed}; "
                 "border-radius: 3px; padding: 1px 6px;"
             )
         else:
             self.badge_label.setText("Not Analyzed")
             self.badge_label.setStyleSheet(
-                "font-size: 9px; color: #fff; background-color: #999; "
+                f"font-size: 9px; color: {theme().text_inverted}; background-color: {theme().badge_not_analyzed}; "
                 "border-radius: 3px; padding: 1px 6px;"
             )
 
@@ -115,23 +120,37 @@ class SourceThumbnail(QFrame):
     def _update_style(self):
         """Update visual style based on state."""
         if self.selected:
-            self.setStyleSheet("""
-                SourceThumbnail {
-                    background-color: #4a90d9;
-                    border: 2px solid #2d6cb5;
-                }
+            self.setStyleSheet(f"""
+                SourceThumbnail {{
+                    background-color: {theme().accent_blue};
+                    border: 2px solid {theme().accent_blue_hover};
+                }}
             """)
         else:
-            self.setStyleSheet("""
-                SourceThumbnail {
-                    background-color: #f5f5f5;
-                    border: 1px solid #ddd;
-                }
-                SourceThumbnail:hover {
-                    background-color: #e8e8e8;
-                    border: 1px solid #bbb;
-                }
+            self.setStyleSheet(f"""
+                SourceThumbnail {{
+                    background-color: {theme().card_background};
+                    border: 1px solid {theme().card_border};
+                }}
+                SourceThumbnail:hover {{
+                    background-color: {theme().card_hover};
+                    border: 1px solid {theme().border_focus};
+                }}
             """)
+
+    def _refresh_theme(self):
+        """Refresh all themed styles when theme changes."""
+        self._update_style()
+        self._update_badge()
+        # Update thumbnail background if no preview
+        if not self.thumbnail_label.pixmap():
+            self.thumbnail_label.setStyleSheet(
+                f"background-color: {theme().thumbnail_background}; color: {theme().text_muted}; font-size: 11px;"
+            )
+        else:
+            self.thumbnail_label.setStyleSheet(f"background-color: {theme().thumbnail_background};")
+        # Update filename label
+        self.filename_label.setStyleSheet(f"font-size: 11px; color: {theme().text_primary};")
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:

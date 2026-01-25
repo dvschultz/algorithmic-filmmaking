@@ -5,6 +5,7 @@ from PySide6.QtCore import Qt, QRectF
 from PySide6.QtGui import QBrush, QColor, QPen
 
 from models.sequence import Track
+from ui.theme import theme
 
 
 class TrackItem(QGraphicsRectItem):
@@ -31,7 +32,7 @@ class TrackItem(QGraphicsRectItem):
         self.setRect(0, y_position, width, height)
 
         # Visual style
-        self.setBrush(QBrush(QColor("#2d2d2d")))
+        self.setBrush(QBrush(theme().colors.qcolor('timeline_track')))
         self.setPen(QPen(Qt.NoPen))
         self.setZValue(-1)  # Behind clips
 
@@ -55,6 +56,6 @@ class TrackItem(QGraphicsRectItem):
     def highlight_drop_target(self, highlight: bool):
         """Visual feedback for drop target."""
         if highlight:
-            self.setBrush(QBrush(QColor("#3d3d4d")))
+            self.setBrush(QBrush(theme().colors.qcolor('timeline_track_highlight')))
         else:
-            self.setBrush(QBrush(QColor("#2d2d2d")))
+            self.setBrush(QBrush(theme().colors.qcolor('timeline_track')))

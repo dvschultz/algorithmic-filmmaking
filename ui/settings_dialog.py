@@ -32,6 +32,7 @@ from core.settings import (
     RESOLUTION_PRESETS,
     FPS_PRESETS,
 )
+from ui.theme import theme
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +137,7 @@ class PathSelector(QWidget):
 
         if is_network:
             # Show warning style and update tooltip
-            self.path_edit.setStyleSheet("border: 1px solid #f0ad4e;")  # Warning orange
+            self.path_edit.setStyleSheet(f"border: 1px solid {theme().accent_orange};")
             self.path_edit.setToolTip(f"{self._base_tooltip}\n\n⚠️ {warning}")
         else:
             # Reset to normal
@@ -180,6 +181,7 @@ class SettingsDialog(QDialog):
             transcription_model=settings.transcription_model,
             transcription_language=settings.transcription_language,
             auto_transcribe=settings.auto_transcribe,
+            theme_preference=settings.theme_preference,
         )
 
         self.setWindowTitle("Settings")
@@ -193,6 +195,10 @@ class SettingsDialog(QDialog):
         if self._paths_disabled:
             self._disable_path_settings()
 
+        # Connect to theme changes to refresh dialog styles
+        if theme().changed:
+            theme().changed.connect(self._refresh_theme)
+
     def _setup_ui(self):
         layout = QVBoxLayout(self)
 
@@ -201,6 +207,7 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(self._create_paths_tab(), "Paths")
         self.tabs.addTab(self._create_detection_tab(), "Detection")
         self.tabs.addTab(self._create_export_tab(), "Export")
+        self.tabs.addTab(self._create_appearance_tab(), "Appearance")
         layout.addWidget(self.tabs)
 
         # Button row
@@ -331,7 +338,7 @@ class SettingsDialog(QDialog):
         analysis_layout.addWidget(self.auto_shots_check)
 
         note_label = QLabel("Note: Changes apply to future detections only")
-        note_label.setStyleSheet("color: #666; font-style: italic;")
+        note_label.setStyleSheet(f"color: {theme().text_secondary}; font-style: italic;")
         analysis_layout.addWidget(note_label)
 
         layout.addWidget(analysis_group)
@@ -460,6 +467,45 @@ class SettingsDialog(QDialog):
         layout.addStretch()
         return tab
 
+    def _create_appearance_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        # Theme group
+        theme_group = QGroupBox("Theme")
+        theme_layout = QVBoxLayout(theme_group)
+
+        # Theme selector
+        theme_row = QHBoxLayout()
+        theme_row.addWidget(QLabel("Appearance:"))
+
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItems([
+            "System (follow OS setting)",
+            "Light",
+            "Dark",
+        ])
+        self.theme_combo.setToolTip(
+            "Choose the app's color theme:\n"
+            "• System: Follows your operating system's light/dark mode\n"
+            "• Light: Always use light colors\n"
+            "• Dark: Always use dark colors"
+        )
+        self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
+        theme_row.addWidget(self.theme_combo)
+        theme_row.addStretch()
+
+        theme_layout.addLayout(theme_row)
+
+        note_label = QLabel("Note: Theme changes take effect immediately")
+        note_label.setStyleSheet(f"color: {theme().text_secondary}; font-style: italic;")
+        theme_layout.addWidget(note_label)
+
+        layout.addWidget(theme_group)
+
+        layout.addStretch()
+        return tab
+
     def _disable_path_settings(self):
         """Disable path-related settings when operations are running."""
         self.cache_path.set_enabled(False)
@@ -513,6 +559,12 @@ class SettingsDialog(QDialog):
 
         self.auto_transcribe_check.setChecked(self.settings.auto_transcribe)
 
+        # Appearance
+        theme_map = {"system": 0, "light": 1, "dark": 2}
+        self.theme_combo.setCurrentIndex(
+            theme_map.get(self.settings.theme_preference, 0)
+        )
+
     def _save_to_settings(self):
         """Save UI values to settings object."""
         # Paths
@@ -545,6 +597,10 @@ class SettingsDialog(QDialog):
 
         self.settings.auto_transcribe = self.auto_transcribe_check.isChecked()
 
+        # Appearance
+        theme_values = ["system", "light", "dark"]
+        self.settings.theme_preference = theme_values[self.theme_combo.currentIndex()]
+
     def _validate(self) -> tuple[bool, str]:
         """Validate all settings. Returns (is_valid, error_message)."""
         # Validate paths
@@ -573,6 +629,21 @@ class SettingsDialog(QDialog):
 
     def _on_sensitivity_changed(self, value: int):
         self.sensitivity_label.setText(f"{value / 10:.1f}")
+
+    def _on_theme_changed(self, index: int):
+        """Apply theme change immediately."""
+        theme_values = ["system", "light", "dark"]
+        preference = theme_values[index]
+        theme().set_preference(preference)
+        # Force refresh even if is_dark didn't change (in case of system -> explicit same)
+        theme().refresh()
+
+    def _refresh_theme(self):
+        """Refresh themed elements in this dialog."""
+        # Update note labels with theme colors
+        for widget in self.findChildren(QLabel):
+            if "font-style: italic" in (widget.styleSheet() or ""):
+                widget.setStyleSheet(f"color: {theme().text_secondary}; font-style: italic;")
 
     def _on_clear_cache(self):
         """Clear the thumbnail cache."""
@@ -655,4 +726,5 @@ class SettingsDialog(QDialog):
             or self.settings.transcription_model != self.original_settings.transcription_model
             or self.settings.transcription_language != self.original_settings.transcription_language
             or self.settings.auto_transcribe != self.original_settings.auto_transcribe
+            or self.settings.theme_preference != self.original_settings.theme_preference
         )
