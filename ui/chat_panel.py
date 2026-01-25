@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ui.chat_widgets import MessageBubble, StreamingBubble, ToolIndicator, ExamplePromptsWidget
+from ui.chat_widgets import MessageBubble, StreamingBubble, ToolIndicator, ThinkingIndicator, ExamplePromptsWidget
 from core.settings import (
     get_anthropic_api_key,
     get_openai_api_key,
@@ -63,6 +63,7 @@ class ChatPanel(QWidget):
         self._is_streaming = False
         self._response_finished_handled = False
         self._current_bubble = None
+        self._thinking_indicator = None
         self._example_prompts_visible = True
         self._setup_ui()
 
@@ -285,11 +286,29 @@ class ChatPanel(QWidget):
         Returns:
             StreamingBubble that can receive text chunks
         """
+        # Show thinking indicator while waiting for response
+        self._show_thinking_indicator()
+
         bubble = StreamingBubble()
         self._current_bubble = bubble
-        self.messages_layout.addWidget(bubble)
-        self._scroll_to_bottom()
+        # Don't add bubble to layout yet - it will replace thinking indicator when text arrives
         return bubble
+
+    def _show_thinking_indicator(self):
+        """Show the thinking indicator."""
+        if self._thinking_indicator is None:
+            self._thinking_indicator = ThinkingIndicator()
+            self.messages_layout.addWidget(self._thinking_indicator)
+            self._scroll_to_bottom()
+
+    def _hide_thinking_indicator(self):
+        """Hide and remove the thinking indicator."""
+        if self._thinking_indicator is not None:
+            self._thinking_indicator.stop()
+            self._thinking_indicator.hide()
+            self.messages_layout.removeWidget(self._thinking_indicator)
+            self._thinking_indicator.deleteLater()
+            self._thinking_indicator = None
 
     def add_tool_indicator(self, tool_name: str, status: str = "running") -> ToolIndicator:
         """Add a tool execution indicator.
@@ -301,6 +320,9 @@ class ChatPanel(QWidget):
         Returns:
             ToolIndicator that can be updated
         """
+        # Hide thinking indicator - tool execution is more specific feedback
+        self._hide_thinking_indicator()
+
         indicator = ToolIndicator(tool_name, status)
         self.messages_layout.addWidget(indicator)
         self._scroll_to_bottom()
@@ -329,6 +351,11 @@ class ChatPanel(QWidget):
             chunk: Text chunk from streaming response
         """
         if self._current_bubble and not self._response_finished_handled:
+            # First chunk - hide thinking indicator and show the bubble
+            if self._thinking_indicator is not None:
+                self._hide_thinking_indicator()
+                self.messages_layout.addWidget(self._current_bubble)
+
             self._current_bubble.append_text(chunk)
             self._scroll_to_bottom()
 
@@ -341,9 +368,15 @@ class ChatPanel(QWidget):
         """
         # Clear any junk in the current bubble and show the formatted result
         if self._current_bubble:
+            # Ensure bubble is in layout (may not be if only tools have run)
+            if self._current_bubble.parent() is None:
+                self.messages_layout.addWidget(self._current_bubble)
             self._current_bubble.clear_text()
             self._current_bubble.append_text(formatted_text)
             self._scroll_to_bottom()
+
+        # Show thinking indicator - LLM is processing after tool result
+        self._show_thinking_indicator()
 
     @Slot()
     def on_stream_complete(self):
@@ -352,7 +385,13 @@ class ChatPanel(QWidget):
             return
         self._response_finished_handled = True
 
+        # Hide thinking indicator
+        self._hide_thinking_indicator()
+
         if self._current_bubble:
+            # Ensure bubble is in layout before finishing
+            if self._current_bubble.parent() is None:
+                self.messages_layout.addWidget(self._current_bubble)
             self._current_bubble.finish()
             self._current_bubble = None
 
@@ -366,6 +405,9 @@ class ChatPanel(QWidget):
         """
         self._response_finished_handled = True
 
+        # Hide thinking indicator
+        self._hide_thinking_indicator()
+
         if self._current_bubble:
             self._current_bubble.finish()
             self._current_bubble = None
@@ -375,6 +417,9 @@ class ChatPanel(QWidget):
 
     def clear_messages(self):
         """Clear all messages from the chat."""
+        # Clean up thinking indicator if present
+        self._hide_thinking_indicator()
+
         # Remove all widgets except the example prompts
         while self.messages_layout.count():
             item = self.messages_layout.takeAt(0)

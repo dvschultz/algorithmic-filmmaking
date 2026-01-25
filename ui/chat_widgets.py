@@ -343,6 +343,66 @@ class ToolIndicator(QFrame):
         self.set_status("complete" if success else "error")
 
 
+class ThinkingIndicator(QFrame):
+    """Shows an animated 'thinking' indicator while the LLM is processing."""
+
+    def __init__(self, parent=None):
+        """Create a thinking indicator.
+
+        Args:
+            parent: Parent widget
+        """
+        super().__init__(parent)
+        self._dot_count = 0
+        self._setup_ui()
+
+        # Animation timer for pulsing dots
+        self._animation_timer = QTimer(self)
+        self._animation_timer.setInterval(400)
+        self._animation_timer.timeout.connect(self._animate)
+        self._animation_timer.start()
+
+    def _setup_ui(self):
+        self.setObjectName("thinkingIndicator")
+        self.setStyleSheet("""
+            QFrame#thinkingIndicator {
+                background-color: #e4e6eb;
+                border-radius: 12px;
+                margin-right: 40px;
+            }
+        """)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(8)
+
+        # Thinking text with animated dots
+        self.label = QLabel("Thinking")
+        self.label.setStyleSheet("color: #65676b; font-size: 13px; font-style: italic;")
+        layout.addWidget(self.label)
+        layout.addStretch()
+
+    def _animate(self):
+        """Animate the thinking dots."""
+        self._dot_count = (self._dot_count + 1) % 4
+        dots = "." * self._dot_count
+        self.label.setText(f"Thinking{dots}")
+
+    def stop(self):
+        """Stop the animation."""
+        self._animation_timer.stop()
+
+    def hideEvent(self, event):
+        """Stop animation when hidden."""
+        self._animation_timer.stop()
+        super().hideEvent(event)
+
+    def showEvent(self, event):
+        """Start animation when shown."""
+        self._animation_timer.start()
+        super().showEvent(event)
+
+
 class ExamplePromptsWidget(QWidget):
     """Displays clickable example prompts when chat is empty.
 
@@ -546,11 +606,17 @@ class ExamplePromptsWidget(QWidget):
             prompts_layout.addWidget(btn)
 
     def _on_button_clicked(self, prompt_text: str):
-        """Handle prompt button click with guard pattern."""
+        """Handle prompt button click with debounce to prevent rapid double-clicks."""
         if self._click_handled:
             return
         self._click_handled = True
         self.prompt_clicked.emit(prompt_text)
+        # Reset guard after short delay to allow subsequent clicks
+        QTimer.singleShot(200, self._reset_click_guard)
+
+    def _reset_click_guard(self):
+        """Reset the click guard after debounce period."""
+        self._click_handled = False
 
     def _refresh_prompts(self):
         """Select new random prompts and rebuild buttons."""
