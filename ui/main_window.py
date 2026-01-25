@@ -1166,6 +1166,9 @@ class MainWindow(QMainWindow):
         self.tab_widget.setCurrentWidget(self.analyze_tab)
         self.status_bar.showMessage(f"Sent {len(clip_ids)} clips to Analyze")
 
+        # Automatically start "Analyze All" on the sent clips
+        self._on_analyze_all_from_tab()
+
     def _on_analyze_colors_from_tab(self):
         """Handle color extraction request from Analyze tab."""
         clips = self.analyze_tab.get_clips()
@@ -1919,6 +1922,9 @@ class MainWindow(QMainWindow):
         self._thumbnails_finished_handled = True
 
         logger.info(f"Thumbnail worker running: {self.thumbnail_worker.isRunning() if self.thumbnail_worker else 'None'}")
+
+        # Refresh Analyze tab lookups (cached properties may have been invalidated)
+        self.analyze_tab.set_lookups(self.clips_by_id, self.sources_by_id)
 
         # Update Cut tab with all clips for this source
         current_source_clips = self.clips_by_source.get(self.current_source.id, []) if self.current_source else []
