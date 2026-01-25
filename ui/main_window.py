@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QTabWidget,
     QLabel,
+    QDockWidget,
 )
 from PySide6.QtCore import Qt, Signal, QThread, QMimeData, QUrl, QTimer, Slot
 from PySide6.QtGui import QDesktopServices, QKeySequence, QAction
@@ -60,6 +61,8 @@ from ui.project_adapter import ProjectSignalAdapter
 from ui.settings_dialog import SettingsDialog
 from ui.tabs import CollectTab, CutTab, AnalyzeTab, GenerateTab, SequenceTab, RenderTab
 from ui.theme import theme
+from ui.chat_panel import ChatPanel
+from ui.chat_worker import ChatAgentWorker
 
 
 class DetectionWorker(QThread):
@@ -515,6 +518,10 @@ class MainWindow(QMainWindow):
         logger.info("Connecting signals...")
         self._connect_signals()
 
+        # Set up chat panel
+        logger.info("Setting up chat panel...")
+        self._setup_chat_panel()
+
         # Playback state (must be after _setup_ui so tabs are initialized)
         logger.info("Setting up playback state...")
         self._is_playing = False
@@ -733,6 +740,11 @@ class MainWindow(QMainWindow):
             action.triggered.connect(lambda checked, idx=i: self.tab_widget.setCurrentIndex(idx))
             view_menu.addAction(action)
 
+        view_menu.addSeparator()
+
+        # Store reference to view menu for chat panel toggle
+        self._view_menu = view_menu
+
     def _is_any_worker_running(self) -> bool:
         """Check if any background worker is currently running."""
         workers = [
@@ -826,6 +838,153 @@ class MainWindow(QMainWindow):
         # Sequence tab video player signals for playback sync
         self.sequence_tab.video_player.position_updated.connect(self._on_video_position_updated)
         self.sequence_tab.video_player.player.playbackStateChanged.connect(self._on_video_state_changed)
+
+    def _setup_chat_panel(self):
+        """Initialize the chat panel dock widget."""
+        from core.llm_client import ProviderConfig, ProviderType, create_provider_config_from_settings
+        from core.settings import get_llm_api_key
+
+        # Initialize chat state
+        self._chat_history: list[dict] = []
+        self._last_user_message: str = ""
+        self._current_chat_bubble = None
+        self._current_tool_indicator = None
+        self._chat_worker: Optional[ChatAgentWorker] = None
+
+        # Create chat panel
+        self.chat_panel = ChatPanel()
+
+        # Set initial provider from settings
+        self.chat_panel.set_provider(self.settings.llm_provider)
+
+        # Create dock widget
+        self.chat_dock = QDockWidget("Agent Chat", self)
+        self.chat_dock.setWidget(self.chat_panel)
+        self.chat_dock.setAllowedAreas(Qt.RightDockWidgetArea | Qt.LeftDockWidgetArea)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.chat_dock)
+
+        # Start hidden by default
+        self.chat_dock.setVisible(False)
+
+        # Add toggle action to View menu
+        self.chat_toggle_action = self.chat_dock.toggleViewAction()
+        self.chat_toggle_action.setText("Show Agent Chat")
+        self.chat_toggle_action.setShortcut(QKeySequence("Ctrl+Shift+C"))
+        self._view_menu.addAction(self.chat_toggle_action)
+
+        # Connect chat panel signals
+        self.chat_panel.message_sent.connect(self._on_chat_message)
+        self.chat_panel.cancel_requested.connect(self._on_chat_cancel)
+        self.chat_panel.provider_changed.connect(self._on_chat_provider_changed)
+
+    def _on_chat_message(self, message: str):
+        """Handle user message from chat panel."""
+        from core.llm_client import ProviderConfig, ProviderType, create_provider_config_from_settings
+        from core.settings import get_llm_api_key
+
+        # Store message for history
+        self._last_user_message = message
+
+        # Cancel any existing worker
+        if self._chat_worker and self._chat_worker.isRunning():
+            self._chat_worker.stop()
+            self._chat_worker.wait(1000)
+
+        # Get current provider config
+        provider_key = self.chat_panel.get_provider()
+
+        # Build provider config
+        config = ProviderConfig(
+            provider=ProviderType(provider_key),
+            model=self.settings.llm_model,
+            api_key=get_llm_api_key() or None,
+            api_base=self.settings.llm_api_base or None,
+            temperature=self.settings.llm_temperature,
+        )
+
+        # Build message history
+        messages = self._chat_history + [{"role": "user", "content": message}]
+
+        # Create busy check callback
+        def check_busy(tool_name: str) -> bool:
+            """Check if a conflicting worker is running."""
+            worker_map = {
+                "detect_scenes": "detection_worker",
+                "analyze_colors": "color_worker",
+                "analyze_shots": "shot_type_worker",
+                "transcribe": "transcription_worker",
+                "download_video": "download_worker",
+            }
+            attr = worker_map.get(tool_name)
+            if attr and hasattr(self, attr):
+                worker = getattr(self, attr)
+                return worker is not None and worker.isRunning()
+            return False
+
+        # Start worker
+        self._chat_worker = ChatAgentWorker(
+            config=config,
+            messages=messages,
+            project=self.project,
+            busy_check=check_busy,
+        )
+
+        # Connect signals
+        bubble = self.chat_panel.start_streaming_response()
+        self._current_chat_bubble = bubble
+
+        self._chat_worker.text_chunk.connect(self.chat_panel.on_stream_chunk)
+        self._chat_worker.tool_called.connect(self._on_chat_tool_called)
+        self._chat_worker.tool_result.connect(self._on_chat_tool_result)
+        self._chat_worker.complete.connect(self._on_chat_complete)
+        self._chat_worker.error.connect(self._on_chat_error)
+
+        self._chat_worker.start()
+
+    def _on_chat_tool_called(self, name: str, args: dict):
+        """Handle tool execution start."""
+        logger.info(f"Chat agent calling tool: {name}")
+        self._current_tool_indicator = self.chat_panel.add_tool_indicator(name)
+
+    def _on_chat_tool_result(self, name: str, result: dict, success: bool):
+        """Handle tool execution completion."""
+        logger.info(f"Chat tool {name} completed: success={success}")
+        if self._current_tool_indicator:
+            self._current_tool_indicator.set_complete(success)
+
+    def _on_chat_complete(self, response: str, tool_history: list[dict]):
+        """Handle chat completion with full history."""
+        logger.info("Chat response complete")
+        self.chat_panel.on_stream_complete()
+
+        # Add user message to history
+        self._chat_history.append({"role": "user", "content": self._last_user_message})
+
+        # Add tool interactions to history
+        for msg in tool_history:
+            self._chat_history.append(msg)
+
+        # Add final assistant response
+        if response and response != "*Cancelled*":
+            self._chat_history.append({"role": "assistant", "content": response})
+
+    def _on_chat_error(self, error: str):
+        """Handle chat error."""
+        logger.error(f"Chat error: {error}")
+        self.chat_panel.on_stream_error(error)
+
+    def _on_chat_cancel(self):
+        """Handle chat cancellation."""
+        if self._chat_worker and self._chat_worker.isRunning():
+            logger.info("Cancelling chat worker")
+            self._chat_worker.stop()
+
+    def _on_chat_provider_changed(self, provider: str):
+        """Handle provider selection change."""
+        logger.info(f"Chat provider changed to: {provider}")
+        # Update settings
+        self.settings.llm_provider = provider
+        # Note: Not auto-saving to allow temporary changes during session
 
     def _on_download_requested_from_tab(self, url: str):
         """Handle download request from Collect tab."""

@@ -14,3 +14,8 @@ Pillow>=10.0
 faster-whisper>=1.0.0
 google-api-python-client>=2.100.0
 keyring>=24.0
+
+# LLM Integration
+litellm>=1.40.0
+tenacity>=8.2.0
+httpx>=0.25.0
