@@ -8,7 +8,7 @@ Provides:
 """
 
 from PySide6.QtCore import Qt, Signal, Slot, QTimer, QEvent
-from PySide6.QtGui import QKeyEvent
+from PySide6.QtGui import QKeyEvent, QStandardItem
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -21,6 +21,12 @@ from PySide6.QtWidgets import (
 )
 
 from ui.chat_widgets import MessageBubble, StreamingBubble, ToolIndicator
+from core.settings import (
+    get_anthropic_api_key,
+    get_openai_api_key,
+    get_gemini_api_key,
+    get_openrouter_api_key,
+)
 
 
 class ChatPanel(QWidget):
@@ -66,6 +72,9 @@ class ChatPanel(QWidget):
         self.provider_combo.setToolTip("Select LLM provider")
         self.provider_combo.currentTextChanged.connect(self._on_provider_changed)
         header.addWidget(self.provider_combo)
+
+        # Disable providers without API keys (deferred to allow full init)
+        QTimer.singleShot(0, self.update_provider_availability)
 
         layout.addLayout(header)
 
@@ -357,3 +366,42 @@ class ChatPanel(QWidget):
             "OpenRouter": "openrouter",
         }
         return provider_map.get(text, "local")
+
+    def update_provider_availability(self):
+        """Update provider dropdown to disable providers without API keys.
+
+        Local (Ollama) is always enabled as it doesn't require an API key.
+        Other providers are disabled if no API key is configured.
+        """
+        # Map combo index to API key getter (index 0 = Local, no key needed)
+        api_key_checks = {
+            1: get_openai_api_key,      # OpenAI
+            2: get_anthropic_api_key,   # Anthropic
+            3: get_gemini_api_key,      # Gemini
+            4: get_openrouter_api_key,  # OpenRouter
+        }
+
+        model = self.provider_combo.model()
+        current_index = self.provider_combo.currentIndex()
+        current_disabled = False
+
+        for index, get_key in api_key_checks.items():
+            item = model.item(index)
+            if item:
+                has_key = bool(get_key())
+                if has_key:
+                    # Enable the item
+                    item.setFlags(item.flags() | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                    item.setToolTip("")
+                else:
+                    # Disable the item
+                    item.setFlags(item.flags() & ~(Qt.ItemIsEnabled | Qt.ItemIsSelectable))
+                    item.setToolTip("API key not configured. Add it in Settings > API Keys.")
+
+                    # Check if current selection is now disabled
+                    if index == current_index:
+                        current_disabled = True
+
+        # If current selection is disabled, switch to Local
+        if current_disabled:
+            self.provider_combo.setCurrentIndex(0)  # Local (Ollama)

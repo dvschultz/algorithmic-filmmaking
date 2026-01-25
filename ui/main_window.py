@@ -788,6 +788,10 @@ class MainWindow(QMainWindow):
         # Apply theme preference
         theme().set_preference(self.settings.theme_preference)
 
+        # Update chat provider availability (API keys may have changed)
+        if hasattr(self, 'chat_panel'):
+            self.chat_panel.update_provider_availability()
+
         logger.info(
             f"Settings applied: sensitivity={self.settings.default_sensitivity}, "
             f"quality={self.settings.export_quality}, "
