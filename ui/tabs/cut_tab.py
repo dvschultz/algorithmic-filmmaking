@@ -232,7 +232,14 @@ class CutTab(BaseTab):
 
     def add_clip(self, clip, source):
         """Add a single clip to the browser (called during thumbnail generation)."""
+        # Switch to clips state if not already showing clips
+        if self.state_stack.currentIndex() != self.STATE_CLIPS:
+            self.state_stack.setCurrentIndex(self.STATE_CLIPS)
         self.clip_browser.add_clip(clip, source)
+        # Track clip and update count
+        if clip not in self._clips:
+            self._clips.append(clip)
+            self.clip_count_label.setText(f"{len(self._clips)} clips")
 
     def clear_clips(self):
         """Clear all clips from the browser."""
