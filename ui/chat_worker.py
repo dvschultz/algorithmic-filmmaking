@@ -7,6 +7,8 @@ Handles streaming responses, tool execution, and emits signals for UI updates.
 import asyncio
 import json
 import logging
+import re
+import uuid
 from typing import Any, Callable, Optional
 
 from PySide6.QtCore import QThread, Signal
@@ -16,6 +18,121 @@ from core.llm_client import LLMClient, ProviderConfig, check_ollama_health
 from core.tool_executor import ToolExecutor
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_tool_calls_from_text(content: str, available_tools: list[str]) -> tuple[list[dict], str]:
+    """Parse tool calls from text content when model doesn't use proper function calling.
+
+    Some models (especially local ones via Ollama) output tool calls as JSON text
+    instead of using the proper tool_calls response format. This function detects
+    and extracts those tool calls.
+
+    Args:
+        content: The text content that may contain JSON tool calls
+        available_tools: List of valid tool names to look for
+
+    Returns:
+        Tuple of (parsed_tool_calls, cleaned_content)
+        - parsed_tool_calls: List of tool call dicts in OpenAI format
+        - cleaned_content: Content with tool call JSON removed
+    """
+    if not content:
+        return [], content
+
+    tool_calls = []
+    cleaned_content = content
+
+    # Pattern 1: JSON object with "name" and "arguments" fields
+    # Handles: {"name": "tool_name", "arguments": {...}}
+    json_pattern = r'\{[^{}]*"name"\s*:\s*"([^"]+)"[^{}]*"arguments"\s*:\s*(\{[^{}]*\}|\[\])[^{}]*\}'
+
+    # Pattern 2: Repeated/malformed JSON (model outputs same call multiple times)
+    # Handles: {"name": "x", "arguments": {},"name": "x", ...}
+
+    # Pattern 3: Markdown code block with JSON
+    code_block_pattern = r'```(?:json)?\s*(\{[^`]+\})\s*```'
+
+    # First try to extract from code blocks
+    code_matches = re.findall(code_block_pattern, content, re.DOTALL)
+    for match in code_matches:
+        try:
+            parsed = json.loads(match)
+            if isinstance(parsed, dict) and "name" in parsed:
+                if parsed["name"] in available_tools:
+                    tool_calls.append(_create_tool_call(parsed["name"], parsed.get("arguments", {})))
+                    cleaned_content = cleaned_content.replace(f"```json\n{match}\n```", "")
+                    cleaned_content = cleaned_content.replace(f"```\n{match}\n```", "")
+        except json.JSONDecodeError:
+            pass
+
+    # If no code block matches, try direct JSON patterns
+    if not tool_calls:
+        # Try to find individual tool call objects
+        for match in re.finditer(json_pattern, content):
+            tool_name = match.group(1)
+            args_str = match.group(2)
+
+            if tool_name in available_tools:
+                try:
+                    args = json.loads(args_str) if args_str else {}
+                    tool_calls.append(_create_tool_call(tool_name, args))
+                    # Only clean the first occurrence to avoid over-cleaning
+                    if len(tool_calls) == 1:
+                        cleaned_content = content[:match.start()] + content[match.end():]
+                except json.JSONDecodeError:
+                    tool_calls.append(_create_tool_call(tool_name, {}))
+                    if len(tool_calls) == 1:
+                        cleaned_content = content[:match.start()] + content[match.end():]
+
+                # Only extract one tool call per response to avoid duplicates
+                break
+
+    # If we found tool calls, also check for common prefixes the model might add
+    if tool_calls:
+        # Remove common preambles
+        preambles = [
+            r"I'll call the .* tool[.:]?\s*",
+            r"Let me .* for you[.:]?\s*",
+            r"Calling .*[.:]?\s*",
+            r"Using the .* function[.:]?\s*",
+        ]
+        for preamble in preambles:
+            cleaned_content = re.sub(preamble, "", cleaned_content, flags=re.IGNORECASE)
+
+        cleaned_content = cleaned_content.strip()
+
+    # Deduplicate tool calls (some models repeat the same call)
+    if len(tool_calls) > 1:
+        seen = set()
+        unique_calls = []
+        for tc in tool_calls:
+            key = (tc["function"]["name"], tc["function"]["arguments"])
+            if key not in seen:
+                seen.add(key)
+                unique_calls.append(tc)
+        tool_calls = unique_calls[:1]  # Only keep the first unique call
+
+    return tool_calls, cleaned_content
+
+
+def _create_tool_call(name: str, arguments: dict) -> dict:
+    """Create a tool call dict in OpenAI format.
+
+    Args:
+        name: Tool name
+        arguments: Tool arguments dict
+
+    Returns:
+        Tool call dict
+    """
+    return {
+        "id": f"call_{uuid.uuid4().hex[:8]}",
+        "type": "function",
+        "function": {
+            "name": name,
+            "arguments": json.dumps(arguments) if isinstance(arguments, dict) else str(arguments)
+        }
+    }
 
 
 class ChatAgentWorker(QThread):
@@ -230,6 +347,17 @@ class ChatAgentWorker(QThread):
             if hasattr(delta, 'tool_calls') and delta.tool_calls:
                 for tc in delta.tool_calls:
                     self._accumulate_tool_call(tool_calls, tc)
+
+        # Fallback: If no tool calls via API but content looks like JSON tool calls,
+        # parse them from the text. This handles models that output tool calls as text.
+        if not tool_calls and content:
+            available_tools = list(tool_registry.keys())
+            parsed_calls, cleaned_content = _parse_tool_calls_from_text(content, available_tools)
+
+            if parsed_calls:
+                logger.info(f"Parsed {len(parsed_calls)} tool call(s) from text content (model fallback)")
+                tool_calls = parsed_calls
+                content = cleaned_content
 
         return content, tool_calls
 
