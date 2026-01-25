@@ -189,7 +189,7 @@ class SettingsDialog(QDialog):
         )
 
         self.setWindowTitle("Settings")
-        self.setMinimumSize(500, 400)
+        self.setMinimumSize(1000, 400)
         self.setModal(True)
 
         self._setup_ui()
