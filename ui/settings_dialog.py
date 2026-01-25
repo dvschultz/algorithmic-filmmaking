@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSlider,
     QDoubleSpinBox,
+    QSpinBox,
     QCheckBox,
     QComboBox,
     QFileDialog,
@@ -182,6 +183,9 @@ class SettingsDialog(QDialog):
             transcription_language=settings.transcription_language,
             auto_transcribe=settings.auto_transcribe,
             theme_preference=settings.theme_preference,
+            youtube_api_key=settings.youtube_api_key,
+            youtube_results_count=settings.youtube_results_count,
+            youtube_parallel_downloads=settings.youtube_parallel_downloads,
         )
 
         self.setWindowTitle("Settings")
@@ -207,6 +211,7 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(self._create_paths_tab(), "Paths")
         self.tabs.addTab(self._create_detection_tab(), "Detection")
         self.tabs.addTab(self._create_export_tab(), "Export")
+        self.tabs.addTab(self._create_api_keys_tab(), "API Keys")
         self.tabs.addTab(self._create_appearance_tab(), "Appearance")
         layout.addWidget(self.tabs)
 
@@ -467,6 +472,80 @@ class SettingsDialog(QDialog):
         layout.addStretch()
         return tab
 
+    def _create_api_keys_tab(self) -> QWidget:
+        """Create the API Keys settings tab."""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        # YouTube API group
+        youtube_group = QGroupBox("YouTube Data API")
+        youtube_layout = QVBoxLayout(youtube_group)
+
+        # API Key input
+        key_layout = QHBoxLayout()
+        key_layout.addWidget(QLabel("API Key:"))
+
+        self.youtube_api_key_edit = QLineEdit()
+        self.youtube_api_key_edit.setEchoMode(QLineEdit.Password)
+        self.youtube_api_key_edit.setPlaceholderText("Enter your YouTube Data API v3 key")
+        key_layout.addWidget(self.youtube_api_key_edit)
+
+        self.show_key_btn = QPushButton("Show")
+        self.show_key_btn.setCheckable(True)
+        self.show_key_btn.toggled.connect(self._toggle_api_key_visibility)
+        key_layout.addWidget(self.show_key_btn)
+
+        youtube_layout.addLayout(key_layout)
+
+        # Help text
+        help_label = QLabel(
+            '<a href="https://console.cloud.google.com/apis/credentials">'
+            "Get an API key from Google Cloud Console</a>"
+        )
+        help_label.setOpenExternalLinks(True)
+        help_label.setStyleSheet(f"color: {theme().text_secondary};")
+        youtube_layout.addWidget(help_label)
+
+        # Results count
+        results_layout = QHBoxLayout()
+        results_layout.addWidget(QLabel("Search results:"))
+
+        self.youtube_results_spin = QSpinBox()
+        self.youtube_results_spin.setRange(10, 50)
+        self.youtube_results_spin.setValue(25)
+        self.youtube_results_spin.setToolTip("Number of results per search (affects API quota)")
+        results_layout.addWidget(self.youtube_results_spin)
+        results_layout.addStretch()
+
+        youtube_layout.addLayout(results_layout)
+
+        # Parallel downloads
+        parallel_layout = QHBoxLayout()
+        parallel_layout.addWidget(QLabel("Parallel downloads:"))
+
+        self.youtube_parallel_spin = QSpinBox()
+        self.youtube_parallel_spin.setRange(1, 3)
+        self.youtube_parallel_spin.setValue(2)
+        self.youtube_parallel_spin.setToolTip("Number of simultaneous downloads")
+        parallel_layout.addWidget(self.youtube_parallel_spin)
+        parallel_layout.addStretch()
+
+        youtube_layout.addLayout(parallel_layout)
+
+        layout.addWidget(youtube_group)
+        layout.addStretch()
+
+        return tab
+
+    def _toggle_api_key_visibility(self, show: bool):
+        """Toggle API key visibility."""
+        if show:
+            self.youtube_api_key_edit.setEchoMode(QLineEdit.Normal)
+            self.show_key_btn.setText("Hide")
+        else:
+            self.youtube_api_key_edit.setEchoMode(QLineEdit.Password)
+            self.show_key_btn.setText("Show")
+
     def _create_appearance_tab(self) -> QWidget:
         tab = QWidget()
         layout = QVBoxLayout(tab)
@@ -565,6 +644,11 @@ class SettingsDialog(QDialog):
             theme_map.get(self.settings.theme_preference, 0)
         )
 
+        # YouTube
+        self.youtube_api_key_edit.setText(self.settings.youtube_api_key)
+        self.youtube_results_spin.setValue(self.settings.youtube_results_count)
+        self.youtube_parallel_spin.setValue(self.settings.youtube_parallel_downloads)
+
     def _save_to_settings(self):
         """Save UI values to settings object."""
         # Paths
@@ -600,6 +684,11 @@ class SettingsDialog(QDialog):
         # Appearance
         theme_values = ["system", "light", "dark"]
         self.settings.theme_preference = theme_values[self.theme_combo.currentIndex()]
+
+        # YouTube
+        self.settings.youtube_api_key = self.youtube_api_key_edit.text()
+        self.settings.youtube_results_count = self.youtube_results_spin.value()
+        self.settings.youtube_parallel_downloads = self.youtube_parallel_spin.value()
 
     def _validate(self) -> tuple[bool, str]:
         """Validate all settings. Returns (is_valid, error_message)."""
@@ -727,4 +816,7 @@ class SettingsDialog(QDialog):
             or self.settings.transcription_language != self.original_settings.transcription_language
             or self.settings.auto_transcribe != self.original_settings.auto_transcribe
             or self.settings.theme_preference != self.original_settings.theme_preference
+            or self.settings.youtube_api_key != self.original_settings.youtube_api_key
+            or self.settings.youtube_results_count != self.original_settings.youtube_results_count
+            or self.settings.youtube_parallel_downloads != self.original_settings.youtube_parallel_downloads
         )
