@@ -3,6 +3,7 @@
 import logging
 import re
 from collections import deque
+from datetime import timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -1080,12 +1081,28 @@ class MainWindow(QMainWindow):
         # Convert dicts to YouTubeVideo objects
         video_objects = []
         for v in videos:
+            # Parse duration string (e.g., "5:23" or "1:02:30") to timedelta
+            duration = None
+            duration_str = v.get("duration", "")
+            if duration_str:
+                parts = duration_str.split(":")
+                try:
+                    if len(parts) == 2:
+                        duration = timedelta(minutes=int(parts[0]), seconds=int(parts[1]))
+                    elif len(parts) == 3:
+                        duration = timedelta(
+                            hours=int(parts[0]), minutes=int(parts[1]), seconds=int(parts[2])
+                        )
+                except (ValueError, IndexError):
+                    pass
+
             video_objects.append(YouTubeVideo(
                 video_id=v.get("video_id", ""),
                 title=v.get("title", ""),
+                description="",  # Not included in tool output
                 channel_title=v.get("channel", ""),
-                duration_str=v.get("duration", ""),
                 thumbnail_url=v.get("thumbnail", ""),
+                duration=duration,
                 view_count=v.get("view_count"),
             ))
 
