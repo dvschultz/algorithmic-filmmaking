@@ -8,13 +8,15 @@ Provides:
 """
 
 from PySide6.QtCore import Qt, Signal, Slot, QTimer, QEvent
-from PySide6.QtGui import QKeyEvent, QStandardItem
+from PySide6.QtGui import QKeyEvent, QStandardItem, QPalette, QColor
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QScrollArea,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -27,6 +29,19 @@ from core.settings import (
     get_gemini_api_key,
     get_openrouter_api_key,
 )
+
+
+class DisabledItemDelegate(QStyledItemDelegate):
+    """Custom delegate that visually grays out disabled combo box items."""
+
+    def paint(self, painter, option, index):
+        # Check if item is disabled
+        if not (index.flags() & Qt.ItemIsEnabled):
+            # Gray out the text for disabled items
+            option = QStyleOptionViewItem(option)
+            option.palette.setColor(QPalette.Text, QColor(160, 160, 160))
+            option.palette.setColor(QPalette.HighlightedText, QColor(160, 160, 160))
+        super().paint(painter, option, index)
 
 
 class ChatPanel(QWidget):
@@ -71,6 +86,10 @@ class ChatPanel(QWidget):
         ])
         self.provider_combo.setToolTip("Select LLM provider")
         self.provider_combo.currentTextChanged.connect(self._on_provider_changed)
+
+        # Use custom delegate to gray out disabled items
+        self.provider_combo.setItemDelegate(DisabledItemDelegate(self.provider_combo))
+
         header.addWidget(self.provider_combo)
 
         # Disable providers without API keys (deferred to allow full init)
