@@ -97,6 +97,11 @@ class Settings:
     # Appearance
     theme_preference: str = "system"  # system, light, dark
 
+    # YouTube API
+    youtube_api_key: str = ""
+    youtube_results_count: int = 25  # 10-50
+    youtube_parallel_downloads: int = 2  # 1-3
+
     def get_quality_preset(self) -> dict:
         """Get FFmpeg parameters for current quality setting."""
         return QUALITY_PRESETS.get(self.export_quality, QUALITY_PRESETS["medium"])
@@ -180,6 +185,18 @@ def load_settings() -> Settings:
         if qsettings.contains("appearance/theme_preference"):
             settings.theme_preference = qsettings.value("appearance/theme_preference")
 
+        # Load YouTube settings
+        if qsettings.contains("youtube/api_key"):
+            settings.youtube_api_key = qsettings.value("youtube/api_key")
+        if qsettings.contains("youtube/results_count"):
+            settings.youtube_results_count = int(
+                qsettings.value("youtube/results_count")
+            )
+        if qsettings.contains("youtube/parallel_downloads"):
+            settings.youtube_parallel_downloads = int(
+                qsettings.value("youtube/parallel_downloads")
+            )
+
         logger.info("Settings loaded successfully")
 
     except Exception as e:
@@ -236,6 +253,11 @@ def save_settings(settings: Settings) -> bool:
 
         # Save appearance settings
         qsettings.setValue("appearance/theme_preference", settings.theme_preference)
+
+        # Save YouTube settings
+        qsettings.setValue("youtube/api_key", settings.youtube_api_key)
+        qsettings.setValue("youtube/results_count", settings.youtube_results_count)
+        qsettings.setValue("youtube/parallel_downloads", settings.youtube_parallel_downloads)
 
         qsettings.sync()
         logger.info("Settings saved successfully")

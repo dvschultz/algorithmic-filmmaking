@@ -16,6 +16,7 @@ from PySide6.QtCore import Signal
 from .base_tab import BaseTab
 from models.clip import Source
 from ui.source_browser import SourceBrowser
+from ui.youtube_search_panel import YouTubeSearchPanel
 from ui.theme import theme
 
 
@@ -44,6 +45,10 @@ class CollectTab(BaseTab):
         # Top toolbar
         toolbar = self._create_toolbar()
         layout.addLayout(toolbar)
+
+        # YouTube search panel (collapsible)
+        self.youtube_search_panel = YouTubeSearchPanel()
+        layout.addWidget(self.youtube_search_panel)
 
         # Main content: source browser grid (with built-in add card)
         self.source_browser = SourceBrowser()
