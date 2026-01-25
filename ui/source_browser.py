@@ -12,9 +12,10 @@ from PySide6.QtWidgets import (
     QFrame,
     QPushButton,
     QFileDialog,
+    QApplication,
 )
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFont, QDragEnterEvent, QDropEvent
+from PySide6.QtGui import QFont, QDragEnterEvent, QDropEvent, QPalette
 
 from models.clip import Source
 from ui.source_thumbnail import SourceThumbnail
@@ -45,28 +46,35 @@ class AddVideoCard(QFrame):
         layout.setAlignment(Qt.AlignCenter)
 
         # Plus icon
-        icon_label = QLabel("+")
+        self.icon_label = QLabel("+")
         icon_font = QFont()
         icon_font.setPointSize(36)
         icon_font.setBold(True)
-        icon_label.setFont(icon_font)
-        icon_label.setAlignment(Qt.AlignCenter)
-        icon_label.setStyleSheet("color: #666;")
-        layout.addWidget(icon_label)
+        self.icon_label.setFont(icon_font)
+        self.icon_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.icon_label)
 
         # Text
-        text_label = QLabel("Add Video")
-        text_label.setAlignment(Qt.AlignCenter)
-        text_label.setStyleSheet("font-size: 12px; font-weight: bold; color: #666;")
-        layout.addWidget(text_label)
+        self.text_label = QLabel("Add Video")
+        self.text_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.text_label)
 
         # Subtext
-        sub_label = QLabel("Drop or click")
-        sub_label.setAlignment(Qt.AlignCenter)
-        sub_label.setStyleSheet("font-size: 10px; color: #999;")
-        layout.addWidget(sub_label)
+        self.sub_label = QLabel("Drop or click")
+        self.sub_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.sub_label)
+
+    def _is_dark_mode(self) -> bool:
+        """Check if the application is in dark mode."""
+        palette = QApplication.palette()
+        bg_color = palette.color(QPalette.Window)
+        # Calculate luminance - dark mode if background is dark
+        luminance = (0.299 * bg_color.red() + 0.587 * bg_color.green() + 0.114 * bg_color.blue()) / 255
+        return luminance < 0.5
 
     def _update_style(self, dragging: bool):
+        is_dark = self._is_dark_mode()
+
         if dragging:
             self.setStyleSheet("""
                 AddVideoCard {
@@ -74,7 +82,23 @@ class AddVideoCard(QFrame):
                     border: 2px dashed #4CAF50;
                 }
             """)
+        elif is_dark:
+            # Dark mode colors
+            self.setStyleSheet("""
+                AddVideoCard {
+                    background-color: #3a3a3a;
+                    border: 2px dashed #555;
+                }
+                AddVideoCard:hover {
+                    background-color: #454545;
+                    border-color: #777;
+                }
+            """)
+            self.icon_label.setStyleSheet("color: #aaa;")
+            self.text_label.setStyleSheet("font-size: 12px; font-weight: bold; color: #aaa;")
+            self.sub_label.setStyleSheet("font-size: 10px; color: #888;")
         else:
+            # Light mode colors
             self.setStyleSheet("""
                 AddVideoCard {
                     background-color: #f0f0f0;
@@ -85,6 +109,9 @@ class AddVideoCard(QFrame):
                     border-color: #999;
                 }
             """)
+            self.icon_label.setStyleSheet("color: #666;")
+            self.text_label.setStyleSheet("font-size: 12px; font-weight: bold; color: #666;")
+            self.sub_label.setStyleSheet("font-size: 10px; color: #999;")
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
