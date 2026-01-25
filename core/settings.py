@@ -371,6 +371,13 @@ class Settings:
     llm_api_base: str = ""  # For local/custom endpoints (default: http://localhost:11434 for Ollama)
     llm_temperature: float = 0.7
 
+    # Per-provider model preferences
+    ollama_model: str = "qwen3:8b"
+    openai_model: str = "gpt-4o-mini"
+    anthropic_model: str = "claude-sonnet-4-20250514"
+    gemini_model: str = "gemini-2.0-flash"
+    openrouter_model: str = "anthropic/claude-sonnet-4"
+
     def get_quality_preset(self) -> dict:
         """Get FFmpeg parameters for current quality setting."""
         return QUALITY_PRESETS.get(self.export_quality, QUALITY_PRESETS["medium"])
@@ -386,6 +393,24 @@ class Settings:
     def min_scene_length_frames(self, fps: float = 30.0) -> int:
         """Convert min scene length to frames."""
         return int(self.min_scene_length_seconds * fps)
+
+    def get_model_for_provider(self, provider: str) -> str:
+        """Get the configured model for a specific provider.
+
+        Args:
+            provider: Provider key (local, openai, anthropic, gemini, openrouter)
+
+        Returns:
+            The model string configured for that provider
+        """
+        model_map = {
+            "local": self.ollama_model,
+            "openai": self.openai_model,
+            "anthropic": self.anthropic_model,
+            "gemini": self.gemini_model,
+            "openrouter": self.openrouter_model,
+        }
+        return model_map.get(provider, self.llm_model)
 
 
 def get_default_settings() -> Settings:
@@ -559,6 +584,17 @@ def _load_from_json(config_path: Path, settings: Settings) -> Settings:
             settings.llm_api_base = val
         if "temperature" in llm:
             settings.llm_temperature = float(llm["temperature"])
+        # Per-provider model preferences
+        if val := llm.get("ollama_model"):
+            settings.ollama_model = val
+        if val := llm.get("openai_model"):
+            settings.openai_model = val
+        if val := llm.get("anthropic_model"):
+            settings.anthropic_model = val
+        if val := llm.get("gemini_model"):
+            settings.gemini_model = val
+        if val := llm.get("openrouter_model"):
+            settings.openrouter_model = val
 
     return settings
 
@@ -605,6 +641,12 @@ def _settings_to_json(settings: Settings) -> dict:
             "model": settings.llm_model,
             "api_base": settings.llm_api_base,
             "temperature": settings.llm_temperature,
+            # Per-provider model preferences
+            "ollama_model": settings.ollama_model,
+            "openai_model": settings.openai_model,
+            "anthropic_model": settings.anthropic_model,
+            "gemini_model": settings.gemini_model,
+            "openrouter_model": settings.openrouter_model,
             # Note: API key is NOT stored here - it goes to keyring
         },
     }

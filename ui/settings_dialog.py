@@ -55,6 +55,7 @@ from core.settings import (
     set_openrouter_api_key,
     is_api_key_from_env,
 )
+from core.llm_client import get_provider_models
 from ui.theme import theme
 
 logger = logging.getLogger(__name__)
@@ -237,6 +238,13 @@ class SettingsDialog(QDialog):
             youtube_api_key=settings.youtube_api_key,
             youtube_results_count=settings.youtube_results_count,
             youtube_parallel_downloads=settings.youtube_parallel_downloads,
+            llm_provider=settings.llm_provider,
+            llm_model=settings.llm_model,
+            ollama_model=settings.ollama_model,
+            openai_model=settings.openai_model,
+            anthropic_model=settings.anthropic_model,
+            gemini_model=settings.gemini_model,
+            openrouter_model=settings.openrouter_model,
         )
 
         self.setWindowTitle("Settings")
@@ -421,6 +429,38 @@ class SettingsDialog(QDialog):
         transcription_layout.addLayout(lang_layout)
 
         layout.addWidget(transcription_group)
+
+        # Chat Agent group
+        chat_group = QGroupBox("Chat Agent")
+        chat_layout = QVBoxLayout(chat_group)
+
+        # Default provider dropdown
+        provider_layout = QHBoxLayout()
+        provider_layout.addWidget(QLabel("Default Provider:"))
+        self.chat_provider_combo = QComboBox()
+        self.chat_provider_combo.addItems([
+            "Local (Ollama)",
+            "OpenAI",
+            "Anthropic",
+            "Gemini",
+            "OpenRouter"
+        ])
+        self.chat_provider_combo.setToolTip(
+            "Select the default LLM provider for the chat agent.\n"
+            "Local (Ollama) runs models on your machine."
+        )
+        provider_layout.addWidget(self.chat_provider_combo)
+        provider_layout.addStretch()
+        chat_layout.addLayout(provider_layout)
+
+        # Per-provider model dropdowns
+        self._create_provider_model_section(chat_layout, "Local (Ollama)", "local")
+        self._create_provider_model_section(chat_layout, "OpenAI", "openai")
+        self._create_provider_model_section(chat_layout, "Anthropic", "anthropic")
+        self._create_provider_model_section(chat_layout, "Gemini", "gemini")
+        self._create_provider_model_section(chat_layout, "OpenRouter", "openrouter")
+
+        layout.addWidget(chat_group)
 
         layout.addStretch()
         return tab
@@ -616,19 +656,24 @@ class SettingsDialog(QDialog):
 
         youtube_layout.addLayout(key_layout)
 
-        # Help text
-        help_label = QLabel(
+        # Help text (hidden when API key is already set)
+        self.youtube_help_label = QLabel(
             '<a href="https://console.cloud.google.com/apis/credentials">'
             "Get an API key from Google Cloud Console</a>"
         )
-        help_label.setOpenExternalLinks(True)
-        help_label.setStyleSheet(f"color: {theme().text_secondary};")
-        youtube_layout.addWidget(help_label)
+        self.youtube_help_label.setOpenExternalLinks(True)
+        self.youtube_help_label.setStyleSheet(f"color: {theme().text_secondary};")
+        youtube_layout.addWidget(self.youtube_help_label)
 
-        # Results count
+        # Update help label visibility when API key changes
+        self.youtube_api_key_edit.textChanged.connect(self._update_youtube_help_visibility)
+
+        # Results count and parallel downloads on same line (two columns)
+        options_layout = QHBoxLayout()
+
+        # Left column: Search results
         results_layout = QHBoxLayout()
         results_layout.addWidget(QLabel("Search results:"))
-
         self.youtube_results_spin = QSpinBox()
         self.youtube_results_spin.setRange(10, 50)
         self.youtube_results_spin.setValue(25)
@@ -636,12 +681,9 @@ class SettingsDialog(QDialog):
         results_layout.addWidget(self.youtube_results_spin)
         results_layout.addStretch()
 
-        youtube_layout.addLayout(results_layout)
-
-        # Parallel downloads
+        # Right column: Parallel downloads
         parallel_layout = QHBoxLayout()
         parallel_layout.addWidget(QLabel("Parallel downloads:"))
-
         self.youtube_parallel_spin = QSpinBox()
         self.youtube_parallel_spin.setRange(1, 3)
         self.youtube_parallel_spin.setValue(2)
@@ -649,7 +691,16 @@ class SettingsDialog(QDialog):
         parallel_layout.addWidget(self.youtube_parallel_spin)
         parallel_layout.addStretch()
 
-        youtube_layout.addLayout(parallel_layout)
+        # Add both columns with equal stretch
+        left_widget = QWidget()
+        left_widget.setLayout(results_layout)
+        right_widget = QWidget()
+        right_widget.setLayout(parallel_layout)
+
+        options_layout.addWidget(left_widget, 1)
+        options_layout.addWidget(right_widget, 1)
+
+        youtube_layout.addLayout(options_layout)
 
         layout.addWidget(youtube_group)
         layout.addStretch()
@@ -673,6 +724,83 @@ class SettingsDialog(QDialog):
         else:
             self.youtube_api_key_edit.setEchoMode(QLineEdit.Password)
             self.show_key_btn.setText("Show")
+
+    def _update_youtube_help_visibility(self):
+        """Show help link only when no API key is entered."""
+        has_key = bool(self.youtube_api_key_edit.text().strip())
+        self.youtube_help_label.setVisible(not has_key)
+
+    def _create_provider_model_section(self, parent_layout, label: str, provider_key: str):
+        """Create a model selection subsection for a provider."""
+        section_layout = QHBoxLayout()
+
+        model_label = QLabel(f"  {label} Model:")
+        section_layout.addWidget(model_label)
+
+        combo = QComboBox()
+        for model_id, display_name in get_provider_models(provider_key):
+            combo.addItem(display_name, model_id)  # userData = model_id
+        combo.setToolTip(f"Select the model to use with {label}")
+
+        section_layout.addWidget(combo)
+
+        # Add "Add API key to enable" label (hidden by default, shown when disabled)
+        hint_label = QLabel("Add API key to enable")
+        hint_label.setStyleSheet(f"color: {theme().text_secondary}; font-style: italic;")
+        hint_label.setVisible(False)
+        section_layout.addWidget(hint_label)
+
+        section_layout.addStretch()
+        parent_layout.addLayout(section_layout)
+
+        # Store references
+        setattr(self, f"{provider_key}_model_combo", combo)
+        setattr(self, f"{provider_key}_model_label", model_label)
+        setattr(self, f"{provider_key}_hint_label", hint_label)
+
+    def _update_chat_model_availability(self):
+        """Disable model dropdowns for providers without API keys."""
+        api_key_checks = {
+            "openai": get_openai_api_key,
+            "anthropic": get_anthropic_api_key,
+            "gemini": get_gemini_api_key,
+            "openrouter": get_openrouter_api_key,
+        }
+
+        for provider, get_key in api_key_checks.items():
+            combo = getattr(self, f"{provider}_model_combo", None)
+            label = getattr(self, f"{provider}_model_label", None)
+            hint = getattr(self, f"{provider}_hint_label", None)
+            if combo:
+                has_key = bool(get_key())
+                combo.setEnabled(has_key)
+                # Gray out the label when disabled
+                if label:
+                    if has_key:
+                        label.setStyleSheet("")  # Reset to default
+                    else:
+                        label.setStyleSheet(f"color: {theme().text_muted};")
+                if hint:
+                    hint.setVisible(not has_key)
+
+        # Local (Ollama) is always enabled - no API key needed
+
+    def _set_model_combo(self, provider: str, model_id: str):
+        """Set a model combo box to the specified model ID.
+
+        Args:
+            provider: Provider key (local, openai, etc.)
+            model_id: Model identifier to select
+        """
+        combo = getattr(self, f"{provider}_model_combo", None)
+        if combo:
+            # Find the index by userData
+            for i in range(combo.count()):
+                if combo.itemData(i) == model_id:
+                    combo.setCurrentIndex(i)
+                    return
+            # If not found, default to first item
+            combo.setCurrentIndex(0)
 
     def _create_appearance_tab(self) -> QWidget:
         tab = QWidget()
@@ -852,6 +980,20 @@ class SettingsDialog(QDialog):
                                       self.openrouter_api_key_lbl, self.openrouter_show_btn,
                                       ENV_OPENROUTER_API_KEY)
 
+        # Chat Agent settings
+        provider_map = {"local": 0, "openai": 1, "anthropic": 2, "gemini": 3, "openrouter": 4}
+        self.chat_provider_combo.setCurrentIndex(provider_map.get(self.settings.llm_provider, 0))
+
+        # Per-provider models
+        self._set_model_combo("local", self.settings.ollama_model)
+        self._set_model_combo("openai", self.settings.openai_model)
+        self._set_model_combo("anthropic", self.settings.anthropic_model)
+        self._set_model_combo("gemini", self.settings.gemini_model)
+        self._set_model_combo("openrouter", self.settings.openrouter_model)
+
+        # Update model dropdown availability based on API keys
+        self._update_chat_model_availability()
+
     def _apply_llm_env_override(self, provider: str, edit: QLineEdit, label: QLabel,
                                  show_btn: QPushButton, env_var: str):
         """Apply environment override indicator for an LLM API key field."""
@@ -912,6 +1054,20 @@ class SettingsDialog(QDialog):
         self.settings.youtube_api_key = self.youtube_api_key_edit.text()
         self.settings.youtube_results_count = self.youtube_results_spin.value()
         self.settings.youtube_parallel_downloads = self.youtube_parallel_spin.value()
+
+        # Chat Agent
+        provider_values = ["local", "openai", "anthropic", "gemini", "openrouter"]
+        self.settings.llm_provider = provider_values[self.chat_provider_combo.currentIndex()]
+
+        # Per-provider models
+        self.settings.ollama_model = self.local_model_combo.currentData()
+        self.settings.openai_model = self.openai_model_combo.currentData()
+        self.settings.anthropic_model = self.anthropic_model_combo.currentData()
+        self.settings.gemini_model = self.gemini_model_combo.currentData()
+        self.settings.openrouter_model = self.openrouter_model_combo.currentData()
+
+        # Update llm_model to match current provider's selection
+        self.settings.llm_model = self.settings.get_model_for_provider(self.settings.llm_provider)
 
     def _validate(self) -> tuple[bool, str]:
         """Validate all settings. Returns (is_valid, error_message)."""
@@ -1052,4 +1208,11 @@ class SettingsDialog(QDialog):
             or self.settings.youtube_api_key != self.original_settings.youtube_api_key
             or self.settings.youtube_results_count != self.original_settings.youtube_results_count
             or self.settings.youtube_parallel_downloads != self.original_settings.youtube_parallel_downloads
+            or self.settings.llm_provider != self.original_settings.llm_provider
+            or self.settings.llm_model != self.original_settings.llm_model
+            or self.settings.ollama_model != self.original_settings.ollama_model
+            or self.settings.openai_model != self.original_settings.openai_model
+            or self.settings.anthropic_model != self.original_settings.anthropic_model
+            or self.settings.gemini_model != self.original_settings.gemini_model
+            or self.settings.openrouter_model != self.original_settings.openrouter_model
         )

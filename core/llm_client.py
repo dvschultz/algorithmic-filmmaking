@@ -30,6 +30,51 @@ DEFAULT_MODELS = {
     "openrouter": "anthropic/claude-sonnet-4",
 }
 
+# Available models per provider (first is recommended)
+PROVIDER_MODELS = {
+    "local": [
+        ("qwen3:8b", "Qwen3 8B (Recommended)"),
+        ("llama3.2:latest", "Llama 3.2"),
+        ("mistral:latest", "Mistral"),
+        ("gemma2:latest", "Gemma 2"),
+        ("phi3:latest", "Phi-3"),
+    ],
+    "openai": [
+        ("gpt-4o-mini", "GPT-4o Mini (Recommended)"),
+        ("gpt-4o", "GPT-4o"),
+        ("gpt-4-turbo", "GPT-4 Turbo"),
+        ("o1-mini", "o1-mini"),
+    ],
+    "anthropic": [
+        ("claude-sonnet-4-20250514", "Claude Sonnet 4 (Recommended)"),
+        ("claude-opus-4-20250514", "Claude Opus 4"),
+        ("claude-haiku-4-20250514", "Claude Haiku 4"),
+    ],
+    "gemini": [
+        ("gemini-2.0-flash", "Gemini 2.0 Flash (Recommended)"),
+        ("gemini-2.0-pro", "Gemini 2.0 Pro"),
+        ("gemini-1.5-pro", "Gemini 1.5 Pro"),
+    ],
+    "openrouter": [
+        ("anthropic/claude-sonnet-4", "Claude Sonnet 4 (Recommended)"),
+        ("openai/gpt-4o", "GPT-4o"),
+        ("google/gemini-2.0-flash", "Gemini 2.0 Flash"),
+        ("meta-llama/llama-3.3-70b", "Llama 3.3 70B"),
+    ],
+}
+
+
+def get_provider_models(provider: str) -> list[tuple[str, str]]:
+    """Get available models for a provider as (model_id, display_name) tuples.
+
+    Args:
+        provider: Provider key (local, openai, anthropic, gemini, openrouter)
+
+    Returns:
+        List of (model_id, display_name) tuples
+    """
+    return PROVIDER_MODELS.get(provider, [])
+
 
 def get_default_model(provider: str) -> str:
     """Get the default model for a provider.

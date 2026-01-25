@@ -361,6 +361,11 @@ class Theme:
             QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {{
                 border-color: {c.border_focus};
             }}
+            QLineEdit:disabled, QTextEdit:disabled, QPlainTextEdit:disabled {{
+                background-color: {c.background_tertiary};
+                color: {c.text_muted};
+                border-color: {c.border_secondary};
+            }}
 
             /* Combo boxes */
             QComboBox {{
@@ -372,6 +377,11 @@ class Theme:
             }}
             QComboBox:hover {{
                 border-color: {c.border_focus};
+            }}
+            QComboBox:disabled {{
+                background-color: {c.background_tertiary};
+                color: {c.text_muted};
+                border-color: {c.border_secondary};
             }}
             QComboBox::drop-down {{
                 border: none;
@@ -392,12 +402,26 @@ class Theme:
                 border-radius: 4px;
                 padding: 4px 8px;
             }}
+            QSpinBox:disabled, QDoubleSpinBox:disabled {{
+                background-color: {c.background_tertiary};
+                color: {c.text_muted};
+                border-color: {c.border_secondary};
+            }}
 
             /* Sliders */
+            QSlider {{
+                background: transparent;
+            }}
             QSlider::groove:horizontal {{
                 background-color: {c.background_tertiary};
                 height: 6px;
                 border-radius: 3px;
+            }}
+            QSlider::sub-page:horizontal {{
+                background: transparent;
+            }}
+            QSlider::add-page:horizontal {{
+                background: transparent;
             }}
             QSlider::handle:horizontal {{
                 background-color: {c.accent_blue};
@@ -407,6 +431,12 @@ class Theme:
             }}
             QSlider::handle:horizontal:hover {{
                 background-color: {c.accent_blue_hover};
+            }}
+            QSlider:disabled::groove:horizontal {{
+                background-color: {c.border_secondary};
+            }}
+            QSlider:disabled::handle:horizontal {{
+                background-color: {c.text_muted};
             }}
 
             /* Checkboxes */

@@ -788,8 +788,9 @@ class MainWindow(QMainWindow):
         # Apply theme preference
         theme().set_preference(self.settings.theme_preference)
 
-        # Update chat provider availability (API keys may have changed)
+        # Update chat panel provider and model from settings
         if hasattr(self, 'chat_panel'):
+            self.chat_panel.set_provider(self.settings.llm_provider)
             self.chat_panel.update_provider_availability()
 
         logger.info(
@@ -1058,13 +1059,11 @@ class MainWindow(QMainWindow):
 
     def _on_chat_provider_changed(self, provider: str):
         """Handle provider selection change."""
-        from core.llm_client import get_default_model
-
         logger.info(f"Chat provider changed to: {provider}")
         # Update settings
         self.settings.llm_provider = provider
-        # Also update the model to the default for this provider
-        self.settings.llm_model = get_default_model(provider)
+        # Use the user's configured model for this provider, not the default
+        self.settings.llm_model = self.settings.get_model_for_provider(provider)
         logger.info(f"Chat model set to: {self.settings.llm_model}")
         # Note: Not auto-saving to allow temporary changes during session
 
