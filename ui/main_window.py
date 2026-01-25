@@ -382,6 +382,7 @@ class BulkDownloadWorker(QThread):
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
         total = len(self.videos)
+        logger.info(f"BulkDownloadWorker starting download of {total} videos")
         self.progress.emit(0, total, f"Starting download of {total} videos...")
 
         with ThreadPoolExecutor(max_workers=self.max_parallel) as executor:
@@ -394,6 +395,7 @@ class BulkDownloadWorker(QThread):
             # Process completions
             for future in as_completed(future_to_video):
                 if self._cancelled:
+                    logger.info("BulkDownloadWorker cancelled")
                     executor.shutdown(wait=False, cancel_futures=True)
                     break
 
@@ -401,12 +403,14 @@ class BulkDownloadWorker(QThread):
                 try:
                     result = future.result()
                     if result.success:
+                        logger.info(f"Download succeeded: {video.title}")
                         self.video_finished.emit(result)
                     else:
-                        self.video_error.emit(
-                            video.video_id, result.error or "Download failed"
-                        )
+                        error_msg = result.error or "Download failed (no error message)"
+                        logger.error(f"Download failed for '{video.title}': {error_msg}")
+                        self.video_error.emit(video.video_id, error_msg)
                 except Exception as e:
+                    logger.exception(f"Download exception for '{video.title}': {e}")
                     self.video_error.emit(video.video_id, str(e))
 
                 with self._lock:
@@ -415,15 +419,22 @@ class BulkDownloadWorker(QThread):
                         self._completed, total, f"Downloaded {self._completed}/{total}"
                     )
 
+        logger.info(f"BulkDownloadWorker finished: {self._completed}/{total} completed")
         self.all_finished.emit()
 
     def _download_one(self, video: YouTubeVideo):
         """Download a single video."""
+        logger.debug(f"Starting download: {video.title} ({video.video_id})")
         downloader = VideoDownloader()
-        return downloader.download(
+        result = downloader.download(
             video.youtube_url,
             cancel_check=lambda: self._cancelled,
         )
+        if result.success:
+            logger.debug(f"Download finished: {video.title} -> {result.file_path}")
+        else:
+            logger.debug(f"Download returned failure: {video.title} - {result.error}")
+        return result
 
 
 class MainWindow(QMainWindow):
@@ -1222,6 +1233,12 @@ class MainWindow(QMainWindow):
         if not videos:
             return
 
+        # Track download results for summary
+        self._bulk_download_total = len(videos)
+        self._bulk_download_success = 0
+        self._bulk_download_errors: list[tuple[str, str]] = []  # (title, error)
+        self._bulk_video_titles = {v.video_id: v.title for v in videos}
+
         self.collect_tab.youtube_search_panel.set_downloading(True)
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, len(videos))
@@ -1245,20 +1262,45 @@ class MainWindow(QMainWindow):
     @Slot(object)
     def _on_bulk_video_finished(self, result):
         """Handle single video download completion."""
+        self._bulk_download_success += 1
         if result.file_path and result.file_path.exists():
             self._load_video(result.file_path)
 
     @Slot(str, str)
     def _on_bulk_video_error(self, video_id: str, error: str):
         """Log individual video download error."""
-        logger.warning(f"Failed to download {video_id}: {error}")
+        title = self._bulk_video_titles.get(video_id, video_id)
+        logger.warning(f"Failed to download '{title}' ({video_id}): {error}")
+        self._bulk_download_errors.append((title, error))
 
     @Slot()
     def _on_bulk_finished(self):
         """Handle bulk download completion."""
         self.progress_bar.setVisible(False)
         self.collect_tab.youtube_search_panel.set_downloading(False)
-        self.status_bar.showMessage("Bulk download complete")
+
+        total = self._bulk_download_total
+        success = self._bulk_download_success
+        errors = self._bulk_download_errors
+
+        if errors:
+            # Show summary with error count
+            self.status_bar.showMessage(
+                f"Download complete: {success}/{total} succeeded, {len(errors)} failed"
+            )
+
+            # Show detailed error dialog
+            error_details = "\n".join(
+                f"• {title}: {error}" for title, error in errors
+            )
+            QMessageBox.warning(
+                self,
+                "Some Downloads Failed",
+                f"Successfully downloaded {success} of {total} videos.\n\n"
+                f"Failed downloads:\n{error_details}",
+            )
+        else:
+            self.status_bar.showMessage(f"Downloaded {success} videos successfully")
 
     def _start_detection(self, threshold: float):
         """Start scene detection with given threshold."""
