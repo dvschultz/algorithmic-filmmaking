@@ -21,13 +21,13 @@ class ProviderType(Enum):
     OPENROUTER = "openrouter"
 
 
-# Default models for each provider
+# Default models for each provider (updated January 2026)
 DEFAULT_MODELS = {
     "local": "qwen3:8b",
     "openai": "gpt-4o-mini",
-    "anthropic": "claude-3-5-sonnet-20241022",
-    "gemini": "gemini-1.5-flash",
-    "openrouter": "anthropic/claude-3.5-sonnet",
+    "anthropic": "claude-sonnet-4-20250514",  # Claude Sonnet 4
+    "gemini": "gemini-2.0-flash",
+    "openrouter": "anthropic/claude-sonnet-4",
 }
 
 
