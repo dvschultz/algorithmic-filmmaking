@@ -22,7 +22,13 @@ logger = logging.getLogger(__name__)
 # Keyring service name for secure credential storage
 KEYRING_SERVICE = "com.scene-ripper.app"
 KEYRING_YOUTUBE_KEY = "youtube_api_key"
-KEYRING_LLM_API_KEY = "llm_api_key"
+KEYRING_LLM_API_KEY = "llm_api_key"  # Legacy, kept for compatibility
+
+# Provider-specific keyring keys
+KEYRING_ANTHROPIC_API_KEY = "anthropic_api_key"
+KEYRING_OPENAI_API_KEY = "openai_api_key"
+KEYRING_GEMINI_API_KEY = "gemini_api_key"
+KEYRING_OPENROUTER_API_KEY = "openrouter_api_key"
 
 # Config schema version
 CONFIG_VERSION = "1.0"
@@ -39,9 +45,15 @@ ENV_WHISPER_MODEL = "SCENE_RIPPER_WHISPER_MODEL"
 # LLM environment variables
 ENV_LLM_PROVIDER = "SCENE_RIPPER_LLM_PROVIDER"
 ENV_LLM_MODEL = "SCENE_RIPPER_LLM_MODEL"
-ENV_LLM_API_KEY = "SCENE_RIPPER_LLM_API_KEY"
+ENV_LLM_API_KEY = "SCENE_RIPPER_LLM_API_KEY"  # Legacy, kept for compatibility
 ENV_LLM_API_BASE = "SCENE_RIPPER_LLM_API_BASE"
 ENV_LLM_TEMPERATURE = "SCENE_RIPPER_LLM_TEMPERATURE"
+
+# Provider-specific API key environment variables
+ENV_ANTHROPIC_API_KEY = "ANTHROPIC_API_KEY"
+ENV_OPENAI_API_KEY = "OPENAI_API_KEY"
+ENV_GEMINI_API_KEY = "GEMINI_API_KEY"
+ENV_OPENROUTER_API_KEY = "OPENROUTER_API_KEY"
 
 
 def _get_api_key_from_keyring() -> str:
@@ -102,21 +114,133 @@ def _set_llm_api_key_in_keyring(api_key: str) -> bool:
         return False
 
 
+# Provider-specific API key getters/setters
+
+def _get_provider_api_key_from_keyring(keyring_key: str) -> str:
+    """Retrieve a provider-specific API key from system keyring."""
+    try:
+        import keyring
+        key = keyring.get_password(KEYRING_SERVICE, keyring_key)
+        return key or ""
+    except Exception as e:
+        logger.debug(f"Could not read {keyring_key} from keyring: {e}")
+        return ""
+
+
+def _set_provider_api_key_in_keyring(keyring_key: str, api_key: str) -> bool:
+    """Store a provider-specific API key in system keyring."""
+    try:
+        import keyring
+        if api_key:
+            keyring.set_password(KEYRING_SERVICE, keyring_key, api_key)
+        else:
+            try:
+                keyring.delete_password(KEYRING_SERVICE, keyring_key)
+            except keyring.errors.PasswordDeleteError:
+                pass
+        return True
+    except Exception as e:
+        logger.warning(f"Could not write {keyring_key} to keyring: {e}")
+        return False
+
+
+def get_anthropic_api_key() -> str:
+    """Get Anthropic API key with priority: env var > keyring."""
+    if api_key := os.environ.get(ENV_ANTHROPIC_API_KEY):
+        return api_key
+    return _get_provider_api_key_from_keyring(KEYRING_ANTHROPIC_API_KEY)
+
+
+def set_anthropic_api_key(api_key: str) -> bool:
+    """Store Anthropic API key in system keyring."""
+    return _set_provider_api_key_in_keyring(KEYRING_ANTHROPIC_API_KEY, api_key)
+
+
+def get_openai_api_key() -> str:
+    """Get OpenAI API key with priority: env var > keyring."""
+    if api_key := os.environ.get(ENV_OPENAI_API_KEY):
+        return api_key
+    return _get_provider_api_key_from_keyring(KEYRING_OPENAI_API_KEY)
+
+
+def set_openai_api_key(api_key: str) -> bool:
+    """Store OpenAI API key in system keyring."""
+    return _set_provider_api_key_in_keyring(KEYRING_OPENAI_API_KEY, api_key)
+
+
+def get_gemini_api_key() -> str:
+    """Get Gemini API key with priority: env var > keyring."""
+    if api_key := os.environ.get(ENV_GEMINI_API_KEY):
+        return api_key
+    return _get_provider_api_key_from_keyring(KEYRING_GEMINI_API_KEY)
+
+
+def set_gemini_api_key(api_key: str) -> bool:
+    """Store Gemini API key in system keyring."""
+    return _set_provider_api_key_in_keyring(KEYRING_GEMINI_API_KEY, api_key)
+
+
+def get_openrouter_api_key() -> str:
+    """Get OpenRouter API key with priority: env var > keyring."""
+    if api_key := os.environ.get(ENV_OPENROUTER_API_KEY):
+        return api_key
+    return _get_provider_api_key_from_keyring(KEYRING_OPENROUTER_API_KEY)
+
+
+def set_openrouter_api_key(api_key: str) -> bool:
+    """Store OpenRouter API key in system keyring."""
+    return _set_provider_api_key_in_keyring(KEYRING_OPENROUTER_API_KEY, api_key)
+
+
+def is_api_key_from_env(provider: str) -> bool:
+    """Check if a provider's API key is set via environment variable.
+
+    Args:
+        provider: Provider name (anthropic, openai, gemini, openrouter)
+
+    Returns:
+        True if the API key is set via environment variable
+    """
+    env_map = {
+        "anthropic": ENV_ANTHROPIC_API_KEY,
+        "openai": ENV_OPENAI_API_KEY,
+        "gemini": ENV_GEMINI_API_KEY,
+        "openrouter": ENV_OPENROUTER_API_KEY,
+    }
+    env_var = env_map.get(provider)
+    return bool(env_var and os.environ.get(env_var))
+
+
 def get_llm_api_key() -> str:
-    """Get LLM API key with priority: environment variable > keyring.
+    """Get LLM API key for the currently selected provider.
+
+    Priority: provider-specific env var > provider-specific keyring > legacy env var > legacy keyring
 
     Returns:
         API key string, or empty string if not configured
     """
-    # Environment variable takes priority
+    settings = load_settings()
+    provider = settings.llm_provider
+
+    # Route to provider-specific getter
+    if provider == "anthropic":
+        return get_anthropic_api_key()
+    elif provider == "openai":
+        return get_openai_api_key()
+    elif provider == "gemini":
+        return get_gemini_api_key()
+    elif provider == "openrouter":
+        return get_openrouter_api_key()
+
+    # For local/ollama, no key needed
+    # Fall back to legacy key for backwards compatibility
     if api_key := os.environ.get(ENV_LLM_API_KEY):
         return api_key
-    # Fall back to keyring
     return _get_llm_api_key_from_keyring()
 
 
 def set_llm_api_key(api_key: str) -> bool:
-    """Store LLM API key in system keyring.
+    """Store LLM API key in system keyring (legacy function).
 
     Args:
         api_key: The API key to store

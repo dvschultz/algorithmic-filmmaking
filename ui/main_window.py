@@ -1042,9 +1042,14 @@ class MainWindow(QMainWindow):
 
     def _on_chat_provider_changed(self, provider: str):
         """Handle provider selection change."""
+        from core.llm_client import get_default_model
+
         logger.info(f"Chat provider changed to: {provider}")
         # Update settings
         self.settings.llm_provider = provider
+        # Also update the model to the default for this provider
+        self.settings.llm_model = get_default_model(provider)
+        logger.info(f"Chat model set to: {self.settings.llm_model}")
         # Note: Not auto-saving to allow temporary changes during session
 
     def _on_download_requested_from_tab(self, url: str):

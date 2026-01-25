@@ -40,6 +40,20 @@ from core.settings import (
     ENV_EXPORT_DIR,
     ENV_SENSITIVITY,
     ENV_WHISPER_MODEL,
+    # LLM API key functions and constants
+    ENV_ANTHROPIC_API_KEY,
+    ENV_OPENAI_API_KEY,
+    ENV_GEMINI_API_KEY,
+    ENV_OPENROUTER_API_KEY,
+    get_anthropic_api_key,
+    set_anthropic_api_key,
+    get_openai_api_key,
+    set_openai_api_key,
+    get_gemini_api_key,
+    set_gemini_api_key,
+    get_openrouter_api_key,
+    set_openrouter_api_key,
+    is_api_key_from_env,
 )
 from ui.theme import theme
 
@@ -486,6 +500,101 @@ class SettingsDialog(QDialog):
         tab = QWidget()
         layout = QVBoxLayout(tab)
 
+        # LLM API Keys group
+        llm_group = QGroupBox("LLM Provider API Keys")
+        llm_layout = QVBoxLayout(llm_group)
+
+        # Anthropic API Key
+        anthropic_layout = QHBoxLayout()
+        self.anthropic_api_key_lbl = QLabel("Anthropic:")
+        self.anthropic_api_key_lbl.setFixedWidth(100)
+        anthropic_layout.addWidget(self.anthropic_api_key_lbl)
+
+        self.anthropic_api_key_edit = QLineEdit()
+        self.anthropic_api_key_edit.setEchoMode(QLineEdit.Password)
+        self.anthropic_api_key_edit.setPlaceholderText("sk-ant-...")
+        anthropic_layout.addWidget(self.anthropic_api_key_edit)
+
+        self.anthropic_show_btn = QPushButton("Show")
+        self.anthropic_show_btn.setCheckable(True)
+        self.anthropic_show_btn.toggled.connect(
+            lambda show: self._toggle_llm_key_visibility(self.anthropic_api_key_edit, self.anthropic_show_btn, show)
+        )
+        anthropic_layout.addWidget(self.anthropic_show_btn)
+
+        llm_layout.addLayout(anthropic_layout)
+
+        # OpenAI API Key
+        openai_layout = QHBoxLayout()
+        self.openai_api_key_lbl = QLabel("OpenAI:")
+        self.openai_api_key_lbl.setFixedWidth(100)
+        openai_layout.addWidget(self.openai_api_key_lbl)
+
+        self.openai_api_key_edit = QLineEdit()
+        self.openai_api_key_edit.setEchoMode(QLineEdit.Password)
+        self.openai_api_key_edit.setPlaceholderText("sk-...")
+        openai_layout.addWidget(self.openai_api_key_edit)
+
+        self.openai_show_btn = QPushButton("Show")
+        self.openai_show_btn.setCheckable(True)
+        self.openai_show_btn.toggled.connect(
+            lambda show: self._toggle_llm_key_visibility(self.openai_api_key_edit, self.openai_show_btn, show)
+        )
+        openai_layout.addWidget(self.openai_show_btn)
+
+        llm_layout.addLayout(openai_layout)
+
+        # Gemini API Key
+        gemini_layout = QHBoxLayout()
+        self.gemini_api_key_lbl = QLabel("Gemini:")
+        self.gemini_api_key_lbl.setFixedWidth(100)
+        gemini_layout.addWidget(self.gemini_api_key_lbl)
+
+        self.gemini_api_key_edit = QLineEdit()
+        self.gemini_api_key_edit.setEchoMode(QLineEdit.Password)
+        self.gemini_api_key_edit.setPlaceholderText("AIza...")
+        gemini_layout.addWidget(self.gemini_api_key_edit)
+
+        self.gemini_show_btn = QPushButton("Show")
+        self.gemini_show_btn.setCheckable(True)
+        self.gemini_show_btn.toggled.connect(
+            lambda show: self._toggle_llm_key_visibility(self.gemini_api_key_edit, self.gemini_show_btn, show)
+        )
+        gemini_layout.addWidget(self.gemini_show_btn)
+
+        llm_layout.addLayout(gemini_layout)
+
+        # OpenRouter API Key
+        openrouter_layout = QHBoxLayout()
+        self.openrouter_api_key_lbl = QLabel("OpenRouter:")
+        self.openrouter_api_key_lbl.setFixedWidth(100)
+        openrouter_layout.addWidget(self.openrouter_api_key_lbl)
+
+        self.openrouter_api_key_edit = QLineEdit()
+        self.openrouter_api_key_edit.setEchoMode(QLineEdit.Password)
+        self.openrouter_api_key_edit.setPlaceholderText("sk-or-...")
+        openrouter_layout.addWidget(self.openrouter_api_key_edit)
+
+        self.openrouter_show_btn = QPushButton("Show")
+        self.openrouter_show_btn.setCheckable(True)
+        self.openrouter_show_btn.toggled.connect(
+            lambda show: self._toggle_llm_key_visibility(self.openrouter_api_key_edit, self.openrouter_show_btn, show)
+        )
+        openrouter_layout.addWidget(self.openrouter_show_btn)
+
+        llm_layout.addLayout(openrouter_layout)
+
+        # LLM Help text
+        llm_help_label = QLabel(
+            "API keys are stored securely in your system keyring. "
+            "Environment variables (e.g., ANTHROPIC_API_KEY) take priority."
+        )
+        llm_help_label.setWordWrap(True)
+        llm_help_label.setStyleSheet(f"color: {theme().text_secondary};")
+        llm_layout.addWidget(llm_help_label)
+
+        layout.addWidget(llm_group)
+
         # YouTube API group
         youtube_group = QGroupBox("YouTube Data API")
         youtube_layout = QVBoxLayout(youtube_group)
@@ -546,6 +655,15 @@ class SettingsDialog(QDialog):
         layout.addStretch()
 
         return tab
+
+    def _toggle_llm_key_visibility(self, edit: QLineEdit, btn: QPushButton, show: bool):
+        """Toggle visibility for an LLM API key field."""
+        if show:
+            edit.setEchoMode(QLineEdit.Normal)
+            btn.setText("Hide")
+        else:
+            edit.setEchoMode(QLineEdit.Password)
+            btn.setText("Show")
 
     def _toggle_api_key_visibility(self, show: bool):
         """Toggle API key visibility."""
@@ -714,6 +832,50 @@ class SettingsDialog(QDialog):
         if is_from_environment("youtube_api_key"):
             self.show_key_btn.setEnabled(False)
 
+        # LLM API Keys - load from keyring
+        self.anthropic_api_key_edit.setText(get_anthropic_api_key())
+        self.openai_api_key_edit.setText(get_openai_api_key())
+        self.gemini_api_key_edit.setText(get_gemini_api_key())
+        self.openrouter_api_key_edit.setText(get_openrouter_api_key())
+
+        # Apply environment override indicators for LLM API keys
+        self._apply_llm_env_override("anthropic", self.anthropic_api_key_edit,
+                                      self.anthropic_api_key_lbl, self.anthropic_show_btn,
+                                      ENV_ANTHROPIC_API_KEY)
+        self._apply_llm_env_override("openai", self.openai_api_key_edit,
+                                      self.openai_api_key_lbl, self.openai_show_btn,
+                                      ENV_OPENAI_API_KEY)
+        self._apply_llm_env_override("gemini", self.gemini_api_key_edit,
+                                      self.gemini_api_key_lbl, self.gemini_show_btn,
+                                      ENV_GEMINI_API_KEY)
+        self._apply_llm_env_override("openrouter", self.openrouter_api_key_edit,
+                                      self.openrouter_api_key_lbl, self.openrouter_show_btn,
+                                      ENV_OPENROUTER_API_KEY)
+
+    def _apply_llm_env_override(self, provider: str, edit: QLineEdit, label: QLabel,
+                                 show_btn: QPushButton, env_var: str):
+        """Apply environment override indicator for an LLM API key field."""
+        if not is_api_key_from_env(provider):
+            return
+
+        # Update label to show "(env)"
+        current_text = label.text()
+        if not current_text.endswith("(env)"):
+            label.setText(f"{current_text} (env)")
+            label.setStyleSheet(f"color: {theme().accent_blue};")
+
+        # Disable the field
+        edit.setEnabled(False)
+        edit.setToolTip(
+            f"🔒 This value is set by environment variable:\n"
+            f"   {env_var}\n\n"
+            "To change this, unset the environment variable or modify it."
+        )
+        edit.setStyleSheet(f"background-color: {theme().surface_highlight};")
+
+        # Disable show/hide button
+        show_btn.setEnabled(False)
+
     def _save_to_settings(self):
         """Save UI values to settings object."""
         # Paths
@@ -853,7 +1015,20 @@ class SettingsDialog(QDialog):
 
         self._ensure_directories()
         self._save_to_settings()
+        self._save_llm_api_keys()
         self.accept()
+
+    def _save_llm_api_keys(self):
+        """Save LLM API keys to keyring (only if not from environment)."""
+        # Only save if not overridden by environment variable
+        if not is_api_key_from_env("anthropic"):
+            set_anthropic_api_key(self.anthropic_api_key_edit.text())
+        if not is_api_key_from_env("openai"):
+            set_openai_api_key(self.openai_api_key_edit.text())
+        if not is_api_key_from_env("gemini"):
+            set_gemini_api_key(self.gemini_api_key_edit.text())
+        if not is_api_key_from_env("openrouter"):
+            set_openrouter_api_key(self.openrouter_api_key_edit.text())
 
     def get_settings(self) -> Settings:
         """Get the current settings (after dialog closes)."""

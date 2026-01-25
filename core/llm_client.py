@@ -21,6 +21,28 @@ class ProviderType(Enum):
     OPENROUTER = "openrouter"
 
 
+# Default models for each provider
+DEFAULT_MODELS = {
+    "local": "qwen3:8b",
+    "openai": "gpt-4o-mini",
+    "anthropic": "claude-3-5-sonnet-20241022",
+    "gemini": "gemini-1.5-flash",
+    "openrouter": "anthropic/claude-3.5-sonnet",
+}
+
+
+def get_default_model(provider: str) -> str:
+    """Get the default model for a provider.
+
+    Args:
+        provider: Provider key (local, openai, anthropic, gemini, openrouter)
+
+    Returns:
+        Default model string for the provider
+    """
+    return DEFAULT_MODELS.get(provider, "qwen3:8b")
+
+
 @dataclass
 class ProviderConfig:
     """Configuration for an LLM provider."""
