@@ -86,7 +86,7 @@ def detect(
     # Import heavy dependencies only when needed (keeps CLI startup fast)
     try:
         from core.scene_detect import SceneDetector, DetectionConfig
-        from core.project import save_project
+        from core.project import Project
     except ImportError as e:
         exit_with(ExitCode.DEPENDENCY_MISSING, f"Missing dependency: {e}")
 
@@ -111,15 +111,12 @@ def detect(
         # Update min_scene_length based on actual FPS
         detection_config.min_scene_length = int(min_scene_length * source.fps)
 
-        # Save project
-        success = save_project(
-            filepath=output,
-            sources=[source],
-            clips=clips,
-            sequence=None,
-        )
+        # Create project using Project class
+        project = Project.new(name=output.stem)
+        project.add_source(source)
+        project.add_clips(clips)
 
-        if not success:
+        if not project.save(output):
             exit_with(ExitCode.GENERAL_ERROR, "Failed to save project file")
 
         # Output result

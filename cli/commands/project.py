@@ -37,13 +37,13 @@ def info(ctx: click.Context, project_file: Path) -> None:
         scene_ripper --json project info my_project.json
     """
     try:
-        from core.project import load_project, ProjectLoadError
+        from core.project import Project, ProjectLoadError
     except ImportError as e:
         exit_with(ExitCode.DEPENDENCY_MISSING, f"Missing dependency: {e}")
 
     try:
-        sources, clips, sequence, metadata, ui_state = load_project(
-            filepath=project_file,
+        proj = Project.load(
+            project_file,
             missing_source_callback=lambda path, sid: None,  # Skip missing sources
         )
     except ProjectLoadError as e:
@@ -53,19 +53,19 @@ def info(ctx: click.Context, project_file: Path) -> None:
 
     # Build result
     result = {
-        "project_name": metadata.name,
-        "project_id": metadata.id,
-        "version": metadata.version,
-        "created_at": metadata.created_at,
-        "modified_at": metadata.modified_at,
-        "source_count": len(sources),
-        "clip_count": len(clips),
-        "sequence_clips": len(sequence.get_all_clips()) if sequence else 0,
-        "sequence_duration_seconds": sequence.duration_seconds if sequence else 0,
+        "project_name": proj.metadata.name,
+        "project_id": proj.metadata.id,
+        "version": proj.metadata.version,
+        "created_at": proj.metadata.created_at,
+        "modified_at": proj.metadata.modified_at,
+        "source_count": len(proj.sources),
+        "clip_count": len(proj.clips),
+        "sequence_clips": len(proj.sequence.get_all_clips()) if proj.sequence else 0,
+        "sequence_duration_seconds": proj.sequence.duration_seconds if proj.sequence else 0,
     }
 
     # Add source details
-    if sources:
+    if proj.sources:
         result["sources"] = [
             {
                 "id": s.id,
@@ -75,7 +75,7 @@ def info(ctx: click.Context, project_file: Path) -> None:
                 "resolution": f"{s.width}x{s.height}",
                 "exists": s.file_path.exists(),
             }
-            for s in sources
+            for s in proj.sources
         ]
 
     as_json = ctx.obj.get("json", False)
@@ -115,13 +115,13 @@ def list_clips(
         scene_ripper project list-clips project.json -n 10
     """
     try:
-        from core.project import load_project, ProjectLoadError
+        from core.project import Project, ProjectLoadError
     except ImportError as e:
         exit_with(ExitCode.DEPENDENCY_MISSING, f"Missing dependency: {e}")
 
     try:
-        sources, clips, sequence, metadata, ui_state = load_project(
-            filepath=project_file,
+        proj = Project.load(
+            project_file,
             missing_source_callback=lambda path, sid: None,
         )
     except ProjectLoadError as e:
@@ -129,10 +129,8 @@ def list_clips(
     except FileNotFoundError:
         exit_with(ExitCode.FILE_NOT_FOUND, f"Project file not found: {project_file}")
 
-    # Build source lookup
-    sources_by_id = {s.id: s for s in sources}
-
     # Apply filter if specified
+    clips = proj.clips
     filtered_clips = clips
     if filter_expr:
         filtered_clips = _apply_filter(clips, filter_expr)
@@ -151,7 +149,7 @@ def list_clips(
             "clips": [],
         }
         for clip in filtered_clips:
-            source = sources_by_id.get(clip.source_id)
+            source = proj.sources_by_id.get(clip.source_id)
             fps = source.fps if source else 30.0
             clip_data = {
                 "id": clip.id,
@@ -178,7 +176,7 @@ def list_clips(
         headers = ["ID", "Start", "End", "Duration", "Shot Type", "Transcript"]
         rows = []
         for clip in filtered_clips:
-            source = sources_by_id.get(clip.source_id)
+            source = proj.sources_by_id.get(clip.source_id)
             fps = source.fps if source else 30.0
             start = _format_time(clip.start_time(fps))
             end = _format_time(clip.end_time(fps))
@@ -232,14 +230,13 @@ def add_to_sequence(
         )
 
     try:
-        from core.project import load_project, save_project, ProjectLoadError
-        from models.sequence import Sequence, SequenceClip
+        from core.project import Project, ProjectLoadError
     except ImportError as e:
         exit_with(ExitCode.DEPENDENCY_MISSING, f"Missing dependency: {e}")
 
     try:
-        sources, clips, sequence, metadata, ui_state = load_project(
-            filepath=project_file,
+        proj = Project.load(
+            project_file,
             missing_source_callback=lambda path, sid: None,
         )
     except ProjectLoadError as e:
@@ -247,19 +244,16 @@ def add_to_sequence(
     except FileNotFoundError:
         exit_with(ExitCode.FILE_NOT_FOUND, f"Project file not found: {project_file}")
 
-    # Build clip lookup
-    clips_by_id = {c.id: c for c in clips}
-    # Also allow matching by prefix
-    for c in clips:
+    # Build clip lookup (also allow matching by prefix)
+    clips_by_id = dict(proj.clips_by_id)
+    for c in proj.clips:
         clips_by_id[c.id[:8]] = c
-
-    sources_by_id = {s.id: s for s in sources}
 
     # Determine which clips to add
     if add_all:
-        clips_to_add = clips
+        clips_to_add = proj.clips
     elif filter_expr:
-        clips_to_add = _apply_filter(clips, filter_expr)
+        clips_to_add = _apply_filter(proj.clips, filter_expr)
     else:
         clips_to_add = []
         for cid in clip_ids:
@@ -271,61 +265,25 @@ def add_to_sequence(
     if not clips_to_add:
         exit_with(ExitCode.VALIDATION_ERROR, "No clips to add")
 
-    # Create or update sequence
-    if sequence is None:
-        # Determine FPS from first source
-        first_source = sources[0] if sources else None
-        fps = first_source.fps if first_source else 30.0
-        sequence = Sequence(name=metadata.name, fps=fps)
-
-    # Calculate starting position (end of current sequence)
-    current_frame = sequence.duration_frames
-
-    # Add clips to sequence
-    track = sequence.tracks[0]  # Use first track
-    added_count = 0
-
-    for clip in clips_to_add:
-        source = sources_by_id.get(clip.source_id)
-        if not source:
-            continue
-
-        seq_clip = SequenceClip(
-            source_clip_id=clip.id,
-            source_id=clip.source_id,
-            track_index=0,
-            start_frame=current_frame,
-            in_point=clip.start_frame,
-            out_point=clip.end_frame,
-        )
-        track.add_clip(seq_clip)
-        current_frame += seq_clip.duration_frames
-        added_count += 1
+    # Use Project's add_to_sequence method
+    clip_ids_to_add = [c.id for c in clips_to_add]
+    proj.add_to_sequence(clip_ids_to_add)
 
     # Save updated project
-    success = save_project(
-        filepath=project_file,
-        sources=sources,
-        clips=clips,
-        sequence=sequence,
-        ui_state=ui_state,
-        metadata=metadata,
-    )
-
-    if not success:
+    if not proj.save():
         exit_with(ExitCode.GENERAL_ERROR, "Failed to save project")
 
     result = {
-        "added_clips": added_count,
-        "total_sequence_clips": len(sequence.get_all_clips()),
-        "sequence_duration_seconds": sequence.duration_seconds,
+        "added_clips": len(clips_to_add),
+        "total_sequence_clips": len(proj.sequence.get_all_clips()) if proj.sequence else 0,
+        "sequence_duration_seconds": proj.sequence.duration_seconds if proj.sequence else 0,
     }
 
     as_json = ctx.obj.get("json", False)
     if as_json:
         output_result(result, as_json=True)
     else:
-        output_success(f"Added {added_count} clips to sequence")
+        output_success(f"Added {len(clips_to_add)} clips to sequence")
         output_result(result, as_json=False)
 
 

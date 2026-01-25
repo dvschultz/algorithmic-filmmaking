@@ -51,10 +51,12 @@ from core.youtube_api import (
 from core.project import (
     save_project,
     load_project,
+    Project,
     ProjectMetadata,
     ProjectLoadError,
     MissingSourceError,
 )
+from ui.project_adapter import ProjectSignalAdapter
 from ui.settings_dialog import SettingsDialog
 from ui.tabs import CollectTab, CutTab, AnalyzeTab, GenerateTab, SequenceTab, RenderTab
 from ui.theme import theme
@@ -475,13 +477,12 @@ class MainWindow(QMainWindow):
         # Apply theme preference from settings
         theme().set_preference(self.settings.theme_preference)
 
-        # State
-        self.sources: list[Source] = []  # All sources in the library
-        self.sources_by_id: dict[str, Source] = {}  # For fast lookup
-        self.current_source: Optional[Source] = None  # Currently active source
-        self.clips: list[Clip] = []  # All clips from all analyzed sources
-        self.clips_by_id: dict[str, Clip] = {}  # For fast lookup
-        self.clips_by_source: dict[str, list[Clip]] = {}  # Clips organized by source ID
+        # Project state - single source of truth
+        self.project = Project.new()
+        self._project_adapter = ProjectSignalAdapter(self.project, self)
+
+        # UI state (not part of Project - these are GUI-specific selections)
+        self.current_source: Optional[Source] = None  # Currently active/selected source
         self._analyze_queue: deque[Source] = deque()  # Queue for batch analysis (O(1) popleft)
         self._analyze_queue_total: int = 0  # Total count for progress display
         self.detection_worker: Optional[DetectionWorker] = None
@@ -502,10 +503,8 @@ class MainWindow(QMainWindow):
         self._shot_type_finished_handled = False
         self._transcription_finished_handled = False
 
-        # Project state
-        self.current_project_path: Optional[Path] = None
-        self.project_metadata: Optional["ProjectMetadata"] = None
-        self._is_dirty: bool = False
+        # Project path tracking (for backwards compatibility - delegates to project)
+        # Note: self.project.path is the actual storage
 
         logger.info("Setting up UI...")
         self._setup_ui()
@@ -520,6 +519,59 @@ class MainWindow(QMainWindow):
         self._playback_timer.setInterval(33)  # ~30fps update rate
         self._playback_timer.timeout.connect(self._on_playback_tick)
         logger.info(f"=== MAINWINDOW INIT COMPLETE (instance #{self._instance_id}) ===")
+
+    # --- Property delegates to Project for backward compatibility ---
+
+    @property
+    def sources(self) -> list[Source]:
+        """All source videos in the project (delegates to Project)."""
+        return self.project.sources
+
+    @property
+    def sources_by_id(self) -> dict[str, Source]:
+        """Source lookup by ID (delegates to Project)."""
+        return self.project.sources_by_id
+
+    @property
+    def clips(self) -> list[Clip]:
+        """All clips from all analyzed sources (delegates to Project)."""
+        return self.project.clips
+
+    @property
+    def clips_by_id(self) -> dict[str, Clip]:
+        """Clip lookup by ID (delegates to Project)."""
+        return self.project.clips_by_id
+
+    @property
+    def clips_by_source(self) -> dict[str, list[Clip]]:
+        """Clips organized by source ID (delegates to Project)."""
+        return self.project.clips_by_source
+
+    @property
+    def current_project_path(self) -> Optional[Path]:
+        """Current project file path (delegates to Project)."""
+        return self.project.path
+
+    @current_project_path.setter
+    def current_project_path(self, value: Optional[Path]) -> None:
+        """Set current project file path (delegates to Project)."""
+        self.project.path = value
+
+    @property
+    def project_metadata(self) -> Optional[ProjectMetadata]:
+        """Project metadata (delegates to Project)."""
+        return self.project.metadata
+
+    @project_metadata.setter
+    def project_metadata(self, value: Optional[ProjectMetadata]) -> None:
+        """Set project metadata (delegates to Project)."""
+        if value is not None:
+            self.project.metadata = value
+
+    @property
+    def _is_dirty(self) -> bool:
+        """Whether project has unsaved changes (delegates to Project)."""
+        return self.project.is_dirty
 
     def _setup_ui(self):
         """Set up the user interface."""
@@ -854,10 +906,9 @@ class MainWindow(QMainWindow):
                 self.status_bar.showMessage(f"Video already in library: {path.name}")
                 return
 
-        # Create new source
+        # Create new source and add to project
         source = Source(file_path=path)
-        self.sources.append(source)
-        self.sources_by_id[source.id] = source
+        self.project.add_source(source)
 
         # Add to CollectTab grid
         self.collect_tab.add_source(source)
@@ -865,7 +916,6 @@ class MainWindow(QMainWindow):
         # Generate thumbnail for the source
         self._generate_source_thumbnail(source)
 
-        self._mark_dirty()
         self.status_bar.showMessage(f"Added to library: {path.name}")
 
     def _generate_source_thumbnail(self, source: Source):
@@ -1117,8 +1167,7 @@ class MainWindow(QMainWindow):
         else:
             # Add to library
             source = Source(file_path=path)
-            self.sources.append(source)
-            self.sources_by_id[source.id] = source
+            self.project.add_source(source)
             self.collect_tab.add_source(source)
 
             # Generate thumbnail
@@ -1126,7 +1175,6 @@ class MainWindow(QMainWindow):
 
             # Select it
             self._select_source(source)
-            self._mark_dirty()
 
         # Set sensitivity on Cut tab
         self.cut_tab.set_sensitivity(self.settings.default_sensitivity)
@@ -1376,14 +1424,8 @@ class MainWindow(QMainWindow):
             source.analyzed = True
 
         # Add new clips to the collection (don't replace existing clips from other sources)
-        # First, remove any existing clips from this source (re-analysis case)
-        self.clips = [c for c in self.clips if c.source_id != self.current_source.id]
-        # Add the new clips
-        self.clips.extend(clips)
-        # Rebuild lookup dictionaries
-        self.clips_by_id = {clip.id: clip for clip in self.clips}
-        self.clips_by_source[self.current_source.id] = clips
-        self._mark_dirty()
+        # This replaces any existing clips from this source (handles re-analysis case)
+        self.project.replace_source_clips(self.current_source.id, clips)
         self._update_window_title()
 
         # Remove old clips for this source from the Cut tab UI (handles re-analysis case)
@@ -2068,13 +2110,13 @@ class MainWindow(QMainWindow):
 
     def _mark_dirty(self):
         """Mark the project as having unsaved changes."""
-        if not self._is_dirty:
-            self._is_dirty = True
+        if not self.project.is_dirty:
+            self.project.mark_dirty()
             self._update_window_title()
 
     def _mark_clean(self):
         """Mark the project as having no unsaved changes."""
-        self._is_dirty = False
+        self.project.mark_clean()
         self._update_window_title()
 
     def _update_window_title(self):
@@ -2248,33 +2290,22 @@ class MainWindow(QMainWindow):
 
         self.status_bar.showMessage("Saving project...")
 
-        # Get sequence from timeline
-        sequence = self.sequence_tab.timeline.get_sequence()
+        # Get sequence from timeline and update project
+        self.project.sequence = self.sequence_tab.timeline.get_sequence()
 
-        # Get UI state
-        ui_state = {
+        # Get UI state and update project
+        self.project.ui_state = {
             "sensitivity": self.cut_tab.sensitivity_slider.value() / 10.0,
             "analyze_clip_ids": self.analyze_tab.get_clip_ids(),
         }
 
-        # Create or update metadata
-        if self.project_metadata is None:
-            self.project_metadata = ProjectMetadata(name=filepath.stem)
-        else:
-            self.project_metadata.name = filepath.stem
+        # Update metadata name to match filename
+        self.project.metadata.name = filepath.stem
 
-        success = save_project(
-            filepath=filepath,
-            sources=self.sources,  # Save all sources in library
-            clips=self.clips,
-            sequence=sequence,
-            ui_state=ui_state,
-            metadata=self.project_metadata,
-        )
+        # Save using Project class
+        success = self.project.save(filepath)
 
         if success:
-            self.current_project_path = filepath
-            self._mark_clean()
             self._add_recent_project(filepath)
             self.status_bar.showMessage(f"Project saved: {filepath.name}")
         else:
@@ -2310,7 +2341,7 @@ class MainWindow(QMainWindow):
                 raise ProjectLoadError("Load cancelled by user")
 
         try:
-            sources, clips, sequence, metadata, ui_state = load_project(
+            loaded_project = Project.load(
                 filepath,
                 missing_source_callback=handle_missing_source,
             )
@@ -2319,7 +2350,7 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("Load failed")
             return
 
-        if not sources:
+        if not loaded_project.sources:
             QMessageBox.warning(
                 self,
                 "Load Project",
@@ -2328,35 +2359,22 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("Load failed - no sources")
             return
 
-        # Clear existing state
+        # Clear existing UI state
         self._clear_project_state()
 
-        # Restore all sources to library
-        self.sources = sources
-        self.sources_by_id = {source.id: source for source in sources}
-
-        # Build source lookup for clip mapping
-        sources_by_id = {s.id: s for s in sources}
+        # Set the new project
+        self.project = loaded_project
+        self._project_adapter.set_project(self.project)
 
         # Add all sources to CollectTab
-        for source in sources:
+        for source in self.sources:
             self.collect_tab.add_source(source)
             # Generate source thumbnails if missing
             if not source.thumbnail_path or not source.thumbnail_path.exists():
                 self._generate_source_thumbnail(source)
 
         # Set first source as current (for backwards compatibility)
-        self.current_source = sources[0]
-
-        # Restore clips
-        self.clips = clips
-        self.clips_by_id = {clip.id: clip for clip in clips}
-        # Organize clips by source
-        self.clips_by_source = {}
-        for clip in clips:
-            if clip.source_id not in self.clips_by_source:
-                self.clips_by_source[clip.source_id] = []
-            self.clips_by_source[clip.source_id].append(clip)
+        self.current_source = self.sources[0]
 
         # Set lookups for Analyze tab
         self.analyze_tab.set_lookups(self.clips_by_id, self.sources_by_id)
@@ -2368,8 +2386,8 @@ class MainWindow(QMainWindow):
         self.cut_tab.set_clips(current_source_clips)
 
         # Add clips to Cut tab browser with their correct source
-        for clip in clips:
-            clip_source = sources_by_id.get(clip.source_id)
+        for clip in self.clips:
+            clip_source = self.sources_by_id.get(clip.source_id)
             if not clip_source:
                 logging.warning(f"Clip {clip.id} references unknown source {clip.source_id}")
                 continue
@@ -2383,10 +2401,13 @@ class MainWindow(QMainWindow):
                 self.cut_tab.update_clip_transcript(clip.id, clip.transcript)
 
         # Restore sequence (pass all sources for multi-source playback)
-        if sequence:
-            self.sequence_tab.timeline.load_sequence(sequence, sources_by_id, clips)
+        if self.project.sequence:
+            self.sequence_tab.timeline.load_sequence(
+                self.project.sequence, self.sources_by_id, self.clips
+            )
 
         # Restore UI state
+        ui_state = self.project.ui_state
         if "sensitivity" in ui_state:
             self.cut_tab.set_sensitivity(ui_state["sensitivity"])
 
@@ -2399,28 +2420,25 @@ class MainWindow(QMainWindow):
                 self.analyze_tab.add_clips(valid_clip_ids)
                 logger.info(f"Restored {len(valid_clip_ids)} clips to Analyze tab")
 
-        # Store project state
-        self.current_project_path = filepath
-        self.project_metadata = metadata
-        self._mark_clean()
         self._add_recent_project(filepath)
 
         # Update UI
         self._on_sequence_changed()  # Updates Export EDL menu state
         self._update_window_title()
-        self.status_bar.showMessage(f"Project loaded: {filepath.name} ({len(clips)} clips)")
+        self.status_bar.showMessage(
+            f"Project loaded: {filepath.name} ({len(self.clips)} clips)"
+        )
 
         # Regenerate missing thumbnails
         self._regenerate_missing_thumbnails()
 
     def _clear_project_state(self):
         """Clear current project state."""
-        self.sources = []
-        self.sources_by_id = {}
+        # Clear project data
+        self.project.clear()
+
+        # Clear UI state
         self.current_source = None
-        self.clips = []
-        self.clips_by_id = {}
-        self.clips_by_source = {}
         self._analyze_queue = deque()
         self._analyze_queue_total = 0
         self.queue_label.setVisible(False)
