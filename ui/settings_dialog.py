@@ -209,7 +209,7 @@ class SettingsDialog(QDialog):
         # Tab widget
         self.tabs = QTabWidget()
         self.tabs.addTab(self._create_paths_tab(), "Paths")
-        self.tabs.addTab(self._create_detection_tab(), "Detection")
+        self.tabs.addTab(self._create_detection_tab(), "Models")
         self.tabs.addTab(self._create_export_tab(), "Export")
         self.tabs.addTab(self._create_api_keys_tab(), "API Keys")
         self.tabs.addTab(self._create_appearance_tab(), "Appearance")
@@ -284,8 +284,37 @@ class SettingsDialog(QDialog):
         tab = QWidget()
         layout = QVBoxLayout(tab)
 
-        # Detection defaults group
-        detection_group = QGroupBox("Detection Defaults")
+        # Auto-analysis group (first)
+        analysis_group = QGroupBox("Automatic Analysis")
+        analysis_layout = QVBoxLayout(analysis_group)
+
+        self.auto_colors_check = QCheckBox("Analyze colors after detection")
+        self.auto_colors_check.setToolTip(
+            "Automatically extract dominant colors from each clip thumbnail"
+        )
+        analysis_layout.addWidget(self.auto_colors_check)
+
+        self.auto_shots_check = QCheckBox("Classify shot types after detection")
+        self.auto_shots_check.setToolTip(
+            "Automatically classify each clip as wide shot, medium shot, close-up, etc."
+        )
+        analysis_layout.addWidget(self.auto_shots_check)
+
+        self.auto_transcribe_check = QCheckBox("Transcribe speech after detection")
+        self.auto_transcribe_check.setToolTip(
+            "Automatically transcribe speech after scene detection completes.\n"
+            "Disable to manually trigger transcription from the Analyze tab."
+        )
+        analysis_layout.addWidget(self.auto_transcribe_check)
+
+        note_label = QLabel("Note: Changes apply to future detections only")
+        note_label.setStyleSheet(f"color: {theme().text_secondary}; font-style: italic;")
+        analysis_layout.addWidget(note_label)
+
+        layout.addWidget(analysis_group)
+
+        # Shot Detection group (second)
+        detection_group = QGroupBox("Shot Detection")
         detection_layout = QVBoxLayout(detection_group)
 
         # Sensitivity slider
@@ -325,35 +354,6 @@ class SettingsDialog(QDialog):
         detection_layout.addLayout(length_layout)
 
         layout.addWidget(detection_group)
-
-        # Auto-analysis group
-        analysis_group = QGroupBox("Automatic Analysis")
-        analysis_layout = QVBoxLayout(analysis_group)
-
-        self.auto_colors_check = QCheckBox("Analyze colors after detection")
-        self.auto_colors_check.setToolTip(
-            "Automatically extract dominant colors from each clip thumbnail"
-        )
-        analysis_layout.addWidget(self.auto_colors_check)
-
-        self.auto_shots_check = QCheckBox("Classify shot types after detection")
-        self.auto_shots_check.setToolTip(
-            "Automatically classify each clip as wide shot, medium shot, close-up, etc."
-        )
-        analysis_layout.addWidget(self.auto_shots_check)
-
-        self.auto_transcribe_check = QCheckBox("Transcribe speech after detection")
-        self.auto_transcribe_check.setToolTip(
-            "Automatically transcribe speech after scene detection completes.\n"
-            "Disable to manually trigger transcription from the Analyze tab."
-        )
-        analysis_layout.addWidget(self.auto_transcribe_check)
-
-        note_label = QLabel("Note: Changes apply to future detections only")
-        note_label.setStyleSheet(f"color: {theme().text_secondary}; font-style: italic;")
-        analysis_layout.addWidget(note_label)
-
-        layout.addWidget(analysis_group)
 
         # Transcription group
         transcription_group = QGroupBox("Transcription")
