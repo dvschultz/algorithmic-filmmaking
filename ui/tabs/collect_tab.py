@@ -78,8 +78,8 @@ class CollectTab(BaseTab):
 
         toolbar.addSpacing(8)
 
-        # Analyze New button
-        self.analyze_btn = QPushButton("Analyze New Videos")
+        # Cut New button
+        self.analyze_btn = QPushButton("Cut New Videos")
         self.analyze_btn.setToolTip("Detect scenes in all unanalyzed videos")
         self.analyze_btn.setEnabled(False)
         self.analyze_btn.clicked.connect(self._on_analyze_click)
@@ -92,7 +92,7 @@ class CollectTab(BaseTab):
         self.videos_added.emit(paths)
 
     def _on_analyze_click(self):
-        """Handle Analyze New Videos button click."""
+        """Handle Cut New Videos button click."""
         # Emit with empty list to analyze all unanalyzed
         self.analyze_requested.emit([])
 
@@ -129,16 +129,16 @@ class CollectTab(BaseTab):
         else:
             self.count_label.setText(f"{count} videos")
 
-        # Update analyze button
+        # Update cut button
         if unanalyzed > 0:
             self.analyze_btn.setEnabled(True)
             if unanalyzed == 1:
-                self.analyze_btn.setText("Analyze 1 New Video")
+                self.analyze_btn.setText("Cut 1 New Video")
             else:
-                self.analyze_btn.setText(f"Analyze {unanalyzed} New Videos")
+                self.analyze_btn.setText(f"Cut {unanalyzed} New Videos")
         else:
             self.analyze_btn.setEnabled(False)
-            self.analyze_btn.setText("Analyze New Videos")
+            self.analyze_btn.setText("Cut New Videos")
 
     # Public methods for MainWindow to call
 
