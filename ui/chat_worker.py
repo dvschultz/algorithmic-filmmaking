@@ -539,8 +539,18 @@ class ChatAgentWorker(QThread):
             System prompt string
         """
         from core.llm_client import ProviderType
+        from core.settings import load_settings
 
-        prompt = """You are an AI assistant for Scene Ripper, a video scene detection and editing tool.
+        # Get settings for default paths
+        settings = load_settings()
+
+        prompt = f"""You are an AI assistant for Scene Ripper, a video scene detection and editing tool.
+
+DEFAULT PATHS (from user settings):
+- Download directory: {settings.download_dir}
+- Export directory: {settings.export_dir}
+
+When downloading videos, use these defaults - do NOT ask the user for a path unless they specify one.
 
 You help users create video projects by:
 - Detecting scenes in videos

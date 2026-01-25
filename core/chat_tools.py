@@ -527,7 +527,7 @@ def search_youtube(query: str, max_results: int = 10) -> dict:
 
 
 @tools.register(
-    description="Download a video from YouTube or Vimeo URL. Returns the downloaded file path.",
+    description="Download a video from YouTube or Vimeo URL. Returns the downloaded file path. Uses the default download directory from settings unless output_dir is specified.",
     requires_project=False,
     modifies_gui_state=False
 )
