@@ -2,7 +2,7 @@
 title: "feat: Agent-Native Architecture Phases 2-4"
 type: feat
 date: 2026-01-25
-status: Ready for Review
+status: Implemented
 depends_on: Phase 1 (CLI Interface) - COMPLETED
 ---
 
@@ -593,21 +593,21 @@ def get_config() -> Settings:
 
 ### Phase 3: Environment Variables
 
-- [ ] All 7 environment variables are supported
-- [ ] Environment variables take precedence over JSON config
-- [ ] Invalid environment variable values log warnings and use defaults
-- [ ] GUI Settings dialog shows "(from environment)" for env-overridden values
-- [ ] `SCENE_RIPPER_CONFIG` allows custom config file path
+- [x] All 7 environment variables are supported
+- [x] Environment variables take precedence over JSON config
+- [x] Invalid environment variable values log warnings and use defaults
+- [x] GUI Settings dialog shows "(from environment)" for env-overridden values
+- [x] `SCENE_RIPPER_CONFIG` allows custom config file path
 
 ### Phase 4: JSON Settings
 
-- [ ] `load_settings()` works without Qt initialized
-- [ ] Settings saved to `~/.config/scene-ripper/config.json` with schema version
-- [ ] File permissions are 0600 (Unix) for security
-- [ ] Atomic writes prevent corruption
-- [ ] YouTube API key stays in keyring, not JSON
-- [ ] Migration from QSettings happens automatically on first GUI launch
-- [ ] CLI and GUI use the same settings module (`core/settings`)
+- [x] `load_settings()` works without Qt initialized
+- [x] Settings saved to `~/.config/scene-ripper/config.json` with schema version
+- [x] File permissions are 0600 (Unix) for security
+- [x] Atomic writes prevent corruption
+- [x] YouTube API key stays in keyring, not JSON
+- [x] Migration from QSettings happens automatically on first GUI launch
+- [x] CLI and GUI use the same settings module (`core/settings`)
 
 ### Integration Tests
 

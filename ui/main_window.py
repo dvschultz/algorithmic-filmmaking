@@ -39,7 +39,7 @@ from core.dataset_export import export_dataset, DatasetExportConfig
 from core.edl_export import export_edl, EDLExportConfig
 from core.analysis.color import extract_dominant_colors
 from core.analysis.shots import classify_shot_type
-from core.settings import Settings, load_settings, save_settings
+from core.settings import Settings, load_settings, save_settings, migrate_from_qsettings
 from core.youtube_api import (
     YouTubeSearchClient,
     YouTubeSearchResult,
@@ -469,6 +469,10 @@ class MainWindow(QMainWindow):
         screen = self.screen().availableGeometry()
         self.resize(screen.width(), screen.height())
         self.setAcceptDrops(True)
+
+        # Migrate QSettings to JSON on first launch (if needed)
+        if migrate_from_qsettings():
+            logger.info("Settings migrated from QSettings to JSON")
 
         # Load settings
         self.settings = load_settings()

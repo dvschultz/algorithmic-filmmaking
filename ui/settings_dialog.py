@@ -29,9 +29,17 @@ from core.settings import (
     get_default_settings,
     get_cache_size,
     format_size,
+    is_from_environment,
+    get_env_overridden_settings,
     QUALITY_PRESETS,
     RESOLUTION_PRESETS,
     FPS_PRESETS,
+    ENV_YOUTUBE_API_KEY,
+    ENV_CACHE_DIR,
+    ENV_DOWNLOAD_DIR,
+    ENV_EXPORT_DIR,
+    ENV_SENSITIVITY,
+    ENV_WHISPER_MODEL,
 )
 from ui.theme import theme
 
@@ -80,6 +88,8 @@ class PathSelector(QWidget):
     def __init__(self, label: str, tooltip: str = "", parent=None):
         super().__init__(parent)
         self._base_tooltip = tooltip
+        self._is_env_override = False
+        self._env_var_name = ""
         self._setup_ui(label, tooltip)
 
     def _setup_ui(self, label: str, tooltip: str):
@@ -151,6 +161,36 @@ class PathSelector(QWidget):
         if not path.parent.exists():
             return False, f"Parent directory does not exist: {path.parent}"
         return True, ""
+
+    def set_from_environment(self, env_var_name: str):
+        """Mark this path as set from an environment variable.
+
+        This disables editing and shows an indicator.
+
+        Args:
+            env_var_name: Name of the environment variable (e.g., "SCENE_RIPPER_CACHE_DIR")
+        """
+        self._is_env_override = True
+        self._env_var_name = env_var_name
+
+        # Disable editing
+        self.path_edit.setReadOnly(True)
+        self.browse_btn.setEnabled(False)
+
+        # Update label to show "(from env)"
+        current_text = self.label.text()
+        if not current_text.endswith("(env)"):
+            self.label.setText(current_text.replace(":", " (env):"))
+            self.label.setStyleSheet(f"color: {theme().accent_blue};")
+
+        # Update tooltip
+        self.path_edit.setToolTip(
+            f"{self._base_tooltip}\n\n"
+            f"🔒 This value is set by environment variable:\n"
+            f"   {env_var_name}\n\n"
+            "To change this, unset the environment variable or modify it."
+        )
+        self.path_edit.setStyleSheet(f"background-color: {theme().surface_highlight};")
 
 
 class SettingsDialog(QDialog):
@@ -319,7 +359,8 @@ class SettingsDialog(QDialog):
 
         # Sensitivity slider
         sens_layout = QHBoxLayout()
-        sens_layout.addWidget(QLabel("Default Sensitivity:"))
+        self.sensitivity_lbl = QLabel("Default Sensitivity:")
+        sens_layout.addWidget(self.sensitivity_lbl)
 
         self.sensitivity_slider = QSlider(Qt.Horizontal)
         self.sensitivity_slider.setRange(10, 100)  # 1.0 to 10.0
@@ -361,7 +402,8 @@ class SettingsDialog(QDialog):
 
         # Model selection
         model_layout = QHBoxLayout()
-        model_layout.addWidget(QLabel("Whisper Model:"))
+        self.whisper_model_lbl = QLabel("Whisper Model:")
+        model_layout.addWidget(self.whisper_model_lbl)
 
         self.transcription_model_combo = QComboBox()
         self.transcription_model_combo.addItems([
@@ -482,7 +524,8 @@ class SettingsDialog(QDialog):
 
         # API Key input
         key_layout = QHBoxLayout()
-        key_layout.addWidget(QLabel("API Key:"))
+        self.youtube_api_key_lbl = QLabel("API Key:")
+        key_layout.addWidget(self.youtube_api_key_lbl)
 
         self.youtube_api_key_edit = QLineEdit()
         self.youtube_api_key_edit.setEchoMode(QLineEdit.Password)
@@ -594,12 +637,50 @@ class SettingsDialog(QDialog):
             "Cannot clear cache while background operations are running."
         )
 
+    def _apply_env_indicator_to_widget(
+        self, widget: QWidget, label: QLabel, setting_name: str, env_var_name: str
+    ):
+        """Apply environment override indicator to a widget.
+
+        Args:
+            widget: The input widget (QLineEdit, QSlider, QComboBox, etc.)
+            label: The associated label widget
+            setting_name: Name of the setting field
+            env_var_name: Name of the environment variable
+        """
+        if not is_from_environment(setting_name):
+            return
+
+        # Update label
+        current_text = label.text()
+        if not current_text.endswith("(env)"):
+            label.setText(current_text.replace(":", " (env):"))
+            label.setStyleSheet(f"color: {theme().accent_blue};")
+
+        # Disable the widget
+        widget.setEnabled(False)
+
+        # Set tooltip explaining the environment override
+        widget.setToolTip(
+            f"🔒 This value is set by environment variable:\n"
+            f"   {env_var_name}\n\n"
+            "To change this, unset the environment variable or modify it."
+        )
+
     def _load_settings(self):
         """Load current settings into UI controls."""
         # Paths
         self.cache_path.set_path(self.settings.thumbnail_cache_dir)
         self.download_path.set_path(self.settings.download_dir)
         self.export_path.set_path(self.settings.export_dir)
+
+        # Apply environment override indicators for paths
+        if is_from_environment("thumbnail_cache_dir"):
+            self.cache_path.set_from_environment(ENV_CACHE_DIR)
+        if is_from_environment("download_dir"):
+            self.download_path.set_from_environment(ENV_DOWNLOAD_DIR)
+        if is_from_environment("export_dir"):
+            self.export_path.set_from_environment(ENV_EXPORT_DIR)
 
         # Update cache size display
         self._update_cache_size()
@@ -609,6 +690,12 @@ class SettingsDialog(QDialog):
         self.min_length_spin.setValue(self.settings.min_scene_length_seconds)
         self.auto_colors_check.setChecked(self.settings.auto_analyze_colors)
         self.auto_shots_check.setChecked(self.settings.auto_classify_shots)
+
+        # Apply environment override indicator for sensitivity
+        self._apply_env_indicator_to_widget(
+            self.sensitivity_slider, self.sensitivity_lbl,
+            "default_sensitivity", ENV_SENSITIVITY
+        )
 
         # Export
         quality_map = {"high": 0, "medium": 1, "low": 2}
@@ -637,6 +724,12 @@ class SettingsDialog(QDialog):
 
         self.auto_transcribe_check.setChecked(self.settings.auto_transcribe)
 
+        # Apply environment override indicator for whisper model
+        self._apply_env_indicator_to_widget(
+            self.transcription_model_combo, self.whisper_model_lbl,
+            "transcription_model", ENV_WHISPER_MODEL
+        )
+
         # Appearance
         theme_map = {"system": 0, "light": 1, "dark": 2}
         self.theme_combo.setCurrentIndex(
@@ -647,6 +740,15 @@ class SettingsDialog(QDialog):
         self.youtube_api_key_edit.setText(self.settings.youtube_api_key)
         self.youtube_results_spin.setValue(self.settings.youtube_results_count)
         self.youtube_parallel_spin.setValue(self.settings.youtube_parallel_downloads)
+
+        # Apply environment override indicator for YouTube API key
+        self._apply_env_indicator_to_widget(
+            self.youtube_api_key_edit, self.youtube_api_key_lbl,
+            "youtube_api_key", ENV_YOUTUBE_API_KEY
+        )
+        # Also disable the show/hide button if from env
+        if is_from_environment("youtube_api_key"):
+            self.show_key_btn.setEnabled(False)
 
     def _save_to_settings(self):
         """Save UI values to settings object."""
