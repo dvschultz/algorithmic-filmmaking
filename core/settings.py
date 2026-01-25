@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 # Keyring service name for secure credential storage
 KEYRING_SERVICE = "com.scene-ripper.app"
 KEYRING_YOUTUBE_KEY = "youtube_api_key"
+KEYRING_LLM_API_KEY = "llm_api_key"
 
 # Config schema version
 CONFIG_VERSION = "1.0"
@@ -34,6 +35,13 @@ ENV_EXPORT_DIR = "SCENE_RIPPER_EXPORT_DIR"
 ENV_CONFIG_PATH = "SCENE_RIPPER_CONFIG"
 ENV_SENSITIVITY = "SCENE_RIPPER_SENSITIVITY"
 ENV_WHISPER_MODEL = "SCENE_RIPPER_WHISPER_MODEL"
+
+# LLM environment variables
+ENV_LLM_PROVIDER = "SCENE_RIPPER_LLM_PROVIDER"
+ENV_LLM_MODEL = "SCENE_RIPPER_LLM_MODEL"
+ENV_LLM_API_KEY = "SCENE_RIPPER_LLM_API_KEY"
+ENV_LLM_API_BASE = "SCENE_RIPPER_LLM_API_BASE"
+ENV_LLM_TEMPERATURE = "SCENE_RIPPER_LLM_TEMPERATURE"
 
 
 def _get_api_key_from_keyring() -> str:
@@ -63,6 +71,60 @@ def _set_api_key_in_keyring(api_key: str) -> bool:
     except Exception as e:
         logger.warning(f"Could not write to keyring: {e}")
         return False
+
+
+def _get_llm_api_key_from_keyring() -> str:
+    """Retrieve LLM API key from system keyring."""
+    try:
+        import keyring
+        key = keyring.get_password(KEYRING_SERVICE, KEYRING_LLM_API_KEY)
+        return key or ""
+    except Exception as e:
+        logger.debug(f"Could not read LLM API key from keyring: {e}")
+        return ""
+
+
+def _set_llm_api_key_in_keyring(api_key: str) -> bool:
+    """Store LLM API key in system keyring."""
+    try:
+        import keyring
+        if api_key:
+            keyring.set_password(KEYRING_SERVICE, KEYRING_LLM_API_KEY, api_key)
+        else:
+            # Delete the key if empty
+            try:
+                keyring.delete_password(KEYRING_SERVICE, KEYRING_LLM_API_KEY)
+            except keyring.errors.PasswordDeleteError:
+                pass  # Key didn't exist
+        return True
+    except Exception as e:
+        logger.warning(f"Could not write LLM API key to keyring: {e}")
+        return False
+
+
+def get_llm_api_key() -> str:
+    """Get LLM API key with priority: environment variable > keyring.
+
+    Returns:
+        API key string, or empty string if not configured
+    """
+    # Environment variable takes priority
+    if api_key := os.environ.get(ENV_LLM_API_KEY):
+        return api_key
+    # Fall back to keyring
+    return _get_llm_api_key_from_keyring()
+
+
+def set_llm_api_key(api_key: str) -> bool:
+    """Store LLM API key in system keyring.
+
+    Args:
+        api_key: The API key to store
+
+    Returns:
+        True if save succeeded
+    """
+    return _set_llm_api_key_in_keyring(api_key)
 
 
 def _get_videos_dir() -> Path:
@@ -182,6 +244,12 @@ class Settings:
     youtube_results_count: int = 25  # 10-50
     youtube_parallel_downloads: int = 2  # 1-3
 
+    # LLM Settings (API key stored in keyring, not here)
+    llm_provider: str = "local"  # local, openai, anthropic, gemini, openrouter
+    llm_model: str = "qwen3:8b"  # Default for local Ollama
+    llm_api_base: str = ""  # For local/custom endpoints (default: http://localhost:11434 for Ollama)
+    llm_temperature: float = 0.7
+
     def get_quality_preset(self) -> dict:
         """Get FFmpeg parameters for current quality setting."""
         return QUALITY_PRESETS.get(self.export_quality, QUALITY_PRESETS["medium"])
@@ -274,6 +342,26 @@ def _apply_env_overrides(settings: Settings) -> Settings:
         settings.transcription_model = model
         _env_overridden.add("transcription_model")
 
+    # LLM environment variables
+    if llm_provider := os.environ.get(ENV_LLM_PROVIDER):
+        settings.llm_provider = llm_provider
+        _env_overridden.add("llm_provider")
+
+    if llm_model := os.environ.get(ENV_LLM_MODEL):
+        settings.llm_model = llm_model
+        _env_overridden.add("llm_model")
+
+    if llm_api_base := os.environ.get(ENV_LLM_API_BASE):
+        settings.llm_api_base = llm_api_base
+        _env_overridden.add("llm_api_base")
+
+    if llm_temperature := os.environ.get(ENV_LLM_TEMPERATURE):
+        try:
+            settings.llm_temperature = float(llm_temperature)
+            _env_overridden.add("llm_temperature")
+        except ValueError:
+            logger.warning(f"Invalid {ENV_LLM_TEMPERATURE}: {llm_temperature}")
+
     return settings
 
 
@@ -344,6 +432,17 @@ def _load_from_json(config_path: Path, settings: Settings) -> Settings:
         if "parallel_downloads" in youtube:
             settings.youtube_parallel_downloads = int(youtube["parallel_downloads"])
 
+    # LLM section (API key comes from keyring, not JSON)
+    if llm := data.get("llm"):
+        if val := llm.get("provider"):
+            settings.llm_provider = val
+        if val := llm.get("model"):
+            settings.llm_model = val
+        if val := llm.get("api_base"):
+            settings.llm_api_base = val
+        if "temperature" in llm:
+            settings.llm_temperature = float(llm["temperature"])
+
     return settings
 
 
@@ -387,6 +486,13 @@ def _settings_to_json(settings: Settings) -> dict:
             "parallel_downloads": settings.youtube_parallel_downloads,
             # Note: API key is NOT stored here - it goes to keyring
         },
+        "llm": {
+            "provider": settings.llm_provider,
+            "model": settings.llm_model,
+            "api_base": settings.llm_api_base,
+            "temperature": settings.llm_temperature,
+            # Note: API key is NOT stored here - it goes to keyring
+        },
     }
 
 
@@ -405,7 +511,7 @@ def load_settings() -> Settings:
     if config_path.exists():
         settings = _load_from_json(config_path, settings)
 
-    # 2. Load API key from keyring (if not already set from JSON, which doesn't store it)
+    # 2. Load API keys from keyring (if not already set from JSON, which doesn't store them)
     if not settings.youtube_api_key:
         settings.youtube_api_key = _get_api_key_from_keyring()
 
