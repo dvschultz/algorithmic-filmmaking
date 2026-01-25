@@ -6,8 +6,9 @@ import os
 import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
+from functools import cached_property
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 import uuid
 
 from models.clip import Source, Clip
@@ -379,3 +380,345 @@ def load_project(
 def get_project_name_from_path(filepath: Path) -> str:
     """Extract project name from filepath."""
     return filepath.stem
+
+
+class Project:
+    """Application state independent of UI.
+
+    This is the single source of truth for project data.
+    Both CLI and GUI use this class to manage state.
+
+    Observer Pattern:
+        Register callbacks via add_observer() to receive state change notifications.
+        Events are strings like "source_added", "clips_added", etc.
+        The GUI wraps these callbacks with Qt signals via ProjectSignalAdapter.
+    """
+
+    def __init__(
+        self,
+        path: Optional[Path] = None,
+        metadata: Optional[ProjectMetadata] = None,
+        sources: Optional[list[Source]] = None,
+        clips: Optional[list[Clip]] = None,
+        sequence: Optional[Sequence] = None,
+        ui_state: Optional[dict] = None,
+    ):
+        """Initialize a Project.
+
+        Args:
+            path: File path (None if unsaved)
+            metadata: Project metadata
+            sources: List of source videos
+            clips: List of detected clips
+            sequence: Timeline sequence
+            ui_state: Optional UI state dict
+        """
+        self.path = path
+        self.metadata = metadata or ProjectMetadata()
+        self._sources = sources or []
+        self._clips = clips or []
+        self.sequence = sequence
+        self.ui_state = ui_state or {}
+
+        self._dirty: bool = False
+        self._observers: list[Callable[[str, Any], None]] = []
+
+    # --- Data access (read-only lists) ---
+
+    @property
+    def sources(self) -> list[Source]:
+        """All source videos in the project."""
+        return self._sources
+
+    @property
+    def clips(self) -> list[Clip]:
+        """All clips from all analyzed sources."""
+        return self._clips
+
+    # --- Cached property indexes ---
+
+    @cached_property
+    def sources_by_id(self) -> dict[str, Source]:
+        """Source lookup by ID."""
+        return {s.id: s for s in self._sources}
+
+    @cached_property
+    def clips_by_id(self) -> dict[str, Clip]:
+        """Clip lookup by ID."""
+        return {c.id: c for c in self._clips}
+
+    @cached_property
+    def clips_by_source(self) -> dict[str, list[Clip]]:
+        """Clips organized by source ID."""
+        result: dict[str, list[Clip]] = {}
+        for clip in self._clips:
+            result.setdefault(clip.source_id, []).append(clip)
+        return result
+
+    def _invalidate_caches(self) -> None:
+        """Clear cached properties when data changes."""
+        for attr in ("sources_by_id", "clips_by_id", "clips_by_source"):
+            self.__dict__.pop(attr, None)
+
+    # --- Observer pattern ---
+
+    def add_observer(self, callback: Callable[[str, Any], None]) -> None:
+        """Register an observer for state changes.
+
+        Args:
+            callback: Function called with (event_name, data) on state changes.
+                Events: source_added, clips_added, clips_updated, sequence_changed,
+                        project_saved, project_loaded
+        """
+        self._observers.append(callback)
+
+    def remove_observer(self, callback: Callable[[str, Any], None]) -> None:
+        """Unregister an observer."""
+        if callback in self._observers:
+            self._observers.remove(callback)
+
+    def _notify_observers(self, event: str, data: Any = None) -> None:
+        """Notify all observers of state change."""
+        for observer in self._observers:
+            try:
+                observer(event, data)
+            except Exception as e:
+                logger.warning(f"Observer error: {e}")
+
+    # --- State operations ---
+
+    def add_source(self, source: Source) -> None:
+        """Add a source video to the project.
+
+        Args:
+            source: Source to add
+        """
+        self._sources.append(source)
+        self._invalidate_caches()
+        self._dirty = True
+        self._notify_observers("source_added", source)
+
+    def remove_source(self, source_id: str) -> Optional[Source]:
+        """Remove a source by ID.
+
+        Also removes all clips associated with this source.
+
+        Args:
+            source_id: ID of the source to remove
+
+        Returns:
+            The removed source, or None if not found
+        """
+        source = self.sources_by_id.get(source_id)
+        if source is None:
+            return None
+
+        self._sources.remove(source)
+        # Remove associated clips
+        self._clips = [c for c in self._clips if c.source_id != source_id]
+        self._invalidate_caches()
+        self._dirty = True
+        self._notify_observers("source_removed", source)
+        return source
+
+    def add_clips(self, clips: list[Clip]) -> None:
+        """Add detected clips to the project.
+
+        Args:
+            clips: Clips to add
+        """
+        self._clips.extend(clips)
+        self._invalidate_caches()
+        self._dirty = True
+        self._notify_observers("clips_added", clips)
+
+    def update_clips(self, clips: list[Clip]) -> None:
+        """Update existing clips (e.g., after color analysis).
+
+        The clips should already be in the project (same IDs).
+
+        Args:
+            clips: Updated clips
+        """
+        # Clips are updated in-place, just notify and mark dirty
+        self._dirty = True
+        self._notify_observers("clips_updated", clips)
+
+    def replace_source_clips(self, source_id: str, new_clips: list[Clip]) -> None:
+        """Replace all clips for a source (e.g., after re-detection).
+
+        Args:
+            source_id: The source whose clips are being replaced
+            new_clips: New clips for this source
+        """
+        self._clips = [c for c in self._clips if c.source_id != source_id]
+        self._clips.extend(new_clips)
+        self._invalidate_caches()
+        self._dirty = True
+        self._notify_observers("clips_added", new_clips)
+
+    def add_to_sequence(self, clip_ids: list[str]) -> None:
+        """Add clips to the sequence by ID.
+
+        Args:
+            clip_ids: IDs of clips to add to the sequence
+        """
+        from models.sequence import SequenceClip
+
+        if self.sequence is None:
+            # Create sequence with FPS from first source
+            fps = self._sources[0].fps if self._sources else 30.0
+            self.sequence = Sequence(name=self.metadata.name, fps=fps)
+
+        # Get current end frame
+        current_frame = self.sequence.duration_frames
+        track = self.sequence.tracks[0]
+
+        for clip_id in clip_ids:
+            clip = self.clips_by_id.get(clip_id)
+            if clip is None:
+                logger.warning(f"Clip not found: {clip_id}")
+                continue
+
+            source = self.sources_by_id.get(clip.source_id)
+            if source is None:
+                logger.warning(f"Source not found for clip: {clip_id}")
+                continue
+
+            seq_clip = SequenceClip(
+                source_clip_id=clip.id,
+                source_id=clip.source_id,
+                track_index=0,
+                start_frame=current_frame,
+                in_point=clip.start_frame,
+                out_point=clip.end_frame,
+            )
+            track.add_clip(seq_clip)
+            current_frame += seq_clip.duration_frames
+
+        self._dirty = True
+        self._notify_observers("sequence_changed", clip_ids)
+
+    # --- Dirty state tracking ---
+
+    @property
+    def is_dirty(self) -> bool:
+        """Check if project has unsaved changes."""
+        return self._dirty
+
+    def mark_dirty(self) -> None:
+        """Mark project as having unsaved changes."""
+        self._dirty = True
+
+    def mark_clean(self) -> None:
+        """Mark project as saved (no unsaved changes)."""
+        self._dirty = False
+
+    # --- Persistence ---
+
+    def save(
+        self,
+        path: Optional[Path] = None,
+        progress_callback: Optional[Callable[[float, str], None]] = None,
+    ) -> bool:
+        """Save project to file.
+
+        Args:
+            path: Path to save to (uses self.path if not specified)
+            progress_callback: Optional progress callback
+
+        Returns:
+            True if save succeeded
+
+        Raises:
+            ValueError: If no path specified and project has no path
+        """
+        save_path = path or self.path
+        if save_path is None:
+            raise ValueError("No path specified for save")
+
+        success = save_project(
+            filepath=save_path,
+            sources=self._sources,
+            clips=self._clips,
+            sequence=self.sequence,
+            ui_state=self.ui_state,
+            metadata=self.metadata,
+            progress_callback=progress_callback,
+        )
+
+        if success:
+            self.path = save_path
+            self.mark_clean()
+            self._notify_observers("project_saved", save_path)
+
+        return success
+
+    @classmethod
+    def load(
+        cls,
+        path: Path,
+        missing_source_callback: Optional[Callable[[Path, str], Optional[Path]]] = None,
+        progress_callback: Optional[Callable[[float, str], None]] = None,
+    ) -> "Project":
+        """Load project from file.
+
+        Args:
+            path: Path to the project file
+            missing_source_callback: Callback when source video is missing
+            progress_callback: Optional progress callback
+
+        Returns:
+            Loaded Project instance
+
+        Raises:
+            ProjectLoadError: If the project file cannot be loaded
+            MissingSourceError: If a source video is missing
+        """
+        sources, clips, sequence, metadata, ui_state = load_project(
+            filepath=path,
+            missing_source_callback=missing_source_callback,
+            progress_callback=progress_callback,
+        )
+
+        project = cls(
+            path=path,
+            metadata=metadata,
+            sources=sources,
+            clips=clips,
+            sequence=sequence,
+            ui_state=ui_state,
+        )
+        project._dirty = False
+        return project
+
+    @classmethod
+    def new(cls, name: str = "Untitled Project") -> "Project":
+        """Create a new empty project.
+
+        Args:
+            name: Project name
+
+        Returns:
+            New empty Project instance
+        """
+        return cls(metadata=ProjectMetadata(name=name))
+
+    def clear(self) -> None:
+        """Clear all project data (for 'New Project')."""
+        self._sources = []
+        self._clips = []
+        self.sequence = None
+        self.ui_state = {}
+        self.path = None
+        self.metadata = ProjectMetadata()
+        self._dirty = False
+        self._invalidate_caches()
+        self._notify_observers("project_cleared", None)
+
+    def __repr__(self) -> str:
+        return (
+            f"Project(name={self.metadata.name!r}, "
+            f"sources={len(self._sources)}, clips={len(self._clips)}, "
+            f"dirty={self._dirty})"
+        )
