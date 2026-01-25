@@ -388,6 +388,28 @@ class ChatPanel(QWidget):
         self.example_prompts.reset_guard()
         self._example_prompts_visible = True
 
+    def update_project_state(
+        self,
+        has_sources: bool = False,
+        clip_count: int = 0,
+        has_analyzed: bool = False,
+        sequence_length: int = 0
+    ):
+        """Update project state to show relevant example prompts.
+
+        Args:
+            has_sources: Whether project has video sources
+            clip_count: Number of clips in project
+            has_analyzed: Whether clips have been analyzed
+            sequence_length: Number of clips in the sequence
+        """
+        self.example_prompts.update_project_state(
+            has_sources=has_sources,
+            clip_count=clip_count,
+            has_analyzed=has_analyzed,
+            sequence_length=sequence_length
+        )
+
     def set_provider(self, provider: str):
         """Set the selected provider.
 

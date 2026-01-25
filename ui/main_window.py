@@ -1067,6 +1067,33 @@ class MainWindow(QMainWindow):
         logger.info(f"Chat model set to: {self.settings.llm_model}")
         # Note: Not auto-saving to allow temporary changes during session
 
+    def _update_chat_project_state(self):
+        """Update chat panel with current project state for context-aware prompts."""
+        if not hasattr(self, 'chat_panel'):
+            return
+
+        has_sources = len(self.project.sources) > 0
+        clip_count = len(self.project.clips)
+
+        # Check if any clips have been analyzed (shot_type or transcript)
+        has_analyzed = any(
+            clip.shot_type or clip.transcript
+            for clip in self.project.clips
+        )
+
+        sequence_length = (
+            len(self.project.sequence.tracks[0].clips)
+            if self.project.sequence and self.project.sequence.tracks
+            else 0
+        )
+
+        self.chat_panel.update_project_state(
+            has_sources=has_sources,
+            clip_count=clip_count,
+            has_analyzed=has_analyzed,
+            sequence_length=sequence_length
+        )
+
     def _on_download_requested_from_tab(self, url: str):
         """Handle download request from Collect tab."""
         self._download_video(url)
@@ -1159,6 +1186,9 @@ class MainWindow(QMainWindow):
 
         # Generate thumbnail for the source
         self._generate_source_thumbnail(source)
+
+        # Update chat panel with project state (new source added)
+        self._update_chat_project_state()
 
         self.status_bar.showMessage(f"Added to library: {path.name}")
 
@@ -1269,6 +1299,9 @@ class MainWindow(QMainWindow):
         self.analyze_tab.set_analyzing(False)
         self.status_bar.showMessage(f"Shot type classification complete - {len(self.analyze_tab.get_clips())} clips")
 
+        # Update chat panel with project state (clips now have shot types)
+        self._update_chat_project_state()
+
     def _on_transcribe_from_tab(self):
         """Handle manual transcription request from Analyze tab."""
         clips = self.analyze_tab.get_clips()
@@ -1367,6 +1400,9 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(False)
         self.analyze_tab.set_analyzing(False)
         self.status_bar.showMessage(f"Transcription complete - {len(self.analyze_tab.get_clips())} clips")
+
+        # Update chat panel with project state (clips now have transcripts)
+        self._update_chat_project_state()
 
     # "Analyze All" handlers - sequential colors → shots → transcribe
 
@@ -1966,6 +2002,9 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(False)
         self.status_bar.showMessage(f"Ready - {len(self.clips)} scenes detected")
 
+        # Update chat panel with project state for context-aware prompts
+        self._update_chat_project_state()
+
         # Continue with next source in batch queue (deferred to let worker cleanup)
         QTimer.singleShot(0, self._start_next_analysis)
 
@@ -2038,6 +2077,9 @@ class MainWindow(QMainWindow):
         sequence = self.sequence_tab.timeline.get_sequence()
         has_clips = sequence.duration_frames > 0
         self.export_edl_action.setEnabled(has_clips)
+
+        # Update chat panel with project state (sequence may have changed)
+        self._update_chat_project_state()
 
     # --- Playback methods ---
 
@@ -2768,6 +2810,7 @@ class MainWindow(QMainWindow):
         # Update UI
         self._on_sequence_changed()  # Updates Export EDL menu state
         self._update_window_title()
+        self._update_chat_project_state()  # Context-aware chat prompts
         self.status_bar.showMessage(
             f"Project loaded: {filepath.name} ({len(self.clips)} clips)"
         )

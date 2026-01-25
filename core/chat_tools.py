@@ -19,6 +19,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional, get_type_hints
 
+from core.youtube_api import (
+    YouTubeSearchClient,
+    YouTubeAPIError,
+    QuotaExceededError,
+    InvalidAPIKeyError,
+)
+from core.downloader import VideoDownloader
+from core.settings import load_settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -472,39 +481,49 @@ def detect_scenes(
     modifies_gui_state=False
 )
 def search_youtube(query: str, max_results: int = 10) -> dict:
-    """Search YouTube via CLI."""
-    cmd = [
-        "scene_ripper", "search", query,
-        "--max-results", str(max_results),
-        "--json"
-    ]
+    """Search YouTube using the Python API."""
+    # Get API key from settings
+    settings = load_settings()
+    api_key = settings.youtube_api_key
+
+    if not api_key:
+        return {
+            "error": "YouTube API key not configured. Add it in Settings > YouTube API Key."
+        }
 
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=TOOL_TIMEOUTS.get("search_youtube", 30)
-        )
-    except subprocess.TimeoutExpired:
-        return {"error": "YouTube search timed out."}
-    except FileNotFoundError:
-        return {"error": "scene_ripper CLI not found."}
+        client = YouTubeSearchClient(api_key)
+        result = client.search(query, max_results=min(max_results, 50))
 
-    if result.returncode != 0:
-        return {"error": result.stderr or "Search failed"}
+        # Convert to serializable format
+        videos = []
+        for video in result.videos:
+            videos.append({
+                "video_id": video.video_id,
+                "title": video.title,
+                "channel": video.channel_title,
+                "duration": video.duration_str,
+                "url": video.youtube_url,
+                "thumbnail": video.thumbnail_url,
+                "view_count": video.view_count,
+            })
 
-    # Parse JSON output
-    try:
-        data = json.loads(result.stdout)
         return {
             "success": True,
             "query": query,
-            "results": data.get("results", []),
-            "total_results": data.get("total_results", 0)
+            "results": videos,
+            "total_results": result.total_results
         }
-    except json.JSONDecodeError:
-        return {"error": "Failed to parse search results"}
+
+    except QuotaExceededError:
+        return {"error": "YouTube API quota exceeded. Try again tomorrow."}
+    except InvalidAPIKeyError:
+        return {"error": "Invalid YouTube API key. Check your settings."}
+    except YouTubeAPIError as e:
+        return {"error": f"YouTube API error: {e}"}
+    except Exception as e:
+        logger.exception("YouTube search failed")
+        return {"error": f"Search failed: {e}"}
 
 
 @tools.register(
@@ -513,46 +532,46 @@ def search_youtube(query: str, max_results: int = 10) -> dict:
     modifies_gui_state=False
 )
 def download_video(url: str, output_dir: Optional[str] = None) -> dict:
-    """Download video via CLI."""
-    # Validate output directory if provided
+    """Download video using the Python API."""
+    # Determine download directory
     if output_dir:
         valid, error, validated_dir = _validate_path(output_dir)
         if not valid:
             return {"error": f"Invalid output directory: {error}"}
-        output_dir = str(validated_dir)
-
-    cmd = ["scene_ripper", "download", url]
-    if output_dir:
-        cmd.extend(["--output-dir", output_dir])
+        download_path = validated_dir
+    else:
+        # Use settings download directory
+        settings = load_settings()
+        download_path = settings.download_dir
 
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=TOOL_TIMEOUTS.get("download_video", 1800)
-        )
-    except subprocess.TimeoutExpired:
-        return {"error": "Download timed out. The video may be too large."}
-    except FileNotFoundError:
-        return {"error": "scene_ripper CLI not found."}
+        downloader = VideoDownloader(download_dir=download_path)
 
-    if result.returncode != 0:
-        return {"error": result.stderr or "Download failed"}
+        # Validate URL first
+        valid, error = downloader.is_valid_url(url)
+        if not valid:
+            return {"error": error}
 
-    # Try to extract file path from output
-    output_lines = result.stdout.strip().split("\n")
-    file_path = None
-    for line in output_lines:
-        if "File:" in line:
-            file_path = line.split("File:")[-1].strip()
-            break
+        # Download the video
+        result = downloader.download(url)
 
-    return {
-        "success": True,
-        "file_path": file_path,
-        "message": result.stdout.strip()
-    }
+        if not result.success:
+            return {"error": result.error or "Download failed"}
+
+        return {
+            "success": True,
+            "file_path": str(result.file_path) if result.file_path else None,
+            "title": result.title,
+            "duration": result.duration,
+            "message": f"Downloaded: {result.title}"
+        }
+
+    except RuntimeError as e:
+        # yt-dlp not found or other runtime errors
+        return {"error": str(e)}
+    except Exception as e:
+        logger.exception("Video download failed")
+        return {"error": f"Download failed: {e}"}
 
 
 @tools.register(

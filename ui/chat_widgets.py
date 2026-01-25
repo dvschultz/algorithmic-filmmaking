@@ -4,7 +4,10 @@ Provides:
 - MessageBubble: Static message display (user or assistant)
 - StreamingBubble: Accumulates streaming text from LLM
 - ToolIndicator: Shows tool execution status
+- ExamplePromptsWidget: Clickable example prompts with random cycling
 """
+
+import random
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
@@ -341,22 +344,139 @@ class ToolIndicator(QFrame):
 
 
 class ExamplePromptsWidget(QWidget):
-    """Displays clickable example prompts when chat is empty."""
+    """Displays clickable example prompts when chat is empty.
+
+    Shows a random selection of prompts from a pool, cycling through
+    new prompts each time the widget is reset. Prompts are filtered
+    based on current project state to show relevant suggestions.
+    """
 
     prompt_clicked = Signal(str)  # Emits the prompt text when clicked
 
-    # Example prompts showcasing agent capabilities
-    PROMPTS = [
-        "Show me all clips in this project",
-        "Find close-up shots with speech",
-        "Analyze colors in the first 5 clips",
-        "Add all wide shots to the sequence",
-    ]
+    # How many prompts to show at once
+    NUM_DISPLAY = 4
+
+    # Project state requirements for prompt categories
+    # "empty" = no sources, "has_sources" = sources but no clips,
+    # "has_clips" = clips exist, "analyzed" = clips have analysis,
+    # "has_sequence" = sequence has clips, "always" = show anytime
+    PROMPTS_BY_STATE = {
+        # === Empty Project - Import/Search ===
+        "empty": [
+            "Search YouTube for 'nature documentary b-roll'",
+            "Find videos about 'cinematic transitions'",
+            "Search for 'drone footage mountains'",
+            "Look up 'slow motion water' on YouTube",
+            "Find 'urban timelapse' videos",
+            "Download this YouTube video: [paste URL]",
+        ],
+
+        # === Has Sources - Need Scene Detection ===
+        "has_sources": [
+            "Detect scenes in my video",
+            "Split this video into clips",
+            "Run scene detection with high sensitivity",
+            "Find all the cuts in my footage",
+            "Show me the project summary",
+            "List all my video sources",
+        ],
+
+        # === Has Clips - Can Analyze or Filter ===
+        "has_clips": [
+            "Show me all clips in this project",
+            "How many clips do I have?",
+            "What's the total duration of my project?",
+            "Find clips longer than 10 seconds",
+            "Show me all short clips under 3 seconds",
+            "Find clips between 5 and 15 seconds",
+            "Show me the longest clips in my project",
+            "Add the first 10 clips to the timeline",
+            # Analysis prompts
+            "Analyze colors in my project",
+            "What are the dominant colors in my clips?",
+            "Run color analysis on this project",
+            "Classify the shot types in my project",
+            "Run shot analysis on my clips",
+            "Transcribe the speech in my clips",
+            "Run speech recognition on my video",
+        ],
+
+        # === Analyzed Clips - Full Filtering ===
+        "analyzed": [
+            "Find all the close-up shots",
+            "Show me all wide shots",
+            "Find medium shots in my project",
+            "List all establishing shots",
+            "Show me the extreme close-ups",
+            "Find clips with speech",
+            "Show me clips without any dialogue",
+            "Find all talking head shots",
+            "Find close-up shots with speech",
+            "Show me wide shots longer than 5 seconds",
+            "Find medium shots without dialogue",
+            "Show me short close-ups under 3 seconds",
+            "Add all wide shots to the sequence",
+            "Put the close-ups in the timeline",
+            "Build a sequence from all speech clips",
+            "Find close-up shots and add them to the timeline",
+            "Find speech clips and export them",
+        ],
+
+        # === Has Sequence - Export/Modify ===
+        "has_sequence": [
+            "Export my sequence clips",
+            "Show me what's in the sequence",
+            "Clear the sequence and start over",
+        ],
+
+        # === Always Available ===
+        "always": [
+            "Show me the project summary",
+            "Export all clips to my desktop",
+            "Search YouTube for b-roll and download the best result",
+        ],
+    }
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._click_handled = False
+        # Project state tracking
+        self._has_sources = False
+        self._clip_count = 0
+        self._has_analyzed = False
+        self._sequence_length = 0
+        self._selected_prompts = self._select_random_prompts()
+        self._prompts_container = None
         self._setup_ui()
+
+    def _get_available_prompts(self) -> list[str]:
+        """Get prompts relevant to current project state."""
+        prompts = list(self.PROMPTS_BY_STATE["always"])  # Always include these
+
+        if not self._has_sources:
+            # Empty project - show import/search prompts
+            prompts.extend(self.PROMPTS_BY_STATE["empty"])
+        elif self._clip_count == 0:
+            # Has sources but no clips - need scene detection
+            prompts.extend(self.PROMPTS_BY_STATE["has_sources"])
+        else:
+            # Has clips
+            prompts.extend(self.PROMPTS_BY_STATE["has_clips"])
+
+            if self._has_analyzed:
+                # Clips are analyzed - show filtering prompts
+                prompts.extend(self.PROMPTS_BY_STATE["analyzed"])
+
+            if self._sequence_length > 0:
+                # Has sequence - show sequence-related prompts
+                prompts.extend(self.PROMPTS_BY_STATE["has_sequence"])
+
+        return prompts
+
+    def _select_random_prompts(self) -> list[str]:
+        """Select random prompts from available pool based on project state."""
+        available = self._get_available_prompts()
+        return random.sample(available, min(self.NUM_DISPLAY, len(available)))
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -373,12 +493,31 @@ class ExamplePromptsWidget(QWidget):
         layout.addWidget(header)
 
         # Prompts container
-        prompts_container = QWidget()
-        prompts_layout = QVBoxLayout(prompts_container)
+        self._prompts_container = QWidget()
+        self._rebuild_prompt_buttons()
+        layout.addWidget(self._prompts_container)
+
+        # Add stretch to center vertically
+        layout.addStretch(1)
+
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+    def _rebuild_prompt_buttons(self):
+        """Rebuild the prompt buttons with current selection."""
+        # Clear existing layout if present
+        if self._prompts_container.layout():
+            old_layout = self._prompts_container.layout()
+            while old_layout.count():
+                item = old_layout.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+            QWidget().setLayout(old_layout)  # Orphan the old layout
+
+        prompts_layout = QVBoxLayout(self._prompts_container)
         prompts_layout.setContentsMargins(0, 0, 0, 0)
         prompts_layout.setSpacing(8)
 
-        for prompt_text in self.PROMPTS:
+        for prompt_text in self._selected_prompts:
             btn = QPushButton(prompt_text)
             btn.setCursor(Qt.PointingHandCursor)
             btn.setStyleSheet("""
@@ -406,13 +545,6 @@ class ExamplePromptsWidget(QWidget):
             btn.clicked.connect(lambda checked, text=prompt_text: self._on_button_clicked(text))
             prompts_layout.addWidget(btn)
 
-        layout.addWidget(prompts_container)
-
-        # Add stretch to center vertically
-        layout.addStretch(1)
-
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-
     def _on_button_clicked(self, prompt_text: str):
         """Handle prompt button click with guard pattern."""
         if self._click_handled:
@@ -420,6 +552,32 @@ class ExamplePromptsWidget(QWidget):
         self._click_handled = True
         self.prompt_clicked.emit(prompt_text)
 
+    def _refresh_prompts(self):
+        """Select new random prompts and rebuild buttons."""
+        self._selected_prompts = self._select_random_prompts()
+        self._rebuild_prompt_buttons()
+
+    def update_project_state(
+        self,
+        has_sources: bool = False,
+        clip_count: int = 0,
+        has_analyzed: bool = False,
+        sequence_length: int = 0
+    ):
+        """Update project state to filter relevant prompts.
+
+        Args:
+            has_sources: Whether project has video sources
+            clip_count: Number of clips in project
+            has_analyzed: Whether clips have been analyzed (shot type, speech, etc.)
+            sequence_length: Number of clips in the sequence
+        """
+        self._has_sources = has_sources
+        self._clip_count = clip_count
+        self._has_analyzed = has_analyzed
+        self._sequence_length = sequence_length
+
     def reset_guard(self):
-        """Reset the click guard (call when showing prompts again)."""
+        """Reset the click guard and refresh prompts."""
         self._click_handled = False
+        self._refresh_prompts()
