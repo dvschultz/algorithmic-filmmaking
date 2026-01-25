@@ -223,8 +223,6 @@ class Settings:
     # Detection defaults
     default_sensitivity: float = 3.0
     min_scene_length_seconds: float = 0.5
-    auto_analyze_colors: bool = True
-    auto_classify_shots: bool = True
 
     # Export defaults
     export_quality: str = "medium"  # high, medium, low
@@ -234,7 +232,6 @@ class Settings:
     # Transcription settings
     transcription_model: str = "small.en"  # tiny.en, small.en, medium.en, large-v3
     transcription_language: str = "en"  # en, auto, or specific language code
-    auto_transcribe: bool = True  # Auto-transcribe on detection
 
     # Appearance
     theme_preference: str = "system"  # system, light, dark
@@ -392,24 +389,20 @@ def _load_from_json(config_path: Path, settings: Settings) -> Settings:
             settings.export_dir = Path(val).expanduser()
 
     # Detection section
+    # Note: auto_analyze_colors, auto_classify_shots are deprecated and ignored
     if detection := data.get("detection"):
         if "default_sensitivity" in detection:
             settings.default_sensitivity = float(detection["default_sensitivity"])
         if "min_scene_length_seconds" in detection:
             settings.min_scene_length_seconds = float(detection["min_scene_length_seconds"])
-        if "auto_analyze_colors" in detection:
-            settings.auto_analyze_colors = bool(detection["auto_analyze_colors"])
-        if "auto_classify_shots" in detection:
-            settings.auto_classify_shots = bool(detection["auto_classify_shots"])
 
     # Transcription section
+    # Note: auto_transcribe is deprecated and ignored
     if transcription := data.get("transcription"):
         if val := transcription.get("model"):
             settings.transcription_model = val
         if val := transcription.get("language"):
             settings.transcription_language = val
-        if "auto_transcribe" in transcription:
-            settings.auto_transcribe = bool(transcription["auto_transcribe"])
 
     # Export section
     if export := data.get("export"):
@@ -465,13 +458,10 @@ def _settings_to_json(settings: Settings) -> dict:
         "detection": {
             "default_sensitivity": settings.default_sensitivity,
             "min_scene_length_seconds": settings.min_scene_length_seconds,
-            "auto_analyze_colors": settings.auto_analyze_colors,
-            "auto_classify_shots": settings.auto_classify_shots,
         },
         "transcription": {
             "model": settings.transcription_model,
             "language": settings.transcription_language,
-            "auto_transcribe": settings.auto_transcribe,
         },
         "export": {
             "quality": settings.export_quality,
@@ -605,14 +595,11 @@ def migrate_from_qsettings() -> bool:
             settings.export_dir = Path(qsettings.value("paths/export_dir"))
 
         # Load detection settings
+        # Note: auto_analyze_colors, auto_classify_shots are deprecated - ignored if present
         if qsettings.contains("detection/default_sensitivity"):
             settings.default_sensitivity = float(qsettings.value("detection/default_sensitivity"))
         if qsettings.contains("detection/min_scene_length_seconds"):
             settings.min_scene_length_seconds = float(qsettings.value("detection/min_scene_length_seconds"))
-        if qsettings.contains("detection/auto_analyze_colors"):
-            settings.auto_analyze_colors = qsettings.value("detection/auto_analyze_colors") == "true"
-        if qsettings.contains("detection/auto_classify_shots"):
-            settings.auto_classify_shots = qsettings.value("detection/auto_classify_shots") == "true"
 
         # Load export settings
         if qsettings.contains("export/quality"):
@@ -623,12 +610,11 @@ def migrate_from_qsettings() -> bool:
             settings.export_fps = qsettings.value("export/fps")
 
         # Load transcription settings
+        # Note: auto_transcribe is deprecated - ignored if present
         if qsettings.contains("transcription/model"):
             settings.transcription_model = qsettings.value("transcription/model")
         if qsettings.contains("transcription/language"):
             settings.transcription_language = qsettings.value("transcription/language")
-        if qsettings.contains("transcription/auto_transcribe"):
-            settings.auto_transcribe = qsettings.value("transcription/auto_transcribe") == "true"
 
         # Load appearance settings
         if qsettings.contains("appearance/theme_preference"):

@@ -28,6 +28,7 @@ class AnalyzeTab(BaseTab):
         analyze_colors_requested: Emitted when color extraction is requested
         analyze_shots_requested: Emitted when shot type classification is requested
         transcribe_requested: Emitted when transcription is requested
+        analyze_all_requested: Emitted when "Analyze All" is requested
         clip_selected: Emitted when a clip is selected (clip: Clip)
         clip_double_clicked: Emitted when a clip is double-clicked (clip: Clip)
         clip_dragged_to_timeline: Emitted when a clip is dragged to timeline (clip: Clip)
@@ -37,6 +38,7 @@ class AnalyzeTab(BaseTab):
     analyze_colors_requested = Signal()
     analyze_shots_requested = Signal()
     transcribe_requested = Signal()
+    analyze_all_requested = Signal()
     clip_selected = Signal(object)  # Clip
     clip_double_clicked = Signal(object)  # Clip
     clip_dragged_to_timeline = Signal(object)  # Clip
@@ -107,6 +109,20 @@ class AnalyzeTab(BaseTab):
         self.transcribe_btn.setEnabled(False)
         self.transcribe_btn.clicked.connect(self._on_transcribe_click)
         controls.addWidget(self.transcribe_btn)
+
+        controls.addSpacing(10)
+
+        # Analyze All button - runs all operations sequentially
+        self.analyze_all_btn = QPushButton("Analyze All")
+        self.analyze_all_btn.setToolTip(
+            "Run all analysis operations sequentially:\n"
+            "1. Extract colors\n"
+            "2. Classify shot types\n"
+            "3. Transcribe speech"
+        )
+        self.analyze_all_btn.setEnabled(False)
+        self.analyze_all_btn.clicked.connect(self._on_analyze_all_click)
+        controls.addWidget(self.analyze_all_btn)
 
         controls.addSpacing(20)
 
@@ -192,6 +208,10 @@ class AnalyzeTab(BaseTab):
         """Handle clip drag to timeline."""
         self.clip_dragged_to_timeline.emit(clip)
 
+    def _on_analyze_all_click(self):
+        """Handle analyze all button click."""
+        self.analyze_all_requested.emit()
+
     def _update_ui_state(self):
         """Update UI based on current clip count."""
         count = len(self._clip_ids)
@@ -200,6 +220,7 @@ class AnalyzeTab(BaseTab):
         self.colors_btn.setEnabled(has_clips)
         self.shots_btn.setEnabled(has_clips)
         self.transcribe_btn.setEnabled(has_clips)
+        self.analyze_all_btn.setEnabled(has_clips)
         self.clear_btn.setEnabled(has_clips)
 
         if has_clips:
@@ -339,13 +360,15 @@ class AnalyzeTab(BaseTab):
 
         Args:
             is_analyzing: Whether an analysis operation is running
-            operation: Which operation is running ("colors", "shots", "transcribe")
+            operation: Which operation is running ("colors", "shots", "transcribe", "all")
         """
         # Disable all buttons during any analysis
-        self.colors_btn.setEnabled(not is_analyzing and len(self._clip_ids) > 0)
-        self.shots_btn.setEnabled(not is_analyzing and len(self._clip_ids) > 0)
-        self.transcribe_btn.setEnabled(not is_analyzing and len(self._clip_ids) > 0)
-        self.clear_btn.setEnabled(not is_analyzing and len(self._clip_ids) > 0)
+        has_clips = len(self._clip_ids) > 0
+        self.colors_btn.setEnabled(not is_analyzing and has_clips)
+        self.shots_btn.setEnabled(not is_analyzing and has_clips)
+        self.transcribe_btn.setEnabled(not is_analyzing and has_clips)
+        self.analyze_all_btn.setEnabled(not is_analyzing and has_clips)
+        self.clear_btn.setEnabled(not is_analyzing and has_clips)
 
         # Update button text based on operation
         if is_analyzing:
@@ -355,7 +378,10 @@ class AnalyzeTab(BaseTab):
                 self.shots_btn.setText("Classifying...")
             elif operation == "transcribe":
                 self.transcribe_btn.setText("Transcribing...")
+            elif operation == "all":
+                self.analyze_all_btn.setText("Analyzing...")
         else:
             self.colors_btn.setText("Extract Colors")
             self.shots_btn.setText("Classify Shots")
             self.transcribe_btn.setText("Transcribe")
+            self.analyze_all_btn.setText("Analyze All")

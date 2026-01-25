@@ -214,14 +214,11 @@ class SettingsDialog(QDialog):
             export_dir=settings.export_dir,
             default_sensitivity=settings.default_sensitivity,
             min_scene_length_seconds=settings.min_scene_length_seconds,
-            auto_analyze_colors=settings.auto_analyze_colors,
-            auto_classify_shots=settings.auto_classify_shots,
             export_quality=settings.export_quality,
             export_resolution=settings.export_resolution,
             export_fps=settings.export_fps,
             transcription_model=settings.transcription_model,
             transcription_language=settings.transcription_language,
-            auto_transcribe=settings.auto_transcribe,
             theme_preference=settings.theme_preference,
             youtube_api_key=settings.youtube_api_key,
             youtube_results_count=settings.youtube_results_count,
@@ -324,36 +321,7 @@ class SettingsDialog(QDialog):
         tab = QWidget()
         layout = QVBoxLayout(tab)
 
-        # Auto-analysis group (first)
-        analysis_group = QGroupBox("Automatic Analysis")
-        analysis_layout = QVBoxLayout(analysis_group)
-
-        self.auto_colors_check = QCheckBox("Analyze colors after detection")
-        self.auto_colors_check.setToolTip(
-            "Automatically extract dominant colors from each clip thumbnail"
-        )
-        analysis_layout.addWidget(self.auto_colors_check)
-
-        self.auto_shots_check = QCheckBox("Classify shot types after detection")
-        self.auto_shots_check.setToolTip(
-            "Automatically classify each clip as wide shot, medium shot, close-up, etc."
-        )
-        analysis_layout.addWidget(self.auto_shots_check)
-
-        self.auto_transcribe_check = QCheckBox("Transcribe speech after detection")
-        self.auto_transcribe_check.setToolTip(
-            "Automatically transcribe speech after scene detection completes.\n"
-            "Disable to manually trigger transcription from the Analyze tab."
-        )
-        analysis_layout.addWidget(self.auto_transcribe_check)
-
-        note_label = QLabel("Note: Changes apply to future detections only")
-        note_label.setStyleSheet(f"color: {theme().text_secondary}; font-style: italic;")
-        analysis_layout.addWidget(note_label)
-
-        layout.addWidget(analysis_group)
-
-        # Shot Detection group (second)
+        # Shot Detection group
         detection_group = QGroupBox("Shot Detection")
         detection_layout = QVBoxLayout(detection_group)
 
@@ -688,8 +656,6 @@ class SettingsDialog(QDialog):
         # Detection
         self.sensitivity_slider.setValue(int(self.settings.default_sensitivity * 10))
         self.min_length_spin.setValue(self.settings.min_scene_length_seconds)
-        self.auto_colors_check.setChecked(self.settings.auto_analyze_colors)
-        self.auto_shots_check.setChecked(self.settings.auto_classify_shots)
 
         # Apply environment override indicator for sensitivity
         self._apply_env_indicator_to_widget(
@@ -721,8 +687,6 @@ class SettingsDialog(QDialog):
         self.transcription_lang_combo.setCurrentIndex(
             lang_map.get(self.settings.transcription_language, 0)
         )
-
-        self.auto_transcribe_check.setChecked(self.settings.auto_transcribe)
 
         # Apply environment override indicator for whisper model
         self._apply_env_indicator_to_widget(
@@ -760,8 +724,6 @@ class SettingsDialog(QDialog):
         # Detection
         self.settings.default_sensitivity = self.sensitivity_slider.value() / 10.0
         self.settings.min_scene_length_seconds = self.min_length_spin.value()
-        self.settings.auto_analyze_colors = self.auto_colors_check.isChecked()
-        self.settings.auto_classify_shots = self.auto_shots_check.isChecked()
 
         # Export
         quality_values = ["high", "medium", "low"]
@@ -779,8 +741,6 @@ class SettingsDialog(QDialog):
 
         lang_values = ["en", "auto"]
         self.settings.transcription_language = lang_values[self.transcription_lang_combo.currentIndex()]
-
-        self.settings.auto_transcribe = self.auto_transcribe_check.isChecked()
 
         # Appearance
         theme_values = ["system", "light", "dark"]
@@ -908,14 +868,11 @@ class SettingsDialog(QDialog):
             or self.settings.export_dir != self.original_settings.export_dir
             or self.settings.default_sensitivity != self.original_settings.default_sensitivity
             or self.settings.min_scene_length_seconds != self.original_settings.min_scene_length_seconds
-            or self.settings.auto_analyze_colors != self.original_settings.auto_analyze_colors
-            or self.settings.auto_classify_shots != self.original_settings.auto_classify_shots
             or self.settings.export_quality != self.original_settings.export_quality
             or self.settings.export_resolution != self.original_settings.export_resolution
             or self.settings.export_fps != self.original_settings.export_fps
             or self.settings.transcription_model != self.original_settings.transcription_model
             or self.settings.transcription_language != self.original_settings.transcription_language
-            or self.settings.auto_transcribe != self.original_settings.auto_transcribe
             or self.settings.theme_preference != self.original_settings.theme_preference
             or self.settings.youtube_api_key != self.original_settings.youtube_api_key
             or self.settings.youtube_results_count != self.original_settings.youtube_results_count
