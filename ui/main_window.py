@@ -887,7 +887,10 @@ class MainWindow(QMainWindow):
     def _on_chat_message(self, message: str):
         """Handle user message from chat panel."""
         from core.llm_client import ProviderConfig, ProviderType, create_provider_config_from_settings
-        from core.settings import get_llm_api_key
+        from core.settings import (
+            get_anthropic_api_key, get_openai_api_key,
+            get_gemini_api_key, get_openrouter_api_key
+        )
 
         # Store message for history
         self._last_user_message = message
@@ -900,11 +903,20 @@ class MainWindow(QMainWindow):
         # Get current provider config
         provider_key = self.chat_panel.get_provider()
 
+        # Get API key for the selected provider (not from disk settings)
+        api_key_getters = {
+            "anthropic": get_anthropic_api_key,
+            "openai": get_openai_api_key,
+            "gemini": get_gemini_api_key,
+            "openrouter": get_openrouter_api_key,
+        }
+        api_key = api_key_getters.get(provider_key, lambda: "")()
+
         # Build provider config
         config = ProviderConfig(
             provider=ProviderType(provider_key),
             model=self.settings.llm_model,
-            api_key=get_llm_api_key() or None,
+            api_key=api_key or None,
             api_base=self.settings.llm_api_base or None,
             temperature=self.settings.llm_temperature,
         )
