@@ -48,7 +48,7 @@ from core.project import (
     MissingSourceError,
 )
 from ui.settings_dialog import SettingsDialog
-from ui.tabs import CollectTab, AnalyzeTab, GenerateTab, SequenceTab, RenderTab
+from ui.tabs import CollectTab, CutTab, AnalyzeTab, GenerateTab, SequenceTab, RenderTab
 
 
 class DetectionWorker(QThread):
@@ -412,6 +412,7 @@ class MainWindow(QMainWindow):
 
         # Create tabs
         self.collect_tab = CollectTab()
+        self.cut_tab = CutTab()
         self.analyze_tab = AnalyzeTab()
         self.generate_tab = GenerateTab()
         self.sequence_tab = SequenceTab()
@@ -419,10 +420,14 @@ class MainWindow(QMainWindow):
 
         # Add tabs
         self.tab_widget.addTab(self.collect_tab, "Collect")
+        self.tab_widget.addTab(self.cut_tab, "Cut")
         self.tab_widget.addTab(self.analyze_tab, "Analyze")
         self.tab_widget.addTab(self.generate_tab, "Generate")
         self.tab_widget.addTab(self.sequence_tab, "Sequence")
         self.tab_widget.addTab(self.render_tab, "Render")
+
+        # Set up Analyze tab lookups (it uses references, not copies)
+        self.analyze_tab.set_lookups(self.clips_by_id, self.sources_by_id)
 
         layout.addWidget(self.tab_widget)
 
@@ -447,6 +452,7 @@ class MainWindow(QMainWindow):
         # Get all tabs
         tabs = [
             self.collect_tab,
+            self.cut_tab,
             self.analyze_tab,
             self.generate_tab,
             self.sequence_tab,
@@ -461,7 +467,7 @@ class MainWindow(QMainWindow):
                 tab.on_tab_deactivated()
 
         # Update Render tab with current sequence info when switching to it
-        if index == 4:  # Render tab
+        if index == 5:  # Render tab
             self._update_render_tab_sequence_info()
 
     def _create_menu_bar(self):
@@ -574,8 +580,8 @@ class MainWindow(QMainWindow):
 
     def _apply_settings(self):
         """Apply current settings to the UI and components."""
-        # Update sensitivity in Analyze tab
-        self.analyze_tab.set_sensitivity(self.settings.default_sensitivity)
+        # Update sensitivity in Cut tab
+        self.cut_tab.set_sensitivity(self.settings.default_sensitivity)
 
         logger.info(
             f"Settings applied: sensitivity={self.settings.default_sensitivity}, "
@@ -592,9 +598,15 @@ class MainWindow(QMainWindow):
         self.collect_tab.source_selected.connect(self._on_source_selected)
         self.collect_tab.download_requested.connect(self._on_download_requested_from_tab)
 
+        # Cut tab signals
+        self.cut_tab.detect_requested.connect(self._on_detect_from_tab)
+        self.cut_tab.clip_dragged_to_timeline.connect(self._on_clip_dragged_to_timeline)
+        self.cut_tab.clips_sent_to_analyze.connect(self._on_clips_sent_to_analyze)
+
         # Analyze tab signals
-        self.analyze_tab.detect_requested.connect(self._on_detect_from_tab)
         self.analyze_tab.transcribe_requested.connect(self._on_transcribe_from_tab)
+        self.analyze_tab.analyze_colors_requested.connect(self._on_analyze_colors_from_tab)
+        self.analyze_tab.analyze_shots_requested.connect(self._on_analyze_shots_from_tab)
         self.analyze_tab.clip_dragged_to_timeline.connect(self._on_clip_dragged_to_timeline)
 
         # Sequence tab signals
@@ -674,7 +686,7 @@ class MainWindow(QMainWindow):
 
         self._select_source(source)
         self._start_detection(self.settings.default_sensitivity)
-        self.tab_widget.setCurrentIndex(1)  # Switch to Analyze tab
+        self.tab_widget.setCurrentIndex(1)  # Switch to Cut tab
 
     def _on_source_selected(self, source: Source):
         """Handle source selection from Collect tab."""
@@ -687,8 +699,8 @@ class MainWindow(QMainWindow):
 
         self.current_source = source
 
-        # Update Analyze tab with source info (keeps existing clips visible)
-        self.analyze_tab.set_source(source)
+        # Update Cut tab with source info (keeps existing clips visible)
+        self.cut_tab.set_source(source)
 
         # Update Sequence tab
         self.sequence_tab.set_source(source)
@@ -732,15 +744,100 @@ class MainWindow(QMainWindow):
             logger.warning(f"Failed to generate source thumbnail: {e}")
 
     def _on_detect_from_tab(self, threshold: float):
-        """Handle detection request from Analyze tab."""
+        """Handle detection request from Cut tab."""
         if not self.current_source:
             return
         # Start detection with the provided threshold
         self._start_detection(threshold)
 
+    def _on_clips_sent_to_analyze(self, clip_ids: list[str]):
+        """Handle clips being sent from Cut to Analyze tab."""
+        self.analyze_tab.add_clips(clip_ids)
+        self.tab_widget.setCurrentWidget(self.analyze_tab)
+        self.status_bar.showMessage(f"Sent {len(clip_ids)} clips to Analyze")
+
+    def _on_analyze_colors_from_tab(self):
+        """Handle color extraction request from Analyze tab."""
+        clips = self.analyze_tab.get_clips()
+        if not clips:
+            return
+
+        # Reset guard
+        self._color_analysis_finished_handled = False
+
+        # Update UI state
+        self.analyze_tab.set_analyzing(True, "colors")
+
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 100)
+        self.status_bar.showMessage(f"Extracting colors from {len(clips)} clips...")
+
+        logger.info("Creating ColorAnalysisWorker (manual)...")
+        self.color_worker = ColorAnalysisWorker(clips)
+        self.color_worker.progress.connect(self._on_color_progress)
+        self.color_worker.color_ready.connect(self._on_color_ready)
+        self.color_worker.finished.connect(self._on_manual_color_analysis_finished, Qt.UniqueConnection)
+        logger.info("Starting ColorAnalysisWorker (manual)...")
+        self.color_worker.start()
+
+    @Slot()
+    def _on_manual_color_analysis_finished(self):
+        """Handle manual color analysis completion."""
+        logger.info("=== MANUAL COLOR ANALYSIS FINISHED ===")
+
+        # Guard against duplicate calls
+        if self._color_analysis_finished_handled:
+            logger.warning("_on_manual_color_analysis_finished already handled, ignoring duplicate call")
+            return
+        self._color_analysis_finished_handled = True
+
+        self.progress_bar.setVisible(False)
+        self.analyze_tab.set_analyzing(False)
+        self.status_bar.showMessage(f"Color extraction complete - {len(self.analyze_tab.get_clips())} clips")
+
+    def _on_analyze_shots_from_tab(self):
+        """Handle shot type classification request from Analyze tab."""
+        clips = self.analyze_tab.get_clips()
+        if not clips:
+            return
+
+        # Reset guard
+        self._shot_type_finished_handled = False
+
+        # Update UI state
+        self.analyze_tab.set_analyzing(True, "shots")
+
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 100)
+        self.status_bar.showMessage(f"Classifying shot types for {len(clips)} clips...")
+
+        logger.info("Creating ShotTypeWorker (manual)...")
+        self.shot_type_worker = ShotTypeWorker(clips)
+        self.shot_type_worker.progress.connect(self._on_shot_type_progress)
+        self.shot_type_worker.shot_type_ready.connect(self._on_shot_type_ready)
+        self.shot_type_worker.finished.connect(self._on_manual_shot_type_finished, Qt.UniqueConnection)
+        logger.info("Starting ShotTypeWorker (manual)...")
+        self.shot_type_worker.start()
+
+    @Slot()
+    def _on_manual_shot_type_finished(self):
+        """Handle manual shot type classification completion."""
+        logger.info("=== MANUAL SHOT TYPE FINISHED ===")
+
+        # Guard against duplicate calls
+        if self._shot_type_finished_handled:
+            logger.warning("_on_manual_shot_type_finished already handled, ignoring duplicate call")
+            return
+        self._shot_type_finished_handled = True
+
+        self.progress_bar.setVisible(False)
+        self.analyze_tab.set_analyzing(False)
+        self.status_bar.showMessage(f"Shot type classification complete - {len(self.analyze_tab.get_clips())} clips")
+
     def _on_transcribe_from_tab(self):
         """Handle manual transcription request from Analyze tab."""
-        if not self.current_source or not self.clips:
+        clips = self.analyze_tab.get_clips()
+        if not clips:
             return
 
         # Check if faster-whisper is available
@@ -756,11 +853,19 @@ class MainWindow(QMainWindow):
             )
             return
 
+        # Get source for the first clip (for audio extraction)
+        # Note: All clips should have the same source for transcription to work
+        first_clip = clips[0]
+        source = self.sources_by_id.get(first_clip.source_id)
+        if not source:
+            logger.error(f"Source not found for clip {first_clip.id}")
+            return
+
         # Reset transcription guard
         self._transcription_finished_handled = False
 
         # Update UI state
-        self.analyze_tab.set_transcribing(True)
+        self.analyze_tab.set_analyzing(True, "transcribe")
 
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 100)
@@ -769,13 +874,13 @@ class MainWindow(QMainWindow):
         model_info = WHISPER_MODELS.get(self.settings.transcription_model, {})
         model_size = model_info.get("size", "unknown")
         self.status_bar.showMessage(
-            f"Transcribing {len(self.clips)} clips using {self.settings.transcription_model} model ({model_size})..."
+            f"Transcribing {len(clips)} clips using {self.settings.transcription_model} model ({model_size})..."
         )
 
         logger.info("Creating TranscriptionWorker (manual)...")
         self.transcription_worker = TranscriptionWorker(
-            self.clips,
-            self.current_source,
+            clips,
+            source,
             self.settings.transcription_model,
             self.settings.transcription_language,
         )
@@ -790,7 +895,7 @@ class MainWindow(QMainWindow):
         """Handle transcription error."""
         logger.error(f"Transcription error: {error}")
         self.progress_bar.setVisible(False)
-        self.analyze_tab.set_transcribing(False)
+        self.analyze_tab.set_analyzing(False)
 
         if "not installed" in error.lower():
             QMessageBox.critical(
@@ -825,8 +930,8 @@ class MainWindow(QMainWindow):
         self._transcription_finished_handled = True
 
         self.progress_bar.setVisible(False)
-        self.analyze_tab.set_transcribing(False)
-        self.status_bar.showMessage(f"Transcription complete - {len(self.clips)} clips")
+        self.analyze_tab.set_analyzing(False)
+        self.status_bar.showMessage(f"Transcription complete - {len(self.analyze_tab.get_clips())} clips")
 
     # Drag and drop handlers
     def dragEnterEvent(self, event: QDragEnterEvent):
@@ -885,8 +990,8 @@ class MainWindow(QMainWindow):
             self._select_source(source)
             self._mark_dirty()
 
-        # Set sensitivity
-        self.analyze_tab.set_sensitivity(self.settings.default_sensitivity)
+        # Set sensitivity on Cut tab
+        self.cut_tab.set_sensitivity(self.settings.default_sensitivity)
 
     def _on_import_url_click(self):
         """Handle import URL button click."""
@@ -956,8 +1061,8 @@ class MainWindow(QMainWindow):
         self._shot_type_finished_handled = False
         self._transcription_finished_handled = False
 
-        # Update Analyze tab state (don't clear clips - keep clips from other sources)
-        self.analyze_tab.set_detecting(True)
+        # Update Cut tab state
+        self.cut_tab.set_detecting(True)
 
         config = DetectionConfig(threshold=threshold)
 
@@ -1021,8 +1126,14 @@ class MainWindow(QMainWindow):
         self._mark_dirty()
         self._update_window_title()
 
-        # Remove old clips for this source from the UI (handles re-analysis case)
-        self.analyze_tab.remove_clips_for_source(self.current_source.id)
+        # Remove old clips for this source from the Cut tab UI (handles re-analysis case)
+        self.cut_tab.remove_clips_for_source(self.current_source.id)
+
+        # Remove orphaned clips from Analyze tab (clips that no longer exist)
+        valid_clip_ids = set(self.clips_by_id.keys())
+        removed_count = self.analyze_tab.remove_orphaned_clips(valid_clip_ids)
+        if removed_count > 0:
+            logger.warning(f"Removed {removed_count} orphaned clips from Analyze tab")
 
         self.status_bar.showMessage(f"Found {len(clips)} scenes. Generating thumbnails...")
 
@@ -1042,7 +1153,7 @@ class MainWindow(QMainWindow):
         """Handle detection error."""
         logger.error(f"=== DETECTION ERROR: {error} ===")
         self.progress_bar.setVisible(False)
-        self.analyze_tab.set_detecting(False)
+        self.cut_tab.set_detecting(False)
         QMessageBox.critical(self, "Detection Error", error)
 
     def _on_thumbnail_progress(self, current: int, total: int):
@@ -1053,8 +1164,8 @@ class MainWindow(QMainWindow):
         """Handle individual thumbnail completion."""
         clip = self.clips_by_id.get(clip_id)
         if clip:
-            # Add to Analyze tab (primary clip browser)
-            self.analyze_tab.add_clip(clip, self.current_source)
+            # Add to Cut tab (primary clip browser for detection)
+            self.cut_tab.add_clip(clip, self.current_source)
 
     @Slot()
     def _on_thumbnails_finished(self):
@@ -1069,9 +1180,10 @@ class MainWindow(QMainWindow):
 
         logger.info(f"Thumbnail worker running: {self.thumbnail_worker.isRunning() if self.thumbnail_worker else 'None'}")
 
-        # Update Analyze tab with all clips (from all sources)
-        self.analyze_tab.set_clips(self.clips)
-        self.analyze_tab.set_detecting(False)
+        # Update Cut tab with all clips for this source
+        current_source_clips = self.clips_by_source.get(self.current_source.id, []) if self.current_source else []
+        self.cut_tab.set_clips(current_source_clips)
+        self.cut_tab.set_detecting(False)
 
         # Make all clips available for timeline remix (via Sequence tab)
         # Pass clips for the current source being analyzed
@@ -1123,7 +1235,8 @@ class MainWindow(QMainWindow):
         clip = self.clips_by_id.get(clip_id)
         if clip:
             clip.dominant_colors = colors
-            # Update Analyze tab clip browser
+            # Update both tabs' clip browsers
+            self.cut_tab.update_clip_colors(clip_id, colors)
             self.analyze_tab.update_clip_colors(clip_id, colors)
             self._mark_dirty()
 
@@ -1166,7 +1279,8 @@ class MainWindow(QMainWindow):
         clip = self.clips_by_id.get(clip_id)
         if clip:
             clip.shot_type = shot_type
-            # Update Analyze tab clip browser
+            # Update both tabs' clip browsers
+            self.cut_tab.update_clip_shot_type(clip_id, shot_type)
             self.analyze_tab.update_clip_shot_type(clip_id, shot_type)
             self._mark_dirty()
             logger.debug(f"Clip {clip_id}: {shot_type} ({confidence:.2f})")
@@ -1233,7 +1347,8 @@ class MainWindow(QMainWindow):
         clip = self.clips_by_id.get(clip_id)
         if clip:
             clip.transcript = segments
-            # Update Analyze tab clip browser
+            # Update both tabs' clip browsers
+            self.cut_tab.update_clip_transcript(clip_id, segments)
             self.analyze_tab.update_clip_transcript(clip_id, segments)
             self._mark_dirty()
             logger.debug(f"Clip {clip_id}: transcribed {len(segments)} segments")
@@ -1439,7 +1554,7 @@ class MainWindow(QMainWindow):
 
     def _on_export_click(self):
         """Export selected clips."""
-        selected = self.analyze_tab.clip_browser.get_selected_clips()
+        selected = self.cut_tab.clip_browser.get_selected_clips()
         if not selected:
             QMessageBox.information(self, "Export", "No clips selected")
             return
@@ -1878,7 +1993,8 @@ class MainWindow(QMainWindow):
 
         # Get UI state
         ui_state = {
-            "sensitivity": self.analyze_tab.sensitivity_slider.value() / 10.0,
+            "sensitivity": self.cut_tab.sensitivity_slider.value() / 10.0,
+            "analyze_clip_ids": self.analyze_tab.get_clip_ids(),
         }
 
         # Create or update metadata
@@ -1982,25 +2098,29 @@ class MainWindow(QMainWindow):
                 self.clips_by_source[clip.source_id] = []
             self.clips_by_source[clip.source_id].append(clip)
 
-        # Update Analyze tab
-        self.analyze_tab.set_source(self.current_source)
-        self.analyze_tab.clear_clips()
-        self.analyze_tab.set_clips(clips)
+        # Set lookups for Analyze tab
+        self.analyze_tab.set_lookups(self.clips_by_id, self.sources_by_id)
 
-        # Add clips to browser with their correct source
+        # Update Cut tab with clips for current source
+        self.cut_tab.set_source(self.current_source)
+        self.cut_tab.clear_clips()
+        current_source_clips = self.clips_by_source.get(self.current_source.id, [])
+        self.cut_tab.set_clips(current_source_clips)
+
+        # Add clips to Cut tab browser with their correct source
         for clip in clips:
             clip_source = sources_by_id.get(clip.source_id)
             if not clip_source:
                 logging.warning(f"Clip {clip.id} references unknown source {clip.source_id}")
                 continue
-            self.analyze_tab.add_clip(clip, clip_source)
+            self.cut_tab.add_clip(clip, clip_source)
             # Update colors and shot type if present
             if clip.dominant_colors:
-                self.analyze_tab.update_clip_colors(clip.id, clip.dominant_colors)
+                self.cut_tab.update_clip_colors(clip.id, clip.dominant_colors)
             if clip.shot_type:
-                self.analyze_tab.update_clip_shot_type(clip.id, clip.shot_type)
+                self.cut_tab.update_clip_shot_type(clip.id, clip.shot_type)
             if clip.transcript:
-                self.analyze_tab.update_clip_transcript(clip.id, clip.transcript)
+                self.cut_tab.update_clip_transcript(clip.id, clip.transcript)
 
         # Restore sequence (pass all sources for multi-source playback)
         if sequence:
@@ -2008,7 +2128,16 @@ class MainWindow(QMainWindow):
 
         # Restore UI state
         if "sensitivity" in ui_state:
-            self.analyze_tab.set_sensitivity(ui_state["sensitivity"])
+            self.cut_tab.set_sensitivity(ui_state["sensitivity"])
+
+        # Restore Analyze tab clips
+        if "analyze_clip_ids" in ui_state:
+            # Validate clip IDs exist before restoring
+            valid_clip_ids = [cid for cid in ui_state["analyze_clip_ids"]
+                              if cid in self.clips_by_id]
+            if valid_clip_ids:
+                self.analyze_tab.add_clips(valid_clip_ids)
+                logger.info(f"Restored {len(valid_clip_ids)} clips to Analyze tab")
 
         # Store project state
         self.current_project_path = filepath
@@ -2036,8 +2165,9 @@ class MainWindow(QMainWindow):
         self._analyze_queue_total = 0
         self.queue_label.setVisible(False)
         self.collect_tab.clear()
+        self.cut_tab.clear_clips()
+        self.cut_tab.set_source(None)
         self.analyze_tab.clear_clips()
-        self.analyze_tab.set_source(None)
         self.sequence_tab.timeline.clear()
 
     def _regenerate_missing_thumbnails(self):
@@ -2073,6 +2203,7 @@ class MainWindow(QMainWindow):
         clip = self.clips_by_id.get(clip_id)
         if clip:
             clip.thumbnail_path = Path(thumb_path)
+            self.cut_tab.update_clip_thumbnail(clip_id, Path(thumb_path))
             self.analyze_tab.update_clip_thumbnail(clip_id, Path(thumb_path))
 
     def _on_project_thumbnails_finished(self):
