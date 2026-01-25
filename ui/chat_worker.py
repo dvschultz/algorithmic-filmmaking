@@ -637,6 +637,10 @@ CURRENT GUI STATE:
             args: Tool arguments
             result: Tool execution result
         """
+        # Only process tools we care about syncing
+        if tool_name not in ("search_youtube", "download_video"):
+            return
+
         if not result.get("success", False):
             return
 
@@ -644,12 +648,13 @@ CURRENT GUI STATE:
         data = result.get("result", result)
 
         if tool_name == "search_youtube":
-            # Emit signal with query and video results
             query = data.get("query", args.get("query", ""))
             videos = data.get("results", [])
             if videos:
-                logger.info(f"Emitting youtube_search_completed with {len(videos)} results")
+                logger.info(f"GUI SYNC: youtube_search_completed ({len(videos)} videos)")
                 self.youtube_search_completed.emit(query, videos)
+            else:
+                logger.warning(f"GUI SYNC: search_youtube had no videos. Keys: {list(data.keys())}")
 
         elif tool_name == "download_video":
             # Emit signal with URL and download result
