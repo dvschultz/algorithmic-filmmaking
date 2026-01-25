@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QFrame,
 )
-from PySide6.QtCore import Qt, Signal, Slot, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import Qt, Signal, Slot, QPropertyAnimation, QEasingCurve, QTimer
 
 from ui.theme import theme
 from ui.youtube_result_thumbnail import YouTubeResultThumbnail
@@ -26,7 +26,9 @@ class YouTubeSearchPanel(QWidget):
     download_requested = Signal(list)  # list of YouTubeVideo
     error_occurred = Signal(str)
 
-    COLUMNS = 4
+    THUMB_WIDTH = 180
+    THUMB_SPACING = 8
+    MIN_COLUMNS = 2
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -34,6 +36,7 @@ class YouTubeSearchPanel(QWidget):
         self._results: list[YouTubeVideo] = []
         self._thumbnails: list[YouTubeResultThumbnail] = []
         self._selected_videos: set[str] = set()  # video_ids
+        self._columns = self.MIN_COLUMNS
 
         self._setup_ui()
         self._connect_theme()
@@ -80,7 +83,7 @@ class YouTubeSearchPanel(QWidget):
         self.results_container = QWidget()
         self.results_grid = QGridLayout(self.results_container)
         self.results_grid.setSpacing(8)
-        self.results_grid.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.results_grid.setContentsMargins(0, 0, 0, 0)
 
         self.scroll.setWidget(self.results_container)
         self.content_layout.addWidget(self.scroll)
@@ -143,16 +146,52 @@ class YouTubeSearchPanel(QWidget):
         self._clear_results()
         self._results = videos
 
+        # Calculate columns based on available width
+        self._calculate_columns()
+
         for i, video in enumerate(videos):
             thumb = YouTubeResultThumbnail(video)
             thumb.selection_changed.connect(self._on_selection_changed)
-
-            row = i // self.COLUMNS
-            col = i % self.COLUMNS
-            self.results_grid.addWidget(thumb, row, col, Qt.AlignTop)
             self._thumbnails.append(thumb)
 
+        self._reflow_grid()
         self._update_status()
+
+    def _calculate_columns(self):
+        """Calculate number of columns based on scroll area width."""
+        available_width = self.scroll.viewport().width()
+        if available_width <= 0:
+            available_width = self.scroll.width() - 20  # Account for scrollbar
+
+        # Calculate how many thumbnails fit
+        cols = max(self.MIN_COLUMNS, available_width // (self.THUMB_WIDTH + self.THUMB_SPACING))
+        self._columns = cols
+
+    def _reflow_grid(self):
+        """Reposition thumbnails in the grid based on current column count."""
+        # Remove all widgets from grid (but don't delete them)
+        for thumb in self._thumbnails:
+            self.results_grid.removeWidget(thumb)
+
+        # Re-add in correct positions
+        for i, thumb in enumerate(self._thumbnails):
+            row = i // self._columns
+            col = i % self._columns
+            self.results_grid.addWidget(thumb, row, col)
+
+    def resizeEvent(self, event):
+        """Handle resize to reflow grid."""
+        super().resizeEvent(event)
+        if self._thumbnails:
+            # Delay reflow slightly to get accurate size
+            QTimer.singleShot(0, self._on_resize_reflow)
+
+    def _on_resize_reflow(self):
+        """Reflow grid after resize."""
+        old_cols = self._columns
+        self._calculate_columns()
+        if self._columns != old_cols:
+            self._reflow_grid()
 
     def _clear_results(self):
         """Clear all result thumbnails."""

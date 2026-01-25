@@ -155,7 +155,7 @@ class YouTubeResultThumbnail(QFrame):
     @Slot(int)
     def _on_checkbox_changed(self, state: int):
         """Handle checkbox state change."""
-        self._selected = state == Qt.Checked
+        self._selected = state == Qt.CheckState.Checked.value
         self._apply_theme()
         self.selection_changed.emit(self.video.video_id, self._selected)
 
