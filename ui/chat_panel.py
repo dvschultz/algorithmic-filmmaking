@@ -258,6 +258,12 @@ class ChatPanel(QWidget):
             self.scroll_area.verticalScrollBar().maximum()
         ))
 
+    @Slot()
+    def on_clear_bubble(self):
+        """Clear the current streaming bubble content."""
+        if self._current_bubble:
+            self._current_bubble.clear_text()
+
     @Slot(str)
     def on_stream_chunk(self, chunk: str):
         """Handle streaming chunk - with guard.
@@ -267,6 +273,19 @@ class ChatPanel(QWidget):
         """
         if self._current_bubble and not self._response_finished_handled:
             self._current_bubble.append_text(chunk)
+            self._scroll_to_bottom()
+
+    @Slot(str)
+    def on_tool_result_formatted(self, formatted_text: str):
+        """Display a formatted tool result.
+
+        Args:
+            formatted_text: Human-readable tool result
+        """
+        # Clear any junk in the current bubble and show the formatted result
+        if self._current_bubble:
+            self._current_bubble.clear_text()
+            self._current_bubble.append_text(formatted_text)
             self._scroll_to_bottom()
 
     @Slot()

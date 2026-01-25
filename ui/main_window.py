@@ -941,8 +941,10 @@ class MainWindow(QMainWindow):
         self._current_chat_bubble = bubble
 
         self._chat_worker.text_chunk.connect(self.chat_panel.on_stream_chunk)
+        self._chat_worker.clear_current_bubble.connect(self.chat_panel.on_clear_bubble)
         self._chat_worker.tool_called.connect(self._on_chat_tool_called)
         self._chat_worker.tool_result.connect(self._on_chat_tool_result)
+        self._chat_worker.tool_result_formatted.connect(self.chat_panel.on_tool_result_formatted)
         self._chat_worker.gui_tool_requested.connect(self._on_gui_tool_requested)
         self._chat_worker.complete.connect(self._on_chat_complete)
         self._chat_worker.error.connect(self._on_chat_error)

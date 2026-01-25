@@ -123,6 +123,78 @@ def _parse_tool_calls_from_text(content: str, available_tools: list[str]) -> tup
     return tool_calls, cleaned_content
 
 
+def _format_tool_result_for_display(tool_name: str, result: dict) -> str:
+    """Format a tool result for human-readable display.
+
+    Args:
+        tool_name: Name of the tool that was executed
+        result: Tool result dict
+
+    Returns:
+        Human-readable summary string
+    """
+    if not result.get("success", False):
+        error = result.get("error", "Unknown error")
+        return f"**Error:** {error}"
+
+    data = result.get("data", result)
+
+    if tool_name == "get_project_state":
+        name = data.get("name", "Untitled")
+        sources = data.get("sources", [])
+        total_clips = data.get("total_clips", 0)
+        sequence_clips = data.get("sequence_clips", 0)
+
+        lines = [f"**Project:** {name}"]
+        if sources:
+            lines.append(f"**Videos:** {len(sources)}")
+            for src in sources[:3]:  # Show first 3
+                src_name = src.get("name", "Unknown")
+                duration = src.get("duration", 0)
+                clips = src.get("clips", 0)
+                lines.append(f"  • {src_name} ({duration:.1f}s, {clips} clips)")
+            if len(sources) > 3:
+                lines.append(f"  • ...and {len(sources) - 3} more")
+        lines.append(f"**Total Clips:** {total_clips}")
+        if sequence_clips:
+            lines.append(f"**Sequence:** {sequence_clips} clips")
+        return "\n".join(lines)
+
+    elif tool_name == "list_clips":
+        clips = data if isinstance(data, list) else data.get("clips", [])
+        if not clips:
+            return "No clips available."
+        lines = [f"**{len(clips)} clips:**"]
+        for clip in clips[:5]:  # Show first 5
+            clip_id = clip.get("id", "?")[:8]
+            duration = clip.get("duration", 0)
+            shot_type = clip.get("shot_type", "")
+            shot_info = f" ({shot_type})" if shot_type else ""
+            lines.append(f"  • {clip_id}... {duration:.1f}s{shot_info}")
+        if len(clips) > 5:
+            lines.append(f"  • ...and {len(clips) - 5} more")
+        return "\n".join(lines)
+
+    elif tool_name == "filter_clips":
+        clips = data if isinstance(data, list) else data.get("clips", [])
+        count = len(clips)
+        if count == 0:
+            return "No clips match the filter criteria."
+        return f"Found **{count}** matching clips."
+
+    elif tool_name == "detect_scenes":
+        clip_count = data.get("clip_count", 0)
+        source_name = data.get("source_name", "video")
+        return f"Detected **{clip_count}** scenes in {source_name}."
+
+    elif tool_name == "add_to_sequence":
+        added = data.get("added", 0)
+        return f"Added **{added}** clips to the sequence."
+
+    # Default: show success message
+    return f"✓ {tool_name} completed successfully."
+
+
 def _create_tool_call(name: str, arguments: dict) -> dict:
     """Create a tool call dict in OpenAI format.
 
@@ -155,8 +227,10 @@ class ChatAgentWorker(QThread):
 
     # Signals
     text_chunk = Signal(str)  # Streaming text chunk
+    clear_current_bubble = Signal()  # Clear the streaming bubble (for JSON suppression)
     tool_called = Signal(str, dict)  # tool_name, arguments
     tool_result = Signal(str, dict, bool)  # tool_name, result, success
+    tool_result_formatted = Signal(str)  # Human-readable tool result summary
     gui_tool_requested = Signal(str, dict, str)  # tool_name, args, tool_call_id (for main thread execution)
     gui_tool_completed = Signal(str)  # tool_call_id (set by main thread when done)
     complete = Signal(str, list)  # final response text, tool_history
@@ -298,6 +372,11 @@ class ChatAgentWorker(QThread):
 
                     self.tool_result.emit(name, result, result.get("success", False))
 
+                    # Emit human-readable summary
+                    formatted = _format_tool_result_for_display(name, result)
+                    if formatted:
+                        self.tool_result_formatted.emit(formatted)
+
                     # Add tool result to messages
                     tool_msg = executor.format_for_llm(result)
                     full_messages.append(tool_msg)
@@ -319,7 +398,7 @@ class ChatAgentWorker(QThread):
         self,
         client: LLMClient,
         messages: list[dict]
-    ) -> tuple[str, list[dict]]:
+    ) -> tuple[list[dict], str]:
         """Stream a single LLM response.
 
         Args:
@@ -331,6 +410,8 @@ class ChatAgentWorker(QThread):
         """
         content = ""
         tool_calls = []
+        display_buffer = ""  # Buffer for detecting JSON before displaying
+        available_tools = [t.name for t in tool_registry.all_tools()]
 
         async for chunk in client.stream_chat(
             messages,
@@ -349,7 +430,15 @@ class ChatAgentWorker(QThread):
             # Accumulate content
             if hasattr(delta, 'content') and delta.content:
                 content += delta.content
-                self.text_chunk.emit(delta.content)
+                display_buffer += delta.content
+
+                # Check if buffer looks like JSON tool call - don't display it
+                if not self._looks_like_json_tool_call(display_buffer, available_tools):
+                    # Safe to display - emit buffered content
+                    if display_buffer:
+                        self.text_chunk.emit(display_buffer)
+                        display_buffer = ""
+                # else: keep buffering, might be a tool call
 
             # Accumulate tool calls
             if hasattr(delta, 'tool_calls') and delta.tool_calls:
@@ -359,15 +448,43 @@ class ChatAgentWorker(QThread):
         # Fallback: If no tool calls via API but content looks like JSON tool calls,
         # parse them from the text. This handles models that output tool calls as text.
         if not tool_calls and content:
-            available_tools = [t.name for t in tool_registry.all_tools()]
             parsed_calls, cleaned_content = _parse_tool_calls_from_text(content, available_tools)
 
             if parsed_calls:
                 logger.info(f"Parsed {len(parsed_calls)} tool call(s) from text content (model fallback)")
                 tool_calls = parsed_calls
                 content = cleaned_content
+                # Don't display the JSON junk - it was a tool call
+                display_buffer = ""
+            elif display_buffer:
+                # Not a tool call, display remaining buffer
+                self.text_chunk.emit(display_buffer)
 
         return content, tool_calls
+
+    def _looks_like_json_tool_call(self, text: str, available_tools: list[str]) -> bool:
+        """Check if text looks like it might be a JSON tool call being streamed.
+
+        Args:
+            text: Text buffer to check
+            available_tools: List of valid tool names
+
+        Returns:
+            True if text looks like JSON tool call (should suppress display)
+        """
+        stripped = text.strip()
+
+        # Starts with { - might be JSON
+        if stripped.startswith('{'):
+            # Check if it contains tool name references
+            for tool_name in available_tools:
+                if f'"{tool_name}"' in stripped or f"'{tool_name}'" in stripped:
+                    return True
+            # Also check for generic tool call patterns
+            if '"name"' in stripped or '"arguments"' in stripped:
+                return True
+
+        return False
 
     def _accumulate_tool_call(self, buffer: list, delta_tc):
         """Accumulate partial tool call from streaming.
