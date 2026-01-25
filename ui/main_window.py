@@ -6,13 +6,6 @@ from collections import deque
 from pathlib import Path
 from typing import Optional
 
-# Set up logging
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
 from PySide6.QtWidgets import (
     QMainWindow,
     QWidget,
@@ -27,9 +20,8 @@ from PySide6.QtWidgets import (
     QLabel,
     QDockWidget,
 )
-from PySide6.QtCore import Qt, Signal, QThread, QMimeData, QUrl, QTimer, Slot
-from PySide6.QtGui import QDesktopServices, QKeySequence, QAction
-from PySide6.QtGui import QDragEnterEvent, QDropEvent
+from PySide6.QtCore import Qt, Signal, QThread, QUrl, QTimer, Slot
+from PySide6.QtGui import QDesktopServices, QKeySequence, QAction, QDragEnterEvent, QDropEvent
 
 from models.clip import Source, Clip
 from core.scene_detect import SceneDetector, DetectionConfig
@@ -40,7 +32,7 @@ from core.dataset_export import export_dataset, DatasetExportConfig
 from core.edl_export import export_edl, EDLExportConfig
 from core.analysis.color import extract_dominant_colors
 from core.analysis.shots import classify_shot_type
-from core.settings import Settings, load_settings, save_settings, migrate_from_qsettings
+from core.settings import load_settings, save_settings, migrate_from_qsettings
 from core.youtube_api import (
     YouTubeSearchClient,
     YouTubeSearchResult,
@@ -50,12 +42,9 @@ from core.youtube_api import (
     InvalidAPIKeyError,
 )
 from core.project import (
-    save_project,
-    load_project,
     Project,
     ProjectMetadata,
     ProjectLoadError,
-    MissingSourceError,
 )
 from ui.project_adapter import ProjectSignalAdapter
 from ui.settings_dialog import SettingsDialog
@@ -63,6 +52,14 @@ from ui.tabs import CollectTab, CutTab, AnalyzeTab, GenerateTab, SequenceTab, Re
 from ui.theme import theme
 from ui.chat_panel import ChatPanel
 from ui.chat_worker import ChatAgentWorker
+from core.gui_state import GUIState
+
+# Set up logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 
 class DetectionWorker(QThread):
@@ -518,6 +515,9 @@ class MainWindow(QMainWindow):
         self._analyze_all_clips: list = []  # Clips being analyzed
         self._transcription_source_queue: list = []  # Queue for multi-source transcription
 
+        # GUI state tracking for agent context awareness
+        self._gui_state = GUIState()
+
         # Project path tracking (for backwards compatibility - delegates to project)
         # Note: self.project.path is the actual storage
 
@@ -654,6 +654,11 @@ class MainWindow(QMainWindow):
             self.render_tab,
         ]
 
+        # Track active tab for agent context
+        tab_names = ["collect", "cut", "analyze", "generate", "sequence", "render"]
+        if 0 <= index < len(tab_names):
+            self._gui_state.active_tab = tab_names[index]
+
         # Notify tabs of activation/deactivation
         for i, tab in enumerate(tabs):
             if i == index:
@@ -744,7 +749,7 @@ class MainWindow(QMainWindow):
         tab_names = ["&Collect", "&Analyze", "&Generate", "&Sequence", "&Render"]
         for i, name in enumerate(tab_names):
             action = QAction(name, self)
-            action.setShortcut(QKeySequence(f"Ctrl+{i+1}"))
+            action.setShortcut(QKeySequence(f"Ctrl+{i + 1}"))
             action.triggered.connect(lambda checked, idx=i: self.tab_widget.setCurrentIndex(idx))
             view_menu.addAction(action)
 
@@ -853,9 +858,6 @@ class MainWindow(QMainWindow):
 
     def _setup_chat_panel(self):
         """Initialize the chat panel dock widget."""
-        from core.llm_client import ProviderConfig, ProviderType, create_provider_config_from_settings
-        from core.settings import get_llm_api_key
-
         # Initialize chat state
         self._chat_history: list[dict] = []
         self._last_user_message: str = ""
@@ -891,7 +893,7 @@ class MainWindow(QMainWindow):
 
     def _on_chat_message(self, message: str):
         """Handle user message from chat panel."""
-        from core.llm_client import ProviderConfig, ProviderType, create_provider_config_from_settings
+        from core.llm_client import ProviderConfig, ProviderType
         from core.settings import (
             get_anthropic_api_key, get_openai_api_key,
             get_gemini_api_key, get_openrouter_api_key
@@ -945,12 +947,13 @@ class MainWindow(QMainWindow):
                 return worker is not None and worker.isRunning()
             return False
 
-        # Start worker
+        # Start worker with GUI state context
         self._chat_worker = ChatAgentWorker(
             config=config,
             messages=messages,
             project=self.project,
             busy_check=check_busy,
+            gui_state_context=self._gui_state.to_context_string(),
         )
 
         # Connect signals
@@ -965,6 +968,10 @@ class MainWindow(QMainWindow):
         self._chat_worker.gui_tool_requested.connect(self._on_gui_tool_requested)
         self._chat_worker.complete.connect(self._on_chat_complete)
         self._chat_worker.error.connect(self._on_chat_error)
+
+        # GUI sync signals - update GUI components when agent performs actions
+        self._chat_worker.youtube_search_completed.connect(self._on_agent_youtube_search)
+        self._chat_worker.video_download_completed.connect(self._on_agent_video_downloaded)
 
         self._chat_worker.start()
 
@@ -1050,6 +1057,94 @@ class MainWindow(QMainWindow):
         """Handle chat error."""
         logger.error(f"Chat error: {error}")
         self.chat_panel.on_stream_error(error)
+
+    @Slot(str, list)
+    def _on_agent_youtube_search(self, query: str, videos: list[dict]):
+        """Sync agent YouTube search results to the GUI.
+
+        When the chat agent performs a YouTube search, this updates the
+        Collect tab's YouTube panel to display the results.
+
+        Args:
+            query: Search query that was executed
+            videos: List of video dicts from search_youtube tool
+        """
+        logger.info(f"Agent YouTube search completed: '{query}' with {len(videos)} results")
+
+        # Convert dicts to YouTubeVideo objects
+        video_objects = []
+        for v in videos:
+            video_objects.append(YouTubeVideo(
+                video_id=v.get("video_id", ""),
+                title=v.get("title", ""),
+                channel_title=v.get("channel", ""),
+                duration_str=v.get("duration", ""),
+                thumbnail_url=v.get("thumbnail", ""),
+                view_count=v.get("view_count"),
+            ))
+
+        # Update YouTube panel with results
+        self.collect_tab.youtube_search_panel.search_input.setText(query)
+        self.collect_tab.youtube_search_panel.display_results(video_objects)
+
+        # Expand panel if collapsed
+        if not self.collect_tab.youtube_search_panel._expanded:
+            self.collect_tab.youtube_search_panel.toggle_btn.click()
+
+        # Switch to Collect tab so user sees the results
+        self._switch_to_tab("collect")
+
+        # Update status bar
+        self.status_bar.showMessage(f"Agent found {len(videos)} videos for '{query}'")
+
+        # Update GUI state for agent context
+        self._gui_state.update_from_search(query, videos)
+
+    @Slot(str, dict)
+    def _on_agent_video_downloaded(self, url: str, result: dict):
+        """Sync agent video download to the GUI.
+
+        When the chat agent downloads a video, this adds it to the library.
+
+        Args:
+            url: URL that was downloaded
+            result: Download result dict containing file_path
+        """
+        file_path = result.get("file_path")
+        if not file_path:
+            logger.warning(f"Agent download completed but no file_path in result: {result}")
+            return
+
+        path = Path(file_path)
+        if not path.exists():
+            logger.warning(f"Agent downloaded file not found: {path}")
+            return
+
+        logger.info(f"Agent downloaded video: {path.name}")
+
+        # Add to library using existing method
+        self._load_video(path)
+
+        # Update status bar
+        self.status_bar.showMessage(f"Agent downloaded: {path.name}")
+
+    def _switch_to_tab(self, tab_name: str):
+        """Switch to a specific tab by name.
+
+        Args:
+            tab_name: Tab name ("collect", "cut", "analyze", "sequence", "generate", "render")
+        """
+        tab_map = {
+            "collect": 0,
+            "cut": 1,
+            "analyze": 2,
+            "sequence": 3,
+            "generate": 4,
+            "render": 5,
+        }
+        index = tab_map.get(tab_name.lower())
+        if index is not None and hasattr(self, 'tab_widget'):
+            self.tab_widget.setCurrentIndex(index)
 
     def _on_chat_cancel(self):
         """Handle chat cancellation."""
@@ -1535,7 +1630,7 @@ class MainWindow(QMainWindow):
         if not is_faster_whisper_available():
             logger.warning("Transcription skipped in 'Analyze All': faster-whisper not installed")
             self.status_bar.showMessage(
-                f"Analysis complete (transcription unavailable - install faster-whisper)"
+                "Analysis complete (transcription unavailable - install faster-whisper)"
             )
             # Skip transcription, continue to next step (which will complete the flow)
             self._start_next_analyze_all_step()
@@ -1754,6 +1849,19 @@ class MainWindow(QMainWindow):
         self.collect_tab.youtube_search_panel.set_searching(False)
         self.collect_tab.youtube_search_panel.display_results(result.videos)
         self.status_bar.showMessage(f"Found {len(result.videos)} videos")
+
+        # Update GUI state for agent context
+        query = self.collect_tab.youtube_search_panel.get_search_query()
+        self._gui_state.update_from_search(query, [
+            {
+                "video_id": v.video_id,
+                "title": v.title,
+                "duration": v.duration_str,
+                "channel": v.channel_title,
+                "thumbnail": v.thumbnail_url,
+            }
+            for v in result.videos
+        ])
 
     @Slot(str)
     def _on_youtube_search_error(self, error: str):
@@ -2060,7 +2168,7 @@ class MainWindow(QMainWindow):
         if self.current_source:
             # Add to Sequence tab timeline (primary source of truth)
             self.sequence_tab.add_clip_to_timeline(clip, self.current_source)
-            self.status_bar.showMessage(f"Added clip to timeline")
+            self.status_bar.showMessage("Added clip to timeline")
             self._mark_dirty()
             # Update Render tab with new sequence info
             self._update_render_tab_sequence_info()
@@ -2327,7 +2435,7 @@ class MainWindow(QMainWindow):
         for i, clip in enumerate(clips):
             start = clip.start_time(fps)
             duration = clip.duration_seconds(fps)
-            output_file = output_path / f"{source_name}_scene_{i+1:03d}.mp4"
+            output_file = output_path / f"{source_name}_scene_{i + 1:03d}.mp4"
 
             success = processor.extract_clip(
                 input_path=self.current_source.file_path,

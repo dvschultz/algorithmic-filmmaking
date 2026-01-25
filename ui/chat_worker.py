@@ -57,7 +57,7 @@ def _parse_tool_calls_from_text(content: str, available_tools: list[str]) -> tup
 
                 # Try to extract arguments
                 args = {}
-                args_pattern = rf'"arguments"\s*:\s*(\{{[^{{}}]*\}})'
+                args_pattern = r'"arguments"\s*:\s*(\{[^{}]*\})'
                 args_match = re.search(args_pattern, content)
                 if args_match:
                     try:
@@ -236,12 +236,17 @@ class ChatAgentWorker(QThread):
     complete = Signal(str, list)  # final response text, tool_history
     error = Signal(str)  # error message
 
+    # GUI sync signals - emitted after tool execution to update GUI components
+    youtube_search_completed = Signal(str, list)  # query, list of video dicts
+    video_download_completed = Signal(str, dict)  # url, download result dict
+
     def __init__(
         self,
         config: ProviderConfig,
         messages: list[dict],
         project: Optional[Any] = None,
         busy_check: Optional[Callable[[str], bool]] = None,
+        gui_state_context: Optional[str] = None,
         parent=None
     ):
         """Initialize the worker.
@@ -251,6 +256,7 @@ class ChatAgentWorker(QThread):
             messages: Conversation history
             project: Active Project instance
             busy_check: Callback to check if operation is busy
+            gui_state_context: Human-readable GUI state for system prompt
             parent: Parent QObject
         """
         super().__init__(parent)
@@ -258,6 +264,7 @@ class ChatAgentWorker(QThread):
         self.messages = messages.copy()
         self.project = project
         self.busy_check = busy_check
+        self.gui_state_context = gui_state_context
         self._stop_requested = False
 
         # For GUI tool synchronization
@@ -371,6 +378,9 @@ class ChatAgentWorker(QThread):
                         result = executor.execute(tc)
 
                     self.tool_result.emit(name, result, result.get("success", False))
+
+                    # Emit GUI sync signals for specific tools
+                    self._emit_gui_sync_signal(name, args, result)
 
                     # Emit human-readable summary
                     formatted = _format_tool_result_for_display(name, result)
@@ -609,7 +619,42 @@ You can reference existing clips by their IDs and build on this project.
 NO PROJECT LOADED - The user should open or create a project first, or you can help them start by detecting scenes in a video.
 """
 
+        # Add GUI state context if available
+        if self.gui_state_context:
+            prompt += f"""
+
+CURRENT GUI STATE:
+{self.gui_state_context}
+"""
+
         return prompt
+
+    def _emit_gui_sync_signal(self, tool_name: str, args: dict, result: dict):
+        """Emit GUI sync signals for tools that should update the GUI.
+
+        Args:
+            tool_name: Name of the executed tool
+            args: Tool arguments
+            result: Tool execution result
+        """
+        if not result.get("success", False):
+            return
+
+        data = result.get("data", result)
+
+        if tool_name == "search_youtube":
+            # Emit signal with query and video results
+            query = data.get("query", args.get("query", ""))
+            videos = data.get("results", [])
+            if videos:
+                logger.info(f"Emitting youtube_search_completed with {len(videos)} results")
+                self.youtube_search_completed.emit(query, videos)
+
+        elif tool_name == "download_video":
+            # Emit signal with URL and download result
+            url = args.get("url", "")
+            logger.info(f"Emitting video_download_completed for {url}")
+            self.video_download_completed.emit(url, data)
 
     def stop(self):
         """Request the worker to stop."""
