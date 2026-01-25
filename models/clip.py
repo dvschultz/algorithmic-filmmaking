@@ -19,6 +19,8 @@ class Source:
     fps: float = 30.0
     width: int = 0
     height: int = 0
+    analyzed: bool = False  # Has this source been analyzed for scenes?
+    thumbnail_path: Optional[Path] = None  # Thumbnail for library grid
 
     @property
     def filename(self) -> str:
@@ -40,6 +42,7 @@ class Source:
             "fps": self.fps,
             "width": self.width,
             "height": self.height,
+            "analyzed": self.analyzed,
         }
         # Store relative path if base_path provided, with absolute fallback
         if base_path:
@@ -92,6 +95,8 @@ class Source:
             fps=data.get("fps", 30.0),
             width=data.get("width", 0),
             height=data.get("height", 0),
+            analyzed=data.get("analyzed", False),
+            thumbnail_path=None,  # Regenerate on load
         )
 
 

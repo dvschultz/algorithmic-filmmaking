@@ -109,6 +109,41 @@ class ThumbnailGenerator:
             height=height,
         )
 
+    def generate_first_frame(
+        self,
+        video_path: Path,
+        source_id: str,
+        width: int = 160,
+        height: int = 90,
+    ) -> Optional[Path]:
+        """
+        Generate a thumbnail from the first frame of a video (for library grid).
+
+        Args:
+            video_path: Source video file
+            source_id: Unique ID for the source (used for caching)
+            width: Thumbnail width
+            height: Thumbnail height
+
+        Returns:
+            Path to generated thumbnail, or None if generation failed
+        """
+        output_path = self.cache_dir / f"source_{source_id}.jpg"
+
+        if output_path.exists():
+            return output_path
+
+        try:
+            return self.generate_thumbnail(
+                video_path=video_path,
+                timestamp_seconds=0.0,  # First frame
+                output_path=output_path,
+                width=width,
+                height=height,
+            )
+        except Exception:
+            return None
+
     def clear_cache(self):
         """Clear all cached thumbnails."""
         if self.cache_dir.exists():

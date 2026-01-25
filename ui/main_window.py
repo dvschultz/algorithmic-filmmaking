@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLineEdit,
     QTabWidget,
+    QLabel,
 )
 from PySide6.QtCore import Qt, Signal, QThread, QMimeData, QUrl, QTimer, Slot
 from PySide6.QtGui import QDesktopServices, QKeySequence, QAction
@@ -353,9 +354,14 @@ class MainWindow(QMainWindow):
         logger.info(f"Loaded settings: sensitivity={self.settings.default_sensitivity}")
 
         # State
-        self.current_source: Optional[Source] = None
-        self.clips: list[Clip] = []
+        self.sources: list[Source] = []  # All sources in the library
+        self.sources_by_id: dict[str, Source] = {}  # For fast lookup
+        self.current_source: Optional[Source] = None  # Currently active source
+        self.clips: list[Clip] = []  # All clips from all analyzed sources
         self.clips_by_id: dict[str, Clip] = {}  # For fast lookup
+        self.clips_by_source: dict[str, list[Clip]] = {}  # Clips organized by source ID
+        self._analyze_queue: list[Source] = []  # Queue for batch analysis
+        self._analyze_queue_total: int = 0  # Total count for progress display
         self.detection_worker: Optional[DetectionWorker] = None
         self.thumbnail_worker: Optional[ThumbnailWorker] = None
         self.download_worker: Optional[DownloadWorker] = None
@@ -428,6 +434,12 @@ class MainWindow(QMainWindow):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Drop a video file to begin")
+
+        # Queue indicator (permanent widget on right side)
+        self.queue_label = QLabel("")
+        self.queue_label.setStyleSheet("color: #666; padding-right: 10px;")
+        self.queue_label.setVisible(False)
+        self.status_bar.addPermanentWidget(self.queue_label)
 
     def _on_tab_changed(self, index: int):
         """Handle tab switching."""
@@ -574,7 +586,9 @@ class MainWindow(QMainWindow):
     def _connect_signals(self):
         """Connect UI signals."""
         # Collect tab signals
-        self.collect_tab.video_imported.connect(self._on_video_imported_from_tab)
+        self.collect_tab.videos_added.connect(self._on_videos_added)
+        self.collect_tab.analyze_requested.connect(self._on_analyze_requested)
+        self.collect_tab.source_selected.connect(self._on_source_selected)
         self.collect_tab.download_requested.connect(self._on_download_requested_from_tab)
 
         # Analyze tab signals
@@ -604,15 +618,115 @@ class MainWindow(QMainWindow):
         self.sequence_tab.video_player.position_updated.connect(self._on_video_position_updated)
         self.sequence_tab.video_player.player.playbackStateChanged.connect(self._on_video_state_changed)
 
-    def _on_video_imported_from_tab(self, path):
-        """Handle video import from Collect tab."""
-        self._load_video(path)
-        # Switch to Analyze tab after import
-        self.tab_widget.setCurrentIndex(1)  # Analyze tab
-
     def _on_download_requested_from_tab(self, url: str):
         """Handle download request from Collect tab."""
         self._download_video(url)
+
+    def _on_videos_added(self, paths: list[Path]):
+        """Handle multiple videos added from Collect tab."""
+        for path in paths:
+            self._add_video_to_library(path)
+
+    def _on_analyze_requested(self, source_ids: list[str]):
+        """Handle analyze request from Collect tab.
+
+        Args:
+            source_ids: List of source IDs to analyze. If empty, analyze all unanalyzed.
+        """
+        if source_ids:
+            sources_to_analyze = [
+                self.sources_by_id[sid]
+                for sid in source_ids
+                if sid in self.sources_by_id and not self.sources_by_id[sid].analyzed
+            ]
+        else:
+            sources_to_analyze = [s for s in self.sources if not s.analyzed]
+
+        if not sources_to_analyze:
+            self.status_bar.showMessage("All videos are already analyzed")
+            return
+
+        # Queue all sources for batch analysis
+        self._analyze_queue = sources_to_analyze.copy()
+        self._analyze_queue_total = len(sources_to_analyze)
+        self._start_next_analysis()
+
+    def _start_next_analysis(self):
+        """Start analyzing the next source in the queue."""
+        if not self._analyze_queue:
+            self.status_bar.showMessage("Batch analysis complete")
+            self.queue_label.setVisible(False)
+            self._analyze_queue_total = 0
+            return
+
+        # Pop the next source from the queue
+        source = self._analyze_queue.pop(0)
+        remaining = len(self._analyze_queue)
+        current = self._analyze_queue_total - remaining
+
+        # Update queue indicator
+        if self._analyze_queue_total > 1:
+            self.queue_label.setText(f"Processing {current} of {self._analyze_queue_total}")
+            self.queue_label.setVisible(True)
+
+        self._select_source(source)
+        self._start_detection(self.settings.default_sensitivity)
+        self.tab_widget.setCurrentIndex(1)  # Switch to Analyze tab
+
+    def _on_source_selected(self, source: Source):
+        """Handle source selection from Collect tab."""
+        self._select_source(source)
+
+    def _select_source(self, source: Source):
+        """Select a source as the current active source."""
+        if source.id == getattr(self.current_source, 'id', None):
+            return  # Already selected
+
+        self.current_source = source
+
+        # Update Analyze tab with source info (keeps existing clips visible)
+        self.analyze_tab.set_source(source)
+
+        # Update Sequence tab
+        self.sequence_tab.set_source(source)
+
+        self._update_window_title()
+        self.status_bar.showMessage(f"Selected: {source.filename}")
+
+    def _add_video_to_library(self, path: Path):
+        """Add a video file to the library without making it active."""
+        # Check if already in library
+        for source in self.sources:
+            if source.file_path == path:
+                self.status_bar.showMessage(f"Video already in library: {path.name}")
+                return
+
+        # Create new source
+        source = Source(file_path=path)
+        self.sources.append(source)
+        self.sources_by_id[source.id] = source
+
+        # Add to CollectTab grid
+        self.collect_tab.add_source(source)
+
+        # Generate thumbnail for the source
+        self._generate_source_thumbnail(source)
+
+        self._mark_dirty()
+        self.status_bar.showMessage(f"Added to library: {path.name}")
+
+    def _generate_source_thumbnail(self, source: Source):
+        """Generate a thumbnail for a source video (first frame)."""
+        from core.thumbnail import ThumbnailGenerator
+
+        generator = ThumbnailGenerator()
+        try:
+            thumb_path = generator.generate_first_frame(source.file_path, source.id)
+            if thumb_path:
+                source.thumbnail_path = thumb_path
+                self.collect_tab.update_source_thumbnail(source.id, thumb_path)
+        except Exception as e:
+            logger.warning(f"Failed to generate source thumbnail: {e}")
 
     def _on_detect_from_tab(self, threshold: float):
         """Handle detection request from Analyze tab."""
@@ -743,18 +857,33 @@ class MainWindow(QMainWindow):
             self._load_video(Path(file_path))
 
     def _load_video(self, path: Path):
-        """Load a video file."""
-        self.current_source = Source(file_path=path)
-        self.clips = []
-        self.clips_by_id = {}
-        self.status_bar.showMessage(f"Loaded: {path.name}")
-        self.setWindowTitle(f"Scene Ripper - {path.name}")
+        """Load a video file - adds to library and selects it."""
+        # Check if already in library
+        existing = None
+        for source in self.sources:
+            if source.file_path == path:
+                existing = source
+                break
 
-        # Update tabs with new source
-        self.analyze_tab.set_source(self.current_source)
-        self.analyze_tab.clear_clips()
+        if existing:
+            # Already in library, just select it
+            self._select_source(existing)
+        else:
+            # Add to library
+            source = Source(file_path=path)
+            self.sources.append(source)
+            self.sources_by_id[source.id] = source
+            self.collect_tab.add_source(source)
+
+            # Generate thumbnail
+            self._generate_source_thumbnail(source)
+
+            # Select it
+            self._select_source(source)
+            self._mark_dirty()
+
+        # Set sensitivity
         self.analyze_tab.set_sensitivity(self.settings.default_sensitivity)
-        self.sequence_tab.set_source(self.current_source)
 
     def _on_import_url_click(self):
         """Handle import URL button click."""
@@ -819,9 +948,8 @@ class MainWindow(QMainWindow):
         self._shot_type_finished_handled = False
         self._transcription_finished_handled = False
 
-        # Update Analyze tab state
+        # Update Analyze tab state (don't clear clips - keep clips from other sources)
         self.analyze_tab.set_detecting(True)
-        self.analyze_tab.clear_clips()
 
         config = DetectionConfig(threshold=threshold)
 
@@ -858,11 +986,35 @@ class MainWindow(QMainWindow):
 
         logger.info(f"Detection worker running: {self.detection_worker.isRunning() if self.detection_worker else 'None'}")
 
-        self.current_source = source
-        self.clips = clips
-        self.clips_by_id = {clip.id: clip for clip in clips}
+        # Update the existing source in the library with detected metadata
+        if self.current_source and self.current_source.id in self.sources_by_id:
+            # Update metadata from detection
+            self.current_source.duration_seconds = source.duration_seconds
+            self.current_source.fps = source.fps
+            self.current_source.width = source.width
+            self.current_source.height = source.height
+            self.current_source.analyzed = True
+
+            # Update CollectTab to show analyzed badge
+            self.collect_tab.update_source_analyzed(self.current_source.id, True)
+        else:
+            # Source not in library yet (shouldn't happen normally)
+            self.current_source = source
+            source.analyzed = True
+
+        # Add new clips to the collection (don't replace existing clips from other sources)
+        # First, remove any existing clips from this source (re-analysis case)
+        self.clips = [c for c in self.clips if c.source_id != self.current_source.id]
+        # Add the new clips
+        self.clips.extend(clips)
+        # Rebuild lookup dictionaries
+        self.clips_by_id = {clip.id: clip for clip in self.clips}
+        self.clips_by_source[self.current_source.id] = clips
         self._mark_dirty()
         self._update_window_title()
+
+        # Remove old clips for this source from the UI (handles re-analysis case)
+        self.analyze_tab.remove_clips_for_source(self.current_source.id)
 
         self.status_bar.showMessage(f"Found {len(clips)} scenes. Generating thumbnails...")
 
@@ -909,15 +1061,17 @@ class MainWindow(QMainWindow):
 
         logger.info(f"Thumbnail worker running: {self.thumbnail_worker.isRunning() if self.thumbnail_worker else 'None'}")
 
-        # Update Analyze tab with clips
+        # Update Analyze tab with all clips (from all sources)
         self.analyze_tab.set_clips(self.clips)
         self.analyze_tab.set_detecting(False)
 
-        # Make clips available for timeline remix (via Sequence tab)
-        if self.current_source and self.clips:
-            self.sequence_tab.set_clips_available(self.clips, self.current_source)
-            # Update Render tab with clip count
-            self.render_tab.set_detected_clips_count(len(self.clips))
+        # Make all clips available for timeline remix (via Sequence tab)
+        # Pass clips for the current source being analyzed
+        current_source_clips = self.clips_by_source.get(self.current_source.id, []) if self.current_source else []
+        if self.current_source and current_source_clips:
+            self.sequence_tab.set_clips_available(current_source_clips, self.current_source)
+        # Update Render tab with total clip count from all sources
+        self.render_tab.set_detected_clips_count(len(self.clips))
 
         # Start color analysis (if enabled in settings)
         if self.clips and self.settings.auto_analyze_colors:
@@ -1036,6 +1190,8 @@ class MainWindow(QMainWindow):
                 self.status_bar.showMessage(
                     f"Ready - {len(self.clips)} scenes (transcription unavailable - install faster-whisper)"
                 )
+                # Continue with next source in batch queue (deferred to let worker cleanup)
+                QTimer.singleShot(0, self._start_next_analysis)
                 return
 
             self.status_bar.showMessage(f"Transcribing speech for {len(self.clips)} scenes...")
@@ -1056,6 +1212,8 @@ class MainWindow(QMainWindow):
         else:
             self.progress_bar.setVisible(False)
             self.status_bar.showMessage(f"Ready - {len(self.clips)} scenes detected")
+            # Continue with next source in batch queue (deferred to let worker cleanup)
+            QTimer.singleShot(0, self._start_next_analysis)
 
     def _on_transcription_progress(self, current: int, total: int):
         """Handle transcription progress."""
@@ -1086,6 +1244,9 @@ class MainWindow(QMainWindow):
         logger.info(f"Transcription worker running: {self.transcription_worker.isRunning() if self.transcription_worker else 'None'}")
         self.progress_bar.setVisible(False)
         self.status_bar.showMessage(f"Ready - {len(self.clips)} scenes detected")
+
+        # Continue with next source in batch queue (deferred to let worker cleanup)
+        QTimer.singleShot(0, self._start_next_analysis)
 
     def _on_clip_dragged_to_timeline(self, clip: Clip):
         """Handle clip dragged from browser to timeline."""
@@ -1699,11 +1860,11 @@ class MainWindow(QMainWindow):
 
     def _save_project_to_file(self, filepath: Path):
         """Save project to the specified file."""
-        if not self.current_source:
+        if not self.sources:
             QMessageBox.warning(
                 self,
                 "Save Project",
-                "No video source loaded. Import a video first."
+                "No videos in library. Import a video first."
             )
             return
 
@@ -1725,7 +1886,7 @@ class MainWindow(QMainWindow):
 
         success = save_project(
             filepath=filepath,
-            sources=[self.current_source],
+            sources=self.sources,  # Save all sources in library
             clips=self.clips,
             sequence=sequence,
             ui_state=ui_state,
@@ -1791,21 +1952,45 @@ class MainWindow(QMainWindow):
         # Clear existing state
         self._clear_project_state()
 
-        # Restore source (single source for now)
+        # Restore all sources to library
+        self.sources = sources
+        self.sources_by_id = {source.id: source for source in sources}
+
+        # Build source lookup for clip mapping
+        sources_by_id = {s.id: s for s in sources}
+
+        # Add all sources to CollectTab
+        for source in sources:
+            self.collect_tab.add_source(source)
+            # Generate source thumbnails if missing
+            if not source.thumbnail_path or not source.thumbnail_path.exists():
+                self._generate_source_thumbnail(source)
+
+        # Set first source as current (for backwards compatibility)
         self.current_source = sources[0]
 
         # Restore clips
         self.clips = clips
         self.clips_by_id = {clip.id: clip for clip in clips}
+        # Organize clips by source
+        self.clips_by_source = {}
+        for clip in clips:
+            if clip.source_id not in self.clips_by_source:
+                self.clips_by_source[clip.source_id] = []
+            self.clips_by_source[clip.source_id].append(clip)
 
         # Update Analyze tab
         self.analyze_tab.set_source(self.current_source)
         self.analyze_tab.clear_clips()
         self.analyze_tab.set_clips(clips)
 
-        # Add clips to browser and queue thumbnail regeneration
+        # Add clips to browser with their correct source
         for clip in clips:
-            self.analyze_tab.add_clip(clip, self.current_source)
+            clip_source = sources_by_id.get(clip.source_id)
+            if not clip_source:
+                logging.warning(f"Clip {clip.id} references unknown source {clip.source_id}")
+                continue
+            self.analyze_tab.add_clip(clip, clip_source)
             # Update colors and shot type if present
             if clip.dominant_colors:
                 self.analyze_tab.update_clip_colors(clip.id, clip.dominant_colors)
@@ -1814,9 +1999,9 @@ class MainWindow(QMainWindow):
             if clip.transcript:
                 self.analyze_tab.update_clip_transcript(clip.id, clip.transcript)
 
-        # Restore sequence (pass clips for _clip_lookup population)
+        # Restore sequence (pass all sources for multi-source playback)
         if sequence:
-            self.sequence_tab.timeline.load_sequence(sequence, sources[0], clips)
+            self.sequence_tab.timeline.load_sequence(sequence, sources_by_id, clips)
 
         # Restore UI state
         if "sensitivity" in ui_state:
@@ -1838,9 +2023,16 @@ class MainWindow(QMainWindow):
 
     def _clear_project_state(self):
         """Clear current project state."""
+        self.sources = []
+        self.sources_by_id = {}
         self.current_source = None
         self.clips = []
         self.clips_by_id = {}
+        self.clips_by_source = {}
+        self._analyze_queue = []
+        self._analyze_queue_total = 0
+        self.queue_label.setVisible(False)
+        self.collect_tab.clear()
         self.analyze_tab.clear_clips()
         self.analyze_tab.set_source(None)
         self.sequence_tab.timeline.clear()

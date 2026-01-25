@@ -429,6 +429,36 @@ class ClipBrowser(QWidget):
         self._source_lookup = {}
         self.empty_label.setVisible(True)
 
+    def remove_clips_for_source(self, source_id: str):
+        """Remove all clips for a specific source (used when re-analyzing)."""
+        # Separate into keep and remove in single pass (O(n) instead of O(n²))
+        keep = []
+        remove = []
+        for thumb in self.thumbnails:
+            if thumb.source.id == source_id:
+                remove.append(thumb)
+            else:
+                keep.append(thumb)
+
+        # Clean up removed widgets
+        for thumb in remove:
+            self.grid.removeWidget(thumb)
+            thumb.deleteLater()
+            # Remove from selection if selected
+            self.selected_clips.discard(thumb.clip.id)
+            # Remove from source lookup
+            if thumb.clip.id in self._source_lookup:
+                del self._source_lookup[thumb.clip.id]
+
+        # Replace list in one operation (avoids O(n) list.remove() calls)
+        if remove:
+            self.thumbnails = keep
+            self._rebuild_grid()
+
+        # Show empty state if no clips left
+        if not self.thumbnails:
+            self.empty_label.setVisible(True)
+
     def set_drag_enabled(self, enabled: bool):
         """Enable or disable dragging clips to timeline."""
         self._drag_enabled = enabled

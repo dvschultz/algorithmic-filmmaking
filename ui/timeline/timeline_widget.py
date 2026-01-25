@@ -362,21 +362,24 @@ class TimelineWidget(QWidget):
         self._update_export_button()
         self.sequence_changed.emit()
 
-    def load_sequence(self, sequence: Sequence, source: Source, clips: list = None):
+    def load_sequence(self, sequence: Sequence, sources: dict, clips: list = None):
         """Load a saved sequence.
 
         Args:
             sequence: The sequence to load
-            source: The source video (for lookups)
+            sources: Dict mapping source_id to Source objects
             clips: List of Clip objects to populate _clip_lookup for playback
         """
-        # Register the source
-        self._source_lookup[source.id] = source
+        # Register all sources
+        for source_id, source in sources.items():
+            self._source_lookup[source_id] = source
 
-        # Populate _clip_lookup from provided clips (required for playback)
+        # Populate _clip_lookup from provided clips with their correct sources
         if clips:
             for clip in clips:
-                self._clip_lookup[clip.id] = (clip, source)
+                clip_source = sources.get(clip.source_id)
+                if clip_source:
+                    self._clip_lookup[clip.id] = (clip, clip_source)
 
         # Set the sequence on the scene (this rebuilds all visuals)
         self.scene.set_sequence(sequence)

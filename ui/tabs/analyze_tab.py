@@ -186,7 +186,9 @@ class AnalyzeTab(BaseTab):
         if source:
             self.detect_btn.setEnabled(True)
             self.video_player.load_video(source.file_path)
-            self.state_stack.setCurrentIndex(self.STATE_NO_CLIPS)
+            # Only show "no clips" state if we don't already have clips visible
+            if not self._clips and not self.clip_browser.thumbnails:
+                self.state_stack.setCurrentIndex(self.STATE_NO_CLIPS)
         else:
             self.detect_btn.setEnabled(False)
             self.state_stack.setCurrentIndex(self.STATE_NO_VIDEO)
@@ -215,6 +217,17 @@ class AnalyzeTab(BaseTab):
         self.clip_browser.clear()
         self._clips = []
         self.clip_count_label.setText("")
+
+    def remove_clips_for_source(self, source_id: str):
+        """Remove clips for a specific source (used when re-analyzing)."""
+        self.clip_browser.remove_clips_for_source(source_id)
+        # Update internal clip list
+        self._clips = [c for c in self._clips if c.source_id != source_id]
+        # Update count label
+        if self._clips:
+            self.clip_count_label.setText(f"{len(self._clips)} clips")
+        else:
+            self.clip_count_label.setText("")
 
     def update_clip_colors(self, clip_id: str, colors: list):
         """Update colors for a clip."""
