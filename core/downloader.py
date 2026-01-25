@@ -1,5 +1,6 @@
 """Video downloader using yt-dlp for YouTube/Vimeo support."""
 
+import logging
 import subprocess
 import shutil
 import re
@@ -9,6 +10,8 @@ from pathlib import Path
 from typing import Callable, Optional
 from dataclasses import dataclass
 from urllib.parse import urlparse
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -177,6 +180,8 @@ class VideoDownloader:
             url,
         ]
 
+        logger.debug(f"yt-dlp command: {' '.join(cmd)}")
+
         # Run download with progress parsing
         process = subprocess.Popen(
             cmd,
@@ -189,6 +194,8 @@ class VideoDownloader:
         cancelled = False
         timed_out = False
         start_time = time.time()
+        last_error = None  # Capture yt-dlp error messages
+        recent_lines = []  # Keep recent output for debugging
 
         try:
             for line in process.stdout:
@@ -203,6 +210,15 @@ class VideoDownloader:
                     break
 
                 line = line.strip()
+
+                # Keep last 10 lines for error reporting
+                recent_lines.append(line)
+                if len(recent_lines) > 10:
+                    recent_lines.pop(0)
+
+                # Capture error messages from yt-dlp
+                if "ERROR:" in line:
+                    last_error = line
 
                 # Parse progress from yt-dlp output
                 if "[download]" in line:
@@ -257,9 +273,19 @@ class VideoDownloader:
             return DownloadResult(success=False, error="Download timed out")
 
         if process.returncode != 0:
+            # Use captured error message if available, otherwise show recent output
+            logger.error(f"yt-dlp failed with code {process.returncode}")
+            logger.error(f"Recent output: {recent_lines}")
+            if last_error:
+                error_msg = last_error
+            elif recent_lines:
+                # Show last few lines that might contain error info
+                error_msg = f"Download failed: {'; '.join(recent_lines[-3:])}"
+            else:
+                error_msg = "Download failed. Check URL and try again."
             return DownloadResult(
                 success=False,
-                error="Download failed. Check URL and try again."
+                error=error_msg
             )
 
         # Find the output file if we didn't catch it
