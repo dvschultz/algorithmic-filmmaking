@@ -4,6 +4,7 @@ Supports local (Ollama), OpenAI, Anthropic, Gemini, and OpenRouter providers
 with a unified interface for streaming chat completions with tool support.
 """
 
+import copy
 import logging
 from dataclasses import dataclass
 from enum import Enum
@@ -157,6 +158,55 @@ class LLMClient:
         """
         self.config = config
 
+    def _prepare_cached_request(
+        self,
+        messages: list[dict],
+        tools: Optional[list[dict]] = None
+    ) -> tuple[list[dict], Optional[list[dict]]]:
+        """Add cache_control markers for Anthropic prompt caching.
+
+        Anthropic's prompt caching reduces costs by 90% for cache hits AND
+        cached tokens don't count against rate limits. This method adds
+        cache_control markers to:
+        - The last tool (for cumulative tool schema caching)
+        - System messages (for system prompt caching)
+
+        Args:
+            messages: Conversation messages
+            tools: Optional tool definitions
+
+        Returns:
+            Tuple of (cached_messages, cached_tools) with cache markers added
+        """
+        # Only apply caching for Anthropic provider
+        if self.config.provider != ProviderType.ANTHROPIC:
+            return messages, tools
+
+        # Cache tools - mark the last tool for cumulative caching
+        cached_tools = tools
+        if tools:
+            cached_tools = copy.deepcopy(tools)
+            cached_tools[-1]["cache_control"] = {"type": "ephemeral"}
+
+        # Cache system messages
+        cached_messages = []
+        for msg in messages:
+            if msg.get("role") == "system":
+                content = msg.get("content", "")
+                # Convert to content block format with cache_control
+                cached_messages.append({
+                    "role": "system",
+                    "content": [{
+                        "type": "text",
+                        "text": content,
+                        "cache_control": {"type": "ephemeral"}
+                    }]
+                })
+            else:
+                cached_messages.append(msg)
+
+        return cached_messages, cached_tools
+
     async def stream_chat(
         self,
         messages: list[dict],
@@ -173,9 +223,12 @@ class LLMClient:
         """
         from litellm import acompletion
 
+        # Apply prompt caching for Anthropic (90% cost savings, rate limit exempt)
+        cached_messages, cached_tools = self._prepare_cached_request(messages, tools)
+
         kwargs = {
             "model": self.config.to_litellm_model(),
-            "messages": messages,
+            "messages": cached_messages,
             "stream": True,
             "temperature": self.config.temperature,
         }
@@ -187,8 +240,8 @@ class LLMClient:
         if api_base:
             kwargs["api_base"] = api_base
 
-        if tools:
-            kwargs["tools"] = tools
+        if cached_tools:
+            kwargs["tools"] = cached_tools
 
         logger.debug(
             f"LLM request: model={kwargs['model']}, "
@@ -215,9 +268,12 @@ class LLMClient:
         """
         from litellm import acompletion
 
+        # Apply prompt caching for Anthropic (90% cost savings, rate limit exempt)
+        cached_messages, cached_tools = self._prepare_cached_request(messages, tools)
+
         kwargs = {
             "model": self.config.to_litellm_model(),
-            "messages": messages,
+            "messages": cached_messages,
             "stream": False,
             "temperature": self.config.temperature,
         }
@@ -229,8 +285,8 @@ class LLMClient:
         if api_base:
             kwargs["api_base"] = api_base
 
-        if tools:
-            kwargs["tools"] = tools
+        if cached_tools:
+            kwargs["tools"] = cached_tools
 
         logger.debug(
             f"LLM request (non-streaming): model={kwargs['model']}, "

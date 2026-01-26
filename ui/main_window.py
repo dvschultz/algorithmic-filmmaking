@@ -1048,6 +1048,7 @@ class MainWindow(QMainWindow):
         self.chat_panel.message_sent.connect(self._on_chat_message)
         self.chat_panel.cancel_requested.connect(self._on_chat_cancel)
         self.chat_panel.provider_changed.connect(self._on_chat_provider_changed)
+        self.chat_panel.clear_requested.connect(self._on_chat_clear)
 
         # Connect plan signals
         self.chat_panel.plan_confirmed.connect(self._on_plan_confirmed)
@@ -1299,7 +1300,7 @@ class MainWindow(QMainWindow):
             tab_names = ["collect", "cut", "analyze", "sequence", "generate", "render"]
             if tab_name in tab_names:
                 index = tab_names.index(tab_name)
-                self.tabs.setCurrentIndex(index)
+                self.tab_widget.setCurrentIndex(index)
 
         elif tool_name == "select_clips":
             # Update clip browser selection in the active tab
@@ -1764,6 +1765,12 @@ class MainWindow(QMainWindow):
         if self._chat_worker and self._chat_worker.isRunning():
             logger.info("Cancelling chat worker")
             self._chat_worker.stop()
+
+    def _on_chat_clear(self):
+        """Handle chat clear request - reset conversation history."""
+        logger.info("Clearing chat history")
+        self._chat_history.clear()
+        self._last_user_message = ""
 
     def _on_chat_provider_changed(self, provider: str):
         """Handle provider selection change."""

@@ -727,10 +727,12 @@ def apply_filters(
             "error": f"Invalid color_palette '{color_palette}'. Valid options: {', '.join(valid_palettes[1:])}"
         }
 
+    # Get the active tab info
+    active_tab = main_window._gui_state.active_tab if main_window._gui_state else "unknown"
+
     # Get the active tab's clip browser via public API
     clip_browser = main_window.get_active_clip_browser()
     if clip_browser is None:
-        active_tab = main_window._gui_state.active_tab if main_window._gui_state else "unknown"
         return {
             "success": False,
             "error": f"No clip browser available in '{active_tab}' tab. Switch to Cut or Analyze tab first."

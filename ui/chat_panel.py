@@ -55,6 +55,7 @@ class ChatPanel(QWidget):
     message_sent = Signal(str)  # User message text
     cancel_requested = Signal()  # Cancel button clicked
     provider_changed = Signal(str)  # Provider selection changed
+    clear_requested = Signal()  # Clear chat history requested
 
     # Plan-related signals
     plan_confirmed = Signal(object)  # Emits Plan object when confirmed
@@ -88,6 +89,29 @@ class ChatPanel(QWidget):
         header_label.setStyleSheet("font-weight: bold; font-size: 14px;")
         header.addWidget(header_label)
         header.addStretch()
+
+        # Clear chat button
+        self.clear_button = QPushButton("Clear")
+        self.clear_button.setToolTip("Clear chat history (helps avoid rate limits)")
+        self.clear_button.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                border: 1px solid #d0d0d0;
+                border-radius: 4px;
+                padding: 4px 8px;
+                color: #666;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #f0f0f0;
+                border-color: #999;
+            }
+            QPushButton:pressed {
+                background-color: #e0e0e0;
+            }
+        """)
+        self.clear_button.clicked.connect(self._on_clear_clicked)
+        header.addWidget(self.clear_button)
 
         self.provider_combo = QComboBox()
         self.provider_combo.addItems([
@@ -225,6 +249,11 @@ class ChatPanel(QWidget):
         self.cancel_requested.emit()
         self._set_streaming_state(False)
         self.add_assistant_message("*Cancelled*")
+
+    def _on_clear_clicked(self):
+        """Handle clear button click."""
+        self.clear_messages()
+        self.clear_requested.emit()
 
     def _on_example_prompt_clicked(self, prompt_text: str):
         """Handle example prompt click - fill input field."""
