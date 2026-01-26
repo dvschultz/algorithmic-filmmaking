@@ -26,9 +26,9 @@ class ProviderType(Enum):
 DEFAULT_MODELS = {
     "local": "qwen3:8b",
     "openai": "gpt-4o-mini",
-    "anthropic": "claude-sonnet-4-20250514",  # Claude Sonnet 4
+    "anthropic": "claude-sonnet-4-5-20250929",  # Claude Sonnet 4.5
     "gemini": "gemini-2.0-flash",
-    "openrouter": "anthropic/claude-sonnet-4",
+    "openrouter": "anthropic/claude-sonnet-4-5",
 }
 
 # Available models per provider (first is recommended)
@@ -47,9 +47,9 @@ PROVIDER_MODELS = {
         ("o1-mini", "o1-mini"),
     ],
     "anthropic": [
-        ("claude-sonnet-4-20250514", "Claude Sonnet 4 (Recommended)"),
-        ("claude-opus-4-20250514", "Claude Opus 4"),
-        ("claude-haiku-4-20250514", "Claude Haiku 4"),
+        ("claude-sonnet-4-5-20250929", "Claude Sonnet 4.5 (Recommended)"),
+        ("claude-opus-4-5-20251101", "Claude Opus 4.5"),
+        ("claude-haiku-4-5-20251001", "Claude Haiku 4.5"),
     ],
     "gemini": [
         ("gemini-2.0-flash", "Gemini 2.0 Flash (Recommended)"),
@@ -57,10 +57,10 @@ PROVIDER_MODELS = {
         ("gemini-1.5-pro", "Gemini 1.5 Pro"),
     ],
     "openrouter": [
-        ("anthropic/claude-sonnet-4", "Claude Sonnet 4 (Recommended)"),
+        ("anthropic/claude-sonnet-4-5", "Claude Sonnet 4.5 (Recommended)"),
+        ("anthropic/claude-haiku-4-5", "Claude Haiku 4.5"),
         ("openai/gpt-4o", "GPT-4o"),
         ("google/gemini-2.0-flash", "Gemini 2.0 Flash"),
-        ("meta-llama/llama-3.3-70b", "Llama 3.3 70B"),
     ],
 }
 
