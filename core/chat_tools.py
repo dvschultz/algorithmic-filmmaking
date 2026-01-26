@@ -277,6 +277,7 @@ tools = ToolRegistry()
 def get_project_state(project) -> dict:
     """Get current project information."""
     return {
+        "success": True,
         "name": project.metadata.name,
         "path": str(project.path) if project.path else None,
         "sources": [
@@ -286,6 +287,7 @@ def get_project_state(project) -> dict:
                 "duration": s.duration_seconds,
                 "fps": s.fps,
                 "analyzed": s.analyzed,
+                "clips": len(project.clips_by_source.get(s.id, [])),
             }
             for s in project.sources
         ],
@@ -1476,6 +1478,10 @@ def analyze_colors_live(main_window, clip_ids: list[str]) -> dict:
     main_window._pending_agent_color_analysis = True
     main_window._agent_color_clips = clips
 
+    # Add clips to Analyze tab and switch
+    main_window.analyze_tab.add_clips([c.id for c in clips])
+    main_window._switch_to_tab("analyze")
+
     # Update UI state
     main_window.analyze_tab.set_analyzing(True, "colors")
     main_window.progress_bar.setVisible(True)
@@ -1529,6 +1535,10 @@ def analyze_shots_live(main_window, clip_ids: list[str]) -> dict:
     # Mark that we're waiting for shot analysis via agent
     main_window._pending_agent_shot_analysis = True
     main_window._agent_shot_clips = clips
+
+    # Add clips to Analyze tab and switch
+    main_window.analyze_tab.add_clips([c.id for c in clips])
+    main_window._switch_to_tab("analyze")
 
     # Update UI state
     main_window.analyze_tab.set_analyzing(True, "shots")
@@ -1614,6 +1624,10 @@ def transcribe_live(main_window, clip_ids: list[str]) -> dict:
 
     # Start with first source
     first_source, first_clips = source_queue[0]
+
+    # Add clips to Analyze tab and switch
+    main_window.analyze_tab.add_clips([c.id for c in clips])
+    main_window._switch_to_tab("analyze")
 
     # Update UI state
     main_window.analyze_tab.set_analyzing(True, "transcribe")

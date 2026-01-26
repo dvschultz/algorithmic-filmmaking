@@ -137,12 +137,12 @@ def _format_tool_result_for_display(tool_name: str, result: dict) -> str:
         error = result.get("error", "Unknown error")
         return f"**Error:** {error}"
 
-    data = result.get("data", result)
+    data = result.get("result", result)
 
     if tool_name == "get_project_state":
         name = data.get("name", "Untitled")
         sources = data.get("sources", [])
-        total_clips = data.get("total_clips", 0)
+        total_clips = data.get("clip_count", 0)
         sequence_clips = data.get("sequence_clips", 0)
 
         lines = [f"**Project:** {name}"]
@@ -566,7 +566,7 @@ You help users create video projects by:
 
 IMPORTANT BEHAVIOR RULES:
 1. Only perform the SPECIFIC task the user requests - nothing more
-2. Do NOT automatically download, analyze, or process unless explicitly asked
+2. Do NOT automatically download or process unless explicitly asked, OR if the processing is required to answer a specific question about missing properties (e.g. "what are the colors?" -> run analyze_colors)
 3. After completing a task, STOP and report results - do not chain additional actions
 4. If you think follow-up actions would help, SUGGEST them verbally - don't execute them
 5. When in doubt, ask the user before taking action
