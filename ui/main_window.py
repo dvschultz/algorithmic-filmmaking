@@ -976,6 +976,9 @@ class MainWindow(QMainWindow):
         self._chat_worker.complete.connect(self._on_chat_complete)
         self._chat_worker.error.connect(self._on_chat_error)
 
+        # Workflow progress for compound operations
+        self._chat_worker.workflow_progress.connect(self._on_workflow_progress)
+
         # GUI sync signals - update GUI components when agent performs actions
         self._chat_worker.youtube_search_completed.connect(self._on_agent_youtube_search)
         self._chat_worker.video_download_completed.connect(self._on_agent_video_downloaded)
@@ -993,6 +996,19 @@ class MainWindow(QMainWindow):
         if self._current_tool_indicator:
             self._current_tool_indicator.set_complete(success)
 
+    @Slot(str, int, int)
+    def _on_workflow_progress(self, step_name: str, current: int, total: int):
+        """Handle workflow progress updates for compound operations.
+
+        Args:
+            step_name: Name of the current step/tool
+            current: Current step number (1-indexed)
+            total: Total number of steps
+        """
+        logger.info(f"Workflow progress: {step_name} ({current}/{total})")
+        # Update status bar with progress
+        self.statusBar().showMessage(f"Processing: {step_name} ({current}/{total})")
+
     @Slot(str, dict, str)
     def _on_gui_tool_requested(self, tool_name: str, args: dict, tool_call_id: str):
         """Execute a GUI-modifying tool on the main thread.
@@ -1007,6 +1023,7 @@ class MainWindow(QMainWindow):
             tool_call_id: ID for tracking the tool call
         """
         from core.chat_tools import tools as tool_registry
+        import inspect
 
         logger.info(f"Executing GUI tool on main thread: {tool_name}")
 
@@ -1021,9 +1038,27 @@ class MainWindow(QMainWindow):
             }
         else:
             try:
-                # Inject project and execute
-                args["project"] = self.project
+                # Check what parameters the tool accepts
+                sig = inspect.signature(tool.func)
+                params = sig.parameters
+
+                # Inject project if tool accepts it
+                if "project" in params:
+                    args["project"] = self.project
+
+                # Inject gui_state if tool accepts it
+                if "gui_state" in params:
+                    args["gui_state"] = self._gui_state
+
+                # Inject main_window if tool accepts it (for project load/new)
+                if "main_window" in params:
+                    args["main_window"] = self
+
                 tool_result = tool.func(**args)
+
+                # Handle special GUI actions based on tool results
+                self._apply_gui_tool_side_effects(tool_name, args, tool_result)
+
                 result = {
                     "tool_call_id": tool_call_id,
                     "name": tool_name,
@@ -1043,6 +1078,34 @@ class MainWindow(QMainWindow):
         # Send result back to worker thread
         if self._chat_worker:
             self._chat_worker.set_gui_tool_result(result)
+
+    def _apply_gui_tool_side_effects(self, tool_name: str, args: dict, result: dict):
+        """Apply GUI side effects after tool execution.
+
+        Some tools modify GUIState but also need to trigger actual UI updates.
+        This method handles those cases.
+
+        Args:
+            tool_name: Name of the executed tool
+            args: Tool arguments
+            result: Tool result
+        """
+        if not result.get("success", True):
+            return
+
+        if tool_name == "navigate_to_tab":
+            # Actually switch the tab in the UI
+            tab_name = args.get("tab_name", "")
+            tab_names = ["collect", "cut", "analyze", "sequence", "generate", "render"]
+            if tab_name in tab_names:
+                index = tab_names.index(tab_name)
+                self.tabs.setCurrentIndex(index)
+
+        elif tool_name == "select_clips":
+            # Update clip browser selection
+            selected_ids = result.get("selected", [])
+            if hasattr(self, 'clip_browser') and self.clip_browser:
+                self.clip_browser.set_selection(selected_ids)
 
     def _on_chat_complete(self, response: str, tool_history: list[dict]):
         """Handle chat completion with full history."""
@@ -2964,6 +3027,75 @@ class MainWindow(QMainWindow):
         self.cut_tab.set_source(None)
         self.analyze_tab.clear_clips()
         self.sequence_tab.timeline.clear()
+
+    def _refresh_ui_from_project(self):
+        """Refresh all UI components after project load.
+
+        Called after setting a new project to update all UI elements.
+        """
+        # Add all sources to CollectTab
+        for source in self.sources:
+            self.collect_tab.add_source(source)
+            # Generate source thumbnails if missing
+            if not source.thumbnail_path or not source.thumbnail_path.exists():
+                self._generate_source_thumbnail(source)
+
+        # Set first source as current
+        if self.sources:
+            self.current_source = self.sources[0]
+
+            # Set lookups for Analyze tab
+            self.analyze_tab.set_lookups(self.clips_by_id, self.sources_by_id)
+
+            # Update Cut tab with clips for current source
+            self.cut_tab.set_source(self.current_source)
+            self.cut_tab.clear_clips()
+            current_source_clips = self.clips_by_source.get(self.current_source.id, [])
+            self.cut_tab.set_clips(current_source_clips)
+
+            # Add clips to Cut tab browser with their correct source
+            for clip in self.clips:
+                clip_source = self.sources_by_id.get(clip.source_id)
+                if not clip_source:
+                    logger.warning(f"Clip {clip.id} references unknown source {clip.source_id}")
+                    continue
+                self.cut_tab.add_clip(clip, clip_source)
+                # Update colors and shot type if present
+                if clip.dominant_colors:
+                    self.cut_tab.update_clip_colors(clip.id, clip.dominant_colors)
+                if clip.shot_type:
+                    self.cut_tab.update_clip_shot_type(clip.id, clip.shot_type)
+                if clip.transcript:
+                    self.cut_tab.update_clip_transcript(clip.id, clip.transcript)
+
+        # Restore sequence
+        if self.project.sequence:
+            self.sequence_tab.timeline.load_sequence(
+                self.project.sequence, self.sources_by_id, self.clips
+            )
+
+        # Restore UI state
+        ui_state = self.project.ui_state
+        if "sensitivity" in ui_state:
+            self.cut_tab.set_sensitivity(ui_state["sensitivity"])
+
+        # Restore Analyze tab clips
+        if "analyze_clip_ids" in ui_state:
+            valid_clip_ids = [cid for cid in ui_state["analyze_clip_ids"]
+                              if cid in self.clips_by_id]
+            if valid_clip_ids:
+                self.analyze_tab.add_clips(valid_clip_ids)
+
+        # Update UI
+        self._on_sequence_changed()
+        self._update_window_title()
+        self._update_chat_project_state()
+        self.status_bar.showMessage(
+            f"Project loaded: {self.project.metadata.name} ({len(self.clips)} clips)"
+        )
+
+        # Regenerate missing thumbnails
+        self._regenerate_missing_thumbnails()
 
     def _regenerate_missing_thumbnails(self):
         """Regenerate thumbnails for clips that don't have them."""

@@ -486,6 +486,18 @@ class ClipBrowser(QWidget):
         """Get list of selected clips."""
         return [t.clip for t in self.thumbnails if t.clip.id in self.selected_clips]
 
+    def set_selection(self, clip_ids: list[str]) -> None:
+        """Set the selection to the specified clip IDs.
+
+        Args:
+            clip_ids: List of clip IDs to select
+        """
+        self.selected_clips = set(clip_ids)
+
+        # Update all thumbnail states
+        for thumb in self.thumbnails:
+            thumb.set_selected(thumb.clip.id in self.selected_clips)
+
     def _on_thumbnail_clicked(self, clip: Clip):
         """Handle thumbnail click."""
         # Toggle selection
