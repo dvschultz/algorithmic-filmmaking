@@ -81,12 +81,17 @@ class TestCLIConfig:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_dir = Path(tmpdir)
             config_path = config_dir / "config.json"
+            # Use the new nested JSON format
             config_path.write_text(json.dumps({
-                "default_sensitivity": 7.0,
-                "transcription_model": "medium.en",
+                "detection": {
+                    "default_sensitivity": 7.0,
+                },
+                "transcription": {
+                    "model": "medium.en",
+                },
             }))
 
-            with patch("cli.utils.config.get_config_path", return_value=config_path):
+            with patch("core.settings._get_config_path", return_value=config_path):
                 config = CLIConfig.load()
                 assert config.default_sensitivity == 7.0
                 assert config.transcription_model == "medium.en"
@@ -96,7 +101,7 @@ class TestCLIConfig:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.json"
 
-            with patch("cli.utils.config.get_config_path", return_value=config_path):
+            with patch("core.settings._get_config_path", return_value=config_path):
                 config = CLIConfig()
                 config.default_sensitivity = 8.0
                 config.youtube_api_key = "saved_key"
@@ -104,10 +109,10 @@ class TestCLIConfig:
                 assert config.save() is True
                 assert config_path.exists()
 
-                # Verify saved content
+                # Verify saved content (uses nested JSON format)
                 saved_data = json.loads(config_path.read_text())
-                assert saved_data["default_sensitivity"] == 8.0
-                assert saved_data["youtube_api_key"] == "saved_key"
+                assert saved_data["detection"]["default_sensitivity"] == 8.0
+                # youtube_api_key is stored in keyring, not JSON
 
     def test_get_config_dir_xdg(self):
         """Test XDG config directory on Linux/macOS."""
