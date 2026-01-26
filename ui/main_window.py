@@ -522,6 +522,18 @@ class MainWindow(QMainWindow):
         self._analyze_all_clips: list = []  # Clips being analyzed
         self._transcription_source_queue: list = []  # Queue for multi-source transcription
 
+        # Agent tool waiting state - tracks when agent is waiting for worker completion
+        self._pending_agent_detection = False
+        self._pending_agent_color_analysis = False
+        self._pending_agent_shot_analysis = False
+        self._pending_agent_transcription = False
+        self._pending_agent_analyze_all = False
+        self._agent_color_clips: list = []
+        self._agent_shot_clips: list = []
+        self._agent_transcription_clips: list = []
+        self._pending_agent_tool_call_id: Optional[str] = None
+        self._pending_agent_tool_name: Optional[str] = None
+
         # GUI state tracking for agent context awareness
         self._gui_state = GUIState()
 
@@ -1017,6 +1029,9 @@ class MainWindow(QMainWindow):
         GUI state needs to be executed. The tool runs on the main thread
         to ensure thread safety with Qt.
 
+        For tools that start background workers (detect_scenes_live, etc.),
+        the result is deferred until the worker completes.
+
         Args:
             tool_name: Name of the tool to execute
             args: Tool arguments
@@ -1055,6 +1070,16 @@ class MainWindow(QMainWindow):
                     args["main_window"] = self
 
                 tool_result = tool.func(**args)
+
+                # Check if tool needs to wait for async worker completion
+                if isinstance(tool_result, dict) and tool_result.get("_wait_for_worker"):
+                    wait_type = tool_result["_wait_for_worker"]
+                    logger.info(f"GUI tool {tool_name} waiting for worker: {wait_type}")
+                    # Store tool_call_id for when worker completes
+                    self._pending_agent_tool_call_id = tool_call_id
+                    self._pending_agent_tool_name = tool_name
+                    # Don't call set_gui_tool_result yet - worker handler will do it
+                    return
 
                 # Handle special GUI actions based on tool results
                 self._apply_gui_tool_side_effects(tool_name, args, tool_result)
@@ -1585,6 +1610,140 @@ class MainWindow(QMainWindow):
         # Update chat panel with project state (clips now have transcripts)
         self._update_chat_project_state()
 
+    # Agent-triggered analysis completion handlers
+    # These are separate from manual handlers to allow independent tracking
+
+    @Slot()
+    def _on_agent_color_analysis_finished(self):
+        """Handle color analysis completion when triggered by agent."""
+        logger.info("=== AGENT COLOR ANALYSIS FINISHED ===")
+
+        # Guard against duplicate calls
+        if self._color_analysis_finished_handled:
+            logger.warning("_on_agent_color_analysis_finished already handled, ignoring duplicate")
+            return
+        self._color_analysis_finished_handled = True
+
+        self.progress_bar.setVisible(False)
+        self.analyze_tab.set_analyzing(False)
+
+        clips = self._agent_color_clips
+        clip_count = len(clips)
+        self.status_bar.showMessage(f"Color extraction complete - {clip_count} clips")
+
+        # Send result back to agent
+        if self._pending_agent_color_analysis and self._chat_worker:
+            self._pending_agent_color_analysis = False
+            result = {
+                "tool_call_id": self._pending_agent_tool_call_id,
+                "name": self._pending_agent_tool_name,
+                "success": True,
+                "result": {
+                    "success": True,
+                    "clip_count": clip_count,
+                    "clip_ids": [c.id for c in clips],
+                    "message": f"Extracted colors from {clip_count} clips"
+                }
+            }
+            self._pending_agent_tool_call_id = None
+            self._pending_agent_tool_name = None
+            self._agent_color_clips = []
+            self._chat_worker.set_gui_tool_result(result)
+            logger.info(f"Sent color analysis result to agent: {clip_count} clips")
+
+    @Slot()
+    def _on_agent_shot_analysis_finished(self):
+        """Handle shot type classification completion when triggered by agent."""
+        logger.info("=== AGENT SHOT ANALYSIS FINISHED ===")
+
+        # Guard against duplicate calls
+        if self._shot_type_finished_handled:
+            logger.warning("_on_agent_shot_analysis_finished already handled, ignoring duplicate")
+            return
+        self._shot_type_finished_handled = True
+
+        self.progress_bar.setVisible(False)
+        self.analyze_tab.set_analyzing(False)
+
+        clips = self._agent_shot_clips
+        clip_count = len(clips)
+        self.status_bar.showMessage(f"Shot type classification complete - {clip_count} clips")
+
+        # Build shot type summary
+        shot_types = {}
+        for clip in clips:
+            st = clip.shot_type or "unknown"
+            shot_types[st] = shot_types.get(st, 0) + 1
+
+        # Send result back to agent
+        if self._pending_agent_shot_analysis and self._chat_worker:
+            self._pending_agent_shot_analysis = False
+            result = {
+                "tool_call_id": self._pending_agent_tool_call_id,
+                "name": self._pending_agent_tool_name,
+                "success": True,
+                "result": {
+                    "success": True,
+                    "clip_count": clip_count,
+                    "clip_ids": [c.id for c in clips],
+                    "shot_type_summary": shot_types,
+                    "message": f"Classified shot types for {clip_count} clips"
+                }
+            }
+            self._pending_agent_tool_call_id = None
+            self._pending_agent_tool_name = None
+            self._agent_shot_clips = []
+            self._chat_worker.set_gui_tool_result(result)
+            logger.info(f"Sent shot analysis result to agent: {clip_count} clips")
+
+        # Update chat panel with project state
+        self._update_chat_project_state()
+
+    @Slot()
+    def _on_agent_transcription_finished(self):
+        """Handle transcription completion when triggered by agent."""
+        logger.info("=== AGENT TRANSCRIPTION FINISHED ===")
+
+        # Guard against duplicate calls
+        if self._transcription_finished_handled:
+            logger.warning("_on_agent_transcription_finished already handled, ignoring duplicate")
+            return
+        self._transcription_finished_handled = True
+
+        self.progress_bar.setVisible(False)
+        self.analyze_tab.set_analyzing(False)
+
+        clips = self._agent_transcription_clips
+        clip_count = len(clips)
+        self.status_bar.showMessage(f"Transcription complete - {clip_count} clips")
+
+        # Build transcript summary
+        transcribed_count = sum(1 for c in clips if c.transcript)
+
+        # Send result back to agent
+        if self._pending_agent_transcription and self._chat_worker:
+            self._pending_agent_transcription = False
+            result = {
+                "tool_call_id": self._pending_agent_tool_call_id,
+                "name": self._pending_agent_tool_name,
+                "success": True,
+                "result": {
+                    "success": True,
+                    "clip_count": clip_count,
+                    "transcribed_count": transcribed_count,
+                    "clip_ids": [c.id for c in clips],
+                    "message": f"Transcribed {transcribed_count} of {clip_count} clips"
+                }
+            }
+            self._pending_agent_tool_call_id = None
+            self._pending_agent_tool_name = None
+            self._agent_transcription_clips = []
+            self._chat_worker.set_gui_tool_result(result)
+            logger.info(f"Sent transcription result to agent: {transcribed_count}/{clip_count} clips")
+
+        # Update chat panel with project state
+        self._update_chat_project_state()
+
     # "Analyze All" handlers - sequential colors → shots → transcribe
 
     def _on_analyze_all_from_tab(self):
@@ -1615,9 +1774,42 @@ class MainWindow(QMainWindow):
             logger.info("'Analyze All' complete")
             self.analyze_tab.set_analyzing(False)
             self.progress_bar.setVisible(False)
-            self.status_bar.showMessage(
-                f"Analysis complete - {len(self._analyze_all_clips)} clips"
-            )
+
+            clips = self._analyze_all_clips
+            clip_count = len(clips)
+            self.status_bar.showMessage(f"Analysis complete - {clip_count} clips")
+
+            # If agent was waiting for analyze_all, send result back
+            if self._pending_agent_analyze_all and self._chat_worker:
+                self._pending_agent_analyze_all = False
+
+                # Build summary
+                shot_types = {}
+                transcribed_count = 0
+                for clip in clips:
+                    if clip.shot_type:
+                        shot_types[clip.shot_type] = shot_types.get(clip.shot_type, 0) + 1
+                    if clip.transcript:
+                        transcribed_count += 1
+
+                result = {
+                    "tool_call_id": self._pending_agent_tool_call_id,
+                    "name": self._pending_agent_tool_name,
+                    "success": True,
+                    "result": {
+                        "success": True,
+                        "clip_count": clip_count,
+                        "clip_ids": [c.id for c in clips],
+                        "shot_type_summary": shot_types,
+                        "transcribed_count": transcribed_count,
+                        "message": f"Analyzed {clip_count} clips (colors, shots, transcription)"
+                    }
+                }
+                self._pending_agent_tool_call_id = None
+                self._pending_agent_tool_name = None
+                self._chat_worker.set_gui_tool_result(result)
+                logger.info(f"Sent analyze_all result to agent: {clip_count} clips")
+
             self._analyze_all_clips = []
             return
 
@@ -2143,7 +2335,23 @@ class MainWindow(QMainWindow):
         logger.error(f"=== DETECTION ERROR: {error} ===")
         self.progress_bar.setVisible(False)
         self.cut_tab.set_detecting(False)
-        QMessageBox.critical(self, "Detection Error", error)
+
+        # If agent was waiting for detection, send error result
+        if self._pending_agent_detection and self._chat_worker:
+            self._pending_agent_detection = False
+            result = {
+                "tool_call_id": self._pending_agent_tool_call_id,
+                "name": self._pending_agent_tool_name,
+                "success": False,
+                "error": error
+            }
+            self._pending_agent_tool_call_id = None
+            self._pending_agent_tool_name = None
+            self._chat_worker.set_gui_tool_result(result)
+            logger.info(f"Sent detection error to agent: {error}")
+        else:
+            # Only show dialog for manual detection
+            QMessageBox.critical(self, "Detection Error", error)
 
     def _on_thumbnail_progress(self, current: int, total: int):
         """Handle thumbnail generation progress."""
@@ -2198,6 +2406,28 @@ class MainWindow(QMainWindow):
 
         # Update chat panel with project state for context-aware prompts
         self._update_chat_project_state()
+
+        # If agent was waiting for detection, send result back
+        if self._pending_agent_detection and self._chat_worker:
+            self._pending_agent_detection = False
+            clip_ids = [c.id for c in current_source_clips]
+            result = {
+                "tool_call_id": self._pending_agent_tool_call_id,
+                "name": self._pending_agent_tool_name,
+                "success": True,
+                "result": {
+                    "success": True,
+                    "source_id": self.current_source.id if self.current_source else None,
+                    "source_name": self.current_source.filename if self.current_source else None,
+                    "clip_count": len(clip_ids),
+                    "clip_ids": clip_ids,
+                    "message": f"Detected {len(clip_ids)} scenes"
+                }
+            }
+            self._pending_agent_tool_call_id = None
+            self._pending_agent_tool_name = None
+            self._chat_worker.set_gui_tool_result(result)
+            logger.info(f"Sent detection result to agent: {len(clip_ids)} clips")
 
         # Continue with next source in batch queue (deferred to let worker cleanup)
         QTimer.singleShot(0, self._start_next_analysis)

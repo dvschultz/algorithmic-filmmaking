@@ -1290,3 +1290,389 @@ def export_clips(
         "output_dir": output_dir,
         "message": result.stdout.strip()
     }
+
+
+# =============================================================================
+# GUI-Aware Tools - Trigger workers and wait for completion
+# =============================================================================
+
+@tools.register(
+    description="Import a local video file into the project library. The video will appear in the Collect tab.",
+    requires_project=True,
+    modifies_gui_state=True
+)
+def import_video(main_window, path: str) -> dict:
+    """Import a video file to the library.
+
+    Args:
+        path: Absolute path to the video file
+
+    Returns:
+        Dict with source_id and metadata if successful
+    """
+    # Validate path
+    valid, error, video_path = _validate_path(path, must_exist=True)
+    if not valid:
+        return {"success": False, "error": error}
+
+    if not video_path.is_file():
+        return {"success": False, "error": f"Path is not a file: {path}"}
+
+    if video_path.suffix.lower() not in {'.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v'}:
+        return {"success": False, "error": f"Unsupported video format: {video_path.suffix}"}
+
+    # Check if already in library
+    for source in main_window.project.sources:
+        if source.file_path == video_path:
+            return {
+                "success": True,
+                "source_id": source.id,
+                "message": "Video already in library",
+                "filename": source.filename,
+                "already_imported": True
+            }
+
+    # Add to library (reuse existing method)
+    main_window._add_video_to_library(video_path)
+
+    # Find the newly added source
+    new_source = None
+    for source in main_window.project.sources:
+        if source.file_path == video_path:
+            new_source = source
+            break
+
+    if new_source:
+        return {
+            "success": True,
+            "source_id": new_source.id,
+            "filename": new_source.filename,
+            "message": f"Imported {new_source.filename}"
+        }
+    else:
+        return {"success": False, "error": "Failed to add video to library"}
+
+
+@tools.register(
+    description="Select a video source as the current active source for detection and editing.",
+    requires_project=True,
+    modifies_gui_state=True
+)
+def select_source(main_window, source_id: str) -> dict:
+    """Select a source as the current active source.
+
+    Args:
+        source_id: ID of the source to select
+
+    Returns:
+        Dict with success status and source info
+    """
+    # Find source
+    source = None
+    for s in main_window.project.sources:
+        if s.id == source_id:
+            source = s
+            break
+
+    if not source:
+        return {"success": False, "error": f"Source not found: {source_id}"}
+
+    # Select it
+    main_window._select_source(source)
+
+    return {
+        "success": True,
+        "source_id": source.id,
+        "filename": source.filename,
+        "duration_seconds": source.duration_seconds,
+        "analyzed": source.analyzed,
+        "clip_count": len(main_window.project.clips_by_source.get(source.id, []))
+    }
+
+
+@tools.register(
+    description="Detect scenes in a video source with live GUI update. Updates the project with detected clips. "
+                "This may take a while for long videos.",
+    requires_project=True,
+    modifies_gui_state=True
+)
+def detect_scenes_live(
+    main_window,
+    source_id: str,
+    sensitivity: float = 3.0
+) -> dict:
+    """Detect scenes in a source video with live GUI update.
+
+    Args:
+        source_id: ID of the source to analyze
+        sensitivity: Detection sensitivity (1.0=sensitive, 10.0=less sensitive)
+
+    Returns:
+        Dict with detected clip count and IDs (after worker completes)
+    """
+    # Find source
+    source = None
+    for s in main_window.project.sources:
+        if s.id == source_id:
+            source = s
+            break
+
+    if not source:
+        return {"success": False, "error": f"Source not found: {source_id}"}
+
+    # Check if detection already running
+    if main_window.detection_worker and main_window.detection_worker.isRunning():
+        return {"success": False, "error": "Scene detection already in progress"}
+
+    # Set current source and start detection
+    main_window._select_source(source)
+
+    # Mark that we're waiting for detection result via agent
+    main_window._pending_agent_detection = True
+
+    # Start detection (this returns immediately, worker runs in background)
+    main_window._start_detection(sensitivity)
+
+    # Return marker that tells GUI handler to wait for worker completion
+    return {"_wait_for_worker": "detection", "source_id": source_id}
+
+
+@tools.register(
+    description="Extract dominant colors from clips with live GUI update. Updates clip metadata.",
+    requires_project=True,
+    modifies_gui_state=True
+)
+def analyze_colors_live(main_window, clip_ids: list[str]) -> dict:
+    """Extract dominant colors from clips with live GUI update.
+
+    Args:
+        clip_ids: List of clip IDs to analyze
+
+    Returns:
+        Dict with analysis results (after worker completes)
+    """
+    # Resolve clips
+    clips = []
+    for clip_id in clip_ids:
+        clip = main_window.project.clips_by_id.get(clip_id)
+        if clip:
+            clips.append(clip)
+
+    if not clips:
+        return {"success": False, "error": "No valid clips found"}
+
+    # Check if worker already running
+    if main_window.color_worker and main_window.color_worker.isRunning():
+        return {"success": False, "error": "Color analysis already in progress"}
+
+    # Reset guard
+    main_window._color_analysis_finished_handled = False
+
+    # Mark that we're waiting for color analysis via agent
+    main_window._pending_agent_color_analysis = True
+    main_window._agent_color_clips = clips
+
+    # Update UI state
+    main_window.analyze_tab.set_analyzing(True, "colors")
+    main_window.progress_bar.setVisible(True)
+    main_window.progress_bar.setRange(0, 100)
+    main_window.status_bar.showMessage(f"Extracting colors from {len(clips)} clips...")
+
+    # Start worker
+    from ui.main_window import ColorAnalysisWorker
+    from PySide6.QtCore import Qt
+
+    main_window.color_worker = ColorAnalysisWorker(clips)
+    main_window.color_worker.progress.connect(main_window._on_color_progress)
+    main_window.color_worker.color_ready.connect(main_window._on_color_ready)
+    main_window.color_worker.finished.connect(main_window._on_agent_color_analysis_finished, Qt.UniqueConnection)
+    main_window.color_worker.start()
+
+    return {"_wait_for_worker": "color_analysis", "clip_count": len(clips)}
+
+
+@tools.register(
+    description="Classify shot types (close-up, medium, wide, etc.) for clips with live GUI update.",
+    requires_project=True,
+    modifies_gui_state=True
+)
+def analyze_shots_live(main_window, clip_ids: list[str]) -> dict:
+    """Classify shot types for clips with live GUI update.
+
+    Args:
+        clip_ids: List of clip IDs to analyze
+
+    Returns:
+        Dict with analysis results (after worker completes)
+    """
+    # Resolve clips
+    clips = []
+    for clip_id in clip_ids:
+        clip = main_window.project.clips_by_id.get(clip_id)
+        if clip:
+            clips.append(clip)
+
+    if not clips:
+        return {"success": False, "error": "No valid clips found"}
+
+    # Check if worker already running
+    if main_window.shot_type_worker and main_window.shot_type_worker.isRunning():
+        return {"success": False, "error": "Shot type analysis already in progress"}
+
+    # Reset guard
+    main_window._shot_type_finished_handled = False
+
+    # Mark that we're waiting for shot analysis via agent
+    main_window._pending_agent_shot_analysis = True
+    main_window._agent_shot_clips = clips
+
+    # Update UI state
+    main_window.analyze_tab.set_analyzing(True, "shots")
+    main_window.progress_bar.setVisible(True)
+    main_window.progress_bar.setRange(0, 100)
+    main_window.status_bar.showMessage(f"Classifying shot types for {len(clips)} clips...")
+
+    # Start worker
+    from ui.main_window import ShotTypeWorker
+    from PySide6.QtCore import Qt
+
+    main_window.shot_type_worker = ShotTypeWorker(clips)
+    main_window.shot_type_worker.progress.connect(main_window._on_shot_type_progress)
+    main_window.shot_type_worker.shot_type_ready.connect(main_window._on_shot_type_ready)
+    main_window.shot_type_worker.finished.connect(main_window._on_agent_shot_analysis_finished, Qt.UniqueConnection)
+    main_window.shot_type_worker.start()
+
+    return {"_wait_for_worker": "shot_analysis", "clip_count": len(clips)}
+
+
+@tools.register(
+    description="Transcribe speech in clips using Whisper with live GUI update.",
+    requires_project=True,
+    modifies_gui_state=True
+)
+def transcribe_live(main_window, clip_ids: list[str]) -> dict:
+    """Transcribe speech in clips with live GUI update.
+
+    Args:
+        clip_ids: List of clip IDs to transcribe
+
+    Returns:
+        Dict with transcription results (after worker completes)
+    """
+    # Check if faster-whisper is available
+    from core.transcription import is_faster_whisper_available
+    if not is_faster_whisper_available():
+        return {
+            "success": False,
+            "error": "Transcription unavailable - faster-whisper not installed"
+        }
+
+    # Resolve clips
+    clips = []
+    for clip_id in clip_ids:
+        clip = main_window.project.clips_by_id.get(clip_id)
+        if clip:
+            clips.append(clip)
+
+    if not clips:
+        return {"success": False, "error": "No valid clips found"}
+
+    # Check if worker already running
+    if main_window.transcription_worker and main_window.transcription_worker.isRunning():
+        return {"success": False, "error": "Transcription already in progress"}
+
+    # Group clips by source (transcription needs source for audio extraction)
+    clips_by_source: dict = {}
+    for clip in clips:
+        if clip.source_id not in clips_by_source:
+            clips_by_source[clip.source_id] = []
+        clips_by_source[clip.source_id].append(clip)
+
+    # For simplicity, process first source's clips (multi-source would need queue)
+    first_source_id = next(iter(clips_by_source.keys()))
+    source = main_window.sources_by_id.get(first_source_id)
+    source_clips = clips_by_source[first_source_id]
+
+    if not source:
+        return {"success": False, "error": f"Source not found: {first_source_id}"}
+
+    # Reset guard
+    main_window._transcription_finished_handled = False
+
+    # Mark that we're waiting for transcription via agent
+    main_window._pending_agent_transcription = True
+    main_window._agent_transcription_clips = source_clips
+
+    # Update UI state
+    main_window.analyze_tab.set_analyzing(True, "transcribe")
+    main_window.progress_bar.setVisible(True)
+    main_window.progress_bar.setRange(0, 100)
+    main_window.status_bar.showMessage(f"Transcribing {len(source_clips)} clips...")
+
+    # Start worker
+    from ui.main_window import TranscriptionWorker
+    from PySide6.QtCore import Qt
+
+    main_window.transcription_worker = TranscriptionWorker(
+        source_clips,
+        source,
+        main_window.settings.transcription_model,
+        main_window.settings.transcription_language,
+    )
+    main_window.transcription_worker.progress.connect(main_window._on_transcription_progress)
+    main_window.transcription_worker.transcript_ready.connect(main_window._on_transcript_ready)
+    main_window.transcription_worker.finished.connect(main_window._on_agent_transcription_finished, Qt.UniqueConnection)
+    main_window.transcription_worker.error.connect(main_window._on_transcription_error)
+    main_window.transcription_worker.start()
+
+    return {"_wait_for_worker": "transcription", "clip_count": len(source_clips)}
+
+
+@tools.register(
+    description="Run all analysis (colors, shots, transcription) on clips sequentially with live GUI update.",
+    requires_project=True,
+    modifies_gui_state=True
+)
+def analyze_all_live(main_window, clip_ids: list[str]) -> dict:
+    """Run all analysis on clips with live GUI update.
+
+    Runs colors, shots, and transcription sequentially.
+
+    Args:
+        clip_ids: List of clip IDs to analyze
+
+    Returns:
+        Dict with analysis summary (after all workers complete)
+    """
+    # Resolve clips
+    clips = []
+    for clip_id in clip_ids:
+        clip = main_window.project.clips_by_id.get(clip_id)
+        if clip:
+            clips.append(clip)
+
+    if not clips:
+        return {"success": False, "error": "No valid clips found"}
+
+    # Check if any analysis already running
+    if main_window.color_worker and main_window.color_worker.isRunning():
+        return {"success": False, "error": "Color analysis already in progress"}
+    if main_window.shot_type_worker and main_window.shot_type_worker.isRunning():
+        return {"success": False, "error": "Shot analysis already in progress"}
+    if main_window.transcription_worker and main_window.transcription_worker.isRunning():
+        return {"success": False, "error": "Transcription already in progress"}
+
+    # Use existing analyze_all mechanism
+    main_window._analyze_all_pending = ["colors", "shots", "transcribe"]
+    main_window._analyze_all_clips = clips
+
+    # Mark that agent is waiting for analyze_all completion
+    main_window._pending_agent_analyze_all = True
+
+    # Update UI state
+    main_window.analyze_tab.set_analyzing(True, "all")
+
+    # Start the sequential analysis
+    main_window._start_next_analyze_all_step()
+
+    return {"_wait_for_worker": "analyze_all", "clip_count": len(clips)}
