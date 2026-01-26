@@ -158,6 +158,7 @@ class AnalyzeTab(BaseTab):
         self.clip_browser.clip_selected.connect(self._on_clip_selected)
         self.clip_browser.clip_double_clicked.connect(self._on_clip_double_clicked)
         self.clip_browser.clip_dragged_to_timeline.connect(self._on_clip_dragged)
+        self.clip_browser.filters_changed.connect(self._on_filters_changed)
         splitter.addWidget(self.clip_browser)
 
         # Right: Video player
@@ -216,6 +217,22 @@ class AnalyzeTab(BaseTab):
     def _on_clip_dragged(self, clip):
         """Handle clip drag to timeline."""
         self.clip_dragged_to_timeline.emit(clip)
+
+    def _on_filters_changed(self):
+        """Handle filter changes - clear selection and update clip count."""
+        # Clear selection
+        self.clip_browser.selected_clips.clear()
+        for thumb in self.clip_browser.thumbnails:
+            thumb.set_selected(False)
+        self._update_selection_ui()
+
+        # Update clip count label
+        visible = self.clip_browser.get_visible_clip_count()
+        total = len(self.clip_browser.thumbnails)
+        if self.clip_browser.has_active_filters():
+            self.clip_count_label.setText(f"{visible}/{total} clips")
+        else:
+            self.clip_count_label.setText(f"{total} clips")
 
     def _on_analyze_all_click(self):
         """Handle analyze all button click."""
@@ -398,3 +415,19 @@ class AnalyzeTab(BaseTab):
             self.shots_btn.setText("Classify Shots")
             self.transcribe_btn.setText("Transcribe")
             self.analyze_all_btn.setText("Analyze All")
+
+    def get_active_filters(self) -> dict:
+        """Get the current filter state from the clip browser.
+
+        Returns:
+            Dict with filter names and their current values
+        """
+        return self.clip_browser.get_active_filters()
+
+    def has_active_filters(self) -> bool:
+        """Check if any filters are currently active.
+
+        Returns:
+            True if at least one filter is set
+        """
+        return self.clip_browser.has_active_filters()

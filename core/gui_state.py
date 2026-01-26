@@ -41,6 +41,9 @@ class GUIState:
     # Plan state
     current_plan: Optional["Plan"] = None
 
+    # Active filters state
+    active_filters: dict = field(default_factory=dict)
+
     def to_context_string(self) -> str:
         """Generate context string for agent system prompt.
 
@@ -92,6 +95,12 @@ class GUIState:
         if self.selected_source_id:
             lines.append(f"ACTIVE SOURCE: {self.selected_source_id[:8]}...")
 
+        # Active filters
+        if self.active_filters:
+            active = [f"{k}={v}" for k, v in self.active_filters.items() if v is not None]
+            if active:
+                lines.append(f"ACTIVE FILTERS: {', '.join(active)}")
+
         # Plan state
         if self.current_plan:
             plan = self.current_plan
@@ -135,3 +144,16 @@ class GUIState:
             plan: Plan object to track
         """
         self.current_plan = plan
+
+    def update_active_filters(self, filters: dict):
+        """Update the active filters state.
+
+        Args:
+            filters: Dict of filter names to values (None values are excluded)
+        """
+        # Only keep non-None values
+        self.active_filters = {k: v for k, v in filters.items() if v is not None}
+
+    def clear_filters(self):
+        """Clear the active filters state."""
+        self.active_filters = {}

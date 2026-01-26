@@ -97,12 +97,33 @@ def info(ctx: click.Context, project_file: Path) -> None:
     default=None,
     help="Limit number of results",
 )
+@click.option(
+    "--duration-min",
+    type=float,
+    default=None,
+    help="Minimum duration in seconds",
+)
+@click.option(
+    "--duration-max",
+    type=float,
+    default=None,
+    help="Maximum duration in seconds",
+)
+@click.option(
+    "--aspect-ratio",
+    type=click.Choice(["16:9", "4:3", "9:16"]),
+    default=None,
+    help="Filter by aspect ratio",
+)
 @click.pass_context
 def list_clips(
     ctx: click.Context,
     project_file: Path,
     filter_expr: Optional[str],
     limit: Optional[int],
+    duration_min: Optional[float],
+    duration_max: Optional[float],
+    aspect_ratio: Optional[str],
 ) -> None:
     """List all clips in a project.
 
@@ -113,6 +134,8 @@ def list_clips(
         scene_ripper project list-clips project.json
         scene_ripper project list-clips project.json --filter shot_type=close-up
         scene_ripper project list-clips project.json -n 10
+        scene_ripper project list-clips project.json --duration-min 2.0 --duration-max 10.0
+        scene_ripper project list-clips project.json --aspect-ratio 16:9
     """
     try:
         from core.project import Project, ProjectLoadError
@@ -134,6 +157,16 @@ def list_clips(
     filtered_clips = clips
     if filter_expr:
         filtered_clips = _apply_filter(clips, filter_expr)
+
+    # Apply duration filter
+    if duration_min is not None or duration_max is not None:
+        filtered_clips = _apply_duration_filter(
+            filtered_clips, proj, duration_min, duration_max
+        )
+
+    # Apply aspect ratio filter
+    if aspect_ratio:
+        filtered_clips = _apply_aspect_ratio_filter(filtered_clips, proj, aspect_ratio)
 
     # Apply limit
     if limit:
@@ -204,6 +237,24 @@ def list_clips(
     "filter_expr",
     help="Add clips matching filter (e.g., 'shot_type=close-up')",
 )
+@click.option(
+    "--duration-min",
+    type=float,
+    default=None,
+    help="Minimum duration in seconds",
+)
+@click.option(
+    "--duration-max",
+    type=float,
+    default=None,
+    help="Maximum duration in seconds",
+)
+@click.option(
+    "--aspect-ratio",
+    type=click.Choice(["16:9", "4:3", "9:16"]),
+    default=None,
+    help="Filter by aspect ratio",
+)
 @click.pass_context
 def add_to_sequence(
     ctx: click.Context,
@@ -211,6 +262,9 @@ def add_to_sequence(
     clip_ids: tuple[str, ...],
     add_all: bool,
     filter_expr: Optional[str],
+    duration_min: Optional[float],
+    duration_max: Optional[float],
+    aspect_ratio: Optional[str],
 ) -> None:
     """Add clips to the timeline sequence.
 
@@ -222,8 +276,10 @@ def add_to_sequence(
         scene_ripper project add-to-sequence project.json clip1 clip2
         scene_ripper project add-to-sequence project.json --all
         scene_ripper project add-to-sequence project.json --filter shot_type=wide
+        scene_ripper project add-to-sequence project.json --duration-min 2.0 --aspect-ratio 16:9
     """
-    if not clip_ids and not add_all and not filter_expr:
+    has_filters = filter_expr or duration_min or duration_max or aspect_ratio
+    if not clip_ids and not add_all and not has_filters:
         exit_with(
             ExitCode.USAGE_ERROR,
             "Specify clip IDs, --all, or --filter to select clips",
@@ -252,8 +308,11 @@ def add_to_sequence(
     # Determine which clips to add
     if add_all:
         clips_to_add = proj.clips
-    elif filter_expr:
-        clips_to_add = _apply_filter(proj.clips, filter_expr)
+    elif has_filters and not clip_ids:
+        # Use filters to select clips
+        clips_to_add = proj.clips
+        if filter_expr:
+            clips_to_add = _apply_filter(clips_to_add, filter_expr)
     else:
         clips_to_add = []
         for cid in clip_ids:
@@ -261,6 +320,12 @@ def add_to_sequence(
                 clips_to_add.append(clips_by_id[cid])
             else:
                 exit_with(ExitCode.VALIDATION_ERROR, f"Clip not found: {cid}")
+
+    # Apply duration and aspect ratio filters
+    if duration_min is not None or duration_max is not None:
+        clips_to_add = _apply_duration_filter(clips_to_add, proj, duration_min, duration_max)
+    if aspect_ratio:
+        clips_to_add = _apply_aspect_ratio_filter(clips_to_add, proj, aspect_ratio)
 
     if not clips_to_add:
         exit_with(ExitCode.VALIDATION_ERROR, "No clips to add")
@@ -334,3 +399,80 @@ def _format_time(seconds: float) -> str:
     if hours:
         return f"{hours}:{minutes:02d}:{secs:02d}"
     return f"{minutes}:{secs:02d}"
+
+
+# Aspect ratio tolerance ranges (5% tolerance)
+ASPECT_RATIO_RANGES = {
+    "16:9": (1.69, 1.87),   # 1.778 ± 5%
+    "4:3": (1.27, 1.40),     # 1.333 ± 5%
+    "9:16": (0.53, 0.59),    # 0.5625 ± 5%
+}
+
+
+def _apply_duration_filter(
+    clips: list,
+    proj,
+    min_duration: Optional[float],
+    max_duration: Optional[float],
+) -> list:
+    """Filter clips by duration.
+
+    Args:
+        clips: List of Clip objects
+        proj: Project object (for source fps lookup)
+        min_duration: Minimum duration in seconds (None = no minimum)
+        max_duration: Maximum duration in seconds (None = no maximum)
+
+    Returns:
+        Filtered list of clips
+    """
+    if min_duration is None and max_duration is None:
+        return clips
+
+    filtered = []
+    for clip in clips:
+        source = proj.sources_by_id.get(clip.source_id)
+        fps = source.fps if source else 30.0
+        duration = clip.duration_seconds(fps)
+
+        if min_duration is not None and duration < min_duration:
+            continue
+        if max_duration is not None and duration > max_duration:
+            continue
+
+        filtered.append(clip)
+
+    return filtered
+
+
+def _apply_aspect_ratio_filter(
+    clips: list,
+    proj,
+    aspect_ratio: str,
+) -> list:
+    """Filter clips by aspect ratio.
+
+    Args:
+        clips: List of Clip objects
+        proj: Project object (for source dimension lookup)
+        aspect_ratio: Aspect ratio string ('16:9', '4:3', '9:16')
+
+    Returns:
+        Filtered list of clips
+    """
+    if aspect_ratio not in ASPECT_RATIO_RANGES:
+        return clips
+
+    min_ratio, max_ratio = ASPECT_RATIO_RANGES[aspect_ratio]
+    filtered = []
+
+    for clip in clips:
+        source = proj.sources_by_id.get(clip.source_id)
+        if not source or source.width == 0 or source.height == 0:
+            continue  # Skip clips without dimensions
+
+        source_aspect = source.width / source.height
+        if min_ratio <= source_aspect <= max_ratio:
+            filtered.append(clip)
+
+    return filtered

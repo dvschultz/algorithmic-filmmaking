@@ -775,6 +775,19 @@ class MainWindow(QMainWindow):
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
 
+        # Edit menu
+        edit_menu = menu_bar.addMenu("&Edit")
+
+        select_all_action = QAction("Select &All", self)
+        select_all_action.setShortcut(QKeySequence.SelectAll)  # Cmd+A
+        select_all_action.triggered.connect(self._on_select_all)
+        edit_menu.addAction(select_all_action)
+
+        deselect_all_action = QAction("&Deselect All", self)
+        deselect_all_action.setShortcut(QKeySequence("Ctrl+Shift+A"))
+        deselect_all_action.triggered.connect(self._on_deselect_all)
+        edit_menu.addAction(deselect_all_action)
+
         # View menu with tab shortcuts
         view_menu = menu_bar.addMenu("&View")
 
@@ -857,6 +870,7 @@ class MainWindow(QMainWindow):
         self.cut_tab.clip_dragged_to_timeline.connect(self._on_clip_dragged_to_timeline)
         self.cut_tab.clips_sent_to_analyze.connect(self._on_clips_sent_to_analyze)
         self.cut_tab.selection_changed.connect(self._on_cut_selection_changed)
+        self.cut_tab.clip_browser.filters_changed.connect(self._on_cut_filters_changed)
 
         # Analyze tab signals
         self.analyze_tab.transcribe_requested.connect(self._on_transcribe_from_tab)
@@ -866,6 +880,7 @@ class MainWindow(QMainWindow):
         self.analyze_tab.clip_dragged_to_timeline.connect(self._on_clip_dragged_to_timeline)
         self.analyze_tab.selection_changed.connect(self._on_analyze_selection_changed)
         self.analyze_tab.clips_changed.connect(self._on_analyze_clips_changed)
+        self.analyze_tab.clip_browser.filters_changed.connect(self._on_analyze_filters_changed)
 
         # Sequence tab signals
         self.sequence_tab.playback_requested.connect(self._on_playback_requested)
@@ -1721,6 +1736,18 @@ class MainWindow(QMainWindow):
         """Handle selection change in Analyze tab."""
         self._gui_state.selected_clip_ids = clip_ids
         logger.debug(f"GUI State updated (Analyze): {len(clip_ids)} clips selected")
+
+    def _on_cut_filters_changed(self):
+        """Handle filter change in Cut tab."""
+        filters = self.cut_tab.get_active_filters()
+        self._gui_state.update_active_filters(filters)
+        logger.debug(f"GUI State updated: Cut tab filters changed")
+
+    def _on_analyze_filters_changed(self):
+        """Handle filter change in Analyze tab."""
+        filters = self.analyze_tab.get_active_filters()
+        self._gui_state.update_active_filters(filters)
+        logger.debug(f"GUI State updated: Analyze tab filters changed")
 
     def _on_analyze_clips_changed(self, clip_ids: list[str]):
         """Handle clip collection change in Analyze tab."""
@@ -3390,6 +3417,41 @@ class MainWindow(QMainWindow):
 
         self.status_bar.showMessage("New project created", 3000)
         logger.info("Created new project")
+
+    def _on_select_all(self):
+        """Handle Select All action (Cmd+A) - select all items in the active tab."""
+        current_tab = self.tab_widget.currentWidget()
+
+        if current_tab == self.collect_tab:
+            self.collect_tab.source_browser.select_all()
+            count = len(self.collect_tab.source_browser.selected_source_ids)
+            self.status_bar.showMessage(f"Selected {count} videos", 2000)
+        elif current_tab == self.cut_tab:
+            self.cut_tab.clip_browser.select_all()
+            count = len(self.cut_tab.clip_browser.selected_clips)
+            self.status_bar.showMessage(f"Selected {count} clips", 2000)
+            self.cut_tab._update_selection_ui()
+        elif current_tab == self.analyze_tab:
+            self.analyze_tab.clip_browser.select_all()
+            count = len(self.analyze_tab.clip_browser.selected_clips)
+            self.status_bar.showMessage(f"Selected {count} clips", 2000)
+            self.analyze_tab._update_selection_ui()
+
+    def _on_deselect_all(self):
+        """Handle Deselect All action (Cmd+Shift+A) - clear selection in the active tab."""
+        current_tab = self.tab_widget.currentWidget()
+
+        if current_tab == self.collect_tab:
+            self.collect_tab.source_browser.clear_selection()
+            self.status_bar.showMessage("Selection cleared", 2000)
+        elif current_tab == self.cut_tab:
+            self.cut_tab.clip_browser.clear_selection()
+            self.status_bar.showMessage("Selection cleared", 2000)
+            self.cut_tab._update_selection_ui()
+        elif current_tab == self.analyze_tab:
+            self.analyze_tab.clip_browser.clear_selection()
+            self.status_bar.showMessage("Selection cleared", 2000)
+            self.analyze_tab._update_selection_ui()
 
     def _on_open_project(self):
         """Handle Open Project action."""

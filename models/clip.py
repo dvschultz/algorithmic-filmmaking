@@ -30,6 +30,17 @@ class Source:
     def total_frames(self) -> int:
         return int(self.duration_seconds * self.fps)
 
+    @property
+    def aspect_ratio(self) -> float:
+        """Get aspect ratio (width / height).
+
+        Returns:
+            Aspect ratio as float, or 0.0 if height is 0.
+        """
+        if self.height == 0:
+            return 0.0
+        return self.width / self.height
+
     def to_dict(self, base_path: Optional[Path] = None) -> dict:
         """Serialize to dictionary for JSON export.
 

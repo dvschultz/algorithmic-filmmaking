@@ -145,7 +145,7 @@ class SourceBrowser(QWidget):
     def __init__(self):
         super().__init__()
         self.thumbnails: list[SourceThumbnail] = []
-        self.selected_source_id: Optional[str] = None
+        self.selected_source_ids: set[str] = set()  # Multi-selection support
         self._sources_by_id: dict[str, Source] = {}
 
         self._setup_ui()
@@ -211,8 +211,7 @@ class SourceBrowser(QWidget):
         del self._sources_by_id[source_id]
 
         # Clear selection if removed
-        if self.selected_source_id == source_id:
-            self.selected_source_id = None
+        self.selected_source_ids.discard(source_id)
 
         self._rebuild_grid()
 
@@ -223,7 +222,7 @@ class SourceBrowser(QWidget):
             thumb.deleteLater()
 
         self.thumbnails = []
-        self.selected_source_id = None
+        self.selected_source_ids.clear()
         self._sources_by_id = {}
         # Add card stays at position 0
         self._rebuild_grid()
@@ -258,16 +257,38 @@ class SourceBrowser(QWidget):
                 break
 
     def _on_thumbnail_clicked(self, source: Source):
-        """Handle thumbnail click."""
-        # Update selection
-        old_selected = self.selected_source_id
-        self.selected_source_id = source.id
+        """Handle thumbnail click - toggle selection."""
+        # Toggle selection
+        if source.id in self.selected_source_ids:
+            self.selected_source_ids.discard(source.id)
+        else:
+            self.selected_source_ids.add(source.id)
 
         # Update all thumbnail states
         for thumb in self.thumbnails:
-            thumb.set_selected(thumb.source.id == self.selected_source_id)
+            thumb.set_selected(thumb.source.id in self.selected_source_ids)
 
         self.source_selected.emit(source)
+
+    def select_all(self) -> None:
+        """Select all sources."""
+        self.selected_source_ids = set(thumb.source.id for thumb in self.thumbnails)
+
+        # Update all thumbnail states
+        for thumb in self.thumbnails:
+            thumb.set_selected(True)
+
+    def clear_selection(self) -> None:
+        """Clear all selections."""
+        self.selected_source_ids.clear()
+
+        # Update all thumbnail states
+        for thumb in self.thumbnails:
+            thumb.set_selected(False)
+
+    def get_selected_sources(self) -> list[Source]:
+        """Get list of selected sources."""
+        return [thumb.source for thumb in self.thumbnails if thumb.source.id in self.selected_source_ids]
 
     def _on_thumbnail_double_clicked(self, source: Source):
         """Handle thumbnail double-click."""

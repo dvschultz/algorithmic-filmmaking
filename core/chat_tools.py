@@ -375,8 +375,16 @@ def add_to_sequence(project, clip_ids: list[str]) -> dict:
     }
 
 
+# Aspect ratio tolerance ranges (5% tolerance) for filtering
+ASPECT_RATIO_RANGES = {
+    "16:9": (1.69, 1.87),   # 1.778 ± 5%
+    "4:3": (1.27, 1.40),     # 1.333 ± 5%
+    "9:16": (0.53, 0.59),    # 0.5625 ± 5%
+}
+
+
 @tools.register(
-    description="Filter clips by criteria. Returns matching clips with their metadata. Available filters: shot_type (close_up, medium_shot, wide_shot, etc.), has_speech (true/false), min_duration (seconds), max_duration (seconds).",
+    description="Filter clips by criteria. Returns matching clips with their metadata. Available filters: shot_type (close_up, medium_shot, wide_shot, etc.), has_speech (true/false), min_duration (seconds), max_duration (seconds), aspect_ratio ('16:9', '4:3', '9:16').",
     requires_project=True,
     modifies_gui_state=False
 )
@@ -385,13 +393,14 @@ def filter_clips(
     shot_type: Optional[str] = None,
     has_speech: Optional[bool] = None,
     min_duration: Optional[float] = None,
-    max_duration: Optional[float] = None
+    max_duration: Optional[float] = None,
+    aspect_ratio: Optional[str] = None
 ) -> list[dict]:
     """Filter clips by various criteria."""
     results = []
 
     for clip in project.clips:
-        # Get source for FPS
+        # Get source for FPS and dimensions
         source = project.sources_by_id.get(clip.source_id)
         fps = source.fps if source else 30.0
 
@@ -414,6 +423,20 @@ def filter_clips(
         if max_duration is not None and duration > max_duration:
             continue
 
+        # Apply aspect ratio filter
+        if aspect_ratio and aspect_ratio in ASPECT_RATIO_RANGES:
+            if not source or source.width == 0 or source.height == 0:
+                continue  # Skip clips without dimensions
+            source_aspect = source.width / source.height
+            min_ratio, max_ratio = ASPECT_RATIO_RANGES[aspect_ratio]
+            if not (min_ratio <= source_aspect <= max_ratio):
+                continue
+
+        # Calculate aspect ratio for output
+        clip_aspect_ratio = None
+        if source and source.height > 0:
+            clip_aspect_ratio = round(source.width / source.height, 3)
+
         results.append({
             "id": clip.id,
             "source_id": clip.source_id,
@@ -422,6 +445,9 @@ def filter_clips(
             "shot_type": getattr(clip, 'shot_type', None),
             "has_speech": bool(getattr(clip, 'transcript', None)),
             "dominant_colors": getattr(clip, 'dominant_colors', None),
+            "width": source.width if source else None,
+            "height": source.height if source else None,
+            "aspect_ratio": clip_aspect_ratio,
         })
 
     return results
@@ -640,6 +666,108 @@ def navigate_to_tab(tab_name: str, gui_state=None) -> dict:
         "success": True,
         "active_tab": tab_name,
         "message": f"Switched to {tab_name} tab"
+    }
+
+
+@tools.register(
+    description="Apply filters to the clip browser in the active tab (Cut or Analyze). "
+                "Filters clips by duration range and/or aspect ratio. "
+                "Use clear_all=True to reset all filters.",
+    requires_project=True,
+    modifies_gui_state=True
+)
+def apply_filters(
+    main_window,
+    min_duration: Optional[float] = None,
+    max_duration: Optional[float] = None,
+    aspect_ratio: Optional[str] = None,
+    clear_all: bool = False,
+) -> dict:
+    """Apply filters to the clip browser in the active tab.
+
+    Args:
+        min_duration: Minimum duration in seconds (None = no minimum)
+        max_duration: Maximum duration in seconds (None = no maximum)
+        aspect_ratio: Filter by aspect ratio ('16:9', '4:3', '9:16', or None)
+        clear_all: If True, clears all filters instead of applying new ones
+
+    Returns:
+        Dict with success status, active filters, and clip counts
+    """
+    if main_window is None:
+        return {"success": False, "error": "Main window not available"}
+
+    # Validate aspect_ratio if provided
+    valid_aspects = ["16:9", "4:3", "9:16"]
+    if aspect_ratio and aspect_ratio not in valid_aspects:
+        return {
+            "success": False,
+            "error": f"Invalid aspect_ratio '{aspect_ratio}'. Valid options: {', '.join(valid_aspects)}"
+        }
+
+    # Get the active tab's clip browser
+    gui_state = getattr(main_window, '_gui_state', None)
+    active_tab = gui_state.active_tab if gui_state else "cut"
+
+    clip_browser = None
+    if active_tab == "cut" and hasattr(main_window, 'cut_tab'):
+        clip_browser = main_window.cut_tab.clip_browser
+    elif active_tab == "analyze" and hasattr(main_window, 'analyze_tab'):
+        clip_browser = main_window.analyze_tab.clip_browser
+
+    if clip_browser is None:
+        return {
+            "success": False,
+            "error": f"No clip browser available in '{active_tab}' tab. Switch to Cut or Analyze tab first."
+        }
+
+    if clear_all:
+        clip_browser.clear_all_filters()
+        return {
+            "success": True,
+            "message": "All filters cleared",
+            "active_filters": clip_browser.get_active_filters(),
+            "visible_clips": clip_browser.get_visible_clip_count(),
+            "total_clips": len(clip_browser.thumbnails),
+        }
+
+    # Apply filters
+    # Block signals to avoid multiple rebuilds
+    clip_browser.duration_slider.blockSignals(True)
+    clip_browser.aspect_ratio_combo.blockSignals(True)
+
+    # Update duration filter
+    if min_duration is not None or max_duration is not None:
+        clip_browser._min_duration = min_duration
+        clip_browser._max_duration = max_duration
+        # Update slider values
+        current_min, current_max = clip_browser.duration_slider.values()
+        new_min = min_duration if min_duration is not None else clip_browser.duration_slider._data_min
+        new_max = max_duration if max_duration is not None else clip_browser.duration_slider._data_max
+        clip_browser.duration_slider.set_values(new_min, new_max)
+
+    if aspect_ratio:
+        clip_browser._aspect_ratio_filter = aspect_ratio
+        clip_browser.aspect_ratio_combo.setCurrentText(aspect_ratio)
+
+    # Unblock and rebuild
+    clip_browser.duration_slider.blockSignals(False)
+    clip_browser.aspect_ratio_combo.blockSignals(False)
+
+    clip_browser._rebuild_grid()
+    clip_browser.filters_changed.emit()
+
+    # Show filter panel if hidden
+    if not clip_browser._filter_panel_visible:
+        clip_browser._toggle_filter_panel(True)
+
+    return {
+        "success": True,
+        "message": "Filters applied",
+        "active_filters": clip_browser.get_active_filters(),
+        "visible_clips": clip_browser.get_visible_clip_count(),
+        "total_clips": len(clip_browser.thumbnails),
+        "active_tab": active_tab,
     }
 
 

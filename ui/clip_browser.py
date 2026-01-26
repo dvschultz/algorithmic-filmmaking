@@ -14,9 +14,13 @@ from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
     QLineEdit,
+    QPushButton,
 )
 from PySide6.QtCore import Qt, Signal, QMimeData, QPoint
 from PySide6.QtGui import QPixmap, QDrag, QPainter, QColor
+from typing import Optional
+
+from ui.widgets.range_slider import RangeSlider
 
 from models.clip import Clip, Source
 from core.analysis.color import get_primary_hue, classify_color_palette, get_palette_display_name, COLOR_PALETTES
@@ -310,8 +314,16 @@ class ClipBrowser(QWidget):
     clip_selected = Signal(object)  # Clip
     clip_double_clicked = Signal(object)  # Clip
     clip_dragged_to_timeline = Signal(object)  # Clip
+    filters_changed = Signal()  # Emitted when any filter changes
 
     COLUMNS = 4
+
+    # Aspect ratio tolerance ranges (5% tolerance)
+    ASPECT_RATIOS = {
+        "16:9": (1.778, 1.69, 1.87),   # 1.778 ± 5%
+        "4:3": (1.333, 1.27, 1.40),     # 1.333 ± 5%
+        "9:16": (0.5625, 0.53, 0.59),   # 0.5625 ± 5%
+    }
 
     def __init__(self):
         super().__init__()
@@ -323,6 +335,12 @@ class ClipBrowser(QWidget):
         self._current_filter = "All"  # Current shot type filter
         self._current_color_filter = "All"  # Current color palette filter
         self._current_search_query = ""  # Current transcript search query
+
+        # Duration and aspect ratio filters
+        self._min_duration: Optional[float] = None
+        self._max_duration: Optional[float] = None
+        self._aspect_ratio_filter: str = "All"  # "All", "16:9", "4:3", "9:16"
+        self._filter_panel_visible = False
 
         self._setup_ui()
 
@@ -340,6 +358,15 @@ class ClipBrowser(QWidget):
         header_layout.addWidget(header_label)
 
         header_layout.addStretch()
+
+        # Filters toggle button
+        self.filters_btn = QPushButton("Filters")
+        self.filters_btn.setCheckable(True)
+        self.filters_btn.setToolTip("Show/hide duration and aspect ratio filters")
+        self.filters_btn.clicked.connect(self._toggle_filter_panel)
+        header_layout.addWidget(self.filters_btn)
+
+        header_layout.addSpacing(8)
 
         # Shot type filter dropdown
         filter_label = QLabel("Shot:")
@@ -392,6 +419,11 @@ class ClipBrowser(QWidget):
 
         layout.addLayout(header_layout)
 
+        # Filter panel (collapsible)
+        self.filter_panel = self._create_filter_panel()
+        self.filter_panel.setVisible(False)
+        layout.addWidget(self.filter_panel)
+
         # Scroll area for thumbnails
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -429,10 +461,16 @@ class ClipBrowser(QWidget):
         self.thumbnails.append(thumb)
         self._thumbnail_by_id[clip.id] = thumb  # O(1) lookup
 
-        # Add to grid
-        row = (len(self.thumbnails) - 1) // self.COLUMNS
-        col = (len(self.thumbnails) - 1) % self.COLUMNS
-        self.grid.addWidget(thumb, row, col)
+        # Add to grid (only if it matches current filters)
+        if self._matches_filter(thumb):
+            row = (len(self.thumbnails) - 1) // self.COLUMNS
+            col = (len(self.thumbnails) - 1) % self.COLUMNS
+            self.grid.addWidget(thumb, row, col)
+        else:
+            thumb.setVisible(False)
+
+        # Update duration range for spinboxes
+        self._update_duration_range()
 
     def clear(self):
         """Clear all clips."""
@@ -498,6 +536,25 @@ class ClipBrowser(QWidget):
         for thumb in self.thumbnails:
             thumb.set_selected(thumb.clip.id in self.selected_clips)
 
+    def select_all(self) -> None:
+        """Select all visible clips."""
+        # Only select clips that are currently visible (not filtered out)
+        self.selected_clips = set(
+            thumb.clip.id for thumb in self.thumbnails if thumb.isVisible()
+        )
+
+        # Update all thumbnail states
+        for thumb in self.thumbnails:
+            thumb.set_selected(thumb.clip.id in self.selected_clips)
+
+    def clear_selection(self) -> None:
+        """Clear all selections."""
+        self.selected_clips.clear()
+
+        # Update all thumbnail states
+        for thumb in self.thumbnails:
+            thumb.set_selected(False)
+
     def _on_thumbnail_clicked(self, clip: Clip):
         """Handle thumbnail click."""
         # Toggle selection
@@ -552,16 +609,19 @@ class ClipBrowser(QWidget):
         """Handle shot type filter dropdown change."""
         self._current_filter = filter_option
         self._rebuild_grid()
+        self.filters_changed.emit()
 
     def _on_color_filter_changed(self, filter_option: str):
         """Handle color palette filter dropdown change."""
         self._current_color_filter = filter_option
         self._rebuild_grid()
+        self.filters_changed.emit()
 
     def _on_search_changed(self, search_text: str):
         """Handle transcript search input change."""
         self._current_search_query = search_text.lower().strip()
         self._rebuild_grid()
+        self.filters_changed.emit()
 
     def _on_sort_changed(self, sort_option: str):
         """Handle sort dropdown change."""
@@ -640,4 +700,196 @@ class ClipBrowser(QWidget):
             if self._current_search_query not in transcript_text:
                 return False
 
+        # Check duration filter
+        if self._min_duration is not None or self._max_duration is not None:
+            duration = thumb.clip.duration_seconds(thumb.source.fps)
+            if self._min_duration is not None and duration < self._min_duration:
+                return False
+            if self._max_duration is not None and duration > self._max_duration:
+                return False
+
+        # Check aspect ratio filter
+        if self._aspect_ratio_filter != "All":
+            source = thumb.source
+            # Hide clips without source dimensions
+            if source.width == 0 or source.height == 0:
+                return False
+            aspect = source.aspect_ratio
+            if self._aspect_ratio_filter in self.ASPECT_RATIOS:
+                _, min_ratio, max_ratio = self.ASPECT_RATIOS[self._aspect_ratio_filter]
+                if not (min_ratio <= aspect <= max_ratio):
+                    return False
+
         return True
+
+    def _create_filter_panel(self) -> QFrame:
+        """Create the collapsible filter panel for duration and aspect ratio."""
+        panel = QFrame()
+        panel.setFrameStyle(QFrame.StyledPanel)
+        panel.setStyleSheet("QFrame { background-color: rgba(0, 0, 0, 0.05); }")
+
+        layout = QHBoxLayout(panel)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(12)
+
+        # Duration range slider
+        duration_label = QLabel("Duration:")
+        layout.addWidget(duration_label)
+
+        self.duration_slider = RangeSlider()
+        self.duration_slider.set_suffix("s")
+        self.duration_slider.set_range(0.0, 60.0)  # Default range, updated when clips added
+        self.duration_slider.setMinimumWidth(200)
+        self.duration_slider.setMaximumWidth(350)
+        self.duration_slider.range_changed.connect(self._on_duration_slider_changed)
+        layout.addWidget(self.duration_slider)
+
+        layout.addSpacing(16)
+
+        # Aspect ratio filter
+        layout.addWidget(QLabel("Aspect:"))
+        self.aspect_ratio_combo = QComboBox()
+        self.aspect_ratio_combo.addItems(["All", "16:9", "4:3", "9:16"])
+        self.aspect_ratio_combo.setFixedWidth(80)
+        self.aspect_ratio_combo.currentTextChanged.connect(self._on_aspect_filter_changed)
+        layout.addWidget(self.aspect_ratio_combo)
+
+        layout.addSpacing(16)
+
+        # Clear filters button
+        self.clear_filters_btn = QPushButton("Clear Filters")
+        self.clear_filters_btn.setToolTip("Reset all filters to show all clips")
+        self.clear_filters_btn.clicked.connect(self.clear_all_filters)
+        layout.addWidget(self.clear_filters_btn)
+
+        layout.addStretch()
+
+        return panel
+
+    def _toggle_filter_panel(self, visible: bool):
+        """Show or hide the filter panel."""
+        self._filter_panel_visible = visible
+        self.filter_panel.setVisible(visible)
+        self.filters_btn.setChecked(visible)
+
+    def _update_duration_range(self):
+        """Update duration slider range based on actual clip durations."""
+        if not self.thumbnails:
+            return
+
+        durations = [
+            thumb.clip.duration_seconds(thumb.source.fps)
+            for thumb in self.thumbnails
+        ]
+        if durations:
+            min_dur = min(durations)
+            max_dur = max(durations)
+            # Set slider range with a small buffer
+            self.duration_slider.set_range(
+                max(0.0, min_dur - 0.1),
+                max_dur + 0.1
+            )
+            # Reset to full range if no filter is active
+            if self._min_duration is None and self._max_duration is None:
+                self.duration_slider.set_values(min_dur - 0.1, max_dur + 0.1)
+
+    def _on_duration_slider_changed(self, min_val: float, max_val: float):
+        """Handle duration slider changes."""
+        # Get the data range from the slider
+        data_min = self.duration_slider._data_min
+        data_max = self.duration_slider._data_max
+
+        # Only apply filter if values differ from full range
+        # Use small tolerance for float comparison
+        at_min = abs(min_val - data_min) < 0.05
+        at_max = abs(max_val - data_max) < 0.05
+
+        if at_min and at_max:
+            # Full range selected = no filter
+            self._min_duration = None
+            self._max_duration = None
+        else:
+            self._min_duration = min_val if not at_min else None
+            self._max_duration = max_val if not at_max else None
+
+        self._rebuild_grid()
+        self.filters_changed.emit()
+
+    def _on_aspect_filter_changed(self, value: str):
+        """Handle aspect ratio filter changes."""
+        self._aspect_ratio_filter = value
+        self._rebuild_grid()
+        self.filters_changed.emit()
+
+    def clear_all_filters(self):
+        """Reset all filters to show all clips."""
+        # Block signals to prevent multiple rebuilds
+        self.filter_combo.blockSignals(True)
+        self.color_filter_combo.blockSignals(True)
+        self.search_input.blockSignals(True)
+        self.duration_slider.blockSignals(True)
+        self.aspect_ratio_combo.blockSignals(True)
+
+        # Reset all filter values
+        self._current_filter = "All"
+        self._current_color_filter = "All"
+        self._current_search_query = ""
+        self._min_duration = None
+        self._max_duration = None
+        self._aspect_ratio_filter = "All"
+
+        # Reset UI controls
+        self.filter_combo.setCurrentText("All")
+        self.color_filter_combo.setCurrentText("All")
+        self.search_input.clear()
+        self.duration_slider.reset()
+        self.aspect_ratio_combo.setCurrentText("All")
+
+        # Unblock signals
+        self.filter_combo.blockSignals(False)
+        self.color_filter_combo.blockSignals(False)
+        self.search_input.blockSignals(False)
+        self.duration_slider.blockSignals(False)
+        self.aspect_ratio_combo.blockSignals(False)
+
+        # Rebuild once
+        self._rebuild_grid()
+        self.filters_changed.emit()
+
+    def get_active_filters(self) -> dict:
+        """Return current filter state.
+
+        Returns:
+            Dict with filter names and their current values
+        """
+        return {
+            "shot_type": self._current_filter if self._current_filter != "All" else None,
+            "color_palette": self._current_color_filter if self._current_color_filter != "All" else None,
+            "search_query": self._current_search_query if self._current_search_query else None,
+            "min_duration": self._min_duration,
+            "max_duration": self._max_duration,
+            "aspect_ratio": self._aspect_ratio_filter if self._aspect_ratio_filter != "All" else None,
+        }
+
+    def has_active_filters(self) -> bool:
+        """Check if any filters are currently active.
+
+        Returns:
+            True if at least one filter is set
+        """
+        return (
+            self._current_filter != "All"
+            or self._current_color_filter != "All"
+            or bool(self._current_search_query)
+            or self._min_duration is not None
+            or self._max_duration is not None
+            or self._aspect_ratio_filter != "All"
+        )
+
+    def get_visible_clip_count(self) -> int:
+        """Get the number of currently visible (non-filtered) clips.
+
+        Returns:
+            Number of visible clips
+        """
+        return sum(1 for thumb in self.thumbnails if self._matches_filter(thumb))
