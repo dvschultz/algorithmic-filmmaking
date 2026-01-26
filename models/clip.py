@@ -112,6 +112,8 @@ class Clip:
     dominant_colors: Optional[list[tuple[int, int, int]]] = None  # RGB tuples
     shot_type: Optional[str] = None  # e.g., "wide", "medium", "close-up"
     transcript: Optional[list["TranscriptSegment"]] = None  # Speech transcription segments
+    tags: list[str] = field(default_factory=list)  # User-defined tags for organization
+    notes: str = ""  # User notes/comments about the clip
 
     @property
     def duration_frames(self) -> int:
@@ -154,6 +156,11 @@ class Clip:
         # Transcript segments
         if self.transcript:
             data["transcript"] = [seg.to_dict() for seg in self.transcript]
+        # Tags and notes (only if non-empty)
+        if self.tags:
+            data["tags"] = self.tags
+        if self.notes:
+            data["notes"] = self.notes
         return data
 
     @classmethod
@@ -186,4 +193,6 @@ class Clip:
             dominant_colors=colors,
             shot_type=data.get("shot_type"),
             transcript=transcript,
+            tags=data.get("tags", []),
+            notes=data.get("notes", ""),
         )

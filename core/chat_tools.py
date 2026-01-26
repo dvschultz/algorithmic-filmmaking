@@ -591,6 +591,384 @@ def navigate_to_tab(tab_name: str, gui_state=None) -> dict:
 
 
 # =============================================================================
+# Phase 3: Export & Project Management Tools
+# =============================================================================
+
+@tools.register(
+    description="Export the current sequence as an EDL (Edit Decision List) file for use in external video editors like DaVinci Resolve, Premiere Pro, or Final Cut.",
+    requires_project=True,
+    modifies_gui_state=False
+)
+def export_edl(project, output_path: Optional[str] = None) -> dict:
+    """Export sequence to EDL format."""
+    from core.edl_export import export_edl as do_export, EDLExportConfig
+
+    if project.sequence is None or not project.sequence.get_all_clips():
+        return {
+            "success": False,
+            "error": "No sequence to export. Add clips to the sequence first."
+        }
+
+    # Determine output path
+    if output_path:
+        valid, error, validated_path = _validate_path(output_path)
+        if not valid:
+            return {"success": False, "error": f"Invalid output path: {error}"}
+        edl_path = validated_path
+    else:
+        # Use settings export_dir with project name
+        settings = load_settings()
+        project_name = project.metadata.name or "untitled"
+        edl_path = settings.export_dir / f"{project_name}.edl"
+
+    # Ensure parent directory exists
+    edl_path.parent.mkdir(parents=True, exist_ok=True)
+
+    config = EDLExportConfig(
+        output_path=edl_path,
+        title=project.metadata.name or "Scene Ripper Export"
+    )
+
+    success = do_export(
+        sequence=project.sequence,
+        sources=project.sources_by_id,
+        config=config
+    )
+
+    if success:
+        return {
+            "success": True,
+            "output_path": str(edl_path),
+            "clip_count": len(project.sequence.get_all_clips()),
+            "message": f"Exported {len(project.sequence.get_all_clips())} clips to EDL"
+        }
+    else:
+        return {
+            "success": False,
+            "error": "Failed to write EDL file"
+        }
+
+
+@tools.register(
+    description="Save the current project to disk. Uses the existing path if project was previously saved, or saves to the export directory for new projects.",
+    requires_project=True,
+    modifies_gui_state=False
+)
+def save_project(project, path: Optional[str] = None) -> dict:
+    """Save project state to JSON file."""
+    # Determine save path
+    if path:
+        valid, error, validated_path = _validate_path(path)
+        if not valid:
+            return {"success": False, "error": f"Invalid path: {error}"}
+        save_path = validated_path
+    elif project.path:
+        save_path = project.path
+    else:
+        # New project - use export dir
+        settings = load_settings()
+        project_name = project.metadata.name or "untitled"
+        save_path = settings.export_dir / f"{project_name}.sceneripper"
+
+    # Ensure .sceneripper extension
+    if save_path.suffix.lower() != ".sceneripper":
+        save_path = save_path.with_suffix(".sceneripper")
+
+    # Ensure parent directory exists
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        success = project.save(path=save_path)
+        if success:
+            return {
+                "success": True,
+                "path": str(save_path),
+                "message": f"Project saved to {save_path.name}"
+            }
+        else:
+            return {
+                "success": False,
+                "error": "Failed to save project"
+            }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+@tools.register(
+    description="Load a project from a .sceneripper or .json file. This replaces the current project.",
+    requires_project=False,
+    modifies_gui_state=True
+)
+def load_project(path: str, main_window=None) -> dict:
+    """Load project from file."""
+    from core.project import Project, ProjectLoadError, MissingSourceError
+
+    valid, error, validated_path = _validate_path(path, must_exist=True)
+    if not valid:
+        return {"success": False, "error": f"Invalid path: {error}"}
+
+    if not validated_path.is_file():
+        return {"success": False, "error": f"Path is not a file: {path}"}
+
+    if main_window is None:
+        return {"success": False, "error": "Cannot load project: main window not available"}
+
+    try:
+        # Load the project
+        new_project = Project.load(validated_path)
+
+        if not new_project.sources:
+            return {"success": False, "error": "No valid sources found in project"}
+
+        # Clear existing UI state
+        main_window._clear_project_state()
+
+        # Set the new project and update adapter
+        main_window.project = new_project
+        main_window._project_adapter.set_project(main_window.project)
+
+        # Refresh UI components with new project data
+        main_window._refresh_ui_from_project()
+
+        return {
+            "success": True,
+            "path": str(validated_path),
+            "name": new_project.metadata.name,
+            "sources": len(new_project.sources),
+            "clips": len(new_project.clips),
+            "message": f"Loaded project: {new_project.metadata.name}"
+        }
+    except ProjectLoadError as e:
+        return {"success": False, "error": f"Failed to load project: {e}"}
+    except MissingSourceError as e:
+        return {"success": False, "error": f"Missing source video: {e.source_path}"}
+    except Exception as e:
+        logger.exception("Failed to load project")
+        return {"success": False, "error": str(e)}
+
+
+@tools.register(
+    description="Create a fresh empty project. This clears the current project state.",
+    requires_project=False,
+    modifies_gui_state=True
+)
+def new_project(name: str = "Untitled Project", main_window=None) -> dict:
+    """Create a new empty project."""
+    from core.project import Project
+
+    if main_window is None:
+        return {"success": False, "error": "Cannot create project: main window not available"}
+
+    # Clear all existing project state
+    main_window._clear_project_state()
+
+    # Create and set new project
+    new_proj = Project.new(name=name)
+    main_window.project = new_proj
+    main_window._project_adapter.set_project(main_window.project)
+
+    # Update window title
+    main_window._update_window_title()
+
+    return {
+        "success": True,
+        "name": name,
+        "message": f"Created new project: {name}"
+    }
+
+
+@tools.register(
+    description="Add tags to one or more clips for organization and filtering.",
+    requires_project=True,
+    modifies_gui_state=True
+)
+def add_tags(project, clip_ids: list[str], tags: list[str]) -> dict:
+    """Add tags to specified clips."""
+    if not clip_ids:
+        return {"success": False, "error": "No clip IDs provided"}
+    if not tags:
+        return {"success": False, "error": "No tags provided"}
+
+    updated = []
+    not_found = []
+
+    for clip_id in clip_ids:
+        clip = project.clips_by_id.get(clip_id)
+        if clip is None:
+            not_found.append(clip_id)
+            continue
+
+        # Add new tags (avoid duplicates)
+        for tag in tags:
+            if tag not in clip.tags:
+                clip.tags.append(tag)
+        updated.append(clip_id)
+
+    if updated:
+        project.update_clips([project.clips_by_id[cid] for cid in updated])
+
+    return {
+        "success": len(updated) > 0,
+        "updated": updated,
+        "not_found": not_found,
+        "tags_added": tags,
+        "message": f"Added {len(tags)} tag(s) to {len(updated)} clip(s)"
+    }
+
+
+@tools.register(
+    description="Remove tags from one or more clips.",
+    requires_project=True,
+    modifies_gui_state=True
+)
+def remove_tags(project, clip_ids: list[str], tags: list[str]) -> dict:
+    """Remove tags from specified clips."""
+    if not clip_ids:
+        return {"success": False, "error": "No clip IDs provided"}
+    if not tags:
+        return {"success": False, "error": "No tags provided"}
+
+    updated = []
+    not_found = []
+
+    for clip_id in clip_ids:
+        clip = project.clips_by_id.get(clip_id)
+        if clip is None:
+            not_found.append(clip_id)
+            continue
+
+        # Remove tags
+        removed_any = False
+        for tag in tags:
+            if tag in clip.tags:
+                clip.tags.remove(tag)
+                removed_any = True
+
+        if removed_any:
+            updated.append(clip_id)
+
+    if updated:
+        project.update_clips([project.clips_by_id[cid] for cid in updated])
+
+    return {
+        "success": len(updated) > 0,
+        "updated": updated,
+        "not_found": not_found,
+        "tags_removed": tags,
+        "message": f"Removed tag(s) from {len(updated)} clip(s)"
+    }
+
+
+@tools.register(
+    description="Add or update a note on a clip.",
+    requires_project=True,
+    modifies_gui_state=True
+)
+def add_note(project, clip_id: str, note: str) -> dict:
+    """Set note text for a clip."""
+    clip = project.clips_by_id.get(clip_id)
+    if clip is None:
+        return {"success": False, "error": f"Clip not found: {clip_id}"}
+
+    clip.notes = note
+    project.update_clips([clip])
+
+    return {
+        "success": True,
+        "clip_id": clip_id,
+        "note": note,
+        "message": "Note updated" if note else "Note cleared"
+    }
+
+
+@tools.register(
+    description="Generate a human-readable summary of the current project including sources, clips, analysis status, and sequence information.",
+    requires_project=True,
+    modifies_gui_state=False
+)
+def get_project_summary(project) -> dict:
+    """Generate project summary."""
+    # Build summary
+    lines = []
+    lines.append(f"# {project.metadata.name}")
+    lines.append("")
+
+    # Project info
+    lines.append("## Project Info")
+    lines.append(f"- **Path**: {project.path or 'Unsaved'}")
+    lines.append(f"- **Created**: {project.metadata.created_at[:10]}")
+    lines.append(f"- **Modified**: {project.metadata.modified_at[:10]}")
+    lines.append(f"- **Unsaved changes**: {'Yes' if project.is_dirty else 'No'}")
+    lines.append("")
+
+    # Sources
+    lines.append(f"## Sources ({len(project.sources)} videos)")
+    if project.sources:
+        total_duration = sum(s.duration_seconds for s in project.sources)
+        lines.append(f"- **Total duration**: {total_duration:.1f}s ({total_duration/60:.1f} min)")
+        lines.append("")
+        for source in project.sources:
+            clip_count = len(project.clips_by_source.get(source.id, []))
+            analyzed = "✓" if source.analyzed else "✗"
+            lines.append(f"- {source.filename} ({source.duration_seconds:.1f}s, {clip_count} clips) [{analyzed}]")
+    else:
+        lines.append("- No sources imported yet")
+    lines.append("")
+
+    # Clips
+    lines.append(f"## Clips ({len(project.clips)} total)")
+    if project.clips:
+        # Count analysis status
+        with_colors = sum(1 for c in project.clips if c.dominant_colors)
+        with_shots = sum(1 for c in project.clips if c.shot_type)
+        with_transcript = sum(1 for c in project.clips if c.transcript)
+        with_tags = sum(1 for c in project.clips if c.tags)
+        with_notes = sum(1 for c in project.clips if c.notes)
+
+        lines.append(f"- **Color analyzed**: {with_colors}/{len(project.clips)}")
+        lines.append(f"- **Shot classified**: {with_shots}/{len(project.clips)}")
+        lines.append(f"- **Transcribed**: {with_transcript}/{len(project.clips)}")
+        lines.append(f"- **Tagged**: {with_tags}/{len(project.clips)}")
+        lines.append(f"- **With notes**: {with_notes}/{len(project.clips)}")
+
+        # List unique tags
+        all_tags = set()
+        for clip in project.clips:
+            all_tags.update(clip.tags)
+        if all_tags:
+            lines.append(f"- **Tags used**: {', '.join(sorted(all_tags))}")
+    else:
+        lines.append("- No clips detected yet")
+    lines.append("")
+
+    # Sequence
+    lines.append("## Sequence")
+    if project.sequence and project.sequence.get_all_clips():
+        seq_clips = project.sequence.get_all_clips()
+        lines.append(f"- **Clips in sequence**: {len(seq_clips)}")
+        lines.append(f"- **Total duration**: {project.sequence.duration_seconds:.1f}s")
+        lines.append(f"- **FPS**: {project.sequence.fps}")
+    else:
+        lines.append("- No sequence built yet")
+
+    summary_text = "\n".join(lines)
+
+    return {
+        "success": True,
+        "summary": summary_text,
+        "stats": {
+            "sources": len(project.sources),
+            "clips": len(project.clips),
+            "sequence_clips": len(project.sequence.get_all_clips()) if project.sequence else 0,
+            "is_dirty": project.is_dirty
+        }
+    }
+
+
+# =============================================================================
 # CLI Tools - Execute via subprocess for batch operations
 # =============================================================================
 

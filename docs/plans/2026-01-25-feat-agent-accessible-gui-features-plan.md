@@ -91,14 +91,14 @@ Tool Execution → Project.notify_observers() → ProjectSignalAdapter
 - [ ] Extended `filter_clips` with transcript content filtering
 
 ### Phase 3: Export & Project Management
-- [ ] `export_edl(output_path: Optional[str])` - CMX 3600 EDL
-- [ ] `save_project(path: Optional[str])` - Save project state
-- [ ] `load_project(path: str)` - Load existing project
-- [ ] `new_project(name: str)` - Create fresh project
-- [ ] `add_tags(clip_ids: list[str], tags: list[str])` - Tag clips
-- [ ] `remove_tags(clip_ids: list[str], tags: list[str])` - Remove tags
-- [ ] `add_note(clip_id: str, note: str)` - Add clip note
-- [ ] `get_project_summary()` - Human-readable project overview
+- [x] `export_edl(output_path: Optional[str])` - CMX 3600 EDL
+- [x] `save_project(path: Optional[str])` - Save project state
+- [x] `load_project(path: str)` - Load existing project
+- [x] `new_project(name: str)` - Create fresh project
+- [x] `add_tags(clip_ids: list[str], tags: list[str])` - Tag clips
+- [x] `remove_tags(clip_ids: list[str], tags: list[str])` - Remove tags
+- [x] `add_note(clip_id: str, note: str)` - Add clip note
+- [x] `get_project_summary()` - Human-readable project overview
 
 ### Phase 4: Workflow Automation
 - [ ] Multi-video pipeline support ("download 5 videos and detect scenes")
