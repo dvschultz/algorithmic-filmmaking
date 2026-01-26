@@ -204,6 +204,9 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
+# Gemini CLI
+.gemini/
+
 # Marimo
 marimo/_static/
 marimo/_lsp/
