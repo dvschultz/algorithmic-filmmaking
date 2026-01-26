@@ -119,6 +119,7 @@ class Clip:
     source_id: str = ""
     start_frame: int = 0
     end_frame: int = 0
+    name: str = ""  # Custom clip name (empty = use auto-generated)
     thumbnail_path: Optional[Path] = None
     dominant_colors: Optional[list[tuple[int, int, int]]] = None  # RGB tuples
     shot_type: Optional[str] = None  # e.g., "wide", "medium", "close-up"
@@ -142,6 +143,27 @@ class Clip:
         """Get duration in seconds."""
         return self.duration_frames / fps
 
+    def display_name(self, source_filename: str = "", fps: float = 30.0) -> str:
+        """Get display name (custom name or auto-generated fallback).
+
+        Args:
+            source_filename: Source video filename for fallback generation
+            fps: Frames per second for timecode calculation
+
+        Returns:
+            Custom name if set, otherwise "filename - timecode" format
+        """
+        if self.name:
+            return self.name
+        # Auto-generate: source filename - start timecode
+        start_time = self.start_time(fps)
+        m = int(start_time // 60)
+        s = int(start_time % 60)
+        timecode = f"{m}:{s:02d}"
+        if source_filename:
+            return f"{source_filename} - {timecode}"
+        return timecode
+
     def get_transcript_text(self) -> str:
         """Get full transcript text from all segments."""
         if not self.transcript:
@@ -156,6 +178,9 @@ class Clip:
             "start_frame": self.start_frame,
             "end_frame": self.end_frame,
         }
+        # Custom name (only if set)
+        if self.name:
+            data["name"] = self.name
         # Colors as RGB objects
         if self.dominant_colors:
             data["dominant_colors"] = [
@@ -200,6 +225,7 @@ class Clip:
             source_id=data.get("source_id", ""),
             start_frame=data.get("start_frame", 0),
             end_frame=data.get("end_frame", 0),
+            name=data.get("name", ""),  # Backwards compatible: defaults to empty
             thumbnail_path=None,  # Regenerate on load
             dominant_colors=colors,
             shot_type=data.get("shot_type"),

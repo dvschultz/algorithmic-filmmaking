@@ -639,6 +639,25 @@ class ClipBrowser(QWidget):
         if thumb:
             thumb.set_thumbnail(thumb_path)
 
+    def update_clips(self, clips: list[Clip]):
+        """Update thumbnails for the given clips (called when clips are edited).
+
+        Args:
+            clips: List of clips that were updated
+        """
+        for clip in clips:
+            thumb = self._thumbnail_by_id.get(clip.id)
+            if thumb:
+                # Update shot type badge
+                if clip.shot_type:
+                    thumb.set_shot_type(clip.shot_type)
+                # Update transcript overlay
+                if clip.transcript:
+                    thumb.set_transcript(clip.transcript)
+                # Update colors
+                if clip.dominant_colors:
+                    thumb.set_colors(clip.dominant_colors)
+
     def _on_filter_changed(self, filter_option: str):
         """Handle shot type filter dropdown change."""
         self._current_filter = filter_option

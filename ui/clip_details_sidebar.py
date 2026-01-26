@@ -2,13 +2,16 @@
 
 Provides a dismissable sidebar displaying detailed clip information:
 - Video preview at top
-- Clip title and metadata
-- Analysis data (colors, shot type, transcript)
+- Editable clip name
+- Clip metadata (read-only: duration, frames, resolution)
+- Editable shot type dropdown
+- Editable transcript segments with timestamps
+- Dominant colors (read-only)
 """
 
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtMultimedia import QMediaPlayer
@@ -26,22 +29,32 @@ from PySide6.QtWidgets import (
 from models.clip import Clip, Source
 from ui.theme import theme
 from ui.video_player import VideoPlayer
+from ui.widgets.editable_label import EditableLabel
+from ui.widgets.shot_type_dropdown import ShotTypeDropdown
+from ui.widgets.editable_transcript import EditableTranscriptWidget
+
+if TYPE_CHECKING:
+    from core.transcription import TranscriptSegment
 
 logger = logging.getLogger(__name__)
 
 
 class ClipDetailsSidebar(QDockWidget):
-    """Sidebar displaying detailed clip information.
+    """Sidebar displaying detailed clip information with editable fields.
 
     Opens on left side of app to show:
     - Video preview with playback controls
-    - Clip metadata (title, duration, frames, resolution)
-    - Analysis data (colors, shot type, transcript)
+    - Editable clip name
+    - Clip metadata (read-only: duration, frames, resolution)
+    - Editable shot type dropdown
+    - Editable transcript with timestamps
+    - Dominant colors display
     """
 
     # Signals
     clip_shown = Signal(str)  # clip_id when shown
     sidebar_closed = Signal()  # sidebar was closed
+    clip_edited = Signal(object)  # Clip - emitted when clip is edited
 
     def __init__(self, parent=None):
         """Create the clip details sidebar.
@@ -60,6 +73,11 @@ class ClipDetailsSidebar(QDockWidget):
         self._source_ref: Optional[Source] = None
         self._loading = False  # Guard flag for duplicate signals
         self._pending_seek: Optional[float] = None  # Seek position to apply when media loads
+
+        # Edit guard flags (prevent duplicate execution per documented learnings)
+        self._name_change_in_progress = False
+        self._shot_type_change_in_progress = False
+        self._transcript_change_in_progress = False
 
         self._setup_ui()
         self._connect_signals()
@@ -105,51 +123,58 @@ class ClipDetailsSidebar(QDockWidget):
         content_layout.setContentsMargins(16, 16, 16, 16)
         content_layout.setSpacing(16)
 
-        # Title section
-        self.title_label = QLabel("No clip selected")
-        self.title_label.setWordWrap(True)
-        self.title_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
-        self._apply_title_style()
-        content_layout.addWidget(self.title_label)
+        # Clip name section (EDITABLE)
+        self.name_header = QLabel("Clip Name")
+        self._apply_section_header_style(self.name_header)
+        content_layout.addWidget(self.name_header)
 
-        # Metadata section
+        self.name_edit = EditableLabel("", placeholder="Enter clip name...")
+        self.name_edit.value_changed.connect(self._on_name_changed)
+        content_layout.addWidget(self.name_edit)
+
+        # Source info (read-only)
+        self.source_label = QLabel("")
+        self._apply_muted_style(self.source_label)
+        content_layout.addWidget(self.source_label)
+
+        # Metadata section (read-only)
+        self.metadata_header = QLabel("Details")
+        self._apply_section_header_style(self.metadata_header)
+        content_layout.addWidget(self.metadata_header)
+
         self.metadata_label = QLabel("")
         self.metadata_label.setWordWrap(True)
         self._apply_secondary_style(self.metadata_label)
         content_layout.addWidget(self.metadata_label)
 
-        # Colors section header
+        # Shot type section (EDITABLE)
+        self.shot_type_header = QLabel("Shot Type")
+        self._apply_section_header_style(self.shot_type_header)
+        content_layout.addWidget(self.shot_type_header)
+
+        self.shot_type_dropdown = ShotTypeDropdown()
+        self.shot_type_dropdown.value_changed.connect(self._on_shot_type_changed)
+        content_layout.addWidget(self.shot_type_dropdown)
+
+        # Colors section (read-only)
         self.colors_header = QLabel("Dominant Colors")
         self._apply_section_header_style(self.colors_header)
         content_layout.addWidget(self.colors_header)
 
-        # Color swatches container
         self.color_swatches = QWidget()
         self.color_swatches_layout = QHBoxLayout(self.color_swatches)
         self.color_swatches_layout.setContentsMargins(0, 0, 0, 0)
         self.color_swatches_layout.setSpacing(8)
         content_layout.addWidget(self.color_swatches)
 
-        # Shot type section
-        self.shot_type_header = QLabel("Shot Type")
-        self._apply_section_header_style(self.shot_type_header)
-        content_layout.addWidget(self.shot_type_header)
-
-        self.shot_type_label = QLabel("")
-        self._apply_secondary_style(self.shot_type_label)
-        content_layout.addWidget(self.shot_type_label)
-
-        # Transcript section header
+        # Transcript section (EDITABLE)
         self.transcript_header = QLabel("Transcript")
         self._apply_section_header_style(self.transcript_header)
         content_layout.addWidget(self.transcript_header)
 
-        # Transcript text
-        self.transcript_text = QLabel("")
-        self.transcript_text.setWordWrap(True)
-        self.transcript_text.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
-        self._apply_secondary_style(self.transcript_text)
-        content_layout.addWidget(self.transcript_text)
+        self.transcript_edit = EditableTranscriptWidget()
+        self.transcript_edit.segments_changed.connect(self._on_transcript_changed)
+        content_layout.addWidget(self.transcript_edit)
 
         # Stretch to push content to top
         content_layout.addStretch()
@@ -169,14 +194,6 @@ class ClipDetailsSidebar(QDockWidget):
         # Connect to media status to seek after video loads
         self.video_player.player.mediaStatusChanged.connect(self._on_media_status_changed)
 
-    def _apply_title_style(self):
-        """Apply title label styling."""
-        self.title_label.setStyleSheet(f"""
-            font-size: 16px;
-            font-weight: bold;
-            color: {theme().text_primary};
-        """)
-
     def _apply_section_header_style(self, label: QLabel):
         """Apply section header styling."""
         label.setStyleSheet(f"""
@@ -191,16 +208,20 @@ class ClipDetailsSidebar(QDockWidget):
         """Apply secondary text styling."""
         label.setStyleSheet(f"color: {theme().text_secondary}; line-height: 1.4;")
 
+    def _apply_muted_style(self, label: QLabel):
+        """Apply muted text styling."""
+        label.setStyleSheet(f"color: {theme().text_muted}; font-size: 12px;")
+
     @Slot()
     def _refresh_theme(self):
         """Update colors on theme change."""
-        self._apply_title_style()
+        self._apply_section_header_style(self.name_header)
+        self._apply_section_header_style(self.metadata_header)
         self._apply_section_header_style(self.colors_header)
         self._apply_section_header_style(self.shot_type_header)
         self._apply_section_header_style(self.transcript_header)
         self._apply_secondary_style(self.metadata_label)
-        self._apply_secondary_style(self.shot_type_label)
-        self._apply_secondary_style(self.transcript_text)
+        self._apply_muted_style(self.source_label)
 
         # Re-render color swatches with current clip
         if self._clip_ref:
@@ -223,6 +244,50 @@ class ClipDetailsSidebar(QDockWidget):
                 self.video_player.seek_to(self._pending_seek)
                 self._pending_seek = None
 
+    @Slot(str)
+    def _on_name_changed(self, new_name: str):
+        """Handle clip name change."""
+        if self._name_change_in_progress or self._loading:
+            return
+        if not self._clip_ref:
+            return
+        self._name_change_in_progress = True
+
+        self._clip_ref.name = new_name
+        self.clip_edited.emit(self._clip_ref)
+
+        self._name_change_in_progress = False
+
+    @Slot(str)
+    def _on_shot_type_changed(self, new_shot_type: str):
+        """Handle shot type change."""
+        if self._shot_type_change_in_progress or self._loading:
+            return
+        if not self._clip_ref:
+            return
+        self._shot_type_change_in_progress = True
+
+        # Store None if empty, otherwise the shot type string
+        self._clip_ref.shot_type = new_shot_type if new_shot_type else None
+        self.clip_edited.emit(self._clip_ref)
+
+        self._shot_type_change_in_progress = False
+
+    @Slot(list)
+    def _on_transcript_changed(self, segments: list):
+        """Handle transcript segment change."""
+        if self._transcript_change_in_progress or self._loading:
+            return
+        if not self._clip_ref:
+            return
+        self._transcript_change_in_progress = True
+
+        # Segments are already updated in-place by the widget
+        self._clip_ref.transcript = segments if segments else None
+        self.clip_edited.emit(self._clip_ref)
+
+        self._transcript_change_in_progress = False
+
     def show_clip(self, clip: Clip, source: Source):
         """Display details for the given clip.
 
@@ -241,12 +306,21 @@ class ClipDetailsSidebar(QDockWidget):
         self._clip_ref = clip
         self._source_ref = source
 
-        # Title: filename - timecode
-        start_time = clip.start_time(source.fps)
-        title = f"{source.filename} - {self._format_time(start_time)}"
-        self.title_label.setText(title)
+        # Block signals while updating UI (per documented learnings)
+        self.name_edit.blockSignals(True)
+        self.shot_type_dropdown.blockSignals(True)
+        self.transcript_edit.blockSignals(True)
 
-        # Metadata
+        # Clip name (editable)
+        display_name = clip.display_name(source.filename, source.fps)
+        self.name_edit.setText(clip.name)  # Show actual name, not fallback
+        self.name_edit.setPlaceholder(display_name)  # Use fallback as placeholder
+
+        # Source info (read-only)
+        start_time = clip.start_time(source.fps)
+        self.source_label.setText(f"{source.filename} at {self._format_time(start_time)}")
+
+        # Metadata (read-only)
         duration = clip.duration_seconds(source.fps)
         metadata_lines = [
             f"Duration: {self._format_time(duration, include_fraction=True)}",
@@ -256,29 +330,22 @@ class ClipDetailsSidebar(QDockWidget):
         ]
         self.metadata_label.setText("\n".join(metadata_lines))
 
-        # Colors
+        # Shot type (editable)
+        self.shot_type_dropdown.setValue(clip.shot_type)
+
+        # Colors (read-only)
         self._update_colors(clip.dominant_colors)
 
-        # Shot type
-        if clip.shot_type:
-            self.shot_type_label.setText(clip.shot_type.title())
-            self.shot_type_header.show()
-            self.shot_type_label.show()
-        else:
-            self.shot_type_label.setText("Not analyzed")
-            self.shot_type_header.show()
-            self.shot_type_label.show()
+        # Transcript (editable)
+        self.transcript_edit.setSegments(clip.transcript)
 
-        # Transcript
-        if clip.transcript:
-            transcript_text = clip.get_transcript_text()
-            self.transcript_text.setText(transcript_text if transcript_text else "No speech detected")
-            self.transcript_header.show()
-            self.transcript_text.show()
-        else:
-            self.transcript_text.setText("No transcript available")
-            self.transcript_header.show()
-            self.transcript_text.show()
+        # Unblock signals
+        self.name_edit.blockSignals(False)
+        self.shot_type_dropdown.blockSignals(False)
+        self.transcript_edit.blockSignals(False)
+
+        # Enable editing
+        self._set_editing_enabled(True)
 
         # Load video preview
         if source.file_path.exists():
@@ -295,6 +362,57 @@ class ClipDetailsSidebar(QDockWidget):
 
         self.clip_shown.emit(clip.id)
         self._loading = False
+
+    def show_multi_selection(self, count: int):
+        """Display multi-selection state.
+
+        Args:
+            count: Number of clips selected
+        """
+        self._loading = True
+        self._clip_ref = None
+        self._source_ref = None
+
+        # Block signals
+        self.name_edit.blockSignals(True)
+        self.shot_type_dropdown.blockSignals(True)
+        self.transcript_edit.blockSignals(True)
+
+        # Show selection count
+        self.name_edit.setText("")
+        self.name_edit.setPlaceholder(f"{count} clips selected")
+        self.source_label.setText("Multiple clips selected")
+        self.metadata_label.setText("Select a single clip to view details")
+
+        # Clear other fields
+        self.shot_type_dropdown.setValue(None)
+        self._update_colors(None)
+        self.transcript_edit.setSegments(None)
+
+        # Unblock signals
+        self.name_edit.blockSignals(False)
+        self.shot_type_dropdown.blockSignals(False)
+        self.transcript_edit.blockSignals(False)
+
+        # Disable editing
+        self._set_editing_enabled(False)
+
+        # Stop video
+        if hasattr(self.video_player, 'player'):
+            self.video_player.player.stop()
+
+        self.show()
+        self._loading = False
+
+    def _set_editing_enabled(self, enabled: bool):
+        """Enable or disable editing of all editable fields.
+
+        Args:
+            enabled: Whether editing should be enabled
+        """
+        self.name_edit.setEnabled(enabled)
+        self.shot_type_dropdown.setEnabled(enabled)
+        self.transcript_edit.setEnabled(enabled)
 
     def _update_colors(self, colors: Optional[list[tuple[int, int, int]]]):
         """Update the color swatches display.
@@ -331,8 +449,7 @@ class ClipDetailsSidebar(QDockWidget):
 
     def _show_missing_file_state(self):
         """Show error state when source file is missing."""
-        # Clear video widget - we can't actually clear it but we can show text
-        self.title_label.setText(self.title_label.text() + "\n(Source file not found)")
+        self.source_label.setText(self.source_label.text() + " (Source file not found)")
 
     def _format_time(self, seconds: float, include_fraction: bool = False) -> str:
         """Format seconds as HH:MM:SS.ff or MM:SS.ff.
@@ -361,11 +478,28 @@ class ClipDetailsSidebar(QDockWidget):
         """Clear the sidebar content."""
         self._clip_ref = None
         self._source_ref = None
-        self.title_label.setText("No clip selected")
+
+        # Block signals
+        self.name_edit.blockSignals(True)
+        self.shot_type_dropdown.blockSignals(True)
+        self.transcript_edit.blockSignals(True)
+
+        self.name_edit.setText("")
+        self.name_edit.setPlaceholder("No clip selected")
+        self.source_label.setText("")
         self.metadata_label.setText("")
         self._update_colors(None)
-        self.shot_type_label.setText("")
-        self.transcript_text.setText("")
+        self.shot_type_dropdown.setValue(None)
+        self.transcript_edit.setSegments(None)
+
+        # Unblock signals
+        self.name_edit.blockSignals(False)
+        self.shot_type_dropdown.blockSignals(False)
+        self.transcript_edit.blockSignals(False)
+
+        # Disable editing
+        self._set_editing_enabled(False)
+
         if hasattr(self.video_player, 'player'):
             self.video_player.player.stop()
 
