@@ -7,7 +7,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QSplitter,
     QWidget,
     QStackedWidget,
 )
@@ -15,7 +14,6 @@ from PySide6.QtCore import Signal, Qt
 
 from .base_tab import BaseTab
 from ui.clip_browser import ClipBrowser
-from ui.video_player import VideoPlayer
 from ui.widgets import EmptyStateWidget
 
 logger = logging.getLogger(__name__)
@@ -149,24 +147,14 @@ class AnalyzeTab(BaseTab):
         layout = QVBoxLayout(content)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # Horizontal splitter for browser and player
-        splitter = QSplitter(Qt.Horizontal)
-
-        # Left: Clip browser
+        # Clip browser (full width - video preview is in clip details sidebar)
         self.clip_browser = ClipBrowser()
         self.clip_browser.set_drag_enabled(True)
         self.clip_browser.clip_selected.connect(self._on_clip_selected)
         self.clip_browser.clip_double_clicked.connect(self._on_clip_double_clicked)
         self.clip_browser.clip_dragged_to_timeline.connect(self._on_clip_dragged)
         self.clip_browser.filters_changed.connect(self._on_filters_changed)
-        splitter.addWidget(self.clip_browser)
-
-        # Right: Video player
-        self.video_player = VideoPlayer()
-        splitter.addWidget(self.video_player)
-
-        splitter.setSizes([400, 600])
-        layout.addWidget(splitter)
+        layout.addWidget(self.clip_browser)
 
         return content
 
@@ -190,13 +178,6 @@ class AnalyzeTab(BaseTab):
     def _on_clip_selected(self, clip):
         """Handle clip selection."""
         self.clip_selected.emit(clip)
-        # Load the source video for this clip
-        source = self._sources_by_id.get(clip.source_id)
-        if source:
-            self.video_player.load_video(source.file_path)
-            start_time = clip.start_time(source.fps)
-            self.video_player.seek_to(start_time)
-        
         self._update_selection_ui()
 
     def _update_selection_ui(self):
@@ -207,12 +188,6 @@ class AnalyzeTab(BaseTab):
     def _on_clip_double_clicked(self, clip):
         """Handle clip double-click."""
         self.clip_double_clicked.emit(clip)
-        source = self._sources_by_id.get(clip.source_id)
-        if source:
-            self.video_player.load_video(source.file_path)
-            start_time = clip.start_time(source.fps)
-            end_time = clip.end_time(source.fps)
-            self.video_player.play_range(start_time, end_time)
 
     def _on_clip_dragged(self, clip):
         """Handle clip drag to timeline."""
