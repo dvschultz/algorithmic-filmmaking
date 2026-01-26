@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import Qt, Signal, Slot
+from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtWidgets import (
     QDockWidget,
     QFrame,
@@ -58,6 +59,7 @@ class ClipDetailsSidebar(QDockWidget):
         self._clip_ref: Optional[Clip] = None
         self._source_ref: Optional[Source] = None
         self._loading = False  # Guard flag for duplicate signals
+        self._pending_seek: Optional[float] = None  # Seek position to apply when media loads
 
         self._setup_ui()
         self._connect_signals()
@@ -71,8 +73,10 @@ class ClipDetailsSidebar(QDockWidget):
 
         # Video preview section
         self.video_player = VideoPlayer()
-        self.video_player.setMaximumHeight(220)
-        self.video_player.setMinimumHeight(180)
+        # Override the video widget's minimum size for sidebar use
+        self.video_player.video_widget.setMinimumSize(200, 150)
+        self.video_player.setMaximumHeight(250)
+        self.video_player.setMinimumHeight(200)
         main_layout.addWidget(self.video_player)
 
         # Separator
@@ -161,6 +165,8 @@ class ClipDetailsSidebar(QDockWidget):
         """Connect signals."""
         theme().changed.connect(self._refresh_theme)
         self.visibilityChanged.connect(self._on_visibility_changed)
+        # Connect to media status to seek after video loads
+        self.video_player.player.mediaStatusChanged.connect(self._on_media_status_changed)
 
     def _apply_title_style(self):
         """Apply title label styling."""
@@ -207,6 +213,14 @@ class ClipDetailsSidebar(QDockWidget):
             # Stop video playback when hidden
             if hasattr(self.video_player, 'player'):
                 self.video_player.player.pause()
+
+    @Slot(QMediaPlayer.MediaStatus)
+    def _on_media_status_changed(self, status: QMediaPlayer.MediaStatus):
+        """Handle media status changes to seek after video loads."""
+        if status == QMediaPlayer.MediaStatus.LoadedMedia:
+            if self._pending_seek is not None:
+                self.video_player.seek_to(self._pending_seek)
+                self._pending_seek = None
 
     def show_clip(self, clip: Clip, source: Source):
         """Display details for the given clip.
@@ -267,8 +281,9 @@ class ClipDetailsSidebar(QDockWidget):
 
         # Load video preview
         if source.file_path.exists():
+            # Store seek position - will be applied when media loads
+            self._pending_seek = start_time
             self.video_player.load_video(source.file_path)
-            self.video_player.seek_to(start_time)
         else:
             logger.warning(f"Source file not found: {source.file_path}")
             self._show_missing_file_state()
