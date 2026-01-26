@@ -53,6 +53,7 @@ from ui.tabs import CollectTab, CutTab, AnalyzeTab, GenerateTab, SequenceTab, Re
 from ui.theme import theme
 from ui.chat_panel import ChatPanel
 from ui.chat_worker import ChatAgentWorker
+from ui.clip_details_sidebar import ClipDetailsSidebar
 from core.gui_state import GUIState
 
 # Set up logging
@@ -659,6 +660,10 @@ class MainWindow(QMainWindow):
         logger.info("Setting up chat panel...")
         self._setup_chat_panel()
 
+        # Set up clip details sidebar
+        logger.info("Setting up clip details sidebar...")
+        self._setup_clip_details_sidebar()
+
         # Playback state (must be after _setup_ui so tabs are initialized)
         logger.info("Setting up playback state...")
         self._is_playing = False
@@ -977,6 +982,7 @@ class MainWindow(QMainWindow):
         self.cut_tab.clips_sent_to_analyze.connect(self._on_clips_sent_to_analyze)
         self.cut_tab.selection_changed.connect(self._on_cut_selection_changed)
         self.cut_tab.clip_browser.filters_changed.connect(self._on_cut_filters_changed)
+        self.cut_tab.clip_browser.view_details_requested.connect(self.show_clip_details)
 
         # Analyze tab signals
         self.analyze_tab.transcribe_requested.connect(self._on_transcribe_from_tab)
@@ -987,6 +993,7 @@ class MainWindow(QMainWindow):
         self.analyze_tab.selection_changed.connect(self._on_analyze_selection_changed)
         self.analyze_tab.clips_changed.connect(self._on_analyze_clips_changed)
         self.analyze_tab.clip_browser.filters_changed.connect(self._on_analyze_filters_changed)
+        self.analyze_tab.clip_browser.view_details_requested.connect(self.show_clip_details)
 
         # Sequence tab signals
         self.sequence_tab.playback_requested.connect(self._on_playback_requested)
@@ -1055,6 +1062,33 @@ class MainWindow(QMainWindow):
         self.chat_panel.plan_cancelled.connect(self._on_plan_cancelled)
         self.chat_panel.plan_retry_requested.connect(self._on_plan_retry_requested)
         self.chat_panel.plan_stop_requested.connect(self._on_plan_stop_requested)
+
+    def _setup_clip_details_sidebar(self):
+        """Initialize the clip details sidebar dock widget."""
+        # Create sidebar
+        self.clip_details_sidebar = ClipDetailsSidebar(self)
+
+        # Add as dock widget on left side
+        self.addDockWidget(Qt.LeftDockWidgetArea, self.clip_details_sidebar)
+
+        # Start hidden by default
+        self.clip_details_sidebar.setVisible(False)
+
+        # Add toggle action to View menu
+        self.clip_details_toggle = self.clip_details_sidebar.toggleViewAction()
+        self.clip_details_toggle.setText("Show Clip Details")
+        self.clip_details_toggle.setShortcut(QKeySequence("Ctrl+D"))
+        self._view_menu.addAction(self.clip_details_toggle)
+
+    def show_clip_details(self, clip: Clip, source: Source):
+        """Show the clip details sidebar for a clip.
+
+        Args:
+            clip: The clip to display
+            source: The source video
+        """
+        if hasattr(self, 'clip_details_sidebar'):
+            self.clip_details_sidebar.show_clip(clip, source)
 
     def _on_chat_message(self, message: str):
         """Handle user message from chat panel."""
