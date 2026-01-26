@@ -455,17 +455,30 @@ class ClipBrowser(QWidget):
         self.scroll.setWidget(self.container)
         layout.addWidget(self.scroll)
 
-        # Placeholder for empty state
+        # Placeholder for empty state (not in grid initially - will be added when needed)
         self.empty_label = QLabel("No scenes detected yet.\nDrop a video or click Import.")
         self.empty_label.setAlignment(Qt.AlignCenter)
-        self.grid.addWidget(self.empty_label, 0, 0, 1, self.COLUMNS)
+        self._empty_label_in_grid = False
+        self._show_empty_state()  # Show initially since no clips
+
+    def _show_empty_state(self):
+        """Show the empty state label in the grid."""
+        if not self._empty_label_in_grid:
+            self.grid.addWidget(self.empty_label, 0, 0, 1, self.COLUMNS)
+            self._empty_label_in_grid = True
+        self.empty_label.setVisible(True)
+
+    def _hide_empty_state(self):
+        """Hide and remove the empty state label from the grid."""
+        if self._empty_label_in_grid:
+            self.empty_label.setVisible(False)
+            self.grid.removeWidget(self.empty_label)
+            self._empty_label_in_grid = False
 
     def add_clip(self, clip: Clip, source: Source):
         """Add a clip to the browser."""
-        # Remove empty placeholder if present
-        if self.empty_label.isVisible():
-            self.empty_label.setVisible(False)
-            self.grid.removeWidget(self.empty_label)
+        # Remove empty placeholder
+        self._hide_empty_state()
 
         # Store source reference
         self._source_lookup[clip.id] = source
@@ -502,9 +515,8 @@ class ClipBrowser(QWidget):
         self.selected_clips = set()
         self._source_lookup = {}
 
-        # Re-add empty label to grid and show it
-        self.grid.addWidget(self.empty_label, 0, 0, 1, self.COLUMNS)
-        self.empty_label.setVisible(True)
+        # Show empty state
+        self._show_empty_state()
 
     def remove_clips_for_source(self, source_id: str):
         """Remove all clips for a specific source (used when re-analyzing)."""
@@ -530,11 +542,7 @@ class ClipBrowser(QWidget):
         # Replace list in one operation (avoids O(n) list.remove() calls)
         if remove:
             self.thumbnails = keep
-            self._rebuild_grid()
-
-        # Show empty state if no clips left
-        if not self.thumbnails:
-            self.empty_label.setVisible(True)
+            self._rebuild_grid()  # This handles empty state
 
     def set_drag_enabled(self, enabled: bool):
         """Enable or disable dragging clips to timeline."""
@@ -694,15 +702,11 @@ class ClipBrowser(QWidget):
             if self._matches_filter(thumb):
                 visible_thumbs.append(thumb)
 
-        # Manage empty label visibility
-        if visible_thumbs:
-            self.empty_label.setVisible(False)
-        elif not self.thumbnails:
-            # Only show empty state if there are no clips at all
-            self.empty_label.setVisible(True)
+        # Manage empty label - only show if no clips at all (not just filtered)
+        if not self.thumbnails:
+            self._show_empty_state()
         else:
-            # Clips exist but all are filtered out - don't show empty state
-            self.empty_label.setVisible(False)
+            self._hide_empty_state()
 
         # Re-add visible thumbnails in order
         for i, thumb in enumerate(visible_thumbs):
