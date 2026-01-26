@@ -1434,6 +1434,9 @@ def detect_scenes_live(
     # Start detection (this returns immediately, worker runs in background)
     main_window._start_detection(sensitivity)
 
+    # Switch to Cut tab to show progress
+    main_window._switch_to_tab("cut")
+
     # Return marker that tells GUI handler to wait for worker completion
     return {"_wait_for_worker": "detection", "source_id": source_id}
 
@@ -1679,8 +1682,14 @@ def analyze_all_live(main_window, clip_ids: list[str]) -> dict:
     # Mark that agent is waiting for analyze_all completion
     main_window._pending_agent_analyze_all = True
 
+    # Add clips to Analyze tab (mirrors "Analyze Selected" behavior)
+    main_window.analyze_tab.add_clips(clip_ids)
+
     # Update UI state
     main_window.analyze_tab.set_analyzing(True, "all")
+
+    # Switch to Analyze tab to show progress
+    main_window._switch_to_tab("analyze")
 
     # Start the sequential analysis
     main_window._start_next_analyze_all_step()

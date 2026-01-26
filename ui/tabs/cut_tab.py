@@ -34,6 +34,7 @@ class CutTab(BaseTab):
     clip_double_clicked = Signal(object)  # Clip
     clip_dragged_to_timeline = Signal(object)  # Clip
     clips_sent_to_analyze = Signal(list)  # list[str] clip IDs
+    selection_changed = Signal(list)  # list[str] selected clip IDs
 
     # State constants for stacked widget
     STATE_NO_VIDEO = 0
@@ -200,6 +201,9 @@ class CutTab(BaseTab):
         else:
             self.selection_label.setText("")
             self.analyze_btn.setEnabled(False)
+        
+        # Notify parent of selection change
+        self.selection_changed.emit([c.id for c in selected])
 
     # Public methods for MainWindow to call
 

@@ -56,6 +56,11 @@ class GUIState:
 
         if self.selected_clip_ids:
             lines.append(f"SELECTED CLIPS: {len(self.selected_clip_ids)}")
+            # Add list of IDs (truncated if too many)
+            ids_str = ", ".join(self.selected_clip_ids[:20])
+            if len(self.selected_clip_ids) > 20:
+                ids_str += ", ..."
+            lines.append(f"SELECTED_IDS: [{ids_str}]")
 
         if self.selected_source_id:
             lines.append(f"ACTIVE SOURCE: {self.selected_source_id[:8]}...")

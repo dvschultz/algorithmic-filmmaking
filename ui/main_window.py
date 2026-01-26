@@ -844,6 +844,7 @@ class MainWindow(QMainWindow):
         self.cut_tab.detect_requested.connect(self._on_detect_from_tab)
         self.cut_tab.clip_dragged_to_timeline.connect(self._on_clip_dragged_to_timeline)
         self.cut_tab.clips_sent_to_analyze.connect(self._on_clips_sent_to_analyze)
+        self.cut_tab.selection_changed.connect(self._on_cut_selection_changed)
 
         # Analyze tab signals
         self.analyze_tab.transcribe_requested.connect(self._on_transcribe_from_tab)
@@ -1418,6 +1419,11 @@ class MainWindow(QMainWindow):
             return
         # Start detection with the provided threshold
         self._start_detection(threshold)
+
+    def _on_cut_selection_changed(self, clip_ids: list[str]):
+        """Handle selection change in Cut tab."""
+        self._gui_state.selected_clip_ids = clip_ids
+        logger.debug(f"GUI State updated: {len(clip_ids)} clips selected")
 
     def _on_clips_sent_to_analyze(self, clip_ids: list[str]):
         """Handle clips being sent from Cut to Analyze tab."""
