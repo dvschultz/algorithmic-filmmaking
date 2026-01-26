@@ -1382,6 +1382,16 @@ class MainWindow(QMainWindow):
             # Refresh the timeline to show the newly added clips
             self._refresh_timeline_from_project()
 
+        elif tool_name == "show_clip_details":
+            # Open the clip details sidebar for the specified clip
+            clip_id = result.get("clip_id")
+            source_id = result.get("source_id")
+            if clip_id and source_id:
+                clip = self.project.clips_by_id.get(clip_id)
+                source = self.project.sources_by_id.get(source_id)
+                if clip and source:
+                    self.show_clip_details(clip, source)
+
     def _refresh_timeline_from_project(self):
         """Refresh the sequence tab timeline from the project's sequence."""
         if not self.project.sequence:

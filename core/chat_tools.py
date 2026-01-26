@@ -27,6 +27,7 @@ from core.youtube_api import (
 )
 from core.downloader import VideoDownloader
 from core.settings import load_settings
+from core.analysis.shots import SHOT_TYPES
 
 logger = logging.getLogger(__name__)
 
@@ -1729,6 +1730,169 @@ def add_note(project, clip_id: str, note: str) -> dict:
         "clip_id": clip_id,
         "note": note,
         "message": "Note updated" if note else "Note cleared"
+    }
+
+
+# Valid shot types for update_clip validation (imported from core.analysis.shots)
+VALID_SHOT_TYPES = set(SHOT_TYPES)
+
+
+@tools.register(
+    description="Update clip metadata. Only specified fields are updated. Shot type must be one of: 'wide shot', 'medium shot', 'close-up', 'extreme close-up', or empty string to clear.",
+    requires_project=True,
+    modifies_gui_state=True
+)
+def update_clip(
+    project,
+    clip_id: str,
+    name: Optional[str] = None,
+    shot_type: Optional[str] = None,
+    notes: Optional[str] = None,
+    tags: Optional[list[str]] = None
+) -> dict:
+    """Update clip metadata fields.
+
+    Args:
+        project: The current project
+        clip_id: ID of the clip to update
+        name: New clip name (None to skip, empty string to clear)
+        shot_type: New shot type (None to skip, empty string to clear)
+        notes: New notes (None to skip, empty string to clear)
+        tags: New tags list (None to skip, replaces all existing tags)
+
+    Returns:
+        Dict with success status and updated fields
+    """
+    clip = project.clips_by_id.get(clip_id)
+    if clip is None:
+        return {"success": False, "error": f"Clip not found: {clip_id}"}
+
+    updated_fields = []
+
+    # Update name if provided
+    if name is not None:
+        clip.name = name
+        updated_fields.append("name")
+
+    # Validate and update shot_type if provided
+    if shot_type is not None:
+        if shot_type == "":
+            # Empty string clears the shot type
+            clip.shot_type = None
+            updated_fields.append("shot_type")
+        elif shot_type in VALID_SHOT_TYPES:
+            clip.shot_type = shot_type
+            updated_fields.append("shot_type")
+        else:
+            return {
+                "success": False,
+                "error": f"Invalid shot type: '{shot_type}'. Must be one of: {', '.join(sorted(VALID_SHOT_TYPES))} or empty string to clear."
+            }
+
+    # Update notes if provided
+    if notes is not None:
+        clip.notes = notes
+        updated_fields.append("notes")
+
+    # Update tags if provided (replaces all existing tags)
+    if tags is not None:
+        clip.tags = list(tags)
+        updated_fields.append("tags")
+
+    if updated_fields:
+        project.update_clips([clip])
+
+    return {
+        "success": True,
+        "clip_id": clip_id,
+        "updated_fields": updated_fields,
+        "message": f"Updated {', '.join(updated_fields)}" if updated_fields else "No fields updated"
+    }
+
+
+@tools.register(
+    description="Update the text of a transcript segment by index. Use list_clips to see clip info including transcript segments.",
+    requires_project=True,
+    modifies_gui_state=True
+)
+def update_clip_transcript(
+    project,
+    clip_id: str,
+    segment_index: int,
+    text: str
+) -> dict:
+    """Update the text of a specific transcript segment.
+
+    Args:
+        project: The current project
+        clip_id: ID of the clip containing the transcript
+        segment_index: Zero-based index of the segment to update
+        text: New text for the segment
+
+    Returns:
+        Dict with success status, old text, and new text
+    """
+    clip = project.clips_by_id.get(clip_id)
+    if clip is None:
+        return {"success": False, "error": f"Clip not found: {clip_id}"}
+
+    if not clip.transcript:
+        return {"success": False, "error": f"Clip has no transcript: {clip_id}"}
+
+    if segment_index < 0 or segment_index >= len(clip.transcript):
+        return {
+            "success": False,
+            "error": f"Segment index {segment_index} out of range. Clip has {len(clip.transcript)} segments (0-{len(clip.transcript)-1})."
+        }
+
+    if not text or not text.strip():
+        return {"success": False, "error": "Text cannot be empty"}
+
+    segment = clip.transcript[segment_index]
+    old_text = segment.text
+    segment.text = text.strip()
+
+    project.update_clips([clip])
+
+    return {
+        "success": True,
+        "clip_id": clip_id,
+        "segment_index": segment_index,
+        "old_text": old_text,
+        "new_text": segment.text,
+        "message": f"Updated transcript segment {segment_index}"
+    }
+
+
+@tools.register(
+    description="Open the clip details sidebar to show a specific clip's information.",
+    requires_project=True,
+    modifies_gui_state=True
+)
+def show_clip_details(project, clip_id: str) -> dict:
+    """Open the clip details sidebar for a specific clip.
+
+    Args:
+        project: The current project
+        clip_id: ID of the clip to show details for
+
+    Returns:
+        Dict with marker for GUI to open sidebar
+    """
+    clip = project.clips_by_id.get(clip_id)
+    if clip is None:
+        return {"success": False, "error": f"Clip not found: {clip_id}"}
+
+    source = project.sources_by_id.get(clip.source_id)
+    if source is None:
+        return {"success": False, "error": f"Source not found for clip: {clip_id}"}
+
+    return {
+        "success": True,
+        "_show_clip_details": True,
+        "clip_id": clip_id,
+        "source_id": clip.source_id,
+        "message": f"Opening clip details for {clip.display_name(source.filename, source.fps)}"
     }
 
 
