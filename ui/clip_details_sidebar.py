@@ -72,7 +72,7 @@ class ClipDetailsSidebar(QDockWidget):
         self._clip_ref: Optional[Clip] = None
         self._source_ref: Optional[Source] = None
         self._loading = False  # Guard flag for duplicate signals
-        self._pending_seek: Optional[float] = None  # Seek position to apply when media loads
+        self._pending_clip_range: Optional[tuple[float, float]] = None  # (start, end) seconds to apply when media loads
 
         # Edit guard flags (prevent duplicate execution per documented learnings)
         self._name_change_in_progress = False
@@ -238,11 +238,12 @@ class ClipDetailsSidebar(QDockWidget):
 
     @Slot(QMediaPlayer.MediaStatus)
     def _on_media_status_changed(self, status: QMediaPlayer.MediaStatus):
-        """Handle media status changes to seek after video loads."""
+        """Handle media status changes to set clip range after video loads."""
         if status == QMediaPlayer.MediaStatus.LoadedMedia:
-            if self._pending_seek is not None:
-                self.video_player.seek_to(self._pending_seek)
-                self._pending_seek = None
+            if self._pending_clip_range is not None:
+                start_time, end_time = self._pending_clip_range
+                self.video_player.set_clip_range(start_time, end_time)
+                self._pending_clip_range = None
 
     @Slot(str)
     def _on_name_changed(self, new_name: str):
@@ -347,10 +348,11 @@ class ClipDetailsSidebar(QDockWidget):
         # Enable editing
         self._set_editing_enabled(True)
 
-        # Load video preview
+        # Load video preview with clip range
         if source.file_path.exists():
-            # Store seek position - will be applied when media loads
-            self._pending_seek = start_time
+            # Store clip range - will be applied when media loads
+            end_time = clip.end_time(source.fps)
+            self._pending_clip_range = (start_time, end_time)
             self.video_player.load_video(source.file_path)
         else:
             logger.warning(f"Source file not found: {source.file_path}")

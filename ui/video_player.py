@@ -27,7 +27,10 @@ class VideoPlayer(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.end_position: Optional[int] = None  # For range playback
+        # Range playback (clip mode)
+        self._clip_start_ms: Optional[int] = None  # Clip start in milliseconds
+        self._clip_end_ms: Optional[int] = None  # Clip end in milliseconds
+        self._loop_playback: bool = True  # Loop within clip range
 
         self._setup_ui()
         self._setup_player()
@@ -96,16 +99,45 @@ class VideoPlayer(QWidget):
     def load_video(self, path: Path):
         """Load a video file."""
         self.player.setSource(QUrl.fromLocalFile(str(path)))
-        self.end_position = None
+        self._clip_start_ms = None
+        self._clip_end_ms = None
 
     def seek_to(self, seconds: float):
         """Seek to a position in seconds."""
         self.player.setPosition(int(seconds * 1000))
 
+    def set_clip_range(self, start_seconds: float, end_seconds: float):
+        """Set playback range to a specific clip.
+
+        This constrains:
+        - Playback to loop/stop at clip boundaries
+        - Slider range to only show clip portion
+        - Time display to show clip-relative time
+
+        Args:
+            start_seconds: Clip start time in seconds
+            end_seconds: Clip end time in seconds
+        """
+        self._clip_start_ms = int(start_seconds * 1000)
+        self._clip_end_ms = int(end_seconds * 1000)
+        # Update slider range to clip duration
+        clip_duration = self._clip_end_ms - self._clip_start_ms
+        self.position_slider.setRange(0, clip_duration)
+        # Seek to clip start
+        self.player.setPosition(self._clip_start_ms)
+        # Update time display
+        self._update_time_label(self._clip_start_ms)
+
+    def clear_clip_range(self):
+        """Clear clip range, allowing full video playback."""
+        self._clip_start_ms = None
+        self._clip_end_ms = None
+        # Reset slider to full video
+        self.position_slider.setRange(0, self.player.duration())
+
     def play_range(self, start_seconds: float, end_seconds: float):
-        """Play a specific range of the video."""
-        self.end_position = int(end_seconds * 1000)
-        self.player.setPosition(int(start_seconds * 1000))
+        """Play a specific range of the video (legacy method)."""
+        self.set_clip_range(start_seconds, end_seconds)
         self.player.play()
 
     def _toggle_playback(self):
@@ -113,37 +145,80 @@ class VideoPlayer(QWidget):
         if self.player.playbackState() == QMediaPlayer.PlayingState:
             self.player.pause()
         else:
+            # If in clip mode and at end, restart from clip start
+            if self._clip_start_ms is not None and self._clip_end_ms is not None:
+                current_pos = self.player.position()
+                if current_pos >= self._clip_end_ms:
+                    self.player.setPosition(self._clip_start_ms)
             self.player.play()
 
     def _stop(self):
-        """Stop playback."""
+        """Stop playback and return to clip/video start."""
         self.player.stop()
-        self.end_position = None
+        # If in clip mode, seek back to clip start
+        if self._clip_start_ms is not None:
+            self.player.setPosition(self._clip_start_ms)
 
     def _set_position(self, position: int):
-        """Set playback position from slider."""
-        self.player.setPosition(position)
+        """Set playback position from slider.
+
+        In clip mode, slider position is relative to clip start.
+        """
+        if self._clip_start_ms is not None:
+            # Convert slider position (relative to clip) to absolute position
+            absolute_position = self._clip_start_ms + position
+            self.player.setPosition(absolute_position)
+        else:
+            self.player.setPosition(position)
 
     @Slot(int)
     def _on_position_changed(self, position: int):
         """Handle position change."""
-        self.position_slider.setValue(position)
         self.position_updated.emit(position)
 
-        # Update time label
-        current = self._format_time(position)
-        total = self._format_time(self.player.duration())
-        self.time_label.setText(f"{current} / {total}")
+        if self._clip_start_ms is not None and self._clip_end_ms is not None:
+            # Clip mode: show position relative to clip
+            relative_position = position - self._clip_start_ms
+            clip_duration = self._clip_end_ms - self._clip_start_ms
 
-        # Check for range end
-        if self.end_position and position >= self.end_position:
-            self.player.pause()
-            self.end_position = None
+            # Clamp to valid range
+            relative_position = max(0, min(relative_position, clip_duration))
+            self.position_slider.setValue(relative_position)
+
+            # Update time label with clip-relative time
+            self._update_time_label(position)
+
+            # Check for clip end
+            if position >= self._clip_end_ms:
+                if self._loop_playback:
+                    # Loop back to clip start
+                    self.player.setPosition(self._clip_start_ms)
+                else:
+                    self.player.pause()
+        else:
+            # Full video mode
+            self.position_slider.setValue(position)
+            current = self._format_time(position)
+            total = self._format_time(self.player.duration())
+            self.time_label.setText(f"{current} / {total}")
+
+    def _update_time_label(self, absolute_position: int):
+        """Update time label for clip mode."""
+        if self._clip_start_ms is not None and self._clip_end_ms is not None:
+            relative_pos = absolute_position - self._clip_start_ms
+            clip_duration = self._clip_end_ms - self._clip_start_ms
+            # Clamp to valid range for display
+            relative_pos = max(0, min(relative_pos, clip_duration))
+            current = self._format_time(relative_pos)
+            total = self._format_time(clip_duration)
+            self.time_label.setText(f"{current} / {total}")
 
     @Slot(int)
     def _on_duration_changed(self, duration: int):
         """Handle duration change."""
-        self.position_slider.setRange(0, duration)
+        # Only update slider range if not in clip mode
+        if self._clip_start_ms is None:
+            self.position_slider.setRange(0, duration)
 
     @Slot(QMediaPlayer.PlaybackState)
     def _on_state_changed(self, state: QMediaPlayer.PlaybackState):
