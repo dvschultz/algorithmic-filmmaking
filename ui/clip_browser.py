@@ -870,6 +870,80 @@ class ClipBrowser(QWidget):
         self._rebuild_grid()
         self.filters_changed.emit()
 
+    def apply_filters(self, filters: dict) -> None:
+        """Apply multiple filters at once via public API.
+
+        Args:
+            filters: Dict with optional keys:
+                - min_duration: float or None
+                - max_duration: float or None
+                - aspect_ratio: str ('16:9', '4:3', '9:16') or None
+                - shot_type: str ('Wide Shot', 'Medium Shot', 'Close-up', 'Extreme CU') or None
+                - color_palette: str ('Warm', 'Cool', 'Neutral', 'Vibrant') or None
+                - search_query: str or None
+        """
+        # Block signals to avoid multiple rebuilds
+        self.duration_slider.blockSignals(True)
+        self.aspect_ratio_combo.blockSignals(True)
+        self.filter_combo.blockSignals(True)
+        self.color_filter_combo.blockSignals(True)
+        self.search_input.blockSignals(True)
+
+        # Apply duration filter
+        if 'min_duration' in filters or 'max_duration' in filters:
+            self._min_duration = filters.get('min_duration')
+            self._max_duration = filters.get('max_duration')
+            new_min = self._min_duration if self._min_duration is not None else self.duration_slider._data_min
+            new_max = self._max_duration if self._max_duration is not None else self.duration_slider._data_max
+            self.duration_slider.set_values(new_min, new_max)
+
+        # Apply aspect ratio filter
+        if 'aspect_ratio' in filters:
+            value = filters['aspect_ratio']
+            self._aspect_ratio_filter = value if value else "All"
+            self.aspect_ratio_combo.setCurrentText(self._aspect_ratio_filter)
+
+        # Apply shot type filter
+        if 'shot_type' in filters:
+            value = filters['shot_type']
+            self._current_filter = value if value else "All"
+            self.filter_combo.setCurrentText(self._current_filter)
+
+        # Apply color palette filter
+        if 'color_palette' in filters:
+            value = filters['color_palette']
+            self._current_color_filter = value if value else "All"
+            self.color_filter_combo.setCurrentText(self._current_color_filter)
+
+        # Apply search query
+        if 'search_query' in filters:
+            value = filters['search_query'] or ""
+            self._current_search_query = value.lower().strip()
+            self.search_input.setText(value)
+
+        # Unblock signals
+        self.duration_slider.blockSignals(False)
+        self.aspect_ratio_combo.blockSignals(False)
+        self.filter_combo.blockSignals(False)
+        self.color_filter_combo.blockSignals(False)
+        self.search_input.blockSignals(False)
+
+        # Rebuild grid and emit signal
+        self._rebuild_grid()
+        self.filters_changed.emit()
+
+        # Show filter panel if hidden
+        if not self._filter_panel_visible:
+            self._toggle_filter_panel(True)
+
+    def set_sort_order(self, sort_by: str) -> None:
+        """Set the clip sort order via public API.
+
+        Args:
+            sort_by: One of 'Timeline', 'Color', 'Duration'
+        """
+        self.sort_combo.setCurrentText(sort_by)
+
     def get_active_filters(self) -> dict:
         """Return current filter state.
 

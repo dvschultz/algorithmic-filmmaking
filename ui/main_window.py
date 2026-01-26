@@ -171,6 +171,74 @@ class DownloadWorker(QThread):
             self.error.emit(str(e))
 
 
+class URLBulkDownloadWorker(QThread):
+    """Background worker for downloading multiple videos from URLs."""
+
+    progress = Signal(int, int, str)  # current, total, message
+    video_finished = Signal(str, object)  # url, DownloadResult
+    all_finished = Signal(list)  # list of result dicts
+
+    def __init__(self, urls: list[str], download_dir: Path):
+        super().__init__()
+        self.urls = urls
+        self.download_dir = download_dir
+        self._cancelled = False
+        self._results = []
+
+    def cancel(self):
+        """Request cancellation."""
+        self._cancelled = True
+
+    def run(self):
+        """Download videos sequentially."""
+        total = len(self.urls)
+        downloader = VideoDownloader(download_dir=self.download_dir)
+
+        for i, url in enumerate(self.urls):
+            if self._cancelled:
+                break
+
+            self.progress.emit(i, total, f"Downloading {i+1}/{total}...")
+
+            try:
+                valid, error = downloader.is_valid_url(url)
+                if not valid:
+                    self._results.append({
+                        "url": url,
+                        "success": False,
+                        "error": error,
+                    })
+                    continue
+
+                result = downloader.download(url)
+
+                if result.success:
+                    self._results.append({
+                        "url": url,
+                        "success": True,
+                        "file_path": str(result.file_path) if result.file_path else None,
+                        "title": result.title,
+                        "duration": result.duration,
+                    })
+                    self.video_finished.emit(url, result)
+                else:
+                    self._results.append({
+                        "url": url,
+                        "success": False,
+                        "error": result.error or "Download failed",
+                    })
+
+            except Exception as e:
+                self._results.append({
+                    "url": url,
+                    "success": False,
+                    "error": str(e),
+                })
+
+        self.progress.emit(total, total, "Downloads complete")
+        self.all_finished.emit(self._results)
+
+
 class SequenceExportWorker(QThread):
     """Background worker for sequence export."""
 
@@ -502,6 +570,7 @@ class MainWindow(QMainWindow):
         self.detection_worker: Optional[DetectionWorker] = None
         self.thumbnail_worker: Optional[ThumbnailWorker] = None
         self.download_worker: Optional[DownloadWorker] = None
+        self.url_bulk_download_worker: Optional[URLBulkDownloadWorker] = None
         self.export_worker: Optional[SequenceExportWorker] = None
         self.color_worker: Optional[ColorAnalysisWorker] = None
         self.shot_type_worker: Optional[ShotTypeWorker] = None
@@ -528,10 +597,13 @@ class MainWindow(QMainWindow):
         self._pending_agent_shot_analysis = False
         self._pending_agent_transcription = False
         self._pending_agent_analyze_all = False
+        self._pending_agent_export = False
+        self._pending_agent_download = False
         self._agent_color_clips: list = []
         self._agent_shot_clips: list = []
         self._agent_transcription_clips: list = []
         self._agent_transcription_source_queue: list = []  # Queue for multi-source transcription
+        self._agent_download_results: list = []  # Results for bulk download
         self._pending_agent_tool_call_id: Optional[str] = None
         self._pending_agent_tool_name: Optional[str] = None
 
@@ -3224,6 +3296,37 @@ class MainWindow(QMainWindow):
         self.export_worker.error.connect(self._on_sequence_export_error)
         self.export_worker.start()
 
+    def start_agent_export(self, sequence, sources: dict, clips: dict, config) -> bool:
+        """Start a sequence export triggered by agent.
+
+        Args:
+            sequence: Sequence to export
+            sources: Dict of source_id -> Source
+            clips: Dict of clip_id -> (Clip, Source)
+            config: ExportConfig
+
+        Returns:
+            True if export started, False if already in progress
+        """
+        # Check if export already running
+        if self.export_worker and self.export_worker.isRunning():
+            return False
+
+        # Mark that agent is waiting
+        self._pending_agent_export = True
+
+        # Start export in background
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 100)
+        self.sequence_tab.timeline.export_btn.setEnabled(False)
+
+        self.export_worker = SequenceExportWorker(sequence, sources, clips, config)
+        self.export_worker.progress.connect(self._on_sequence_export_progress)
+        self.export_worker.finished.connect(self._on_sequence_export_finished)
+        self.export_worker.error.connect(self._on_sequence_export_error)
+        self.export_worker.start()
+        return True
+
     def _on_sequence_export_progress(self, progress: float, message: str):
         """Handle sequence export progress update."""
         self.progress_bar.setValue(int(progress * 100))
@@ -3235,14 +3338,120 @@ class MainWindow(QMainWindow):
         self.sequence_tab.timeline.export_btn.setEnabled(True)
         self.status_bar.showMessage(f"Sequence exported to {output_path.name}")
 
-        # Open containing folder
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(output_path.parent)))
+        # If agent was waiting for export, send result back
+        if self._pending_agent_export and self._chat_worker:
+            self._pending_agent_export = False
+            sequence = self.sequence_tab.get_sequence()
+            result = {
+                "tool_call_id": self._pending_agent_tool_call_id,
+                "name": self._pending_agent_tool_name,
+                "success": True,
+                "result": {
+                    "success": True,
+                    "output_path": str(output_path),
+                    "clip_count": len(sequence.get_all_clips()) if sequence else 0,
+                    "message": f"Exported to {output_path.name}"
+                }
+            }
+            self._pending_agent_tool_call_id = None
+            self._pending_agent_tool_name = None
+            self._chat_worker.set_gui_tool_result(result)
+            logger.info(f"Sent export result to agent: {output_path}")
+        else:
+            # Only open folder for manual exports
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(output_path.parent)))
 
     def _on_sequence_export_error(self, error: str):
         """Handle sequence export error."""
         self.progress_bar.setVisible(False)
         self.sequence_tab.timeline.export_btn.setEnabled(True)
-        QMessageBox.critical(self, "Export Error", f"Failed to export sequence: {error}")
+
+        # If agent was waiting for export, send error result
+        if self._pending_agent_export and self._chat_worker:
+            self._pending_agent_export = False
+            result = {
+                "tool_call_id": self._pending_agent_tool_call_id,
+                "name": self._pending_agent_tool_name,
+                "success": False,
+                "error": error
+            }
+            self._pending_agent_tool_call_id = None
+            self._pending_agent_tool_name = None
+            self._chat_worker.set_gui_tool_result(result)
+            logger.info(f"Sent export error to agent: {error}")
+        else:
+            # Only show dialog for manual exports
+            QMessageBox.critical(self, "Export Error", f"Failed to export sequence: {error}")
+
+    def start_agent_bulk_download(self, urls: list[str], download_dir: Path) -> bool:
+        """Start bulk video downloads triggered by agent.
+
+        Args:
+            urls: List of video URLs to download
+            download_dir: Directory to save downloads
+
+        Returns:
+            True if download started, False if already in progress
+        """
+        # Check if download already running
+        if self.url_bulk_download_worker and self.url_bulk_download_worker.isRunning():
+            return False
+
+        # Mark that agent is waiting
+        self._pending_agent_download = True
+        self._agent_download_results = []
+
+        # Start download in background
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, len(urls))
+        self.status_bar.showMessage(f"Downloading {len(urls)} videos...")
+
+        self.url_bulk_download_worker = URLBulkDownloadWorker(urls, download_dir)
+        self.url_bulk_download_worker.progress.connect(self._on_agent_download_progress)
+        self.url_bulk_download_worker.video_finished.connect(self._on_agent_video_finished)
+        self.url_bulk_download_worker.all_finished.connect(self._on_agent_bulk_download_finished)
+        self.url_bulk_download_worker.start()
+        return True
+
+    def _on_agent_download_progress(self, current: int, total: int, message: str):
+        """Handle bulk download progress update."""
+        self.progress_bar.setValue(current)
+        self.status_bar.showMessage(message)
+
+    def _on_agent_video_finished(self, url: str, result):
+        """Handle individual video download completion."""
+        # Add to source browser
+        if result.success and result.file_path and hasattr(self, 'collect_tab'):
+            from models.clip import Source
+            source = Source.from_path(result.file_path)
+            self.collect_tab.source_browser.add_source(source)
+            logger.info(f"Added downloaded source to browser: {result.file_path}")
+
+    def _on_agent_bulk_download_finished(self, results: list):
+        """Handle bulk download completion."""
+        self.progress_bar.setVisible(False)
+        success_count = sum(1 for r in results if r.get("success"))
+        self.status_bar.showMessage(f"Downloaded {success_count}/{len(results)} videos")
+
+        # If agent was waiting, send result back
+        if self._pending_agent_download and self._chat_worker:
+            self._pending_agent_download = False
+            result = {
+                "tool_call_id": self._pending_agent_tool_call_id,
+                "name": self._pending_agent_tool_name,
+                "success": success_count > 0,
+                "result": {
+                    "success": success_count > 0,
+                    "message": f"Downloaded {success_count} of {len(results)} videos",
+                    "success_count": success_count,
+                    "failed_count": len(results) - success_count,
+                    "results": results,
+                }
+            }
+            self._pending_agent_tool_call_id = None
+            self._pending_agent_tool_name = None
+            self._chat_worker.set_gui_tool_result(result)
+            logger.info(f"Sent bulk download result to agent: {success_count}/{len(results)}")
 
     def _on_export_edl_click(self):
         """Export the timeline sequence as an EDL file."""

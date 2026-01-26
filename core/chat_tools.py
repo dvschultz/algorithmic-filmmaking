@@ -671,7 +671,7 @@ def navigate_to_tab(tab_name: str, gui_state=None) -> dict:
 
 @tools.register(
     description="Apply filters to the clip browser in the active tab (Cut or Analyze). "
-                "Filters clips by duration range and/or aspect ratio. "
+                "Filters clips by duration range, aspect ratio, shot type, color palette, and/or transcript search. "
                 "Use clear_all=True to reset all filters.",
     requires_project=True,
     modifies_gui_state=True
@@ -681,6 +681,9 @@ def apply_filters(
     min_duration: Optional[float] = None,
     max_duration: Optional[float] = None,
     aspect_ratio: Optional[str] = None,
+    shot_type: Optional[str] = None,
+    color_palette: Optional[str] = None,
+    search_query: Optional[str] = None,
     clear_all: bool = False,
 ) -> dict:
     """Apply filters to the clip browser in the active tab.
@@ -689,6 +692,9 @@ def apply_filters(
         min_duration: Minimum duration in seconds (None = no minimum)
         max_duration: Maximum duration in seconds (None = no maximum)
         aspect_ratio: Filter by aspect ratio ('16:9', '4:3', '9:16', or None)
+        shot_type: Filter by shot type ('Wide Shot', 'Medium Shot', 'Close-up', 'Extreme CU', or None)
+        color_palette: Filter by color palette ('Warm', 'Cool', 'Neutral', 'Vibrant', or None)
+        search_query: Filter by transcript text (case-insensitive substring search)
         clear_all: If True, clears all filters instead of applying new ones
 
     Returns:
@@ -703,6 +709,22 @@ def apply_filters(
         return {
             "success": False,
             "error": f"Invalid aspect_ratio '{aspect_ratio}'. Valid options: {', '.join(valid_aspects)}"
+        }
+
+    # Validate shot_type if provided
+    valid_shots = ["All", "Wide Shot", "Medium Shot", "Close-up", "Extreme CU"]
+    if shot_type and shot_type not in valid_shots:
+        return {
+            "success": False,
+            "error": f"Invalid shot_type '{shot_type}'. Valid options: {', '.join(valid_shots[1:])}"
+        }
+
+    # Validate color_palette if provided
+    valid_palettes = ["All", "Warm", "Cool", "Neutral", "Vibrant"]
+    if color_palette and color_palette not in valid_palettes:
+        return {
+            "success": False,
+            "error": f"Invalid color_palette '{color_palette}'. Valid options: {', '.join(valid_palettes[1:])}"
         }
 
     # Get the active tab's clip browser
@@ -731,35 +753,23 @@ def apply_filters(
             "total_clips": len(clip_browser.thumbnails),
         }
 
-    # Apply filters
-    # Block signals to avoid multiple rebuilds
-    clip_browser.duration_slider.blockSignals(True)
-    clip_browser.aspect_ratio_combo.blockSignals(True)
-
-    # Update duration filter
-    if min_duration is not None or max_duration is not None:
-        clip_browser._min_duration = min_duration
-        clip_browser._max_duration = max_duration
-        # Update slider values
-        current_min, current_max = clip_browser.duration_slider.values()
-        new_min = min_duration if min_duration is not None else clip_browser.duration_slider._data_min
-        new_max = max_duration if max_duration is not None else clip_browser.duration_slider._data_max
-        clip_browser.duration_slider.set_values(new_min, new_max)
-
+    # Build filters dict for public API
+    filters = {}
+    if min_duration is not None:
+        filters['min_duration'] = min_duration
+    if max_duration is not None:
+        filters['max_duration'] = max_duration
     if aspect_ratio:
-        clip_browser._aspect_ratio_filter = aspect_ratio
-        clip_browser.aspect_ratio_combo.setCurrentText(aspect_ratio)
+        filters['aspect_ratio'] = aspect_ratio
+    if shot_type:
+        filters['shot_type'] = shot_type
+    if color_palette:
+        filters['color_palette'] = color_palette
+    if search_query is not None:
+        filters['search_query'] = search_query
 
-    # Unblock and rebuild
-    clip_browser.duration_slider.blockSignals(False)
-    clip_browser.aspect_ratio_combo.blockSignals(False)
-
-    clip_browser._rebuild_grid()
-    clip_browser.filters_changed.emit()
-
-    # Show filter panel if hidden
-    if not clip_browser._filter_panel_visible:
-        clip_browser._toggle_filter_panel(True)
+    # Apply filters via public API
+    clip_browser.apply_filters(filters)
 
     return {
         "success": True,
@@ -771,9 +781,379 @@ def apply_filters(
     }
 
 
+@tools.register(
+    description="Set the sort order for clips in the active tab's clip browser (Cut or Analyze). "
+                "Options: 'Timeline' (original order), 'Color' (grouped by dominant hue), 'Duration' (shortest to longest).",
+    requires_project=False,
+    modifies_gui_state=True
+)
+def set_clip_sort_order(
+    main_window,
+    sort_by: str,
+) -> dict:
+    """Set the sort order for clips in the clip browser.
+
+    Args:
+        sort_by: Sort method - 'Timeline', 'Color', or 'Duration'
+
+    Returns:
+        Dict with success status and current sort order
+    """
+    if main_window is None:
+        return {"success": False, "error": "Main window not available"}
+
+    # Validate sort option
+    valid_sorts = ["Timeline", "Color", "Duration"]
+    if sort_by not in valid_sorts:
+        return {
+            "success": False,
+            "error": f"Invalid sort_by '{sort_by}'. Valid options: {', '.join(valid_sorts)}"
+        }
+
+    # Get the active tab's clip browser
+    gui_state = getattr(main_window, '_gui_state', None)
+    active_tab = gui_state.active_tab if gui_state else "cut"
+
+    clip_browser = None
+    if active_tab == "cut" and hasattr(main_window, 'cut_tab'):
+        clip_browser = main_window.cut_tab.clip_browser
+    elif active_tab == "analyze" and hasattr(main_window, 'analyze_tab'):
+        clip_browser = main_window.analyze_tab.clip_browser
+
+    if clip_browser is None:
+        return {
+            "success": False,
+            "error": f"No clip browser available in '{active_tab}' tab. Switch to Cut or Analyze tab first."
+        }
+
+    # Set sort order via public API
+    clip_browser.set_sort_order(sort_by)
+
+    return {
+        "success": True,
+        "message": f"Clips sorted by {sort_by}",
+        "sort_order": sort_by,
+        "active_tab": active_tab,
+    }
+
+
+@tools.register(
+    description="Clear all clips from the Analyze tab. Use this to reset the analysis view before adding new clips.",
+    requires_project=False,
+    modifies_gui_state=True
+)
+def clear_analyze_clips(main_window) -> dict:
+    """Clear all clips from the Analyze tab.
+
+    Returns:
+        Dict with success status
+    """
+    if main_window is None:
+        return {"success": False, "error": "Main window not available"}
+
+    if not hasattr(main_window, 'analyze_tab'):
+        return {"success": False, "error": "Analyze tab not available"}
+
+    clip_count = len(main_window.analyze_tab._clip_ids)
+    main_window.analyze_tab.clear_clips()
+    main_window.analyze_tab.clips_cleared.emit()
+
+    return {
+        "success": True,
+        "message": f"Cleared {clip_count} clips from Analyze tab",
+        "cleared_count": clip_count,
+    }
+
+
+# =============================================================================
+# Playback Control Tools
+# =============================================================================
+
+@tools.register(
+    description="Start or resume video playback in the sequence preview player.",
+    requires_project=False,
+    modifies_gui_state=True
+)
+def play_preview(main_window) -> dict:
+    """Start video playback in the preview player.
+
+    Returns:
+        Dict with success status and playback state
+    """
+    if main_window is None:
+        return {"success": False, "error": "Main window not available"}
+
+    if not hasattr(main_window, 'sequence_tab') or not hasattr(main_window.sequence_tab, 'video_player'):
+        return {"success": False, "error": "Video player not available"}
+
+    player = main_window.sequence_tab.video_player
+    player.player.play()
+
+    return {
+        "success": True,
+        "message": "Playback started",
+        "state": "playing",
+    }
+
+
+@tools.register(
+    description="Pause video playback in the sequence preview player.",
+    requires_project=False,
+    modifies_gui_state=True
+)
+def pause_preview(main_window) -> dict:
+    """Pause video playback in the preview player.
+
+    Returns:
+        Dict with success status and playback state
+    """
+    if main_window is None:
+        return {"success": False, "error": "Main window not available"}
+
+    if not hasattr(main_window, 'sequence_tab') or not hasattr(main_window.sequence_tab, 'video_player'):
+        return {"success": False, "error": "Video player not available"}
+
+    player = main_window.sequence_tab.video_player
+    player.player.pause()
+
+    return {
+        "success": True,
+        "message": "Playback paused",
+        "state": "paused",
+    }
+
+
+@tools.register(
+    description="Seek to a specific position in the video preview. Time is in seconds.",
+    requires_project=False,
+    modifies_gui_state=True
+)
+def seek_to_time(main_window, seconds: float) -> dict:
+    """Seek to a position in the video preview.
+
+    Args:
+        seconds: Position to seek to in seconds
+
+    Returns:
+        Dict with success status and current position
+    """
+    if main_window is None:
+        return {"success": False, "error": "Main window not available"}
+
+    if not hasattr(main_window, 'sequence_tab') or not hasattr(main_window.sequence_tab, 'video_player'):
+        return {"success": False, "error": "Video player not available"}
+
+    if seconds < 0:
+        return {"success": False, "error": "Position cannot be negative"}
+
+    player = main_window.sequence_tab.video_player
+
+    # Check upper bound - get duration from player
+    duration_ms = player.player.duration()
+    if duration_ms > 0:
+        duration_s = duration_ms / 1000.0
+        if seconds > duration_s:
+            return {
+                "success": False,
+                "error": f"Position {seconds:.2f}s exceeds video duration ({duration_s:.2f}s)"
+            }
+
+    player.seek_to(seconds)
+
+    return {
+        "success": True,
+        "message": f"Seeked to {seconds:.2f}s",
+        "position_seconds": seconds,
+    }
+
+
+@tools.register(
+    description="Remove a video source from the library. This also removes all clips generated from this source. "
+                "Use list_sources first to find the source ID.",
+    requires_project=True,
+    modifies_gui_state=True
+)
+def remove_source(
+    main_window,
+    project,
+    source_id: str,
+) -> dict:
+    """Remove a video source from the library.
+
+    Args:
+        source_id: ID of the source to remove
+
+    Returns:
+        Dict with success status and removed source info
+    """
+    if project is None:
+        return {"success": False, "error": "No project loaded"}
+
+    # Find the source
+    source = project.sources_by_id.get(source_id)
+    if source is None:
+        # Try matching by filename
+        for s in project.sources:
+            if s.file_path and (s.file_path.name == source_id or s.file_path.stem == source_id):
+                source = s
+                source_id = s.id
+                break
+
+    if source is None:
+        return {
+            "success": False,
+            "error": f"Source '{source_id}' not found. Use list_sources to see available sources."
+        }
+
+    # Count clips that will be removed
+    clips_to_remove = len([c for c in project.clips if c.source_id == source_id])
+    source_name = source.filename if source.file_path else f"Source {source_id[:8]}"
+
+    # Remove from project
+    project.remove_source(source_id)
+
+    # Update UI if available
+    if main_window and hasattr(main_window, 'collect_tab'):
+        main_window.collect_tab.source_browser.remove_source(source_id)
+
+    return {
+        "success": True,
+        "message": f"Removed source '{source_name}' and {clips_to_remove} associated clips",
+        "removed_source": source_name,
+        "removed_clips_count": clips_to_remove,
+    }
+
+
 # =============================================================================
 # Phase 3: Export & Project Management Tools
 # =============================================================================
+
+@tools.register(
+    description="Export the current sequence as a video file (MP4). This renders all clips in the timeline into a single video. "
+                "May take significant time for long sequences. Use quality='low' for faster exports.",
+    requires_project=True,
+    modifies_gui_state=False
+)
+def export_sequence(
+    main_window,
+    project,
+    output_path: Optional[str] = None,
+    quality: str = "medium",
+    resolution: Optional[str] = None,
+    fps: Optional[float] = None,
+) -> dict:
+    """Export the current sequence as a video file.
+
+    Args:
+        output_path: Path for output video (optional, defaults to export_dir)
+        quality: Export quality - 'low', 'medium', or 'high'
+        resolution: Target resolution - 'original', '1080p', '720p', or '480p' (optional)
+        fps: Target frame rate (optional, defaults to sequence fps)
+
+    Returns:
+        Dict with success status and output path
+    """
+    from core.sequence_export import SequenceExporter, ExportConfig
+
+    # Validate quality parameter
+    valid_qualities = ["low", "medium", "high"]
+    if quality not in valid_qualities:
+        return {
+            "success": False,
+            "error": f"Invalid quality '{quality}'. Valid options: {', '.join(valid_qualities)}"
+        }
+
+    # Validate resolution if provided
+    valid_resolutions = ["original", "1080p", "720p", "480p"]
+    if resolution and resolution not in valid_resolutions:
+        return {
+            "success": False,
+            "error": f"Invalid resolution '{resolution}'. Valid options: {', '.join(valid_resolutions)}"
+        }
+
+    # Get sequence from sequence tab
+    if main_window is None or not hasattr(main_window, 'sequence_tab'):
+        return {"success": False, "error": "Sequence tab not available"}
+
+    sequence = main_window.sequence_tab.get_sequence()
+    all_clips = sequence.get_all_clips()
+
+    if not all_clips:
+        return {
+            "success": False,
+            "error": "No clips in timeline to export. Add clips to the sequence first."
+        }
+
+    # Determine output path
+    if output_path:
+        valid, error, validated_path = _validate_path(output_path)
+        if not valid:
+            return {"success": False, "error": f"Invalid output path: {error}"}
+        video_path = validated_path
+    else:
+        settings = load_settings()
+        project_name = project.metadata.name or "sequence_export"
+        video_path = settings.export_dir / f"{project_name}.mp4"
+
+    # Ensure .mp4 extension
+    if video_path.suffix.lower() != ".mp4":
+        video_path = video_path.with_suffix(".mp4")
+
+    # Ensure parent directory exists
+    video_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Quality presets
+    quality_presets = {
+        "high": {"crf": 18, "preset": "slow", "bitrate": "8M"},
+        "medium": {"crf": 23, "preset": "medium", "bitrate": "4M"},
+        "low": {"crf": 28, "preset": "fast", "bitrate": "2M"},
+    }
+    preset = quality_presets[quality]
+
+    # Resolution presets
+    resolution_presets = {
+        "1080p": (1920, 1080),
+        "720p": (1280, 720),
+        "480p": (854, 480),
+        "original": (None, None),
+    }
+    width, height = resolution_presets.get(resolution, (None, None)) if resolution else (None, None)
+
+    # Build sources and clips dictionaries
+    sources = project.sources_by_id.copy()
+    clips = {}
+    for clip in project.clips:
+        source = sources.get(clip.source_id)
+        if source:
+            clips[clip.id] = (clip, source)
+
+    config = ExportConfig(
+        output_path=video_path,
+        fps=fps if fps else sequence.fps,
+        width=width,
+        height=height,
+        crf=preset["crf"],
+        preset=preset["preset"],
+        video_bitrate=preset["bitrate"],
+    )
+
+    # Check if export is already running
+    if main_window.export_worker and main_window.export_worker.isRunning():
+        return {"success": False, "error": "Export already in progress"}
+
+    # Start async export via worker
+    started = main_window.start_agent_export(sequence, sources, clips, config)
+    if not started:
+        return {"success": False, "error": "Failed to start export worker"}
+
+    # Return marker that tells GUI handler to wait for worker completion
+    return {
+        "_wait_for_worker": "export",
+        "output_path": str(video_path),
+        "clip_count": len(all_clips),
+        "quality": quality,
+    }
+
 
 @tools.register(
     description="Export the current sequence as an EDL (Edit Decision List) file for use in external video editors like DaVinci Resolve, Premiere Pro, or Final Cut.",
@@ -827,6 +1207,84 @@ def export_edl(project, output_path: Optional[str] = None) -> dict:
         return {
             "success": False,
             "error": "Failed to write EDL file"
+        }
+
+
+@tools.register(
+    description="Export clip metadata as a JSON dataset file. Useful for training AI models or external analysis. "
+                "Includes clip timings, colors, shot types, and optionally thumbnail paths.",
+    requires_project=True,
+    modifies_gui_state=False
+)
+def export_dataset(
+    project,
+    output_path: Optional[str] = None,
+    include_thumbnails: bool = True,
+    source_id: Optional[str] = None,
+) -> dict:
+    """Export clip metadata as JSON dataset.
+
+    Args:
+        output_path: Path for the JSON output file (optional, defaults to export_dir)
+        include_thumbnails: Whether to include thumbnail paths in the export
+        source_id: Export clips from a specific source only (optional, defaults to all)
+
+    Returns:
+        Dict with success status and export info
+    """
+    from core.dataset_export import export_dataset as do_export, DatasetExportConfig
+
+    # Get clips to export
+    if source_id:
+        source = project.sources_by_id.get(source_id)
+        if source is None:
+            return {"success": False, "error": f"Source '{source_id}' not found"}
+        clips = [c for c in project.clips if c.source_id == source_id]
+        source_name = source.path.stem
+    else:
+        # Export all clips, using first source as primary
+        clips = project.clips
+        source = project.sources[0] if project.sources else None
+        source_name = "all_clips"
+
+    if not clips:
+        return {"success": False, "error": "No clips to export"}
+
+    if source is None:
+        return {"success": False, "error": "No source video found"}
+
+    # Determine output path
+    if output_path:
+        valid, error, validated_path = _validate_path(output_path)
+        if not valid:
+            return {"success": False, "error": f"Invalid output path: {error}"}
+        json_path = validated_path
+    else:
+        settings = load_settings()
+        json_path = settings.export_dir / f"{source_name}_dataset.json"
+
+    # Ensure parent directory exists
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+
+    config = DatasetExportConfig(
+        output_path=json_path,
+        include_thumbnails=include_thumbnails,
+        pretty_print=True,
+    )
+
+    success = do_export(source=source, clips=clips, config=config)
+
+    if success:
+        return {
+            "success": True,
+            "output_path": str(json_path),
+            "clip_count": len(clips),
+            "message": f"Exported {len(clips)} clips to JSON dataset"
+        }
+    else:
+        return {
+            "success": False,
+            "error": "Failed to write dataset file"
         }
 
 
@@ -1316,6 +1774,65 @@ def download_video(url: str, output_dir: Optional[str] = None) -> dict:
     except Exception as e:
         logger.exception("Video download failed")
         return {"error": f"Download failed: {e}"}
+
+
+@tools.register(
+    description="Download multiple videos from YouTube URLs. Downloads in background thread to keep UI responsive. "
+                "Returns status for each video. Use search_youtube first to find video URLs.",
+    requires_project=False,
+    modifies_gui_state=True
+)
+def download_videos(
+    main_window,
+    urls: list[str],
+    output_dir: Optional[str] = None,
+) -> dict:
+    """Download multiple videos from YouTube URLs.
+
+    Args:
+        urls: List of YouTube video URLs to download
+        output_dir: Optional output directory (defaults to settings.download_dir)
+
+    Returns:
+        Dict with success status and results for each video (after worker completes)
+    """
+    if not urls:
+        return {"success": False, "error": "No URLs provided"}
+
+    if len(urls) > 10:
+        return {
+            "success": False,
+            "error": "Maximum 10 videos per batch. Split into multiple calls for larger batches."
+        }
+
+    if main_window is None:
+        return {"success": False, "error": "Main window not available"}
+
+    # Determine download directory
+    if output_dir:
+        valid, error, validated_dir = _validate_path(output_dir)
+        if not valid:
+            return {"success": False, "error": f"Invalid output directory: {error}"}
+        download_path = validated_dir
+    else:
+        settings = load_settings()
+        download_path = settings.download_dir
+
+    # Check if download already running
+    if main_window.url_bulk_download_worker and main_window.url_bulk_download_worker.isRunning():
+        return {"success": False, "error": "Bulk download already in progress"}
+
+    # Start async download via worker
+    started = main_window.start_agent_bulk_download(urls, download_path)
+    if not started:
+        return {"success": False, "error": "Failed to start download worker"}
+
+    # Return marker that tells GUI handler to wait for worker completion
+    return {
+        "_wait_for_worker": "download",
+        "url_count": len(urls),
+        "download_dir": str(download_path),
+    }
 
 
 @tools.register(
@@ -2055,3 +2572,50 @@ def get_remix_state(project, main_window) -> dict:
     state["success"] = True
 
     return state
+
+
+@tools.register(
+    description="Get current application settings (non-sensitive). Returns directories, quality presets, "
+                "theme preference, and other user-configurable options. Does not expose API keys.",
+    requires_project=False,
+    modifies_gui_state=False
+)
+def get_settings() -> dict:
+    """Get current application settings.
+
+    Returns non-sensitive settings including directories, export quality,
+    theme preference, and detection parameters.
+
+    Returns:
+        Dict with success status and settings values
+    """
+    settings = load_settings()
+
+    return {
+        "success": True,
+        "settings": {
+            # Directories
+            "download_dir": str(settings.download_dir),
+            "export_dir": str(settings.export_dir),
+            "thumbnail_cache_dir": str(settings.thumbnail_cache_dir),
+            # Detection
+            "default_sensitivity": settings.default_sensitivity,
+            "min_scene_length_seconds": settings.min_scene_length_seconds,
+            # Export
+            "export_quality": settings.export_quality,
+            "export_resolution": settings.export_resolution,
+            "export_fps": settings.export_fps,
+            # Transcription
+            "transcription_model": settings.transcription_model,
+            "transcription_language": settings.transcription_language,
+            # Appearance
+            "theme_preference": settings.theme_preference,
+            # YouTube (no API key)
+            "youtube_results_count": settings.youtube_results_count,
+            "youtube_parallel_downloads": settings.youtube_parallel_downloads,
+            # LLM (no API keys)
+            "llm_provider": settings.llm_provider,
+            "llm_model": settings.llm_model,
+            "llm_temperature": settings.llm_temperature,
+        }
+    }
