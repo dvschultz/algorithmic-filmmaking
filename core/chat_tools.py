@@ -865,6 +865,219 @@ def clear_analyze_clips(main_window) -> dict:
     }
 
 
+@tools.register(
+    description="Send clips from Cut tab to Analyze tab for analysis. "
+                "If no clip_ids provided, sends currently selected clips from Cut tab. "
+                "Automatically switches to Analyze tab after adding clips.",
+    requires_project=True,
+    modifies_gui_state=True
+)
+def send_to_analyze(
+    main_window,
+    project,
+    clip_ids: Optional[list[str]] = None,
+    auto_analyze: bool = False,
+) -> dict:
+    """Send clips to the Analyze tab.
+
+    Args:
+        clip_ids: List of clip IDs to send (optional, defaults to selected clips in Cut tab)
+        auto_analyze: If True, automatically start "Analyze All" on the sent clips
+
+    Returns:
+        Dict with success status and sent clip count
+    """
+    if main_window is None:
+        return {"success": False, "error": "Main window not available"}
+
+    if not hasattr(main_window, 'analyze_tab') or not hasattr(main_window, 'cut_tab'):
+        return {"success": False, "error": "Required tabs not available"}
+
+    # Get clip IDs from selection if not provided
+    if clip_ids is None:
+        selected_clips = main_window.cut_tab.clip_browser.get_selected_clips()
+        if not selected_clips:
+            return {
+                "success": False,
+                "error": "No clips selected in Cut tab. Select clips first or provide clip_ids."
+            }
+        clip_ids = [clip.id for clip in selected_clips]
+
+    # Validate clip IDs exist
+    valid_ids = []
+    for cid in clip_ids:
+        if cid in project.clips_by_id:
+            valid_ids.append(cid)
+
+    if not valid_ids:
+        return {
+            "success": False,
+            "error": "No valid clip IDs found. Check that clips exist in the project."
+        }
+
+    # Add clips to Analyze tab
+    main_window.analyze_tab.add_clips(valid_ids)
+
+    # Switch to Analyze tab
+    main_window.tab_widget.setCurrentWidget(main_window.analyze_tab)
+
+    # Update GUI state
+    gui_state = getattr(main_window, '_gui_state', None)
+    if gui_state:
+        gui_state.active_tab = "analyze"
+
+    # Optionally start analysis
+    if auto_analyze:
+        main_window._on_analyze_all_from_tab()
+
+    return {
+        "success": True,
+        "message": f"Sent {len(valid_ids)} clips to Analyze tab",
+        "sent_count": len(valid_ids),
+        "clip_ids": valid_ids,
+        "auto_analyze": auto_analyze,
+    }
+
+
+@tools.register(
+    description="Clear all filters in the active tab's clip browser (Cut or Analyze). "
+                "Resets duration, aspect ratio, shot type, color palette, and search filters.",
+    requires_project=False,
+    modifies_gui_state=True
+)
+def clear_filters(main_window, tab: Optional[str] = None) -> dict:
+    """Clear all filters in the clip browser.
+
+    Args:
+        tab: Target tab - 'cut', 'analyze', or None for active tab
+
+    Returns:
+        Dict with success status
+    """
+    if main_window is None:
+        return {"success": False, "error": "Main window not available"}
+
+    # Determine which tab to use
+    gui_state = getattr(main_window, '_gui_state', None)
+    active_tab = tab or (gui_state.active_tab if gui_state else "cut")
+
+    clip_browser = None
+    if active_tab == "cut" and hasattr(main_window, 'cut_tab'):
+        clip_browser = main_window.cut_tab.clip_browser
+    elif active_tab == "analyze" and hasattr(main_window, 'analyze_tab'):
+        clip_browser = main_window.analyze_tab.clip_browser
+
+    if clip_browser is None:
+        return {
+            "success": False,
+            "error": f"No clip browser available in '{active_tab}' tab."
+        }
+
+    clip_browser.clear_all_filters()
+
+    return {
+        "success": True,
+        "message": f"Cleared all filters in {active_tab} tab",
+        "tab": active_tab,
+        "visible_clips": clip_browser.get_visible_clip_count(),
+        "total_clips": len(clip_browser.thumbnails),
+    }
+
+
+@tools.register(
+    description="Select all visible clips in the active tab's clip browser (Cut or Analyze). "
+                "Equivalent to Cmd+A keyboard shortcut.",
+    requires_project=False,
+    modifies_gui_state=True
+)
+def select_all_clips(main_window, tab: Optional[str] = None) -> dict:
+    """Select all visible clips in the clip browser.
+
+    Args:
+        tab: Target tab - 'cut', 'analyze', or None for active tab
+
+    Returns:
+        Dict with success status and selected count
+    """
+    if main_window is None:
+        return {"success": False, "error": "Main window not available"}
+
+    gui_state = getattr(main_window, '_gui_state', None)
+    active_tab = tab or (gui_state.active_tab if gui_state else "cut")
+
+    clip_browser = None
+    if active_tab == "cut" and hasattr(main_window, 'cut_tab'):
+        clip_browser = main_window.cut_tab.clip_browser
+    elif active_tab == "analyze" and hasattr(main_window, 'analyze_tab'):
+        clip_browser = main_window.analyze_tab.clip_browser
+
+    if clip_browser is None:
+        return {
+            "success": False,
+            "error": f"No clip browser available in '{active_tab}' tab."
+        }
+
+    clip_browser.select_all()
+    selected_count = len(clip_browser.get_selected_clips())
+
+    # Update GUI state
+    if gui_state:
+        gui_state.selected_clip_ids = [c.id for c in clip_browser.get_selected_clips()]
+
+    return {
+        "success": True,
+        "message": f"Selected {selected_count} clips in {active_tab} tab",
+        "selected_count": selected_count,
+        "tab": active_tab,
+    }
+
+
+@tools.register(
+    description="Deselect all clips in the active tab's clip browser (Cut or Analyze). "
+                "Equivalent to Cmd+Shift+A keyboard shortcut.",
+    requires_project=False,
+    modifies_gui_state=True
+)
+def deselect_all_clips(main_window, tab: Optional[str] = None) -> dict:
+    """Deselect all clips in the clip browser.
+
+    Args:
+        tab: Target tab - 'cut', 'analyze', or None for active tab
+
+    Returns:
+        Dict with success status
+    """
+    if main_window is None:
+        return {"success": False, "error": "Main window not available"}
+
+    gui_state = getattr(main_window, '_gui_state', None)
+    active_tab = tab or (gui_state.active_tab if gui_state else "cut")
+
+    clip_browser = None
+    if active_tab == "cut" and hasattr(main_window, 'cut_tab'):
+        clip_browser = main_window.cut_tab.clip_browser
+    elif active_tab == "analyze" and hasattr(main_window, 'analyze_tab'):
+        clip_browser = main_window.analyze_tab.clip_browser
+
+    if clip_browser is None:
+        return {
+            "success": False,
+            "error": f"No clip browser available in '{active_tab}' tab."
+        }
+
+    clip_browser.clear_selection()
+
+    # Update GUI state
+    if gui_state:
+        gui_state.selected_clip_ids = []
+
+    return {
+        "success": True,
+        "message": f"Deselected all clips in {active_tab} tab",
+        "tab": active_tab,
+    }
+
+
 # =============================================================================
 # Playback Control Tools
 # =============================================================================
@@ -1030,7 +1243,10 @@ def remove_source(
 
 @tools.register(
     description="Export the current sequence as a video file (MP4). This renders all clips in the timeline into a single video. "
-                "May take significant time for long sequences. Use quality='low' for faster exports.",
+                "Parameters: quality='low'/'medium'/'high' (affects CRF and encoding speed), "
+                "resolution='original'/'1080p'/'720p'/'480p' (target resolution), "
+                "fps=float (target frame rate, defaults to sequence fps). "
+                "Runs in background - may take significant time for long sequences.",
     requires_project=True,
     modifies_gui_state=False
 )
@@ -2140,6 +2356,59 @@ def detect_scenes_live(
 
 
 @tools.register(
+    description="Detect scenes in all unanalyzed video sources. Queues all sources that haven't been analyzed yet "
+                "and processes them sequentially. Equivalent to 'Cut New Videos' button in Collect tab.",
+    requires_project=True,
+    modifies_gui_state=True
+)
+def detect_all_unanalyzed(
+    main_window,
+    project,
+    sensitivity: float = 3.0
+) -> dict:
+    """Detect scenes in all unanalyzed video sources.
+
+    Args:
+        sensitivity: Detection sensitivity (1.0=sensitive, 10.0=less sensitive)
+
+    Returns:
+        Dict with queued source count
+    """
+    if main_window is None:
+        return {"success": False, "error": "Main window not available"}
+
+    # Find unanalyzed sources
+    unanalyzed = [s for s in project.sources if not s.analyzed]
+
+    if not unanalyzed:
+        return {
+            "success": True,
+            "message": "All sources are already analyzed",
+            "queued_count": 0,
+            "source_ids": [],
+        }
+
+    # Check if detection already running
+    if main_window.detection_worker and main_window.detection_worker.isRunning():
+        return {"success": False, "error": "Scene detection already in progress. Wait for it to complete."}
+
+    # Update default sensitivity for the batch
+    main_window.settings.default_sensitivity = sensitivity
+
+    # Queue all unanalyzed sources
+    source_ids = [s.id for s in unanalyzed]
+    main_window._on_analyze_requested(source_ids)
+
+    return {
+        "success": True,
+        "message": f"Queued {len(unanalyzed)} sources for scene detection",
+        "queued_count": len(unanalyzed),
+        "source_ids": source_ids,
+        "sensitivity": sensitivity,
+    }
+
+
+@tools.register(
     description="Extract dominant colors from clips with live GUI update. Updates clip metadata.",
     requires_project=True,
     modifies_gui_state=True
@@ -2618,4 +2887,103 @@ def get_settings() -> dict:
             "llm_model": settings.llm_model,
             "llm_temperature": settings.llm_temperature,
         }
+    }
+
+
+# Safe settings that can be modified by agent (no API keys, no paths)
+SAFE_SETTINGS = {
+    "default_sensitivity": (float, 1.0, 10.0),
+    "min_scene_length_seconds": (float, 0.1, 10.0),
+    "export_quality": (str, ["low", "medium", "high"]),
+    "export_resolution": (str, ["original", "1080p", "720p", "480p"]),
+    "export_fps": (str, ["original", "24", "30", "60"]),
+    "transcription_model": (str, ["tiny.en", "small.en", "medium.en", "large-v3"]),
+    "transcription_language": (str, None),  # Any string allowed
+    "theme_preference": (str, ["system", "light", "dark"]),
+    "youtube_results_count": (int, 10, 50),
+    "youtube_parallel_downloads": (int, 1, 3),
+    "llm_provider": (str, ["local", "openai", "anthropic", "gemini", "openrouter"]),
+    "llm_model": (str, None),  # Any string allowed
+    "llm_temperature": (float, 0.0, 2.0),
+}
+
+
+@tools.register(
+    description="Update application settings (safe settings only, no API keys or paths). "
+                "Use get_settings first to see current values. "
+                "Settings: default_sensitivity (1.0-10.0), export_quality ('low'/'medium'/'high'), "
+                "export_resolution ('original'/'1080p'/'720p'/'480p'), theme_preference ('system'/'light'/'dark'), "
+                "llm_provider ('local'/'openai'/'anthropic'/'gemini'/'openrouter'), llm_model, llm_temperature (0.0-2.0).",
+    requires_project=False,
+    modifies_gui_state=False
+)
+def update_settings(setting_name: str, value) -> dict:
+    """Update an application setting.
+
+    Args:
+        setting_name: Name of the setting to update (must be in SAFE_SETTINGS)
+        value: New value for the setting
+
+    Returns:
+        Dict with success status and updated value
+    """
+    if setting_name not in SAFE_SETTINGS:
+        return {
+            "success": False,
+            "error": f"Setting '{setting_name}' cannot be modified. "
+                     f"Safe settings: {', '.join(sorted(SAFE_SETTINGS.keys()))}"
+        }
+
+    spec = SAFE_SETTINGS[setting_name]
+    expected_type = spec[0]
+
+    # Type validation
+    if expected_type == float:
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return {"success": False, "error": f"Setting '{setting_name}' requires a number"}
+        min_val, max_val = spec[1], spec[2]
+        if not (min_val <= value <= max_val):
+            return {
+                "success": False,
+                "error": f"Setting '{setting_name}' must be between {min_val} and {max_val}"
+            }
+    elif expected_type == int:
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            return {"success": False, "error": f"Setting '{setting_name}' requires an integer"}
+        min_val, max_val = spec[1], spec[2]
+        if not (min_val <= value <= max_val):
+            return {
+                "success": False,
+                "error": f"Setting '{setting_name}' must be between {min_val} and {max_val}"
+            }
+    elif expected_type == str:
+        value = str(value)
+        allowed_values = spec[1]
+        if allowed_values is not None and value not in allowed_values:
+            return {
+                "success": False,
+                "error": f"Setting '{setting_name}' must be one of: {', '.join(allowed_values)}"
+            }
+
+    # Load current settings
+    settings = load_settings()
+
+    # Update the setting
+    old_value = getattr(settings, setting_name)
+    setattr(settings, setting_name, value)
+
+    # Save settings
+    from core.settings import save_settings
+    save_settings(settings)
+
+    return {
+        "success": True,
+        "message": f"Updated {setting_name}: {old_value} -> {value}",
+        "setting": setting_name,
+        "old_value": old_value,
+        "new_value": value,
     }
