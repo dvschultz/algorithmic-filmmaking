@@ -103,16 +103,36 @@ def _is_path_under(path: Path, root: Path) -> bool:
         return False
 
 
-# Timeout values for CLI tools (in seconds)
+# Timeout values for tools (in seconds)
+# Used by both CLI subprocess calls and GUI tool async workers
 TOOL_TIMEOUTS = {
     "detect_scenes": 600,      # 10 minutes for large videos
+    "detect_scenes_live": 600, # 10 minutes for large videos
     "download_video": 1800,    # 30 minutes for long videos
+    "download_videos": 3600,   # 60 minutes for bulk downloads (up to 10 videos)
     "search_youtube": 30,      # 30 seconds
     "analyze_colors": 300,     # 5 minutes
     "analyze_shots": 300,      # 5 minutes
     "transcribe": 1200,        # 20 minutes
+    "transcribe_clips": 1200,  # 20 minutes
     "export_clips": 600,       # 10 minutes
+    "export_sequence": 600,    # 10 minutes
 }
+
+# Default timeout for tools not in TOOL_TIMEOUTS
+DEFAULT_TOOL_TIMEOUT = 60  # 1 minute
+
+
+def get_tool_timeout(tool_name: str) -> float:
+    """Get the timeout for a tool in seconds.
+
+    Args:
+        tool_name: Name of the tool
+
+    Returns:
+        Timeout in seconds
+    """
+    return TOOL_TIMEOUTS.get(tool_name, DEFAULT_TOOL_TIMEOUT)
 
 
 @dataclass

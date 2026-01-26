@@ -18,7 +18,7 @@ try:
 except ImportError:
     RateLimitError = None
 
-from core.chat_tools import tools as tool_registry
+from core.chat_tools import get_tool_timeout, tools as tool_registry
 from core.llm_client import LLMClient, ProviderConfig, check_ollama_health
 from core.tool_executor import ToolExecutor
 
@@ -372,8 +372,9 @@ class ChatAgentWorker(QThread):
                         self._gui_tool_result = None
                         self.gui_tool_requested.emit(name, args, tool_call_id)
 
-                        # Wait for main thread to complete (with timeout)
-                        completed = self._gui_tool_event.wait(timeout=30.0)
+                        # Wait for main thread to complete (with per-tool timeout)
+                        tool_timeout = get_tool_timeout(name)
+                        completed = self._gui_tool_event.wait(timeout=tool_timeout)
                         if not completed or self._stop_requested:
                             result = {
                                 "tool_call_id": tool_call_id,
