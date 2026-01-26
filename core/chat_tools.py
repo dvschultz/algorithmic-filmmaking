@@ -403,6 +403,10 @@ def list_clips(project) -> list[dict]:
             "duration_seconds": round(duration, 2),
             "shot_type": getattr(clip, 'shot_type', None),
             "has_speech": bool(getattr(clip, 'transcript', None)),
+            "dominant_colors": getattr(clip, 'dominant_colors', None),
+            "transcript": clip.get_transcript_text() if clip.transcript else None,
+            "notes": getattr(clip, 'notes', None),
+            "tags": getattr(clip, 'tags', []),
         })
 
     return results

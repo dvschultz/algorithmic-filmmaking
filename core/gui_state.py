@@ -28,6 +28,12 @@ class GUIState:
     selected_clip_ids: list[str] = field(default_factory=list)
     selected_source_id: Optional[str] = None
 
+    # Analyze tab state
+    analyze_tab_ids: list[str] = field(default_factory=list)
+
+    # Sequence state
+    sequence_ids: list[str] = field(default_factory=list)
+
     def to_context_string(self) -> str:
         """Generate context string for agent system prompt.
 
@@ -53,6 +59,20 @@ class GUIState:
             lines.append(f"VIDEOS SELECTED FOR DOWNLOAD: {count}")
 
         lines.append(f"ACTIVE TAB: {self.active_tab}")
+
+        if self.analyze_tab_ids:
+            lines.append(f"ANALYZE TAB CLIPS: {len(self.analyze_tab_ids)}")
+            ids_str = ", ".join(self.analyze_tab_ids[:20])
+            if len(self.analyze_tab_ids) > 20:
+                ids_str += ", ..."
+            lines.append(f"ANALYZE_IDS: [{ids_str}]")
+
+        if self.sequence_ids:
+            lines.append(f"TIMELINE SEQUENCE: {len(self.sequence_ids)} clips")
+            ids_str = ", ".join(self.sequence_ids[:20])
+            if len(self.sequence_ids) > 20:
+                ids_str += ", ..."
+            lines.append(f"SEQUENCE_IDS: [{ids_str}]")
 
         if self.selected_clip_ids:
             lines.append(f"SELECTED CLIPS: {len(self.selected_clip_ids)}")

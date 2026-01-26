@@ -43,6 +43,8 @@ class AnalyzeTab(BaseTab):
     clip_double_clicked = Signal(object)  # Clip
     clip_dragged_to_timeline = Signal(object)  # Clip
     clips_cleared = Signal()
+    selection_changed = Signal(list)  # list[str] selected clip IDs
+    clips_changed = Signal(list)  # list[str] current clip IDs in tab
 
     # State constants for stacked widget
     STATE_NO_CLIPS = 0
@@ -193,6 +195,13 @@ class AnalyzeTab(BaseTab):
             self.video_player.load_video(source.file_path)
             start_time = clip.start_time(source.fps)
             self.video_player.seek_to(start_time)
+        
+        self._update_selection_ui()
+
+    def _update_selection_ui(self):
+        """Update selection state and notify parent."""
+        selected = self.clip_browser.get_selected_clips()
+        self.selection_changed.emit([c.id for c in selected])
 
     def _on_clip_double_clicked(self, clip):
         """Handle clip double-click."""
@@ -265,6 +274,7 @@ class AnalyzeTab(BaseTab):
         if added_count > 0:
             logger.info(f"Added {added_count} clips to Analyze tab")
         self._update_ui_state()
+        self.clips_changed.emit(self.get_clip_ids())
 
     def remove_clip(self, clip_id: str):
         """Remove a single clip from the analysis tab.
@@ -286,12 +296,14 @@ class AnalyzeTab(BaseTab):
                         if source:
                             self.clip_browser.add_clip(c, source)
         self._update_ui_state()
+        self.clips_changed.emit(self.get_clip_ids())
 
     def clear_clips(self):
         """Remove all clips from the analysis tab."""
         self._clip_ids.clear()
         self.clip_browser.clear()
         self._update_ui_state()
+        self.clips_changed.emit([])
 
     def remove_orphaned_clips(self, valid_clip_ids: set[str]) -> int:
         """Remove clips that no longer exist in the main clip collection.
@@ -315,6 +327,7 @@ class AnalyzeTab(BaseTab):
                 if clip and source:
                     self.clip_browser.add_clip(clip, source)
             self._update_ui_state()
+            self.clips_changed.emit(self.get_clip_ids())
             return len(orphaned)
         return 0
 

@@ -677,7 +677,16 @@ class MainWindow(QMainWindow):
         # Track active tab for agent context
         tab_names = ["collect", "cut", "analyze", "generate", "sequence", "render"]
         if 0 <= index < len(tab_names):
-            self._gui_state.active_tab = tab_names[index]
+            active_tab = tab_names[index]
+            self._gui_state.active_tab = active_tab
+            
+            # Sync selection state for the new tab
+            if active_tab == "cut":
+                selected = self.cut_tab.clip_browser.get_selected_clips()
+                self._gui_state.selected_clip_ids = [c.id for c in selected]
+            elif active_tab == "analyze":
+                selected = self.analyze_tab.clip_browser.get_selected_clips()
+                self._gui_state.selected_clip_ids = [c.id for c in selected]
 
         # Notify tabs of activation/deactivation
         for i, tab in enumerate(tabs):
@@ -852,6 +861,8 @@ class MainWindow(QMainWindow):
         self.analyze_tab.analyze_shots_requested.connect(self._on_analyze_shots_from_tab)
         self.analyze_tab.analyze_all_requested.connect(self._on_analyze_all_from_tab)
         self.analyze_tab.clip_dragged_to_timeline.connect(self._on_clip_dragged_to_timeline)
+        self.analyze_tab.selection_changed.connect(self._on_analyze_selection_changed)
+        self.analyze_tab.clips_changed.connect(self._on_analyze_clips_changed)
 
         # Sequence tab signals
         self.sequence_tab.playback_requested.connect(self._on_playback_requested)
@@ -861,6 +872,8 @@ class MainWindow(QMainWindow):
         self.sequence_tab.timeline.sequence_changed.connect(self._update_render_tab_sequence_info)
         # Update EDL export menu item when sequence changes
         self.sequence_tab.timeline.sequence_changed.connect(self._on_sequence_changed)
+        # Update agent context when sequence changes
+        self.sequence_tab.timeline.sequence_changed.connect(self._on_sequence_ids_changed)
         # Mark project dirty when sequence changes
         self.sequence_tab.timeline.sequence_changed.connect(self._mark_dirty)
 
@@ -1129,10 +1142,14 @@ class MainWindow(QMainWindow):
                 self.tabs.setCurrentIndex(index)
 
         elif tool_name == "select_clips":
-            # Update clip browser selection
+            # Update clip browser selection in the active tab
             selected_ids = result.get("selected", [])
-            if hasattr(self, 'clip_browser') and self.clip_browser:
-                self.clip_browser.set_selection(selected_ids)
+            active_tab = self._gui_state.active_tab
+            
+            if active_tab == "cut":
+                self.cut_tab.clip_browser.set_selection(selected_ids)
+            elif active_tab == "analyze":
+                self.analyze_tab.clip_browser.set_selection(selected_ids)
 
     def _on_chat_complete(self, response: str, tool_history: list[dict]):
         """Handle chat completion with full history."""
@@ -1424,6 +1441,23 @@ class MainWindow(QMainWindow):
         """Handle selection change in Cut tab."""
         self._gui_state.selected_clip_ids = clip_ids
         logger.debug(f"GUI State updated: {len(clip_ids)} clips selected")
+
+    def _on_analyze_selection_changed(self, clip_ids: list[str]):
+        """Handle selection change in Analyze tab."""
+        self._gui_state.selected_clip_ids = clip_ids
+        logger.debug(f"GUI State updated (Analyze): {len(clip_ids)} clips selected")
+
+    def _on_analyze_clips_changed(self, clip_ids: list[str]):
+        """Handle clip collection change in Analyze tab."""
+        self._gui_state.analyze_tab_ids = clip_ids
+        logger.debug(f"GUI State updated: {len(clip_ids)} clips in Analyze tab")
+
+    def _on_sequence_ids_changed(self):
+        """Handle sequence change and update context."""
+        sequence = self.sequence_tab.timeline.get_sequence()
+        clip_ids = [c.source_clip_id for c in sequence.get_all_clips()]
+        self._gui_state.sequence_ids = clip_ids
+        logger.debug(f"GUI State updated: {len(clip_ids)} clips in sequence")
 
     def _on_clips_sent_to_analyze(self, clip_ids: list[str]):
         """Handle clips being sent from Cut to Analyze tab."""

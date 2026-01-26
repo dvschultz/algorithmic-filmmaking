@@ -167,7 +167,7 @@ def _format_tool_result_for_display(tool_name: str, result: dict) -> str:
         lines = [f"**{len(clips)} clips:**"]
         for clip in clips[:5]:  # Show first 5
             clip_id = clip.get("id", "?")[:8]
-            duration = clip.get("duration", 0)
+            duration = clip.get("duration_seconds", 0)
             shot_type = clip.get("shot_type", "")
             shot_info = f" ({shot_type})" if shot_type else ""
             lines.append(f"  • {clip_id}... {duration:.1f}s{shot_info}")
