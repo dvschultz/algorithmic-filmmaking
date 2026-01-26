@@ -71,12 +71,13 @@ class ClipDetailsSidebar(QDockWidget):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # Video preview section
+        # Video preview section - square aspect for both horizontal and vertical video
         self.video_player = VideoPlayer()
-        # Override the video widget's minimum size for sidebar use
-        self.video_player.video_widget.setMinimumSize(200, 150)
-        self.video_player.setMaximumHeight(250)
-        self.video_player.setMinimumHeight(200)
+        # Make video area square (works well for both landscape and portrait video)
+        self.video_player.video_widget.setMinimumSize(350, 350)
+        self.video_player.video_widget.setMaximumSize(500, 500)
+        self.video_player.setMinimumHeight(400)
+        self.video_player.setMaximumHeight(550)
         main_layout.addWidget(self.video_player)
 
         # Separator
