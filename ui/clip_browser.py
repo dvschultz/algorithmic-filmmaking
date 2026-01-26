@@ -251,8 +251,10 @@ class ClipThumbnail(QFrame):
         self._drag_start_pos = None
 
     def mouseDoubleClickEvent(self, event):
+        # Emit signal to undo the selection toggle from the first click
+        # (double-click should not affect selection, only open details)
         self.double_clicked.emit(self.clip)
-        # Also trigger view details on double-click
+        # Trigger view details on double-click
         self.view_details_requested.emit(self.clip, self.source)
 
     def contextMenuEvent(self, event):
@@ -600,7 +602,22 @@ class ClipBrowser(QWidget):
         self.clip_selected.emit(clip)
 
     def _on_thumbnail_double_clicked(self, clip: Clip):
-        """Handle thumbnail double-click."""
+        """Handle thumbnail double-click.
+
+        Double-click should open details without affecting selection.
+        Since mousePressEvent already toggled selection, we toggle it back.
+        """
+        # Undo the selection toggle from the first click
+        if clip.id in self.selected_clips:
+            self.selected_clips.remove(clip.id)
+        else:
+            self.selected_clips.add(clip.id)
+
+        # Update thumbnail visual state
+        thumb = self._thumbnail_by_id.get(clip.id)
+        if thumb:
+            thumb.set_selected(thumb.clip.id in self.selected_clips)
+
         self.clip_double_clicked.emit(clip)
 
     def _on_drag_started(self, clip: Clip):
