@@ -102,17 +102,22 @@ class TestCLIConfig:
             config_path = Path(tmpdir) / "config.json"
 
             with patch("core.settings._get_config_path", return_value=config_path):
-                config = CLIConfig()
-                config.default_sensitivity = 8.0
-                config.youtube_api_key = "saved_key"
+                # Mock keyring to prevent writing test values to real keyring
+                with patch("core.settings._set_api_key_in_keyring") as mock_keyring:
+                    config = CLIConfig()
+                    config.default_sensitivity = 8.0
+                    config.youtube_api_key = "test_api_key"
 
-                assert config.save() is True
-                assert config_path.exists()
+                    assert config.save() is True
+                    assert config_path.exists()
 
-                # Verify saved content (uses nested JSON format)
-                saved_data = json.loads(config_path.read_text())
-                assert saved_data["detection"]["default_sensitivity"] == 8.0
-                # youtube_api_key is stored in keyring, not JSON
+                    # Verify keyring was called with the API key
+                    mock_keyring.assert_called_once_with("test_api_key")
+
+                    # Verify saved content (uses nested JSON format)
+                    saved_data = json.loads(config_path.read_text())
+                    assert saved_data["detection"]["default_sensitivity"] == 8.0
+                    # youtube_api_key is stored in keyring, not JSON
 
     def test_get_config_dir_xdg(self):
         """Test XDG config directory on Linux/macOS."""
