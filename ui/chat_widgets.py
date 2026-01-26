@@ -5,14 +5,16 @@ Provides:
 - StreamingBubble: Accumulates streaming text from LLM
 - ToolIndicator: Shows tool execution status
 - ExamplePromptsWidget: Clickable example prompts with random cycling
+- PlanStepWidget: Individual step in an editable plan
+- PlanWidget: Inline editable plan with steps
 """
 
 import random
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QTextBrowser, QVBoxLayout,
-    QWidget
+    QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSizePolicy, QTextBrowser,
+    QVBoxLayout, QWidget
 )
 
 
@@ -647,3 +649,556 @@ class ExamplePromptsWidget(QWidget):
         """Reset the click guard and refresh prompts."""
         self._click_handled = False
         self._refresh_prompts()
+
+
+class PlanStepWidget(QFrame):
+    """Single step row in a plan widget with status, text, and controls."""
+
+    # Signals
+    text_edited = Signal(int, str)  # (step_index, new_text)
+    delete_requested = Signal(int)  # step_index
+    move_up_requested = Signal(int)  # step_index
+    move_down_requested = Signal(int)  # step_index
+
+    # Status icons
+    STATUS_ICONS = {
+        "pending": "\u2610",    # Empty box ☐
+        "running": "\u23f3",    # Hourglass ⏳
+        "completed": "\u2714",  # Check mark ✔
+        "failed": "\u2718",     # X mark ✘
+    }
+
+    def __init__(self, index: int, text: str, status: str = "pending", parent=None):
+        """Create a plan step widget.
+
+        Args:
+            index: Step index (0-based)
+            text: Step description text
+            status: Step status (pending, running, completed, failed)
+            parent: Parent widget
+        """
+        super().__init__(parent)
+        self._index = index
+        self._text = text
+        self._status = status
+        self._is_editing = False
+        self._setup_ui()
+
+    def _setup_ui(self):
+        self.setObjectName("planStep")
+        self._update_style()
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(8)
+
+        # Status icon
+        self.status_icon = QLabel(self.STATUS_ICONS.get(self._status, "\u2610"))
+        self.status_icon.setFixedWidth(20)
+        self.status_icon.setStyleSheet("font-size: 14px;")
+        layout.addWidget(self.status_icon)
+
+        # Step number
+        self.number_label = QLabel(f"{self._index + 1}.")
+        self.number_label.setFixedWidth(24)
+        self.number_label.setStyleSheet("font-weight: bold; color: #65676b;")
+        layout.addWidget(self.number_label)
+
+        # Step text (label for display, line edit for editing)
+        self.text_label = QLabel(self._text)
+        self.text_label.setWordWrap(True)
+        self.text_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        self.text_label.setStyleSheet("color: #050505;")
+        self.text_label.mouseDoubleClickEvent = self._on_double_click
+        layout.addWidget(self.text_label, 1)
+
+        # Edit field (hidden initially)
+        self.text_edit = QLineEdit(self._text)
+        self.text_edit.setStyleSheet("""
+            QLineEdit {
+                border: 1px solid #0084ff;
+                border-radius: 4px;
+                padding: 4px;
+                background: white;
+            }
+        """)
+        self.text_edit.returnPressed.connect(self._finish_editing)
+        self.text_edit.hide()
+        layout.addWidget(self.text_edit, 1)
+
+        # Move up button
+        self.up_btn = QPushButton("\u25b2")  # ▲
+        self.up_btn.setFixedSize(24, 24)
+        self.up_btn.setToolTip("Move up")
+        self.up_btn.setStyleSheet("""
+            QPushButton {
+                background: transparent;
+                border: none;
+                color: #65676b;
+                font-size: 10px;
+            }
+            QPushButton:hover { color: #0084ff; }
+        """)
+        self.up_btn.clicked.connect(lambda: self.move_up_requested.emit(self._index))
+        layout.addWidget(self.up_btn)
+
+        # Move down button
+        self.down_btn = QPushButton("\u25bc")  # ▼
+        self.down_btn.setFixedSize(24, 24)
+        self.down_btn.setToolTip("Move down")
+        self.down_btn.setStyleSheet("""
+            QPushButton {
+                background: transparent;
+                border: none;
+                color: #65676b;
+                font-size: 10px;
+            }
+            QPushButton:hover { color: #0084ff; }
+        """)
+        self.down_btn.clicked.connect(lambda: self.move_down_requested.emit(self._index))
+        layout.addWidget(self.down_btn)
+
+        # Delete button
+        self.delete_btn = QPushButton("\u2715")  # ✕
+        self.delete_btn.setFixedSize(24, 24)
+        self.delete_btn.setToolTip("Delete step")
+        self.delete_btn.setStyleSheet("""
+            QPushButton {
+                background: transparent;
+                border: none;
+                color: #65676b;
+                font-size: 12px;
+            }
+            QPushButton:hover { color: #ff4444; }
+        """)
+        self.delete_btn.clicked.connect(lambda: self.delete_requested.emit(self._index))
+        layout.addWidget(self.delete_btn)
+
+    def _update_style(self):
+        """Update widget style based on status."""
+        if self._status == "running":
+            bg_color = "#e3f2fd"  # Light blue
+            border_color = "#2196f3"
+        elif self._status == "completed":
+            bg_color = "#e8f5e9"  # Light green
+            border_color = "#4caf50"
+        elif self._status == "failed":
+            bg_color = "#ffebee"  # Light red
+            border_color = "#f44336"
+        else:  # pending
+            bg_color = "#f8f9fa"
+            border_color = "#dee2e6"
+
+        self.setStyleSheet(f"""
+            QFrame#planStep {{
+                background-color: {bg_color};
+                border: 1px solid {border_color};
+                border-radius: 6px;
+            }}
+        """)
+
+    def _on_double_click(self, event):
+        """Handle double-click to start editing."""
+        if self._status == "pending":  # Only allow editing pending steps
+            self._start_editing()
+
+    def _start_editing(self):
+        """Enter edit mode."""
+        if self._is_editing:
+            return
+        self._is_editing = True
+        self.text_label.hide()
+        self.text_edit.setText(self._text)
+        self.text_edit.show()
+        self.text_edit.setFocus()
+        self.text_edit.selectAll()
+
+    def _finish_editing(self):
+        """Exit edit mode and save changes."""
+        if not self._is_editing:
+            return
+        self._is_editing = False
+        new_text = self.text_edit.text().strip()
+        if new_text and new_text != self._text:
+            self._text = new_text
+            self.text_label.setText(new_text)
+            self.text_edited.emit(self._index, new_text)
+        self.text_edit.hide()
+        self.text_label.show()
+
+    def focusOutEvent(self, event):
+        """Handle focus loss to finish editing."""
+        if self._is_editing:
+            self._finish_editing()
+        super().focusOutEvent(event)
+
+    def set_status(self, status: str):
+        """Update step status.
+
+        Args:
+            status: New status (pending, running, completed, failed)
+        """
+        self._status = status
+        self.status_icon.setText(self.STATUS_ICONS.get(status, "\u2610"))
+        self._update_style()
+
+        # Update icon color based on status
+        if status == "completed":
+            self.status_icon.setStyleSheet("font-size: 14px; color: #4caf50;")
+        elif status == "failed":
+            self.status_icon.setStyleSheet("font-size: 14px; color: #f44336;")
+        elif status == "running":
+            self.status_icon.setStyleSheet("font-size: 14px; color: #2196f3;")
+        else:
+            self.status_icon.setStyleSheet("font-size: 14px;")
+
+        # Disable controls for non-pending steps
+        editable = status == "pending"
+        self.up_btn.setEnabled(editable)
+        self.down_btn.setEnabled(editable)
+        self.delete_btn.setEnabled(editable)
+
+    def set_index(self, index: int):
+        """Update step index (for reordering)."""
+        self._index = index
+        self.number_label.setText(f"{index + 1}.")
+
+    @property
+    def text(self) -> str:
+        return self._text
+
+    @property
+    def status(self) -> str:
+        return self._status
+
+
+class PlanWidget(QFrame):
+    """Editable plan widget shown inline in chat.
+
+    Displays a list of steps that can be edited, reordered, and deleted
+    before confirmation. During execution, shows status updates.
+    """
+
+    # Signals
+    confirmed = Signal(object)  # Emits Plan object with current steps
+    cancelled = Signal()
+    retry_requested = Signal(int)  # step_index
+    stop_requested = Signal()
+
+    def __init__(self, plan, parent=None):
+        """Create a plan widget.
+
+        Args:
+            plan: Plan object with steps
+            parent: Parent widget
+        """
+        super().__init__(parent)
+        self._plan = plan
+        self._step_widgets: list[PlanStepWidget] = []
+        self._is_executing = False
+        self._setup_ui()
+
+    def _setup_ui(self):
+        self.setObjectName("planWidget")
+        self.setStyleSheet("""
+            QFrame#planWidget {
+                background-color: #ffffff;
+                border: 2px solid #0084ff;
+                border-radius: 12px;
+            }
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+
+        # Header
+        header_layout = QHBoxLayout()
+        header_icon = QLabel("\U0001f4cb")  # 📋 clipboard
+        header_icon.setStyleSheet("font-size: 18px;")
+        header_layout.addWidget(header_icon)
+
+        header_text = QLabel(f"Plan: {self._plan.summary}")
+        header_text.setStyleSheet("font-weight: bold; font-size: 14px; color: #050505;")
+        header_text.setWordWrap(True)
+        header_layout.addWidget(header_text, 1)
+
+        layout.addLayout(header_layout)
+
+        # Separator
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setStyleSheet("background-color: #dee2e6;")
+        separator.setFixedHeight(1)
+        layout.addWidget(separator)
+
+        # Steps container
+        self.steps_container = QWidget()
+        self.steps_layout = QVBoxLayout(self.steps_container)
+        self.steps_layout.setContentsMargins(0, 0, 0, 0)
+        self.steps_layout.setSpacing(6)
+
+        # Add step widgets
+        for i, step in enumerate(self._plan.steps):
+            self._add_step_widget(i, step.description, step.status)
+
+        layout.addWidget(self.steps_container)
+
+        # Separator before buttons
+        separator2 = QFrame()
+        separator2.setFrameShape(QFrame.HLine)
+        separator2.setStyleSheet("background-color: #dee2e6;")
+        separator2.setFixedHeight(1)
+        layout.addWidget(separator2)
+
+        # Button row
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+
+        # Cancel button
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #f0f2f5;
+                color: #65676b;
+                border: 1px solid #d0d0d0;
+                border-radius: 6px;
+                padding: 8px 20px;
+                font-weight: 500;
+            }
+            QPushButton:hover {
+                background-color: #e4e6eb;
+            }
+        """)
+        self.cancel_btn.clicked.connect(self._on_cancel)
+        button_layout.addWidget(self.cancel_btn)
+
+        button_layout.addSpacing(8)
+
+        # Confirm button
+        self.confirm_btn = QPushButton("\u2714 Confirm Plan")  # ✔
+        self.confirm_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #0084ff;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 8px 20px;
+                font-weight: 500;
+            }
+            QPushButton:hover {
+                background-color: #0073e6;
+            }
+            QPushButton:disabled {
+                background-color: #b0b0b0;
+            }
+        """)
+        self.confirm_btn.clicked.connect(self._on_confirm)
+        button_layout.addWidget(self.confirm_btn)
+
+        # Stop button (hidden initially, shown during execution on failure)
+        self.stop_btn = QPushButton("Stop")
+        self.stop_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #ff4444;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 8px 20px;
+                font-weight: 500;
+            }
+            QPushButton:hover {
+                background-color: #ff2222;
+            }
+        """)
+        self.stop_btn.clicked.connect(self._on_stop)
+        self.stop_btn.hide()
+        button_layout.addWidget(self.stop_btn)
+
+        # Retry button (hidden initially, shown on step failure)
+        self.retry_btn = QPushButton("Retry")
+        self.retry_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #ff9800;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 8px 20px;
+                font-weight: 500;
+            }
+            QPushButton:hover {
+                background-color: #f57c00;
+            }
+        """)
+        self.retry_btn.clicked.connect(self._on_retry)
+        self.retry_btn.hide()
+        button_layout.addWidget(self.retry_btn)
+
+        layout.addLayout(button_layout)
+
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+
+    def _add_step_widget(self, index: int, text: str, status: str):
+        """Add a step widget to the list."""
+        step_widget = PlanStepWidget(index, text, status)
+        step_widget.text_edited.connect(self._on_step_edited)
+        step_widget.delete_requested.connect(self._on_step_delete)
+        step_widget.move_up_requested.connect(self._on_step_move_up)
+        step_widget.move_down_requested.connect(self._on_step_move_down)
+        self._step_widgets.append(step_widget)
+        self.steps_layout.addWidget(step_widget)
+
+    def _reindex_steps(self):
+        """Update step indices after reorder/delete."""
+        for i, widget in enumerate(self._step_widgets):
+            widget.set_index(i)
+
+    def _on_step_edited(self, index: int, new_text: str):
+        """Handle step text edit."""
+        if 0 <= index < len(self._plan.steps):
+            self._plan.steps[index].description = new_text
+
+    def _on_step_delete(self, index: int):
+        """Handle step deletion."""
+        if len(self._step_widgets) <= 1:
+            return  # Can't delete last step
+
+        if 0 <= index < len(self._step_widgets):
+            # Remove widget
+            widget = self._step_widgets.pop(index)
+            self.steps_layout.removeWidget(widget)
+            widget.deleteLater()
+
+            # Remove from plan
+            if 0 <= index < len(self._plan.steps):
+                self._plan.steps.pop(index)
+
+            self._reindex_steps()
+
+    def _on_step_move_up(self, index: int):
+        """Handle step move up."""
+        if index <= 0:
+            return
+
+        # Swap widgets
+        self._step_widgets[index], self._step_widgets[index - 1] = \
+            self._step_widgets[index - 1], self._step_widgets[index]
+
+        # Swap in plan
+        self._plan.steps[index], self._plan.steps[index - 1] = \
+            self._plan.steps[index - 1], self._plan.steps[index]
+
+        # Rebuild layout
+        self._rebuild_steps_layout()
+
+    def _on_step_move_down(self, index: int):
+        """Handle step move down."""
+        if index >= len(self._step_widgets) - 1:
+            return
+
+        # Swap widgets
+        self._step_widgets[index], self._step_widgets[index + 1] = \
+            self._step_widgets[index + 1], self._step_widgets[index]
+
+        # Swap in plan
+        self._plan.steps[index], self._plan.steps[index + 1] = \
+            self._plan.steps[index + 1], self._plan.steps[index]
+
+        # Rebuild layout
+        self._rebuild_steps_layout()
+
+    def _rebuild_steps_layout(self):
+        """Rebuild steps layout after reorder."""
+        # Remove all widgets from layout (but don't delete them)
+        while self.steps_layout.count():
+            self.steps_layout.takeAt(0)
+
+        # Re-add in new order
+        for i, widget in enumerate(self._step_widgets):
+            widget.set_index(i)
+            self.steps_layout.addWidget(widget)
+
+    def _on_cancel(self):
+        """Handle cancel button click."""
+        self.cancelled.emit()
+
+    def _on_confirm(self):
+        """Handle confirm button click."""
+        # Update plan steps from widgets (in case of edits)
+        for i, widget in enumerate(self._step_widgets):
+            if i < len(self._plan.steps):
+                self._plan.steps[i].description = widget.text
+
+        self._plan.confirm()
+        self.confirmed.emit(self._plan)
+
+    def _on_retry(self):
+        """Handle retry button click."""
+        self.retry_btn.hide()
+        self.stop_btn.hide()
+        self.retry_requested.emit(self._plan.current_step_index)
+
+    def _on_stop(self):
+        """Handle stop button click."""
+        self.retry_btn.hide()
+        self.stop_btn.hide()
+        self.stop_requested.emit()
+
+    def set_executing(self, executing: bool):
+        """Set execution state.
+
+        Args:
+            executing: Whether plan is currently executing
+        """
+        self._is_executing = executing
+
+        # Disable editing controls during execution
+        for widget in self._step_widgets:
+            widget.up_btn.setEnabled(not executing and widget.status == "pending")
+            widget.down_btn.setEnabled(not executing and widget.status == "pending")
+            widget.delete_btn.setEnabled(not executing and widget.status == "pending")
+
+        # Update buttons
+        self.confirm_btn.setEnabled(not executing)
+        self.cancel_btn.setText("Stop" if executing else "Cancel")
+
+    def update_step_status(self, step_index: int, status: str, error: str = None):
+        """Update a step's status.
+
+        Args:
+            step_index: Index of step to update
+            status: New status (pending, running, completed, failed)
+            error: Error message if failed
+        """
+        if 0 <= step_index < len(self._step_widgets):
+            self._step_widgets[step_index].set_status(status)
+
+            # Also update plan model
+            if 0 <= step_index < len(self._plan.steps):
+                self._plan.steps[step_index].status = status
+                if error:
+                    self._plan.steps[step_index].error = error
+
+            # Show retry/stop buttons on failure
+            if status == "failed":
+                self.retry_btn.show()
+                self.stop_btn.show()
+                self.confirm_btn.hide()
+                self.cancel_btn.hide()
+
+    def mark_completed(self):
+        """Mark the plan as fully completed."""
+        self._is_executing = False
+        self.confirm_btn.hide()
+        self.cancel_btn.hide()
+        self.retry_btn.hide()
+        self.stop_btn.hide()
+
+    def get_steps(self) -> list[str]:
+        """Get current step descriptions."""
+        return [w.text for w in self._step_widgets]
+
+    @property
+    def plan(self):
+        """Get the plan object."""
+        return self._plan

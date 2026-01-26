@@ -133,11 +133,17 @@ def _format_tool_result_for_display(tool_name: str, result: dict) -> str:
     Returns:
         Human-readable summary string
     """
+    # Check executor-level failure
     if not result.get("success", False):
         error = result.get("error", "Unknown error")
         return f"**Error:** {error}"
 
     data = result.get("result", result)
+
+    # Check inner tool failure (executor succeeded but tool returned error)
+    if isinstance(data, dict) and data.get("success") is False:
+        error = data.get("error", "Unknown error")
+        return f"**Error:** {error}"
 
     if tool_name == "get_project_state":
         name = data.get("name", "Untitled")
@@ -383,7 +389,15 @@ class ChatAgentWorker(QThread):
                         # Execute non-GUI tool directly in worker thread
                         result = executor.execute(tc)
 
-                    self.tool_result.emit(name, result, result.get("success", False))
+                    # Determine actual success: check both executor and inner tool
+                    executor_success = result.get("success", False)
+                    inner_result = result.get("result", {})
+                    tool_success = executor_success
+                    if executor_success and isinstance(inner_result, dict):
+                        # If executor succeeded, check if tool itself reported failure
+                        tool_success = inner_result.get("success", True)
+
+                    self.tool_result.emit(name, result, tool_success)
 
                     # Emit GUI sync signals for specific tools
                     self._emit_gui_sync_signal(name, args, result)
@@ -602,6 +616,39 @@ When the user wants to work with videos:
 - Use search_youtube to find videos
 
 If the user's request is unclear, ask clarifying questions.
+
+PLANNING MODE:
+When the user asks you to "plan" something or describes a complex multi-step workflow (3+ steps), use the planning system:
+
+1. DETECT PLANNING REQUESTS: Look for keywords like "plan", "create a workflow", or complex requests involving multiple operations (e.g., "download 100 videos, detect scenes, and create a random edit").
+
+2. CLARIFY FIRST: Ask 2-3 focused questions to understand requirements:
+   - What constraints matter? (quality, duration, count limits)
+   - What's the desired outcome format?
+   - Any preferences for how to handle edge cases?
+
+3. BREAK DOWN: After getting answers, decompose into 3-10 clear steps.
+   Each step should be a single logical action (search, download, detect, export, etc.)
+
+4. PRESENT PLAN: Call the present_plan tool with:
+   - steps: List of human-readable step descriptions
+   - summary: Brief description of what the plan accomplishes
+   Example: present_plan(steps=["Search YouTube for 'mushroom documentary'", "Download top 10 results", "Detect scenes in all videos"], summary="Download and process mushroom documentaries")
+
+5. WAIT FOR CONFIRMATION: After calling present_plan, STOP and wait for the user to confirm or edit the plan. Do NOT execute anything until confirmation.
+
+6. EXECUTE AFTER CONFIRMATION: Once confirmed, execute steps one at a time:
+   - Report which step you're executing (e.g., "Executing step 2/5: Downloading videos...")
+   - If a step fails, report the error and wait for user to choose [Retry] or [Stop]
+   - Provide a summary when complete
+
+Example step descriptions (human-readable, not tool names):
+- "Search YouTube for 'mushroom documentary' videos"
+- "Download the top 100 search results"
+- "Detect scenes in all downloaded videos"
+- "Randomly select scenes totaling 20 minutes"
+- "Add selected clips to the sequence"
+- "Export the final sequence"
 """
 
         # For Ollama, include tool schemas in the prompt since we don't pass them via API
@@ -687,6 +734,12 @@ CURRENT GUI STATE:
         # ToolExecutor wraps the actual tool return value in "result" key
         data = result.get("result", result)
 
+        # Check if inner tool reported failure
+        if isinstance(data, dict) and data.get("success") is False:
+            error = data.get("error", "Unknown error")
+            logger.warning(f"GUI SYNC: {tool_name} failed: {error}")
+            return
+
         if tool_name == "search_youtube":
             query = data.get("query", args.get("query", ""))
             videos = data.get("results", [])
@@ -694,7 +747,7 @@ CURRENT GUI STATE:
                 logger.info(f"GUI SYNC: youtube_search_completed ({len(videos)} videos)")
                 self.youtube_search_completed.emit(query, videos)
             else:
-                logger.warning(f"GUI SYNC: search_youtube had no videos. Keys: {list(data.keys())}")
+                logger.warning(f"GUI SYNC: search_youtube returned no videos for query: {query}")
 
         elif tool_name == "download_video":
             # Emit signal with URL and download result

@@ -270,6 +270,53 @@ tools = ToolRegistry()
 # =============================================================================
 
 @tools.register(
+    description="Display a plan to the user for review and editing. Call this after breaking down a complex request into steps. The user can edit, reorder, or delete steps before confirming. Wait for user confirmation before executing the plan.",
+    requires_project=False,
+    modifies_gui_state=True
+)
+def present_plan(main_window, steps: list[str], summary: str) -> dict:
+    """Display an editable plan widget in the chat panel.
+
+    Args:
+        steps: List of human-readable step descriptions in execution order
+        summary: Brief description of what the plan accomplishes
+
+    Returns:
+        Plan ID and instructions for the LLM to wait for confirmation
+    """
+    from models.plan import Plan
+
+    if not steps:
+        return {
+            "success": False,
+            "error": "No steps provided for the plan"
+        }
+
+    if len(steps) > 20:
+        return {
+            "success": False,
+            "error": f"Plan has {len(steps)} steps, maximum is 20. Please break into smaller plans."
+        }
+
+    # Create the plan
+    plan = Plan.from_steps(steps, summary)
+
+    # Store plan in GUI state for tracking
+    if hasattr(main_window, '_gui_state'):
+        main_window._gui_state.current_plan = plan
+
+    # Return marker that tells GUI handler to display the plan widget
+    return {
+        "_display_plan": True,
+        "plan_id": plan.id,
+        "summary": summary,
+        "steps": steps,
+        "step_count": len(steps),
+        "message": "Plan presented to user. Waiting for confirmation or edits."
+    }
+
+
+@tools.register(
     description="Get current project state including sources, clips, and sequence.",
     requires_project=True,
     modifies_gui_state=False

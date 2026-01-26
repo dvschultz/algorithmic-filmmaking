@@ -535,6 +535,9 @@ class MainWindow(QMainWindow):
         self._pending_agent_tool_call_id: Optional[str] = None
         self._pending_agent_tool_name: Optional[str] = None
 
+        # Plan execution state
+        self._pending_plan_tool_call_id: Optional[str] = None
+
         # GUI state tracking for agent context awareness
         self._gui_state = GUIState()
 
@@ -925,6 +928,12 @@ class MainWindow(QMainWindow):
         self.chat_panel.cancel_requested.connect(self._on_chat_cancel)
         self.chat_panel.provider_changed.connect(self._on_chat_provider_changed)
 
+        # Connect plan signals
+        self.chat_panel.plan_confirmed.connect(self._on_plan_confirmed)
+        self.chat_panel.plan_cancelled.connect(self._on_plan_cancelled)
+        self.chat_panel.plan_retry_requested.connect(self._on_plan_retry_requested)
+        self.chat_panel.plan_stop_requested.connect(self._on_plan_stop_requested)
+
     def _on_chat_message(self, message: str):
         """Handle user message from chat panel."""
         from core.llm_client import ProviderConfig, ProviderType
@@ -935,6 +944,15 @@ class MainWindow(QMainWindow):
 
         # Store message for history
         self._last_user_message = message
+
+        # Check for chat-based plan confirmation
+        if self.chat_panel.has_pending_plan():
+            if self._is_plan_confirmation(message):
+                # User confirmed plan via chat message
+                plan = self.chat_panel.get_current_plan()
+                if plan:
+                    self._on_plan_confirmed(plan)
+                    return
 
         # Cancel any existing worker
         if self._chat_worker and self._chat_worker.isRunning():
@@ -1096,6 +1114,12 @@ class MainWindow(QMainWindow):
                     # Don't call set_gui_tool_result yet - worker handler will do it
                     return
 
+                # Check if tool wants to display a plan widget
+                if isinstance(tool_result, dict) and tool_result.get("_display_plan"):
+                    logger.info(f"GUI tool {tool_name} displaying plan widget")
+                    self._handle_display_plan(tool_result, tool_call_id)
+                    return
+
                 # Handle special GUI actions based on tool results
                 self._apply_gui_tool_side_effects(tool_name, args, tool_result)
 
@@ -1171,6 +1195,257 @@ class MainWindow(QMainWindow):
         """Handle chat error."""
         logger.error(f"Chat error: {error}")
         self.chat_panel.on_stream_error(error)
+
+    # =========================================================================
+    # Plan Execution Flow
+    # =========================================================================
+
+    def _handle_display_plan(self, tool_result: dict, tool_call_id: str):
+        """Handle the present_plan tool result by showing the plan widget.
+
+        Args:
+            tool_result: Tool result containing plan data
+            tool_call_id: ID for tracking the tool call
+        """
+        from models.plan import Plan
+
+        # Create Plan from the tool result
+        steps = tool_result.get("steps", [])
+        summary = tool_result.get("summary", "")
+        plan = Plan.from_steps(steps, summary)
+        plan.id = tool_result.get("plan_id", plan.id)
+
+        # Store plan in GUI state
+        self._gui_state.set_plan(plan)
+
+        # Store pending tool call ID for when user confirms
+        self._pending_plan_tool_call_id = tool_call_id
+
+        # Display plan widget in chat panel
+        self.chat_panel.show_plan_widget(plan)
+
+        # Return result to worker - plan is displayed, awaiting confirmation
+        if self._chat_worker:
+            result = {
+                "tool_call_id": tool_call_id,
+                "name": "present_plan",
+                "success": True,
+                "result": {
+                    "plan_id": plan.id,
+                    "step_count": len(steps),
+                    "status": "awaiting_confirmation",
+                    "message": "Plan displayed. Waiting for user to confirm or edit."
+                }
+            }
+            self._chat_worker.set_gui_tool_result(result)
+
+    def _is_plan_confirmation(self, message: str) -> bool:
+        """Check if a message is a plan confirmation.
+
+        Detects phrases like "confirm", "run it", "execute", "go ahead",
+        "looks good", "start", "do it".
+
+        Args:
+            message: User message to check
+
+        Returns:
+            True if message appears to be plan confirmation
+        """
+        message_lower = message.lower().strip()
+
+        # Direct confirmation phrases
+        confirmation_phrases = [
+            "confirm",
+            "confirmed",
+            "run it",
+            "run the plan",
+            "execute",
+            "execute it",
+            "execute the plan",
+            "go ahead",
+            "go for it",
+            "looks good",
+            "lgtm",
+            "start",
+            "start it",
+            "do it",
+            "proceed",
+            "yes",
+            "yeah",
+            "yep",
+            "sure",
+            "ok",
+            "okay",
+            "let's go",
+            "lets go",
+            "let's do it",
+            "lets do it",
+        ]
+
+        # Check for exact match or phrase at start
+        for phrase in confirmation_phrases:
+            if message_lower == phrase:
+                return True
+            # Also check if it starts with the phrase followed by punctuation
+            if message_lower.startswith(phrase) and (
+                len(message_lower) == len(phrase)
+                or message_lower[len(phrase)] in "!.,;: "
+            ):
+                return True
+
+        # Check for negation - don't confirm if user says "no", "don't", "cancel", etc.
+        negation_phrases = [
+            "no",
+            "nope",
+            "don't",
+            "dont",
+            "cancel",
+            "stop",
+            "wait",
+            "hold on",
+            "not yet",
+            "actually",
+            "change",
+            "edit",
+            "modify",
+        ]
+        for phrase in negation_phrases:
+            if phrase in message_lower:
+                return False
+
+        return False
+
+    @Slot(object)
+    def _on_plan_confirmed(self, plan):
+        """Handle plan confirmation from chat panel.
+
+        Args:
+            plan: Confirmed Plan object (may have edited steps)
+        """
+        logger.info(f"Plan confirmed: {plan.summary} with {len(plan.steps)} steps")
+
+        # Update GUI state with confirmed plan
+        self._gui_state.set_plan(plan)
+
+        # Set plan as executing in the widget
+        self.chat_panel.set_plan_executing(True)
+        plan.start_execution()
+
+        # Send a message to the agent to start executing
+        execution_message = (
+            f"User confirmed the plan. Execute the following {len(plan.steps)} steps in order:\n\n"
+        )
+        for i, step in enumerate(plan.steps):
+            execution_message += f"{i+1}. {step.description}\n"
+
+        execution_message += "\nExecute each step one at a time. Report progress after each step."
+
+        # Simulate a user message to trigger execution
+        self._on_chat_message(execution_message)
+
+    @Slot()
+    def _on_plan_cancelled(self):
+        """Handle plan cancellation from chat panel."""
+        logger.info("Plan cancelled by user")
+
+        # Clear plan from GUI state
+        self._gui_state.clear_plan_state()
+
+        # Add a message indicating cancellation
+        self.chat_panel.add_assistant_message("*Plan cancelled*")
+
+    @Slot(int)
+    def _on_plan_retry_requested(self, step_index: int):
+        """Handle retry request for a failed plan step.
+
+        Args:
+            step_index: Index of the step to retry
+        """
+        plan = self._gui_state.current_plan
+        if not plan or step_index >= len(plan.steps):
+            return
+
+        logger.info(f"Retrying plan step {step_index + 1}: {plan.steps[step_index].description}")
+
+        # Reset step status
+        plan.retry_current_step()
+        self.chat_panel.update_plan_step_status(step_index, "running")
+
+        # Send message to agent to retry this step
+        step = plan.steps[step_index]
+        retry_message = f"Retry step {step_index + 1}: {step.description}"
+        self._on_chat_message(retry_message)
+
+    @Slot()
+    def _on_plan_stop_requested(self):
+        """Handle stop request after plan step failure."""
+        plan = self._gui_state.current_plan
+        if not plan:
+            return
+
+        logger.info("Plan execution stopped by user")
+
+        # Mark plan as failed
+        plan.stop_on_failure()
+
+        # Update widget
+        self.chat_panel.set_plan_executing(False)
+
+        # Generate summary of what was completed
+        completed = sum(1 for s in plan.steps if s.status == "completed")
+        failed = sum(1 for s in plan.steps if s.status == "failed")
+        pending = sum(1 for s in plan.steps if s.status == "pending")
+
+        summary = f"**Plan stopped**\n\n"
+        summary += f"- Completed: {completed}/{len(plan.steps)} steps\n"
+        if failed > 0:
+            summary += f"- Failed: {failed} step(s)\n"
+        if pending > 0:
+            summary += f"- Skipped: {pending} step(s)\n"
+
+        self.chat_panel.add_assistant_message(summary)
+
+        # Clear plan from GUI state
+        self._gui_state.clear_plan_state()
+
+    def update_plan_step_progress(self, step_index: int, status: str, error: str = None, summary: str = None):
+        """Update a plan step's progress during execution.
+
+        Called by the agent execution flow to update step status.
+
+        Args:
+            step_index: Index of the step
+            status: New status (running, completed, failed)
+            error: Error message if failed
+            summary: Result summary if completed
+        """
+        plan = self._gui_state.current_plan
+        if not plan or step_index >= len(plan.steps):
+            return
+
+        # Update plan model
+        step = plan.steps[step_index]
+        step.status = status
+        if error:
+            step.error = error
+        if summary:
+            step.result_summary = summary
+
+        # Update widget
+        self.chat_panel.update_plan_step_status(step_index, status, error)
+
+        # Check if plan is complete
+        if status == "completed" and step_index == len(plan.steps) - 1:
+            # All steps completed
+            plan.status = "completed"
+            self.chat_panel.set_plan_executing(False)
+            self.chat_panel.mark_plan_completed()
+
+            # Generate completion summary
+            self.chat_panel.add_assistant_message(
+                f"**Plan complete!** {plan.get_progress_summary()}"
+            )
+            self._gui_state.clear_plan_state()
 
     @Slot(str, list)
     def _on_agent_youtube_search(self, query: str, videos: list[dict]):
