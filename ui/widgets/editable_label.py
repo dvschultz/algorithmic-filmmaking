@@ -1,0 +1,189 @@
+"""Inline editable label widget.
+
+A label that can be clicked to edit inline, with auto-save on blur/Enter
+and Escape to cancel. Uses dual-widget approach (QLabel + QLineEdit).
+"""
+
+from PySide6.QtCore import Qt, Signal, Slot
+from PySide6.QtWidgets import QWidget, QHBoxLayout, QLabel, QLineEdit
+
+from ui.theme import theme
+
+
+class EditableLabel(QWidget):
+    """Label that can be clicked to edit inline.
+
+    Signals:
+        value_changed(str): Emitted when text is edited and saved
+    """
+
+    value_changed = Signal(str)
+
+    def __init__(self, text: str = "", placeholder: str = "", parent=None):
+        """Create an editable label.
+
+        Args:
+            text: Initial text value
+            placeholder: Placeholder shown when text is empty
+            parent: Parent widget
+        """
+        super().__init__(parent)
+        self._text = text
+        self._placeholder = placeholder
+        self._is_editing = False
+
+        self._setup_ui()
+        self._apply_style()
+        theme().changed.connect(self._apply_style)
+
+    def _setup_ui(self):
+        """Build the widget UI."""
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # Display label
+        self.label = QLabel(self._text or self._placeholder)
+        self.label.setCursor(Qt.PointingHandCursor)
+        self.label.setWordWrap(True)
+        self.label.installEventFilter(self)
+        layout.addWidget(self.label)
+
+        # Edit field (hidden initially)
+        self.edit = QLineEdit(self._text)
+        self.edit.setPlaceholderText(self._placeholder)
+        self.edit.returnPressed.connect(self._finish_editing)
+        self.edit.installEventFilter(self)
+        self.edit.hide()
+        layout.addWidget(self.edit)
+
+    def _apply_style(self):
+        """Apply theme-aware styling."""
+        # Label style - show hover indication
+        self.label.setStyleSheet(f"""
+            QLabel {{
+                color: {theme().text_primary};
+                padding: 4px 8px;
+                border-radius: 4px;
+            }}
+            QLabel:hover {{
+                background-color: {theme().background_tertiary};
+            }}
+        """)
+
+        # Edit field style
+        self.edit.setStyleSheet(f"""
+            QLineEdit {{
+                color: {theme().text_primary};
+                background-color: {theme().background_tertiary};
+                border: 1px solid {theme().border_focus};
+                border-radius: 4px;
+                padding: 4px 8px;
+            }}
+            QLineEdit:focus {{
+                border: 2px solid {theme().accent_blue};
+            }}
+        """)
+
+        # Placeholder style
+        if not self._text:
+            self.label.setStyleSheet(self.label.styleSheet() + f"""
+                QLabel {{
+                    color: {theme().text_muted};
+                    font-style: italic;
+                }}
+            """)
+
+    def eventFilter(self, obj, event):
+        """Handle events for label and edit widgets."""
+        if obj == self.label:
+            if event.type() == event.Type.MouseButtonPress:
+                self._start_editing()
+                return True
+        elif obj == self.edit:
+            if event.type() == event.Type.FocusOut:
+                self._finish_editing()
+                return False
+            elif event.type() == event.Type.KeyPress:
+                if event.key() == Qt.Key_Escape:
+                    self._cancel_editing()
+                    return True
+        return super().eventFilter(obj, event)
+
+    def _start_editing(self):
+        """Enter edit mode."""
+        if self._is_editing:
+            return
+        self._is_editing = True
+
+        self.label.hide()
+        self.edit.setText(self._text)
+        self.edit.show()
+        self.edit.setFocus()
+        self.edit.selectAll()
+
+    def _finish_editing(self):
+        """Exit edit mode and save changes."""
+        if not self._is_editing:
+            return
+        self._is_editing = False
+
+        new_text = self.edit.text().strip()
+        if new_text != self._text:
+            self._text = new_text
+            self.label.setText(new_text or self._placeholder)
+            self._apply_style()  # Update placeholder styling
+            self.value_changed.emit(new_text)
+
+        self.edit.hide()
+        self.label.show()
+
+    def _cancel_editing(self):
+        """Cancel edit and revert to previous value."""
+        if not self._is_editing:
+            return
+        self._is_editing = False
+
+        self.edit.hide()
+        self.label.show()
+
+    def setText(self, text: str):
+        """Set text programmatically (doesn't emit signal).
+
+        Args:
+            text: New text value
+        """
+        self._text = text
+        self.label.setText(text or self._placeholder)
+        self.edit.setText(text)
+        self._apply_style()
+
+    def text(self) -> str:
+        """Get current text value."""
+        return self._text
+
+    def setPlaceholder(self, placeholder: str):
+        """Set placeholder text.
+
+        Args:
+            placeholder: Placeholder shown when text is empty
+        """
+        self._placeholder = placeholder
+        self.edit.setPlaceholderText(placeholder)
+        if not self._text:
+            self.label.setText(placeholder)
+        self._apply_style()
+
+    def setEnabled(self, enabled: bool):
+        """Enable or disable editing.
+
+        Args:
+            enabled: Whether editing is enabled
+        """
+        super().setEnabled(enabled)
+        if enabled:
+            self.label.setCursor(Qt.PointingHandCursor)
+        else:
+            self.label.setCursor(Qt.ArrowCursor)
+            if self._is_editing:
+                self._cancel_editing()

@@ -598,6 +598,9 @@ class MainWindow(QMainWindow):
         self.project = Project.new()
         self._project_adapter = ProjectSignalAdapter(self.project, self)
 
+        # Connect project adapter signals for view synchronization
+        self._project_adapter.clips_updated.connect(self._on_clips_updated)
+
         # UI state (not part of Project - these are GUI-specific selections)
         self.current_source: Optional[Source] = None  # Currently active/selected source
         self._analyze_queue: deque[Source] = deque()  # Queue for batch analysis (O(1) popleft)
@@ -1074,6 +1077,9 @@ class MainWindow(QMainWindow):
         # Start hidden by default
         self.clip_details_sidebar.setVisible(False)
 
+        # Connect clip edited signal to update project
+        self.clip_details_sidebar.clip_edited.connect(self._on_clip_edited)
+
         # Add toggle action to View menu
         self.clip_details_toggle = self.clip_details_sidebar.toggleViewAction()
         self.clip_details_toggle.setText("Show Clip Details")
@@ -1089,6 +1095,32 @@ class MainWindow(QMainWindow):
         """
         if hasattr(self, 'clip_details_sidebar'):
             self.clip_details_sidebar.show_clip(clip, source)
+
+    @Slot(object)
+    def _on_clip_edited(self, clip: Clip):
+        """Handle clip edited from sidebar.
+
+        Args:
+            clip: The edited clip
+        """
+        # Notify project of clip update (triggers observers including ClipBrowser)
+        self.project.update_clips([clip])
+        logger.debug(f"Clip {clip.id} updated from sidebar")
+
+    @Slot(list)
+    def _on_clips_updated(self, clips: list):
+        """Handle clips updated signal from project.
+
+        Forwards clip updates to both tab clip browsers for display refresh.
+
+        Args:
+            clips: List of updated clips
+        """
+        # Update clip browsers in both tabs
+        if hasattr(self, 'cut_tab') and hasattr(self.cut_tab, 'clip_browser'):
+            self.cut_tab.clip_browser.update_clips(clips)
+        if hasattr(self, 'analyze_tab') and hasattr(self.analyze_tab, 'clip_browser'):
+            self.analyze_tab.clip_browser.update_clips(clips)
 
     def _on_chat_message(self, message: str):
         """Handle user message from chat panel."""
