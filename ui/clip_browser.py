@@ -448,6 +448,7 @@ class ClipBrowser(QWidget):
         # Remove empty placeholder if present
         if self.empty_label.isVisible():
             self.empty_label.setVisible(False)
+            self.grid.removeWidget(self.empty_label)
 
         # Store source reference
         self._source_lookup[clip.id] = source
@@ -482,6 +483,9 @@ class ClipBrowser(QWidget):
         self._thumbnail_by_id = {}
         self.selected_clips = set()
         self._source_lookup = {}
+
+        # Re-add empty label to grid and show it
+        self.grid.addWidget(self.empty_label, 0, 0, 1, self.COLUMNS)
         self.empty_label.setVisible(True)
 
     def remove_clips_for_source(self, source_id: str):
@@ -667,6 +671,16 @@ class ClipBrowser(QWidget):
         for thumb in self.thumbnails:
             if self._matches_filter(thumb):
                 visible_thumbs.append(thumb)
+
+        # Manage empty label visibility
+        if visible_thumbs:
+            self.empty_label.setVisible(False)
+        elif not self.thumbnails:
+            # Only show empty state if there are no clips at all
+            self.empty_label.setVisible(True)
+        else:
+            # Clips exist but all are filtered out - don't show empty state
+            self.empty_label.setVisible(False)
 
         # Re-add visible thumbnails in order
         for i, thumb in enumerate(visible_thumbs):
