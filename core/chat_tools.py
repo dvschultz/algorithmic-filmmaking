@@ -1588,34 +1588,43 @@ def transcribe_live(main_window, clip_ids: list[str]) -> dict:
             clips_by_source[clip.source_id] = []
         clips_by_source[clip.source_id].append(clip)
 
-    # For simplicity, process first source's clips (multi-source would need queue)
-    first_source_id = next(iter(clips_by_source.keys()))
-    source = main_window.sources_by_id.get(first_source_id)
-    source_clips = clips_by_source[first_source_id]
+    # Build queue of (source_id, clips) for multi-source transcription
+    source_queue = []
+    for source_id, source_clips in clips_by_source.items():
+        source = main_window.sources_by_id.get(source_id)
+        if source:
+            source_queue.append((source, source_clips))
+        else:
+            logger.warning(f"Source not found for transcription: {source_id}")
 
-    if not source:
-        return {"success": False, "error": f"Source not found: {first_source_id}"}
+    if not source_queue:
+        return {"success": False, "error": "No valid sources found for clips"}
+
+    # Store queue and all clips for sequential processing
+    main_window._agent_transcription_source_queue = source_queue[1:]  # Remaining after first
+    main_window._agent_transcription_clips = clips  # All clips for final result
+    main_window._pending_agent_transcription = True
 
     # Reset guard
     main_window._transcription_finished_handled = False
 
-    # Mark that we're waiting for transcription via agent
-    main_window._pending_agent_transcription = True
-    main_window._agent_transcription_clips = source_clips
+    # Start with first source
+    first_source, first_clips = source_queue[0]
 
     # Update UI state
     main_window.analyze_tab.set_analyzing(True, "transcribe")
     main_window.progress_bar.setVisible(True)
     main_window.progress_bar.setRange(0, 100)
-    main_window.status_bar.showMessage(f"Transcribing {len(source_clips)} clips...")
+    sources_info = f" (source 1/{len(source_queue)})" if len(source_queue) > 1 else ""
+    main_window.status_bar.showMessage(f"Transcribing {len(first_clips)} clips{sources_info}...")
 
-    # Start worker
+    # Start worker for first source
     from ui.main_window import TranscriptionWorker
     from PySide6.QtCore import Qt
 
     main_window.transcription_worker = TranscriptionWorker(
-        source_clips,
-        source,
+        first_clips,
+        first_source,
         main_window.settings.transcription_model,
         main_window.settings.transcription_language,
     )
@@ -1625,7 +1634,7 @@ def transcribe_live(main_window, clip_ids: list[str]) -> dict:
     main_window.transcription_worker.error.connect(main_window._on_transcription_error)
     main_window.transcription_worker.start()
 
-    return {"_wait_for_worker": "transcription", "clip_count": len(source_clips)}
+    return {"_wait_for_worker": "transcription", "clip_count": len(clips)}
 
 
 @tools.register(

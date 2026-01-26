@@ -531,6 +531,7 @@ class MainWindow(QMainWindow):
         self._agent_color_clips: list = []
         self._agent_shot_clips: list = []
         self._agent_transcription_clips: list = []
+        self._agent_transcription_source_queue: list = []  # Queue for multi-source transcription
         self._pending_agent_tool_call_id: Optional[str] = None
         self._pending_agent_tool_name: Optional[str] = None
 
@@ -1710,6 +1711,38 @@ class MainWindow(QMainWindow):
             return
         self._transcription_finished_handled = True
 
+        # Check if there are more sources to process
+        if self._agent_transcription_source_queue:
+            next_source, next_clips = self._agent_transcription_source_queue.pop(0)
+            remaining = len(self._agent_transcription_source_queue)
+            total_sources = remaining + 2  # +1 for current, +1 for just-completed
+            current_source_num = total_sources - remaining
+
+            logger.info(f"Continuing transcription with next source: {next_source.filename} ({current_source_num}/{total_sources})")
+
+            # Reset guard for next source
+            self._transcription_finished_handled = False
+
+            # Update status
+            self.status_bar.showMessage(
+                f"Transcribing {len(next_clips)} clips (source {current_source_num}/{total_sources})..."
+            )
+
+            # Start worker for next source
+            self.transcription_worker = TranscriptionWorker(
+                next_clips,
+                next_source,
+                self.settings.transcription_model,
+                self.settings.transcription_language,
+            )
+            self.transcription_worker.progress.connect(self._on_transcription_progress)
+            self.transcription_worker.transcript_ready.connect(self._on_transcript_ready)
+            self.transcription_worker.finished.connect(self._on_agent_transcription_finished, Qt.UniqueConnection)
+            self.transcription_worker.error.connect(self._on_transcription_error)
+            self.transcription_worker.start()
+            return
+
+        # All sources processed - finalize
         self.progress_bar.setVisible(False)
         self.analyze_tab.set_analyzing(False)
 
@@ -1738,6 +1771,7 @@ class MainWindow(QMainWindow):
             self._pending_agent_tool_call_id = None
             self._pending_agent_tool_name = None
             self._agent_transcription_clips = []
+            self._agent_transcription_source_queue = []
             self._chat_worker.set_gui_tool_result(result)
             logger.info(f"Sent transcription result to agent: {transcribed_count}/{clip_count} clips")
 
