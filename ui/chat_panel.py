@@ -23,7 +23,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ui.chat_widgets import MessageBubble, StreamingBubble, ToolIndicator, ThinkingIndicator, ExamplePromptsWidget
+from ui.chat_widgets import (
+    MessageBubble, StreamingBubble, ToolIndicator, ThinkingIndicator,
+    ExamplePromptsWidget, PlanWidget
+)
 from core.settings import (
     get_anthropic_api_key,
     get_openai_api_key,
@@ -53,6 +56,12 @@ class ChatPanel(QWidget):
     cancel_requested = Signal()  # Cancel button clicked
     provider_changed = Signal(str)  # Provider selection changed
 
+    # Plan-related signals
+    plan_confirmed = Signal(object)  # Emits Plan object when confirmed
+    plan_cancelled = Signal()  # Plan cancelled before execution
+    plan_retry_requested = Signal(int)  # Retry step at index
+    plan_stop_requested = Signal()  # Stop execution after failure
+
     def __init__(self, parent=None):
         """Create the chat panel.
 
@@ -65,6 +74,7 @@ class ChatPanel(QWidget):
         self._current_bubble = None
         self._thinking_indicator = None
         self._example_prompts_visible = True
+        self._current_plan_widget = None
         self._setup_ui()
 
     def _setup_ui(self):
@@ -420,6 +430,9 @@ class ChatPanel(QWidget):
         # Clean up thinking indicator if present
         self._hide_thinking_indicator()
 
+        # Clean up plan widget if present
+        self._current_plan_widget = None
+
         # Remove all widgets except the example prompts
         while self.messages_layout.count():
             item = self.messages_layout.takeAt(0)
@@ -528,3 +541,103 @@ class ChatPanel(QWidget):
         # If current selection is disabled, switch to Local
         if current_disabled:
             self.provider_combo.setCurrentIndex(0)  # Local (Ollama)
+
+    # =========================================================================
+    # Plan Widget Methods
+    # =========================================================================
+
+    def show_plan_widget(self, plan):
+        """Display a plan widget inline in the chat.
+
+        Args:
+            plan: Plan object to display
+        """
+        # Hide example prompts if still visible
+        if self._example_prompts_visible:
+            self.example_prompts.hide()
+            self._example_prompts_visible = False
+
+        # Remove any existing plan widget
+        if self._current_plan_widget is not None:
+            self._remove_plan_widget()
+
+        # Create and add new plan widget
+        self._current_plan_widget = PlanWidget(plan)
+        self._current_plan_widget.confirmed.connect(self._on_plan_confirmed)
+        self._current_plan_widget.cancelled.connect(self._on_plan_cancelled)
+        self._current_plan_widget.retry_requested.connect(self._on_plan_retry)
+        self._current_plan_widget.stop_requested.connect(self._on_plan_stop)
+
+        self.messages_layout.addWidget(self._current_plan_widget)
+        self._scroll_to_bottom()
+
+    def _remove_plan_widget(self):
+        """Remove the current plan widget."""
+        if self._current_plan_widget is not None:
+            self.messages_layout.removeWidget(self._current_plan_widget)
+            self._current_plan_widget.deleteLater()
+            self._current_plan_widget = None
+
+    def _on_plan_confirmed(self, plan):
+        """Handle plan confirmation from widget."""
+        self.plan_confirmed.emit(plan)
+
+    def _on_plan_cancelled(self):
+        """Handle plan cancellation from widget."""
+        self._remove_plan_widget()
+        self.plan_cancelled.emit()
+
+    def _on_plan_retry(self, step_index: int):
+        """Handle retry request from widget."""
+        self.plan_retry_requested.emit(step_index)
+
+    def _on_plan_stop(self):
+        """Handle stop request from widget."""
+        self.plan_stop_requested.emit()
+
+    def update_plan_step_status(self, step_index: int, status: str, error: str = None):
+        """Update a plan step's status.
+
+        Args:
+            step_index: Index of the step to update
+            status: New status (pending, running, completed, failed)
+            error: Error message if status is 'failed'
+        """
+        if self._current_plan_widget is not None:
+            self._current_plan_widget.update_step_status(step_index, status, error)
+            self._scroll_to_bottom()
+
+    def set_plan_executing(self, executing: bool):
+        """Set whether the plan is currently executing.
+
+        Args:
+            executing: True if plan is being executed
+        """
+        if self._current_plan_widget is not None:
+            self._current_plan_widget.set_executing(executing)
+
+    def mark_plan_completed(self):
+        """Mark the current plan as fully completed."""
+        if self._current_plan_widget is not None:
+            self._current_plan_widget.mark_completed()
+
+    def get_current_plan(self):
+        """Get the current plan object if a plan widget is displayed.
+
+        Returns:
+            Plan object or None
+        """
+        if self._current_plan_widget is not None:
+            return self._current_plan_widget.plan
+        return None
+
+    def has_pending_plan(self) -> bool:
+        """Check if there's a plan widget waiting for confirmation.
+
+        Returns:
+            True if a plan is displayed and in draft status
+        """
+        if self._current_plan_widget is not None:
+            plan = self._current_plan_widget.plan
+            return plan.status == "draft"
+        return False

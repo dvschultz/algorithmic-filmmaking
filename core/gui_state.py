@@ -4,12 +4,16 @@ Tracks current GUI state so the chat agent can be aware of:
 - Recent YouTube search results
 - Current tab selection
 - Selected clips and sources
+- Current execution plan
 
 This state is passed to the agent's system prompt for context.
 """
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from models.plan import Plan
 
 
 @dataclass
@@ -33,6 +37,9 @@ class GUIState:
 
     # Sequence state
     sequence_ids: list[str] = field(default_factory=list)
+
+    # Plan state
+    current_plan: Optional["Plan"] = None
 
     def to_context_string(self) -> str:
         """Generate context string for agent system prompt.
@@ -85,6 +92,19 @@ class GUIState:
         if self.selected_source_id:
             lines.append(f"ACTIVE SOURCE: {self.selected_source_id[:8]}...")
 
+        # Plan state
+        if self.current_plan:
+            plan = self.current_plan
+            lines.append(f"CURRENT PLAN: {plan.summary}")
+            lines.append(f"  Status: {plan.status}")
+            lines.append(f"  Steps: {len(plan.steps)}")
+            if plan.status == "executing":
+                lines.append(f"  Current step: {plan.current_step_index + 1}/{len(plan.steps)}")
+                if plan.current_step:
+                    lines.append(f"  Executing: {plan.current_step.description}")
+            elif plan.status == "draft":
+                lines.append("  Awaiting user confirmation")
+
         return "\n".join(lines) if lines else ""
 
     def clear_search_state(self):
@@ -103,3 +123,15 @@ class GUIState:
         self.last_search_query = query
         self.search_results = results
         self.selected_video_ids = []
+
+    def clear_plan_state(self):
+        """Clear the current plan state."""
+        self.current_plan = None
+
+    def set_plan(self, plan: "Plan"):
+        """Set the current plan.
+
+        Args:
+            plan: Plan object to track
+        """
+        self.current_plan = plan
