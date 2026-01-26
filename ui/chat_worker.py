@@ -649,6 +649,27 @@ Example step descriptions (human-readable, not tool names):
 - "Randomly select scenes totaling 20 minutes"
 - "Add selected clips to the sequence"
 - "Export the final sequence"
+
+PLANNING CONSTRAINTS:
+When creating plans, follow these tool dependency rules:
+
+1. SEARCH → DOWNLOAD RULE: After a "search" step (search_youtube), you MUST include
+   a "download" step for those results BEFORE any subsequent search step.
+   Search results are ephemeral - a new search replaces previous results.
+
+   WRONG:
+   - Step 1: Search for "mushrooms"
+   - Step 2: Search for "fungi"      ← Previous search results lost!
+   - Step 3: Download all
+
+   CORRECT:
+   - Step 1: Search for "mushrooms"
+   - Step 2: Download mushroom videos
+   - Step 3: Search for "fungi"
+   - Step 4: Download fungi videos
+
+2. If the user wants to search multiple topics, create a plan that interleaves
+   search and download steps for each topic.
 """
 
         # For Ollama, include tool schemas in the prompt since we don't pass them via API
