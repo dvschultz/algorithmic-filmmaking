@@ -4,17 +4,22 @@ The ToolExecutor bridges between LLM tool calls and the actual tool functions,
 providing:
 - Safe execution with error handling
 - Project injection for tools that need it
-- Conflict detection with running GUI workers
+- Conflict detection with running GUI workers (with wait-retry)
 - Result formatting for LLM context
 """
 
 import json
 import logging
+import time
 from typing import Any, Callable, Optional
 
 from core.chat_tools import ToolRegistry, tools as default_registry
 
 logger = logging.getLogger(__name__)
+
+# Default retry settings for busy operations
+BUSY_RETRY_DELAY_SECONDS = 1.0  # Wait between retries
+BUSY_MAX_WAIT_SECONDS = 30.0    # Maximum total wait time
 
 # Tools that conflict with GUI workers
 CONFLICTING_TOOLS = {
@@ -94,14 +99,11 @@ class ToolExecutor:
                 f"Unknown tool: {name}. Available tools: {[t.name for t in self.registry.all_tools()]}"
             )
 
-        # Check for conflicting operations
+        # Check for conflicting operations with wait-retry
         if name in CONFLICTING_TOOLS and self.busy_check:
-            if self.busy_check(name):
-                return self._error_result(
-                    tool_call_id, name,
-                    f"Cannot run {name}: A similar operation is already in progress. "
-                    "Please wait for it to complete or cancel it first."
-                )
+            wait_result = self._wait_for_busy_operation(name)
+            if wait_result is not None:
+                return self._error_result(tool_call_id, name, wait_result)
 
         # Check project requirement
         if tool.requires_project and not self.project:
@@ -149,6 +151,41 @@ class ToolExecutor:
             "success": False,
             "error": error
         }
+
+    def _wait_for_busy_operation(self, tool_name: str) -> Optional[str]:
+        """Wait for a conflicting operation to complete with retry.
+
+        Args:
+            tool_name: Name of the tool attempting to execute
+
+        Returns:
+            None if operation is clear to proceed, error message if timed out
+        """
+        if not self.busy_check:
+            return None
+
+        if not self.busy_check(tool_name):
+            return None  # Not busy, proceed immediately
+
+        logger.info(f"Tool {tool_name} waiting for conflicting operation to complete...")
+        start_time = time.time()
+        waited = False
+
+        while time.time() - start_time < BUSY_MAX_WAIT_SECONDS:
+            if not self.busy_check(tool_name):
+                if waited:
+                    logger.info(f"Conflicting operation completed, proceeding with {tool_name}")
+                return None  # Conflict cleared
+
+            waited = True
+            time.sleep(BUSY_RETRY_DELAY_SECONDS)
+
+        # Timed out waiting
+        return (
+            f"Cannot run {tool_name}: A similar operation is still in progress after "
+            f"waiting {BUSY_MAX_WAIT_SECONDS:.0f} seconds. "
+            "Please wait for it to complete or cancel it first."
+        )
 
     def format_for_llm(self, result: dict) -> dict:
         """Format tool result as a message for LLM context.

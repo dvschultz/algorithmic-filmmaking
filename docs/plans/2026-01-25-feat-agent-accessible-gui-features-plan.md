@@ -101,10 +101,10 @@ Tool Execution → Project.notify_observers() → ProjectSignalAdapter
 - [x] `get_project_summary()` - Human-readable project overview
 
 ### Phase 4: Workflow Automation
-- [ ] Multi-video pipeline support ("download 5 videos and detect scenes")
-- [ ] Progress reporting for compound operations
-- [ ] Failure recovery/resume capability
-- [ ] Conflict queuing when GUI is busy
+- [x] Multi-video pipeline support ("download 5 videos and detect scenes")
+- [x] Progress reporting for compound operations
+- [x] Failure recovery/resume capability (via system prompt guidance)
+- [x] Conflict queuing when GUI is busy
 
 ### Testing Requirements
 - [ ] Unit tests for each new tool

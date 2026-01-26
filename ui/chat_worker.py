@@ -233,6 +233,7 @@ class ChatAgentWorker(QThread):
     tool_result_formatted = Signal(str)  # Human-readable tool result summary
     gui_tool_requested = Signal(str, dict, str)  # tool_name, args, tool_call_id (for main thread execution)
     gui_tool_completed = Signal(str)  # tool_call_id (set by main thread when done)
+    workflow_progress = Signal(str, int, int)  # step_name, current, total (for compound operations)
     complete = Signal(str, list)  # final response text, tool_history
     error = Signal(str)  # error message
 
@@ -330,8 +331,9 @@ class ChatAgentWorker(QThread):
                 # Add assistant message with tool calls to history
                 tool_history.append(assistant_msg)
 
-                # Execute tools
-                for tc in tool_calls:
+                # Execute tools with progress reporting
+                total_tools = len(tool_calls)
+                for tool_idx, tc in enumerate(tool_calls, start=1):
                     if self._stop_requested:
                         break
 
@@ -343,6 +345,10 @@ class ChatAgentWorker(QThread):
                         args = json.loads(args_str) if isinstance(args_str, str) else args_str
                     except json.JSONDecodeError:
                         args = {}
+
+                    # Emit workflow progress for compound operations
+                    if total_tools > 1:
+                        self.workflow_progress.emit(name, tool_idx, total_tools)
 
                     # Emit tool call signal
                     self.tool_called.emit(name, args)
@@ -564,6 +570,23 @@ IMPORTANT BEHAVIOR RULES:
 3. After completing a task, STOP and report results - do not chain additional actions
 4. If you think follow-up actions would help, SUGGEST them verbally - don't execute them
 5. When in doubt, ask the user before taking action
+
+WORKFLOW AUTOMATION (for multi-step requests):
+When the user requests compound operations like "download 5 videos and detect scenes in each":
+1. Process each step sequentially - complete one before starting the next
+2. Report progress after each step (e.g., "Downloaded video 2/5, detecting scenes...")
+3. If a step fails, continue with remaining items and report all failures at the end
+4. Provide a summary when complete showing successes and failures
+5. For large batches, confirm with the user before proceeding if the operation may take a long time
+
+Example workflow response:
+- "Processing 3 videos..."
+- "Video 1/3: Downloaded 'example.mp4' - detecting scenes..."
+- "Video 1/3: Complete - found 12 scenes"
+- "Video 2/3: Downloaded 'demo.mp4' - detecting scenes..."
+- "Video 2/3: Failed - file not found, continuing with remaining videos"
+- "Video 3/3: Complete - found 8 scenes"
+- "Summary: 2/3 videos processed successfully (20 total scenes), 1 failed"
 
 Available tools let you perform these operations. Always explain what you're doing before using tools.
 

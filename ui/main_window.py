@@ -976,6 +976,9 @@ class MainWindow(QMainWindow):
         self._chat_worker.complete.connect(self._on_chat_complete)
         self._chat_worker.error.connect(self._on_chat_error)
 
+        # Workflow progress for compound operations
+        self._chat_worker.workflow_progress.connect(self._on_workflow_progress)
+
         # GUI sync signals - update GUI components when agent performs actions
         self._chat_worker.youtube_search_completed.connect(self._on_agent_youtube_search)
         self._chat_worker.video_download_completed.connect(self._on_agent_video_downloaded)
@@ -992,6 +995,19 @@ class MainWindow(QMainWindow):
         logger.info(f"Chat tool {name} completed: success={success}")
         if self._current_tool_indicator:
             self._current_tool_indicator.set_complete(success)
+
+    @Slot(str, int, int)
+    def _on_workflow_progress(self, step_name: str, current: int, total: int):
+        """Handle workflow progress updates for compound operations.
+
+        Args:
+            step_name: Name of the current step/tool
+            current: Current step number (1-indexed)
+            total: Total number of steps
+        """
+        logger.info(f"Workflow progress: {step_name} ({current}/{total})")
+        # Update status bar with progress
+        self.statusBar().showMessage(f"Processing: {step_name} ({current}/{total})")
 
     @Slot(str, dict, str)
     def _on_gui_tool_requested(self, tool_name: str, args: dict, tool_call_id: str):
