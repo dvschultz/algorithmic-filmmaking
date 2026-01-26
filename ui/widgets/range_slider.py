@@ -96,6 +96,10 @@ class RangeSlider(QWidget):
         """Get the current selected range."""
         return (self._value_min, self._value_max)
 
+    def get_data_range(self) -> tuple[float, float]:
+        """Get the data range (min/max possible values)."""
+        return (self._data_min, self._data_max)
+
     def reset(self):
         """Reset to full range."""
         self._value_min = self._data_min

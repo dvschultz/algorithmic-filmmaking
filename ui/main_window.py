@@ -172,11 +172,13 @@ class DownloadWorker(QThread):
 
 
 class URLBulkDownloadWorker(QThread):
-    """Background worker for downloading multiple videos from URLs."""
+    """Background worker for downloading multiple videos from URLs in parallel."""
 
     progress = Signal(int, int, str)  # current, total, message
     video_finished = Signal(str, object)  # url, DownloadResult
     all_finished = Signal(list)  # list of result dicts
+
+    MAX_WORKERS = 3  # Parallel download limit
 
     def __init__(self, urls: list[str], download_dir: Path):
         super().__init__()
@@ -184,56 +186,88 @@ class URLBulkDownloadWorker(QThread):
         self.download_dir = download_dir
         self._cancelled = False
         self._results = []
+        self._completed_count = 0
+        self._lock = None  # Initialized in run()
 
     def cancel(self):
         """Request cancellation."""
         self._cancelled = True
 
-    def run(self):
-        """Download videos sequentially."""
-        total = len(self.urls)
+    def _download_single(self, url: str) -> dict:
+        """Download a single URL (called from thread pool)."""
         downloader = VideoDownloader(download_dir=self.download_dir)
 
-        for i, url in enumerate(self.urls):
-            if self._cancelled:
-                break
+        try:
+            valid, error = downloader.is_valid_url(url)
+            if not valid:
+                return {"url": url, "success": False, "error": error, "result": None}
 
-            self.progress.emit(i, total, f"Downloading {i+1}/{total}...")
+            result = downloader.download(url)
 
-            try:
-                valid, error = downloader.is_valid_url(url)
-                if not valid:
-                    self._results.append({
-                        "url": url,
-                        "success": False,
-                        "error": error,
-                    })
-                    continue
-
-                result = downloader.download(url)
-
-                if result.success:
-                    self._results.append({
-                        "url": url,
-                        "success": True,
-                        "file_path": str(result.file_path) if result.file_path else None,
-                        "title": result.title,
-                        "duration": result.duration,
-                    })
-                    self.video_finished.emit(url, result)
-                else:
-                    self._results.append({
-                        "url": url,
-                        "success": False,
-                        "error": result.error or "Download failed",
-                    })
-
-            except Exception as e:
-                self._results.append({
+            if result.success:
+                return {
+                    "url": url,
+                    "success": True,
+                    "file_path": str(result.file_path) if result.file_path else None,
+                    "title": result.title,
+                    "duration": result.duration,
+                    "result": result,
+                }
+            else:
+                return {
                     "url": url,
                     "success": False,
-                    "error": str(e),
-                })
+                    "error": result.error or "Download failed",
+                    "result": None,
+                }
+
+        except Exception as e:
+            return {"url": url, "success": False, "error": str(e), "result": None}
+
+    def run(self):
+        """Download videos in parallel using ThreadPoolExecutor."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import threading
+
+        total = len(self.urls)
+        self._lock = threading.Lock()
+        self._completed_count = 0
+
+        self.progress.emit(0, total, f"Starting {total} downloads...")
+
+        with ThreadPoolExecutor(max_workers=self.MAX_WORKERS) as executor:
+            # Submit all download tasks
+            future_to_url = {executor.submit(self._download_single, url): url for url in self.urls}
+
+            # Process results as they complete
+            for future in as_completed(future_to_url):
+                if self._cancelled:
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    break
+
+                url = future_to_url[future]
+                try:
+                    result_dict = future.result()
+
+                    # Remove the internal 'result' object before storing
+                    download_result = result_dict.pop("result", None)
+
+                    with self._lock:
+                        self._results.append(result_dict)
+                        self._completed_count += 1
+                        count = self._completed_count
+
+                    # Emit progress from main QThread (safe)
+                    self.progress.emit(count, total, f"Downloaded {count}/{total}...")
+
+                    # Emit video_finished for successful downloads
+                    if result_dict["success"] and download_result:
+                        self.video_finished.emit(url, download_result)
+
+                except Exception as e:
+                    with self._lock:
+                        self._results.append({"url": url, "success": False, "error": str(e)})
+                        self._completed_count += 1
 
         self.progress.emit(total, total, "Downloads complete")
         self.all_finished.emit(self._results)
@@ -1198,6 +1232,21 @@ class MainWindow(QMainWindow):
                     # Store tool_call_id for when worker completes
                     self._pending_agent_tool_call_id = tool_call_id
                     self._pending_agent_tool_name = tool_name
+
+                    # Start the appropriate worker based on wait_type
+                    started = self._start_worker_for_tool(wait_type, tool_result)
+                    if not started:
+                        # Worker couldn't start - send error immediately
+                        result = {
+                            "tool_call_id": tool_call_id,
+                            "name": tool_name,
+                            "success": False,
+                            "error": f"Failed to start {wait_type} worker"
+                        }
+                        self._pending_agent_tool_call_id = None
+                        self._pending_agent_tool_name = None
+                        if self._chat_worker:
+                            self._chat_worker.set_gui_tool_result(result)
                     # Don't call set_gui_tool_result yet - worker handler will do it
                     return
 
@@ -1637,6 +1686,19 @@ class MainWindow(QMainWindow):
         index = tab_map.get(tab_name.lower())
         if index is not None and hasattr(self, 'tab_widget'):
             self.tab_widget.setCurrentIndex(index)
+
+    def get_active_clip_browser(self):
+        """Get the clip browser for the currently active tab.
+
+        Returns:
+            ClipBrowser instance or None if not available
+        """
+        active_tab = self._gui_state.active_tab if self._gui_state else "cut"
+        if active_tab == "cut" and hasattr(self, 'cut_tab'):
+            return self.cut_tab.clip_browser
+        elif active_tab == "analyze" and hasattr(self, 'analyze_tab'):
+            return self.analyze_tab.clip_browser
+        return None
 
     def _on_chat_cancel(self):
         """Handle chat cancellation."""
@@ -3228,6 +3290,14 @@ class MainWindow(QMainWindow):
 
     def _on_sequence_export_click(self):
         """Export the timeline sequence to a single video file."""
+        # Check if export is already running
+        if self.export_worker and self.export_worker.isRunning():
+            QMessageBox.warning(
+                self, "Export in Progress",
+                "An export is already running. Please wait for it to complete."
+            )
+            return
+
         # Use the SequenceTab's timeline, not the legacy one
         sequence = self.sequence_tab.get_sequence()
         all_clips = sequence.get_all_clips()
@@ -3452,6 +3522,215 @@ class MainWindow(QMainWindow):
             self._pending_agent_tool_name = None
             self._chat_worker.set_gui_tool_result(result)
             logger.info(f"Sent bulk download result to agent: {success_count}/{len(results)}")
+
+    def _start_worker_for_tool(self, wait_type: str, tool_result: dict) -> bool:
+        """Start the appropriate worker based on tool's _wait_for_worker type.
+
+        Args:
+            wait_type: Worker type from tool result
+            tool_result: Full tool result dict with parameters
+
+        Returns:
+            True if worker started, False otherwise
+        """
+        if wait_type == "color_analysis":
+            clip_ids = tool_result.get("clip_ids", [])
+            return self.start_agent_color_analysis(clip_ids)
+
+        elif wait_type == "shot_analysis":
+            clip_ids = tool_result.get("clip_ids", [])
+            return self.start_agent_shot_analysis(clip_ids)
+
+        elif wait_type == "transcription":
+            clip_ids = tool_result.get("clip_ids", [])
+            return self.start_agent_transcription(clip_ids)
+
+        elif wait_type == "export":
+            # Export worker is started by the tool itself via start_agent_export
+            # Just return True since the worker is already running
+            return True
+
+        elif wait_type == "download":
+            # Download worker is started by the tool itself via start_agent_bulk_download
+            return True
+
+        else:
+            logger.warning(f"Unknown worker type: {wait_type}")
+            return False
+
+    def start_agent_color_analysis(self, clip_ids: list[str]) -> bool:
+        """Start color analysis for clips triggered by agent.
+
+        Args:
+            clip_ids: List of clip IDs to analyze
+
+        Returns:
+            True if started, False if already running
+        """
+        # Resolve clips
+        clips = [self.project.clips_by_id.get(cid) for cid in clip_ids]
+        clips = [c for c in clips if c is not None]
+
+        if not clips:
+            return False
+
+        # Check if worker already running
+        if self.color_worker and self.color_worker.isRunning():
+            return False
+
+        # Reset guard
+        self._color_analysis_finished_handled = False
+
+        # Mark that we're waiting for color analysis via agent
+        self._pending_agent_color_analysis = True
+        self._agent_color_clips = clips
+
+        # Add clips to Analyze tab and switch
+        self.analyze_tab.add_clips([c.id for c in clips])
+        self._switch_to_tab("analyze")
+
+        # Update UI state
+        self.analyze_tab.set_analyzing(True, "colors")
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 100)
+        self.status_bar.showMessage(f"Extracting colors from {len(clips)} clips...")
+
+        # Start worker
+        from PySide6.QtCore import Qt
+        self.color_worker = ColorAnalysisWorker(clips)
+        self.color_worker.progress.connect(self._on_color_progress)
+        self.color_worker.color_ready.connect(self._on_color_ready)
+        self.color_worker.finished.connect(self._on_agent_color_analysis_finished, Qt.UniqueConnection)
+        self.color_worker.start()
+
+        return True
+
+    def start_agent_shot_analysis(self, clip_ids: list[str]) -> bool:
+        """Start shot type classification for clips triggered by agent.
+
+        Args:
+            clip_ids: List of clip IDs to analyze
+
+        Returns:
+            True if started, False if already running
+        """
+        # Resolve clips
+        clips = [self.project.clips_by_id.get(cid) for cid in clip_ids]
+        clips = [c for c in clips if c is not None]
+
+        if not clips:
+            return False
+
+        # Check if worker already running
+        if self.shot_type_worker and self.shot_type_worker.isRunning():
+            return False
+
+        # Reset guard
+        self._shot_type_finished_handled = False
+
+        # Mark that we're waiting for shot analysis via agent
+        self._pending_agent_shot_analysis = True
+        self._agent_shot_clips = clips
+
+        # Add clips to Analyze tab and switch
+        self.analyze_tab.add_clips([c.id for c in clips])
+        self._switch_to_tab("analyze")
+
+        # Update UI state
+        self.analyze_tab.set_analyzing(True, "shots")
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 100)
+        self.status_bar.showMessage(f"Classifying shot types for {len(clips)} clips...")
+
+        # Start worker
+        from PySide6.QtCore import Qt
+        self.shot_type_worker = ShotTypeWorker(clips)
+        self.shot_type_worker.progress.connect(self._on_shot_type_progress)
+        self.shot_type_worker.shot_type_ready.connect(self._on_shot_type_ready)
+        self.shot_type_worker.finished.connect(self._on_agent_shot_analysis_finished, Qt.UniqueConnection)
+        self.shot_type_worker.start()
+
+        return True
+
+    def start_agent_transcription(self, clip_ids: list[str]) -> bool:
+        """Start transcription for clips triggered by agent.
+
+        Args:
+            clip_ids: List of clip IDs to transcribe
+
+        Returns:
+            True if started, False if already running or unavailable
+        """
+        # Check if faster-whisper is available
+        from core.transcription import is_faster_whisper_available
+        if not is_faster_whisper_available():
+            return False
+
+        # Resolve clips
+        clips = [self.project.clips_by_id.get(cid) for cid in clip_ids]
+        clips = [c for c in clips if c is not None]
+
+        if not clips:
+            return False
+
+        # Check if worker already running
+        if self.transcription_worker and self.transcription_worker.isRunning():
+            return False
+
+        # Group clips by source
+        clips_by_source: dict = {}
+        for clip in clips:
+            if clip.source_id not in clips_by_source:
+                clips_by_source[clip.source_id] = []
+            clips_by_source[clip.source_id].append(clip)
+
+        # Build queue of (source, clips) for multi-source transcription
+        source_queue = []
+        for source_id, source_clips in clips_by_source.items():
+            source = self.sources_by_id.get(source_id)
+            if source:
+                source_queue.append((source, source_clips))
+
+        if not source_queue:
+            return False
+
+        # Store queue and all clips for sequential processing
+        self._agent_transcription_source_queue = source_queue[1:]  # Remaining after first
+        self._agent_transcription_clips = clips  # All clips for final result
+        self._pending_agent_transcription = True
+
+        # Reset guard
+        self._transcription_finished_handled = False
+
+        # Start with first source
+        first_source, first_clips = source_queue[0]
+
+        # Add clips to Analyze tab and switch
+        self.analyze_tab.add_clips([c.id for c in clips])
+        self._switch_to_tab("analyze")
+
+        # Update UI state
+        self.analyze_tab.set_analyzing(True, "transcribe")
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 100)
+        sources_info = f" (source 1/{len(source_queue)})" if len(source_queue) > 1 else ""
+        self.status_bar.showMessage(f"Transcribing {len(first_clips)} clips{sources_info}...")
+
+        # Start worker for first source
+        from PySide6.QtCore import Qt
+        self.transcription_worker = TranscriptionWorker(
+            first_clips,
+            first_source,
+            self.settings.transcription_model,
+            self.settings.transcription_language,
+        )
+        self.transcription_worker.progress.connect(self._on_transcription_progress)
+        self.transcription_worker.transcript_ready.connect(self._on_transcript_ready)
+        self.transcription_worker.finished.connect(self._on_agent_transcription_finished, Qt.UniqueConnection)
+        self.transcription_worker.error.connect(self._on_transcription_error)
+        self.transcription_worker.start()
+
+        return True
 
     def _on_export_edl_click(self):
         """Export the timeline sequence as an EDL file."""

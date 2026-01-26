@@ -893,8 +893,9 @@ class ClipBrowser(QWidget):
         if 'min_duration' in filters or 'max_duration' in filters:
             self._min_duration = filters.get('min_duration')
             self._max_duration = filters.get('max_duration')
-            new_min = self._min_duration if self._min_duration is not None else self.duration_slider._data_min
-            new_max = self._max_duration if self._max_duration is not None else self.duration_slider._data_max
+            data_min, data_max = self.duration_slider.get_data_range()
+            new_min = self._min_duration if self._min_duration is not None else data_min
+            new_max = self._max_duration if self._max_duration is not None else data_max
             self.duration_slider.set_values(new_min, new_max)
 
         # Apply aspect ratio filter

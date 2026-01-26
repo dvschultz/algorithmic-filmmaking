@@ -330,7 +330,7 @@ def get_project_state(project) -> dict:
         "sources": [
             {
                 "id": s.id,
-                "name": s.file_path.name,
+                "name": s.file_path.name if s.file_path else "Unknown",
                 "duration": s.duration_seconds,
                 "fps": s.fps,
                 "analyzed": s.analyzed,
@@ -727,17 +727,10 @@ def apply_filters(
             "error": f"Invalid color_palette '{color_palette}'. Valid options: {', '.join(valid_palettes[1:])}"
         }
 
-    # Get the active tab's clip browser
-    gui_state = getattr(main_window, '_gui_state', None)
-    active_tab = gui_state.active_tab if gui_state else "cut"
-
-    clip_browser = None
-    if active_tab == "cut" and hasattr(main_window, 'cut_tab'):
-        clip_browser = main_window.cut_tab.clip_browser
-    elif active_tab == "analyze" and hasattr(main_window, 'analyze_tab'):
-        clip_browser = main_window.analyze_tab.clip_browser
-
+    # Get the active tab's clip browser via public API
+    clip_browser = main_window.get_active_clip_browser()
     if clip_browser is None:
+        active_tab = main_window._gui_state.active_tab if main_window._gui_state else "unknown"
         return {
             "success": False,
             "error": f"No clip browser available in '{active_tab}' tab. Switch to Cut or Analyze tab first."
@@ -810,17 +803,10 @@ def set_clip_sort_order(
             "error": f"Invalid sort_by '{sort_by}'. Valid options: {', '.join(valid_sorts)}"
         }
 
-    # Get the active tab's clip browser
-    gui_state = getattr(main_window, '_gui_state', None)
-    active_tab = gui_state.active_tab if gui_state else "cut"
-
-    clip_browser = None
-    if active_tab == "cut" and hasattr(main_window, 'cut_tab'):
-        clip_browser = main_window.cut_tab.clip_browser
-    elif active_tab == "analyze" and hasattr(main_window, 'analyze_tab'):
-        clip_browser = main_window.analyze_tab.clip_browser
-
+    # Get the active tab's clip browser via public API
+    clip_browser = main_window.get_active_clip_browser()
     if clip_browser is None:
+        active_tab = main_window._gui_state.active_tab if main_window._gui_state else "unknown"
         return {
             "success": False,
             "error": f"No clip browser available in '{active_tab}' tab. Switch to Cut or Analyze tab first."
@@ -829,6 +815,7 @@ def set_clip_sort_order(
     # Set sort order via public API
     clip_browser.set_sort_order(sort_by)
 
+    active_tab = main_window._gui_state.active_tab if main_window._gui_state else "unknown"
     return {
         "success": True,
         "message": f"Clips sorted by {sort_by}",
@@ -2422,48 +2409,18 @@ def analyze_colors_live(main_window, clip_ids: list[str]) -> dict:
     Returns:
         Dict with analysis results (after worker completes)
     """
-    # Resolve clips
-    clips = []
-    for clip_id in clip_ids:
-        clip = main_window.project.clips_by_id.get(clip_id)
-        if clip:
-            clips.append(clip)
+    # Validate clips exist
+    valid_ids = [cid for cid in clip_ids if cid in main_window.project.clips_by_id]
 
-    if not clips:
+    if not valid_ids:
         return {"success": False, "error": "No valid clips found"}
 
     # Check if worker already running
     if main_window.color_worker and main_window.color_worker.isRunning():
         return {"success": False, "error": "Color analysis already in progress"}
 
-    # Reset guard
-    main_window._color_analysis_finished_handled = False
-
-    # Mark that we're waiting for color analysis via agent
-    main_window._pending_agent_color_analysis = True
-    main_window._agent_color_clips = clips
-
-    # Add clips to Analyze tab and switch
-    main_window.analyze_tab.add_clips([c.id for c in clips])
-    main_window._switch_to_tab("analyze")
-
-    # Update UI state
-    main_window.analyze_tab.set_analyzing(True, "colors")
-    main_window.progress_bar.setVisible(True)
-    main_window.progress_bar.setRange(0, 100)
-    main_window.status_bar.showMessage(f"Extracting colors from {len(clips)} clips...")
-
-    # Start worker
-    from ui.main_window import ColorAnalysisWorker
-    from PySide6.QtCore import Qt
-
-    main_window.color_worker = ColorAnalysisWorker(clips)
-    main_window.color_worker.progress.connect(main_window._on_color_progress)
-    main_window.color_worker.color_ready.connect(main_window._on_color_ready)
-    main_window.color_worker.finished.connect(main_window._on_agent_color_analysis_finished, Qt.UniqueConnection)
-    main_window.color_worker.start()
-
-    return {"_wait_for_worker": "color_analysis", "clip_count": len(clips)}
+    # Return instruction for MainWindow to start the worker
+    return {"_wait_for_worker": "color_analysis", "clip_ids": valid_ids, "clip_count": len(valid_ids)}
 
 
 @tools.register(
@@ -2480,48 +2437,18 @@ def analyze_shots_live(main_window, clip_ids: list[str]) -> dict:
     Returns:
         Dict with analysis results (after worker completes)
     """
-    # Resolve clips
-    clips = []
-    for clip_id in clip_ids:
-        clip = main_window.project.clips_by_id.get(clip_id)
-        if clip:
-            clips.append(clip)
+    # Validate clips exist
+    valid_ids = [cid for cid in clip_ids if cid in main_window.project.clips_by_id]
 
-    if not clips:
+    if not valid_ids:
         return {"success": False, "error": "No valid clips found"}
 
     # Check if worker already running
     if main_window.shot_type_worker and main_window.shot_type_worker.isRunning():
         return {"success": False, "error": "Shot type analysis already in progress"}
 
-    # Reset guard
-    main_window._shot_type_finished_handled = False
-
-    # Mark that we're waiting for shot analysis via agent
-    main_window._pending_agent_shot_analysis = True
-    main_window._agent_shot_clips = clips
-
-    # Add clips to Analyze tab and switch
-    main_window.analyze_tab.add_clips([c.id for c in clips])
-    main_window._switch_to_tab("analyze")
-
-    # Update UI state
-    main_window.analyze_tab.set_analyzing(True, "shots")
-    main_window.progress_bar.setVisible(True)
-    main_window.progress_bar.setRange(0, 100)
-    main_window.status_bar.showMessage(f"Classifying shot types for {len(clips)} clips...")
-
-    # Start worker
-    from ui.main_window import ShotTypeWorker
-    from PySide6.QtCore import Qt
-
-    main_window.shot_type_worker = ShotTypeWorker(clips)
-    main_window.shot_type_worker.progress.connect(main_window._on_shot_type_progress)
-    main_window.shot_type_worker.shot_type_ready.connect(main_window._on_shot_type_ready)
-    main_window.shot_type_worker.finished.connect(main_window._on_agent_shot_analysis_finished, Qt.UniqueConnection)
-    main_window.shot_type_worker.start()
-
-    return {"_wait_for_worker": "shot_analysis", "clip_count": len(clips)}
+    # Return instruction for MainWindow to start the worker
+    return {"_wait_for_worker": "shot_analysis", "clip_ids": valid_ids, "clip_count": len(valid_ids)}
 
 
 @tools.register(
@@ -2546,78 +2473,18 @@ def transcribe_live(main_window, clip_ids: list[str]) -> dict:
             "error": "Transcription unavailable - faster-whisper not installed"
         }
 
-    # Resolve clips
-    clips = []
-    for clip_id in clip_ids:
-        clip = main_window.project.clips_by_id.get(clip_id)
-        if clip:
-            clips.append(clip)
+    # Validate clips exist
+    valid_ids = [cid for cid in clip_ids if cid in main_window.project.clips_by_id]
 
-    if not clips:
+    if not valid_ids:
         return {"success": False, "error": "No valid clips found"}
 
     # Check if worker already running
     if main_window.transcription_worker and main_window.transcription_worker.isRunning():
         return {"success": False, "error": "Transcription already in progress"}
 
-    # Group clips by source (transcription needs source for audio extraction)
-    clips_by_source: dict = {}
-    for clip in clips:
-        if clip.source_id not in clips_by_source:
-            clips_by_source[clip.source_id] = []
-        clips_by_source[clip.source_id].append(clip)
-
-    # Build queue of (source_id, clips) for multi-source transcription
-    source_queue = []
-    for source_id, source_clips in clips_by_source.items():
-        source = main_window.sources_by_id.get(source_id)
-        if source:
-            source_queue.append((source, source_clips))
-        else:
-            logger.warning(f"Source not found for transcription: {source_id}")
-
-    if not source_queue:
-        return {"success": False, "error": "No valid sources found for clips"}
-
-    # Store queue and all clips for sequential processing
-    main_window._agent_transcription_source_queue = source_queue[1:]  # Remaining after first
-    main_window._agent_transcription_clips = clips  # All clips for final result
-    main_window._pending_agent_transcription = True
-
-    # Reset guard
-    main_window._transcription_finished_handled = False
-
-    # Start with first source
-    first_source, first_clips = source_queue[0]
-
-    # Add clips to Analyze tab and switch
-    main_window.analyze_tab.add_clips([c.id for c in clips])
-    main_window._switch_to_tab("analyze")
-
-    # Update UI state
-    main_window.analyze_tab.set_analyzing(True, "transcribe")
-    main_window.progress_bar.setVisible(True)
-    main_window.progress_bar.setRange(0, 100)
-    sources_info = f" (source 1/{len(source_queue)})" if len(source_queue) > 1 else ""
-    main_window.status_bar.showMessage(f"Transcribing {len(first_clips)} clips{sources_info}...")
-
-    # Start worker for first source
-    from ui.main_window import TranscriptionWorker
-    from PySide6.QtCore import Qt
-
-    main_window.transcription_worker = TranscriptionWorker(
-        first_clips,
-        first_source,
-        main_window.settings.transcription_model,
-        main_window.settings.transcription_language,
-    )
-    main_window.transcription_worker.progress.connect(main_window._on_transcription_progress)
-    main_window.transcription_worker.transcript_ready.connect(main_window._on_transcript_ready)
-    main_window.transcription_worker.finished.connect(main_window._on_agent_transcription_finished, Qt.UniqueConnection)
-    main_window.transcription_worker.error.connect(main_window._on_transcription_error)
-    main_window.transcription_worker.start()
-
-    return {"_wait_for_worker": "transcription", "clip_count": len(clips)}
+    # Return instruction for MainWindow to start the worker
+    return {"_wait_for_worker": "transcription", "clip_ids": valid_ids, "clip_count": len(valid_ids)}
 
 
 @tools.register(
