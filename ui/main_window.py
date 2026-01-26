@@ -1306,11 +1306,35 @@ class MainWindow(QMainWindow):
             # Update clip browser selection in the active tab
             selected_ids = result.get("selected", [])
             active_tab = self._gui_state.active_tab
-            
+
             if active_tab == "cut":
                 self.cut_tab.clip_browser.set_selection(selected_ids)
             elif active_tab == "analyze":
                 self.analyze_tab.clip_browser.set_selection(selected_ids)
+
+        elif tool_name == "add_to_sequence":
+            # Refresh the timeline to show the newly added clips
+            self._refresh_timeline_from_project()
+
+    def _refresh_timeline_from_project(self):
+        """Refresh the sequence tab timeline from the project's sequence."""
+        if not self.project.sequence:
+            return
+
+        # Build sources dict from project
+        sources = {s.id: s for s in self.project.sources}
+
+        # Load sequence into timeline
+        self.sequence_tab.timeline.load_sequence(
+            self.project.sequence,
+            sources,
+            self.project.clips
+        )
+
+        # Zoom to fit the content
+        self.sequence_tab.timeline._on_zoom_fit()
+
+        logger.info(f"Refreshed timeline with {len(self.project.sequence.tracks[0].clips)} clips")
 
     def _on_chat_complete(self, response: str, tool_history: list[dict]):
         """Handle chat completion with full history."""
@@ -3556,12 +3580,30 @@ class MainWindow(QMainWindow):
 
     def _on_agent_video_finished(self, url: str, result):
         """Handle individual video download completion."""
-        # Add to source browser
+        # Add to project and source browser
         if result.success and result.file_path and hasattr(self, 'collect_tab'):
+            from pathlib import Path
             from models.clip import Source
-            source = Source.from_path(result.file_path)
-            self.collect_tab.source_browser.add_source(source)
-            logger.info(f"Added downloaded source to browser: {result.file_path}")
+
+            file_path = Path(result.file_path)
+
+            # Check if already in project
+            for existing in self.project.sources:
+                if existing.file_path == file_path:
+                    logger.info(f"Source already in project: {file_path.name}")
+                    return
+
+            # Create source and add to project
+            source = Source(file_path=file_path)
+            self.project.add_source(source)
+
+            # Add to CollectTab grid
+            self.collect_tab.add_source(source)
+
+            # Generate thumbnail for the source
+            self._generate_source_thumbnail(source)
+
+            logger.info(f"Added downloaded source to project: {file_path.name}")
 
     def _on_agent_bulk_download_finished(self, results: list):
         """Handle bulk download completion."""
@@ -3618,6 +3660,11 @@ class MainWindow(QMainWindow):
 
         elif wait_type == "download":
             # Download worker is started by the tool itself via start_agent_bulk_download
+            return True
+
+        elif wait_type == "detection":
+            # Detection worker is started by the tool itself via _start_detection
+            # Just return True since the worker is already running
             return True
 
         else:

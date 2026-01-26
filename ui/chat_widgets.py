@@ -689,26 +689,29 @@ class PlanStepWidget(QFrame):
         self._update_style()
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
 
         # Status icon
         self.status_icon = QLabel(self.STATUS_ICONS.get(self._status, "\u2610"))
         self.status_icon.setFixedWidth(20)
+        self.status_icon.setAlignment(Qt.AlignTop)
         self.status_icon.setStyleSheet("font-size: 14px;")
         layout.addWidget(self.status_icon)
 
         # Step number
         self.number_label = QLabel(f"{self._index + 1}.")
-        self.number_label.setFixedWidth(24)
+        self.number_label.setFixedWidth(28)
+        self.number_label.setAlignment(Qt.AlignTop)
         self.number_label.setStyleSheet("font-weight: bold; color: #65676b;")
         layout.addWidget(self.number_label)
 
         # Step text (label for display, line edit for editing)
         self.text_label = QLabel(self._text)
         self.text_label.setWordWrap(True)
+        self.text_label.setTextFormat(Qt.PlainText)
         self.text_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
-        self.text_label.setStyleSheet("color: #050505;")
+        self.text_label.setStyleSheet("color: #050505; line-height: 1.3;")
         self.text_label.mouseDoubleClickEvent = self._on_double_click
         layout.addWidget(self.text_label, 1)
 
@@ -852,11 +855,11 @@ class PlanStepWidget(QFrame):
         else:
             self.status_icon.setStyleSheet("font-size: 14px;")
 
-        # Disable controls for non-pending steps
+        # Hide controls for non-pending steps (gives text more room)
         editable = status == "pending"
-        self.up_btn.setEnabled(editable)
-        self.down_btn.setEnabled(editable)
-        self.delete_btn.setEnabled(editable)
+        self.up_btn.setVisible(editable)
+        self.down_btn.setVisible(editable)
+        self.delete_btn.setVisible(editable)
 
     def set_index(self, index: int):
         """Update step index (for reordering)."""
