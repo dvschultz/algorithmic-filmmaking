@@ -1694,11 +1694,70 @@ class MainWindow(QMainWindow):
             ClipBrowser instance or None if not available
         """
         active_tab = self._gui_state.active_tab if self._gui_state else "cut"
-        if active_tab == "cut" and hasattr(self, 'cut_tab'):
+        return self.get_clip_browser(active_tab)
+
+    def get_clip_browser(self, tab_name: str = None):
+        """Get the clip browser for a specific tab.
+
+        Args:
+            tab_name: Tab name ('cut' or 'analyze'), or None for active tab
+
+        Returns:
+            ClipBrowser instance or None if not available
+        """
+        if tab_name is None:
+            tab_name = self._gui_state.active_tab if self._gui_state else "cut"
+
+        if tab_name == "cut" and hasattr(self, 'cut_tab'):
             return self.cut_tab.clip_browser
-        elif active_tab == "analyze" and hasattr(self, 'analyze_tab'):
+        elif tab_name == "analyze" and hasattr(self, 'analyze_tab'):
             return self.analyze_tab.clip_browser
         return None
+
+    def get_video_player(self):
+        """Get the video player from the sequence tab.
+
+        Returns:
+            VideoPlayer instance or None if not available
+        """
+        if hasattr(self, 'sequence_tab') and hasattr(self.sequence_tab, 'video_player'):
+            return self.sequence_tab.video_player
+        return None
+
+    def get_selected_clips(self):
+        """Get selected clips from the active tab's clip browser.
+
+        Returns:
+            List of selected Clip objects, or empty list if none
+        """
+        clip_browser = self.get_active_clip_browser()
+        if clip_browser:
+            return clip_browser.get_selected_clips()
+        return []
+
+    def get_analyze_clip_count(self) -> int:
+        """Get the number of clips in the Analyze tab.
+
+        Returns:
+            Number of clips, or 0 if tab not available
+        """
+        if hasattr(self, 'analyze_tab'):
+            return len(self.analyze_tab.get_clip_ids())
+        return 0
+
+    def remove_source_from_library(self, source_id: str) -> bool:
+        """Remove a source from the library browser.
+
+        Args:
+            source_id: ID of the source to remove
+
+        Returns:
+            True if removed, False if not found
+        """
+        if hasattr(self, 'collect_tab') and hasattr(self.collect_tab, 'source_browser'):
+            self.collect_tab.source_browser.remove_source(source_id)
+            return True
+        return False
 
     def _on_chat_cancel(self):
         """Handle chat cancellation."""

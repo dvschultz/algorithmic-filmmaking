@@ -841,7 +841,7 @@ def clear_analyze_clips(main_window) -> dict:
     if not hasattr(main_window, 'analyze_tab'):
         return {"success": False, "error": "Analyze tab not available"}
 
-    clip_count = len(main_window.analyze_tab._clip_ids)
+    clip_count = main_window.get_analyze_clip_count()
     main_window.analyze_tab.clear_clips()
     main_window.analyze_tab.clips_cleared.emit()
 
@@ -882,11 +882,11 @@ def send_to_analyze(
 
     # Get clip IDs from selection if not provided
     if clip_ids is None:
-        selected_clips = main_window.cut_tab.clip_browser.get_selected_clips()
+        selected_clips = main_window.get_selected_clips()
         if not selected_clips:
             return {
                 "success": False,
-                "error": "No clips selected in Cut tab. Select clips first or provide clip_ids."
+                "error": "No clips selected. Select clips first or provide clip_ids."
             }
         clip_ids = [clip.id for clip in selected_clips]
 
@@ -906,7 +906,7 @@ def send_to_analyze(
     main_window.analyze_tab.add_clips(valid_ids)
 
     # Switch to Analyze tab
-    main_window.tab_widget.setCurrentWidget(main_window.analyze_tab)
+    main_window._switch_to_tab("analyze")
 
     # Update GUI state
     gui_state = getattr(main_window, '_gui_state', None)
@@ -946,26 +946,21 @@ def clear_filters(main_window, tab: Optional[str] = None) -> dict:
 
     # Determine which tab to use
     gui_state = getattr(main_window, '_gui_state', None)
-    active_tab = tab or (gui_state.active_tab if gui_state else "cut")
+    target_tab = tab or (gui_state.active_tab if gui_state else "cut")
 
-    clip_browser = None
-    if active_tab == "cut" and hasattr(main_window, 'cut_tab'):
-        clip_browser = main_window.cut_tab.clip_browser
-    elif active_tab == "analyze" and hasattr(main_window, 'analyze_tab'):
-        clip_browser = main_window.analyze_tab.clip_browser
-
+    clip_browser = main_window.get_clip_browser(target_tab)
     if clip_browser is None:
         return {
             "success": False,
-            "error": f"No clip browser available in '{active_tab}' tab."
+            "error": f"No clip browser available in '{target_tab}' tab."
         }
 
     clip_browser.clear_all_filters()
 
     return {
         "success": True,
-        "message": f"Cleared all filters in {active_tab} tab",
-        "tab": active_tab,
+        "message": f"Cleared all filters in {target_tab} tab",
+        "tab": target_tab,
         "visible_clips": clip_browser.get_visible_clip_count(),
         "total_clips": len(clip_browser.thumbnails),
     }
@@ -990,18 +985,13 @@ def select_all_clips(main_window, tab: Optional[str] = None) -> dict:
         return {"success": False, "error": "Main window not available"}
 
     gui_state = getattr(main_window, '_gui_state', None)
-    active_tab = tab or (gui_state.active_tab if gui_state else "cut")
+    target_tab = tab or (gui_state.active_tab if gui_state else "cut")
 
-    clip_browser = None
-    if active_tab == "cut" and hasattr(main_window, 'cut_tab'):
-        clip_browser = main_window.cut_tab.clip_browser
-    elif active_tab == "analyze" and hasattr(main_window, 'analyze_tab'):
-        clip_browser = main_window.analyze_tab.clip_browser
-
+    clip_browser = main_window.get_clip_browser(target_tab)
     if clip_browser is None:
         return {
             "success": False,
-            "error": f"No clip browser available in '{active_tab}' tab."
+            "error": f"No clip browser available in '{target_tab}' tab."
         }
 
     clip_browser.select_all()
@@ -1013,9 +1003,9 @@ def select_all_clips(main_window, tab: Optional[str] = None) -> dict:
 
     return {
         "success": True,
-        "message": f"Selected {selected_count} clips in {active_tab} tab",
+        "message": f"Selected {selected_count} clips in {target_tab} tab",
         "selected_count": selected_count,
-        "tab": active_tab,
+        "tab": target_tab,
     }
 
 
@@ -1038,18 +1028,13 @@ def deselect_all_clips(main_window, tab: Optional[str] = None) -> dict:
         return {"success": False, "error": "Main window not available"}
 
     gui_state = getattr(main_window, '_gui_state', None)
-    active_tab = tab or (gui_state.active_tab if gui_state else "cut")
+    target_tab = tab or (gui_state.active_tab if gui_state else "cut")
 
-    clip_browser = None
-    if active_tab == "cut" and hasattr(main_window, 'cut_tab'):
-        clip_browser = main_window.cut_tab.clip_browser
-    elif active_tab == "analyze" and hasattr(main_window, 'analyze_tab'):
-        clip_browser = main_window.analyze_tab.clip_browser
-
+    clip_browser = main_window.get_clip_browser(target_tab)
     if clip_browser is None:
         return {
             "success": False,
-            "error": f"No clip browser available in '{active_tab}' tab."
+            "error": f"No clip browser available in '{target_tab}' tab."
         }
 
     clip_browser.clear_selection()
@@ -1060,8 +1045,8 @@ def deselect_all_clips(main_window, tab: Optional[str] = None) -> dict:
 
     return {
         "success": True,
-        "message": f"Deselected all clips in {active_tab} tab",
-        "tab": active_tab,
+        "message": f"Deselected all clips in {target_tab} tab",
+        "tab": target_tab,
     }
 
 
@@ -1083,10 +1068,10 @@ def play_preview(main_window) -> dict:
     if main_window is None:
         return {"success": False, "error": "Main window not available"}
 
-    if not hasattr(main_window, 'sequence_tab') or not hasattr(main_window.sequence_tab, 'video_player'):
+    player = main_window.get_video_player()
+    if player is None:
         return {"success": False, "error": "Video player not available"}
 
-    player = main_window.sequence_tab.video_player
     player.player.play()
 
     return {
@@ -1110,10 +1095,10 @@ def pause_preview(main_window) -> dict:
     if main_window is None:
         return {"success": False, "error": "Main window not available"}
 
-    if not hasattr(main_window, 'sequence_tab') or not hasattr(main_window.sequence_tab, 'video_player'):
+    player = main_window.get_video_player()
+    if player is None:
         return {"success": False, "error": "Video player not available"}
 
-    player = main_window.sequence_tab.video_player
     player.player.pause()
 
     return {
@@ -1140,13 +1125,12 @@ def seek_to_time(main_window, seconds: float) -> dict:
     if main_window is None:
         return {"success": False, "error": "Main window not available"}
 
-    if not hasattr(main_window, 'sequence_tab') or not hasattr(main_window.sequence_tab, 'video_player'):
+    player = main_window.get_video_player()
+    if player is None:
         return {"success": False, "error": "Video player not available"}
 
     if seconds < 0:
         return {"success": False, "error": "Position cannot be negative"}
-
-    player = main_window.sequence_tab.video_player
 
     # Check upper bound - get duration from player
     duration_ms = player.player.duration()
@@ -1213,8 +1197,8 @@ def remove_source(
     project.remove_source(source_id)
 
     # Update UI if available
-    if main_window and hasattr(main_window, 'collect_tab'):
-        main_window.collect_tab.source_browser.remove_source(source_id)
+    if main_window:
+        main_window.remove_source_from_library(source_id)
 
     return {
         "success": True,
