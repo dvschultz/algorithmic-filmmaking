@@ -1050,7 +1050,8 @@ def search_youtube(query: str, max_results: int = 10) -> dict:
 
     if not api_key:
         return {
-            "error": "YouTube API key not configured. Add it in Settings > YouTube API Key."
+            "success": False,
+            "error": "YouTube API key not configured. Add it in Settings > YouTube API Key.",
         }
 
     try:
@@ -1077,15 +1078,15 @@ def search_youtube(query: str, max_results: int = 10) -> dict:
             "total_results": result.total_results
         }
 
-    except QuotaExceededError:
-        return {"error": "YouTube API quota exceeded. Try again tomorrow."}
-    except InvalidAPIKeyError:
-        return {"error": "Invalid YouTube API key. Check your settings."}
+    except QuotaExceededError as e:
+        return {"success": False, "error": f"YouTube API quota exceeded. {e}"}
+    except InvalidAPIKeyError as e:
+        return {"success": False, "error": f"Invalid YouTube API key. {e}"}
     except YouTubeAPIError as e:
-        return {"error": f"YouTube API error: {e}"}
+        return {"success": False, "error": f"YouTube API error: {e}"}
     except Exception as e:
         logger.exception("YouTube search failed")
-        return {"error": f"Search failed: {e}"}
+        return {"success": False, "error": f"Search failed: {e}"}
 
 
 @tools.register(
@@ -1685,3 +1686,170 @@ def analyze_all_live(main_window, clip_ids: list[str]) -> dict:
     main_window._start_next_analyze_all_step()
 
     return {"_wait_for_worker": "analyze_all", "clip_count": len(clips)}
+
+
+# =============================================================================
+# Sequence/Remix Tools - Generate sorted clip sequences
+# =============================================================================
+
+@tools.register(
+    description="List available sorting algorithms and their current availability status. "
+                "Some algorithms (like color) require clip analysis first.",
+    requires_project=True,
+    modifies_gui_state=False
+)
+def list_sorting_algorithms(project) -> dict:
+    """List available sorting algorithms and whether they can be used.
+
+    Returns:
+        Dict with algorithms list showing name, key, available status, and reason if unavailable
+    """
+    # Check if clips have color analysis
+    clips = project.clips
+    has_colors = any(clip.dominant_colors for clip in clips) if clips else False
+
+    algorithms = [
+        {
+            "key": "color",
+            "name": "Color",
+            "description": "Sort clips by dominant color along the color wheel",
+            "available": has_colors,
+            "reason": None if has_colors else "Run color analysis on clips first",
+            "parameters": [
+                {"name": "direction", "type": "string", "options": ["rainbow", "warm_to_cool", "cool_to_warm"], "default": "rainbow"}
+            ]
+        },
+        {
+            "key": "duration",
+            "name": "Duration",
+            "description": "Sort clips by length (shortest or longest first)",
+            "available": True,
+            "reason": None,
+            "parameters": [
+                {"name": "direction", "type": "string", "options": ["short_first", "long_first"], "default": "short_first"}
+            ]
+        },
+        {
+            "key": "shuffle",
+            "name": "Shuffle",
+            "description": "Randomize clip order with no repeating sources back-to-back",
+            "available": True,
+            "reason": None,
+            "parameters": [
+                {"name": "seed", "type": "integer", "description": "Random seed for reproducibility (0 = random)", "default": 0}
+            ]
+        },
+        {
+            "key": "sequential",
+            "name": "Sequential",
+            "description": "Keep clips in their original detection order",
+            "available": True,
+            "reason": None,
+            "parameters": []
+        },
+    ]
+
+    return {
+        "algorithms": algorithms,
+        "clip_count": len(clips),
+        "has_color_analysis": has_colors,
+    }
+
+
+@tools.register(
+    description="Generate a sequence using a sorting algorithm and apply it to the timeline. "
+                "Available algorithms: color, duration, shuffle, sequential. "
+                "Returns the generated sequence with clip details.",
+    requires_project=True,
+    modifies_gui_state=True
+)
+def generate_remix(
+    project,
+    main_window,
+    algorithm: str,
+    clip_count: int = 10,
+    direction: Optional[str] = None,
+    seed: Optional[int] = None,
+) -> dict:
+    """Generate a sequence using the specified algorithm and apply to timeline.
+
+    Args:
+        algorithm: One of "color", "duration", "shuffle", "sequential"
+        clip_count: Number of clips to include (1-100)
+        direction: For color: "rainbow", "warm_to_cool", "cool_to_warm"
+                   For duration: "short_first", "long_first"
+        seed: For shuffle: random seed for reproducibility (0 = random)
+
+    Returns:
+        Dict with success status, applied clips, and algorithm used
+    """
+    valid_algorithms = ["color", "duration", "shuffle", "sequential"]
+    if algorithm not in valid_algorithms:
+        return {
+            "success": False,
+            "error": f"Invalid algorithm '{algorithm}'. Valid options: {', '.join(valid_algorithms)}"
+        }
+
+    # Validate clip count
+    if clip_count < 1 or clip_count > 100:
+        return {
+            "success": False,
+            "error": "clip_count must be between 1 and 100"
+        }
+
+    # Check color algorithm requirements
+    if algorithm == "color":
+        has_colors = any(clip.dominant_colors for clip in project.clips)
+        if not has_colors:
+            return {
+                "success": False,
+                "error": "Color sorting requires color analysis. Run analyze_colors_live first."
+            }
+
+    # Check if we have clips
+    if not project.clips:
+        return {
+            "success": False,
+            "error": "No clips available. Detect scenes first."
+        }
+
+    # Get sequence tab from main window
+    if main_window is None or not hasattr(main_window, 'sequence_tab'):
+        return {
+            "success": False,
+            "error": "Main window not available"
+        }
+
+    # Use sequence tab's generate_and_apply method
+    result = main_window.sequence_tab.generate_and_apply(
+        algorithm=algorithm,
+        clip_count=clip_count,
+        direction=direction,
+        seed=seed
+    )
+
+    return result
+
+
+@tools.register(
+    description="Get the current state of the sequence tab including selected algorithm, "
+                "parameters, preview clips, and timeline clips.",
+    requires_project=True,
+    modifies_gui_state=False
+)
+def get_remix_state(project, main_window) -> dict:
+    """Get current state of the remix/sequence UI.
+
+    Returns:
+        Dict with current algorithm, parameters, preview clip count, and timeline state
+    """
+    if main_window is None or not hasattr(main_window, 'sequence_tab'):
+        return {
+            "success": False,
+            "error": "Main window not available"
+        }
+
+    state = main_window.sequence_tab.get_sorting_state()
+    state["success"] = True
+
+    return state

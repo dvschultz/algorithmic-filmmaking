@@ -192,7 +192,7 @@ def _format_tool_result_for_display(tool_name: str, result: dict) -> str:
         return f"Added **{added}** clips to the sequence."
 
     # Default: show success message
-    return f"✓ {tool_name} completed successfully."
+    return ""
 
 
 def _create_tool_call(name: str, arguments: dict) -> dict:
