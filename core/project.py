@@ -599,6 +599,105 @@ class Project:
         self._dirty = True
         self._notify_observers("sequence_changed", clip_ids)
 
+    def remove_from_sequence(self, clip_ids: list[str]) -> list[str]:
+        """Remove clips from the sequence by their sequence clip IDs.
+
+        Args:
+            clip_ids: IDs of sequence clips to remove (not source clip IDs)
+
+        Returns:
+            List of IDs that were successfully removed
+        """
+        if self.sequence is None:
+            return []
+
+        removed = []
+        track = self.sequence.tracks[0]
+
+        for clip_id in clip_ids:
+            removed_clip = track.remove_clip(clip_id)
+            if removed_clip:
+                removed.append(clip_id)
+            else:
+                logger.warning(f"Sequence clip not found: {clip_id}")
+
+        if removed:
+            # Recalculate start frames after removal
+            self._recalculate_sequence_positions()
+            self._dirty = True
+            self._notify_observers("sequence_changed", removed)
+
+        return removed
+
+    def clear_sequence(self) -> int:
+        """Clear all clips from the sequence.
+
+        Returns:
+            Number of clips that were cleared
+        """
+        if self.sequence is None:
+            return 0
+
+        track = self.sequence.tracks[0]
+        count = len(track.clips)
+        track.clips.clear()
+
+        if count > 0:
+            self._dirty = True
+            self._notify_observers("sequence_changed", [])
+
+        return count
+
+    def reorder_sequence(self, clip_ids: list[str]) -> bool:
+        """Reorder clips in the sequence to match the provided order.
+
+        Args:
+            clip_ids: Sequence clip IDs in the desired order
+
+        Returns:
+            True if reorder succeeded, False otherwise
+        """
+        if self.sequence is None:
+            return False
+
+        track = self.sequence.tracks[0]
+
+        # Build lookup of current clips
+        clips_by_id = {clip.id: clip for clip in track.clips}
+
+        # Validate all IDs exist
+        for clip_id in clip_ids:
+            if clip_id not in clips_by_id:
+                logger.warning(f"Cannot reorder: clip not found: {clip_id}")
+                return False
+
+        # Reorder clips based on provided order
+        reordered = [clips_by_id[clip_id] for clip_id in clip_ids]
+
+        # Add any clips not in the provided list at the end (preserve them)
+        existing_ids = set(clip_ids)
+        for clip in track.clips:
+            if clip.id not in existing_ids:
+                reordered.append(clip)
+
+        track.clips = reordered
+        self._recalculate_sequence_positions()
+
+        self._dirty = True
+        self._notify_observers("sequence_changed", clip_ids)
+        return True
+
+    def _recalculate_sequence_positions(self) -> None:
+        """Recalculate start_frame for all sequence clips after reorder/removal."""
+        if self.sequence is None:
+            return
+
+        for track in self.sequence.tracks:
+            current_frame = 0
+            for clip in track.clips:
+                clip.start_frame = current_frame
+                current_frame += clip.duration_frames
+
     # --- Dirty state tracking ---
 
     @property

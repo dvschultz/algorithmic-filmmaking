@@ -406,6 +406,190 @@ def list_clips(project) -> list[dict]:
     return results
 
 
+@tools.register(
+    description="Remove clips from the timeline sequence by their sequence clip IDs.",
+    requires_project=True,
+    modifies_gui_state=True
+)
+def remove_from_sequence(project, clip_ids: list[str]) -> dict:
+    """Remove clips from the timeline sequence."""
+    if not clip_ids:
+        return {
+            "success": False,
+            "error": "No clip IDs provided"
+        }
+
+    removed = project.remove_from_sequence(clip_ids)
+
+    return {
+        "success": len(removed) > 0,
+        "removed": removed,
+        "not_found": [cid for cid in clip_ids if cid not in removed],
+        "sequence_length": len(project.sequence.tracks[0].clips) if project.sequence else 0
+    }
+
+
+@tools.register(
+    description="Clear all clips from the timeline sequence, resetting it to empty.",
+    requires_project=True,
+    modifies_gui_state=True
+)
+def clear_sequence(project) -> dict:
+    """Clear the timeline sequence."""
+    count = project.clear_sequence()
+
+    return {
+        "success": True,
+        "clips_removed": count,
+        "message": f"Cleared {count} clips from the sequence"
+    }
+
+
+@tools.register(
+    description="Reorder clips in the timeline sequence. Provide sequence clip IDs in the desired order.",
+    requires_project=True,
+    modifies_gui_state=True
+)
+def reorder_sequence(project, clip_ids: list[str]) -> dict:
+    """Reorder clips in the sequence."""
+    if not clip_ids:
+        return {
+            "success": False,
+            "error": "No clip IDs provided"
+        }
+
+    if project.sequence is None:
+        return {
+            "success": False,
+            "error": "No sequence exists"
+        }
+
+    success = project.reorder_sequence(clip_ids)
+
+    if success:
+        return {
+            "success": True,
+            "message": f"Reordered {len(clip_ids)} clips",
+            "new_order": clip_ids
+        }
+    else:
+        return {
+            "success": False,
+            "error": "One or more clip IDs not found in sequence"
+        }
+
+
+@tools.register(
+    description="Get the current state of the timeline sequence including all clips, their positions, and durations.",
+    requires_project=True,
+    modifies_gui_state=False
+)
+def get_sequence_state(project) -> dict:
+    """Return detailed sequence state."""
+    if project.sequence is None:
+        return {
+            "has_sequence": False,
+            "clips": [],
+            "total_duration_seconds": 0,
+            "clip_count": 0
+        }
+
+    sequence = project.sequence
+    fps = sequence.fps
+    clips_data = []
+
+    for track in sequence.tracks:
+        for seq_clip in track.clips:
+            # Get source clip info
+            source_clip = project.clips_by_id.get(seq_clip.source_clip_id)
+            source = project.sources_by_id.get(seq_clip.source_id)
+
+            clips_data.append({
+                "id": seq_clip.id,
+                "source_clip_id": seq_clip.source_clip_id,
+                "source_id": seq_clip.source_id,
+                "source_name": source.file_path.name if source else "Unknown",
+                "track_index": seq_clip.track_index,
+                "start_frame": seq_clip.start_frame,
+                "start_time_seconds": round(seq_clip.start_time(fps), 2),
+                "duration_frames": seq_clip.duration_frames,
+                "duration_seconds": round(seq_clip.duration_seconds(fps), 2),
+                "in_point": seq_clip.in_point,
+                "out_point": seq_clip.out_point,
+            })
+
+    return {
+        "has_sequence": True,
+        "name": sequence.name,
+        "fps": fps,
+        "clips": clips_data,
+        "total_duration_frames": sequence.duration_frames,
+        "total_duration_seconds": round(sequence.duration_seconds, 2),
+        "clip_count": len(clips_data)
+    }
+
+
+@tools.register(
+    description="Select clips in the browser by their IDs. This updates the GUI selection state.",
+    requires_project=True,
+    modifies_gui_state=True
+)
+def select_clips(project, clip_ids: list[str], gui_state=None) -> dict:
+    """Update GUI selection to specified clips."""
+    if gui_state is None:
+        return {
+            "success": False,
+            "error": "GUI state not available"
+        }
+
+    # Validate clip IDs
+    valid_ids = [cid for cid in clip_ids if cid in project.clips_by_id]
+    invalid_ids = [cid for cid in clip_ids if cid not in project.clips_by_id]
+
+    if invalid_ids:
+        logger.warning(f"Invalid clip IDs for selection: {invalid_ids}")
+
+    # Update GUI state
+    gui_state.selected_clip_ids = valid_ids
+
+    return {
+        "success": True,
+        "selected": valid_ids,
+        "invalid_ids": invalid_ids,
+        "selection_count": len(valid_ids)
+    }
+
+
+@tools.register(
+    description="Switch to a specific tab in the application. Valid tabs: collect, cut, analyze, sequence, generate, render",
+    requires_project=False,
+    modifies_gui_state=True
+)
+def navigate_to_tab(tab_name: str, gui_state=None) -> dict:
+    """Switch active tab."""
+    valid_tabs = ["collect", "cut", "analyze", "sequence", "generate", "render"]
+
+    if tab_name not in valid_tabs:
+        return {
+            "success": False,
+            "error": f"Invalid tab name '{tab_name}'. Valid tabs: {', '.join(valid_tabs)}"
+        }
+
+    if gui_state is None:
+        return {
+            "success": False,
+            "error": "GUI state not available"
+        }
+
+    gui_state.active_tab = tab_name
+
+    return {
+        "success": True,
+        "active_tab": tab_name,
+        "message": f"Switched to {tab_name} tab"
+    }
+
+
 # =============================================================================
 # CLI Tools - Execute via subprocess for batch operations
 # =============================================================================

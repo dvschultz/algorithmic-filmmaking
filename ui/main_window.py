@@ -1007,6 +1007,7 @@ class MainWindow(QMainWindow):
             tool_call_id: ID for tracking the tool call
         """
         from core.chat_tools import tools as tool_registry
+        import inspect
 
         logger.info(f"Executing GUI tool on main thread: {tool_name}")
 
@@ -1021,9 +1022,23 @@ class MainWindow(QMainWindow):
             }
         else:
             try:
-                # Inject project and execute
-                args["project"] = self.project
+                # Check what parameters the tool accepts
+                sig = inspect.signature(tool.func)
+                params = sig.parameters
+
+                # Inject project if tool accepts it
+                if "project" in params:
+                    args["project"] = self.project
+
+                # Inject gui_state if tool accepts it
+                if "gui_state" in params:
+                    args["gui_state"] = self._gui_state
+
                 tool_result = tool.func(**args)
+
+                # Handle special GUI actions based on tool results
+                self._apply_gui_tool_side_effects(tool_name, args, tool_result)
+
                 result = {
                     "tool_call_id": tool_call_id,
                     "name": tool_name,
@@ -1043,6 +1058,34 @@ class MainWindow(QMainWindow):
         # Send result back to worker thread
         if self._chat_worker:
             self._chat_worker.set_gui_tool_result(result)
+
+    def _apply_gui_tool_side_effects(self, tool_name: str, args: dict, result: dict):
+        """Apply GUI side effects after tool execution.
+
+        Some tools modify GUIState but also need to trigger actual UI updates.
+        This method handles those cases.
+
+        Args:
+            tool_name: Name of the executed tool
+            args: Tool arguments
+            result: Tool result
+        """
+        if not result.get("success", True):
+            return
+
+        if tool_name == "navigate_to_tab":
+            # Actually switch the tab in the UI
+            tab_name = args.get("tab_name", "")
+            tab_names = ["collect", "cut", "analyze", "sequence", "generate", "render"]
+            if tab_name in tab_names:
+                index = tab_names.index(tab_name)
+                self.tabs.setCurrentIndex(index)
+
+        elif tool_name == "select_clips":
+            # Update clip browser selection
+            selected_ids = result.get("selected", [])
+            if hasattr(self, 'clip_browser') and self.clip_browser:
+                self.clip_browser.set_selection(selected_ids)
 
     def _on_chat_complete(self, response: str, tool_history: list[dict]):
         """Handle chat completion with full history."""
