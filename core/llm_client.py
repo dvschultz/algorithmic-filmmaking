@@ -102,6 +102,7 @@ class ProviderConfig:
         """Convert to LiteLLM model string format."""
         prefixes = {
             ProviderType.LOCAL: "ollama/",
+            ProviderType.ANTHROPIC: "anthropic/",
             ProviderType.GEMINI: "gemini/",
             ProviderType.OPENROUTER: "openrouter/",
         }
