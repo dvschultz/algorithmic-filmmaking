@@ -13,6 +13,11 @@ from typing import Any, Callable, Optional
 
 from PySide6.QtCore import QThread, Signal
 
+try:
+    from litellm.exceptions import RateLimitError
+except ImportError:
+    RateLimitError = None
+
 from core.chat_tools import tools as tool_registry
 from core.llm_client import LLMClient, ProviderConfig, check_ollama_health
 from core.tool_executor import ToolExecutor
@@ -416,7 +421,21 @@ class ChatAgentWorker(QThread):
 
             except Exception as e:
                 logger.exception("Error in agent loop")
-                self.error.emit(str(e))
+                # Provide user-friendly message for rate limit errors
+                error_msg = str(e)
+                if RateLimitError and isinstance(e, RateLimitError):
+                    error_msg = (
+                        "Rate limit exceeded. The conversation has grown too large "
+                        "for your API tier's token limit. Try clearing the chat history "
+                        "or waiting a minute before trying again."
+                    )
+                elif "rate_limit" in error_msg.lower() or "429" in error_msg:
+                    error_msg = (
+                        "Rate limit exceeded. The conversation has grown too large "
+                        "for your API tier's token limit. Try clearing the chat history "
+                        "or waiting a minute before trying again."
+                    )
+                self.error.emit(error_msg)
                 return
 
         if iteration >= max_iterations:
