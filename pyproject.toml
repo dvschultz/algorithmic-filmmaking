@@ -8,10 +8,16 @@ license = {text = "MIT"}
 
 [project.scripts]
 scene_ripper = "cli.main:main"
+scene-ripper-mcp = "scene_ripper_mcp.server:main"
+
+[project.optional-dependencies]
+mcp = [
+    "mcp[cli]>=1.2.0",
+]
 
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["cli*", "core*", "models*", "ui*"]
+include = ["cli*", "core*", "models*", "ui*", "scene_ripper_mcp*"]
