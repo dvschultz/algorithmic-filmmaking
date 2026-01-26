@@ -52,8 +52,8 @@ class ClipDetailsSidebar(QDockWidget):
         super().__init__("Clip Details", parent)
         self.setObjectName("ClipDetailsSidebar")
         self.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
-        self.setMinimumWidth(320)
-        self.setMaximumWidth(450)
+        self.setMinimumWidth(400)
+        self.setMaximumWidth(550)
 
         # State references (not copies - per documented learnings)
         self._clip_ref: Optional[Clip] = None
@@ -248,7 +248,7 @@ class ClipDetailsSidebar(QDockWidget):
         # Metadata
         duration = clip.duration_seconds(source.fps)
         metadata_lines = [
-            f"Duration: {self._format_time(duration)}",
+            f"Duration: {self._format_time(duration, include_fraction=True)}",
             f"Frames: {clip.start_frame} - {clip.end_frame}",
             f"Resolution: {source.width}x{source.height}",
             f"FPS: {source.fps:.2f}",
@@ -333,21 +333,28 @@ class ClipDetailsSidebar(QDockWidget):
         # Clear video widget - we can't actually clear it but we can show text
         self.title_label.setText(self.title_label.text() + "\n(Source file not found)")
 
-    def _format_time(self, seconds: float) -> str:
-        """Format seconds as HH:MM:SS or MM:SS.
+    def _format_time(self, seconds: float, include_fraction: bool = False) -> str:
+        """Format seconds as HH:MM:SS.ff or MM:SS.ff.
 
         Args:
             seconds: Time in seconds
+            include_fraction: If True, include fractional seconds
 
         Returns:
             Formatted time string
         """
         h = int(seconds // 3600)
         m = int((seconds % 3600) // 60)
-        s = int(seconds % 60)
-        if h > 0:
-            return f"{h}:{m:02d}:{s:02d}"
-        return f"{m}:{s:02d}"
+        s = seconds % 60
+        if include_fraction:
+            if h > 0:
+                return f"{h}:{m:02d}:{s:05.2f}"
+            return f"{m}:{s:05.2f}"
+        else:
+            s = int(s)
+            if h > 0:
+                return f"{h}:{m:02d}:{s:02d}"
+            return f"{m}:{s:02d}"
 
     def clear(self):
         """Clear the sidebar content."""

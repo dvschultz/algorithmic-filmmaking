@@ -6,7 +6,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QSlider,
-    QSplitter,
     QWidget,
     QStackedWidget,
 )
@@ -14,7 +13,6 @@ from PySide6.QtCore import Signal, Qt
 
 from .base_tab import BaseTab
 from ui.clip_browser import ClipBrowser
-from ui.video_player import VideoPlayer
 from ui.widgets import EmptyStateWidget
 
 
@@ -139,24 +137,14 @@ class CutTab(BaseTab):
         layout = QVBoxLayout(content)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # Horizontal splitter for browser and player
-        splitter = QSplitter(Qt.Horizontal)
-
-        # Left: Clip browser
+        # Clip browser (full width - video preview is in clip details sidebar)
         self.clip_browser = ClipBrowser()
         self.clip_browser.set_drag_enabled(True)
         self.clip_browser.clip_selected.connect(self._on_clip_selected)
         self.clip_browser.clip_double_clicked.connect(self._on_clip_double_clicked)
         self.clip_browser.clip_dragged_to_timeline.connect(self._on_clip_dragged)
         self.clip_browser.filters_changed.connect(self._on_filters_changed)
-        splitter.addWidget(self.clip_browser)
-
-        # Right: Video player
-        self.video_player = VideoPlayer()
-        splitter.addWidget(self.video_player)
-
-        splitter.setSizes([400, 600])
-        layout.addWidget(splitter)
+        layout.addWidget(self.clip_browser)
 
         return content
 
@@ -175,18 +163,11 @@ class CutTab(BaseTab):
     def _on_clip_selected(self, clip):
         """Handle clip selection."""
         self.clip_selected.emit(clip)
-        if self._current_source:
-            start_time = clip.start_time(self._current_source.fps)
-            self.video_player.seek_to(start_time)
         self._update_selection_ui()
 
     def _on_clip_double_clicked(self, clip):
         """Handle clip double-click."""
         self.clip_double_clicked.emit(clip)
-        if self._current_source:
-            start_time = clip.start_time(self._current_source.fps)
-            end_time = clip.end_time(self._current_source.fps)
-            self.video_player.play_range(start_time, end_time)
 
     def _on_clip_dragged(self, clip):
         """Handle clip drag to timeline."""
@@ -223,7 +204,6 @@ class CutTab(BaseTab):
         self._current_source = source
         if source:
             self.detect_btn.setEnabled(True)
-            self.video_player.load_video(source.file_path)
             # Only show "no clips" state if we don't already have clips visible
             if not self._clips and not self.clip_browser.thumbnails:
                 self.state_stack.setCurrentIndex(self.STATE_NO_CLIPS)
