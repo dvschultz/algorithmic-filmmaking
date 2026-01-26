@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QLineEdit,
     QPushButton,
+    QMenu,
 )
 from PySide6.QtCore import Qt, Signal, QMimeData, QPoint
 from PySide6.QtGui import QPixmap, QDrag, QPainter, QColor
@@ -73,6 +74,7 @@ class ClipThumbnail(QFrame):
     clicked = Signal(object)  # Clip
     double_clicked = Signal(object)  # Clip
     drag_started = Signal(object)  # Clip
+    view_details_requested = Signal(object, object)  # Clip, Source
 
     def __init__(self, clip: Clip, source: Source, drag_enabled: bool = False):
         super().__init__()
@@ -250,6 +252,17 @@ class ClipThumbnail(QFrame):
 
     def mouseDoubleClickEvent(self, event):
         self.double_clicked.emit(self.clip)
+        # Also trigger view details on double-click
+        self.view_details_requested.emit(self.clip, self.source)
+
+    def contextMenuEvent(self, event):
+        """Show context menu with clip actions."""
+        menu = QMenu(self)
+        view_details_action = menu.addAction("View Details")
+        view_details_action.triggered.connect(
+            lambda: self.view_details_requested.emit(self.clip, self.source)
+        )
+        menu.exec_(event.globalPos())
 
     def set_drag_enabled(self, enabled: bool):
         """Enable or disable dragging."""
@@ -315,6 +328,7 @@ class ClipBrowser(QWidget):
     clip_double_clicked = Signal(object)  # Clip
     clip_dragged_to_timeline = Signal(object)  # Clip
     filters_changed = Signal()  # Emitted when any filter changes
+    view_details_requested = Signal(object, object)  # Clip, Source - request to show clip details
 
     COLUMNS = 4
 
@@ -346,6 +360,9 @@ class ClipBrowser(QWidget):
 
     def _setup_ui(self):
         """Set up the UI."""
+        # Enable keyboard focus for clip details shortcuts
+        self.setFocusPolicy(Qt.StrongFocus)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
@@ -458,6 +475,7 @@ class ClipBrowser(QWidget):
         thumb.clicked.connect(self._on_thumbnail_clicked)
         thumb.double_clicked.connect(self._on_thumbnail_double_clicked)
         thumb.drag_started.connect(self._on_drag_started)
+        thumb.view_details_requested.connect(self._on_view_details_requested)
 
         self.thumbnails.append(thumb)
         self._thumbnail_by_id[clip.id] = thumb  # O(1) lookup
@@ -580,6 +598,10 @@ class ClipBrowser(QWidget):
     def _on_drag_started(self, clip: Clip):
         """Handle clip drag to timeline."""
         self.clip_dragged_to_timeline.emit(clip)
+
+    def _on_view_details_requested(self, clip: Clip, source: Source):
+        """Handle request to view clip details."""
+        self.view_details_requested.emit(clip, source)
 
     def get_source_for_clip(self, clip_id: str) -> Optional[Source]:
         """Get the source for a clip by ID."""
@@ -982,3 +1004,22 @@ class ClipBrowser(QWidget):
             Number of visible clips
         """
         return sum(1 for thumb in self.thumbnails if self._matches_filter(thumb))
+
+    def keyPressEvent(self, event):
+        """Handle keyboard shortcuts for clip details.
+
+        Args:
+            event: The key event
+        """
+        # Enter or 'i' to show details of selected clip
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_I):
+            selected = self.get_selected_clips()
+            if selected and len(selected) == 1:
+                clip = selected[0]
+                # Look up the source for this clip
+                source = self._source_lookup.get(clip.id)
+                if source:
+                    self.view_details_requested.emit(clip, source)
+                    event.accept()
+                    return
+        super().keyPressEvent(event)
