@@ -4342,8 +4342,9 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(False)
         self.status_bar.showMessage("Description generation complete", 3000)
 
-        # Save project
-        self.project.save()
+        # Save project if path is set
+        if self.project.path:
+            self.project.save()
 
         # Send result back to agent
         if hasattr(self, '_pending_agent_description') and self._pending_agent_description:
@@ -4407,8 +4408,9 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(False)
         self.status_bar.showMessage("Classification complete", 3000)
 
-        # Save project
-        self.project.save()
+        # Save project if path is set
+        if self.project.path:
+            self.project.save()
 
         # Send result back to agent
         if hasattr(self, '_pending_agent_classification') and self._pending_agent_classification:
@@ -4473,8 +4475,9 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(False)
         self.status_bar.showMessage("Object detection complete", 3000)
 
-        # Save project
-        self.project.save()
+        # Save project if path is set
+        if self.project.path:
+            self.project.save()
 
         # Send result back to agent
         if hasattr(self, '_pending_agent_object_detection') and self._pending_agent_object_detection:

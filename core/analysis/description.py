@@ -55,10 +55,10 @@ def _load_cpu_model(model_id: str):
         return model, tokenizer
         
     except ImportError:
-        logger.error("transformers or einops not installed. Cannot use CPU vision tier.")
+        logger.error("transformers, einops, or torchvision not installed. Cannot use CPU vision tier.")
         raise RuntimeError(
             "Missing dependencies for CPU vision. "
-            "Please install: pip install transformers einops"
+            "Please install: pip install transformers einops torchvision"
         )
     except Exception as e:
         logger.error(f"Failed to load CPU model: {e}")
