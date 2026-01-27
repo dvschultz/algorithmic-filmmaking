@@ -2104,16 +2104,16 @@ def get_project_summary(project) -> dict:
 # =============================================================================
 
 @tools.register(
-    description="Detect scenes in a video file. Creates clips from detected scene boundaries. Returns the clip count and clip IDs.",
-    requires_project=False,
+    description="Detect scenes in a video file and add clips to the project. Creates clips from detected scene boundaries. Returns the clip count and clip IDs.",
+    requires_project=True,
     modifies_gui_state=False
 )
 def detect_scenes(
+    project,
     video_path: str,
     sensitivity: float = 3.0,
-    output_path: Optional[str] = None
 ) -> dict:
-    """Run scene detection using Python API."""
+    """Run scene detection using Python API and add clips to project."""
     from core.scene_detect import SceneDetector, DetectionConfig
 
     # Validate video path
@@ -2125,6 +2125,13 @@ def detect_scenes(
         return {"success": False, "error": f"Path is not a file: {video_path}"}
 
     try:
+        # Check if source already exists in project (by file path)
+        existing_source = None
+        for s in project.sources:
+            if s.file_path == video:
+                existing_source = s
+                break
+
         # Create detector with configured sensitivity
         config = DetectionConfig(threshold=sensitivity)
         detector = SceneDetector(config)
@@ -2132,37 +2139,26 @@ def detect_scenes(
         # Run detection
         source, clips = detector.detect_scenes(video)
 
-        # Optionally save results to JSON
-        if output_path:
-            valid, error, validated_output = _validate_path(output_path)
-            if valid:
-                import json
-                output_data = {
-                    "source": {
-                        "id": source.id,
-                        "file_path": str(source.file_path),
-                        "duration_seconds": source.duration_seconds,
-                        "fps": source.fps,
-                    },
-                    "clips": [
-                        {
-                            "id": clip.id,
-                            "source_id": clip.source_id,
-                            "start_frame": clip.start_frame,
-                            "end_frame": clip.end_frame,
-                        }
-                        for clip in clips
-                    ]
-                }
-                with open(validated_output, "w") as f:
-                    json.dump(output_data, f, indent=2)
+        # If source already exists, use that source ID and update clips
+        if existing_source:
+            source = existing_source
+            # Update clip source IDs to match existing source
+            for clip in clips:
+                clip.source_id = source.id
+        else:
+            # Add new source to project
+            project.sources.append(source)
+
+        # Add clips to project
+        for clip in clips:
+            project.clips.append(clip)
 
         return {
             "success": True,
             "clips_detected": len(clips),
             "clip_ids": [clip.id for clip in clips],
             "source_id": source.id,
-            "message": f"Detected {len(clips)} scenes in {video.name}"
+            "message": f"Detected {len(clips)} scenes in {video.name} and added to project"
         }
 
     except FileNotFoundError as e:
