@@ -2106,7 +2106,7 @@ def get_project_summary(project) -> dict:
 @tools.register(
     description="Detect scenes in a video file and add clips to the project. Creates clips from detected scene boundaries. Returns the clip count and clip IDs.",
     requires_project=True,
-    modifies_gui_state=False
+    modifies_gui_state=True
 )
 def detect_scenes(
     project,
@@ -2125,12 +2125,20 @@ def detect_scenes(
         return {"success": False, "error": f"Path is not a file: {video_path}"}
 
     try:
-        # Check if source already exists in project (by file path)
+        # Check if source already exists in project (by resolved file path)
+        # Use resolve() to handle symlinks and relative paths consistently
+        resolved_video = video.resolve()
         existing_source = None
         for s in project.sources:
-            if s.file_path == video:
-                existing_source = s
-                break
+            try:
+                if s.file_path.resolve() == resolved_video:
+                    existing_source = s
+                    break
+            except (OSError, ValueError):
+                # Handle edge cases where resolve() might fail
+                if s.file_path == video:
+                    existing_source = s
+                    break
 
         # Create detector with configured sensitivity
         config = DetectionConfig(threshold=sensitivity)
@@ -2142,16 +2150,19 @@ def detect_scenes(
         # If source already exists, use that source ID and update clips
         if existing_source:
             source = existing_source
+            # Mark source as analyzed
+            source.analyzed = True
             # Update clip source IDs to match existing source
             for clip in clips:
                 clip.source_id = source.id
         else:
-            # Add new source to project
-            project.sources.append(source)
+            # Mark source as analyzed
+            source.analyzed = True
+            # Add new source using proper Project method (invalidates caches, notifies observers)
+            project.add_source(source)
 
-        # Add clips to project
-        for clip in clips:
-            project.clips.append(clip)
+        # Add clips using proper Project method (invalidates caches, notifies observers)
+        project.add_clips(clips)
 
         return {
             "success": True,
