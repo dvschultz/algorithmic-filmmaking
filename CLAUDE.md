@@ -122,14 +122,103 @@ python -m cli.main --help
 
 ## Tab Workflow
 
-The application uses a tab-based workflow where each tab represents a stage:
+The application uses a tab-based workflow where each tab represents a stage. **The expected user flow is:**
 
-1. **Collect** - Import local videos or search/download from YouTube
-2. **Analyze** - Run scene detection and analysis on sources
-3. **Sequence** - Arrange clips using card-based sorting interface
-4. **Cut** - Fine-tune individual cuts with timeline editor
-5. **Generate** - Apply effects and transitions
-6. **Render** - Export final video
+```
+Collect → Cut → Analyze → Sequence → Render
+```
+
+### Data Model Flow
+
+```
+Source (video file)
+    ↓ scene detection
+Clips (detected scenes with start/end frames)
+    ↓ analysis (optional)
+Clips with metadata (shot_type, colors, description, transcript)
+    ↓ add to sequence
+SequenceClips (clips arranged on timeline)
+    ↓ render
+Output video file
+```
+
+### Tab Details
+
+1. **Collect** - Import source videos
+   - Add local video files via drag-drop or file browser
+   - Search and download from YouTube
+   - Sources appear in the source browser sidebar
+   - Sources have `analyzed: bool` flag (initially False)
+
+2. **Cut** - Scene detection and clip browsing
+   - Select a source and run scene detection (sensitivity 1.0-10.0)
+   - Detection creates `Clip` objects with `start_frame`, `end_frame`, `source_id`
+   - Clips appear in the clip browser grid with thumbnails
+   - After detection, `source.analyzed = True`
+   - Can preview clips in the video player
+
+3. **Analyze** - Enrich clips with metadata
+   - **Describe**: Send frame/video to VLM for natural language description
+   - **Classify**: Detect shot type (close-up, medium, wide, etc.)
+   - **Detect Objects**: Run YOLO object detection
+   - **Colors**: Extract dominant color palette
+   - **Transcribe**: Run Whisper speech-to-text
+   - All analysis updates clip metadata fields
+
+4. **Sequence** - Arrange clips into a sequence
+   - Card-based sorting interface
+   - Drag-drop clips to reorder
+   - Filter/sort by metadata (shot type, duration, color, etc.)
+   - Selected clips are added to the timeline sequence
+   - Creates `SequenceClip` objects referencing source clips
+
+5. **Render** - Export final video
+   - Export sequence as video file (MP4)
+   - Export as EDL for external editors
+   - Export clips individually
+   - Configure quality, resolution, codec settings
+
+### Key Data Relationships
+
+```python
+# Source contains metadata about a video file
+Source:
+    id: str (UUID)
+    file_path: Path
+    fps: float
+    duration_seconds: float
+    analyzed: bool  # True after scene detection
+
+# Clip is a detected scene within a source
+Clip:
+    id: str (UUID)
+    source_id: str  # References Source.id
+    start_frame: int
+    end_frame: int
+    thumbnail_path: Path
+    # Analysis metadata (optional):
+    shot_type: str
+    dominant_colors: list[str]
+    description: str
+    transcript: str
+
+# SequenceClip is a clip placed on the timeline
+SequenceClip:
+    id: str (UUID)
+    source_clip_id: str  # References Clip.id
+    source_id: str       # References Source.id
+    start_frame: int     # Position on timeline
+    in_point: int        # Clip start (usually same as source clip)
+    out_point: int       # Clip end
+```
+
+### Project State Management
+
+The `Project` class (`core/project.py`) is the single source of truth:
+- **Always use Project methods** to modify state (`add_source()`, `add_clips()`, etc.)
+- **Never directly append** to `project.sources` or `project.clips` lists
+- Project methods invalidate caches and notify GUI observers
+- Cached properties: `sources_by_id`, `clips_by_id`, `clips_by_source`
 
 All tabs inherit from `ui/tabs/base_tab.py` which provides common functionality.
 
