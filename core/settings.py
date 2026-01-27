@@ -376,8 +376,8 @@ class Settings:
 
     # Per-provider model preferences
     ollama_model: str = "qwen3:8b"
-    openai_model: str = "gpt-4o-mini"
-    anthropic_model: str = "claude-sonnet-4-20250514"
+    openai_model: str = "gpt-5.2"
+    anthropic_model: str = "claude-sonnet-4-5-20250929"
     gemini_model: str = "gemini-2.5-flash"
     openrouter_model: str = "anthropic/claude-sonnet-4"
 
@@ -385,7 +385,7 @@ class Settings:
     description_model_tier: str = "cpu"  # cpu, gpu, cloud
     description_model_cpu: str = "vikhyatk/moondream2"
     description_model_gpu: str = "llava-hf/llava-onevision-qwen2-7b-ov-hf"
-    description_model_cloud: str = "gpt-4o"
+    description_model_cloud: str = "gpt-5.2"
     description_temporal_frames: int = 4
 
     def get_quality_preset(self) -> dict:

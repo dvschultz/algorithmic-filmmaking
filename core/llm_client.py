@@ -25,7 +25,7 @@ class ProviderType(Enum):
 # Default models for each provider (updated January 2026)
 DEFAULT_MODELS = {
     "local": "qwen3:8b",
-    "openai": "gpt-4o-mini",
+    "openai": "gpt-5.2",
     "anthropic": "claude-sonnet-4-5-20250929",  # Claude Sonnet 4.5
     "gemini": "gemini-2.5-flash",
     "openrouter": "anthropic/claude-sonnet-4-5",
@@ -41,9 +41,9 @@ PROVIDER_MODELS = {
         ("phi3:latest", "Phi-3"),
     ],
     "openai": [
-        ("gpt-4o-mini", "GPT-4o Mini (Recommended)"),
-        ("gpt-4o", "GPT-4o"),
-        ("gpt-4-turbo", "GPT-4 Turbo"),
+        ("gpt-5.2", "GPT-5.2 (Recommended)"),
+        ("gpt-5", "GPT-5"),
+        ("gpt-5-mini", "GPT-5 Mini"),
         ("o1-mini", "o1-mini"),
     ],
     "anthropic": [
@@ -59,7 +59,7 @@ PROVIDER_MODELS = {
     "openrouter": [
         ("anthropic/claude-sonnet-4-5", "Claude Sonnet 4.5 (Recommended)"),
         ("anthropic/claude-haiku-4-5", "Claude Haiku 4.5"),
-        ("openai/gpt-4o", "GPT-4o"),
+        ("openai/gpt-5.2", "GPT-5.2"),
         ("google/gemini-2.5-flash", "Gemini 2.5 Flash"),
     ],
 }

@@ -474,9 +474,10 @@ class SettingsDialog(QDialog):
         cloud_layout.addWidget(QLabel("Cloud Model:"))
         self.vision_cloud_combo = QComboBox()
         self.vision_cloud_combo.addItems([
-            "gpt-4o",
-            "gpt-4o-mini",
-            "claude-3-5-sonnet-20240620",
+            "gpt-5.2",
+            "gpt-5",
+            "gpt-5-mini",
+            "claude-sonnet-4-5-20250929",
             "gemini-2.5-flash",
             "gemini-2.5-pro",
             "gemini-2.0-flash",
