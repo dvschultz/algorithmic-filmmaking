@@ -4395,6 +4395,12 @@ class MainWindow(QMainWindow):
                     })
 
             if self._chat_worker:
+                result = {
+                    "tool_call_id": self._pending_agent_tool_call_id,
+                    "name": self._pending_agent_tool_name,
+                    "success": True,
+                    "result": result
+                }
                 self._pending_agent_tool_call_id = None
                 self._pending_agent_tool_name = None
                 self._chat_worker.set_gui_tool_result(result)
@@ -4460,6 +4466,12 @@ class MainWindow(QMainWindow):
                     })
 
             if self._chat_worker:
+                result = {
+                    "tool_call_id": self._pending_agent_tool_call_id,
+                    "name": self._pending_agent_tool_name,
+                    "success": True,
+                    "result": result
+                }
                 self._pending_agent_tool_call_id = None
                 self._pending_agent_tool_name = None
                 self._chat_worker.set_gui_tool_result(result)
@@ -4532,6 +4544,12 @@ class MainWindow(QMainWindow):
                 result["object_counts"] = all_labels
 
             if self._chat_worker:
+                result = {
+                    "tool_call_id": self._pending_agent_tool_call_id,
+                    "name": self._pending_agent_tool_name,
+                    "success": True,
+                    "result": result
+                }
                 self._pending_agent_tool_call_id = None
                 self._pending_agent_tool_name = None
                 self._chat_worker.set_gui_tool_result(result)

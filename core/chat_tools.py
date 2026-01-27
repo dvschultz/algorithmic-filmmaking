@@ -433,24 +433,19 @@ def describe_content_live(
             "error": "No valid clip IDs provided"
         }
 
-    # Start description worker
-    # Note: DescriptionWorker must be implemented in MainWindow
-    started = main_window.start_agent_description(
-        clip_ids=valid_ids,
-        tier=tier,
-        prompt=prompt
-    )
-    
-    if not started:
-        return {
-            "success": False,
-            "error": "Failed to start description worker"
-        }
+    # Check if worker already running
+    if main_window.description_worker and main_window.description_worker.isRunning():
+        return {"success": False, "error": "Description generation already in progress"}
+
+    # Set default prompt if not provided
+    final_prompt = prompt or "Describe this video frame in detail. Keep the description concise, no longer than a single paragraph."
 
     return {
         "_wait_for_worker": "description",
+        "clip_ids": valid_ids,
         "clip_count": len(valid_ids),
-        "tier": tier or "default",
+        "tier": tier,
+        "prompt": final_prompt,
         "message": f"Started generating descriptions for {len(valid_ids)} clips..."
     }
 

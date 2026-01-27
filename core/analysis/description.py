@@ -33,6 +33,11 @@ def encode_image_base64(image_path: Path) -> str:
         return base64.b64encode(f.read()).decode("utf-8")
 
 
+# Default Moondream revision - updated to fix GenerationMixin compatibility
+# with transformers v4.50+. See: https://huggingface.co/vikhyatk/moondream2/discussions/39
+MOONDREAM_REVISION = "2025-06-21"
+
+
 def _load_cpu_model(model_id: str):
     """Load CPU-optimized model (Moondream).
 
@@ -51,18 +56,37 @@ def _load_cpu_model(model_id: str):
             return _CPU_MODEL, _CPU_TOKENIZER
 
         try:
+            import torch
             from transformers import AutoModelForCausalLM, AutoTokenizer
 
-            logger.info(f"Loading CPU vision model: {model_id}...")
+            logger.info(f"Loading CPU vision model: {model_id} (revision: {MOONDREAM_REVISION})...")
+
+            # Determine best available device
+            if torch.cuda.is_available():
+                device = "cuda"
+            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                device = "mps"
+            else:
+                device = "cpu"
+
+            logger.info(f"Using device: {device}")
 
             # Load tokenizer and model
             # trust_remote_code=True is required for Moondream
-            tokenizer = AutoTokenizer.from_pretrained(model_id, revision="2024-08-26")
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_id,
+                revision=MOONDREAM_REVISION,
+                trust_remote_code=True
+            )
             model = AutoModelForCausalLM.from_pretrained(
                 model_id,
                 trust_remote_code=True,
-                revision="2024-08-26"
+                revision=MOONDREAM_REVISION,
+                torch_dtype=torch.float32 if device == "cpu" else torch.float16,
             )
+
+            # Move model to device (ensures all components on same device)
+            model = model.to(device)
 
             _CPU_MODEL = model
             _CPU_TOKENIZER = tokenizer
@@ -103,6 +127,13 @@ def describe_frame_cloud(image_path: Path, prompt: str = "Describe this image.")
     
     settings = load_settings()
     model = settings.description_model_cloud
+
+    # Normalize model name for LiteLLM
+    # This ensures "gemini-..." routes to AI Studio (via API key) instead of Vertex AI
+    if "gemini" in model and not any(model.startswith(p) for p in ["gemini/", "vertex_ai/"]):
+        model = f"gemini/{model}"
+    elif "claude" in model and not any(model.startswith(p) for p in ["anthropic/", "bedrock/"]):
+        model = f"anthropic/{model}"
     
     # Ensure API keys are available
     # LiteLLM usually handles environment variables, but we can helper set them if needed
@@ -195,3 +226,37 @@ def unload_model():
         _CPU_MODEL = None
         _CPU_TOKENIZER = None
         logger.info("VLM model unloaded")
+
+
+def clear_model_cache(model_id: str = "vikhyatk/moondream2") -> bool:
+    """Clear the HuggingFace cache for a specific model.
+
+    This is useful when updating to a new model revision.
+
+    Returns:
+        True if cache was cleared, False if cache dir not found.
+    """
+    import shutil
+    from huggingface_hub import HfFolder
+
+    try:
+        from huggingface_hub import cached_assets_path
+        from huggingface_hub.constants import HF_HUB_CACHE
+
+        cache_dir = Path(HF_HUB_CACHE)
+
+        # HuggingFace stores models in: cache_dir/models--{org}--{model}
+        model_cache_name = f"models--{model_id.replace('/', '--')}"
+        model_cache_path = cache_dir / model_cache_name
+
+        if model_cache_path.exists():
+            shutil.rmtree(model_cache_path)
+            logger.info(f"Cleared model cache: {model_cache_path}")
+            return True
+        else:
+            logger.info(f"No cache found for {model_id}")
+            return False
+
+    except Exception as e:
+        logger.error(f"Failed to clear model cache: {e}")
+        return False

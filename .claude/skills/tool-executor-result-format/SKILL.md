@@ -1,109 +1,56 @@
 ---
 name: tool-executor-result-format
 description: |
-  Fix for accessing tool results from ToolExecutor in Scene Ripper. Use when:
-  (1) signal handlers receive empty data from tool execution, (2) tool results
-  appear to be missing fields that the tool definitely returns, (3) writing new
-  code that processes results from ChatAgentWorker tool execution. The ToolExecutor
-  wraps all tool return values in a "result" key, not "data".
+  Fix "KeyError: 'result'" errors in ToolExecutor.format_for_llm. Use when: (1) Integrating new tools into an agent system, (2) Tool execution succeeds but the agent crashes while formatting the response, (3) The error traceback points to `result["result"]`.
 author: Claude Code
 version: 1.0.0
-date: 2026-01-25
+date: 2026-01-27
 ---
 
-# ToolExecutor Result Format
+# Tool Executor Result Format
 
 ## Problem
-
-When writing code that processes tool execution results from `ChatAgentWorker`, the
-actual tool return value is not at the top level of the result dict. This causes
-handlers to receive empty or wrong data.
+When implementing custom tools or callbacks for an LLM agent, failing to structure the return value exactly as expected by the `ToolExecutor` causes a crash. The executor expects a specific dictionary structure to format the result for the LLM. If a tool (or a callback handling an async tool result) returns a flat dictionary, the executor fails with `KeyError: 'result'` when trying to access the nested result.
 
 ## Context / Trigger Conditions
-
-- Writing signal handlers for tool completion (e.g., `youtube_search_completed`)
-- Code expects tool return values at top level but gets `None` or wrong data
-- Tool clearly returns data (visible in chat) but handler doesn't receive it
-- Working with `result` dict from `ToolExecutor.execute()`
+- **Error**: `KeyError: 'result'` in `ToolExecutor.format_for_llm`
+- **Architecture**: Custom agent system with `ToolExecutor` class
+- **Scenario**: Completing an asynchronous tool execution (e.g., via a signal handler like `_on_agent_task_finished`)
 
 ## Solution
+Ensure that any function returning a tool result to the agent (especially async completion handlers) wraps the actual data in a `result` key and includes the required metadata fields.
 
-The `ToolExecutor.execute()` method wraps all tool return values in this structure:
-
+### Incorrect Structure (Causes Crash)
 ```python
-{
-    "tool_call_id": "call_xxx",
-    "name": "tool_name",
-    "success": True,  # or False
-    "result": { ... actual tool return value here ... }
-}
-```
-
-To access the actual tool data:
-
-```python
-# WRONG - "data" key doesn't exist
-data = result.get("data", result)
-
-# CORRECT - use "result" key
-data = result.get("result", result)
-
-# Then access tool-specific fields
-query = data.get("query", "")
-videos = data.get("results", [])
-```
-
-## Verification
-
-After fixing, log statements should show the correct nested data:
-
-```python
-logger.info(f"Result keys: {result.keys()}")  # Shows: tool_call_id, name, success, result
-logger.info(f"Data keys: {data.keys()}")       # Shows actual tool return fields
-```
-
-## Example
-
-For `search_youtube` tool which returns:
-```python
-{"success": True, "query": "...", "results": [...]}
-```
-
-The full result from ToolExecutor is:
-```python
-{
-    "tool_call_id": "call_abc123",
-    "name": "search_youtube",
+# The agent expects a wrapper, but gets flat data
+result = {
     "success": True,
-    "result": {
+    "count": 5,
+    "items": [...]
+}
+# Crash: result["result"] raises KeyError
+```
+
+### Correct Structure
+```python
+# Properly wrapped result
+result = {
+    "tool_call_id": original_tool_call_id,  # Required to match request
+    "name": tool_name,                      # Required for context
+    "success": True,                        # Status flag
+    "result": {                             # <--- The actual data wrapper
         "success": True,
-        "query": "nature documentary",
-        "results": [{"video_id": "...", "title": "..."}]
+        "count": 5,
+        "items": [...]
     }
 }
 ```
 
-Access pattern:
-```python
-def _emit_gui_sync_signal(self, tool_name: str, args: dict, result: dict):
-    if not result.get("success", False):
-        return
-
-    # Unwrap the actual tool return value
-    data = result.get("result", result)
-
-    if tool_name == "search_youtube":
-        videos = data.get("results", [])  # Now correctly gets the list
-```
+## Verification
+1. Inspect the code passing the result to the agent (e.g., `chat_worker.set_gui_tool_result(result)`).
+2. Verify it contains the top-level keys: `tool_call_id`, `name`, `success`, and `result`.
+3. Verify the actual payload is nested inside the `result` key.
 
 ## Notes
-
-- The outer `success` and inner `success` may both exist - check the outer one for
-  execution status, inner one is tool-specific
-- For error cases, the result has `"error": "message"` instead of `"result"`
-- See `core/tool_executor.py` lines 123-128 for the wrapping logic
-
-## Related Files
-
-- `core/tool_executor.py` - Defines the result structure
-- `ui/chat_worker.py` - Consumes results in `_emit_gui_sync_signal`
+- This pattern is common in systems that need to standardize error handling and metadata (ID, name) separate from the tool's actual return value.
+- For synchronous tools executed directly by `ToolExecutor`, the wrapping is often handled automatically. This issue primarily affects **asynchronous/GUI tools** where the result is constructed manually in a callback.
