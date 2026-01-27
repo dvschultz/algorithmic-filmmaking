@@ -75,12 +75,8 @@ class ClipDetailsSidebar(QDockWidget):
         self._loading = False  # Guard flag for duplicate signals
         self._pending_clip_range: Optional[tuple[float, float]] = None  # (start, end) seconds to apply when media loads
 
-        # Edit guard flags (prevent duplicate execution per documented learnings)
-        self._name_change_in_progress = False
-        self._shot_type_change_in_progress = False
-        self._transcript_change_in_progress = False
-        self._object_labels_change_in_progress = False
-        self._description_change_in_progress = False
+        # Edit guard flag (prevent duplicate execution per documented learnings)
+        self._change_in_progress = False
 
         self._setup_ui()
         self._connect_signals()
@@ -296,85 +292,67 @@ class ClipDetailsSidebar(QDockWidget):
                 self.video_player.set_clip_range(start_time, end_time)
                 self._pending_clip_range = None
 
+    def _emit_clip_edit(self):
+        """Emit clip_edited signal with guard protection."""
+        if self._clip_ref:
+            self.clip_edited.emit(self._clip_ref)
+
     @Slot(str)
     def _on_name_changed(self, new_name: str):
         """Handle clip name change."""
-        if self._name_change_in_progress or self._loading:
+        if self._change_in_progress or self._loading or not self._clip_ref:
             return
-        if not self._clip_ref:
-            return
-        self._name_change_in_progress = True
-
+        self._change_in_progress = True
         self._clip_ref.name = new_name
-        self.clip_edited.emit(self._clip_ref)
-
-        self._name_change_in_progress = False
+        self._emit_clip_edit()
+        self._change_in_progress = False
 
     @Slot(str)
     def _on_shot_type_changed(self, new_shot_type: str):
         """Handle shot type change."""
-        if self._shot_type_change_in_progress or self._loading:
+        if self._change_in_progress or self._loading or not self._clip_ref:
             return
-        if not self._clip_ref:
-            return
-        self._shot_type_change_in_progress = True
-
-        # Store None if empty, otherwise the shot type string
+        self._change_in_progress = True
         self._clip_ref.shot_type = new_shot_type if new_shot_type else None
-        self.clip_edited.emit(self._clip_ref)
-
-        self._shot_type_change_in_progress = False
+        self._emit_clip_edit()
+        self._change_in_progress = False
 
     @Slot(list)
     def _on_transcript_changed(self, segments: list):
         """Handle transcript segment change."""
-        if self._transcript_change_in_progress or self._loading:
+        if self._change_in_progress or self._loading or not self._clip_ref:
             return
-        if not self._clip_ref:
-            return
-        self._transcript_change_in_progress = True
-
-        # Segments are already updated in-place by the widget
+        self._change_in_progress = True
         self._clip_ref.transcript = segments if segments else None
-        self.clip_edited.emit(self._clip_ref)
-
-        self._transcript_change_in_progress = False
+        self._emit_clip_edit()
+        self._change_in_progress = False
 
     @Slot(str)
     def _on_object_labels_changed(self, new_value: str):
         """Handle object labels edit."""
-        if self._object_labels_change_in_progress or self._loading:
+        if self._change_in_progress or self._loading or not self._clip_ref:
             return
-        if not self._clip_ref:
-            return
-        self._object_labels_change_in_progress = True
-
-        # Parse comma-separated to list
+        self._change_in_progress = True
         if new_value.strip():
             labels = [label.strip() for label in new_value.split(",") if label.strip()]
             self._clip_ref.object_labels = labels if labels else None
         else:
             self._clip_ref.object_labels = None
-
-        self.clip_edited.emit(self._clip_ref)
-        self._object_labels_change_in_progress = False
+        self._emit_clip_edit()
+        self._change_in_progress = False
 
     @Slot(str)
     def _on_description_changed(self, new_value: str):
         """Handle description edit."""
-        if self._description_change_in_progress or self._loading:
+        if self._change_in_progress or self._loading or not self._clip_ref:
             return
-        if not self._clip_ref:
-            return
-        self._description_change_in_progress = True
-
+        self._change_in_progress = True
         self._clip_ref.description = new_value.strip() if new_value.strip() else None
         # Clear model metadata on manual edit
         self._clip_ref.description_model = None
         self._clip_ref.description_frames = None
-
-        self.clip_edited.emit(self._clip_ref)
-        self._description_change_in_progress = False
+        self._emit_clip_edit()
+        self._change_in_progress = False
 
     def show_clip(self, clip: Clip, source: Source):
         """Display details for the given clip.
@@ -395,11 +373,7 @@ class ClipDetailsSidebar(QDockWidget):
         self._source_ref = source
 
         # Block signals while updating UI (per documented learnings)
-        self.name_edit.blockSignals(True)
-        self.shot_type_dropdown.blockSignals(True)
-        self.transcript_edit.blockSignals(True)
-        self.object_labels_edit.blockSignals(True)
-        self.description_edit.blockSignals(True)
+        self._block_editable_signals(True)
 
         # Clip name (editable)
         display_name = clip.display_name(source.filename, source.fps)
@@ -446,8 +420,7 @@ class ClipDetailsSidebar(QDockWidget):
             self.detected_objects_label.setText(summary)
             self.detected_objects_label.setStyleSheet(f"color: {theme().text_primary};")
         else:
-            self.detected_objects_label.setText("Run Detect Objects to analyze...")
-            self.detected_objects_label.setStyleSheet(f"color: {theme().text_muted}; font-style: italic;")
+            self._set_detected_objects_placeholder("Run Detect Objects to analyze...")
 
         # Person Count (read-only)
         if clip.person_count and clip.person_count > 0:
@@ -472,14 +445,8 @@ class ClipDetailsSidebar(QDockWidget):
             self.description_edit.setText("")
             self.description_meta_label.setVisible(False)
 
-        # Unblock signals
-        self.name_edit.blockSignals(False)
-        self.shot_type_dropdown.blockSignals(False)
-        self.transcript_edit.blockSignals(False)
-        self.object_labels_edit.blockSignals(False)
-        self.description_edit.blockSignals(False)
-
-        # Enable editing
+        # Unblock signals and enable editing
+        self._block_editable_signals(False)
         self._set_editing_enabled(True)
 
         # Load video preview with clip range
@@ -508,13 +475,7 @@ class ClipDetailsSidebar(QDockWidget):
         self._loading = True
         self._clip_ref = None
         self._source_ref = None
-
-        # Block signals
-        self.name_edit.blockSignals(True)
-        self.shot_type_dropdown.blockSignals(True)
-        self.transcript_edit.blockSignals(True)
-        self.object_labels_edit.blockSignals(True)
-        self.description_edit.blockSignals(True)
+        self._block_editable_signals(True)
 
         # Show selection count
         self.name_edit.setText("")
@@ -530,21 +491,14 @@ class ClipDetailsSidebar(QDockWidget):
         # Clear new fields
         self.object_labels_edit.setPlaceholder(f"{count} clips selected")
         self.object_labels_edit.setText("")
-        self.detected_objects_label.setText("Select a single clip to view details")
-        self.detected_objects_label.setStyleSheet(f"color: {theme().text_muted}; font-style: italic;")
+        self._set_detected_objects_placeholder("Select a single clip to view details")
         self.person_count_label.setVisible(False)
         self.description_edit.setPlaceholder(f"{count} clips selected")
         self.description_edit.setText("")
         self.description_meta_label.setVisible(False)
 
-        # Unblock signals
-        self.name_edit.blockSignals(False)
-        self.shot_type_dropdown.blockSignals(False)
-        self.transcript_edit.blockSignals(False)
-        self.object_labels_edit.blockSignals(False)
-        self.description_edit.blockSignals(False)
-
-        # Disable editing
+        # Unblock signals and disable editing
+        self._block_editable_signals(False)
         self._set_editing_enabled(False)
 
         # Stop video
@@ -566,6 +520,27 @@ class ClipDetailsSidebar(QDockWidget):
         self.object_labels_edit.setEnabled(enabled)
         self.description_edit.setEnabled(enabled)
         # Note: detected_objects and person_count are always read-only
+
+    def _block_editable_signals(self, block: bool):
+        """Block or unblock signals on all editable fields.
+
+        Args:
+            block: True to block signals, False to unblock
+        """
+        self.name_edit.blockSignals(block)
+        self.shot_type_dropdown.blockSignals(block)
+        self.transcript_edit.blockSignals(block)
+        self.object_labels_edit.blockSignals(block)
+        self.description_edit.blockSignals(block)
+
+    def _set_detected_objects_placeholder(self, text: str):
+        """Set detected objects label to placeholder style.
+
+        Args:
+            text: Placeholder text to display
+        """
+        self.detected_objects_label.setText(text)
+        self.detected_objects_label.setStyleSheet(f"color: {theme().text_muted}; font-style: italic;")
 
     def _update_colors(self, colors: Optional[list[tuple[int, int, int]]]):
         """Update the color swatches display.
@@ -631,13 +606,7 @@ class ClipDetailsSidebar(QDockWidget):
         """Clear the sidebar content."""
         self._clip_ref = None
         self._source_ref = None
-
-        # Block signals
-        self.name_edit.blockSignals(True)
-        self.shot_type_dropdown.blockSignals(True)
-        self.transcript_edit.blockSignals(True)
-        self.object_labels_edit.blockSignals(True)
-        self.description_edit.blockSignals(True)
+        self._block_editable_signals(True)
 
         self.name_edit.setText("")
         self.name_edit.setPlaceholder("No clip selected")
@@ -647,24 +616,16 @@ class ClipDetailsSidebar(QDockWidget):
         self.shot_type_dropdown.setValue(None)
         self.transcript_edit.setSegments(None)
 
-        # Clear new fields
+        # Clear analysis fields
         self.object_labels_edit.setText("")
         self.object_labels_edit.setPlaceholder("Run Classify to analyze...")
-        self.detected_objects_label.setText("Run Detect Objects to analyze...")
-        self.detected_objects_label.setStyleSheet(f"color: {theme().text_muted}; font-style: italic;")
+        self._set_detected_objects_placeholder("Run Detect Objects to analyze...")
         self.person_count_label.setVisible(False)
         self.description_edit.setText("")
         self.description_edit.setPlaceholder("Run Describe to analyze...")
         self.description_meta_label.setVisible(False)
 
-        # Unblock signals
-        self.name_edit.blockSignals(False)
-        self.shot_type_dropdown.blockSignals(False)
-        self.transcript_edit.blockSignals(False)
-        self.object_labels_edit.blockSignals(False)
-        self.description_edit.blockSignals(False)
-
-        # Disable editing
+        self._block_editable_signals(False)
         self._set_editing_enabled(False)
 
         if hasattr(self.video_player, 'player'):

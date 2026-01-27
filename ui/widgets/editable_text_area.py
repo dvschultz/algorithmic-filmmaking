@@ -64,28 +64,21 @@ class EditableTextArea(QWidget):
 
     def _apply_style(self):
         """Apply theme-aware styling."""
-        # Label style - show hover indication
-        base_style = f"""
+        # Label style - use muted color for placeholder state
+        text_color = theme().text_muted if not self._text else theme().text_primary
+        font_style = "italic" if not self._text else "normal"
+
+        self.label.setStyleSheet(f"""
             QLabel {{
-                color: {theme().text_primary};
+                color: {text_color};
+                font-style: {font_style};
                 padding: 4px 8px;
                 border-radius: 4px;
             }}
             QLabel:hover {{
                 background-color: {theme().background_tertiary};
             }}
-        """
-
-        # Placeholder style when empty
-        if not self._text:
-            base_style += f"""
-                QLabel {{
-                    color: {theme().text_muted};
-                    font-style: italic;
-                }}
-            """
-
-        self.label.setStyleSheet(base_style)
+        """)
 
         # Edit field style
         self.edit.setStyleSheet(f"""
