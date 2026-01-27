@@ -27,7 +27,7 @@ DEFAULT_MODELS = {
     "local": "qwen3:8b",
     "openai": "gpt-4o-mini",
     "anthropic": "claude-sonnet-4-5-20250929",  # Claude Sonnet 4.5
-    "gemini": "gemini-2.0-flash",
+    "gemini": "gemini-3.0-flash",
     "openrouter": "anthropic/claude-sonnet-4-5",
 }
 
@@ -52,15 +52,15 @@ PROVIDER_MODELS = {
         ("claude-haiku-4-5-20251001", "Claude Haiku 4.5"),
     ],
     "gemini": [
-        ("gemini-2.0-flash", "Gemini 2.0 Flash (Recommended)"),
-        ("gemini-2.0-pro", "Gemini 2.0 Pro"),
-        ("gemini-1.5-pro", "Gemini 1.5 Pro"),
+        ("gemini-3.0-flash", "Gemini 3.0 Flash (Recommended)"),
+        ("gemini-3.0-pro", "Gemini 3.0 Pro"),
+        ("gemini-2.5-flash", "Gemini 2.5 Flash"),
     ],
     "openrouter": [
         ("anthropic/claude-sonnet-4-5", "Claude Sonnet 4.5 (Recommended)"),
         ("anthropic/claude-haiku-4-5", "Claude Haiku 4.5"),
         ("openai/gpt-4o", "GPT-4o"),
-        ("google/gemini-2.0-flash", "Gemini 2.0 Flash"),
+        ("google/gemini-3.0-flash", "Gemini 3.0 Flash"),
     ],
 }
 
