@@ -247,6 +247,11 @@ class SettingsDialog(QDialog):
             anthropic_model=settings.anthropic_model,
             gemini_model=settings.gemini_model,
             openrouter_model=settings.openrouter_model,
+            description_model_tier=settings.description_model_tier,
+            description_model_cpu=settings.description_model_cpu,
+            description_model_gpu=settings.description_model_gpu,
+            description_model_cloud=settings.description_model_cloud,
+            description_temporal_frames=settings.description_temporal_frames,
         )
 
         self.setWindowTitle("Settings")
@@ -431,6 +436,71 @@ class SettingsDialog(QDialog):
         transcription_layout.addLayout(lang_layout)
 
         layout.addWidget(transcription_group)
+
+        # Vision Description group
+        vision_group = QGroupBox("Vision Description")
+        vision_layout = QVBoxLayout(vision_group)
+
+        # Tier selection
+        tier_layout = QHBoxLayout()
+        tier_layout.addWidget(QLabel("Processing Tier:"))
+        self.vision_tier_combo = QComboBox()
+        self.vision_tier_combo.addItems([
+            "CPU (Local) - Free, runs on device (Moondream)",
+            "Cloud API - Higher quality, costs money (GPT-4o/Claude)",
+        ])
+        self.vision_tier_combo.setToolTip(
+            "Choose where to run video analysis.\n"
+            "CPU: Downloads ~1.6GB model once, runs locally.\n"
+            "Cloud: Sends frames to LLM provider (requires API key)."
+        )
+        tier_layout.addWidget(self.vision_tier_combo)
+        vision_layout.addLayout(tier_layout)
+
+        # CPU Model
+        cpu_layout = QHBoxLayout()
+        cpu_layout.addWidget(QLabel("Local Model:"))
+        self.vision_cpu_combo = QComboBox()
+        self.vision_cpu_combo.addItems([
+            "vikhyatk/moondream2",
+        ])
+        self.vision_cpu_combo.setEditable(True)  # Allow custom model IDs
+        self.vision_cpu_combo.setToolTip("HuggingFace model ID for local analysis")
+        cpu_layout.addWidget(self.vision_cpu_combo)
+        vision_layout.addLayout(cpu_layout)
+
+        # Cloud Model
+        cloud_layout = QHBoxLayout()
+        cloud_layout.addWidget(QLabel("Cloud Model:"))
+        self.vision_cloud_combo = QComboBox()
+        self.vision_cloud_combo.addItems([
+            "gpt-4o",
+            "claude-3-5-sonnet-20240620",
+            "gemini-1.5-pro",
+        ])
+        self.vision_cloud_combo.setEditable(True)
+        self.vision_cloud_combo.setToolTip("Model ID for cloud analysis (via LiteLLM)")
+        cloud_layout.addWidget(self.vision_cloud_combo)
+        vision_layout.addLayout(cloud_layout)
+
+        # Temporal Frames
+        frames_layout = QHBoxLayout()
+        frames_layout.addWidget(QLabel("Frames per Clip:"))
+        self.vision_frames_spin = QSpinBox()
+        self.vision_frames_spin.setRange(1, 10)
+        self.vision_frames_spin.setValue(4)
+        self.vision_frames_spin.setToolTip(
+            "Number of frames to analyze per clip for descriptions.\n"
+            "Higher = better understanding of action, but slower."
+        )
+        frames_layout.addWidget(self.vision_frames_spin)
+        frames_layout.addStretch()
+        vision_layout.addLayout(frames_layout)
+
+        # Connect tier change to enable/disable appropriate model fields
+        self.vision_tier_combo.currentIndexChanged.connect(self._on_vision_tier_changed)
+
+        layout.addWidget(vision_group)
 
         # Chat Agent group
         chat_group = QGroupBox("Chat Agent")
@@ -843,6 +913,12 @@ class SettingsDialog(QDialog):
         layout.addStretch()
         return tab
 
+    def _on_vision_tier_changed(self, index: int):
+        """Enable/disable model fields based on selected tier."""
+        is_cpu = (index == 0)
+        self.vision_cpu_combo.setEnabled(is_cpu)
+        self.vision_cloud_combo.setEnabled(not is_cpu)
+
     def _disable_path_settings(self):
         """Disable path-related settings when operations are running."""
         self.cache_path.set_enabled(False)
@@ -941,6 +1017,17 @@ class SettingsDialog(QDialog):
             self.transcription_model_combo, self.whisper_model_lbl,
             "transcription_model", ENV_WHISPER_MODEL
         )
+
+        # Vision Description
+        tier_idx = 0 if self.settings.description_model_tier == "cpu" else 1
+        self.vision_tier_combo.setCurrentIndex(tier_idx)
+        
+        self.vision_cpu_combo.setCurrentText(self.settings.description_model_cpu)
+        self.vision_cloud_combo.setCurrentText(self.settings.description_model_cloud)
+        self.vision_frames_spin.setValue(self.settings.description_temporal_frames)
+        
+        # Trigger enable/disable state
+        self._on_vision_tier_changed(tier_idx)
 
         # Appearance
         theme_map = {"system": 0, "light": 1, "dark": 2}
@@ -1047,6 +1134,12 @@ class SettingsDialog(QDialog):
 
         lang_values = ["en", "auto"]
         self.settings.transcription_language = lang_values[self.transcription_lang_combo.currentIndex()]
+
+        # Vision Description
+        self.settings.description_model_tier = "cpu" if self.vision_tier_combo.currentIndex() == 0 else "cloud"
+        self.settings.description_model_cpu = self.vision_cpu_combo.currentText()
+        self.settings.description_model_cloud = self.vision_cloud_combo.currentText()
+        self.settings.description_temporal_frames = self.vision_frames_spin.value()
 
         # Appearance
         theme_values = ["system", "light", "dark"]
@@ -1206,6 +1299,10 @@ class SettingsDialog(QDialog):
             or self.settings.export_fps != self.original_settings.export_fps
             or self.settings.transcription_model != self.original_settings.transcription_model
             or self.settings.transcription_language != self.original_settings.transcription_language
+            or self.settings.description_model_tier != self.original_settings.description_model_tier
+            or self.settings.description_model_cpu != self.original_settings.description_model_cpu
+            or self.settings.description_model_cloud != self.original_settings.description_model_cloud
+            or self.settings.description_temporal_frames != self.original_settings.description_temporal_frames
             or self.settings.theme_preference != self.original_settings.theme_preference
             or self.settings.youtube_api_key != self.original_settings.youtube_api_key
             or self.settings.youtube_results_count != self.original_settings.youtube_results_count
