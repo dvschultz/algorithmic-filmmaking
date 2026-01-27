@@ -30,6 +30,7 @@ from models.clip import Clip, Source
 from ui.theme import theme
 from ui.video_player import VideoPlayer
 from ui.widgets.editable_label import EditableLabel
+from ui.widgets.editable_text_area import EditableTextArea
 from ui.widgets.shot_type_dropdown import ShotTypeDropdown
 from ui.widgets.editable_transcript import EditableTranscriptWidget
 
@@ -78,6 +79,8 @@ class ClipDetailsSidebar(QDockWidget):
         self._name_change_in_progress = False
         self._shot_type_change_in_progress = False
         self._transcript_change_in_progress = False
+        self._object_labels_change_in_progress = False
+        self._description_change_in_progress = False
 
         self._setup_ui()
         self._connect_signals()
@@ -147,15 +150,6 @@ class ClipDetailsSidebar(QDockWidget):
         self._apply_secondary_style(self.metadata_label)
         content_layout.addWidget(self.metadata_label)
 
-        # Shot type section (EDITABLE)
-        self.shot_type_header = QLabel("Shot Type")
-        self._apply_section_header_style(self.shot_type_header)
-        content_layout.addWidget(self.shot_type_header)
-
-        self.shot_type_dropdown = ShotTypeDropdown()
-        self.shot_type_dropdown.value_changed.connect(self._on_shot_type_changed)
-        content_layout.addWidget(self.shot_type_dropdown)
-
         # Colors section (read-only)
         self.colors_header = QLabel("Dominant Colors")
         self._apply_section_header_style(self.colors_header)
@@ -167,6 +161,29 @@ class ClipDetailsSidebar(QDockWidget):
         self.color_swatches_layout.setSpacing(8)
         content_layout.addWidget(self.color_swatches)
 
+        # Shot type section (EDITABLE)
+        self.shot_type_header = QLabel("Shot Type")
+        self._apply_section_header_style(self.shot_type_header)
+        content_layout.addWidget(self.shot_type_header)
+
+        self.shot_type_dropdown = ShotTypeDropdown()
+        self.shot_type_dropdown.value_changed.connect(self._on_shot_type_changed)
+        content_layout.addWidget(self.shot_type_dropdown)
+
+        # Description section (EDITABLE)
+        self.description_header = QLabel("Description")
+        self._apply_section_header_style(self.description_header)
+        content_layout.addWidget(self.description_header)
+
+        self.description_edit = EditableTextArea("", placeholder="Run Describe to analyze...")
+        self.description_edit.value_changed.connect(self._on_description_changed)
+        content_layout.addWidget(self.description_edit)
+
+        self.description_meta_label = QLabel("")
+        self._apply_muted_style(self.description_meta_label)
+        self.description_meta_label.setVisible(False)
+        content_layout.addWidget(self.description_meta_label)
+
         # Transcript section (EDITABLE)
         self.transcript_header = QLabel("Transcript")
         self._apply_section_header_style(self.transcript_header)
@@ -175,6 +192,30 @@ class ClipDetailsSidebar(QDockWidget):
         self.transcript_edit = EditableTranscriptWidget()
         self.transcript_edit.segments_changed.connect(self._on_transcript_changed)
         content_layout.addWidget(self.transcript_edit)
+
+        # Object Labels section (EDITABLE)
+        self.object_labels_header = QLabel("Classification")
+        self._apply_section_header_style(self.object_labels_header)
+        content_layout.addWidget(self.object_labels_header)
+
+        self.object_labels_edit = EditableLabel("", placeholder="Run Classify to analyze...")
+        self.object_labels_edit.value_changed.connect(self._on_object_labels_changed)
+        content_layout.addWidget(self.object_labels_edit)
+
+        # Detected Objects section (read-only)
+        self.detected_objects_header = QLabel("Detected Objects")
+        self._apply_section_header_style(self.detected_objects_header)
+        content_layout.addWidget(self.detected_objects_header)
+
+        self.detected_objects_label = QLabel("")
+        self.detected_objects_label.setWordWrap(True)
+        content_layout.addWidget(self.detected_objects_label)
+
+        # Person Count (read-only, shown below detected objects when > 0)
+        self.person_count_label = QLabel("")
+        self._apply_muted_style(self.person_count_label)
+        self.person_count_label.setVisible(False)
+        content_layout.addWidget(self.person_count_label)
 
         # Stretch to push content to top
         content_layout.addStretch()
@@ -219,13 +260,23 @@ class ClipDetailsSidebar(QDockWidget):
         self._apply_section_header_style(self.metadata_header)
         self._apply_section_header_style(self.colors_header)
         self._apply_section_header_style(self.shot_type_header)
+        self._apply_section_header_style(self.description_header)
         self._apply_section_header_style(self.transcript_header)
+        self._apply_section_header_style(self.object_labels_header)
+        self._apply_section_header_style(self.detected_objects_header)
         self._apply_secondary_style(self.metadata_label)
         self._apply_muted_style(self.source_label)
+        self._apply_muted_style(self.description_meta_label)
+        self._apply_muted_style(self.person_count_label)
 
         # Re-render color swatches with current clip
         if self._clip_ref:
             self._update_colors(self._clip_ref.dominant_colors)
+            # Re-render detected objects styling
+            if self._clip_ref.detected_objects:
+                self.detected_objects_label.setStyleSheet(f"color: {theme().text_primary};")
+            else:
+                self.detected_objects_label.setStyleSheet(f"color: {theme().text_muted}; font-style: italic;")
 
     @Slot(bool)
     def _on_visibility_changed(self, visible: bool):
@@ -289,6 +340,42 @@ class ClipDetailsSidebar(QDockWidget):
 
         self._transcript_change_in_progress = False
 
+    @Slot(str)
+    def _on_object_labels_changed(self, new_value: str):
+        """Handle object labels edit."""
+        if self._object_labels_change_in_progress or self._loading:
+            return
+        if not self._clip_ref:
+            return
+        self._object_labels_change_in_progress = True
+
+        # Parse comma-separated to list
+        if new_value.strip():
+            labels = [label.strip() for label in new_value.split(",") if label.strip()]
+            self._clip_ref.object_labels = labels if labels else None
+        else:
+            self._clip_ref.object_labels = None
+
+        self.clip_edited.emit(self._clip_ref)
+        self._object_labels_change_in_progress = False
+
+    @Slot(str)
+    def _on_description_changed(self, new_value: str):
+        """Handle description edit."""
+        if self._description_change_in_progress or self._loading:
+            return
+        if not self._clip_ref:
+            return
+        self._description_change_in_progress = True
+
+        self._clip_ref.description = new_value.strip() if new_value.strip() else None
+        # Clear model metadata on manual edit
+        self._clip_ref.description_model = None
+        self._clip_ref.description_frames = None
+
+        self.clip_edited.emit(self._clip_ref)
+        self._description_change_in_progress = False
+
     def show_clip(self, clip: Clip, source: Source):
         """Display details for the given clip.
 
@@ -311,6 +398,8 @@ class ClipDetailsSidebar(QDockWidget):
         self.name_edit.blockSignals(True)
         self.shot_type_dropdown.blockSignals(True)
         self.transcript_edit.blockSignals(True)
+        self.object_labels_edit.blockSignals(True)
+        self.description_edit.blockSignals(True)
 
         # Clip name (editable)
         display_name = clip.display_name(source.filename, source.fps)
@@ -340,10 +429,55 @@ class ClipDetailsSidebar(QDockWidget):
         # Transcript (editable)
         self.transcript_edit.setSegments(clip.transcript)
 
+        # Object Labels (editable)
+        if clip.object_labels:
+            self.object_labels_edit.setText(", ".join(clip.object_labels))
+        else:
+            self.object_labels_edit.setText("")
+
+        # Detected Objects (read-only summary)
+        if clip.detected_objects:
+            # Count by label: {"person": 2, "car": 1}
+            counts: dict[str, int] = {}
+            for obj in clip.detected_objects:
+                label = obj.get("label", "unknown")
+                counts[label] = counts.get(label, 0) + 1
+            summary = ", ".join(f"{count} {label}" for label, count in counts.items())
+            self.detected_objects_label.setText(summary)
+            self.detected_objects_label.setStyleSheet(f"color: {theme().text_primary};")
+        else:
+            self.detected_objects_label.setText("Run Detect Objects to analyze...")
+            self.detected_objects_label.setStyleSheet(f"color: {theme().text_muted}; font-style: italic;")
+
+        # Person Count (read-only)
+        if clip.person_count and clip.person_count > 0:
+            self.person_count_label.setText(f"People detected: {clip.person_count}")
+            self.person_count_label.setVisible(True)
+        else:
+            self.person_count_label.setVisible(False)
+
+        # Description (editable)
+        if clip.description:
+            self.description_edit.setText(clip.description)
+            # Show metadata if available
+            if clip.description_model:
+                meta = f"Generated by {clip.description_model}"
+                if clip.description_frames and clip.description_frames > 1:
+                    meta += f" ({clip.description_frames} frames)"
+                self.description_meta_label.setText(meta)
+                self.description_meta_label.setVisible(True)
+            else:
+                self.description_meta_label.setVisible(False)
+        else:
+            self.description_edit.setText("")
+            self.description_meta_label.setVisible(False)
+
         # Unblock signals
         self.name_edit.blockSignals(False)
         self.shot_type_dropdown.blockSignals(False)
         self.transcript_edit.blockSignals(False)
+        self.object_labels_edit.blockSignals(False)
+        self.description_edit.blockSignals(False)
 
         # Enable editing
         self._set_editing_enabled(True)
@@ -379,6 +513,8 @@ class ClipDetailsSidebar(QDockWidget):
         self.name_edit.blockSignals(True)
         self.shot_type_dropdown.blockSignals(True)
         self.transcript_edit.blockSignals(True)
+        self.object_labels_edit.blockSignals(True)
+        self.description_edit.blockSignals(True)
 
         # Show selection count
         self.name_edit.setText("")
@@ -391,10 +527,22 @@ class ClipDetailsSidebar(QDockWidget):
         self._update_colors(None)
         self.transcript_edit.setSegments(None)
 
+        # Clear new fields
+        self.object_labels_edit.setPlaceholder(f"{count} clips selected")
+        self.object_labels_edit.setText("")
+        self.detected_objects_label.setText("Select a single clip to view details")
+        self.detected_objects_label.setStyleSheet(f"color: {theme().text_muted}; font-style: italic;")
+        self.person_count_label.setVisible(False)
+        self.description_edit.setPlaceholder(f"{count} clips selected")
+        self.description_edit.setText("")
+        self.description_meta_label.setVisible(False)
+
         # Unblock signals
         self.name_edit.blockSignals(False)
         self.shot_type_dropdown.blockSignals(False)
         self.transcript_edit.blockSignals(False)
+        self.object_labels_edit.blockSignals(False)
+        self.description_edit.blockSignals(False)
 
         # Disable editing
         self._set_editing_enabled(False)
@@ -415,6 +563,9 @@ class ClipDetailsSidebar(QDockWidget):
         self.name_edit.setEnabled(enabled)
         self.shot_type_dropdown.setEnabled(enabled)
         self.transcript_edit.setEnabled(enabled)
+        self.object_labels_edit.setEnabled(enabled)
+        self.description_edit.setEnabled(enabled)
+        # Note: detected_objects and person_count are always read-only
 
     def _update_colors(self, colors: Optional[list[tuple[int, int, int]]]):
         """Update the color swatches display.
@@ -485,6 +636,8 @@ class ClipDetailsSidebar(QDockWidget):
         self.name_edit.blockSignals(True)
         self.shot_type_dropdown.blockSignals(True)
         self.transcript_edit.blockSignals(True)
+        self.object_labels_edit.blockSignals(True)
+        self.description_edit.blockSignals(True)
 
         self.name_edit.setText("")
         self.name_edit.setPlaceholder("No clip selected")
@@ -494,10 +647,22 @@ class ClipDetailsSidebar(QDockWidget):
         self.shot_type_dropdown.setValue(None)
         self.transcript_edit.setSegments(None)
 
+        # Clear new fields
+        self.object_labels_edit.setText("")
+        self.object_labels_edit.setPlaceholder("Run Classify to analyze...")
+        self.detected_objects_label.setText("Run Detect Objects to analyze...")
+        self.detected_objects_label.setStyleSheet(f"color: {theme().text_muted}; font-style: italic;")
+        self.person_count_label.setVisible(False)
+        self.description_edit.setText("")
+        self.description_edit.setPlaceholder("Run Describe to analyze...")
+        self.description_meta_label.setVisible(False)
+
         # Unblock signals
         self.name_edit.blockSignals(False)
         self.shot_type_dropdown.blockSignals(False)
         self.transcript_edit.blockSignals(False)
+        self.object_labels_edit.blockSignals(False)
+        self.description_edit.blockSignals(False)
 
         # Disable editing
         self._set_editing_enabled(False)

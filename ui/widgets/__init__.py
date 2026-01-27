@@ -1,5 +1,6 @@
 """Shared UI widgets."""
 
+from .editable_text_area import EditableTextArea
 from .empty_state import EmptyStateWidget
 from .range_slider import RangeSlider, DurationRangeSlider
 from .sorting_card import SortingCard
@@ -9,6 +10,7 @@ from .timeline_preview import TimelinePreview
 
 __all__ = [
     "DurationRangeSlider",
+    "EditableTextArea",
     "EmptyStateWidget",
     "RangeSlider",
     "SortingCard",
