@@ -341,6 +341,9 @@ class Settings:
     thumbnail_cache_dir: Path = field(
         default_factory=lambda: _get_cache_dir() / "thumbnails"
     )
+    model_cache_dir: Path = field(
+        default_factory=lambda: _get_cache_dir() / "models"
+    )
     download_dir: Path = field(default_factory=_get_default_download_dir)
     export_dir: Path = field(default_factory=_get_default_export_dir)
 
@@ -532,6 +535,8 @@ def _load_from_json(config_path: Path, settings: Settings) -> Settings:
     if paths := data.get("paths"):
         if val := paths.get("thumbnail_cache_dir"):
             settings.thumbnail_cache_dir = Path(val).expanduser()
+        if val := paths.get("model_cache_dir"):
+            settings.model_cache_dir = Path(val).expanduser()
         if val := paths.get("download_dir"):
             settings.download_dir = Path(val).expanduser()
         if val := paths.get("export_dir"):
@@ -612,6 +617,7 @@ def _settings_to_json(settings: Settings) -> dict:
         "version": CONFIG_VERSION,
         "paths": {
             "thumbnail_cache_dir": str(settings.thumbnail_cache_dir),
+            "model_cache_dir": str(settings.model_cache_dir),
             "download_dir": str(settings.download_dir),
             "export_dir": str(settings.export_dir),
         },

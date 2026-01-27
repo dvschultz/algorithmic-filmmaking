@@ -19,3 +19,7 @@ keyring>=24.0
 litellm>=1.40.0
 tenacity>=8.2.0
 httpx>=0.25.0
+
+# Content Analysis
+ultralytics>=8.0.0  # YOLOv8
+torchvision>=0.15.0  # MobileNet (compatible with torch>=2.0)

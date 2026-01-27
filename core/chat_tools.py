@@ -115,6 +115,9 @@ TOOL_TIMEOUTS = {
     "search_youtube": 30,      # 30 seconds
     "analyze_colors": 300,     # 5 minutes
     "analyze_shots": 300,      # 5 minutes
+    "classify_content_live": 300,  # 5 minutes for classification
+    "detect_objects_live": 300,    # 5 minutes for object detection
+    "count_people_live": 300,      # 5 minutes for person detection
     "transcribe": 1200,        # 20 minutes
     "transcribe_clips": 1200,  # 20 minutes
     "export_clips": 600,       # 10 minutes
@@ -406,7 +409,7 @@ ASPECT_RATIO_RANGES = {
 
 
 @tools.register(
-    description="Filter clips by criteria. Returns matching clips with their metadata. Available filters: shot_type (close_up, medium_shot, wide_shot, etc.), has_speech (true/false), min_duration (seconds), max_duration (seconds), aspect_ratio ('16:9', '4:3', '9:16'), search_query (text to search in transcripts).",
+    description="Filter clips by criteria. Returns matching clips with their metadata. Available filters: shot_type, has_speech, min_duration, max_duration, aspect_ratio, search_query, has_object (e.g., 'dog', 'car'), min_people, max_people.",
     requires_project=True,
     modifies_gui_state=False
 )
@@ -417,9 +420,28 @@ def filter_clips(
     min_duration: Optional[float] = None,
     max_duration: Optional[float] = None,
     aspect_ratio: Optional[str] = None,
-    search_query: Optional[str] = None
+    search_query: Optional[str] = None,
+    has_object: Optional[str] = None,
+    min_people: Optional[int] = None,
+    max_people: Optional[int] = None,
 ) -> list[dict]:
-    """Filter clips by various criteria."""
+    """Filter clips by various criteria including content analysis.
+
+    Args:
+        project: Project instance
+        shot_type: Filter by shot type (e.g., 'close-up', 'wide shot')
+        has_speech: Filter by whether clip has transcribed speech
+        min_duration: Minimum duration in seconds
+        max_duration: Maximum duration in seconds
+        aspect_ratio: Filter by aspect ratio ('16:9', '4:3', '9:16')
+        search_query: Search text in transcripts
+        has_object: Filter by object label (e.g., 'dog', 'car', 'person')
+        min_people: Minimum number of people detected
+        max_people: Maximum number of people detected
+
+    Returns:
+        List of matching clips with metadata
+    """
     results = []
 
     for clip in project.clips:
@@ -463,6 +485,27 @@ def filter_clips(
             if search_query.lower() not in transcript_text.lower():
                 continue
 
+        # Apply has_object filter (checks both object_labels and detected_objects)
+        if has_object is not None:
+            object_labels = getattr(clip, 'object_labels', None) or []
+            detected_objects = getattr(clip, 'detected_objects', None) or []
+            detected_labels = [d.get("label", "") for d in detected_objects]
+            all_labels = set(label.lower() for label in object_labels + detected_labels)
+            if has_object.lower() not in all_labels:
+                continue
+
+        # Apply min_people filter
+        if min_people is not None:
+            person_count = getattr(clip, 'person_count', None) or 0
+            if person_count < min_people:
+                continue
+
+        # Apply max_people filter
+        if max_people is not None:
+            person_count = getattr(clip, 'person_count', None) or 0
+            if person_count > max_people:
+                continue
+
         # Calculate aspect ratio for output
         clip_aspect_ratio = None
         if source and source.height > 0:
@@ -476,6 +519,8 @@ def filter_clips(
             "shot_type": getattr(clip, 'shot_type', None),
             "has_speech": bool(getattr(clip, 'transcript', None)),
             "dominant_colors": getattr(clip, 'dominant_colors', None),
+            "object_labels": getattr(clip, 'object_labels', None),
+            "person_count": getattr(clip, 'person_count', None),
             "width": source.width if source else None,
             "height": source.height if source else None,
             "aspect_ratio": clip_aspect_ratio,
@@ -508,6 +553,8 @@ def list_clips(project) -> list[dict]:
             "shot_type": getattr(clip, 'shot_type', None),
             "has_speech": bool(getattr(clip, 'transcript', None)),
             "dominant_colors": getattr(clip, 'dominant_colors', None),
+            "object_labels": getattr(clip, 'object_labels', None),
+            "person_count": getattr(clip, 'person_count', None),
             "transcript": clip.get_transcript_text() if clip.transcript else None,
             "notes": getattr(clip, 'notes', None),
             "tags": getattr(clip, 'tags', []),
@@ -2665,6 +2712,115 @@ def transcribe_live(main_window, clip_ids: list[str]) -> dict:
 
     # Return instruction for MainWindow to start the worker
     return {"_wait_for_worker": "transcription", "clip_ids": valid_ids, "clip_count": len(valid_ids)}
+
+
+@tools.register(
+    description="Classify frame content using ImageNet labels. Identifies objects like 'dog', 'car', 'tree' in clips using MobileNet. Updates clip.object_labels.",
+    requires_project=True,
+    modifies_gui_state=True
+)
+def classify_content_live(main_window, clip_ids: list[str], top_k: int = 5) -> dict:
+    """Classify content in clips with live GUI update.
+
+    Uses MobileNetV3-Small to classify frames with ImageNet labels (1000 categories).
+    Results are stored in clip.object_labels.
+
+    Args:
+        clip_ids: List of clip IDs to classify
+        top_k: Number of top labels to return per clip (default: 5)
+
+    Returns:
+        Dict with classification results (after worker completes)
+    """
+    # Validate clips exist
+    valid_ids = [cid for cid in clip_ids if cid in main_window.project.clips_by_id]
+
+    if not valid_ids:
+        return {"success": False, "error": "No valid clips found"}
+
+    # Check if worker already running
+    if main_window.classification_worker and main_window.classification_worker.isRunning():
+        return {"success": False, "error": "Classification already in progress"}
+
+    # Return instruction for MainWindow to start the worker
+    return {
+        "_wait_for_worker": "classification",
+        "clip_ids": valid_ids,
+        "clip_count": len(valid_ids),
+        "top_k": top_k,
+    }
+
+
+@tools.register(
+    description="Detect and count objects in clips using YOLO. Returns object labels, counts, and bounding boxes. Updates clip.detected_objects and clip.person_count.",
+    requires_project=True,
+    modifies_gui_state=True
+)
+def detect_objects_live(main_window, clip_ids: list[str], confidence: float = 0.5) -> dict:
+    """Detect objects in clips with live GUI update.
+
+    Uses YOLOv8 to detect objects from COCO dataset (80 object classes).
+    Results are stored in clip.detected_objects and clip.person_count.
+
+    Args:
+        clip_ids: List of clip IDs to analyze
+        confidence: Detection confidence threshold (0.0-1.0, default: 0.5)
+
+    Returns:
+        Dict with detection results (after worker completes)
+    """
+    # Validate clips exist
+    valid_ids = [cid for cid in clip_ids if cid in main_window.project.clips_by_id]
+
+    if not valid_ids:
+        return {"success": False, "error": "No valid clips found"}
+
+    # Check if worker already running
+    if main_window.detection_worker_yolo and main_window.detection_worker_yolo.isRunning():
+        return {"success": False, "error": "Object detection already in progress"}
+
+    # Return instruction for MainWindow to start the worker
+    return {
+        "_wait_for_worker": "object_detection",
+        "clip_ids": valid_ids,
+        "clip_count": len(valid_ids),
+        "confidence": confidence,
+    }
+
+
+@tools.register(
+    description="Count people in clips using YOLO. Faster than full object detection when you only need person counts. Updates clip.person_count.",
+    requires_project=True,
+    modifies_gui_state=True
+)
+def count_people_live(main_window, clip_ids: list[str]) -> dict:
+    """Count people in clips with live GUI update.
+
+    Uses YOLOv8 to count people in each clip. Faster than detect_objects_live
+    when you only need person counts.
+
+    Args:
+        clip_ids: List of clip IDs to analyze
+
+    Returns:
+        Dict with person count results (after worker completes)
+    """
+    # Validate clips exist
+    valid_ids = [cid for cid in clip_ids if cid in main_window.project.clips_by_id]
+
+    if not valid_ids:
+        return {"success": False, "error": "No valid clips found"}
+
+    # Check if worker already running
+    if main_window.detection_worker_yolo and main_window.detection_worker_yolo.isRunning():
+        return {"success": False, "error": "Object detection already in progress"}
+
+    # Return instruction for MainWindow to start the worker
+    return {
+        "_wait_for_worker": "person_detection",
+        "clip_ids": valid_ids,
+        "clip_count": len(valid_ids),
+    }
 
 
 @tools.register(

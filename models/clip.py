@@ -126,6 +126,10 @@ class Clip:
     transcript: Optional[list["TranscriptSegment"]] = None  # Speech transcription segments
     tags: list[str] = field(default_factory=list)  # User-defined tags for organization
     notes: str = ""  # User notes/comments about the clip
+    # Content analysis fields
+    object_labels: Optional[list[str]] = None  # ImageNet labels, e.g., ["dog", "car", "tree"]
+    detected_objects: Optional[list[dict]] = None  # [{label, confidence, bbox}]
+    person_count: Optional[int] = None  # Number of people detected
 
     @property
     def duration_frames(self) -> int:
@@ -197,6 +201,13 @@ class Clip:
             data["tags"] = self.tags
         if self.notes:
             data["notes"] = self.notes
+        # Content analysis fields
+        if self.object_labels:
+            data["object_labels"] = self.object_labels
+        if self.detected_objects:
+            data["detected_objects"] = self.detected_objects
+        if self.person_count is not None:
+            data["person_count"] = self.person_count
         return data
 
     @classmethod
@@ -232,4 +243,8 @@ class Clip:
             transcript=transcript,
             tags=data.get("tags", []),
             notes=data.get("notes", ""),
+            # Content analysis fields
+            object_labels=data.get("object_labels"),
+            detected_objects=data.get("detected_objects"),
+            person_count=data.get("person_count"),
         )
