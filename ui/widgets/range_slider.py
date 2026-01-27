@@ -48,6 +48,10 @@ class RangeSlider(QWidget):
         self.setMouseTracking(True)
         self.setCursor(Qt.ArrowCursor)
 
+        # Accessibility
+        self.setAccessibleName("Range slider")
+        self._update_accessible_description()
+
     def set_range(self, min_val: float, max_val: float):
         """Set the data range (min/max possible values).
 
@@ -86,6 +90,7 @@ class RangeSlider(QWidget):
             self._value_min, self._value_max = self._value_max, self._value_min
 
         self.update()
+        self._update_accessible_description()
 
     def set_suffix(self, suffix: str):
         """Set the suffix for value labels (e.g., 's' for seconds)."""
@@ -95,6 +100,12 @@ class RangeSlider(QWidget):
     def values(self) -> tuple[float, float]:
         """Get the current selected range."""
         return (self._value_min, self._value_max)
+
+    def _update_accessible_description(self):
+        """Update the accessible description with current values."""
+        self.setAccessibleDescription(
+            f"Minimum: {self._value_min:.1f}{self._suffix}, Maximum: {self._value_max:.1f}{self._suffix}"
+        )
 
     def get_data_range(self) -> tuple[float, float]:
         """Get the data range (min/max possible values)."""
@@ -314,6 +325,7 @@ class RangeSlider(QWidget):
                 self._value_max = min(self._data_max, self._value_max)
 
             self.update()
+            self._update_accessible_description()
             self.range_changed.emit(self._value_min, self._value_max)
         else:
             # Update cursor based on hover

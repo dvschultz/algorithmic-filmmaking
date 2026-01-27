@@ -74,6 +74,21 @@ class ThemeColors:
     badge_analyzed: str          # "Analyzed" badge
     badge_not_analyzed: str      # "Not Analyzed" badge
     shot_type_badge: str         # Shot type label background
+    surface_highlight: str       # Highlighted surface (env override indicator)
+
+    # Chat/Plan widget colors (semantic)
+    chat_user_bubble: str        # User message bubble
+    chat_assistant_bubble: str   # Assistant message bubble
+    chat_user_text: str          # User message text
+    chat_assistant_text: str     # Assistant message text
+    plan_pending_bg: str         # Pending step background
+    plan_pending_border: str     # Pending step border
+    plan_running_bg: str         # Running step background
+    plan_running_border: str     # Running step border
+    plan_completed_bg: str       # Completed step background
+    plan_completed_border: str   # Completed step border
+    plan_failed_bg: str          # Failed step background
+    plan_failed_border: str      # Failed step border
 
     def qcolor(self, attr: str) -> QColor:
         """Get a QColor for the given attribute name."""
@@ -129,6 +144,21 @@ DARK_THEME = ThemeColors(
     badge_analyzed="#4CAF50",
     badge_not_analyzed="#999999",
     shot_type_badge="#666666",
+    surface_highlight="#454545",
+
+    # Chat/Plan widget colors
+    chat_user_bubble="#4a90d9",
+    chat_assistant_bubble="#3a3a3a",
+    chat_user_text="#ffffff",
+    chat_assistant_text="#ffffff",
+    plan_pending_bg="#2a2a2a",
+    plan_pending_border="#555555",
+    plan_running_bg="#1a3a5c",
+    plan_running_border="#4a90d9",
+    plan_completed_bg="#1a3a1a",
+    plan_completed_border="#4CAF50",
+    plan_failed_bg="#3a1a1a",
+    plan_failed_border="#ff4444",
 )
 
 
@@ -180,6 +210,21 @@ LIGHT_THEME = ThemeColors(
     badge_analyzed="#28a745",
     badge_not_analyzed="#999999",
     shot_type_badge="#666666",
+    surface_highlight="#e8e8e8",
+
+    # Chat/Plan widget colors
+    chat_user_bubble="#4a90d9",
+    chat_assistant_bubble="#e4e6eb",
+    chat_user_text="#ffffff",
+    chat_assistant_text="#333333",
+    plan_pending_bg="#f8f9fa",
+    plan_pending_border="#dee2e6",
+    plan_running_bg="#e3f2fd",
+    plan_running_border="#2196f3",
+    plan_completed_bg="#e8f5e9",
+    plan_completed_border="#4caf50",
+    plan_failed_bg="#ffebee",
+    plan_failed_border="#f44336",
 )
 
 
@@ -408,24 +453,40 @@ class Theme:
                 border-color: {c.border_secondary};
             }}
 
-            /* Sliders */
+            /* Sliders - use explicit background colors to prevent native styling bleed-through on macOS */
             QSlider {{
-                background: transparent;
+                background-color: {c.background_secondary};
+                border: none;
+                padding: 0px;
+                min-height: 20px;
+                max-height: 20px;
             }}
             QSlider::groove:horizontal {{
                 background-color: {c.background_tertiary};
+                border: none;
                 height: 6px;
                 border-radius: 3px;
+                margin: 7px 0;
             }}
             QSlider::sub-page:horizontal {{
-                background: transparent;
+                background-color: {c.background_secondary};
+                border: none;
+                height: 6px;
+                border-radius: 3px;
+                margin: 7px 0;
             }}
             QSlider::add-page:horizontal {{
-                background: transparent;
+                background-color: {c.background_secondary};
+                border: none;
+                height: 6px;
+                border-radius: 3px;
+                margin: 7px 0;
             }}
             QSlider::handle:horizontal {{
                 background-color: {c.accent_blue};
+                border: none;
                 width: 16px;
+                height: 16px;
                 margin: -5px 0;
                 border-radius: 8px;
             }}
@@ -437,6 +498,28 @@ class Theme:
             }}
             QSlider:disabled::handle:horizontal {{
                 background-color: {c.text_muted};
+            }}
+            /* Vertical sliders */
+            QSlider::groove:vertical {{
+                background-color: {c.background_tertiary};
+                border: none;
+                width: 6px;
+                border-radius: 3px;
+                margin: 0 7px;
+            }}
+            QSlider::handle:vertical {{
+                background-color: {c.accent_blue};
+                border: none;
+                height: 16px;
+                width: 16px;
+                margin: 0 -5px;
+                border-radius: 8px;
+            }}
+            QSlider::handle:vertical:hover {{
+                background-color: {c.accent_blue_hover};
+            }}
+            QSlider:focus::handle:horizontal, QSlider:focus::handle:vertical {{
+                border: 2px solid {c.border_focus};
             }}
 
             /* Checkboxes */

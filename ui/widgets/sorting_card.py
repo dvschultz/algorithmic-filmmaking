@@ -54,6 +54,10 @@ class SortingCard(QFrame):
         # Enable keyboard focus
         self.setFocusPolicy(Qt.StrongFocus)
 
+        # Accessibility
+        self.setAccessibleName(title)
+        self.setAccessibleDescription(description)
+
         self._setup_ui()
         self._update_style()
 

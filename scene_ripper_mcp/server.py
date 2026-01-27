@@ -1,6 +1,7 @@
 """MCP Server entry point using FastMCP."""
 
 import logging
+import os
 import sys
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
@@ -15,6 +16,22 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Default timeout for long-running operations (5 minutes)
+DEFAULT_TOOL_TIMEOUT = 300
+
+
+def get_tool_timeout() -> int:
+    """Get tool timeout from environment variable.
+
+    Returns:
+        Timeout in seconds (default: 300)
+    """
+    try:
+        return int(os.environ.get("MCP_TOOL_TIMEOUT", DEFAULT_TOOL_TIMEOUT))
+    except ValueError:
+        logger.warning("Invalid MCP_TOOL_TIMEOUT value, using default")
+        return DEFAULT_TOOL_TIMEOUT
+
 
 @asynccontextmanager
 async def lifespan(server: FastMCP) -> AsyncIterator[dict]:
@@ -25,9 +42,12 @@ async def lifespan(server: FastMCP) -> AsyncIterator[dict]:
     from core.settings import load_settings
 
     settings = load_settings()
-    logger.info(f"Settings loaded: download_dir={settings.download_dir}")
+    timeout = get_tool_timeout()
 
-    yield {"settings": settings}
+    logger.info(f"Settings loaded: download_dir={settings.download_dir}")
+    logger.info(f"Tool timeout: {timeout}s (set MCP_TOOL_TIMEOUT to customize)")
+
+    yield {"settings": settings, "tool_timeout": timeout}
 
     logger.info("Scene Ripper MCP Server shutting down...")
 

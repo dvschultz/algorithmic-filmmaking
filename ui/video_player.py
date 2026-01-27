@@ -8,10 +8,10 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
     QPushButton,
-    QSlider,
     QLabel,
     QStyle,
 )
+from ui.widgets.styled_slider import StyledSlider
 from PySide6.QtCore import Qt, QUrl, Slot, Signal
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QVideoWidget
@@ -59,20 +59,25 @@ class VideoPlayer(QWidget):
         # Play/Pause button
         self.play_btn = QPushButton()
         self.play_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
-        self.play_btn.setFixedSize(40, 30)
+        self.play_btn.setFixedSize(44, 32)
+        self.play_btn.setAccessibleName("Play")
+        self.play_btn.setToolTip("Play/Pause video")
         self.play_btn.clicked.connect(self._toggle_playback)
         controls.addWidget(self.play_btn)
 
         # Stop button
         self.stop_btn = QPushButton()
         self.stop_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaStop))
-        self.stop_btn.setFixedSize(40, 30)
+        self.stop_btn.setFixedSize(44, 32)
+        self.stop_btn.setAccessibleName("Stop")
+        self.stop_btn.setToolTip("Stop video")
         self.stop_btn.clicked.connect(self._stop)
         controls.addWidget(self.stop_btn)
 
         # Position slider
-        self.position_slider = QSlider(Qt.Horizontal)
+        self.position_slider = StyledSlider(Qt.Horizontal)
         self.position_slider.setRange(0, 0)
+        self.position_slider.setAccessibleName("Video position")
         self.position_slider.sliderMoved.connect(self._set_position)
         controls.addWidget(self.position_slider, 1)
 

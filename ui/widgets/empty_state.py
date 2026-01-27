@@ -18,18 +18,27 @@ class EmptyStateWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.addStretch()
 
-        title_label = QLabel(title)
+        self._title_label = QLabel(title)
         title_font = QFont()
         title_font.setPointSize(18)
         title_font.setBold(True)
-        title_label.setFont(title_font)
-        title_label.setStyleSheet(f"color: {theme().text_secondary};")
-        title_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(title_label)
+        self._title_label.setFont(title_font)
+        self._title_label.setStyleSheet(f"color: {theme().text_secondary};")
+        self._title_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self._title_label)
 
-        message_label = QLabel(message)
-        message_label.setStyleSheet(f"color: {theme().text_muted};")
-        message_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(message_label)
+        self._message_label = QLabel(message)
+        self._message_label.setStyleSheet(f"color: {theme().text_muted};")
+        self._message_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self._message_label)
 
         layout.addStretch()
+
+        # Connect to theme changes
+        if theme().changed:
+            theme().changed.connect(self._on_theme_changed)
+
+    def _on_theme_changed(self):
+        """Handle theme changes."""
+        self._title_label.setStyleSheet(f"color: {theme().text_secondary};")
+        self._message_label.setStyleSheet(f"color: {theme().text_muted};")

@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
-    QSlider,
     QDoubleSpinBox,
     QSpinBox,
     QCheckBox,
@@ -23,6 +22,8 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
 )
 from PySide6.QtCore import Qt
+
+from ui.widgets.styled_slider import StyledSlider
 
 from core.settings import (
     Settings,
@@ -120,7 +121,8 @@ class PathSelector(QWidget):
         layout.addWidget(self.path_edit)
 
         self.browse_btn = QPushButton("...")
-        self.browse_btn.setFixedWidth(30)
+        self.browse_btn.setFixedWidth(44)  # Minimum touch target size
+        self.browse_btn.setAccessibleName("Browse")
         self.browse_btn.setToolTip("Browse for folder")
         self.browse_btn.clicked.connect(self._on_browse)
         layout.addWidget(self.browse_btn)
@@ -352,7 +354,7 @@ class SettingsDialog(QDialog):
         self.sensitivity_lbl = QLabel("Default Sensitivity:")
         sens_layout.addWidget(self.sensitivity_lbl)
 
-        self.sensitivity_slider = QSlider(Qt.Horizontal)
+        self.sensitivity_slider = StyledSlider(Qt.Horizontal)
         self.sensitivity_slider.setRange(10, 100)  # 1.0 to 10.0
         self.sensitivity_slider.setToolTip(
             "Lower values detect more scenes (more sensitive to cuts).\n"
