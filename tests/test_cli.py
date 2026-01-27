@@ -59,12 +59,16 @@ class TestCLIConfig:
 
     def test_config_defaults(self):
         """Test that config has sensible defaults."""
-        config = CLIConfig()
-        assert config.default_sensitivity == 3.0
-        assert config.min_scene_length_seconds == 0.5
-        assert config.transcription_model == "small.en"
-        assert config.transcription_language == "en"
-        assert config.youtube_results_count == 25
+        # Isolate from user's actual config by mocking config path and keyring
+        with patch("core.settings._get_config_path") as mock_path:
+            mock_path.return_value = Path("/nonexistent/config.json")
+            with patch("core.settings._get_api_key_from_keyring", return_value=""):
+                config = CLIConfig()
+                assert config.default_sensitivity == 3.0
+                assert config.min_scene_length_seconds == 0.5
+                assert config.transcription_model == "small.en"
+                assert config.transcription_language == "en"
+                assert config.youtube_results_count == 25
 
     def test_config_load_with_env_vars(self):
         """Test that environment variables override config."""
@@ -392,13 +396,14 @@ class TestYouTubeCommands:
 
     def test_search_no_api_key(self, runner):
         """Test search fails gracefully without API key."""
-        # Clear any API key from environment
+        # Clear any API key from environment, config file, AND keyring
         with patch.dict(os.environ, {}, clear=True):
-            with patch("cli.utils.config.get_config_path") as mock_path:
+            with patch("core.settings._get_config_path") as mock_path:
                 mock_path.return_value = Path("/nonexistent/config.json")
-                result = runner.invoke(cli, ["search", "test query"])
-                assert result.exit_code == ExitCode.VALIDATION_ERROR
-                assert "API key" in result.output
+                with patch("core.settings._get_api_key_from_keyring", return_value=""):
+                    result = runner.invoke(cli, ["search", "test query"])
+                    assert result.exit_code == ExitCode.VALIDATION_ERROR
+                    assert "API key" in result.output
 
     def test_search_help(self, runner):
         """Test search help."""

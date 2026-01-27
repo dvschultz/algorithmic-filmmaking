@@ -244,6 +244,7 @@ class ChatAgentWorker(QThread):
     tool_result_formatted = Signal(str)  # Human-readable tool result summary
     gui_tool_requested = Signal(str, dict, str)  # tool_name, args, tool_call_id (for main thread execution)
     gui_tool_completed = Signal(str)  # tool_call_id (set by main thread when done)
+    gui_tool_cancelled = Signal(str)  # tool_name (emitted when GUI tool times out, to cancel workers)
     workflow_progress = Signal(str, int, int)  # step_name, current, total (for compound operations)
     complete = Signal(str, list)  # final response text, tool_history
     error = Signal(str)  # error message
@@ -311,7 +312,7 @@ class ChatAgentWorker(QThread):
         system_prompt = self._build_system_prompt()
         full_messages = [{"role": "system", "content": system_prompt}] + self.messages
 
-        max_iterations = 10  # Prevent infinite tool loops
+        max_iterations = 25  # Prevent infinite tool loops (increased for complex multi-step workflows)
         iteration = 0
         tool_history = []  # Track tool interactions for history
 
@@ -376,6 +377,8 @@ class ChatAgentWorker(QThread):
                         tool_timeout = get_tool_timeout(name)
                         completed = self._gui_tool_event.wait(timeout=tool_timeout)
                         if not completed or self._stop_requested:
+                            # Emit cancellation signal so MainWindow can stop orphaned workers
+                            self.gui_tool_cancelled.emit(name)
                             result = {
                                 "tool_call_id": tool_call_id,
                                 "name": name,

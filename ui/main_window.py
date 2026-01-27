@@ -81,22 +81,35 @@ class DetectionWorker(QThread):
         super().__init__()
         self.video_path = video_path
         self.config = config
+        self._cancelled = False
         logger.debug("DetectionWorker created")
+
+    def cancel(self):
+        """Request cancellation of the detection."""
+        logger.info("DetectionWorker.cancel() called")
+        self._cancelled = True
 
     def run(self):
         logger.info("DetectionWorker.run() STARTING")
         try:
+            if self._cancelled:
+                logger.info("DetectionWorker cancelled before start")
+                return
             detector = SceneDetector(self.config)
             source, clips = detector.detect_scenes_with_progress(
                 self.video_path,
                 lambda p, m: self.progress.emit(p, m),
             )
+            if self._cancelled:
+                logger.info("DetectionWorker cancelled after detection")
+                return
             logger.info("DetectionWorker.run() emitting finished signal")
             self.finished.emit(source, clips)
             logger.info("DetectionWorker.run() COMPLETED")
         except Exception as e:
-            logger.error(f"DetectionWorker.run() ERROR: {e}")
-            self.error.emit(str(e))
+            if not self._cancelled:
+                logger.error(f"DetectionWorker.run() ERROR: {e}")
+                self.error.emit(str(e))
 
 
 class ThumbnailWorker(QThread):
@@ -1222,6 +1235,7 @@ class MainWindow(QMainWindow):
         self._chat_worker.tool_result.connect(self._on_chat_tool_result)
         self._chat_worker.tool_result_formatted.connect(self.chat_panel.on_tool_result_formatted)
         self._chat_worker.gui_tool_requested.connect(self._on_gui_tool_requested)
+        self._chat_worker.gui_tool_cancelled.connect(self._on_gui_tool_cancelled)
         self._chat_worker.complete.connect(self._on_chat_complete)
         self._chat_worker.error.connect(self._on_chat_error)
 
@@ -1244,6 +1258,39 @@ class MainWindow(QMainWindow):
         logger.info(f"Chat tool {name} completed: success={success}")
         if self._current_tool_indicator:
             self._current_tool_indicator.set_complete(success)
+
+    @Slot(str)
+    def _on_gui_tool_cancelled(self, tool_name: str):
+        """Cancel any running worker when agent tool times out.
+
+        This prevents orphaned background threads from continuing to run
+        after the agent has given up waiting for them.
+
+        Args:
+            tool_name: Name of the tool that timed out
+        """
+        logger.warning(f"Agent tool '{tool_name}' timed out. Attempting to cancel worker.")
+
+        # Map tool names to their worker attributes
+        worker_map = {
+            "detect_scenes_live": "detection_worker",
+            "analyze_colors_live": "color_analysis_worker",
+            "analyze_shots_live": "shot_type_worker",
+            "transcribe_live": "transcription_worker",
+            "download_video": "download_worker",
+        }
+
+        worker_attr = worker_map.get(tool_name)
+        if worker_attr:
+            worker = getattr(self, worker_attr, None)
+            if worker and worker.isRunning() and hasattr(worker, "cancel"):
+                logger.info(f"Cancelling {worker_attr} due to timeout")
+                worker.cancel()
+
+        # Clear pending tool state
+        if self._pending_agent_tool_name == tool_name:
+            self._pending_agent_tool_call_id = None
+            self._pending_agent_tool_name = None
 
     @Slot(str, int, int)
     def _on_workflow_progress(self, step_name: str, current: int, total: int):

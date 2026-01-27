@@ -46,6 +46,11 @@ def _validate_path(path_str: str, must_exist: bool = False, allow_relative: bool
     if not path_str:
         return False, "Path cannot be empty", None
 
+    # Check for path traversal attempts in raw string BEFORE any parsing
+    # This prevents bypass via Path() normalization
+    if ".." in path_str:
+        return False, f"Path traversal not allowed: {path_str}", None
+
     try:
         path = Path(path_str)
 
@@ -55,10 +60,6 @@ def _validate_path(path_str: str, must_exist: bool = False, allow_relative: bool
         # Check for absolute path requirement
         if not allow_relative and not path.is_absolute():
             return False, f"Only absolute paths are allowed: {path_str}", None
-
-        # Check for path traversal attempts (.. in original path)
-        if ".." in str(path):
-            return False, f"Path traversal not allowed: {path_str}", None
 
         # Check existence if required
         if must_exist and not resolved.exists():
