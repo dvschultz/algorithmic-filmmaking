@@ -21,3 +21,26 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["cli*", "core*", "models*", "ui*", "scene_ripper_mcp*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+asyncio_mode = "strict"
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+exclude = [
+    "tests/",
+    "docs/",
+    "build/",
+]
+
+[[tool.mypy.overrides]]
+module = "cli.*"
+disallow_untyped_defs = false  # Start permissive, enable gradually
+strict_optional = true

@@ -1,7 +1,7 @@
 """Progress display utilities for the CLI."""
 
 import sys
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import click
 
@@ -35,29 +35,33 @@ def create_progress_callback(
     else:
         # Interactive: use progress bar
         # We need to manage the progress bar state
-        state = {"bar": None, "last_pos": 0}
+        state: dict[str, Any] = {"bar": None, "last_pos": 0}
 
         def callback(progress: float, status: str) -> None:
             # Create bar on first call
             if state["bar"] is None:
-                state["bar"] = click.progressbar(
+                bar = click.progressbar(
                     length=100,
                     label=label,
                     file=sys.stderr,
                     show_eta=True,
                     show_percent=True,
                 )
-                state["bar"].__enter__()
+                bar.__enter__()
+                state["bar"] = bar
 
             # Update progress
             new_pos = int(progress * 100)
-            if new_pos > state["last_pos"]:
-                state["bar"].update(new_pos - state["last_pos"])
+            bar = state["bar"]
+            if bar is not None and new_pos > state["last_pos"]:
+                bar.update(new_pos - state["last_pos"])
                 state["last_pos"] = new_pos
 
             # Close bar when complete
             if progress >= 1.0:
-                state["bar"].__exit__(None, None, None)
+                bar = state["bar"]
+                if bar is not None:
+                    bar.__exit__(None, None, None)
                 if show_status and status:
                     click.echo(f"{label}: {status}", err=True)
 
@@ -84,7 +88,7 @@ class ProgressContext:
         """
         self.label = label
         self.show_status = show_status
-        self._bar: Optional[click.progressbar] = None
+        self._bar: Optional[Any] = None  # click.progressbar instance
         self._last_pos = 0
         self._interactive = sys.stderr.isatty()
 

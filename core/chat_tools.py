@@ -405,7 +405,7 @@ ASPECT_RATIO_RANGES = {
 
 
 @tools.register(
-    description="Filter clips by criteria. Returns matching clips with their metadata. Available filters: shot_type (close_up, medium_shot, wide_shot, etc.), has_speech (true/false), min_duration (seconds), max_duration (seconds), aspect_ratio ('16:9', '4:3', '9:16').",
+    description="Filter clips by criteria. Returns matching clips with their metadata. Available filters: shot_type (close_up, medium_shot, wide_shot, etc.), has_speech (true/false), min_duration (seconds), max_duration (seconds), aspect_ratio ('16:9', '4:3', '9:16'), search_query (text to search in transcripts).",
     requires_project=True,
     modifies_gui_state=False
 )
@@ -415,7 +415,8 @@ def filter_clips(
     has_speech: Optional[bool] = None,
     min_duration: Optional[float] = None,
     max_duration: Optional[float] = None,
-    aspect_ratio: Optional[str] = None
+    aspect_ratio: Optional[str] = None,
+    search_query: Optional[str] = None
 ) -> list[dict]:
     """Filter clips by various criteria."""
     results = []
@@ -451,6 +452,14 @@ def filter_clips(
             source_aspect = source.width / source.height
             min_ratio, max_ratio = ASPECT_RATIO_RANGES[aspect_ratio]
             if not (min_ratio <= source_aspect <= max_ratio):
+                continue
+
+        # Apply transcript search filter
+        if search_query:
+            transcript_text = clip.get_transcript_text()
+            if not transcript_text:
+                continue
+            if search_query.lower() not in transcript_text.lower():
                 continue
 
         # Calculate aspect ratio for output
@@ -3023,4 +3032,261 @@ def update_settings(setting_name: str, value) -> dict:
         "setting": setting_name,
         "old_value": old_value,
         "new_value": value,
+    }
+
+
+# =============================================================================
+# Content-Aware Tools - Search, similarity, and grouping
+# =============================================================================
+
+
+@tools.register(
+    description="Search clip transcripts for specific words or phrases. Returns clips containing the search term with timestamp and context. Useful for finding clips where specific things are said.",
+    requires_project=True,
+    modifies_gui_state=False
+)
+def search_transcripts(
+    project,
+    query: str,
+    case_sensitive: bool = False,
+    context_chars: int = 50
+) -> dict:
+    """Search transcripts for matching content.
+
+    Args:
+        query: Text to search for in transcripts
+        case_sensitive: Whether to match case exactly (default: False)
+        context_chars: Number of characters of context around match (default: 50)
+
+    Returns:
+        Dictionary with success status, query, match count, and list of matches
+    """
+    if not query:
+        return {"success": False, "error": "Query cannot be empty"}
+
+    search_query = query if case_sensitive else query.lower()
+    results = []
+
+    for clip in project.clips:
+        if not clip.transcript:
+            continue
+
+        full_text = clip.get_transcript_text()
+        if not full_text:
+            continue
+
+        search_text = full_text if case_sensitive else full_text.lower()
+
+        if search_query in search_text:
+            # Find match position for context
+            pos = search_text.find(search_query)
+            start = max(0, pos - context_chars)
+            end = min(len(full_text), pos + len(query) + context_chars)
+            context = full_text[start:end]
+
+            # Add ellipsis if truncated
+            if start > 0:
+                context = "..." + context
+            if end < len(full_text):
+                context = context + "..."
+
+            source = project.sources_by_id.get(clip.source_id)
+            fps = source.fps if source else 30.0
+
+            results.append({
+                "clip_id": clip.id,
+                "source_name": source.file_path.name if source else "Unknown",
+                "match_context": context,
+                "duration_seconds": round(clip.duration_seconds(fps), 2),
+                "start_time": round(clip.start_time(fps), 2),
+                "shot_type": clip.shot_type,
+            })
+
+    return {
+        "success": True,
+        "query": query,
+        "match_count": len(results),
+        "matches": results
+    }
+
+
+@tools.register(
+    description="Find clips visually similar to a reference clip based on color palette, shot type, or duration. Returns a ranked list of similar clips.",
+    requires_project=True,
+    modifies_gui_state=False
+)
+def find_similar_clips(
+    project,
+    clip_id: str,
+    criteria: Optional[list[str]] = None,
+    limit: int = 10
+) -> dict:
+    """Find clips similar to a reference clip by visual/temporal criteria.
+
+    Args:
+        clip_id: ID of the reference clip to find similar clips to
+        criteria: List of criteria to compare: 'color', 'shot_type', 'duration'
+                  (default: ['color', 'shot_type'])
+        limit: Maximum number of similar clips to return (default: 10)
+
+    Returns:
+        Dictionary with success status, reference clip ID, criteria used,
+        and list of similar clips with similarity scores
+    """
+    from core.analysis.color import get_primary_hue
+
+    if criteria is None:
+        criteria = ["color", "shot_type"]
+
+    # Validate criteria
+    valid_criteria = ["color", "shot_type", "duration"]
+    for c in criteria:
+        if c not in valid_criteria:
+            return {
+                "success": False,
+                "error": f"Invalid criterion '{c}'. Valid criteria: {', '.join(valid_criteria)}"
+            }
+
+    reference = project.clips_by_id.get(clip_id)
+    if not reference:
+        return {"success": False, "error": f"Clip '{clip_id}' not found"}
+
+    ref_source = project.sources_by_id.get(reference.source_id)
+    ref_fps = ref_source.fps if ref_source else 30.0
+    ref_duration = reference.duration_seconds(ref_fps)
+
+    scores = []
+    for clip in project.clips:
+        if clip.id == clip_id:
+            continue
+
+        score = 0.0
+        source = project.sources_by_id.get(clip.source_id)
+        fps = source.fps if source else 30.0
+
+        # Score by shot type match
+        if "shot_type" in criteria:
+            if clip.shot_type and reference.shot_type:
+                if clip.shot_type == reference.shot_type:
+                    score += 1.0
+                # Partial match for similar shot types
+                elif clip.shot_type and reference.shot_type:
+                    # Close types get partial score
+                    close_types = {
+                        "close_up": ["extreme_close_up", "medium_close_up"],
+                        "medium_shot": ["medium_close_up", "medium_long_shot"],
+                        "wide_shot": ["medium_long_shot", "extreme_wide_shot"],
+                    }
+                    if reference.shot_type in close_types:
+                        if clip.shot_type in close_types[reference.shot_type]:
+                            score += 0.5
+
+        # Score by color similarity
+        if "color" in criteria and reference.dominant_colors and clip.dominant_colors:
+            ref_hue = get_primary_hue(reference.dominant_colors)
+            clip_hue = get_primary_hue(clip.dominant_colors)
+            hue_diff = abs(ref_hue - clip_hue)
+            if hue_diff > 180:
+                hue_diff = 360 - hue_diff
+            # Similar within 60 degrees gets full score, degrades linearly
+            score += max(0, 1.0 - hue_diff / 60)
+
+        # Score by duration similarity
+        if "duration" in criteria:
+            clip_duration = clip.duration_seconds(fps)
+            if ref_duration > 0 and clip_duration > 0:
+                duration_ratio = min(ref_duration, clip_duration) / max(ref_duration, clip_duration)
+                score += duration_ratio
+
+        if score > 0:
+            scores.append((clip, score, source))
+
+    # Sort by score descending
+    scores.sort(key=lambda x: x[1], reverse=True)
+
+    results = []
+    for clip, score, source in scores[:limit]:
+        fps = source.fps if source else 30.0
+        results.append({
+            "clip_id": clip.id,
+            "source_name": source.file_path.name if source else "Unknown",
+            "similarity_score": round(score, 2),
+            "shot_type": clip.shot_type,
+            "duration_seconds": round(clip.duration_seconds(fps), 2),
+            "has_speech": bool(clip.transcript),
+        })
+
+    return {
+        "success": True,
+        "reference_clip_id": clip_id,
+        "criteria": criteria,
+        "similar_clips": results
+    }
+
+
+@tools.register(
+    description="Group clips by a specific criterion: 'color' (dominant palette), 'shot_type', 'duration' (short/medium/long), or 'source'. Returns groups with clip IDs and counts.",
+    requires_project=True,
+    modifies_gui_state=False
+)
+def group_clips_by(project, criterion: str) -> dict:
+    """Group clips by specified criterion.
+
+    Args:
+        criterion: How to group clips - 'color', 'shot_type', 'duration', or 'source'
+
+    Returns:
+        Dictionary with success status, criterion used, group count,
+        and groups with clip IDs and counts
+    """
+    from core.analysis.color import classify_color_palette
+
+    valid_criteria = ["color", "shot_type", "duration", "source"]
+    if criterion not in valid_criteria:
+        return {
+            "success": False,
+            "error": f"Invalid criterion '{criterion}'. Valid criteria: {', '.join(valid_criteria)}"
+        }
+
+    groups: dict[str, list[str]] = {}
+
+    for clip in project.clips:
+        source = project.sources_by_id.get(clip.source_id)
+        fps = source.fps if source else 30.0
+
+        if criterion == "shot_type":
+            key = clip.shot_type if clip.shot_type else "unknown"
+        elif criterion == "color":
+            if clip.dominant_colors:
+                key = classify_color_palette(clip.dominant_colors)
+            else:
+                key = "unanalyzed"
+        elif criterion == "duration":
+            duration = clip.duration_seconds(fps)
+            if duration < 2:
+                key = "short (<2s)"
+            elif duration < 10:
+                key = "medium (2-10s)"
+            else:
+                key = "long (>10s)"
+        elif criterion == "source":
+            key = source.file_path.name if source else "unknown"
+        else:
+            key = "unknown"
+
+        if key not in groups:
+            groups[key] = []
+        groups[key].append(clip.id)
+
+    # Format output with counts
+    formatted_groups = {
+        k: {"clip_ids": v, "count": len(v)}
+        for k, v in sorted(groups.items())
+    }
+
+    return {
+        "success": True,
+        "criterion": criterion,
+        "group_count": len(groups),
+        "groups": formatted_groups
     }

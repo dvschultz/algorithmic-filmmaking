@@ -8,6 +8,12 @@ from cli.utils.config import CLIConfig
 from cli.utils.errors import ExitCode, exit_with
 from cli.utils.output import output_result, output_success
 from cli.utils.progress import create_progress_callback
+from cli.utils.signals import (
+    setup_signal_handlers,
+    restore_default_handlers,
+    GracefulExit,
+    ProgressCheckpoint,
+)
 
 
 @click.command()
@@ -101,6 +107,11 @@ def detect(
     detector = SceneDetector(config=detection_config)
     progress = create_progress_callback("Detecting scenes")
 
+    # Set up signal handling for graceful shutdown
+    checkpoint_path = output.with_suffix(".checkpoint.json")
+    checkpoint = ProgressCheckpoint(checkpoint_path)
+    setup_signal_handlers(checkpoint)
+
     try:
         # Run detection
         source, clips = detector.detect_scenes_with_progress(
@@ -118,6 +129,9 @@ def detect(
 
         if not project.save(output):
             exit_with(ExitCode.GENERAL_ERROR, "Failed to save project file")
+
+        # Clean up checkpoint file on successful completion
+        checkpoint.clear()
 
         # Output result
         result = {
@@ -137,7 +151,12 @@ def detect(
             output_success(f"Detected {len(clips)} scenes in {video.name}")
             output_result(result, as_json=False)
 
+    except GracefulExit:
+        click.echo("\nDetection interrupted.", err=True)
+        exit_with(ExitCode.GENERAL_ERROR, "Detection was interrupted by user")
     except FileNotFoundError:
         exit_with(ExitCode.FILE_NOT_FOUND, f"Video not found: {video}")
     except Exception as e:
         exit_with(ExitCode.GENERAL_ERROR, f"Detection failed: {e}")
+    finally:
+        restore_default_handlers()
