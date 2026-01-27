@@ -579,11 +579,18 @@ class DescriptionWorker(QThread):
     error = Signal(str, str)  # clip_id, error_message
     finished = Signal()
 
-    def __init__(self, clips: list[Clip], tier: Optional[str] = None, prompt: Optional[str] = None):
+    def __init__(
+        self,
+        clips: list[Clip],
+        tier: Optional[str] = None,
+        prompt: Optional[str] = None,
+        sources: Optional[dict[str, Source]] = None,
+    ):
         super().__init__()
         self.clips = clips
         self.tier = tier
         self.prompt = prompt
+        self.sources = sources or {}  # source_id -> Source lookup
         self._cancelled = False
         self.error_count = 0
         self.success_count = 0
@@ -606,10 +613,18 @@ class DescriptionWorker(QThread):
                 break
             try:
                 if clip.thumbnail_path and clip.thumbnail_path.exists():
+                    # Get source for video extraction (if available)
+                    source = self.sources.get(clip.source_id)
+
                     description, model = describe_frame(
                         clip.thumbnail_path,
                         tier=self.tier,
-                        prompt=self.prompt or "Describe this video frame in 3 sentences or less. Focus on the main subjects, action, and setting."
+                        prompt=self.prompt or "Describe this video frame in 3 sentences or less. Focus on the main subjects, action, and setting.",
+                        # Pass video info for potential video extraction (Gemini)
+                        source_path=source.file_path if source else None,
+                        start_frame=clip.start_frame,
+                        end_frame=clip.end_frame,
+                        fps=source.fps if source else None,
                     )
                     # Only emit valid descriptions (not error messages)
                     if description and not description.startswith("Error"):
@@ -2638,8 +2653,11 @@ class MainWindow(QMainWindow):
         # Use tier from settings
         tier = self.settings.description_model_tier
 
+        # Get sources for video extraction (Gemini video mode)
+        sources = self.project.sources_by_id
+
         logger.info(f"Creating DescriptionWorker (manual) with tier={tier}...")
-        self.description_worker = DescriptionWorker(clips, tier=tier)
+        self.description_worker = DescriptionWorker(clips, tier=tier, sources=sources)
         self.description_worker.progress.connect(self._on_description_progress)
         self.description_worker.description_ready.connect(self._on_description_ready)
         self.description_worker.error.connect(self._on_description_error)
@@ -4522,7 +4540,8 @@ class MainWindow(QMainWindow):
 
         # Start worker
         from PySide6.QtCore import Qt
-        self.description_worker = DescriptionWorker(clips, tier=tier, prompt=prompt)
+        sources = self.project.sources_by_id
+        self.description_worker = DescriptionWorker(clips, tier=tier, prompt=prompt, sources=sources)
         self.description_worker.progress.connect(self._on_description_progress)
         self.description_worker.description_ready.connect(self._on_description_ready)
         self.description_worker.error.connect(self._on_description_error)

@@ -4,11 +4,17 @@ Supports multiple tiers:
 - CPU: Moondream 2B (via transformers) - optimized for standard hardware
 - Cloud: GPT-4o, Claude, Gemini (via LiteLLM) - high quality, requires API key
 - GPU: (Future) LLaVA/Qwen - high quality local inference
+
+Gemini models support video input natively, providing richer temporal understanding.
 """
 
 import base64
 import logging
+import shutil
+import subprocess
+import tempfile
 import threading
+import uuid
 from pathlib import Path
 from typing import Optional, Literal
 
@@ -36,6 +42,160 @@ def encode_image_base64(image_path: Path) -> str:
 # Default Moondream revision - updated to fix GenerationMixin compatibility
 # with transformers v4.50+. See: https://huggingface.co/vikhyatk/moondream2/discussions/39
 MOONDREAM_REVISION = "2025-06-21"
+
+
+def _get_ffmpeg_path() -> str:
+    """Find FFmpeg executable."""
+    path = shutil.which("ffmpeg")
+    if path is None:
+        raise RuntimeError(
+            "FFmpeg not found. Please install FFmpeg and ensure it's in your PATH."
+        )
+    return path
+
+
+def is_video_capable_model(model: str) -> bool:
+    """Check if model supports video input.
+
+    Currently only Gemini models support native video understanding.
+
+    Args:
+        model: Model name/identifier
+
+    Returns:
+        True if the model supports video input
+    """
+    return "gemini" in model.lower()
+
+
+def extract_clip_segment(
+    source_path: Path,
+    start_frame: int,
+    end_frame: int,
+    fps: float,
+    output_dir: Optional[Path] = None,
+) -> Path:
+    """Extract clip segment from source video using FFmpeg.
+
+    Args:
+        source_path: Path to source video file
+        start_frame: Starting frame number
+        end_frame: Ending frame number
+        fps: Video frame rate
+        output_dir: Directory for temp file (default: system temp)
+
+    Returns:
+        Path to extracted video segment (MP4 format)
+
+    Raises:
+        RuntimeError: If FFmpeg extraction fails
+    """
+    start_time = start_frame / fps
+    duration = (end_frame - start_frame) / fps
+
+    if output_dir is None:
+        output_dir = Path(tempfile.gettempdir())
+
+    # Generate unique filename
+    output_path = output_dir / f"clip_{uuid.uuid4().hex[:8]}.mp4"
+
+    cmd = [
+        _get_ffmpeg_path(),
+        "-y",
+        "-ss", str(start_time),
+        "-i", str(source_path),
+        "-t", str(duration),
+        "-c:v", "libx264",
+        "-preset", "fast",
+        "-crf", "23",
+        "-c:a", "aac",
+        "-b:a", "128k",
+        "-movflags", "+faststart",
+        str(output_path),
+    ]
+
+    logger.info(f"Extracting clip: {start_time:.2f}s - {start_time + duration:.2f}s")
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    if result.returncode != 0:
+        raise RuntimeError(f"FFmpeg extraction failed: {result.stderr}")
+
+    logger.info(f"Extracted clip to {output_path} ({output_path.stat().st_size / 1024 / 1024:.1f} MB)")
+    return output_path
+
+
+def encode_video_base64(video_path: Path) -> str:
+    """Encode video to base64 string."""
+    with open(video_path, "rb") as f:
+        return base64.b64encode(f.read()).decode("utf-8")
+
+
+def describe_video_cloud(
+    video_path: Path,
+    prompt: str = "Describe this video clip in 3 sentences or less. Focus on the main subjects, action, and setting.",
+) -> tuple[str, str]:
+    """Send video to Gemini for description via LiteLLM.
+
+    Args:
+        video_path: Path to video file
+        prompt: Description prompt
+
+    Returns:
+        Tuple of (description, model_name_with_suffix)
+
+    Raises:
+        ValueError: If API key is not configured
+        RuntimeError: If video description fails
+    """
+    from core.settings import get_gemini_api_key
+
+    settings = load_settings()
+    model = settings.description_model_cloud
+    original_model = model
+
+    logger.info(f"Video description requested with model: {model}")
+
+    # Normalize model name for LiteLLM
+    if "gemini" in model.lower() and not any(model.startswith(p) for p in ["gemini/", "vertex_ai/"]):
+        model = f"gemini/{model}"
+
+    api_key = get_gemini_api_key()
+    if not api_key:
+        raise ValueError("Gemini API key not configured. Please add it in Settings.")
+
+    # Encode video to base64
+    base64_video = encode_video_base64(video_path)
+    file_size_mb = video_path.stat().st_size / 1024 / 1024
+    logger.info(f"Encoded video: {file_size_mb:.1f} MB")
+
+    # LiteLLM message format for video (using file type)
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": f"data:video/mp4;base64,{base64_video}",
+                        "format": "video/mp4",
+                    },
+                },
+            ],
+        }
+    ]
+
+    try:
+        logger.info(f"Calling LiteLLM with video, model={model}")
+        response = litellm.completion(
+            model=model,
+            messages=messages,
+            api_key=api_key,
+        )
+        description = response.choices[0].message.content
+        return description, f"{original_model} (video)"
+    except Exception as e:
+        logger.error(f"Video description failed for model {model}: {e}")
+        raise RuntimeError(f"Video description failed ({original_model}): {e}") from e
 
 
 def _load_cpu_model(model_id: str):
@@ -187,14 +347,26 @@ def describe_frame_cloud(image_path: Path, prompt: str = "Describe this image.")
 def describe_frame(
     image_path: Path,
     tier: Optional[str] = None,
-    prompt: str = "Describe this video frame in 3 sentences or less. Focus on the main subjects, action, and setting."
+    prompt: str = "Describe this video frame in 3 sentences or less. Focus on the main subjects, action, and setting.",
+    source_path: Optional[Path] = None,
+    start_frame: Optional[int] = None,
+    end_frame: Optional[int] = None,
+    fps: Optional[float] = None,
 ) -> tuple[str, str]:
-    """Generate description for a video frame.
+    """Generate description for a video frame or clip.
+
+    If source video info is provided and the model supports video input,
+    extracts and sends the clip for richer temporal understanding.
+    Otherwise uses single frame analysis.
 
     Args:
-        image_path: Path to the image file
+        image_path: Path to the image file (fallback thumbnail)
         tier: 'cpu', 'gpu', or 'cloud'. If None, uses settings default.
         prompt: Instruction for the model
+        source_path: Path to source video file (for video extraction)
+        start_frame: Starting frame number of clip
+        end_frame: Ending frame number of clip
+        fps: Video frame rate
 
     Returns:
         Tuple of (description, model_name)
@@ -213,6 +385,35 @@ def describe_frame(
         return desc, settings.description_model_cpu
 
     elif tier == "cloud":
+        model = settings.description_model_cloud
+
+        # Check if we should use video input for Gemini
+        if (
+            is_video_capable_model(model)
+            and settings.use_video_for_gemini
+            and source_path is not None
+            and start_frame is not None
+            and end_frame is not None
+            and fps is not None
+        ):
+            try:
+                # Extract and describe video clip
+                logger.info(f"Using video mode for Gemini (frames {start_frame}-{end_frame})")
+                temp_video = extract_clip_segment(
+                    source_path, start_frame, end_frame, fps
+                )
+                try:
+                    return describe_video_cloud(temp_video, prompt)
+                finally:
+                    # Cleanup temp file
+                    if temp_video.exists():
+                        temp_video.unlink()
+                        logger.debug(f"Cleaned up temp video: {temp_video}")
+            except Exception as e:
+                logger.warning(f"Video description failed, falling back to frame: {e}")
+                # Fall through to frame-based description
+
+        # Frame-based description (default or fallback)
         desc = describe_frame_cloud(image_path, prompt)
         return desc, settings.description_model_cloud
 
