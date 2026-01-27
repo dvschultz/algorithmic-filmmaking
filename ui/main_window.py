@@ -1346,15 +1346,95 @@ class MainWindow(QMainWindow):
     def _on_clips_added(self, clips: list):
         """Handle clips added signal from project.
 
-        Refreshes lookups for tabs that need to resolve clip references.
+        Refreshes lookups, updates Cut tab, and generates thumbnails for new clips.
 
         Args:
             clips: List of added clips
         """
         logger.info(f"Project clips_added event: {len(clips)} clips")
+
         # Refresh Analyze tab lookups (cached properties may have been invalidated)
         if hasattr(self, 'analyze_tab'):
             self.analyze_tab.set_lookups(self.clips_by_id, self.sources_by_id)
+
+        # Determine which source these clips belong to
+        clip_source_id = clips[0].source_id if clips else None
+        clip_source = self.sources_by_id.get(clip_source_id) if clip_source_id else None
+
+        # If no current source is set, set it to this source
+        if clip_source and not self.current_source:
+            self.current_source = clip_source
+            logger.info(f"Set current_source to {clip_source.id}")
+
+        # Update Cut tab with clips for this source
+        if hasattr(self, 'cut_tab') and clip_source:
+            # Get all clips for this source (including newly added ones)
+            source_clips = self.clips_by_source.get(clip_source.id, [])
+            if source_clips:
+                # Set the source in Cut tab if not already set
+                self.cut_tab.set_source(clip_source)
+                self.cut_tab.set_clips(source_clips)
+                logger.info(f"Updated Cut tab with {len(source_clips)} clips for source {clip_source.id}")
+
+        # Generate thumbnails for clips that don't have them
+        clips_needing_thumbnails = [c for c in clips if not c.thumbnail_path or not c.thumbnail_path.exists()]
+        if clips_needing_thumbnails:
+            logger.info(f"Starting thumbnail generation for {len(clips_needing_thumbnails)} clips")
+            # Don't start if another thumbnail worker is running
+            if self.thumbnail_worker and self.thumbnail_worker.isRunning():
+                logger.warning("ThumbnailWorker already running, queueing clips for later")
+                # Store clips for later processing
+                if not hasattr(self, '_pending_thumbnail_clips'):
+                    self._pending_thumbnail_clips = []
+                self._pending_thumbnail_clips.extend(clips_needing_thumbnails)
+            else:
+                # Get default source for thumbnails (first clip's source)
+                default_source = None
+                if clips_needing_thumbnails:
+                    first_clip = clips_needing_thumbnails[0]
+                    default_source = self.sources_by_id.get(first_clip.source_id)
+
+                if default_source:
+                    self.thumbnail_worker = ThumbnailWorker(
+                        default_source,
+                        clips_needing_thumbnails,
+                        self.settings.thumbnail_cache_dir,
+                        sources_by_id=self.sources_by_id,
+                    )
+                    self.thumbnail_worker.thumbnail_ready.connect(self._on_project_thumbnail_ready)
+                    self.thumbnail_worker.finished.connect(self._on_agent_thumbnails_finished, Qt.UniqueConnection)
+                    logger.info("Starting ThumbnailWorker for agent-added clips...")
+                    self.thumbnail_worker.start()
+
+    @Slot()
+    def _on_agent_thumbnails_finished(self):
+        """Handle thumbnails completed for agent-added clips."""
+        logger.info("Agent thumbnail generation finished")
+        # Refresh Cut tab to show thumbnails
+        if hasattr(self, 'cut_tab') and self.current_source:
+            source_clips = self.clips_by_source.get(self.current_source.id, [])
+            if source_clips:
+                self.cut_tab.set_clips(source_clips)
+
+        # Process any pending thumbnail clips
+        if hasattr(self, '_pending_thumbnail_clips') and self._pending_thumbnail_clips:
+            pending = self._pending_thumbnail_clips
+            self._pending_thumbnail_clips = []
+            logger.info(f"Processing {len(pending)} pending thumbnail clips")
+            # Re-trigger via a fake clips_added (just for thumbnails)
+            clips_still_needing = [c for c in pending if not c.thumbnail_path or not c.thumbnail_path.exists()]
+            if clips_still_needing:
+                default_source = self.sources_by_id.get(clips_still_needing[0].source_id)
+                if default_source:
+                    self.thumbnail_worker = ThumbnailWorker(
+                        default_source,
+                        clips_still_needing,
+                        self.settings.thumbnail_cache_dir,
+                        sources_by_id=self.sources_by_id,
+                    )
+                    self.thumbnail_worker.thumbnail_ready.connect(self._on_project_thumbnail_ready)
+                    self.thumbnail_worker.finished.connect(self._on_agent_thumbnails_finished, Qt.UniqueConnection)
+                    self.thumbnail_worker.start()
 
     @Slot(object)
     def _on_source_added(self, source):
