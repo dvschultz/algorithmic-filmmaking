@@ -220,28 +220,28 @@ def _on_description_finished(self, results: dict):
 
 ### Functional Requirements
 
-- [ ] "Classify" button appears in Analyze tab after Transcribe button
-- [ ] "Detect Objects" button appears after Classify button
-- [ ] "Describe" button appears after Detect Objects button
-- [ ] All three new buttons are disabled when no clips are present
-- [ ] All three new buttons are enabled when clips are present
-- [ ] Clicking "Classify" runs `ClassificationWorker` on all clips in tab
-- [ ] Clicking "Detect Objects" runs `ObjectDetectionWorker` on all clips in tab
-- [ ] Clicking "Describe" runs `DescriptionWorker` on all clips in tab
-- [ ] Buttons show "running" state while worker is active
-- [ ] Results are stored in clip model (`object_labels`, `detected_objects`, `person_count`, `description`)
-- [ ] Project saves include new analysis data
+- [x] "Classify" button appears in Analyze tab after Transcribe button
+- [x] "Detect Objects" button appears after Classify button
+- [x] "Describe" button appears after Detect Objects button
+- [x] All three new buttons are disabled when no clips are present
+- [x] All three new buttons are enabled when clips are present
+- [x] Clicking "Classify" runs `ClassificationWorker` on all clips in tab
+- [x] Clicking "Detect Objects" runs `ObjectDetectionWorker` on all clips in tab
+- [x] Clicking "Describe" runs `DescriptionWorker` on all clips in tab
+- [x] Buttons show "running" state while worker is active
+- [x] Results are stored in clip model (`object_labels`, `detected_objects`, `person_count`, `description`)
+- [x] Project saves include new analysis data
 
 ### Non-Functional Requirements
 
 - [ ] Button layout does not overflow on 1280px wide window
-- [ ] Tooltips explain what each button does
-- [ ] Workers can be cancelled via existing cancel mechanism
+- [x] Tooltips explain what each button does
+- [x] Workers can be cancelled via existing cancel mechanism
 
 ### Quality Gates
 
 - [ ] No new regressions in existing analysis buttons
-- [ ] Workers started from GUI vs agent are distinguished for result handling
+- [x] Workers started from GUI vs agent are distinguished for result handling
 
 ## Implementation Notes
 
