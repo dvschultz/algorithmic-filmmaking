@@ -216,6 +216,44 @@ When the agent makes changes, ensure GUI state is synchronized via `core/gui_sta
 ### Card-Based UI
 The sequence tab uses a card-based interface (`ui/widgets/sorting_card.py`) for visual clip arrangement with drag-and-drop support.
 
+### UI Consistency Standards
+Maintain consistent widget sizing across the entire application using constants from `ui/theme.py`:
+
+```python
+from ui.theme import UISizes
+
+# Available constants:
+UISizes.COMBO_BOX_MIN_HEIGHT    # 28 - Use for ALL combo boxes
+UISizes.LINE_EDIT_MIN_HEIGHT    # 28 - Use for text inputs
+UISizes.BUTTON_MIN_HEIGHT       # 28 - Use for buttons
+UISizes.FORM_LABEL_WIDTH        # 140 - Standard label width
+UISizes.FORM_LABEL_WIDTH_NARROW # 120 - Compact layouts
+UISizes.FORM_LABEL_WIDTH_WIDE   # 180 - Wide labels
+UISizes.COMBO_BOX_MIN_WIDTH     # 200 - Minimum combo width
+UISizes.COMBO_BOX_MIN_WIDTH_WIDE # 300 - Wide combo boxes
+```
+
+**Dropdowns (QComboBox)**
+- Always set minimum height: `combo.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)`
+- Apply to ALL combo boxes throughout the app for visual consistency
+
+**Labels in form layouts**
+- Use fixed width for alignment: `label.setFixedWidth(UISizes.FORM_LABEL_WIDTH)`
+
+**Scrollable content**
+- Wrap long form content in `QScrollArea` with `setWidgetResizable(True)`
+- Use `setFrameShape(QScrollArea.NoFrame)` for seamless appearance
+
+```python
+# Standard combo box setup
+combo = QComboBox()
+combo.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
+
+# For form layouts with multiple fields
+label = QLabel("Field Name:")
+label.setFixedWidth(UISizes.FORM_LABEL_WIDTH)
+```
+
 ## Testing
 
 ```bash

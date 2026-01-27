@@ -96,6 +96,25 @@ class ThemeColors:
         return QColor(color_str)
 
 
+# UI sizing constants - use these for consistent widget dimensions
+class UISizes:
+    """Standard sizes for UI elements to ensure consistency across the app."""
+
+    # Widget heights
+    COMBO_BOX_MIN_HEIGHT = 28
+    LINE_EDIT_MIN_HEIGHT = 28
+    BUTTON_MIN_HEIGHT = 28
+
+    # Label widths for form layouts
+    FORM_LABEL_WIDTH = 140
+    FORM_LABEL_WIDTH_NARROW = 120
+    FORM_LABEL_WIDTH_WIDE = 180
+
+    # Minimum widths
+    COMBO_BOX_MIN_WIDTH = 200
+    COMBO_BOX_MIN_WIDTH_WIDE = 300
+
+
 # Dark theme color definitions
 DARK_THEME = ThemeColors(
     # Backgrounds

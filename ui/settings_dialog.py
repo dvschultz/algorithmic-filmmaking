@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QMessageBox,
     QDialogButtonBox,
+    QScrollArea,
 )
 from PySide6.QtCore import Qt
 
@@ -57,7 +58,7 @@ from core.settings import (
     is_api_key_from_env,
 )
 from core.llm_client import get_provider_models
-from ui.theme import theme
+from ui.theme import theme, UISizes
 
 logger = logging.getLogger(__name__)
 
@@ -348,7 +349,17 @@ class SettingsDialog(QDialog):
 
     def _create_detection_tab(self) -> QWidget:
         tab = QWidget()
-        layout = QVBoxLayout(tab)
+        tab_layout = QVBoxLayout(tab)
+        tab_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Create scroll area for content
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QScrollArea.NoFrame)
+
+        # Content widget inside scroll area
+        content = QWidget()
+        layout = QVBoxLayout(content)
 
         # Shot Detection group
         detection_group = QGroupBox("Shot Detection")
@@ -512,8 +523,11 @@ class SettingsDialog(QDialog):
 
         # Default provider dropdown
         provider_layout = QHBoxLayout()
-        provider_layout.addWidget(QLabel("Default Provider:"))
+        provider_label = QLabel("Default Provider:")
+        provider_label.setFixedWidth(UISizes.FORM_LABEL_WIDTH)
+        provider_layout.addWidget(provider_label)
         self.chat_provider_combo = QComboBox()
+        self.chat_provider_combo.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
         self.chat_provider_combo.addItems([
             "Local (Ollama)",
             "OpenAI",
@@ -539,6 +553,10 @@ class SettingsDialog(QDialog):
         layout.addWidget(chat_group)
 
         layout.addStretch()
+
+        # Set up scroll area
+        scroll_area.setWidget(content)
+        tab_layout.addWidget(scroll_area)
         return tab
 
     def _create_export_tab(self) -> QWidget:
@@ -811,9 +829,12 @@ class SettingsDialog(QDialog):
         section_layout = QHBoxLayout()
 
         model_label = QLabel(f"  {label} Model:")
+        model_label.setFixedWidth(UISizes.FORM_LABEL_WIDTH)
         section_layout.addWidget(model_label)
 
         combo = QComboBox()
+        combo.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
+        combo.setMinimumWidth(UISizes.COMBO_BOX_MIN_WIDTH_WIDE)
         for model_id, display_name in get_provider_models(provider_key):
             combo.addItem(display_name, model_id)  # userData = model_id
         combo.setToolTip(f"Select the model to use with {label}")
