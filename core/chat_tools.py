@@ -2104,7 +2104,7 @@ def get_project_summary(project) -> dict:
 # =============================================================================
 
 @tools.register(
-    description="Detect scenes in a video file. Creates clips from detected scene boundaries. Returns the output project file path and clip count.",
+    description="Detect scenes in a video file. Creates clips from detected scene boundaries. Returns the clip count and clip IDs.",
     requires_project=False,
     modifies_gui_state=False
 )
@@ -2113,59 +2113,62 @@ def detect_scenes(
     sensitivity: float = 3.0,
     output_path: Optional[str] = None
 ) -> dict:
-    """Run scene detection via CLI."""
+    """Run scene detection using Python API."""
+    from core.scene_detect import SceneDetector, DetectionConfig
+
     # Validate video path
     valid, error, video = _validate_path(video_path, must_exist=True)
     if not valid:
-        return {"error": error}
+        return {"success": False, "error": error}
 
     if not video.is_file():
-        return {"error": f"Path is not a file: {video_path}"}
-
-    # Validate and set output path
-    if output_path is None:
-        output_path = str(video.with_suffix(".json"))
-    else:
-        valid, error, validated_output = _validate_path(output_path)
-        if not valid:
-            return {"error": f"Invalid output path: {error}"}
-        output_path = str(validated_output)
-
-    cmd = [
-        "scene_ripper", "detect", str(video),
-        "--sensitivity", str(sensitivity),
-        "--output", output_path,
-    ]
+        return {"success": False, "error": f"Path is not a file: {video_path}"}
 
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=TOOL_TIMEOUTS.get("detect_scenes", 600)
-        )
-    except subprocess.TimeoutExpired:
-        return {"error": "Scene detection timed out. The video may be too large."}
-    except FileNotFoundError:
-        return {"error": "scene_ripper CLI not found. Is it installed?"}
+        # Create detector with configured sensitivity
+        config = DetectionConfig(threshold=sensitivity)
+        detector = SceneDetector(config)
 
-    if result.returncode != 0:
-        return {"error": result.stderr or "Detection failed"}
+        # Run detection
+        source, clips = detector.detect_scenes(video)
 
-    # Try to count clips from output
-    try:
-        with open(output_path) as f:
-            data = json.load(f)
-            clip_count = len(data.get("clips", []))
-    except Exception:
-        clip_count = "unknown"
+        # Optionally save results to JSON
+        if output_path:
+            valid, error, validated_output = _validate_path(output_path)
+            if valid:
+                import json
+                output_data = {
+                    "source": {
+                        "id": source.id,
+                        "file_path": str(source.file_path),
+                        "duration_seconds": source.duration_seconds,
+                        "fps": source.fps,
+                    },
+                    "clips": [
+                        {
+                            "id": clip.id,
+                            "source_id": clip.source_id,
+                            "start_frame": clip.start_frame,
+                            "end_frame": clip.end_frame,
+                        }
+                        for clip in clips
+                    ]
+                }
+                with open(validated_output, "w") as f:
+                    json.dump(output_data, f, indent=2)
 
-    return {
-        "success": True,
-        "output_path": output_path,
-        "clips_detected": clip_count,
-        "message": f"Detected scenes in {video.name}"
-    }
+        return {
+            "success": True,
+            "clips_detected": len(clips),
+            "clip_ids": [clip.id for clip in clips],
+            "source_id": source.id,
+            "message": f"Detected {len(clips)} scenes in {video.name}"
+        }
+
+    except FileNotFoundError as e:
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        return {"success": False, "error": f"Scene detection failed: {e}"}
 
 
 @tools.register(
