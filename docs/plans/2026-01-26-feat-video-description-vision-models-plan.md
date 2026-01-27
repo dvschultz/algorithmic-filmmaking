@@ -112,19 +112,19 @@ class Clip:
 ### Phase 1: Foundation (Core Module + Settings)
 
 **Tasks:**
-- [ ] Add description settings to `core/settings.py`
+- [x] Add description settings to `core/settings.py`
   - `description_model_tier: str = "cpu"` (cpu, gpu, cloud)
   - `description_model_cpu: str = "moondream-2b"`
   - `description_model_gpu: str = "llava-onevision-7b-q4"`
   - `description_model_cloud: str = "gpt-4o"`
   - `description_temporal_frames: int = 4`
-- [ ] Create `core/analysis/description.py` with:
+- [x] Create `core/analysis/description.py` with:
   - Lazy model loading (thread-safe singleton pattern)
   - `describe_frame(image_path, tier, temporal_frames) -> str`
   - Support for CPU tier (Moondream via transformers)
   - Support for Cloud tier (LiteLLM with existing API keys)
-- [ ] Extend `models/clip.py` with description fields
-- [ ] Update `to_dict()` / `from_dict()` for persistence
+- [x] Extend `models/clip.py` with description fields
+- [x] Update `to_dict()` / `from_dict()` for persistence
 
 **Files:**
 - `core/settings.py`
@@ -134,14 +134,14 @@ class Clip:
 ### Phase 2: CLI Integration
 
 **Tasks:**
-- [ ] Add `scene_ripper analyze describe` CLI command
+- [x] Add `scene_ripper analyze describe` CLI command
   - `--tier cpu|gpu|cloud` (override settings)
   - `--temporal` flag for multi-frame analysis
   - `--force` to re-describe
   - `--clip/-c` for specific clips
   - `--prompt` for custom description prompt
-- [ ] JSON output support
-- [ ] Progress display with ProgressContext
+- [x] JSON output support
+- [x] Progress display with ProgressContext
 
 **Files:**
 - `cli/commands/analyze.py`
@@ -149,13 +149,13 @@ class Clip:
 ### Phase 3: Agent Tools + Search
 
 **Tasks:**
-- [ ] Add `describe_content_live` agent tool
+- [x] Add `describe_content_live` agent tool
   - Parameters: `clip_ids`, `tier`, `temporal`
   - Returns `_wait_for_worker: "description"`
-- [ ] Extend `filter_clips` with `search_description` parameter
+- [x] Extend `filter_clips` with `search_description` parameter
   - Case-insensitive substring matching
-- [ ] Extend `list_clips` to include description in output
-- [ ] Add timeout to `TOOL_TIMEOUTS` (600s for local, 300s for cloud)
+- [x] Extend `list_clips` to include description in output
+- [x] Add timeout to `TOOL_TIMEOUTS` (600s for local, 300s for cloud)
 
 **Files:**
 - `core/chat_tools.py`
@@ -163,11 +163,11 @@ class Clip:
 ### Phase 4: GUI Worker
 
 **Tasks:**
-- [ ] Add `DescriptionWorker(QThread)` to `ui/main_window.py`
+- [x] Add `DescriptionWorker(QThread)` to `ui/main_window.py`
   - Signals: `progress(int, int)`, `description_ready(str, str)`, `finished()`
   - Support cancellation
-- [ ] Connect worker to tool executor dispatch
-- [ ] Add signal handlers for updating clips
+- [x] Connect worker to tool executor dispatch
+- [x] Add signal handlers for updating clips
 
 **Files:**
 - `ui/main_window.py`
@@ -186,10 +186,10 @@ class Clip:
 ### Phase 6: Testing
 
 **Tasks:**
-- [ ] Unit tests for `description.py` (mocked models)
-- [ ] Tests for `filter_clips` with `search_description`
-- [ ] Tests for Clip serialization with description fields
-- [ ] Integration tests for CLI command
+- [x] Unit tests for `description.py` (mocked models)
+- [x] Tests for `filter_clips` with `search_description`
+- [x] Tests for Clip serialization with description fields
+- [ ] Integration tests for CLI command (optional - CLI uses same code paths as unit tests)
 
 **Files:**
 - `tests/test_description.py`

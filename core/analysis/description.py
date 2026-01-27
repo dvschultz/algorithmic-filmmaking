@@ -8,6 +8,7 @@ Supports multiple tiers:
 
 import base64
 import logging
+import threading
 from pathlib import Path
 from typing import Optional, Literal
 
@@ -17,6 +18,9 @@ import litellm
 from core.settings import load_settings
 
 logger = logging.getLogger(__name__)
+
+# Thread-safe model loading
+_model_lock = threading.Lock()
 
 # Global model cache to avoid reloading heavy weights
 _CPU_MODEL = None
@@ -30,39 +34,49 @@ def encode_image_base64(image_path: Path) -> str:
 
 
 def _load_cpu_model(model_id: str):
-    """Load CPU-optimized model (Moondream)."""
+    """Load CPU-optimized model (Moondream).
+
+    Thread-safe lazy loading with singleton pattern.
+    """
     global _CPU_MODEL, _CPU_TOKENIZER
-    
+
+    # Fast path: model already loaded
     if _CPU_MODEL is not None:
         return _CPU_MODEL, _CPU_TOKENIZER
 
-    try:
-        from transformers import AutoModelForCausalLM, AutoTokenizer
-        
-        logger.info(f"Loading CPU vision model: {model_id}...")
-        
-        # Load tokenizer and model
-        # trust_remote_code=True is required for Moondream
-        tokenizer = AutoTokenizer.from_pretrained(model_id, revision="2024-08-26")
-        model = AutoModelForCausalLM.from_pretrained(
-            model_id, 
-            trust_remote_code=True,
-            revision="2024-08-26"
-        )
-        
-        _CPU_MODEL = model
-        _CPU_TOKENIZER = tokenizer
-        return model, tokenizer
-        
-    except ImportError:
-        logger.error("transformers, einops, or torchvision not installed. Cannot use CPU vision tier.")
-        raise RuntimeError(
-            "Missing dependencies for CPU vision. "
-            "Please install: pip install transformers einops torchvision"
-        )
-    except Exception as e:
-        logger.error(f"Failed to load CPU model: {e}")
-        raise
+    # Thread-safe loading
+    with _model_lock:
+        # Double-check after acquiring lock
+        if _CPU_MODEL is not None:
+            return _CPU_MODEL, _CPU_TOKENIZER
+
+        try:
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+
+            logger.info(f"Loading CPU vision model: {model_id}...")
+
+            # Load tokenizer and model
+            # trust_remote_code=True is required for Moondream
+            tokenizer = AutoTokenizer.from_pretrained(model_id, revision="2024-08-26")
+            model = AutoModelForCausalLM.from_pretrained(
+                model_id,
+                trust_remote_code=True,
+                revision="2024-08-26"
+            )
+
+            _CPU_MODEL = model
+            _CPU_TOKENIZER = tokenizer
+            return model, tokenizer
+
+        except ImportError:
+            logger.error("transformers, einops, or torchvision not installed. Cannot use CPU vision tier.")
+            raise RuntimeError(
+                "Missing dependencies for CPU vision. "
+                "Please install: pip install transformers einops torchvision"
+            )
+        except Exception as e:
+            logger.error(f"Failed to load CPU model: {e}")
+            raise
 
 
 def describe_frame_cpu(image_path: Path, prompt: str = "Describe this image.") -> str:
@@ -163,6 +177,21 @@ def describe_frame(
         logger.warning("GPU tier not implemented yet, falling back to CPU")
         desc = describe_frame_cpu(image_path, prompt)
         return desc, settings.description_model_cpu
-        
+
     else:
         return f"Unknown tier: {tier}", "unknown"
+
+
+def is_model_loaded() -> bool:
+    """Check if a CPU model is currently loaded."""
+    return _CPU_MODEL is not None
+
+
+def unload_model():
+    """Unload the CPU model to free memory."""
+    global _CPU_MODEL, _CPU_TOKENIZER
+
+    with _model_lock:
+        _CPU_MODEL = None
+        _CPU_TOKENIZER = None
+        logger.info("VLM model unloaded")

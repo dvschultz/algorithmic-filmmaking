@@ -125,5 +125,196 @@ class TestDescriptionAnalysis(unittest.TestCase):
         self.assertEqual(len(call_kwargs["messages"]), 1)
         self.assertEqual(call_kwargs["messages"][0]["role"], "user")
 
+class TestFilterClipsSearchDescription(unittest.TestCase):
+    """Test filter_clips with search_description parameter."""
+
+    def setUp(self):
+        from core.project import Project
+        from models.clip import Source, Clip
+
+        self.project = Project.new(name="Test Project")
+
+        source = Source(
+            id="src-1",
+            file_path=Path("/test/video1.mp4"),
+            duration_seconds=120.0,
+            fps=30.0,
+            width=1920,
+            height=1080,
+        )
+        self.project.add_source(source)
+
+    def test_filter_by_search_description(self):
+        """Test filtering clips by description text."""
+        from core.chat_tools import filter_clips
+        from models.clip import Clip
+
+        self.project.add_clips([
+            Clip(id="clip-1", source_id="src-1", start_frame=0, end_frame=90,
+                 description="A person walking on a beach at sunset"),
+            Clip(id="clip-2", source_id="src-1", start_frame=90, end_frame=180,
+                 description="A dog playing in the park"),
+            Clip(id="clip-3", source_id="src-1", start_frame=180, end_frame=270,
+                 description=None),
+        ])
+
+        result = filter_clips(self.project, search_description="beach")
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["id"], "clip-1")
+
+    def test_filter_search_description_case_insensitive(self):
+        """Test search_description is case insensitive."""
+        from core.chat_tools import filter_clips
+        from models.clip import Clip
+
+        self.project.add_clips([
+            Clip(id="clip-1", source_id="src-1", start_frame=0, end_frame=90,
+                 description="A SUNSET over the ocean"),
+        ])
+
+        result = filter_clips(self.project, search_description="sunset")
+        self.assertEqual(len(result), 1)
+
+        result = filter_clips(self.project, search_description="OCEAN")
+        self.assertEqual(len(result), 1)
+
+    def test_filter_search_description_excludes_none(self):
+        """Test clips without descriptions are excluded from search."""
+        from core.chat_tools import filter_clips
+        from models.clip import Clip
+
+        self.project.add_clips([
+            Clip(id="clip-1", source_id="src-1", start_frame=0, end_frame=90,
+                 description=None),
+            Clip(id="clip-2", source_id="src-1", start_frame=90, end_frame=180,
+                 description="A mountain landscape"),
+        ])
+
+        result = filter_clips(self.project, search_description="mountain")
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["id"], "clip-2")
+
+    def test_filter_search_description_no_matches(self):
+        """Test search returns empty when no descriptions match."""
+        from core.chat_tools import filter_clips
+        from models.clip import Clip
+
+        self.project.add_clips([
+            Clip(id="clip-1", source_id="src-1", start_frame=0, end_frame=90,
+                 description="A sunset beach scene"),
+        ])
+
+        result = filter_clips(self.project, search_description="mountain")
+        self.assertEqual(len(result), 0)
+
+
+class TestClipDescriptionSerialization(unittest.TestCase):
+    """Test Clip serialization with description fields."""
+
+    def test_clip_to_dict_includes_description(self):
+        """Test to_dict includes description fields."""
+        from models.clip import Clip
+
+        clip = Clip(
+            id="test-1",
+            source_id="src-1",
+            start_frame=0,
+            end_frame=100,
+            description="A person walking on a beach",
+            description_model="gpt-4o",
+            description_frames=1,
+        )
+
+        data = clip.to_dict()
+
+        self.assertEqual(data["description"], "A person walking on a beach")
+        self.assertEqual(data["description_model"], "gpt-4o")
+        self.assertEqual(data["description_frames"], 1)
+
+    def test_clip_from_dict_restores_description(self):
+        """Test from_dict restores description fields."""
+        from models.clip import Clip
+
+        data = {
+            "id": "test-1",
+            "source_id": "src-1",
+            "start_frame": 0,
+            "end_frame": 100,
+            "description": "A dog playing in snow",
+            "description_model": "moondream-2b",
+            "description_frames": 4,
+        }
+
+        clip = Clip.from_dict(data)
+
+        self.assertEqual(clip.description, "A dog playing in snow")
+        self.assertEqual(clip.description_model, "moondream-2b")
+        self.assertEqual(clip.description_frames, 4)
+
+    def test_clip_roundtrip_preserves_description(self):
+        """Test to_dict/from_dict roundtrip preserves description."""
+        from models.clip import Clip
+
+        original = Clip(
+            id="test-1",
+            source_id="src-1",
+            start_frame=0,
+            end_frame=100,
+            description="A dramatic sunset over mountains",
+            description_model="claude-3-opus",
+            description_frames=8,
+        )
+
+        data = original.to_dict()
+        restored = Clip.from_dict(data)
+
+        self.assertEqual(restored.description, original.description)
+        self.assertEqual(restored.description_model, original.description_model)
+        self.assertEqual(restored.description_frames, original.description_frames)
+
+    def test_clip_to_dict_excludes_none_description(self):
+        """Test to_dict excludes None description fields."""
+        from models.clip import Clip
+
+        clip = Clip(
+            id="test-1",
+            source_id="src-1",
+            start_frame=0,
+            end_frame=100,
+            description=None,
+        )
+
+        data = clip.to_dict()
+
+        # Should not include description keys when None
+        self.assertNotIn("description", data)
+        self.assertNotIn("description_model", data)
+
+
+class TestModelManagement(unittest.TestCase):
+    """Test model loading/unloading helpers."""
+
+    def test_is_model_loaded_initially_false(self):
+        """Test is_model_loaded returns False when no model loaded."""
+        import core.analysis.description as desc_module
+        desc_module._CPU_MODEL = None
+
+        from core.analysis.description import is_model_loaded
+        self.assertFalse(is_model_loaded())
+
+    def test_unload_model_clears_state(self):
+        """Test unload_model clears model state."""
+        import core.analysis.description as desc_module
+        desc_module._CPU_MODEL = "dummy_model"
+        desc_module._CPU_TOKENIZER = "dummy_tokenizer"
+
+        from core.analysis.description import unload_model
+        unload_model()
+
+        self.assertIsNone(desc_module._CPU_MODEL)
+        self.assertIsNone(desc_module._CPU_TOKENIZER)
+
+
 if __name__ == "__main__":
     unittest.main()
