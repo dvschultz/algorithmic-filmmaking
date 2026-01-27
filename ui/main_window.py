@@ -802,6 +802,8 @@ class MainWindow(QMainWindow):
 
         # Connect project adapter signals for view synchronization
         self._project_adapter.clips_updated.connect(self._on_clips_updated)
+        self._project_adapter.clips_added.connect(self._on_clips_added)
+        self._project_adapter.source_added.connect(self._on_source_added)
 
         # UI state (not part of Project - these are GUI-specific selections)
         self.current_source: Optional[Source] = None  # Currently active/selected source
@@ -1339,6 +1341,34 @@ class MainWindow(QMainWindow):
             self.cut_tab.clip_browser.update_clips(clips)
         if hasattr(self, 'analyze_tab') and hasattr(self.analyze_tab, 'clip_browser'):
             self.analyze_tab.clip_browser.update_clips(clips)
+
+    @Slot(list)
+    def _on_clips_added(self, clips: list):
+        """Handle clips added signal from project.
+
+        Refreshes lookups for tabs that need to resolve clip references.
+
+        Args:
+            clips: List of added clips
+        """
+        logger.info(f"Project clips_added event: {len(clips)} clips")
+        # Refresh Analyze tab lookups (cached properties may have been invalidated)
+        if hasattr(self, 'analyze_tab'):
+            self.analyze_tab.set_lookups(self.clips_by_id, self.sources_by_id)
+
+    @Slot(object)
+    def _on_source_added(self, source):
+        """Handle source added signal from project.
+
+        Refreshes lookups for tabs that need to resolve source references.
+
+        Args:
+            source: The added Source object
+        """
+        logger.info(f"Project source_added event: {source.id}")
+        # Refresh Analyze tab lookups (cached properties may have been invalidated)
+        if hasattr(self, 'analyze_tab'):
+            self.analyze_tab.set_lookups(self.clips_by_id, self.sources_by_id)
 
     def _on_chat_message(self, message: str):
         """Handle user message from chat panel."""
