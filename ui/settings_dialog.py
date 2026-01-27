@@ -475,8 +475,11 @@ class SettingsDialog(QDialog):
         self.vision_cloud_combo = QComboBox()
         self.vision_cloud_combo.addItems([
             "gpt-4o",
+            "gpt-4o-mini",
             "claude-3-5-sonnet-20240620",
-            "gemini-1.5-pro",
+            "gemini-2.5-flash",
+            "gemini-2.5-pro",
+            "gemini-2.0-flash",
         ])
         self.vision_cloud_combo.setEditable(True)
         self.vision_cloud_combo.setToolTip("Model ID for cloud analysis (via LiteLLM)")
