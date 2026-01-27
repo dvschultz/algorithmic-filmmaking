@@ -464,7 +464,7 @@ class SettingsDialog(QDialog):
         self.vision_cpu_combo.addItems([
             "vikhyatk/moondream2",
         ])
-        self.vision_cpu_combo.setEditable(True)  # Allow custom model IDs
+        self.vision_cpu_combo.setEditable(False)
         self.vision_cpu_combo.setToolTip("HuggingFace model ID for local analysis")
         cpu_layout.addWidget(self.vision_cpu_combo)
         vision_layout.addLayout(cpu_layout)
@@ -482,7 +482,7 @@ class SettingsDialog(QDialog):
             "gemini-2.5-pro",
             "gemini-2.0-flash",
         ])
-        self.vision_cloud_combo.setEditable(True)
+        self.vision_cloud_combo.setEditable(False)
         self.vision_cloud_combo.setToolTip("Model ID for cloud analysis (via LiteLLM)")
         cloud_layout.addWidget(self.vision_cloud_combo)
         vision_layout.addLayout(cloud_layout)
@@ -963,6 +963,16 @@ class SettingsDialog(QDialog):
             "To change this, unset the environment variable or modify it."
         )
 
+    def _set_combo_text(self, combo: QComboBox, text: str):
+        """Set combo box to text, adding item if needed."""
+        index = combo.findText(text)
+        if index >= 0:
+            combo.setCurrentIndex(index)
+        else:
+            # Add custom value and select it
+            combo.addItem(text)
+            combo.setCurrentIndex(combo.count() - 1)
+
     def _load_settings(self):
         """Load current settings into UI controls."""
         # Paths
@@ -1026,8 +1036,8 @@ class SettingsDialog(QDialog):
         tier_idx = 0 if self.settings.description_model_tier == "cpu" else 1
         self.vision_tier_combo.setCurrentIndex(tier_idx)
         
-        self.vision_cpu_combo.setCurrentText(self.settings.description_model_cpu)
-        self.vision_cloud_combo.setCurrentText(self.settings.description_model_cloud)
+        self._set_combo_text(self.vision_cpu_combo, self.settings.description_model_cpu)
+        self._set_combo_text(self.vision_cloud_combo, self.settings.description_model_cloud)
         self.vision_frames_spin.setValue(self.settings.description_temporal_frames)
         
         # Trigger enable/disable state
