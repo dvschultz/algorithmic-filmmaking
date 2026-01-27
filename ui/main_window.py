@@ -474,6 +474,103 @@ class TranscriptionWorker(QThread):
         logger.info("TranscriptionWorker.run() COMPLETED")
 
 
+class ClassificationWorker(QThread):
+    """Background worker for frame classification using MobileNet."""
+
+    progress = Signal(int, int)  # current, total
+    labels_ready = Signal(str, list)  # clip_id, [(label, confidence), ...]
+    finished = Signal()
+
+    def __init__(self, clips: list[Clip], top_k: int = 5, threshold: float = 0.1):
+        super().__init__()
+        self.clips = clips
+        self.top_k = top_k
+        self.threshold = threshold
+        self._cancelled = False
+        logger.debug("ClassificationWorker created")
+
+    def cancel(self):
+        """Request cancellation of the classification."""
+        logger.info("ClassificationWorker.cancel() called")
+        self._cancelled = True
+
+    def run(self):
+        logger.info("ClassificationWorker.run() STARTING")
+        from core.analysis.classification import classify_frame
+
+        total = len(self.clips)
+        for i, clip in enumerate(self.clips):
+            if self._cancelled:
+                logger.info("ClassificationWorker cancelled")
+                break
+            try:
+                if clip.thumbnail_path and clip.thumbnail_path.exists():
+                    results = classify_frame(
+                        clip.thumbnail_path,
+                        top_k=self.top_k,
+                        threshold=self.threshold,
+                    )
+                    self.labels_ready.emit(clip.id, results)
+            except Exception as e:
+                logger.warning(f"Classification failed for {clip.id}: {e}")
+            self.progress.emit(i + 1, total)
+        logger.info("ClassificationWorker.run() emitting finished signal")
+        self.finished.emit()
+        logger.info("ClassificationWorker.run() COMPLETED")
+
+
+class ObjectDetectionWorker(QThread):
+    """Background worker for object detection using YOLOv8."""
+
+    progress = Signal(int, int)  # current, total
+    objects_ready = Signal(str, list, int)  # clip_id, detections, person_count
+    finished = Signal()
+
+    def __init__(self, clips: list[Clip], confidence: float = 0.5, detect_all: bool = True):
+        super().__init__()
+        self.clips = clips
+        self.confidence = confidence
+        self.detect_all = detect_all  # False = persons only (faster)
+        self._cancelled = False
+        logger.debug("ObjectDetectionWorker created")
+
+    def cancel(self):
+        """Request cancellation of the object detection."""
+        logger.info("ObjectDetectionWorker.cancel() called")
+        self._cancelled = True
+
+    def run(self):
+        logger.info("ObjectDetectionWorker.run() STARTING")
+        from core.analysis.detection import detect_objects, count_people
+
+        total = len(self.clips)
+        for i, clip in enumerate(self.clips):
+            if self._cancelled:
+                logger.info("ObjectDetectionWorker cancelled")
+                break
+            try:
+                if clip.thumbnail_path and clip.thumbnail_path.exists():
+                    if self.detect_all:
+                        detections = detect_objects(
+                            clip.thumbnail_path,
+                            confidence_threshold=self.confidence,
+                        )
+                        person_count = sum(1 for d in detections if d["label"] == "person")
+                    else:
+                        detections = []
+                        person_count = count_people(
+                            clip.thumbnail_path,
+                            confidence_threshold=self.confidence,
+                        )
+                    self.objects_ready.emit(clip.id, detections, person_count)
+            except Exception as e:
+                logger.warning(f"Object detection failed for {clip.id}: {e}")
+            self.progress.emit(i + 1, total)
+        logger.info("ObjectDetectionWorker.run() emitting finished signal")
+        self.finished.emit()
+        logger.info("ObjectDetectionWorker.run() COMPLETED")
+
+
 class YouTubeSearchWorker(QThread):
     """Background worker for YouTube search."""
 
@@ -642,6 +739,8 @@ class MainWindow(QMainWindow):
         self.color_worker: Optional[ColorAnalysisWorker] = None
         self.shot_type_worker: Optional[ShotTypeWorker] = None
         self.transcription_worker: Optional[TranscriptionWorker] = None
+        self.classification_worker: Optional[ClassificationWorker] = None
+        self.detection_worker_yolo: Optional[ObjectDetectionWorker] = None
         self.youtube_search_worker: Optional[YouTubeSearchWorker] = None
         self.bulk_download_worker: Optional[BulkDownloadWorker] = None
         self.youtube_client: Optional[YouTubeSearchClient] = None
@@ -650,6 +749,8 @@ class MainWindow(QMainWindow):
         self._detection_finished_handled = False
         self._thumbnails_finished_handled = False
         self._color_analysis_finished_handled = False
+        self._classification_finished_handled = False
+        self._object_detection_finished_handled = False
         self._shot_type_finished_handled = False
         self._transcription_finished_handled = False
 
@@ -956,6 +1057,8 @@ class MainWindow(QMainWindow):
             self.color_worker,
             self.shot_type_worker,
             self.transcription_worker,
+            self.classification_worker,
+            self.detection_worker_yolo,
             self.youtube_search_worker,
             self.bulk_download_worker,
         ]
@@ -3806,6 +3909,20 @@ class MainWindow(QMainWindow):
             # Just return True since the worker is already running
             return True
 
+        elif wait_type == "classification":
+            clip_ids = tool_result.get("clip_ids", [])
+            top_k = tool_result.get("top_k", 5)
+            return self.start_agent_classification(clip_ids, top_k)
+
+        elif wait_type == "object_detection":
+            clip_ids = tool_result.get("clip_ids", [])
+            confidence = tool_result.get("confidence", 0.5)
+            return self.start_agent_object_detection(clip_ids, confidence, detect_all=True)
+
+        elif wait_type == "person_detection":
+            clip_ids = tool_result.get("clip_ids", [])
+            return self.start_agent_object_detection(clip_ids, 0.5, detect_all=False)
+
         else:
             logger.warning(f"Unknown worker type: {wait_type}")
             return False
@@ -3983,6 +4100,241 @@ class MainWindow(QMainWindow):
         self.transcription_worker.start()
 
         return True
+
+    def start_agent_classification(self, clip_ids: list[str], top_k: int = 5) -> bool:
+        """Start frame classification for clips triggered by agent.
+
+        Args:
+            clip_ids: List of clip IDs to classify
+            top_k: Number of top labels to return per clip
+
+        Returns:
+            True if started, False if already running
+        """
+        # Resolve clips
+        clips = [self.project.clips_by_id.get(cid) for cid in clip_ids]
+        clips = [c for c in clips if c is not None]
+
+        if not clips:
+            return False
+
+        # Check if worker already running
+        if self.classification_worker and self.classification_worker.isRunning():
+            return False
+
+        # Reset guard
+        self._classification_finished_handled = False
+
+        # Mark that we're waiting for classification via agent
+        self._pending_agent_classification = True
+        self._agent_classification_clips = clips
+
+        # Add clips to Analyze tab and switch
+        self.analyze_tab.add_clips([c.id for c in clips])
+        self._switch_to_tab("analyze")
+
+        # Update UI state
+        self.analyze_tab.set_analyzing(True, "classify")
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 100)
+        self.status_bar.showMessage(f"Classifying content in {len(clips)} clips...")
+
+        # Start worker
+        from PySide6.QtCore import Qt
+        self.classification_worker = ClassificationWorker(clips, top_k=top_k)
+        self.classification_worker.progress.connect(self._on_classification_progress)
+        self.classification_worker.labels_ready.connect(self._on_classification_ready)
+        self.classification_worker.finished.connect(self._on_agent_classification_finished, Qt.UniqueConnection)
+        self.classification_worker.start()
+
+        return True
+
+    def start_agent_object_detection(self, clip_ids: list[str], confidence: float = 0.5, detect_all: bool = True) -> bool:
+        """Start object detection for clips triggered by agent.
+
+        Args:
+            clip_ids: List of clip IDs to analyze
+            confidence: Detection confidence threshold
+            detect_all: True for all objects, False for people only
+
+        Returns:
+            True if started, False if already running
+        """
+        # Resolve clips
+        clips = [self.project.clips_by_id.get(cid) for cid in clip_ids]
+        clips = [c for c in clips if c is not None]
+
+        if not clips:
+            return False
+
+        # Check if worker already running
+        if self.detection_worker_yolo and self.detection_worker_yolo.isRunning():
+            return False
+
+        # Reset guard
+        self._object_detection_finished_handled = False
+
+        # Mark that we're waiting for object detection via agent
+        self._pending_agent_object_detection = True
+        self._agent_object_detection_clips = clips
+        self._agent_object_detection_all = detect_all
+
+        # Add clips to Analyze tab and switch
+        self.analyze_tab.add_clips([c.id for c in clips])
+        self._switch_to_tab("analyze")
+
+        # Update UI state
+        task_name = "objects" if detect_all else "people"
+        self.analyze_tab.set_analyzing(True, task_name)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 100)
+        msg = f"Detecting {'objects' if detect_all else 'people'} in {len(clips)} clips..."
+        self.status_bar.showMessage(msg)
+
+        # Start worker
+        from PySide6.QtCore import Qt
+        self.detection_worker_yolo = ObjectDetectionWorker(clips, confidence=confidence, detect_all=detect_all)
+        self.detection_worker_yolo.progress.connect(self._on_object_detection_progress)
+        self.detection_worker_yolo.objects_ready.connect(self._on_objects_ready)
+        self.detection_worker_yolo.finished.connect(self._on_agent_object_detection_finished, Qt.UniqueConnection)
+        self.detection_worker_yolo.start()
+
+        return True
+
+    @Slot(int, int)
+    def _on_classification_progress(self, current: int, total: int):
+        """Handle classification progress updates."""
+        if total > 0:
+            percent = int(current / total * 100)
+            self.progress_bar.setValue(percent)
+            self.status_bar.showMessage(f"Classifying content: {current}/{total} clips...")
+
+    @Slot(str, list)
+    def _on_classification_ready(self, clip_id: str, results: list):
+        """Handle classification results for a single clip."""
+        clip = self.project.clips_by_id.get(clip_id)
+        if clip:
+            # Store labels (just the label strings, not confidences)
+            clip.object_labels = [label for label, _ in results]
+            logger.debug(f"Classification for {clip_id}: {clip.object_labels[:3]}")
+
+    @Slot()
+    def _on_agent_classification_finished(self):
+        """Handle classification completion when triggered by agent."""
+        logger.info("=== AGENT CLASSIFICATION FINISHED ===")
+
+        # Guard against duplicate calls
+        if self._classification_finished_handled:
+            logger.warning("_on_agent_classification_finished already handled, ignoring duplicate")
+            return
+        self._classification_finished_handled = True
+
+        # Reset UI state
+        self.analyze_tab.set_analyzing(False)
+        self.progress_bar.setVisible(False)
+        self.status_bar.showMessage("Classification complete", 3000)
+
+        # Save project
+        self.project.save()
+
+        # Send result back to agent
+        if hasattr(self, '_pending_agent_classification') and self._pending_agent_classification:
+            self._pending_agent_classification = False
+            clips = getattr(self, '_agent_classification_clips', [])
+
+            # Build result summary
+            classified_count = sum(1 for c in clips if c.object_labels)
+            result = {
+                "success": True,
+                "classified_clips": classified_count,
+                "total_clips": len(clips),
+                "sample_labels": [],
+            }
+
+            # Include sample labels from first few clips
+            for clip in clips[:3]:
+                if clip.object_labels:
+                    result["sample_labels"].append({
+                        "clip_id": clip.id,
+                        "labels": clip.object_labels[:5],
+                    })
+
+            if self._chat_worker:
+                self._pending_agent_tool_call_id = None
+                self._pending_agent_tool_name = None
+                self._chat_worker.set_gui_tool_result(result)
+                logger.info(f"Sent classification result to agent: {classified_count}/{len(clips)} clips")
+
+    @Slot(int, int)
+    def _on_object_detection_progress(self, current: int, total: int):
+        """Handle object detection progress updates."""
+        if total > 0:
+            percent = int(current / total * 100)
+            self.progress_bar.setValue(percent)
+            detect_all = getattr(self, '_agent_object_detection_all', True)
+            task = "objects" if detect_all else "people"
+            self.status_bar.showMessage(f"Detecting {task}: {current}/{total} clips...")
+
+    @Slot(str, list, int)
+    def _on_objects_ready(self, clip_id: str, detections: list, person_count: int):
+        """Handle object detection results for a single clip."""
+        clip = self.project.clips_by_id.get(clip_id)
+        if clip:
+            clip.detected_objects = detections
+            clip.person_count = person_count
+            logger.debug(f"Detection for {clip_id}: {len(detections)} objects, {person_count} people")
+
+    @Slot()
+    def _on_agent_object_detection_finished(self):
+        """Handle object detection completion when triggered by agent."""
+        logger.info("=== AGENT OBJECT DETECTION FINISHED ===")
+
+        # Guard against duplicate calls
+        if self._object_detection_finished_handled:
+            logger.warning("_on_agent_object_detection_finished already handled, ignoring duplicate")
+            return
+        self._object_detection_finished_handled = True
+
+        # Reset UI state
+        self.analyze_tab.set_analyzing(False)
+        self.progress_bar.setVisible(False)
+        self.status_bar.showMessage("Object detection complete", 3000)
+
+        # Save project
+        self.project.save()
+
+        # Send result back to agent
+        if hasattr(self, '_pending_agent_object_detection') and self._pending_agent_object_detection:
+            self._pending_agent_object_detection = False
+            clips = getattr(self, '_agent_object_detection_clips', [])
+            detect_all = getattr(self, '_agent_object_detection_all', True)
+
+            # Build result summary
+            detected_count = sum(1 for c in clips if c.detected_objects is not None or c.person_count is not None)
+            total_people = sum(c.person_count or 0 for c in clips)
+
+            result = {
+                "success": True,
+                "analyzed_clips": detected_count,
+                "total_clips": len(clips),
+                "total_people_detected": total_people,
+            }
+
+            if detect_all:
+                # Aggregate object counts across all clips
+                all_labels: dict[str, int] = {}
+                for clip in clips:
+                    if clip.detected_objects:
+                        for det in clip.detected_objects:
+                            label = det["label"]
+                            all_labels[label] = all_labels.get(label, 0) + 1
+                result["object_counts"] = all_labels
+
+            if self._chat_worker:
+                self._pending_agent_tool_call_id = None
+                self._pending_agent_tool_name = None
+                self._chat_worker.set_gui_tool_result(result)
+                logger.info(f"Sent object detection result to agent: {detected_count}/{len(clips)} clips")
 
     def _on_export_edl_click(self):
         """Export the timeline sequence as an EDL file."""
@@ -4592,6 +4944,8 @@ class MainWindow(QMainWindow):
             ("color", self.color_worker),
             ("shot_type", self.shot_type_worker),
             ("transcription", self.transcription_worker),
+            ("classification", self.classification_worker),
+            ("object_detection", self.detection_worker_yolo),
         ]
 
         for name, worker in workers:
