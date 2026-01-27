@@ -187,7 +187,7 @@ def describe_frame_cloud(image_path: Path, prompt: str = "Describe this image.")
 def describe_frame(
     image_path: Path,
     tier: Optional[str] = None,
-    prompt: str = "Describe this video frame in detail. Focus on main subjects, action, setting, and mood."
+    prompt: str = "Describe this video frame in 3 sentences or less. Focus on the main subjects, action, and setting."
 ) -> tuple[str, str]:
     """Generate description for a video frame.
 

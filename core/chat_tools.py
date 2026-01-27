@@ -438,7 +438,7 @@ def describe_content_live(
         return {"success": False, "error": "Description generation already in progress"}
 
     # Set default prompt if not provided
-    final_prompt = prompt or "Describe this video frame in detail. Keep the description concise, no longer than a single paragraph."
+    final_prompt = prompt or "Describe this video frame in 3 sentences or less. Focus on the main subjects, action, and setting."
 
     return {
         "_wait_for_worker": "description",
