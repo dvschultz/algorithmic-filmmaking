@@ -1521,12 +1521,34 @@ class MainWindow(QMainWindow):
                     # Start the appropriate worker based on wait_type
                     started = self._start_worker_for_tool(wait_type, tool_result)
                     if not started:
-                        # Worker couldn't start - send error immediately
+                        # Worker couldn't start - likely already running
+                        is_running = False
+                        worker_attr = {
+                            "description": "description_worker",
+                            "classification": "classification_worker",
+                            "object_detection": "detection_worker_yolo",
+                            "color_analysis": "color_worker",
+                            "shot_analysis": "shot_type_worker",
+                            "transcription": "transcription_worker",
+                        }.get(wait_type)
+                        
+                        if worker_attr and hasattr(self, worker_attr):
+                            w = getattr(self, worker_attr)
+                            is_running = w and w.isRunning()
+
+                        error_msg = f"Failed to start {wait_type} worker."
+                        if is_running:
+                            error_msg = (
+                                f"An analysis task ({wait_type}) is already in progress. "
+                                "Please wait for it to complete. Note: First-time runs may "
+                                "take several minutes while model weights are downloaded."
+                            )
+
                         result = {
                             "tool_call_id": tool_call_id,
                             "name": tool_name,
                             "success": False,
-                            "error": f"Failed to start {wait_type} worker"
+                            "error": error_msg
                         }
                         self._pending_agent_tool_call_id = None
                         self._pending_agent_tool_name = None
@@ -4296,7 +4318,10 @@ class MainWindow(QMainWindow):
         self.analyze_tab.set_analyzing(True, "description")
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 100)
-        self.status_bar.showMessage(f"Generating descriptions for {len(clips)} clips...")
+        self.status_bar.showMessage(
+            f"Generating descriptions for {len(clips)} clips... "
+            "(First run may take several minutes to download models)"
+        )
 
         # Start worker
         from PySide6.QtCore import Qt
