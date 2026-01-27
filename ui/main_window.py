@@ -576,6 +576,7 @@ class DescriptionWorker(QThread):
 
     progress = Signal(int, int)  # current, total
     description_ready = Signal(str, str, str)  # clip_id, description, model_name
+    error = Signal(str, str)  # clip_id, error_message
     finished = Signal()
 
     def __init__(self, clips: list[Clip], tier: Optional[str] = None, prompt: Optional[str] = None):
@@ -584,6 +585,9 @@ class DescriptionWorker(QThread):
         self.tier = tier
         self.prompt = prompt
         self._cancelled = False
+        self.error_count = 0
+        self.success_count = 0
+        self.last_error = None
         logger.debug("DescriptionWorker created")
 
     def cancel(self):
@@ -607,11 +611,23 @@ class DescriptionWorker(QThread):
                         tier=self.tier,
                         prompt=self.prompt or "Describe this video frame in detail."
                     )
-                    self.description_ready.emit(clip.id, description, model)
+                    # Only emit valid descriptions (not error messages)
+                    if description and not description.startswith("Error"):
+                        self.description_ready.emit(clip.id, description, model)
+                        self.success_count += 1
+                    else:
+                        logger.warning(f"Invalid description for {clip.id}: {description}")
+                        self.error_count += 1
+                        self.last_error = description
+                        self.error.emit(clip.id, description)
             except Exception as e:
-                logger.warning(f"Description failed for {clip.id}: {e}")
+                error_msg = str(e)
+                logger.warning(f"Description failed for {clip.id}: {error_msg}")
+                self.error_count += 1
+                self.last_error = error_msg
+                self.error.emit(clip.id, error_msg)
             self.progress.emit(i + 1, total)
-        logger.info("DescriptionWorker.run() emitting finished signal")
+        logger.info(f"DescriptionWorker.run() completed: {self.success_count} success, {self.error_count} errors")
         self.finished.emit()
         logger.info("DescriptionWorker.run() COMPLETED")
 
@@ -2626,9 +2642,17 @@ class MainWindow(QMainWindow):
         self.description_worker = DescriptionWorker(clips, tier=tier)
         self.description_worker.progress.connect(self._on_description_progress)
         self.description_worker.description_ready.connect(self._on_description_ready)
+        self.description_worker.error.connect(self._on_description_error)
         self.description_worker.finished.connect(self._on_manual_description_finished, Qt.UniqueConnection)
         logger.info("Starting DescriptionWorker (manual)...")
         self.description_worker.start()
+
+    @Slot(str, str)
+    def _on_description_error(self, clip_id: str, error_msg: str):
+        """Handle description error for a single clip."""
+        logger.warning(f"Description error for clip {clip_id}: {error_msg}")
+        # Show error in status bar (will be overwritten by progress updates)
+        # The full error summary is shown when finished
 
     @Slot()
     def _on_manual_description_finished(self):
@@ -2643,7 +2667,21 @@ class MainWindow(QMainWindow):
 
         self.progress_bar.setVisible(False)
         self.analyze_tab.set_analyzing(False)
-        self.status_bar.showMessage(f"Description generation complete - {len(self.analyze_tab.get_clips())} clips")
+
+        # Build status message with error info if applicable
+        total_clips = len(self.analyze_tab.get_clips())
+        if hasattr(self, 'description_worker') and self.description_worker:
+            success = self.description_worker.success_count
+            errors = self.description_worker.error_count
+            if errors > 0:
+                self.status_bar.showMessage(
+                    f"Description complete: {success} succeeded, {errors} failed. "
+                    f"Last error: {self.description_worker.last_error[:100] if self.description_worker.last_error else 'Unknown'}"
+                )
+            else:
+                self.status_bar.showMessage(f"Description generation complete - {success} clips")
+        else:
+            self.status_bar.showMessage(f"Description generation complete - {total_clips} clips")
 
         # Save project if path is set
         if self.project.path:
@@ -4487,6 +4525,7 @@ class MainWindow(QMainWindow):
         self.description_worker = DescriptionWorker(clips, tier=tier, prompt=prompt)
         self.description_worker.progress.connect(self._on_description_progress)
         self.description_worker.description_ready.connect(self._on_description_ready)
+        self.description_worker.error.connect(self._on_description_error)
         self.description_worker.finished.connect(self._on_agent_description_finished, Qt.UniqueConnection)
         self.description_worker.start()
 
@@ -4524,7 +4563,21 @@ class MainWindow(QMainWindow):
         # Reset UI state
         self.analyze_tab.set_analyzing(False)
         self.progress_bar.setVisible(False)
-        self.status_bar.showMessage("Description generation complete", 3000)
+
+        # Get error info from worker
+        error_count = 0
+        last_error = None
+        if hasattr(self, 'description_worker') and self.description_worker:
+            error_count = self.description_worker.error_count
+            last_error = self.description_worker.last_error
+
+        if error_count > 0:
+            self.status_bar.showMessage(
+                f"Description complete with {error_count} errors. Last: {last_error[:80] if last_error else 'Unknown'}",
+                5000
+            )
+        else:
+            self.status_bar.showMessage("Description generation complete", 3000)
 
         # Save project if path is set
         if self.project.path:
@@ -4537,14 +4590,19 @@ class MainWindow(QMainWindow):
 
             # Build result summary
             described_count = sum(1 for c in clips if c.description)
-            
+
             result = {
-                "success": True,
+                "success": error_count == 0 or described_count > 0,  # Partial success is still success
                 "described_clips": described_count,
                 "total_clips": len(clips),
+                "error_count": error_count,
                 "sample_descriptions": [],
             }
-            
+
+            # Include error info if present
+            if error_count > 0 and last_error:
+                result["last_error"] = last_error
+
             # Include sample descriptions
             for clip in clips[:3]:
                 if clip.description:
@@ -4557,13 +4615,13 @@ class MainWindow(QMainWindow):
                 result = {
                     "tool_call_id": self._pending_agent_tool_call_id,
                     "name": self._pending_agent_tool_name,
-                    "success": True,
+                    "success": result["success"],
                     "result": result
                 }
                 self._pending_agent_tool_call_id = None
                 self._pending_agent_tool_name = None
                 self._chat_worker.set_gui_tool_result(result)
-                logger.info(f"Sent description result to agent: {described_count}/{len(clips)} clips")
+                logger.info(f"Sent description result to agent: {described_count}/{len(clips)} clips, {error_count} errors")
 
     @Slot(int, int)
     def _on_classification_progress(self, current: int, total: int):
