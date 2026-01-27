@@ -114,42 +114,50 @@ def describe_frame_cpu(image_path: Path, prompt: str = "Describe this image.") -
         return model.answer_question(enc_image, prompt, tokenizer)
     except Exception as e:
         logger.error(f"CPU inference failed: {e}")
-        return f"Error generating description: {e}"
+        raise RuntimeError(f"CPU inference failed: {e}") from e
 
 
 def describe_frame_cloud(image_path: Path, prompt: str = "Describe this image.") -> str:
     """Generate description using Cloud API (via LiteLLM)."""
     from core.settings import (
-        get_openai_api_key, 
-        get_anthropic_api_key, 
+        get_openai_api_key,
+        get_anthropic_api_key,
         get_gemini_api_key
     )
-    
+
     settings = load_settings()
     model = settings.description_model_cloud
+    original_model = model  # Keep for logging
+
+    logger.info(f"Cloud description requested with model: {model}")
 
     # Normalize model name for LiteLLM
     # This ensures "gemini-..." routes to AI Studio (via API key) instead of Vertex AI
-    if "gemini" in model and not any(model.startswith(p) for p in ["gemini/", "vertex_ai/"]):
+    if "gemini" in model.lower() and not any(model.startswith(p) for p in ["gemini/", "vertex_ai/"]):
         model = f"gemini/{model}"
-    elif "claude" in model and not any(model.startswith(p) for p in ["anthropic/", "bedrock/"]):
+    elif "claude" in model.lower() and not any(model.startswith(p) for p in ["anthropic/", "bedrock/"]):
         model = f"anthropic/{model}"
-    
+
+    logger.info(f"Normalized model name: {model}")
+
     # Ensure API keys are available
     # LiteLLM usually handles environment variables, but we can helper set them if needed
     api_key = None
-    if "gpt" in model:
+    if "gpt" in model.lower() or "openai" in model.lower():
         api_key = get_openai_api_key()
-    elif "claude" in model:
+        logger.info("Using OpenAI API key")
+    elif "claude" in model.lower() or "anthropic" in model.lower():
         api_key = get_anthropic_api_key()
-    elif "gemini" in model:
+        logger.info("Using Anthropic API key")
+    elif "gemini" in model.lower():
         api_key = get_gemini_api_key()
-        
+        logger.info("Using Gemini API key")
+
     if not api_key:
-        logger.warning(f"No API key found for cloud model {model}. Inference may fail.")
+        raise ValueError(f"No API key found for cloud model {original_model}. Please configure the API key in Settings.")
 
     base64_image = encode_image_base64(image_path)
-    
+
     messages = [
         {
             "role": "user",
@@ -164,6 +172,7 @@ def describe_frame_cloud(image_path: Path, prompt: str = "Describe this image.")
     ]
 
     try:
+        logger.info(f"Calling LiteLLM with model={model}")
         response = litellm.completion(
             model=model,
             messages=messages,
@@ -171,38 +180,42 @@ def describe_frame_cloud(image_path: Path, prompt: str = "Describe this image.")
         )
         return response.choices[0].message.content
     except Exception as e:
-        logger.error(f"Cloud inference failed: {e}")
-        return f"Error generating description: {e}"
+        logger.error(f"Cloud inference failed for model {model}: {e}")
+        raise RuntimeError(f"Cloud inference failed ({original_model}): {e}") from e
 
 
 def describe_frame(
-    image_path: Path, 
+    image_path: Path,
     tier: Optional[str] = None,
     prompt: str = "Describe this video frame in detail. Focus on main subjects, action, setting, and mood."
 ) -> tuple[str, str]:
     """Generate description for a video frame.
-    
+
     Args:
         image_path: Path to the image file
         tier: 'cpu', 'gpu', or 'cloud'. If None, uses settings default.
         prompt: Instruction for the model
-        
+
     Returns:
         Tuple of (description, model_name)
+
+    Raises:
+        RuntimeError: If description generation fails
+        ValueError: If tier is unknown or API key is missing
     """
     settings = load_settings()
     tier = tier or settings.description_model_tier
-    
+
     logger.info(f"Describing frame {image_path.name} using {tier} tier")
-    
+
     if tier == "cpu":
         desc = describe_frame_cpu(image_path, prompt)
         return desc, settings.description_model_cpu
-        
+
     elif tier == "cloud":
         desc = describe_frame_cloud(image_path, prompt)
         return desc, settings.description_model_cloud
-        
+
     elif tier == "gpu":
         # Placeholder for Phase 5
         logger.warning("GPU tier not implemented yet, falling back to CPU")
@@ -210,7 +223,7 @@ def describe_frame(
         return desc, settings.description_model_cpu
 
     else:
-        return f"Unknown tier: {tier}", "unknown"
+        raise ValueError(f"Unknown tier: {tier}")
 
 
 def is_model_loaded() -> bool:
