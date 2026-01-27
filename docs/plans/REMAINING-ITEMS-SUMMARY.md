@@ -187,31 +187,42 @@ This document consolidates all unchecked items from incomplete planning document
 
 **Source:** `2026-01-26-feat-clip-details-sidebar-plan.md`
 
-**Note:** The editable version (`2026-01-26-feat-editable-clip-details-sidebar-plan.md`) is complete and archived. This original plan may be superseded.
+**Status:** ✅ SUPERSEDED - Editable version implemented all criteria plus editing capabilities
 
-### Functional Requirements (14 items)
+The editable version (`2026-01-26-feat-editable-clip-details-sidebar-plan.md`) was implemented and archived. It includes all features from the original plan plus editable name, shot type, and transcript fields.
 
-- [ ] Sidebar opens via right-click context menu "View Details"
-- [ ] Sidebar opens via double-click on clip card (ClipThumbnail, SortingCard)
-- [ ] Sidebar opens via keyboard (Enter or 'i' when clip selected)
-- [ ] Video preview plays clip range (start_frame to end_frame)
-- [ ] Displays clip title as "source_filename - HH:MM:SS"
-- [ ] Displays duration, frame range, source resolution
-- [ ] Displays dominant colors as swatches (if analyzed)
-- [ ] Displays shot type badge (if analyzed)
-- [ ] Displays transcript text (if transcribed)
-- [ ] Sidebar content updates when different clip is selected
-- [ ] Dismissable via X button
-- [ ] Dismissable via Escape key
-- [ ] Sidebar persists across tab changes
+### Implementation Details
 
-### Non-Functional Requirements (5 items)
+- Sidebar: `ui/clip_details_sidebar.py` (519 lines)
+- Supporting widgets: `ui/widgets/editable_label.py`, `ui/widgets/shot_type_dropdown.py`, `ui/widgets/editable_transcript.py`
+- Integration: `ui/main_window.py:1105` (`show_clip_details` method)
+- Triggers: `ui/clip_browser.py` (right-click:268, double-click:261, keyboard:1095)
 
-- [ ] Uses theme colors (light/dark mode support)
-- [ ] Sidebar width: 350px default, resizable via dock widget
-- [ ] Video preview maintains aspect ratio
-- [ ] Empty states for missing analysis data ("Not analyzed")
-- [ ] Error state for missing source file
+### Functional Requirements ✅ ALL MET
+
+- [x] Sidebar opens via right-click context menu "View Details" (`clip_browser.py:268-275`)
+- [x] Sidebar opens via double-click on ClipThumbnail (`clip_browser.py:261-266`)
+- [x] Sidebar opens via keyboard Enter/'i' when clip selected (`clip_browser.py:1095-1112`)
+- [x] Video preview plays clip range with `set_clip_range()` (`clip_details_sidebar.py:351-359`)
+- [x] Displays clip title as "source_filename at HH:MM:SS" (`clip_details_sidebar.py:316-322`)
+- [x] Displays duration, frame range, source resolution (`clip_details_sidebar.py:324-332`)
+- [x] Displays dominant colors as swatches (`clip_details_sidebar.py:419-450`)
+- [x] Displays shot type via editable dropdown (exceeds original plan)
+- [x] Displays transcript via editable widget (exceeds original plan)
+- [x] Sidebar content updates when different clip selected (`show_clip` method)
+- [x] Dismissable via X button (QDockWidget built-in)
+- [x] Dismissable via Escape key (`clip_details_sidebar.py:514-516`)
+- [x] Sidebar persists across tab changes (QDockWidget at main window level)
+
+### Non-Functional Requirements ✅ ALL MET
+
+- [x] Uses theme colors with light/dark mode (`_refresh_theme` connected to `theme().changed`)
+- [x] Sidebar width: 400-550px, resizable via dock widget (`setMinimumWidth(400)`, `setMaximumWidth(550)`)
+- [x] Video preview maintains aspect ratio (Qt VideoPlayer handles this)
+- [x] Empty states for missing analysis data ("Not analyzed" in `_update_colors`)
+- [x] Error state for missing source file (`_show_missing_file_state`)
+
+**Note:** Original plan mentioned SortingCard for double-click, but SortingCard is for sorting algorithms, not clips. ClipThumbnail has full support.
 
 ---
 
@@ -252,9 +263,9 @@ Moved to `docs/plans/archive/`:
 | Low | CLI Interface | 3 quality gates |
 | Low | Agent-Native Phases 2-3-4 | 4 integration tests |
 | Medium | Agent-Accessible GUI Features | 7 items (Phase 2 tools + tests) |
-| ✅ Done | MCP Server Phase 5 | 0 items (ready for archive) |
-| ✅ Done | Agent Planning Tool | 0 items (ready for archive) |
-| ✅ Done | Sequence Tab Redesign | 0 items (ready for archive) |
-| Review | Clip Details Sidebar (original) | May be superseded |
+| ✅ Done | MCP Server Phase 5 | 0 items |
+| ✅ Done | Agent Planning Tool | 0 items |
+| ✅ Done | Sequence Tab Redesign | 0 items |
+| ✅ Done | Clip Details Sidebar | 0 items (superseded by editable version) |
 
-**Total remaining items: ~14** (reduced from ~20 after validating MCP Server is complete)
+**Total remaining items: ~14** (CLI quality gates + integration tests + agent-accessible features)
