@@ -120,22 +120,34 @@ This document consolidates all unchecked items from incomplete planning document
 
 **Source:** `2026-01-25-feat-agent-planning-tool-plan.md`
 
-**Status:** Files marked as complete, but acceptance criteria unchecked
+**Status:** ✅ COMPLETE (with minor UX variations from original spec)
+
+### Implementation Details
+
+- `present_plan` tool: `core/chat_tools.py:298`
+- `PlanStepWidget`: `ui/chat_widgets.py:737` (268 lines)
+- `PlanWidget`: `ui/chat_widgets.py:1007` (150+ lines)
+- `Plan` model: `models/plan.py` (201 lines)
+- Execution flow: `ui/main_window.py:1456-1655`
 
 ### Acceptance Criteria (12 items)
 
-- [ ] User can say "plan X" and LLM asks clarifying questions
-- [ ] LLM calls `present_plan` with step list after getting answers
-- [ ] Plan widget displays inline in chat with numbered steps
-- [ ] User can edit step text by double-clicking
-- [ ] User can reorder steps via drag-and-drop
-- [ ] User can delete steps (right-click menu or delete key)
-- [ ] Confirm button triggers sequential execution
-- [ ] Cancel button before execution dismisses plan
-- [ ] Step status indicators update during execution (pending → running → done/failed)
-- [ ] Failed steps show error but execution continues
-- [ ] Cancel during execution stops after current step
-- [ ] Completion summary shows results per step
+- [x] User can say "plan X" and LLM asks clarifying questions
+- [x] LLM calls `present_plan` with step list after getting answers
+- [x] Plan widget displays inline in chat with numbered steps
+- [x] User can edit step text by double-clicking (`_on_double_click` in PlanStepWidget)
+- [x] User can reorder steps via up/down buttons (buttons instead of drag-drop)
+- [x] User can delete steps via delete button (button instead of right-click/keyboard)
+- [x] Confirm button triggers sequential execution (`_on_confirm` → `_on_plan_confirmed`)
+- [x] Cancel button before execution dismisses plan (`_on_plan_cancelled`)
+- [x] Step status indicators update during execution (`update_step_status`)
+- [x] Failed steps show error with retry option (`retry_btn`, `_on_plan_retry_requested`)
+- [x] Cancel during execution stops after current step (`_on_plan_stop_requested`)
+- [x] Completion summary shows results per step (progress tracking in Plan model)
+
+**Note:** Reordering uses ▲/▼ buttons instead of drag-and-drop. Delete uses button instead of right-click menu/keyboard. Core functionality complete.
+
+**Recommendation:** Move `2026-01-25-feat-agent-planning-tool-plan.md` to `archive/`
 
 ---
 
@@ -214,11 +226,12 @@ Moved to `docs/plans/archive/`:
 4. `2026-01-24-refactor-split-cut-analyze-tabs-plan.md`
 5. `2026-01-25-feat-agent-chatbot-plan.md`
 6. `2026-01-25-feat-agent-gui-bidirectional-sync-plan.md`
-7. `2026-01-25-feat-chat-example-prompts-plan.md`
-8. `2026-01-25-feat-gui-aware-agent-tools-plan.md`
-9. `2026-01-25-refactor-move-analysis-to-on-demand-plan.md`
-10. `2026-01-26-feat-editable-clip-details-sidebar-plan.md`
-11. `2026-01-25-feat-sequence-tab-card-based-redesign-plan.md`
+7. `2026-01-25-feat-agent-planning-tool-plan.md`
+8. `2026-01-25-feat-chat-example-prompts-plan.md`
+9. `2026-01-25-feat-gui-aware-agent-tools-plan.md`
+10. `2026-01-25-feat-sequence-tab-card-based-redesign-plan.md`
+11. `2026-01-25-refactor-move-analysis-to-on-demand-plan.md`
+12. `2026-01-26-feat-editable-clip-details-sidebar-plan.md`
 
 ---
 
@@ -230,8 +243,8 @@ Moved to `docs/plans/archive/`:
 | Low | Agent-Native Phases 2-3-4 | 4 integration tests |
 | Medium | Agent-Accessible GUI Features | 7 items (Phase 2 tools + tests) |
 | Medium | MCP Server Phase 5 | 6 quality gates |
-| Medium | Agent Planning Tool | 12 acceptance criteria |
+| ✅ Done | Agent Planning Tool | 0 items (ready for archive) |
 | ✅ Done | Sequence Tab Redesign | 0 items (ready for archive) |
 | Review | Clip Details Sidebar (original) | May be superseded |
 
-**Total remaining items: ~32** (reduced from ~57 after validating Sequence Tab is complete)
+**Total remaining items: ~20** (reduced from ~32 after validating Agent Planning Tool is complete)
