@@ -1175,6 +1175,9 @@ class MainWindow(QMainWindow):
         self.analyze_tab.transcribe_requested.connect(self._on_transcribe_from_tab)
         self.analyze_tab.analyze_colors_requested.connect(self._on_analyze_colors_from_tab)
         self.analyze_tab.analyze_shots_requested.connect(self._on_analyze_shots_from_tab)
+        self.analyze_tab.classify_requested.connect(self._on_classify_from_tab)
+        self.analyze_tab.detect_objects_requested.connect(self._on_detect_objects_from_tab)
+        self.analyze_tab.describe_requested.connect(self._on_describe_from_tab)
         self.analyze_tab.analyze_all_requested.connect(self._on_analyze_all_from_tab)
         self.analyze_tab.clip_dragged_to_timeline.connect(self._on_clip_dragged_to_timeline)
         self.analyze_tab.selection_changed.connect(self._on_analyze_selection_changed)
@@ -2491,6 +2494,162 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(f"Transcription complete - {len(self.analyze_tab.get_clips())} clips")
 
         # Update chat panel with project state (clips now have transcripts)
+        self._update_chat_project_state()
+
+    def _on_classify_from_tab(self):
+        """Handle classification request from Analyze tab."""
+        clips = self.analyze_tab.get_clips()
+        if not clips:
+            return
+
+        # Check if worker already running
+        if hasattr(self, 'classification_worker') and self.classification_worker and self.classification_worker.isRunning():
+            return
+
+        # Reset guard
+        self._classification_finished_handled = False
+
+        # Update UI state
+        self.analyze_tab.set_analyzing(True, "classify")
+
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 100)
+        self.status_bar.showMessage(f"Classifying content in {len(clips)} clips...")
+
+        logger.info("Creating ClassificationWorker (manual)...")
+        self.classification_worker = ClassificationWorker(clips)
+        self.classification_worker.progress.connect(self._on_classification_progress)
+        self.classification_worker.labels_ready.connect(self._on_classification_ready)
+        self.classification_worker.finished.connect(self._on_manual_classification_finished, Qt.UniqueConnection)
+        logger.info("Starting ClassificationWorker (manual)...")
+        self.classification_worker.start()
+
+    @Slot()
+    def _on_manual_classification_finished(self):
+        """Handle manual classification completion."""
+        logger.info("=== MANUAL CLASSIFICATION FINISHED ===")
+
+        # Guard against duplicate calls
+        if self._classification_finished_handled:
+            logger.warning("_on_manual_classification_finished already handled, ignoring duplicate call")
+            return
+        self._classification_finished_handled = True
+
+        self.progress_bar.setVisible(False)
+        self.analyze_tab.set_analyzing(False)
+        self.status_bar.showMessage(f"Classification complete - {len(self.analyze_tab.get_clips())} clips")
+
+        # Save project if path is set
+        if self.project.path:
+            self.project.save()
+
+        # Update chat panel with project state
+        self._update_chat_project_state()
+
+    def _on_detect_objects_from_tab(self):
+        """Handle object detection request from Analyze tab."""
+        clips = self.analyze_tab.get_clips()
+        if not clips:
+            return
+
+        # Check if worker already running
+        if hasattr(self, 'detection_worker_yolo') and self.detection_worker_yolo and self.detection_worker_yolo.isRunning():
+            return
+
+        # Reset guard
+        self._object_detection_finished_handled = False
+
+        # Update UI state
+        self.analyze_tab.set_analyzing(True, "detect")
+
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 100)
+        self.status_bar.showMessage(f"Detecting objects in {len(clips)} clips...")
+
+        logger.info("Creating ObjectDetectionWorker (manual)...")
+        self.detection_worker_yolo = ObjectDetectionWorker(clips)
+        self.detection_worker_yolo.progress.connect(self._on_object_detection_progress)
+        self.detection_worker_yolo.objects_ready.connect(self._on_objects_ready)
+        self.detection_worker_yolo.finished.connect(self._on_manual_object_detection_finished, Qt.UniqueConnection)
+        logger.info("Starting ObjectDetectionWorker (manual)...")
+        self.detection_worker_yolo.start()
+
+    @Slot()
+    def _on_manual_object_detection_finished(self):
+        """Handle manual object detection completion."""
+        logger.info("=== MANUAL OBJECT DETECTION FINISHED ===")
+
+        # Guard against duplicate calls
+        if self._object_detection_finished_handled:
+            logger.warning("_on_manual_object_detection_finished already handled, ignoring duplicate call")
+            return
+        self._object_detection_finished_handled = True
+
+        self.progress_bar.setVisible(False)
+        self.analyze_tab.set_analyzing(False)
+        self.status_bar.showMessage(f"Object detection complete - {len(self.analyze_tab.get_clips())} clips")
+
+        # Save project if path is set
+        if self.project.path:
+            self.project.save()
+
+        # Update chat panel with project state
+        self._update_chat_project_state()
+
+    def _on_describe_from_tab(self):
+        """Handle description request from Analyze tab."""
+        clips = self.analyze_tab.get_clips()
+        if not clips:
+            return
+
+        # Check if worker already running
+        if hasattr(self, 'description_worker') and self.description_worker and self.description_worker.isRunning():
+            return
+
+        # Reset guard
+        self._description_finished_handled = False
+
+        # Update UI state
+        self.analyze_tab.set_analyzing(True, "describe")
+
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 100)
+        self.status_bar.showMessage(
+            f"Generating descriptions for {len(clips)} clips... "
+            "(First run may take several minutes to download models)"
+        )
+
+        # Use tier from settings
+        tier = self.settings.description_model_tier
+
+        logger.info(f"Creating DescriptionWorker (manual) with tier={tier}...")
+        self.description_worker = DescriptionWorker(clips, tier=tier)
+        self.description_worker.progress.connect(self._on_description_progress)
+        self.description_worker.description_ready.connect(self._on_description_ready)
+        self.description_worker.finished.connect(self._on_manual_description_finished, Qt.UniqueConnection)
+        logger.info("Starting DescriptionWorker (manual)...")
+        self.description_worker.start()
+
+    @Slot()
+    def _on_manual_description_finished(self):
+        """Handle manual description completion."""
+        logger.info("=== MANUAL DESCRIPTION FINISHED ===")
+
+        # Guard against duplicate calls
+        if self._description_finished_handled:
+            logger.warning("_on_manual_description_finished already handled, ignoring duplicate call")
+            return
+        self._description_finished_handled = True
+
+        self.progress_bar.setVisible(False)
+        self.analyze_tab.set_analyzing(False)
+        self.status_bar.showMessage(f"Description generation complete - {len(self.analyze_tab.get_clips())} clips")
+
+        # Save project if path is set
+        if self.project.path:
+            self.project.save()
+
+        # Update chat panel with project state
         self._update_chat_project_state()
 
     # Agent-triggered analysis completion handlers
@@ -4395,6 +4554,12 @@ class MainWindow(QMainWindow):
                     })
 
             if self._chat_worker:
+                result = {
+                    "tool_call_id": self._pending_agent_tool_call_id,
+                    "name": self._pending_agent_tool_name,
+                    "success": True,
+                    "result": result
+                }
                 self._pending_agent_tool_call_id = None
                 self._pending_agent_tool_name = None
                 self._chat_worker.set_gui_tool_result(result)
@@ -4460,6 +4625,12 @@ class MainWindow(QMainWindow):
                     })
 
             if self._chat_worker:
+                result = {
+                    "tool_call_id": self._pending_agent_tool_call_id,
+                    "name": self._pending_agent_tool_name,
+                    "success": True,
+                    "result": result
+                }
                 self._pending_agent_tool_call_id = None
                 self._pending_agent_tool_name = None
                 self._chat_worker.set_gui_tool_result(result)
@@ -4532,6 +4703,12 @@ class MainWindow(QMainWindow):
                 result["object_counts"] = all_labels
 
             if self._chat_worker:
+                result = {
+                    "tool_call_id": self._pending_agent_tool_call_id,
+                    "name": self._pending_agent_tool_name,
+                    "success": True,
+                    "result": result
+                }
                 self._pending_agent_tool_call_id = None
                 self._pending_agent_tool_name = None
                 self._chat_worker.set_gui_tool_result(result)

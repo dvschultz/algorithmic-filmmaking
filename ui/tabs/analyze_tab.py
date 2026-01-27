@@ -36,6 +36,9 @@ class AnalyzeTab(BaseTab):
     analyze_colors_requested = Signal()
     analyze_shots_requested = Signal()
     transcribe_requested = Signal()
+    classify_requested = Signal()
+    detect_objects_requested = Signal()
+    describe_requested = Signal()
     analyze_all_requested = Signal()
     clip_selected = Signal(object)  # Clip
     clip_double_clicked = Signal(object)  # Clip
@@ -110,6 +113,36 @@ class AnalyzeTab(BaseTab):
         self.transcribe_btn.clicked.connect(self._on_transcribe_click)
         controls.addWidget(self.transcribe_btn)
 
+        # Classify Content button
+        self.classify_btn = QPushButton("Classify")
+        self.classify_btn.setToolTip(
+            "Classify frame content using ImageNet labels\n"
+            "(dog, car, tree, person, etc.)"
+        )
+        self.classify_btn.setEnabled(False)
+        self.classify_btn.clicked.connect(self._on_classify_click)
+        controls.addWidget(self.classify_btn)
+
+        # Detect Objects button
+        self.detect_btn = QPushButton("Detect Objects")
+        self.detect_btn.setToolTip(
+            "Detect and locate objects using YOLO\n"
+            "Includes bounding boxes and person count"
+        )
+        self.detect_btn.setEnabled(False)
+        self.detect_btn.clicked.connect(self._on_detect_click)
+        controls.addWidget(self.detect_btn)
+
+        # Describe Content button
+        self.describe_btn = QPushButton("Describe")
+        self.describe_btn.setToolTip(
+            "Generate AI descriptions of frame content\n"
+            "Uses model configured in Settings > Vision Description"
+        )
+        self.describe_btn.setEnabled(False)
+        self.describe_btn.clicked.connect(self._on_describe_click)
+        controls.addWidget(self.describe_btn)
+
         controls.addSpacing(10)
 
         # Analyze All button - runs all operations sequentially
@@ -170,6 +203,18 @@ class AnalyzeTab(BaseTab):
         """Handle transcribe button click."""
         self.transcribe_requested.emit()
 
+    def _on_classify_click(self):
+        """Handle Classify button click."""
+        self.classify_requested.emit()
+
+    def _on_detect_click(self):
+        """Handle Detect Objects button click."""
+        self.detect_objects_requested.emit()
+
+    def _on_describe_click(self):
+        """Handle Describe button click."""
+        self.describe_requested.emit()
+
     def _on_clear_click(self):
         """Handle clear all button click."""
         self.clear_clips()
@@ -221,6 +266,9 @@ class AnalyzeTab(BaseTab):
         self.colors_btn.setEnabled(has_clips)
         self.shots_btn.setEnabled(has_clips)
         self.transcribe_btn.setEnabled(has_clips)
+        self.classify_btn.setEnabled(has_clips)
+        self.detect_btn.setEnabled(has_clips)
+        self.describe_btn.setEnabled(has_clips)
         self.analyze_all_btn.setEnabled(has_clips)
         self.clear_btn.setEnabled(has_clips)
 
@@ -365,13 +413,17 @@ class AnalyzeTab(BaseTab):
 
         Args:
             is_analyzing: Whether an analysis operation is running
-            operation: Which operation is running ("colors", "shots", "transcribe", "all")
+            operation: Which operation is running ("colors", "shots", "transcribe",
+                       "classify", "detect", "describe", "all")
         """
         # Disable all buttons during any analysis
         has_clips = len(self._clip_ids) > 0
         self.colors_btn.setEnabled(not is_analyzing and has_clips)
         self.shots_btn.setEnabled(not is_analyzing and has_clips)
         self.transcribe_btn.setEnabled(not is_analyzing and has_clips)
+        self.classify_btn.setEnabled(not is_analyzing and has_clips)
+        self.detect_btn.setEnabled(not is_analyzing and has_clips)
+        self.describe_btn.setEnabled(not is_analyzing and has_clips)
         self.analyze_all_btn.setEnabled(not is_analyzing and has_clips)
         self.clear_btn.setEnabled(not is_analyzing and has_clips)
 
@@ -383,12 +435,21 @@ class AnalyzeTab(BaseTab):
                 self.shots_btn.setText("Classifying...")
             elif operation == "transcribe":
                 self.transcribe_btn.setText("Transcribing...")
+            elif operation == "classify":
+                self.classify_btn.setText("Classifying...")
+            elif operation == "detect":
+                self.detect_btn.setText("Detecting...")
+            elif operation == "describe":
+                self.describe_btn.setText("Describing...")
             elif operation == "all":
                 self.analyze_all_btn.setText("Analyzing...")
         else:
             self.colors_btn.setText("Extract Colors")
             self.shots_btn.setText("Classify Shots")
             self.transcribe_btn.setText("Transcribe")
+            self.classify_btn.setText("Classify")
+            self.detect_btn.setText("Detect Objects")
+            self.describe_btn.setText("Describe")
             self.analyze_all_btn.setText("Analyze All")
 
     def get_active_filters(self) -> dict:
