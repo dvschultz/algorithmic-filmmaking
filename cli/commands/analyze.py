@@ -117,8 +117,8 @@ def describe(
 
     # Prepare prompt
     default_prompt = (
-        "Describe this video frame in detail. Focus on main subjects, "
-        "action, setting, and mood."
+        "Describe this video frame in 3 sentences or less. "
+        "Focus on the main subjects, action, and setting."
     )
     final_prompt = prompt or default_prompt
     

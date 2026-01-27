@@ -609,7 +609,7 @@ class DescriptionWorker(QThread):
                     description, model = describe_frame(
                         clip.thumbnail_path,
                         tier=self.tier,
-                        prompt=self.prompt or "Describe this video frame in detail."
+                        prompt=self.prompt or "Describe this video frame in 3 sentences or less. Focus on the main subjects, action, and setting."
                     )
                     # Only emit valid descriptions (not error messages)
                     if description and not description.startswith("Error"):
