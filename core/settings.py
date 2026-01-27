@@ -381,6 +381,13 @@ class Settings:
     gemini_model: str = "gemini-2.5-flash"
     openrouter_model: str = "anthropic/claude-sonnet-4"
 
+    # Vision Description Settings
+    description_model_tier: str = "cpu"  # cpu, gpu, cloud
+    description_model_cpu: str = "vikhyatk/moondream2"
+    description_model_gpu: str = "llava-hf/llava-onevision-qwen2-7b-ov-hf"
+    description_model_cloud: str = "gpt-4o"
+    description_temporal_frames: int = 4
+
     def get_quality_preset(self) -> dict:
         """Get FFmpeg parameters for current quality setting."""
         return QUALITY_PRESETS.get(self.export_quality, QUALITY_PRESETS["medium"])
@@ -601,6 +608,19 @@ def _load_from_json(config_path: Path, settings: Settings) -> Settings:
         if val := llm.get("openrouter_model"):
             settings.openrouter_model = val
 
+    # Description section
+    if description := data.get("description"):
+        if val := description.get("model_tier"):
+            settings.description_model_tier = val
+        if val := description.get("model_cpu"):
+            settings.description_model_cpu = val
+        if val := description.get("model_gpu"):
+            settings.description_model_gpu = val
+        if val := description.get("model_cloud"):
+            settings.description_model_cloud = val
+        if "temporal_frames" in description:
+            settings.description_temporal_frames = int(description["temporal_frames"])
+
     return settings
 
 
@@ -654,6 +674,13 @@ def _settings_to_json(settings: Settings) -> dict:
             "gemini_model": settings.gemini_model,
             "openrouter_model": settings.openrouter_model,
             # Note: API key is NOT stored here - it goes to keyring
+        },
+        "description": {
+            "model_tier": settings.description_model_tier,
+            "model_cpu": settings.description_model_cpu,
+            "model_gpu": settings.description_model_gpu,
+            "model_cloud": settings.description_model_cloud,
+            "temporal_frames": settings.description_temporal_frames,
         },
     }
 

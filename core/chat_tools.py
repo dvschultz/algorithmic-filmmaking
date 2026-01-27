@@ -118,6 +118,7 @@ TOOL_TIMEOUTS = {
     "classify_content_live": 300,  # 5 minutes for classification
     "detect_objects_live": 300,    # 5 minutes for object detection
     "count_people_live": 300,      # 5 minutes for person detection
+    "describe_content_live": 600,  # 10 minutes for descriptions
     "transcribe": 1200,        # 20 minutes
     "transcribe_clips": 1200,  # 20 minutes
     "export_clips": 600,       # 10 minutes
@@ -400,6 +401,60 @@ def add_to_sequence(project, clip_ids: list[str]) -> dict:
     }
 
 
+@tools.register(
+    description="Generate natural language descriptions for video clips using Vision-Language Models. "
+                "Useful for understanding clip content beyond simple tags. "
+                "Supports tiers: 'cpu' (Moondream), 'gpu' (LLaVA), 'cloud' (GPT-4o/Claude).",
+    requires_project=True,
+    modifies_gui_state=True
+)
+def describe_content_live(
+    main_window,
+    project,
+    clip_ids: list[str],
+    tier: Optional[str] = None,
+    prompt: Optional[str] = None,
+) -> dict:
+    """Generate descriptions for clips.
+
+    Args:
+        clip_ids: List of clip IDs to analyze
+        tier: Model tier ('cpu', 'gpu', 'cloud')
+        prompt: Custom prompt for the model
+
+    Returns:
+        Dict with status and wait token
+    """
+    # Validate clip IDs
+    valid_ids = [cid for cid in clip_ids if cid in project.clips_by_id]
+    if not valid_ids:
+        return {
+            "success": False,
+            "error": "No valid clip IDs provided"
+        }
+
+    # Start description worker
+    # Note: DescriptionWorker must be implemented in MainWindow
+    started = main_window.start_agent_description(
+        clip_ids=valid_ids,
+        tier=tier,
+        prompt=prompt
+    )
+    
+    if not started:
+        return {
+            "success": False,
+            "error": "Failed to start description worker"
+        }
+
+    return {
+        "_wait_for_worker": "description",
+        "clip_count": len(valid_ids),
+        "tier": tier or "default",
+        "message": f"Started generating descriptions for {len(valid_ids)} clips..."
+    }
+
+
 # Aspect ratio tolerance ranges (5% tolerance) for filtering
 ASPECT_RATIO_RANGES = {
     "16:9": (1.69, 1.87),   # 1.778 ± 5%
@@ -409,7 +464,7 @@ ASPECT_RATIO_RANGES = {
 
 
 @tools.register(
-    description="Filter clips by criteria. Returns matching clips with their metadata. Available filters: shot_type, has_speech, min_duration, max_duration, aspect_ratio, search_query, has_object (e.g., 'dog', 'car'), min_people, max_people.",
+    description="Filter clips by criteria. Returns matching clips with their metadata. Available filters: shot_type, has_speech, min_duration, max_duration, aspect_ratio, search_query, has_object (e.g., 'dog', 'car'), min_people, max_people, search_description.",
     requires_project=True,
     modifies_gui_state=False
 )
@@ -424,6 +479,7 @@ def filter_clips(
     has_object: Optional[str] = None,
     min_people: Optional[int] = None,
     max_people: Optional[int] = None,
+    search_description: Optional[str] = None,
 ) -> list[dict]:
     """Filter clips by various criteria including content analysis.
 
@@ -438,6 +494,7 @@ def filter_clips(
         has_object: Filter by object label (e.g., 'dog', 'car', 'person')
         min_people: Minimum number of people detected
         max_people: Maximum number of people detected
+        search_description: Search text in visual descriptions
 
     Returns:
         List of matching clips with metadata
@@ -485,6 +542,14 @@ def filter_clips(
             if search_query.lower() not in transcript_text.lower():
                 continue
 
+        # Apply description search filter
+        if search_description:
+            description = getattr(clip, 'description', None)
+            if not description:
+                continue
+            if search_description.lower() not in description.lower():
+                continue
+
         # Apply has_object filter (checks both object_labels and detected_objects)
         if has_object is not None:
             object_labels = getattr(clip, 'object_labels', None) or []
@@ -521,6 +586,7 @@ def filter_clips(
             "dominant_colors": getattr(clip, 'dominant_colors', None),
             "object_labels": getattr(clip, 'object_labels', None),
             "person_count": getattr(clip, 'person_count', None),
+            "description": getattr(clip, 'description', None),
             "width": source.width if source else None,
             "height": source.height if source else None,
             "aspect_ratio": clip_aspect_ratio,
@@ -555,6 +621,7 @@ def list_clips(project) -> list[dict]:
             "dominant_colors": getattr(clip, 'dominant_colors', None),
             "object_labels": getattr(clip, 'object_labels', None),
             "person_count": getattr(clip, 'person_count', None),
+            "description": getattr(clip, 'description', None),
             "transcript": clip.get_transcript_text() if clip.transcript else None,
             "notes": getattr(clip, 'notes', None),
             "tags": getattr(clip, 'tags', []),

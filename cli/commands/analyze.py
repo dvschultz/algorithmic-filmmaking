@@ -23,6 +23,186 @@ def analyze() -> None:
     pass
 
 
+@analyze.command("describe")
+@click.argument("project_file", type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "--clip",
+    "-c",
+    "clip_ids",
+    multiple=True,
+    help="Specific clip IDs to analyze (default: all)",
+)
+@click.option(
+    "--tier",
+    type=click.Choice(["cpu", "gpu", "cloud"]),
+    help="Model tier to use (overrides settings)",
+)
+@click.option(
+    "--prompt",
+    help="Custom prompt for the model",
+)
+@click.option(
+    "--force",
+    "-f",
+    is_flag=True,
+    help="Re-describe clips that already have descriptions",
+)
+@click.pass_context
+def describe(
+    ctx: click.Context,
+    project_file: Path,
+    clip_ids: tuple[str, ...],
+    tier: Optional[str],
+    prompt: Optional[str],
+    force: bool,
+) -> None:
+    """Generate descriptions for clips using Vision-Language Models.
+
+    Generates natural language descriptions for video frames using
+    either local CPU models (Moondream), GPU models, or Cloud APIs.
+
+    \b
+    Examples:
+        scene_ripper analyze describe project.json
+        scene_ripper analyze describe project.json --tier cloud
+        scene_ripper analyze describe project.json --prompt "Describe the lighting"
+    """
+    try:
+        from core.project import load_project, save_project, ProjectLoadError
+        from core.thumbnail import ThumbnailGenerator
+        from core.analysis.description import describe_frame
+    except ImportError as e:
+        exit_with(ExitCode.DEPENDENCY_MISSING, f"Missing dependency: {e}")
+
+    config = CLIConfig.load()
+
+    try:
+        sources, clips, sequence, metadata, ui_state = load_project(
+            filepath=project_file,
+            missing_source_callback=lambda path, sid: None,
+        )
+    except ProjectLoadError as e:
+        exit_with(ExitCode.GENERAL_ERROR, f"Failed to load project: {e}")
+    except FileNotFoundError:
+        exit_with(ExitCode.FILE_NOT_FOUND, f"Project file not found: {project_file}")
+
+    sources_by_id = {s.id: s for s in sources}
+
+    # Filter clips if specific IDs provided
+    clips_to_analyze = clips
+    if clip_ids:
+        clip_set = set(clip_ids)
+        clips_to_analyze = [
+            c for c in clips if c.id in clip_set or c.id[:8] in clip_set
+        ]
+        if not clips_to_analyze:
+            exit_with(ExitCode.VALIDATION_ERROR, "No matching clips found")
+
+    # Filter out already-analyzed clips unless force
+    if not force:
+        clips_to_analyze = [c for c in clips_to_analyze if c.description is None]
+
+    if not clips_to_analyze:
+        output_info("All clips already have descriptions. Use --force to re-analyze.")
+        return
+
+    # Initialize thumbnail generator
+    try:
+        thumb_gen = ThumbnailGenerator(cache_dir=config.cache_dir / "thumbnails")
+    except RuntimeError as e:
+        exit_with(ExitCode.DEPENDENCY_MISSING, str(e))
+
+    analyzed_count = 0
+    errors = []
+
+    # Prepare prompt
+    default_prompt = (
+        "Describe this video frame in detail. Focus on main subjects, "
+        "action, setting, and mood."
+    )
+    final_prompt = prompt or default_prompt
+    
+    output_info(f"Generating descriptions using tier: {tier or 'default'}")
+
+    with ProgressContext("Generating descriptions") as progress:
+        total = len(clips_to_analyze)
+        for i, clip in enumerate(clips_to_analyze):
+            progress.update(i / total, f"Clip {i + 1}/{total}")
+
+            source = sources_by_id.get(clip.source_id)
+            if not source or not source.file_path.exists():
+                errors.append(f"Clip {clip.id[:8]}: source not found")
+                continue
+
+            try:
+                # Generate thumbnail for analysis
+                fps = source.fps
+                start_time = clip.start_time(fps)
+                end_time = clip.end_time(fps)
+
+                thumb_path = thumb_gen.generate_clip_thumbnail(
+                    video_path=source.file_path,
+                    start_seconds=start_time,
+                    end_seconds=end_time,
+                    width=640,  # Higher resolution for VLMs
+                    height=360,
+                )
+
+                # Generate description
+                description, model_name = describe_frame(
+                    image_path=thumb_path,
+                    tier=tier,
+                    prompt=final_prompt,
+                )
+                
+                # Check if result is an error message
+                if description.startswith("Error"):
+                    errors.append(f"Clip {clip.id[:8]}: {description}")
+                    continue
+                    
+                clip.description = description
+                clip.description_model = model_name
+                clip.description_frames = 1
+                analyzed_count += 1
+
+            except Exception as e:
+                errors.append(f"Clip {clip.id[:8]}: {e}")
+
+        progress.update(1.0, "Complete")
+
+    # Save updated project
+    success = save_project(
+        filepath=project_file,
+        sources=sources,
+        clips=clips,
+        sequence=sequence,
+        ui_state=ui_state,
+        metadata=metadata,
+    )
+
+    if not success:
+        exit_with(ExitCode.GENERAL_ERROR, "Failed to save project")
+
+    result = {
+        "analyzed_clips": analyzed_count,
+        "errors": len(errors),
+        "total_clips": len(clips),
+    }
+
+    as_json = ctx.obj.get("json", False)
+    if as_json:
+        if errors:
+            result["error_details"] = errors
+        output_result(result, as_json=True)
+    else:
+        output_success(f"Generated descriptions for {analyzed_count} clips")
+        if errors:
+            for err in errors[:5]:
+                output_info(f"  {err}")
+            if len(errors) > 5:
+                output_info(f"  ... and {len(errors) - 5} more errors")
+
+
 @analyze.command("colors")
 @click.argument("project_file", type=click.Path(exists=True, path_type=Path))
 @click.option(

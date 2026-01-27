@@ -130,6 +130,10 @@ class Clip:
     object_labels: Optional[list[str]] = None  # ImageNet labels, e.g., ["dog", "car", "tree"]
     detected_objects: Optional[list[dict]] = None  # [{label, confidence, bbox}]
     person_count: Optional[int] = None  # Number of people detected
+    # Video description fields
+    description: Optional[str] = None  # Natural language description
+    description_model: Optional[str] = None  # Model that generated it (e.g., "moondream-2b", "gpt-4o")
+    description_frames: Optional[int] = None  # 1 for single frame, N for temporal
 
     @property
     def duration_frames(self) -> int:
@@ -208,6 +212,13 @@ class Clip:
             data["detected_objects"] = self.detected_objects
         if self.person_count is not None:
             data["person_count"] = self.person_count
+        # Description fields
+        if self.description:
+            data["description"] = self.description
+        if self.description_model:
+            data["description_model"] = self.description_model
+        if self.description_frames:
+            data["description_frames"] = self.description_frames
         return data
 
     @classmethod
@@ -247,4 +258,8 @@ class Clip:
             object_labels=data.get("object_labels"),
             detected_objects=data.get("detected_objects"),
             person_count=data.get("person_count"),
+            # Description fields
+            description=data.get("description"),
+            description_model=data.get("description_model"),
+            description_frames=data.get("description_frames"),
         )

@@ -571,6 +571,51 @@ class ObjectDetectionWorker(QThread):
         logger.info("ObjectDetectionWorker.run() COMPLETED")
 
 
+class DescriptionWorker(QThread):
+    """Background worker for generating video descriptions."""
+
+    progress = Signal(int, int)  # current, total
+    description_ready = Signal(str, str, str)  # clip_id, description, model_name
+    finished = Signal()
+
+    def __init__(self, clips: list[Clip], tier: Optional[str] = None, prompt: Optional[str] = None):
+        super().__init__()
+        self.clips = clips
+        self.tier = tier
+        self.prompt = prompt
+        self._cancelled = False
+        logger.debug("DescriptionWorker created")
+
+    def cancel(self):
+        """Request cancellation of the description generation."""
+        logger.info("DescriptionWorker.cancel() called")
+        self._cancelled = True
+
+    def run(self):
+        logger.info("DescriptionWorker.run() STARTING")
+        from core.analysis.description import describe_frame
+
+        total = len(self.clips)
+        for i, clip in enumerate(self.clips):
+            if self._cancelled:
+                logger.info("DescriptionWorker cancelled")
+                break
+            try:
+                if clip.thumbnail_path and clip.thumbnail_path.exists():
+                    description, model = describe_frame(
+                        clip.thumbnail_path,
+                        tier=self.tier,
+                        prompt=self.prompt or "Describe this video frame in detail."
+                    )
+                    self.description_ready.emit(clip.id, description, model)
+            except Exception as e:
+                logger.warning(f"Description failed for {clip.id}: {e}")
+            self.progress.emit(i + 1, total)
+        logger.info("DescriptionWorker.run() emitting finished signal")
+        self.finished.emit()
+        logger.info("DescriptionWorker.run() COMPLETED")
+
+
 class YouTubeSearchWorker(QThread):
     """Background worker for YouTube search."""
 
@@ -741,6 +786,7 @@ class MainWindow(QMainWindow):
         self.transcription_worker: Optional[TranscriptionWorker] = None
         self.classification_worker: Optional[ClassificationWorker] = None
         self.detection_worker_yolo: Optional[ObjectDetectionWorker] = None
+        self.description_worker: Optional[DescriptionWorker] = None
         self.youtube_search_worker: Optional[YouTubeSearchWorker] = None
         self.bulk_download_worker: Optional[BulkDownloadWorker] = None
         self.youtube_client: Optional[YouTubeSearchClient] = None
@@ -751,6 +797,7 @@ class MainWindow(QMainWindow):
         self._color_analysis_finished_handled = False
         self._classification_finished_handled = False
         self._object_detection_finished_handled = False
+        self._description_finished_handled = False
         self._shot_type_finished_handled = False
         self._transcription_finished_handled = False
 
@@ -764,13 +811,18 @@ class MainWindow(QMainWindow):
         self._pending_agent_color_analysis = False
         self._pending_agent_shot_analysis = False
         self._pending_agent_transcription = False
+        self._pending_agent_classification = False
+        self._pending_agent_object_detection = False
+        self._pending_agent_description = False
         self._pending_agent_analyze_all = False
         self._pending_agent_export = False
         self._pending_agent_download = False
         self._agent_color_clips: list = []
         self._agent_shot_clips: list = []
         self._agent_transcription_clips: list = []
-        self._agent_transcription_source_queue: list = []  # Queue for multi-source transcription
+        self._agent_classification_clips: list = []
+        self._agent_object_detection_clips: list = []
+        self._agent_description_clips: list = []
         self._agent_download_results: list = []  # Results for bulk download
         self._pending_agent_tool_call_id: Optional[str] = None
         self._pending_agent_tool_name: Optional[str] = None
@@ -3923,6 +3975,12 @@ class MainWindow(QMainWindow):
             clip_ids = tool_result.get("clip_ids", [])
             return self.start_agent_object_detection(clip_ids, 0.5, detect_all=False)
 
+        elif wait_type == "description":
+            clip_ids = tool_result.get("clip_ids", [])
+            tier = tool_result.get("tier")
+            prompt = tool_result.get("prompt")
+            return self.start_agent_description(clip_ids, tier, prompt)
+
         else:
             logger.warning(f"Unknown worker type: {wait_type}")
             return False
@@ -4200,6 +4258,121 @@ class MainWindow(QMainWindow):
         self.detection_worker_yolo.start()
 
         return True
+
+    def start_agent_description(self, clip_ids: list[str], tier: Optional[str] = None, prompt: Optional[str] = None) -> bool:
+        """Start description generation for clips triggered by agent.
+
+        Args:
+            clip_ids: List of clip IDs to analyze
+            tier: Model tier ('cpu', 'gpu', 'cloud')
+            prompt: Custom prompt for the model
+
+        Returns:
+            True if started, False if already running
+        """
+        # Resolve clips
+        clips = [self.project.clips_by_id.get(cid) for cid in clip_ids]
+        clips = [c for c in clips if c is not None]
+
+        if not clips:
+            return False
+
+        # Check if worker already running
+        if self.description_worker and self.description_worker.isRunning():
+            return False
+
+        # Reset guard
+        self._description_finished_handled = False
+
+        # Mark that we're waiting for description via agent
+        self._pending_agent_description = True
+        self._agent_description_clips = clips
+
+        # Add clips to Analyze tab and switch
+        self.analyze_tab.add_clips([c.id for c in clips])
+        self._switch_to_tab("analyze")
+
+        # Update UI state
+        self.analyze_tab.set_analyzing(True, "description")
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 100)
+        self.status_bar.showMessage(f"Generating descriptions for {len(clips)} clips...")
+
+        # Start worker
+        from PySide6.QtCore import Qt
+        self.description_worker = DescriptionWorker(clips, tier=tier, prompt=prompt)
+        self.description_worker.progress.connect(self._on_description_progress)
+        self.description_worker.description_ready.connect(self._on_description_ready)
+        self.description_worker.finished.connect(self._on_agent_description_finished, Qt.UniqueConnection)
+        self.description_worker.start()
+
+        return True
+
+    @Slot(int, int)
+    def _on_description_progress(self, current: int, total: int):
+        """Handle description generation progress updates."""
+        if total > 0:
+            percent = int(current / total * 100)
+            self.progress_bar.setValue(percent)
+            self.status_bar.showMessage(f"Generating descriptions: {current}/{total} clips...")
+
+    @Slot(str, str, str)
+    def _on_description_ready(self, clip_id: str, description: str, model_name: str):
+        """Handle description results for a single clip."""
+        clip = self.project.clips_by_id.get(clip_id)
+        if clip:
+            clip.description = description
+            clip.description_model = model_name
+            clip.description_frames = 1
+            logger.debug(f"Description for {clip_id}: {description[:50]}...")
+
+    @Slot()
+    def _on_agent_description_finished(self):
+        """Handle description completion when triggered by agent."""
+        logger.info("=== AGENT DESCRIPTION FINISHED ===")
+
+        # Guard against duplicate calls
+        if self._description_finished_handled:
+            logger.warning("_on_agent_description_finished already handled, ignoring duplicate")
+            return
+        self._description_finished_handled = True
+
+        # Reset UI state
+        self.analyze_tab.set_analyzing(False)
+        self.progress_bar.setVisible(False)
+        self.status_bar.showMessage("Description generation complete", 3000)
+
+        # Save project
+        self.project.save()
+
+        # Send result back to agent
+        if hasattr(self, '_pending_agent_description') and self._pending_agent_description:
+            self._pending_agent_description = False
+            clips = getattr(self, '_agent_description_clips', [])
+
+            # Build result summary
+            described_count = sum(1 for c in clips if c.description)
+            
+            result = {
+                "success": True,
+                "described_clips": described_count,
+                "total_clips": len(clips),
+                "sample_descriptions": [],
+            }
+            
+            # Include sample descriptions
+            for clip in clips[:3]:
+                if clip.description:
+                    result["sample_descriptions"].append({
+                        "clip_id": clip.id,
+                        "description": clip.description,
+                    })
+
+            if self._chat_worker:
+                self._pending_agent_tool_call_id = None
+                self._pending_agent_tool_name = None
+                self._chat_worker.set_gui_tool_result(result)
+                logger.info(f"Sent description result to agent: {described_count}/{len(clips)} clips")
 
     @Slot(int, int)
     def _on_classification_progress(self, current: int, total: int):
