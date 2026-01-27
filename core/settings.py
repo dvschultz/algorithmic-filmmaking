@@ -378,7 +378,7 @@ class Settings:
     ollama_model: str = "qwen3:8b"
     openai_model: str = "gpt-4o-mini"
     anthropic_model: str = "claude-sonnet-4-20250514"
-    gemini_model: str = "gemini-3.0-flash"
+    gemini_model: str = "gemini-2.5-flash"
     openrouter_model: str = "anthropic/claude-sonnet-4"
 
     def get_quality_preset(self) -> dict:
