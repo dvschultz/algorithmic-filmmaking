@@ -15,10 +15,19 @@ class ThumbnailGenerator:
             raise RuntimeError("FFmpeg not found")
 
         # Default cache directory
+        default_cache = Path.home() / ".cache" / "scene-ripper" / "thumbnails"
         if cache_dir is None:
-            cache_dir = Path.home() / ".cache" / "scene-ripper" / "thumbnails"
+            cache_dir = default_cache
+
+        # Try to create cache directory, fall back to default if inaccessible
         self.cache_dir = cache_dir
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+        except (PermissionError, OSError):
+            # Configured cache dir is inaccessible (e.g., unmounted drive)
+            # Fall back to default location
+            self.cache_dir = default_cache
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     def generate_thumbnail(
         self,

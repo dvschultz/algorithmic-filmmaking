@@ -106,26 +106,42 @@ class ThumbnailWorker(QThread):
     thumbnail_ready = Signal(str, str)  # clip_id, thumbnail_path
     finished = Signal()
 
-    def __init__(self, source: Source, clips: list[Clip], cache_dir: Path = None):
+    def __init__(
+        self,
+        source: Source,
+        clips: list[Clip],
+        cache_dir: Path = None,
+        sources_by_id: dict[str, Source] = None,
+    ):
         super().__init__()
         self.source = source
         self.clips = clips
         self.cache_dir = cache_dir
+        self.sources_by_id = sources_by_id or {}
         logger.debug("ThumbnailWorker created")
 
     def run(self):
         logger.info("ThumbnailWorker.run() STARTING")
         logger.info(f"ThumbnailWorker: {len(self.clips)} clips to process")
+        logger.info(f"ThumbnailWorker: sources_by_id has {len(self.sources_by_id)} entries: {list(self.sources_by_id.keys())}")
+        logger.info(f"ThumbnailWorker: default source: {self.source.id if self.source else None}")
         generator = ThumbnailGenerator(cache_dir=self.cache_dir)
         total = len(self.clips)
 
         for i, clip in enumerate(self.clips):
             try:
-                logger.info(f"ThumbnailWorker: generating thumbnail for clip {clip.id}")
+                # Use clip's source if available, fall back to default source
+                source = self.sources_by_id.get(clip.source_id, self.source)
+                logger.info(f"ThumbnailWorker: clip {clip.id[:8]} source_id={clip.source_id}, found source: {source.id if source else None}")
+                if not source:
+                    logger.warning(f"No source found for clip {clip.id} (source_id={clip.source_id})")
+                    continue
+
+                logger.info(f"ThumbnailWorker: generating thumbnail for clip {clip.id}, video: {source.file_path}")
                 thumb_path = generator.generate_clip_thumbnail(
-                    video_path=self.source.file_path,
-                    start_seconds=clip.start_time(self.source.fps),
-                    end_seconds=clip.end_time(self.source.fps),
+                    video_path=source.file_path,
+                    start_seconds=clip.start_time(source.fps),
+                    end_seconds=clip.end_time(source.fps),
                 )
                 clip.thumbnail_path = thumb_path
                 logger.info(f"ThumbnailWorker: emitting thumbnail_ready for clip {clip.id}, path={thumb_path}")
@@ -4204,6 +4220,7 @@ class MainWindow(QMainWindow):
 
         if success:
             self._add_recent_project(filepath)
+            self._update_window_title()
             self.status_bar.showMessage(f"Project saved: {filepath.name}")
         else:
             QMessageBox.warning(self, "Save Project", "Failed to save project")
@@ -4417,7 +4434,14 @@ class MainWindow(QMainWindow):
 
     def _regenerate_missing_thumbnails(self):
         """Regenerate thumbnails for clips that don't have them."""
-        if not self.current_source or not self.clips:
+        logger.info("_regenerate_missing_thumbnails called")
+        logger.info(f"  self.clips count: {len(self.clips) if self.clips else 0}")
+        logger.info(f"  self.sources count: {len(self.sources) if self.sources else 0}")
+        logger.info(f"  self.current_source: {self.current_source.id if self.current_source else None}")
+        logger.info(f"  sources_by_id keys: {list(self.sources_by_id.keys()) if self.sources_by_id else []}")
+
+        if not self.clips:
+            logger.warning("  No clips, returning early")
             return
 
         # Check which clips need thumbnails
@@ -4427,29 +4451,46 @@ class MainWindow(QMainWindow):
         ]
 
         if not clips_needing_thumbnails:
+            logger.info("  All clips have thumbnails, returning")
             return
+
+        # Log clip source IDs to verify they match
+        for clip in clips_needing_thumbnails[:3]:  # Log first 3
+            logger.info(f"  Clip {clip.id[:8]} source_id: {clip.source_id}")
 
         logger.info(f"Regenerating thumbnails for {len(clips_needing_thumbnails)} clips")
         self.status_bar.showMessage(f"Regenerating {len(clips_needing_thumbnails)} thumbnails...")
 
-        # Use existing ThumbnailWorker with project-load-specific handlers
-        self.thumbnail_worker = ThumbnailWorker(
-            self.current_source,
-            clips_needing_thumbnails,
-            self.settings.thumbnail_cache_dir,
-        )
-        # Use handlers that update existing clips instead of adding new ones
-        self.thumbnail_worker.thumbnail_ready.connect(self._on_project_thumbnail_ready)
-        self.thumbnail_worker.finished.connect(self._on_project_thumbnails_finished, Qt.UniqueConnection)
-        self.thumbnail_worker.start()
+        try:
+            # Use existing ThumbnailWorker with project-load-specific handlers
+            # Pass sources_by_id so each clip uses its correct source
+            self.thumbnail_worker = ThumbnailWorker(
+                self.current_source,
+                clips_needing_thumbnails,
+                self.settings.thumbnail_cache_dir,
+                sources_by_id=self.sources_by_id,
+            )
+            # Use handlers that update existing clips instead of adding new ones
+            self.thumbnail_worker.thumbnail_ready.connect(self._on_project_thumbnail_ready)
+            self.thumbnail_worker.finished.connect(self._on_project_thumbnails_finished, Qt.UniqueConnection)
+            logger.info("Starting ThumbnailWorker for project load...")
+            self.thumbnail_worker.start()
+            logger.info(f"ThumbnailWorker started, isRunning: {self.thumbnail_worker.isRunning()}")
+        except Exception as e:
+            logger.error(f"Failed to start thumbnail worker: {e}", exc_info=True)
 
     def _on_project_thumbnail_ready(self, clip_id: str, thumb_path: str):
         """Handle individual thumbnail during project load (update, don't add)."""
+        logger.info(f"_on_project_thumbnail_ready: clip_id={clip_id}, thumb_path={thumb_path}")
         clip = self.clips_by_id.get(clip_id)
         if clip:
-            clip.thumbnail_path = Path(thumb_path)
-            self.cut_tab.update_clip_thumbnail(clip_id, Path(thumb_path))
-            self.analyze_tab.update_clip_thumbnail(clip_id, Path(thumb_path))
+            thumb_path_obj = Path(thumb_path)
+            logger.info(f"  thumbnail exists: {thumb_path_obj.exists()}")
+            clip.thumbnail_path = thumb_path_obj
+            self.cut_tab.update_clip_thumbnail(clip_id, thumb_path_obj)
+            self.analyze_tab.update_clip_thumbnail(clip_id, thumb_path_obj)
+        else:
+            logger.warning(f"  clip not found in clips_by_id!")
 
     def _on_project_thumbnails_finished(self):
         """Handle thumbnails completed during project load (no analysis restart)."""

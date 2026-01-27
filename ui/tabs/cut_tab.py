@@ -5,7 +5,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QSlider,
     QWidget,
     QStackedWidget,
 )
@@ -14,6 +13,7 @@ from PySide6.QtCore import Signal, Qt
 from .base_tab import BaseTab
 from ui.clip_browser import ClipBrowser
 from ui.widgets import EmptyStateWidget
+from ui.widgets.styled_slider import StyledSlider
 
 
 class CutTab(BaseTab):
@@ -89,7 +89,7 @@ class CutTab(BaseTab):
         # Sensitivity slider
         controls.addWidget(QLabel("Sensitivity:"))
 
-        self.sensitivity_slider = QSlider(Qt.Horizontal)
+        self.sensitivity_slider = StyledSlider(Qt.Horizontal)
         self.sensitivity_slider.setRange(10, 100)  # 1.0 to 10.0
         self.sensitivity_slider.setValue(30)  # Default 3.0
         self.sensitivity_slider.setMaximumWidth(150)

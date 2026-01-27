@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QLabel,
 )
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QPixmap, QKeyEvent
 
 from models.clip import Source
 from ui.theme import theme
@@ -29,6 +29,9 @@ class SourceThumbnail(QFrame):
         self.setLineWidth(2)
         self.setFixedSize(180, 150)
         self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setAccessibleName(source.filename)
+        self.setAccessibleDescription(f"Video source: {source.filename}")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
@@ -158,3 +161,26 @@ class SourceThumbnail(QFrame):
 
     def mouseDoubleClickEvent(self, event):
         self.double_clicked.emit(self.source)
+
+    def keyPressEvent(self, event: QKeyEvent):
+        """Handle keyboard events for accessibility."""
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+            self.clicked.emit(self.source)
+        else:
+            super().keyPressEvent(event)
+
+    def focusInEvent(self, event):
+        """Handle focus gained - add visual indicator."""
+        super().focusInEvent(event)
+        if not self.selected:
+            self.setStyleSheet(f"""
+                SourceThumbnail {{
+                    background-color: {theme().card_hover};
+                    border: 2px solid {theme().border_focus};
+                }}
+            """)
+
+    def focusOutEvent(self, event):
+        """Handle focus lost - remove visual indicator."""
+        super().focusOutEvent(event)
+        self._update_style()

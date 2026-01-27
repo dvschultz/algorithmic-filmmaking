@@ -17,6 +17,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget
 )
 
+from ui.theme import theme
+
 
 class MessageBubble(QFrame):
     """Single message bubble for chat display."""
@@ -36,30 +38,7 @@ class MessageBubble(QFrame):
     def _setup_ui(self, text: str):
         # Set object name for styling
         self.setObjectName("userBubble" if self._is_user else "assistantBubble")
-
-        # Style the bubble
-        if self._is_user:
-            self.setStyleSheet("""
-                QFrame#userBubble {
-                    background-color: #0084ff;
-                    border-radius: 12px;
-                    margin-left: 40px;
-                }
-                QFrame#userBubble QLabel {
-                    color: white;
-                }
-            """)
-        else:
-            self.setStyleSheet("""
-                QFrame#assistantBubble {
-                    background-color: #e4e6eb;
-                    border-radius: 12px;
-                    margin-right: 40px;
-                }
-                QFrame#assistantBubble QLabel {
-                    color: #050505;
-                }
-            """)
+        self._apply_style()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 8, 12, 8)
@@ -79,13 +58,7 @@ class MessageBubble(QFrame):
             self.text_browser.setOpenExternalLinks(True)
             self.text_browser.setFrameShape(QFrame.NoFrame)
             # Make background transparent to show bubble background
-            self.text_browser.setStyleSheet("""
-                QTextBrowser {
-                    background: transparent;
-                    border: none;
-                    color: #050505;
-                }
-            """)
+            self._apply_text_browser_style()
             # Let the browser expand to fit content
             self.text_browser.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
             self.text_browser.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -97,6 +70,54 @@ class MessageBubble(QFrame):
 
         # Allow bubble to expand for content
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+
+        # Connect to theme changes
+        if theme().changed:
+            theme().changed.connect(self._on_theme_changed)
+
+    def _apply_style(self):
+        """Apply theme-based styling to the bubble."""
+        t = theme()
+        if self._is_user:
+            self.setStyleSheet(f"""
+                QFrame#userBubble {{
+                    background-color: {t.chat_user_bubble};
+                    border-radius: 12px;
+                    margin-left: 40px;
+                }}
+                QFrame#userBubble QLabel {{
+                    color: {t.chat_user_text};
+                }}
+            """)
+        else:
+            self.setStyleSheet(f"""
+                QFrame#assistantBubble {{
+                    background-color: {t.chat_assistant_bubble};
+                    border-radius: 12px;
+                    margin-right: 40px;
+                }}
+                QFrame#assistantBubble QLabel {{
+                    color: {t.chat_assistant_text};
+                }}
+            """)
+
+    def _apply_text_browser_style(self):
+        """Apply theme-based styling to text browser."""
+        if hasattr(self, 'text_browser') and self.text_browser:
+            t = theme()
+            self.text_browser.setStyleSheet(f"""
+                QTextBrowser {{
+                    background: transparent;
+                    border: none;
+                    color: {t.chat_assistant_text};
+                }}
+            """)
+
+    def _on_theme_changed(self):
+        """Handle theme changes."""
+        self._apply_style()
+        if hasattr(self, 'text_browser'):
+            self._apply_text_browser_style()
 
     def _adjust_text_browser_height(self):
         """Adjust text browser height to fit content."""
@@ -131,16 +152,7 @@ class StreamingBubble(QFrame):
 
     def _setup_ui(self):
         self.setObjectName("assistantBubble")
-        self.setStyleSheet("""
-            QFrame#assistantBubble {
-                background-color: #e4e6eb;
-                border-radius: 12px;
-                margin-right: 40px;
-            }
-            QFrame#assistantBubble QLabel {
-                color: #050505;
-            }
-        """)
+        self._apply_style()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 8, 12, 8)
@@ -155,6 +167,37 @@ class StreamingBubble(QFrame):
 
         # Allow bubble to expand for content
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+
+        # Connect to theme changes
+        if theme().changed:
+            theme().changed.connect(self._on_theme_changed)
+
+    def _apply_style(self):
+        """Apply theme-based styling."""
+        t = theme()
+        self.setStyleSheet(f"""
+            QFrame#assistantBubble {{
+                background-color: {t.chat_assistant_bubble};
+                border-radius: 12px;
+                margin-right: 40px;
+            }}
+            QFrame#assistantBubble QLabel {{
+                color: {t.chat_assistant_text};
+            }}
+        """)
+
+    def _on_theme_changed(self):
+        """Handle theme changes."""
+        self._apply_style()
+        if hasattr(self, 'text_browser') and self.text_browser:
+            t = theme()
+            self.text_browser.setStyleSheet(f"""
+                QTextBrowser {{
+                    background: transparent;
+                    border: none;
+                    color: {t.chat_assistant_text};
+                }}
+            """)
 
     def append_text(self, chunk: str):
         """Append a chunk of text to the bubble.
@@ -201,16 +244,17 @@ class StreamingBubble(QFrame):
         self.label.hide()
         self.label.deleteLater()
 
+        t = theme()
         self.text_browser = QTextBrowser()
         self.text_browser.setMarkdown(self._text)
         self.text_browser.setOpenExternalLinks(True)
         self.text_browser.setFrameShape(QFrame.NoFrame)
-        self.text_browser.setStyleSheet("""
-            QTextBrowser {
+        self.text_browser.setStyleSheet(f"""
+            QTextBrowser {{
                 background: transparent;
                 border: none;
-                color: #050505;
-            }
+                color: {t.chat_assistant_text};
+            }}
         """)
         self.text_browser.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         self.text_browser.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -276,14 +320,7 @@ class ToolIndicator(QFrame):
 
     def _setup_ui(self):
         self.setObjectName("toolIndicator")
-        self.setStyleSheet("""
-            QFrame#toolIndicator {
-                background-color: #f0f2f5;
-                border-radius: 8px;
-                border: 1px solid #d0d0d0;
-                padding: 4px;
-            }
-        """)
+        self._apply_style()
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 4, 8, 4)
@@ -296,10 +333,31 @@ class ToolIndicator(QFrame):
 
         # Tool name and status
         self.name_label = QLabel(self._get_status_text())
-        self.name_label.setStyleSheet("color: #65676b; font-size: 12px;")
+        self.name_label.setStyleSheet(f"color: {theme().text_secondary}; font-size: 12px;")
         layout.addWidget(self.name_label)
 
         layout.addStretch()
+
+        # Connect to theme changes
+        if theme().changed:
+            theme().changed.connect(self._on_theme_changed)
+
+    def _apply_style(self):
+        """Apply theme-based styling."""
+        t = theme()
+        self.setStyleSheet(f"""
+            QFrame#toolIndicator {{
+                background-color: {t.background_tertiary};
+                border-radius: 8px;
+                border: 1px solid {t.border_secondary};
+                padding: 4px;
+            }}
+        """)
+
+    def _on_theme_changed(self):
+        """Handle theme changes."""
+        self._apply_style()
+        self.name_label.setStyleSheet(f"color: {theme().text_secondary}; font-size: 12px;")
 
     def _get_status_icon(self) -> str:
         """Get icon for current status."""
@@ -331,10 +389,11 @@ class ToolIndicator(QFrame):
         self.name_label.setText(self._get_status_text())
 
         # Update color based on status
+        t = theme()
         if status == "complete":
-            self.status_icon.setStyleSheet("color: #00a400;")
+            self.status_icon.setStyleSheet(f"color: {t.accent_green};")
         elif status == "error":
-            self.status_icon.setStyleSheet("color: #ff0000;")
+            self.status_icon.setStyleSheet(f"color: {t.accent_red};")
 
     def set_complete(self, success: bool = True):
         """Mark the tool as complete.
@@ -366,13 +425,7 @@ class ThinkingIndicator(QFrame):
 
     def _setup_ui(self):
         self.setObjectName("thinkingIndicator")
-        self.setStyleSheet("""
-            QFrame#thinkingIndicator {
-                background-color: #e4e6eb;
-                border-radius: 12px;
-                margin-right: 40px;
-            }
-        """)
+        self._apply_style()
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 8, 12, 8)
@@ -380,9 +433,29 @@ class ThinkingIndicator(QFrame):
 
         # Thinking text with animated dots
         self.label = QLabel("Thinking")
-        self.label.setStyleSheet("color: #65676b; font-size: 13px; font-style: italic;")
+        self.label.setStyleSheet(f"color: {theme().text_secondary}; font-size: 13px; font-style: italic;")
         layout.addWidget(self.label)
         layout.addStretch()
+
+        # Connect to theme changes
+        if theme().changed:
+            theme().changed.connect(self._on_theme_changed)
+
+    def _apply_style(self):
+        """Apply theme-based styling."""
+        t = theme()
+        self.setStyleSheet(f"""
+            QFrame#thinkingIndicator {{
+                background-color: {t.chat_assistant_bubble};
+                border-radius: 12px;
+                margin-right: 40px;
+            }}
+        """)
+
+    def _on_theme_changed(self):
+        """Handle theme changes."""
+        self._apply_style()
+        self.label.setStyleSheet(f"color: {theme().text_secondary}; font-size: 13px; font-style: italic;")
 
     def _animate(self):
         """Animate the thinking dots."""
@@ -549,10 +622,10 @@ class ExamplePromptsWidget(QWidget):
         layout.addStretch(1)
 
         # Header text
-        header = QLabel("Try asking...")
-        header.setStyleSheet("color: #65676b; font-size: 14px; font-weight: 500;")
-        header.setAlignment(Qt.AlignCenter)
-        layout.addWidget(header)
+        self._header = QLabel("Try asking...")
+        self._header.setStyleSheet(f"color: {theme().text_secondary}; font-size: 14px; font-weight: 500;")
+        self._header.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self._header)
 
         # Prompts container
         self._prompts_container = QWidget()
@@ -563,6 +636,15 @@ class ExamplePromptsWidget(QWidget):
         layout.addStretch(1)
 
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        # Connect to theme changes
+        if theme().changed:
+            theme().changed.connect(self._on_theme_changed)
+
+    def _on_theme_changed(self):
+        """Handle theme changes."""
+        self._header.setStyleSheet(f"color: {theme().text_secondary}; font-size: 14px; font-weight: 500;")
+        self._rebuild_prompt_buttons()
 
     def _rebuild_prompt_buttons(self):
         """Rebuild the prompt buttons with current selection."""
@@ -579,30 +661,31 @@ class ExamplePromptsWidget(QWidget):
         prompts_layout.setContentsMargins(0, 0, 0, 0)
         prompts_layout.setSpacing(8)
 
+        t = theme()
         for prompt_text in self._selected_prompts:
             btn = QPushButton(prompt_text)
             btn.setCursor(Qt.PointingHandCursor)
-            btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #f0f2f5;
-                    border: 1px solid #d0d0d0;
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {t.background_tertiary};
+                    border: 1px solid {t.border_secondary};
                     border-radius: 12px;
                     padding: 10px 16px;
-                    color: #333333;
+                    color: {t.text_primary};
                     text-align: left;
                     font-size: 13px;
-                }
-                QPushButton:hover {
-                    background-color: #e4e6eb;
-                }
-                QPushButton:pressed {
-                    background-color: #d8dadf;
-                }
-                QPushButton:disabled {
-                    background-color: #f5f5f5;
-                    color: #a0a0a0;
-                    border-color: #e0e0e0;
-                }
+                }}
+                QPushButton:hover {{
+                    background-color: {t.background_elevated};
+                }}
+                QPushButton:pressed {{
+                    background-color: {t.accent_blue};
+                }}
+                QPushButton:disabled {{
+                    background-color: {t.background_secondary};
+                    color: {t.text_muted};
+                    border-color: {t.border_secondary};
+                }}
             """)
             btn.clicked.connect(lambda checked, text=prompt_text: self._on_button_clicked(text))
             prompts_layout.addWidget(btn)
@@ -699,11 +782,13 @@ class PlanStepWidget(QFrame):
         self.status_icon.setStyleSheet("font-size: 14px;")
         layout.addWidget(self.status_icon)
 
+        t = theme()
+
         # Step number
         self.number_label = QLabel(f"{self._index + 1}.")
         self.number_label.setFixedWidth(28)
         self.number_label.setAlignment(Qt.AlignTop)
-        self.number_label.setStyleSheet("font-weight: bold; color: #65676b;")
+        self.number_label.setStyleSheet(f"font-weight: bold; color: {t.text_secondary};")
         layout.addWidget(self.number_label)
 
         # Step text (label for display, line edit for editing)
@@ -711,86 +796,129 @@ class PlanStepWidget(QFrame):
         self.text_label.setWordWrap(True)
         self.text_label.setTextFormat(Qt.PlainText)
         self.text_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
-        self.text_label.setStyleSheet("color: #050505; line-height: 1.3;")
+        self.text_label.setStyleSheet(f"color: {t.text_primary}; line-height: 1.3;")
         self.text_label.mouseDoubleClickEvent = self._on_double_click
         layout.addWidget(self.text_label, 1)
 
         # Edit field (hidden initially)
         self.text_edit = QLineEdit(self._text)
-        self.text_edit.setStyleSheet("""
-            QLineEdit {
-                border: 1px solid #0084ff;
+        self.text_edit.setStyleSheet(f"""
+            QLineEdit {{
+                border: 1px solid {t.accent_blue};
                 border-radius: 4px;
                 padding: 4px;
-                background: white;
-            }
+                background: {t.background_primary};
+                color: {t.text_primary};
+            }}
         """)
         self.text_edit.returnPressed.connect(self._finish_editing)
         self.text_edit.hide()
         layout.addWidget(self.text_edit, 1)
 
-        # Move up button
+        # Move up button - increased size for accessibility (44x32 minimum touch target)
         self.up_btn = QPushButton("\u25b2")  # ▲
-        self.up_btn.setFixedSize(24, 24)
+        self.up_btn.setFixedSize(32, 32)
         self.up_btn.setToolTip("Move up")
-        self.up_btn.setStyleSheet("""
-            QPushButton {
+        self.up_btn.setAccessibleName("Move step up")
+        self.up_btn.setStyleSheet(f"""
+            QPushButton {{
                 background: transparent;
                 border: none;
-                color: #65676b;
+                color: {t.text_secondary};
                 font-size: 10px;
-            }
-            QPushButton:hover { color: #0084ff; }
+            }}
+            QPushButton:hover {{ color: {t.accent_blue}; }}
         """)
         self.up_btn.clicked.connect(lambda: self.move_up_requested.emit(self._index))
         layout.addWidget(self.up_btn)
 
         # Move down button
         self.down_btn = QPushButton("\u25bc")  # ▼
-        self.down_btn.setFixedSize(24, 24)
+        self.down_btn.setFixedSize(32, 32)
         self.down_btn.setToolTip("Move down")
-        self.down_btn.setStyleSheet("""
-            QPushButton {
+        self.down_btn.setAccessibleName("Move step down")
+        self.down_btn.setStyleSheet(f"""
+            QPushButton {{
                 background: transparent;
                 border: none;
-                color: #65676b;
+                color: {t.text_secondary};
                 font-size: 10px;
-            }
-            QPushButton:hover { color: #0084ff; }
+            }}
+            QPushButton:hover {{ color: {t.accent_blue}; }}
         """)
         self.down_btn.clicked.connect(lambda: self.move_down_requested.emit(self._index))
         layout.addWidget(self.down_btn)
 
         # Delete button
         self.delete_btn = QPushButton("\u2715")  # ✕
-        self.delete_btn.setFixedSize(24, 24)
+        self.delete_btn.setFixedSize(32, 32)
         self.delete_btn.setToolTip("Delete step")
-        self.delete_btn.setStyleSheet("""
-            QPushButton {
+        self.delete_btn.setAccessibleName("Delete step")
+        self.delete_btn.setStyleSheet(f"""
+            QPushButton {{
                 background: transparent;
                 border: none;
-                color: #65676b;
+                color: {t.text_secondary};
                 font-size: 12px;
-            }
-            QPushButton:hover { color: #ff4444; }
+            }}
+            QPushButton:hover {{ color: {t.accent_red}; }}
         """)
         self.delete_btn.clicked.connect(lambda: self.delete_requested.emit(self._index))
         layout.addWidget(self.delete_btn)
 
+        # Connect to theme changes
+        if theme().changed:
+            theme().changed.connect(self._on_theme_changed)
+
+    def _on_theme_changed(self):
+        """Handle theme changes."""
+        self._update_style()
+        t = theme()
+        self.number_label.setStyleSheet(f"font-weight: bold; color: {t.text_secondary};")
+        self.text_label.setStyleSheet(f"color: {t.text_primary}; line-height: 1.3;")
+        self.up_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent;
+                border: none;
+                color: {t.text_secondary};
+                font-size: 10px;
+            }}
+            QPushButton:hover {{ color: {t.accent_blue}; }}
+        """)
+        self.down_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent;
+                border: none;
+                color: {t.text_secondary};
+                font-size: 10px;
+            }}
+            QPushButton:hover {{ color: {t.accent_blue}; }}
+        """)
+        self.delete_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent;
+                border: none;
+                color: {t.text_secondary};
+                font-size: 12px;
+            }}
+            QPushButton:hover {{ color: {t.accent_red}; }}
+        """)
+
     def _update_style(self):
         """Update widget style based on status."""
+        t = theme()
         if self._status == "running":
-            bg_color = "#e3f2fd"  # Light blue
-            border_color = "#2196f3"
+            bg_color = t.plan_running_bg
+            border_color = t.plan_running_border
         elif self._status == "completed":
-            bg_color = "#e8f5e9"  # Light green
-            border_color = "#4caf50"
+            bg_color = t.plan_completed_bg
+            border_color = t.plan_completed_border
         elif self._status == "failed":
-            bg_color = "#ffebee"  # Light red
-            border_color = "#f44336"
+            bg_color = t.plan_failed_bg
+            border_color = t.plan_failed_border
         else:  # pending
-            bg_color = "#f8f9fa"
-            border_color = "#dee2e6"
+            bg_color = t.plan_pending_bg
+            border_color = t.plan_pending_border
 
         self.setStyleSheet(f"""
             QFrame#planStep {{
@@ -846,12 +974,13 @@ class PlanStepWidget(QFrame):
         self._update_style()
 
         # Update icon color based on status
+        t = theme()
         if status == "completed":
-            self.status_icon.setStyleSheet("font-size: 14px; color: #4caf50;")
+            self.status_icon.setStyleSheet(f"font-size: 14px; color: {t.plan_completed_border};")
         elif status == "failed":
-            self.status_icon.setStyleSheet("font-size: 14px; color: #f44336;")
+            self.status_icon.setStyleSheet(f"font-size: 14px; color: {t.plan_failed_border};")
         elif status == "running":
-            self.status_icon.setStyleSheet("font-size: 14px; color: #2196f3;")
+            self.status_icon.setStyleSheet(f"font-size: 14px; color: {t.plan_running_border};")
         else:
             self.status_icon.setStyleSheet("font-size: 14px;")
 
@@ -903,12 +1032,13 @@ class PlanWidget(QFrame):
 
     def _setup_ui(self):
         self.setObjectName("planWidget")
-        self.setStyleSheet("""
-            QFrame#planWidget {
-                background-color: #ffffff;
-                border: 2px solid #0084ff;
+        t = theme()
+        self.setStyleSheet(f"""
+            QFrame#planWidget {{
+                background-color: {t.background_primary};
+                border: 2px solid {t.accent_blue};
                 border-radius: 12px;
-            }
+            }}
         """)
 
         layout = QVBoxLayout(self)
@@ -921,19 +1051,19 @@ class PlanWidget(QFrame):
         header_icon.setStyleSheet("font-size: 18px;")
         header_layout.addWidget(header_icon)
 
-        header_text = QLabel(f"Plan: {self._plan.summary}")
-        header_text.setStyleSheet("font-weight: bold; font-size: 14px; color: #050505;")
-        header_text.setWordWrap(True)
-        header_layout.addWidget(header_text, 1)
+        self._header_text = QLabel(f"Plan: {self._plan.summary}")
+        self._header_text.setStyleSheet(f"font-weight: bold; font-size: 14px; color: {t.text_primary};")
+        self._header_text.setWordWrap(True)
+        header_layout.addWidget(self._header_text, 1)
 
         layout.addLayout(header_layout)
 
         # Separator
-        separator = QFrame()
-        separator.setFrameShape(QFrame.HLine)
-        separator.setStyleSheet("background-color: #dee2e6;")
-        separator.setFixedHeight(1)
-        layout.addWidget(separator)
+        self._separator1 = QFrame()
+        self._separator1.setFrameShape(QFrame.HLine)
+        self._separator1.setStyleSheet(f"background-color: {t.border_secondary};")
+        self._separator1.setFixedHeight(1)
+        layout.addWidget(self._separator1)
 
         # Steps container
         self.steps_container = QWidget()
@@ -948,11 +1078,11 @@ class PlanWidget(QFrame):
         layout.addWidget(self.steps_container)
 
         # Separator before buttons
-        separator2 = QFrame()
-        separator2.setFrameShape(QFrame.HLine)
-        separator2.setStyleSheet("background-color: #dee2e6;")
-        separator2.setFixedHeight(1)
-        layout.addWidget(separator2)
+        self._separator2 = QFrame()
+        self._separator2.setFrameShape(QFrame.HLine)
+        self._separator2.setStyleSheet(f"background-color: {t.border_secondary};")
+        self._separator2.setFixedHeight(1)
+        layout.addWidget(self._separator2)
 
         # Button row
         button_layout = QHBoxLayout()
@@ -960,18 +1090,18 @@ class PlanWidget(QFrame):
 
         # Cancel button
         self.cancel_btn = QPushButton("Cancel")
-        self.cancel_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #f0f2f5;
-                color: #65676b;
-                border: 1px solid #d0d0d0;
+        self.cancel_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {t.background_tertiary};
+                color: {t.text_secondary};
+                border: 1px solid {t.border_secondary};
                 border-radius: 6px;
                 padding: 8px 20px;
                 font-weight: 500;
-            }
-            QPushButton:hover {
-                background-color: #e4e6eb;
-            }
+            }}
+            QPushButton:hover {{
+                background-color: {t.background_elevated};
+            }}
         """)
         self.cancel_btn.clicked.connect(self._on_cancel)
         button_layout.addWidget(self.cancel_btn)
@@ -980,39 +1110,40 @@ class PlanWidget(QFrame):
 
         # Confirm button
         self.confirm_btn = QPushButton("\u2714 Confirm Plan")  # ✔
-        self.confirm_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #0084ff;
-                color: white;
+        self.confirm_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {t.accent_blue};
+                color: {t.text_inverted};
                 border: none;
                 border-radius: 6px;
                 padding: 8px 20px;
                 font-weight: 500;
-            }
-            QPushButton:hover {
-                background-color: #0073e6;
-            }
-            QPushButton:disabled {
-                background-color: #b0b0b0;
-            }
+            }}
+            QPushButton:hover {{
+                background-color: {t.accent_blue_hover};
+            }}
+            QPushButton:disabled {{
+                background-color: {t.text_muted};
+            }}
         """)
         self.confirm_btn.clicked.connect(self._on_confirm)
         button_layout.addWidget(self.confirm_btn)
 
         # Stop button (hidden initially, shown during execution on failure)
         self.stop_btn = QPushButton("Stop")
-        self.stop_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #ff4444;
-                color: white;
+        self.stop_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {t.accent_red};
+                color: {t.text_inverted};
                 border: none;
                 border-radius: 6px;
                 padding: 8px 20px;
                 font-weight: 500;
-            }
-            QPushButton:hover {
-                background-color: #ff2222;
-            }
+            }}
+            QPushButton:hover {{
+                background-color: {t.accent_red};
+                opacity: 0.9;
+            }}
         """)
         self.stop_btn.clicked.connect(self._on_stop)
         self.stop_btn.hide()
@@ -1020,18 +1151,19 @@ class PlanWidget(QFrame):
 
         # Retry button (hidden initially, shown on step failure)
         self.retry_btn = QPushButton("Retry")
-        self.retry_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #ff9800;
-                color: white;
+        self.retry_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {t.accent_orange};
+                color: {t.text_inverted};
                 border: none;
                 border-radius: 6px;
                 padding: 8px 20px;
                 font-weight: 500;
-            }
-            QPushButton:hover {
-                background-color: #f57c00;
-            }
+            }}
+            QPushButton:hover {{
+                background-color: {t.accent_orange};
+                opacity: 0.9;
+            }}
         """)
         self.retry_btn.clicked.connect(self._on_retry)
         self.retry_btn.hide()
@@ -1040,6 +1172,25 @@ class PlanWidget(QFrame):
         layout.addLayout(button_layout)
 
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+
+        # Connect to theme changes
+        if theme().changed:
+            theme().changed.connect(self._on_theme_changed)
+
+    def _on_theme_changed(self):
+        """Handle theme changes."""
+        t = theme()
+        self.setStyleSheet(f"""
+            QFrame#planWidget {{
+                background-color: {t.background_primary};
+                border: 2px solid {t.accent_blue};
+                border-radius: 12px;
+            }}
+        """)
+        self._header_text.setStyleSheet(f"font-weight: bold; font-size: 14px; color: {t.text_primary};")
+        self._separator1.setStyleSheet(f"background-color: {t.border_secondary};")
+        self._separator2.setStyleSheet(f"background-color: {t.border_secondary};")
+        # Button styles would need to be refreshed too but they're less critical
 
     def _add_step_widget(self, index: int, text: str, status: str):
         """Add a step widget to the list."""

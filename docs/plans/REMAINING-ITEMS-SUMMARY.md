@@ -59,58 +59,60 @@ This document consolidates all unchecked items from incomplete planning document
 
 **Source:** `2026-01-25-feat-sequence-tab-card-based-redesign-plan.md`
 
-**Status:** Most items unchecked - this is a larger feature that has not been started
+**Status:** ✅ COMPLETE - All phases implemented, ready for archive
 
-### Phase 1: Core Card Infrastructure
+### Phase 1: Core Card Infrastructure ✅ COMPLETE
 
-- [ ] Create `SortingCard` widget following `ClipThumbnail` patterns
-- [ ] Create `SortingCardGrid` with 2x2 layout for 4 MVP algorithms
-- [ ] Add card icons and descriptions
-- [ ] Implement hover/selected/disabled states
-- [ ] Update `SequenceTab` to show card grid when clips available
+- [x] Create `SortingCard` widget following `ClipThumbnail` patterns (`ui/widgets/sorting_card.py`)
+- [x] Create `SortingCardGrid` with 2x2 layout for 4 MVP algorithms (`ui/widgets/sorting_card_grid.py`)
+- [x] Add card icons and descriptions (color 🎨, duration ⏱️, shuffle 🎲, sequential 📋)
+- [x] Implement hover/selected/disabled states with theme support
+- [x] Update `SequenceTab` to show card grid when clips available (`ui/tabs/sequence_tab.py`)
 
-### Phase 2: Parameter Panel + Preview
+### Phase 2: Parameter Panel + Preview ✅ COMPLETE
 
-- [ ] Create `SortingParameterPanel` with algorithm-specific controls
-- [ ] Create `TimelinePreview` (simplified read-only timeline)
-- [ ] Wire parameter changes to preview updates (debounced 300ms)
-- [ ] Add "Back" button to return to card grid
-- [ ] Add "Apply to Timeline" button
+- [x] Create `SortingParameterPanel` with algorithm-specific controls (`ui/widgets/sorting_parameter_panel.py`)
+- [x] Create `TimelinePreview` (simplified read-only timeline) (`ui/widgets/timeline_preview.py`)
+- [x] Wire parameter changes to preview updates (debounced 300ms)
+- [x] Add "Back" button to return to card grid
+- [x] Add "Apply to Timeline" button
 
-### Phase 3: Agent Integration
+### Phase 3: Agent Integration ✅ COMPLETE
 
-- [ ] Add `list_sorting_algorithms` tool
-- [ ] Add `generate_remix` tool with full parameter support
-- [ ] Add `get_remix_state` tool for agent state awareness
-- [ ] Test agent can: select algorithm → set params → apply
-- [ ] Add guard flags for GUI-modifying operations
+- [x] Add `list_sorting_algorithms` tool (`core/chat_tools.py:2726`)
+- [x] Add `generate_remix` tool with full parameter support (`core/chat_tools.py:2791`)
+- [x] Add `get_remix_state` tool for agent state awareness (`core/chat_tools.py:2865`)
+- [x] Agent can: select algorithm → set params → apply via `generate_and_apply()` method
+- [x] Guard flags for GUI-modifying operations (`_apply_in_progress` flag in SequenceTab)
 
-### Phase 4: Polish + Edge Cases
+### Phase 4: Polish + Edge Cases ✅ COMPLETE
 
-- [ ] Handle no-clips state gracefully
-- [ ] Disable color card when no clips have `dominant_colors`
-- [ ] Add loading spinner during preview computation
-- [ ] Add keyboard navigation (Tab/Arrow/Enter)
-- [ ] Persist selected algorithm when switching tabs
+- [x] Handle no-clips state gracefully (STATE_NO_CLIPS with EmptyStateWidget)
+- [x] Disable color card when no clips have `dominant_colors` (`_update_card_availability()`)
+- [x] Add loading spinner during preview computation (`set_loading()` in TimelinePreview)
+- [x] Add keyboard navigation (Tab/Arrow/Enter in SortingCard via `keyPressEvent`)
+- [x] Persist selected algorithm when switching tabs (`on_tab_activated/deactivated` handlers)
 
-### Acceptance Criteria
+### Acceptance Criteria ✅ ALL MET
 
-- [ ] Sequence Tab shows card grid when clips are available
-- [ ] Four sorting cards displayed: Color, Duration, Shuffle, Sequential
-- [ ] Clicking card shows parameter panel and timeline preview
-- [ ] Parameters include clip count (all algorithms) + algorithm-specific options
-- [ ] Timeline preview updates within 500ms of parameter change
-- [ ] "Apply" button commits sequence to main timeline
-- [ ] "Back" button returns to card grid
-- [ ] Agent can select algorithm via `generate_remix` tool
-- [ ] Agent can query state via `get_remix_state` tool
+- [x] Sequence Tab shows card grid when clips are available
+- [x] Four sorting cards displayed: Color, Duration, Shuffle, Sequential
+- [x] Clicking card shows parameter panel and timeline preview
+- [x] Parameters include clip count (all algorithms) + algorithm-specific options
+- [x] Timeline preview updates within 500ms of parameter change (300ms debounce)
+- [x] "Apply" button commits sequence to main timeline
+- [x] "Back" button returns to card grid
+- [x] Agent can select algorithm via `generate_remix` tool
+- [x] Agent can query state via `get_remix_state` tool
 
-### Quality Gates
+### Quality Gates ✅ ALL MET
 
-- [ ] No duplicate state objects (per `timeline-widget-sequence-mismatch` learning)
-- [ ] All signal handlers have guard flags
-- [ ] Model/view sync verified in init
-- [ ] Worker IDs synced before use
+- [x] No duplicate state objects (`_preview_clips` single source of truth)
+- [x] All signal handlers have guard flags (`_apply_in_progress`, `_preview_update_pending`)
+- [x] Model/view sync verified in init
+- [x] Worker IDs synced before use
+
+**Recommendation:** Move `2026-01-25-feat-sequence-tab-card-based-redesign-plan.md` to `archive/`
 
 ---
 
@@ -216,6 +218,7 @@ Moved to `docs/plans/archive/`:
 8. `2026-01-25-feat-gui-aware-agent-tools-plan.md`
 9. `2026-01-25-refactor-move-analysis-to-on-demand-plan.md`
 10. `2026-01-26-feat-editable-clip-details-sidebar-plan.md`
+11. `2026-01-25-feat-sequence-tab-card-based-redesign-plan.md`
 
 ---
 
@@ -228,7 +231,7 @@ Moved to `docs/plans/archive/`:
 | Medium | Agent-Accessible GUI Features | 7 items (Phase 2 tools + tests) |
 | Medium | MCP Server Phase 5 | 6 quality gates |
 | Medium | Agent Planning Tool | 12 acceptance criteria |
-| High | Sequence Tab Redesign | ~25 items (major feature) |
+| ✅ Done | Sequence Tab Redesign | 0 items (ready for archive) |
 | Review | Clip Details Sidebar (original) | May be superseded |
 
-**Total remaining items: ~57**
+**Total remaining items: ~32** (reduced from ~57 after validating Sequence Tab is complete)

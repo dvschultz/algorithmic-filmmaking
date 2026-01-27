@@ -1,7 +1,10 @@
 """Clip browser with thumbnail grid view."""
 
+import logging
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from PySide6.QtWidgets import (
     QWidget,
@@ -18,7 +21,7 @@ from PySide6.QtWidgets import (
     QMenu,
 )
 from PySide6.QtCore import Qt, Signal, QMimeData, QPoint
-from PySide6.QtGui import QPixmap, QDrag, QPainter, QColor
+from PySide6.QtGui import QPixmap, QDrag, QPainter, QColor, QKeyEvent
 from typing import Optional
 
 from ui.widgets.range_slider import RangeSlider
@@ -37,9 +40,9 @@ class ColorSwatchBar(QWidget):
         self.colors: list[tuple[int, int, int]] = []
         self.setFixedSize(160, 10)
 
-    def set_colors(self, colors: list[tuple[int, int, int]]):
+    def set_colors(self, colors: list[tuple[int, int, int]] | None):
         """Set the colors to display."""
-        self.colors = colors
+        self.colors = colors or []
         self.update()
 
     def paintEvent(self, event):
@@ -88,6 +91,11 @@ class ClipThumbnail(QFrame):
         self.setLineWidth(2)
         self.setFixedSize(180, 160)  # Increased height for shot type label
         self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.StrongFocus)
+        clip_name = clip.name if clip.name else f"Clip {clip.id[:8]}"
+        duration = clip.duration_seconds(source.fps)
+        self.setAccessibleName(clip_name)
+        self.setAccessibleDescription(f"Clip from {source.filename}, duration {duration:.1f}s")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
@@ -266,20 +274,60 @@ class ClipThumbnail(QFrame):
         )
         menu.exec_(event.globalPos())
 
+    def keyPressEvent(self, event: QKeyEvent):
+        """Handle keyboard events for accessibility."""
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+            self.clicked.emit(self.clip)
+        elif event.key() == Qt.Key_Menu or (
+            event.key() == Qt.Key_F10 and event.modifiers() & Qt.ShiftModifier
+        ):
+            # Show context menu at widget center
+            center = self.rect().center()
+            global_pos = self.mapToGlobal(center)
+            menu = QMenu(self)
+            view_details_action = menu.addAction("View Details")
+            view_details_action.triggered.connect(
+                lambda: self.view_details_requested.emit(self.clip, self.source)
+            )
+            menu.exec_(global_pos)
+        else:
+            super().keyPressEvent(event)
+
+    def focusInEvent(self, event):
+        """Handle focus gained - add visual indicator."""
+        super().focusInEvent(event)
+        if not self.selected:
+            self.setStyleSheet(f"""
+                ClipThumbnail {{
+                    background-color: {theme().card_hover};
+                    border: 2px solid {theme().border_focus};
+                }}
+            """)
+
+    def focusOutEvent(self, event):
+        """Handle focus lost - remove visual indicator."""
+        super().focusOutEvent(event)
+        self._update_style()
+
     def set_drag_enabled(self, enabled: bool):
         """Enable or disable dragging."""
         self._drag_enabled = enabled
 
-    def set_colors(self, colors: list[tuple[int, int, int]]):
+    def set_colors(self, colors: list[tuple[int, int, int]] | None):
         """Set the dominant colors for this clip."""
+        self.clip.dominant_colors = colors
         self.color_bar.set_colors(colors)
 
-    def set_shot_type(self, shot_type: str):
+    def set_shot_type(self, shot_type: str | None):
         """Set the shot type for this clip."""
-        self.shot_type_label.setText(get_display_name(shot_type))
-        self.shot_type_label.setVisible(True)
+        self.clip.shot_type = shot_type
+        if shot_type:
+            self.shot_type_label.setText(get_display_name(shot_type))
+            self.shot_type_label.setVisible(True)
+        else:
+            self.shot_type_label.setVisible(False)
 
-    def set_transcript(self, segments: list):
+    def set_transcript(self, segments: list | None):
         """Set the transcript segments for this clip."""
         self.clip.transcript = segments
         self._update_transcript_overlay()
@@ -652,9 +700,13 @@ class ClipBrowser(QWidget):
 
     def update_clip_thumbnail(self, clip_id: str, thumb_path: Path):
         """Update the thumbnail image for a specific clip (O(1) lookup)."""
+        logger.info(f"ClipBrowser.update_clip_thumbnail: clip_id={clip_id}, path={thumb_path}")
         thumb = self._thumbnail_by_id.get(clip_id)
         if thumb:
+            logger.info(f"  Found thumbnail widget, calling set_thumbnail")
             thumb.set_thumbnail(thumb_path)
+        else:
+            logger.warning(f"  Thumbnail widget not found! _thumbnail_by_id keys: {list(self._thumbnail_by_id.keys())[:5]}...")
 
     def update_clips(self, clips: list[Clip]):
         """Update thumbnails for the given clips (called when clips are edited).
@@ -665,15 +717,10 @@ class ClipBrowser(QWidget):
         for clip in clips:
             thumb = self._thumbnail_by_id.get(clip.id)
             if thumb:
-                # Update shot type badge
-                if clip.shot_type:
-                    thumb.set_shot_type(clip.shot_type)
-                # Update transcript overlay
-                if clip.transcript:
-                    thumb.set_transcript(clip.transcript)
-                # Update colors
-                if clip.dominant_colors:
-                    thumb.set_colors(clip.dominant_colors)
+                # Always update all editable fields to reflect changes
+                thumb.set_shot_type(clip.shot_type)
+                thumb.set_transcript(clip.transcript)
+                thumb.set_colors(clip.dominant_colors)
 
     def _on_filter_changed(self, filter_option: str):
         """Handle shot type filter dropdown change."""
@@ -802,7 +849,7 @@ class ClipBrowser(QWidget):
         """Create the collapsible filter panel for duration and aspect ratio."""
         panel = QFrame()
         panel.setFrameStyle(QFrame.StyledPanel)
-        panel.setStyleSheet("QFrame { background-color: rgba(0, 0, 0, 0.05); }")
+        panel.setStyleSheet(f"QFrame {{ background-color: {theme().background_tertiary}; }}")
 
         layout = QHBoxLayout(panel)
         layout.setContentsMargins(8, 8, 8, 8)
