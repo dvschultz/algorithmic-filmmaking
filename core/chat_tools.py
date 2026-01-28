@@ -1632,13 +1632,13 @@ def export_dataset(
 
 
 @tools.register(
-    description="Set or update the project name. Use this when the project is unnamed ('Untitled Project') to give it a meaningful name before saving.",
+    description="Set or update the project name. Use this when the project is unnamed ('Untitled Project') to give it a meaningful name. The project will be automatically saved after naming.",
     requires_project=True,
     modifies_gui_state=True,
     modifies_project_state=True
 )
 def set_project_name(project, name: str) -> dict:
-    """Set the project name."""
+    """Set the project name and auto-save."""
     import re
 
     if not name or not name.strip():
@@ -1659,12 +1659,33 @@ def set_project_name(project, name: str) -> dict:
     project.metadata.name = clean_name
     project.mark_dirty()
 
-    return {
+    # Auto-save the project if it hasn't been saved yet
+    # This enables future auto-saves (which require project.path to be set)
+    save_path = None
+    if not project.path:
+        settings = load_settings()
+        save_path = settings.export_dir / f"{clean_name}.sceneripper"
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            project.save(path=save_path)
+            logger.info(f"Auto-saved new project to {save_path}")
+        except Exception as e:
+            logger.error(f"Failed to auto-save project: {e}")
+            # Don't fail the rename just because save failed
+            save_path = None
+
+    result = {
         "success": True,
         "old_name": old_name,
         "new_name": project.metadata.name,
         "message": f"Project renamed to '{project.metadata.name}'"
     }
+
+    if save_path:
+        result["saved_to"] = str(save_path)
+        result["message"] += f" and saved to {save_path.name}"
+
+    return result
 
 
 @tools.register(

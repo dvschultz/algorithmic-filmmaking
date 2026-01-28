@@ -112,6 +112,19 @@ class ToolExecutor:
                 "This tool requires an active project. Please open or create a project first."
             )
 
+        # Check project naming requirement for state-modifying tools
+        # Agent must name the project before making significant changes
+        if (tool.modifies_project_state
+            and self.project
+            and name not in ("set_project_name", "new_project", "load_project", "save_project")
+            and self.project.metadata.name == "Untitled Project"):
+            return self._error_result(
+                tool_call_id, name,
+                "Project must be named before making changes. "
+                "Ask the user what they'd like to name this project, "
+                "then use set_project_name to set it."
+            )
+
         # Inject project if needed
         if tool.requires_project:
             args["project"] = self.project

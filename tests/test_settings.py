@@ -15,6 +15,9 @@ from core.settings import (
     is_from_environment,
     get_env_overridden_settings,
     get_default_settings,
+    validate_download_dir,
+    get_default_download_dir,
+    is_download_dir_from_env,
     _get_config_dir,
     _get_config_path,
     _get_cache_dir,
@@ -371,3 +374,51 @@ class TestFilePermissions:
                     stat_result = config_dir.stat()
                     permissions = stat_result.st_mode & 0o777
                     assert permissions == 0o700
+
+
+class TestDownloadDirectoryValidation:
+    """Tests for download directory validation functions."""
+
+    def test_validate_download_dir_existing(self):
+        """Test validation of existing writable directory."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            valid, error = validate_download_dir(Path(tmpdir))
+            assert valid is True
+            assert error == ""
+
+    def test_validate_download_dir_creates_new(self):
+        """Test that validation creates directory if it doesn't exist."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            new_dir = Path(tmpdir) / "new_subdir" / "nested"
+            assert not new_dir.exists()
+
+            valid, error = validate_download_dir(new_dir)
+            assert valid is True
+            assert error == ""
+            assert new_dir.exists()
+
+    @pytest.mark.skipif(os.getuid() == 0, reason="Skip permission test when root")
+    def test_validate_download_dir_permission_denied(self):
+        """Test validation fails for non-writable paths."""
+        # /root is typically not writable by non-root users
+        invalid_path = Path("/root/scene_ripper_test_invalid")
+        valid, error = validate_download_dir(invalid_path)
+        assert valid is False
+        assert "Permission" in error or "Cannot" in error
+
+    def test_get_default_download_dir_contains_app_name(self):
+        """Test that default download dir includes app identifier."""
+        default = get_default_download_dir()
+        assert "Scene Ripper" in str(default)
+
+    def test_is_download_dir_from_env_true(self):
+        """Test detection when download dir is set via env var."""
+        with patch.dict(os.environ, {ENV_DOWNLOAD_DIR: "/tmp/test_downloads"}):
+            assert is_download_dir_from_env() is True
+
+    def test_is_download_dir_from_env_false(self):
+        """Test detection when download dir is not set via env var."""
+        env_copy = os.environ.copy()
+        env_copy.pop(ENV_DOWNLOAD_DIR, None)
+        with patch.dict(os.environ, env_copy, clear=True):
+            assert is_download_dir_from_env() is False

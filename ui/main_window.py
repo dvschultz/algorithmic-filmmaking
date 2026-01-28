@@ -33,7 +33,14 @@ from core.dataset_export import export_dataset, DatasetExportConfig
 from core.edl_export import export_edl, EDLExportConfig
 from core.analysis.color import extract_dominant_colors
 from core.analysis.shots import classify_shot_type
-from core.settings import load_settings, save_settings, migrate_from_qsettings
+from core.settings import (
+    load_settings,
+    save_settings,
+    migrate_from_qsettings,
+    validate_download_dir,
+    get_default_download_dir,
+    is_download_dir_from_env,
+)
 from core.youtube_api import (
     YouTubeSearchClient,
     YouTubeSearchResult,
@@ -1820,6 +1827,25 @@ class MainWindow(QMainWindow):
             sources,
             self.project.clips
         )
+
+        # Update sequence tab state to show timeline content
+        # The state stack controls visibility - need to show content area
+        if self.project.sequence.tracks[0].clips:
+            # Make content area visible (timeline is in content_widget)
+            self.sequence_tab.content_widget.setVisible(True)
+
+            # Update sequence tab's internal state for multi-source clips
+            self.sequence_tab._sources.update(sources)
+            if self.project.clips:
+                # Build (Clip, Source) tuples for all clips
+                self.sequence_tab._available_clips = [
+                    (clip, sources.get(clip.source_id))
+                    for clip in self.project.clips
+                    if sources.get(clip.source_id)
+                ]
+                self.sequence_tab._clips = self.project.clips
+                # Switch state to card selection (which shows timeline)
+                self.sequence_tab._set_state(self.sequence_tab.STATE_CARD_SELECTION)
 
         # Zoom to fit the content
         self.sequence_tab.timeline._on_zoom_fit()
@@ -4286,6 +4312,131 @@ class MainWindow(QMainWindow):
             # Only show dialog for manual exports
             QMessageBox.critical(self, "Export Error", f"Failed to export sequence: {error}")
 
+    def _validate_download_directory(self, download_dir: Path) -> Optional[Path]:
+        """Validate download directory and prompt user to fix if invalid.
+
+        If the configured directory doesn't exist and can't be created, shows a dialog
+        allowing the user to select a new directory or use the default.
+
+        Args:
+            download_dir: The configured download directory path
+
+        Returns:
+            A valid Path if validation succeeds (possibly different from input),
+            or None if the user cancels the operation.
+        """
+        # Try to validate the directory
+        valid, error_msg = validate_download_dir(download_dir)
+        if valid:
+            return download_dir
+
+        # Directory is invalid - check if it's from an environment variable
+        from_env = is_download_dir_from_env()
+
+        if from_env:
+            # Show info dialog explaining the env var situation
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Icon.Warning)
+            msg_box.setWindowTitle("Download Directory Unavailable")
+            msg_box.setText(
+                f"The download directory set via SCENE_RIPPER_DOWNLOAD_DIR "
+                f"environment variable is unavailable:\n\n{download_dir}\n\n{error_msg}"
+            )
+            msg_box.setInformativeText(
+                "Would you like to use the default directory for this session? "
+                "(To permanently fix this, update your environment variable.)"
+            )
+            msg_box.setStandardButtons(
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel
+            )
+            msg_box.setDefaultButton(QMessageBox.StandardButton.Yes)
+
+            result = msg_box.exec()
+            if result == QMessageBox.StandardButton.Yes:
+                # Use default temporarily (don't save)
+                default_dir = get_default_download_dir()
+                valid, default_error = validate_download_dir(default_dir)
+                if valid:
+                    logger.info(f"Using temporary default download dir: {default_dir}")
+                    return default_dir
+                else:
+                    QMessageBox.critical(
+                        self,
+                        "Default Directory Also Unavailable",
+                        f"Could not create default directory:\n{default_dir}\n\n{default_error}"
+                    )
+                    return None
+            else:
+                return None
+
+        # Not from env var - show dialog with options
+        while True:
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Icon.Warning)
+            msg_box.setWindowTitle("Download Directory Unavailable")
+            msg_box.setText(
+                f"The configured download directory is unavailable:\n\n"
+                f"{download_dir}\n\n{error_msg}"
+            )
+            msg_box.setInformativeText("Please select a new directory or use the default.")
+
+            # Add custom buttons
+            select_btn = msg_box.addButton("Select Directory...", QMessageBox.ButtonRole.ActionRole)
+            default_btn = msg_box.addButton("Use Default", QMessageBox.ButtonRole.ActionRole)
+            cancel_btn = msg_box.addButton(QMessageBox.StandardButton.Cancel)
+            msg_box.setDefaultButton(select_btn)
+
+            msg_box.exec()
+            clicked = msg_box.clickedButton()
+
+            if clicked == cancel_btn:
+                return None
+
+            elif clicked == default_btn:
+                default_dir = get_default_download_dir()
+                valid, default_error = validate_download_dir(default_dir)
+                if valid:
+                    # Save the new setting
+                    self.settings.download_dir = default_dir
+                    save_settings(self.settings)
+                    logger.info(f"Updated download directory to default: {default_dir}")
+                    return default_dir
+                else:
+                    QMessageBox.critical(
+                        self,
+                        "Default Directory Unavailable",
+                        f"Could not create default directory:\n{default_dir}\n\n{default_error}"
+                    )
+                    # Continue the loop to let user try again
+
+            elif clicked == select_btn:
+                # Show directory picker
+                new_dir = QFileDialog.getExistingDirectory(
+                    self,
+                    "Select Download Directory",
+                    str(Path.home()),
+                    QFileDialog.Option.ShowDirsOnly
+                )
+                if not new_dir:
+                    # User cancelled picker - return to dialog
+                    continue
+
+                new_path = Path(new_dir)
+                valid, new_error = validate_download_dir(new_path)
+                if valid:
+                    # Save the new setting
+                    self.settings.download_dir = new_path
+                    save_settings(self.settings)
+                    logger.info(f"Updated download directory to: {new_path}")
+                    return new_path
+                else:
+                    QMessageBox.warning(
+                        self,
+                        "Directory Not Valid",
+                        f"Cannot use selected directory:\n{new_path}\n\n{new_error}"
+                    )
+                    # Continue the loop to let user try again
+
     def start_agent_bulk_download(self, urls: list[str], download_dir: Path) -> bool:
         """Start bulk video downloads triggered by agent.
 
@@ -4294,10 +4445,16 @@ class MainWindow(QMainWindow):
             download_dir: Directory to save downloads
 
         Returns:
-            True if download started, False if already in progress
+            True if download started, False if already in progress or cancelled
         """
         # Check if download already running
         if self.url_bulk_download_worker and self.url_bulk_download_worker.isRunning():
+            return False
+
+        # Validate download directory
+        validated_dir = self._validate_download_directory(download_dir)
+        if validated_dir is None:
+            # User cancelled - download not started
             return False
 
         # Mark that agent is waiting
@@ -4309,7 +4466,7 @@ class MainWindow(QMainWindow):
         self.progress_bar.setRange(0, len(urls))
         self.status_bar.showMessage(f"Downloading {len(urls)} videos...")
 
-        self.url_bulk_download_worker = URLBulkDownloadWorker(urls, download_dir)
+        self.url_bulk_download_worker = URLBulkDownloadWorker(urls, validated_dir)
         self.url_bulk_download_worker.progress.connect(self._on_agent_download_progress)
         self.url_bulk_download_worker.video_finished.connect(self._on_agent_video_finished)
         self.url_bulk_download_worker.all_finished.connect(self._on_agent_bulk_download_finished)

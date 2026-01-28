@@ -844,6 +844,48 @@ def migrate_from_qsettings() -> bool:
         return False
 
 
+def validate_download_dir(path: Path) -> tuple[bool, str]:
+    """Validate and attempt to create download directory.
+
+    Tests that the directory exists (or can be created) and is writable.
+
+    Args:
+        path: Path to the download directory
+
+    Returns:
+        Tuple of (success, error_message). On success, error_message is empty.
+    """
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        # Verify writable by creating and removing a test file
+        test_file = path / ".write_test"
+        test_file.touch()
+        test_file.unlink()
+        return True, ""
+    except PermissionError:
+        return False, f"Permission denied: Cannot write to {path}"
+    except OSError as e:
+        return False, f"Cannot create directory: {e}"
+
+
+def get_default_download_dir() -> Path:
+    """Get the platform-appropriate default download directory.
+
+    Returns:
+        Path to the default download directory (~/Movies/Scene Ripper Downloads on macOS)
+    """
+    return _get_default_download_dir()
+
+
+def is_download_dir_from_env() -> bool:
+    """Check if the download directory setting comes from an environment variable.
+
+    Returns:
+        True if SCENE_RIPPER_DOWNLOAD_DIR environment variable is set
+    """
+    return bool(os.environ.get(ENV_DOWNLOAD_DIR))
+
+
 def get_cache_size(cache_dir: Path) -> int:
     """Calculate total size of cache directory in bytes.
 
