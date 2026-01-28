@@ -1346,7 +1346,8 @@ class MainWindow(QMainWindow):
     def _on_clips_added(self, clips: list):
         """Handle clips added signal from project.
 
-        Refreshes lookups, updates Cut tab, and generates thumbnails for new clips.
+        Refreshes lookups, sets current source, and generates thumbnails for new clips.
+        Clips are added to Cut tab via _on_thumbnail_ready when thumbnails complete.
 
         Args:
             clips: List of added clips
@@ -1361,22 +1362,16 @@ class MainWindow(QMainWindow):
         clip_source_id = clips[0].source_id if clips else None
         clip_source = self.sources_by_id.get(clip_source_id) if clip_source_id else None
 
-        # If no current source is set, set it to this source
+        # Set current source if not already set (needed for _on_thumbnail_ready)
         if clip_source and not self.current_source:
             self.current_source = clip_source
             logger.info(f"Set current_source to {clip_source.id}")
 
-        # Update Cut tab with clips for this source
+        # Set source in Cut tab (prepares UI state, clips added via _on_thumbnail_ready)
         if hasattr(self, 'cut_tab') and clip_source:
-            # Get all clips for this source (including newly added ones)
-            source_clips = self.clips_by_source.get(clip_source.id, [])
-            if source_clips:
-                # Set the source in Cut tab if not already set
-                self.cut_tab.set_source(clip_source)
-                self.cut_tab.set_clips(source_clips)
-                logger.info(f"Updated Cut tab with {len(source_clips)} clips for source {clip_source.id}")
+            self.cut_tab.set_source(clip_source)
 
-        # Generate thumbnails for clips that don't have them
+        # Generate thumbnails - _on_thumbnail_ready will add clips to Cut tab
         clips_needing_thumbnails = [c for c in clips if not c.thumbnail_path or not c.thumbnail_path.exists()]
         if clips_needing_thumbnails:
             logger.info(f"Starting thumbnail generation for {len(clips_needing_thumbnails)} clips")
@@ -1401,7 +1396,8 @@ class MainWindow(QMainWindow):
                         self.settings.thumbnail_cache_dir,
                         sources_by_id=self.sources_by_id,
                     )
-                    self.thumbnail_worker.thumbnail_ready.connect(self._on_project_thumbnail_ready)
+                    # Connect to _on_thumbnail_ready - this adds clips to Cut tab!
+                    self.thumbnail_worker.thumbnail_ready.connect(self._on_thumbnail_ready)
                     self.thumbnail_worker.finished.connect(self._on_agent_thumbnails_finished, Qt.UniqueConnection)
                     logger.info("Starting ThumbnailWorker for agent-added clips...")
                     self.thumbnail_worker.start()
@@ -1410,18 +1406,12 @@ class MainWindow(QMainWindow):
     def _on_agent_thumbnails_finished(self):
         """Handle thumbnails completed for agent-added clips."""
         logger.info("Agent thumbnail generation finished")
-        # Refresh Cut tab to show thumbnails
-        if hasattr(self, 'cut_tab') and self.current_source:
-            source_clips = self.clips_by_source.get(self.current_source.id, [])
-            if source_clips:
-                self.cut_tab.set_clips(source_clips)
 
         # Process any pending thumbnail clips
         if hasattr(self, '_pending_thumbnail_clips') and self._pending_thumbnail_clips:
             pending = self._pending_thumbnail_clips
             self._pending_thumbnail_clips = []
             logger.info(f"Processing {len(pending)} pending thumbnail clips")
-            # Re-trigger via a fake clips_added (just for thumbnails)
             clips_still_needing = [c for c in pending if not c.thumbnail_path or not c.thumbnail_path.exists()]
             if clips_still_needing:
                 default_source = self.sources_by_id.get(clips_still_needing[0].source_id)
@@ -1432,7 +1422,8 @@ class MainWindow(QMainWindow):
                         self.settings.thumbnail_cache_dir,
                         sources_by_id=self.sources_by_id,
                     )
-                    self.thumbnail_worker.thumbnail_ready.connect(self._on_project_thumbnail_ready)
+                    # Connect to _on_thumbnail_ready - this adds clips to Cut tab!
+                    self.thumbnail_worker.thumbnail_ready.connect(self._on_thumbnail_ready)
                     self.thumbnail_worker.finished.connect(self._on_agent_thumbnails_finished, Qt.UniqueConnection)
                     self.thumbnail_worker.start()
 
