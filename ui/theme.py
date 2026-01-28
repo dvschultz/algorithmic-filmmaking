@@ -114,6 +114,11 @@ class UISizes:
     COMBO_BOX_MIN_WIDTH = 200
     COMBO_BOX_MIN_WIDTH_WIDE = 300
 
+    # Grid layout constants
+    GRID_GUTTER = 24           # Spacing between grid items
+    GRID_CARD_MAX_WIDTH = 240  # Maximum width per card/column
+    GRID_MARGIN = 16           # Outer margin around grid
+
 
 # Dark theme color definitions
 DARK_THEME = ThemeColors(

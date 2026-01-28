@@ -19,7 +19,7 @@ from PySide6.QtGui import QFont, QDragEnterEvent, QDropEvent, QPalette
 
 from models.clip import Source
 from ui.source_thumbnail import SourceThumbnail
-from ui.theme import theme
+from ui.theme import theme, UISizes
 
 
 class AddVideoCard(QFrame):
@@ -34,7 +34,7 @@ class AddVideoCard(QFrame):
         self.setAcceptDrops(True)
         self.setFrameStyle(QFrame.Panel | QFrame.Raised)
         self.setLineWidth(2)
-        self.setFixedSize(180, 150)
+        self.setFixedSize(UISizes.GRID_CARD_MAX_WIDTH, 200)  # Match SourceThumbnail
         self.setCursor(Qt.PointingHandCursor)
 
         self._setup_ui()
@@ -163,8 +163,8 @@ class SourceBrowser(QWidget):
         # Container for grid
         self.container = QWidget()
         self.grid = QGridLayout(self.container)
-        self.grid.setSpacing(12)
-        self.grid.setContentsMargins(16, 16, 16, 16)
+        self.grid.setSpacing(UISizes.GRID_GUTTER)
+        self.grid.setContentsMargins(UISizes.GRID_MARGIN, UISizes.GRID_MARGIN, UISizes.GRID_MARGIN, UISizes.GRID_MARGIN)
         # Align grid to top-left
         self.grid.setAlignment(Qt.AlignTop | Qt.AlignLeft)
 

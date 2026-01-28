@@ -29,7 +29,7 @@ from ui.widgets.range_slider import RangeSlider
 from models.clip import Clip, Source
 from core.analysis.color import get_primary_hue, classify_color_palette, get_palette_display_name, COLOR_PALETTES
 from core.analysis.shots import get_display_name, SHOT_TYPES
-from ui.theme import theme
+from ui.theme import theme, UISizes
 
 
 class ColorSwatchBar(QWidget):
@@ -38,7 +38,7 @@ class ColorSwatchBar(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.colors: list[tuple[int, int, int]] = []
-        self.setFixedSize(160, 10)
+        self.setFixedSize(220, 10)
 
     def set_colors(self, colors: list[tuple[int, int, int]] | None):
         """Set the colors to display."""
@@ -89,7 +89,7 @@ class ClipThumbnail(QFrame):
 
         self.setFrameStyle(QFrame.Panel | QFrame.Raised)
         self.setLineWidth(2)
-        self.setFixedSize(180, 160)  # Increased height for shot type label
+        self.setFixedSize(UISizes.GRID_CARD_MAX_WIDTH, 210)  # 240px wide, proportionally scaled
         self.setCursor(Qt.PointingHandCursor)
         self.setFocusPolicy(Qt.StrongFocus)
         clip_name = clip.name if clip.name else f"Clip {clip.id[:8]}"
@@ -103,14 +103,14 @@ class ClipThumbnail(QFrame):
 
         # Thumbnail container (for overlay positioning)
         self.thumb_container = QWidget()
-        self.thumb_container.setFixedSize(160, 90)
+        self.thumb_container.setFixedSize(220, 124)
         thumb_layout = QVBoxLayout(self.thumb_container)
         thumb_layout.setContentsMargins(0, 0, 0, 0)
         thumb_layout.setSpacing(0)
 
         # Thumbnail image
         self.thumbnail_label = QLabel(self.thumb_container)
-        self.thumbnail_label.setFixedSize(160, 90)
+        self.thumbnail_label.setFixedSize(220, 124)
         self.thumbnail_label.setAlignment(Qt.AlignCenter)
         self.thumbnail_label.setStyleSheet(f"background-color: {theme().thumbnail_background};")
 
@@ -121,7 +121,7 @@ class ClipThumbnail(QFrame):
 
         # Transcript overlay (positioned on top of thumbnail)
         self.transcript_overlay = QLabel(self.thumb_container)
-        self.transcript_overlay.setFixedSize(160, 90)
+        self.transcript_overlay.setFixedSize(220, 124)
         self.transcript_overlay.setAlignment(Qt.AlignCenter)
         self.transcript_overlay.setWordWrap(True)
         self.transcript_overlay.setStyleSheet(
@@ -131,7 +131,7 @@ class ClipThumbnail(QFrame):
             "padding: 6px; "
             "border-radius: 0px;"
         )
-        self.transcript_overlay.setGeometry(0, 0, 160, 90)
+        self.transcript_overlay.setGeometry(0, 0, 220, 124)
         self.transcript_overlay.raise_()  # Ensure overlay is on top
         self.transcript_overlay.setVisible(False)
         self._update_transcript_overlay()
@@ -184,7 +184,7 @@ class ClipThumbnail(QFrame):
         pixmap = QPixmap(str(path))
         if not pixmap.isNull():
             scaled = pixmap.scaled(
-                160, 90,
+                220, 124,
                 Qt.KeepAspectRatio,
                 Qt.SmoothTransformation
             )
@@ -499,8 +499,9 @@ class ClipBrowser(QWidget):
         # Container for grid
         self.container = QWidget()
         self.grid = QGridLayout(self.container)
-        self.grid.setSpacing(8)
-        self.grid.setContentsMargins(8, 8, 8, 8)
+        self.grid.setSpacing(UISizes.GRID_GUTTER)
+        self.grid.setContentsMargins(UISizes.GRID_MARGIN, UISizes.GRID_MARGIN, UISizes.GRID_MARGIN, UISizes.GRID_MARGIN)
+        self.grid.setAlignment(Qt.AlignTop | Qt.AlignLeft)
 
         self.scroll.setWidget(self.container)
         layout.addWidget(self.scroll)
@@ -547,7 +548,7 @@ class ClipBrowser(QWidget):
         if self._matches_filter(thumb):
             row = (len(self.thumbnails) - 1) // self.COLUMNS
             col = (len(self.thumbnails) - 1) % self.COLUMNS
-            self.grid.addWidget(thumb, row, col)
+            self.grid.addWidget(thumb, row, col, Qt.AlignTop | Qt.AlignLeft)
         else:
             thumb.setVisible(False)
 
@@ -795,7 +796,7 @@ class ClipBrowser(QWidget):
         for i, thumb in enumerate(visible_thumbs):
             row = i // self.COLUMNS
             col = i % self.COLUMNS
-            self.grid.addWidget(thumb, row, col)
+            self.grid.addWidget(thumb, row, col, Qt.AlignTop | Qt.AlignLeft)
             thumb.setVisible(True)
 
     def _matches_filter(self, thumb: ClipThumbnail) -> bool:
