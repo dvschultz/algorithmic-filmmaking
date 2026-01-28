@@ -198,8 +198,13 @@ class ToolExecutor:
         """
         if result["success"]:
             content = json.dumps(result["result"], indent=2, default=str)
-        else:
+        elif "error" in result:
             content = json.dumps({"error": result["error"]})
+        elif "result" in result:
+            # Some async tools return success=False with result containing details
+            content = json.dumps(result["result"], indent=2, default=str)
+        else:
+            content = json.dumps({"error": "Tool failed with unknown error"})
 
         return {
             "role": "tool",
