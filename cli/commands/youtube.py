@@ -32,6 +32,27 @@ from cli.utils.progress import create_progress_callback
     default=None,
     help="Filter by duration: short (<4min), medium (4-20min), long (>20min)",
 )
+@click.option(
+    "--aspect-ratio",
+    "-a",
+    type=click.Choice(["any", "16:9", "4:3", "9:16", "1:1"]),
+    default="any",
+    help="Filter by aspect ratio (requires fetching metadata)",
+)
+@click.option(
+    "--resolution",
+    "-r",
+    type=click.Choice(["any", "4k", "1080p", "720p", "480p"]),
+    default="any",
+    help="Filter by minimum resolution (requires fetching metadata)",
+)
+@click.option(
+    "--max-size",
+    "-s",
+    type=click.Choice(["any", "100mb", "500mb", "1gb"]),
+    default="any",
+    help="Filter by maximum file size (requires fetching metadata)",
+)
 @click.pass_context
 def search(
     ctx: click.Context,
@@ -39,6 +60,9 @@ def search(
     max_results: Optional[int],
     order: str,
     duration: Optional[str],
+    aspect_ratio: str,
+    resolution: str,
+    max_size: str,
 ) -> None:
     """Search YouTube for videos.
 
@@ -51,6 +75,7 @@ def search(
         scene_ripper search "Soviet animation 1980s"
         scene_ripper search "nature documentary" --duration long
         scene_ripper search "film noir" --max-results 10 --order date
+        scene_ripper search "short film" --aspect-ratio 16:9 --resolution 1080p
     """
     try:
         from core.youtube_api import (
@@ -59,6 +84,7 @@ def search(
             QuotaExceededError,
             YouTubeAPIError,
         )
+        from core.downloader import VideoDownloader
     except ImportError as e:
         exit_with(ExitCode.DEPENDENCY_MISSING, f"Missing dependency: {e}")
 
@@ -92,41 +118,102 @@ def search(
     except YouTubeAPIError as e:
         exit_with(ExitCode.NETWORK_ERROR, f"YouTube API error: {e}")
 
+    # Apply filters if any are set (requires fetching metadata)
+    filters_active = any([
+        aspect_ratio != "any",
+        resolution != "any",
+        max_size != "any",
+    ])
+
+    if filters_active and result.videos:
+        output_info(f"Fetching metadata for {len(result.videos)} videos to apply filters...")
+
+        try:
+            downloader = VideoDownloader()
+        except RuntimeError as e:
+            exit_with(ExitCode.DEPENDENCY_MISSING, str(e))
+
+        filtered_videos = []
+        for i, video in enumerate(result.videos):
+            try:
+                info = downloader.get_video_info(video.youtube_url, include_format_details=True)
+                video.width = info.get("width")
+                video.height = info.get("height")
+                video.aspect_ratio = info.get("aspect_ratio")
+                video.filesize_approx = info.get("filesize_approx")
+                video.has_detailed_info = True
+
+                # Check if video matches filters
+                if (video.matches_aspect_ratio(aspect_ratio) and
+                    video.matches_resolution(resolution) and
+                    video.matches_max_size(max_size)):
+                    filtered_videos.append(video)
+            except Exception as e:
+                # If metadata fetch fails, skip the video when filtering
+                output_info(f"  Skipping {video.title[:30]}... (metadata fetch failed)")
+
+        output_info(f"Found {len(filtered_videos)} videos matching filters")
+        result.videos = filtered_videos
+
     as_json = ctx.obj.get("json", False)
 
     if as_json:
+        video_list = []
+        for v in result.videos:
+            video_data = {
+                "video_id": v.video_id,
+                "title": v.title,
+                "channel": v.channel_title,
+                "duration": v.duration_str,
+                "views": v.view_count,
+                "url": v.youtube_url,
+                "thumbnail": v.thumbnail_url,
+                "definition": v.definition,
+            }
+            # Include metadata if available
+            if v.has_detailed_info:
+                video_data.update({
+                    "width": v.width,
+                    "height": v.height,
+                    "resolution": v.resolution_str,
+                    "aspect_ratio": v.aspect_ratio,
+                    "aspect_ratio_str": v.aspect_ratio_str,
+                    "filesize_approx": v.filesize_approx,
+                })
+            video_list.append(video_data)
+
         output_data = {
             "query": query,
             "total_results": result.total_results,
             "returned": len(result.videos),
-            "results": [
-                {
-                    "video_id": v.video_id,
-                    "title": v.title,
-                    "channel": v.channel_title,
-                    "duration": v.duration_str,
-                    "views": v.view_count,
-                    "url": v.youtube_url,
-                    "thumbnail": v.thumbnail_url,
-                    "definition": v.definition,
-                }
-                for v in result.videos
-            ],
+            "filters_applied": filters_active,
+            "results": video_list,
         }
         if result.next_page_token:
             output_data["next_page_token"] = result.next_page_token
         output_result(output_data, as_json=True)
     else:
         click.echo(f"Found {result.total_results} results for '{query}'")
+        if filters_active:
+            click.echo(f"Showing {len(result.videos)} matching filters")
         click.echo()
 
-        # Table output
-        headers = ["#", "Title", "Duration", "Channel"]
-        rows = []
-        for i, video in enumerate(result.videos, 1):
-            title = video.title[:50] + "..." if len(video.title) > 50 else video.title
-            channel = video.channel_title[:20] if video.channel_title else ""
-            rows.append([i, title, video.duration_str, channel])
+        # Table output - include resolution if metadata was fetched
+        if filters_active:
+            headers = ["#", "Title", "Duration", "Resolution", "Channel"]
+            rows = []
+            for i, video in enumerate(result.videos, 1):
+                title = video.title[:45] + "..." if len(video.title) > 45 else video.title
+                channel = video.channel_title[:15] if video.channel_title else ""
+                res = video.resolution_str if video.has_detailed_info else ""
+                rows.append([i, title, video.duration_str, res, channel])
+        else:
+            headers = ["#", "Title", "Duration", "Channel"]
+            rows = []
+            for i, video in enumerate(result.videos, 1):
+                title = video.title[:50] + "..." if len(video.title) > 50 else video.title
+                channel = video.channel_title[:20] if video.channel_title else ""
+                rows.append([i, title, video.duration_str, channel])
 
         output_table(headers, rows)
 

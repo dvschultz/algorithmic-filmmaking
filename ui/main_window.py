@@ -117,7 +117,7 @@ class ThumbnailWorker(QThread):
 
     progress = Signal(int, int)  # current, total
     thumbnail_ready = Signal(str, str)  # clip_id, thumbnail_path
-    finished = Signal()
+    # Note: Don't override QThread.finished - use the built-in signal instead
 
     def __init__(
         self,
@@ -164,9 +164,8 @@ class ThumbnailWorker(QThread):
 
             self.progress.emit(i + 1, total)
 
-        logger.info("ThumbnailWorker.run() emitting finished signal")
-        self.finished.emit()
         logger.info("ThumbnailWorker.run() COMPLETED")
+        # QThread's built-in finished signal will be emitted after run() returns
 
 
 class DownloadWorker(QThread):

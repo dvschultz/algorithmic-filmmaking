@@ -242,9 +242,12 @@ class ToolRegistry:
         properties = {}
         required = []
 
+        # Parameters that are injected by the system, not provided by the LLM
+        injected_params = {"project", "gui_state", "main_window"}
+
         for param_name, param in sig.parameters.items():
-            # Skip 'project' parameter - it's injected by executor
-            if param_name == "project":
+            # Skip injected parameters - they're provided by the executor
+            if param_name in injected_params:
                 continue
 
             # Get type hint or default to string
@@ -2179,12 +2182,22 @@ def detect_scenes(
 
 
 @tools.register(
-    description="Search YouTube for videos matching a query. Returns video titles, IDs, durations, and URLs.",
+    description="""Search YouTube for videos matching a query. Returns video titles, IDs, durations, and URLs.
+Optional filters (require fetching metadata from each video, which is slower):
+- aspect_ratio: "any", "16:9", "4:3", "9:16", or "1:1"
+- resolution: "any", "4k", "1080p", "720p", or "480p" (minimum resolution)
+- max_size: "any", "100mb", "500mb", or "1gb" (maximum file size)""",
     requires_project=False,
     modifies_gui_state=False
 )
-def search_youtube(query: str, max_results: int = 10) -> dict:
-    """Search YouTube using the Python API."""
+def search_youtube(
+    query: str,
+    max_results: int = 10,
+    aspect_ratio: str = "any",
+    resolution: str = "any",
+    max_size: str = "any"
+) -> dict:
+    """Search YouTube using the Python API with optional filters."""
     # Get API key from settings
     settings = load_settings()
     api_key = settings.youtube_api_key
@@ -2199,10 +2212,46 @@ def search_youtube(query: str, max_results: int = 10) -> dict:
         client = YouTubeSearchClient(api_key)
         result = client.search(query, max_results=min(max_results, 50))
 
+        # Check if filtering is needed
+        filters_active = any([
+            aspect_ratio != "any",
+            resolution != "any",
+            max_size != "any",
+        ])
+
+        videos_to_process = result.videos
+
+        # Apply filters if set (requires fetching metadata)
+        if filters_active and videos_to_process:
+            try:
+                downloader = VideoDownloader()
+                filtered = []
+                for video in videos_to_process:
+                    try:
+                        info = downloader.get_video_info(
+                            video.youtube_url,
+                            include_format_details=True
+                        )
+                        video.width = info.get("width")
+                        video.height = info.get("height")
+                        video.aspect_ratio = info.get("aspect_ratio")
+                        video.filesize_approx = info.get("filesize_approx")
+                        video.has_detailed_info = True
+
+                        if (video.matches_aspect_ratio(aspect_ratio) and
+                            video.matches_resolution(resolution) and
+                            video.matches_max_size(max_size)):
+                            filtered.append(video)
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch metadata for {video.video_id}: {e}")
+                videos_to_process = filtered
+            except Exception as e:
+                logger.warning(f"Could not apply filters: {e}")
+
         # Convert to serializable format
         videos = []
-        for video in result.videos:
-            videos.append({
+        for video in videos_to_process:
+            video_data = {
                 "video_id": video.video_id,
                 "title": video.title,
                 "channel": video.channel_title,
@@ -2210,13 +2259,25 @@ def search_youtube(query: str, max_results: int = 10) -> dict:
                 "url": video.youtube_url,
                 "thumbnail": video.thumbnail_url,
                 "view_count": video.view_count,
-            })
+            }
+            # Include metadata if available
+            if video.has_detailed_info:
+                video_data.update({
+                    "width": video.width,
+                    "height": video.height,
+                    "resolution": video.resolution_str,
+                    "aspect_ratio": video.aspect_ratio,
+                    "filesize_approx": video.filesize_approx,
+                })
+            videos.append(video_data)
 
         return {
             "success": True,
             "query": query,
+            "filters_applied": filters_active,
             "results": videos,
-            "total_results": result.total_results
+            "total_results": result.total_results,
+            "filtered_count": len(videos)
         }
 
     except QuotaExceededError as e:

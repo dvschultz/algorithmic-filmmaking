@@ -14,7 +14,7 @@ from PySide6.QtCore import Qt, Signal, Slot, QUrl
 from PySide6.QtGui import QPixmap, QCloseEvent
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 
-from ui.theme import theme
+from ui.theme import theme, UISizes
 from core.youtube_api import YouTubeVideo
 
 
@@ -30,7 +30,7 @@ class YouTubeResultThumbnail(QFrame):
         self._network_manager = network_manager  # Shared manager from parent
         self._pending_reply: Optional[QNetworkReply] = None
 
-        self.setFixedSize(180, 140)
+        self.setFixedSize(UISizes.GRID_CARD_MAX_WIDTH, 186)
         self.setFrameStyle(QFrame.Panel | QFrame.Raised)
         self.setCursor(Qt.PointingHandCursor)
 
@@ -48,10 +48,10 @@ class YouTubeResultThumbnail(QFrame):
 
         # Thumbnail with checkbox overlay
         thumb_container = QWidget()
-        thumb_container.setFixedSize(172, 97)
+        thumb_container.setFixedSize(228, 128)
 
         self.thumbnail_label = QLabel(thumb_container)
-        self.thumbnail_label.setFixedSize(172, 97)
+        self.thumbnail_label.setFixedSize(228, 128)
         self.thumbnail_label.setAlignment(Qt.AlignCenter)
         self.thumbnail_label.setStyleSheet(
             f"background-color: {theme().thumbnail_background};"
@@ -75,11 +75,22 @@ class YouTubeResultThumbnail(QFrame):
             self.duration_label.setText(self.video.duration_str)
             self.duration_label.adjustSize()
             self.duration_label.move(
-                172 - self.duration_label.width() - 4,
-                97 - self.duration_label.height() - 4,
+                228 - self.duration_label.width() - 4,
+                128 - self.duration_label.height() - 4,
             )
         else:
             self.duration_label.hide()
+
+        # Resolution badge in top-right (below checkbox area)
+        self.resolution_label = QLabel(thumb_container)
+        self.resolution_label.setAlignment(Qt.AlignCenter)
+        self.resolution_label.setStyleSheet(
+            f"background-color: {theme().accent_purple}; "
+            "color: white; font-size: 9px; font-weight: bold; padding: 2px 4px; "
+            "border-radius: 2px;"
+        )
+        self.resolution_label.hide()  # Hidden until metadata is fetched
+        self.resolution_label.raise_()
 
         layout.addWidget(thumb_container)
 
@@ -88,7 +99,7 @@ class YouTubeResultThumbnail(QFrame):
         self.title_label.setWordWrap(True)
         self.title_label.setMaximumHeight(28)
         metrics = self.title_label.fontMetrics()
-        elided = metrics.elidedText(self.video.title, Qt.ElideRight, 340)
+        elided = metrics.elidedText(self.video.title, Qt.ElideRight, 460)
         self.title_label.setText(elided)
         self.title_label.setToolTip(self.video.title)
         self.title_label.setStyleSheet(
@@ -144,7 +155,7 @@ class YouTubeResultThumbnail(QFrame):
             pixmap.loadFromData(data)
             if not pixmap.isNull():
                 scaled = pixmap.scaled(
-                    172, 97, Qt.KeepAspectRatio, Qt.SmoothTransformation
+                    228, 128, Qt.KeepAspectRatio, Qt.SmoothTransformation
                 )
                 self.thumbnail_label.setPixmap(scaled)
 
@@ -175,6 +186,18 @@ class YouTubeResultThumbnail(QFrame):
     def set_selected(self, selected: bool):
         """Set selection state."""
         self.checkbox.setChecked(selected)
+
+    def update_metadata_display(self):
+        """Update display after metadata is fetched."""
+        if self.video.has_detailed_info and self.video.resolution_str:
+            self.resolution_label.setText(self.video.resolution_str)
+            self.resolution_label.adjustSize()
+            # Position in top-right, below the checkbox
+            self.resolution_label.move(
+                228 - self.resolution_label.width() - 4,
+                4,
+            )
+            self.resolution_label.show()
 
     def mousePressEvent(self, event):
         """Toggle selection on click."""
