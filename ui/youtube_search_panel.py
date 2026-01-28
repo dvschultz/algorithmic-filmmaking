@@ -1,5 +1,8 @@
 """Expandable YouTube search panel for Collect tab."""
 
+import logging
+from typing import Optional
+
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -10,13 +13,70 @@ from PySide6.QtWidgets import (
     QLabel,
     QScrollArea,
     QFrame,
+    QComboBox,
+    QProgressBar,
 )
-from PySide6.QtCore import Qt, Signal, Slot, QPropertyAnimation, QEasingCurve, QTimer
+from PySide6.QtCore import Qt, Signal, Slot, QPropertyAnimation, QEasingCurve, QTimer, QThread, QObject
 from PySide6.QtNetwork import QNetworkAccessManager
 
-from ui.theme import theme
+from ui.theme import theme, UISizes
 from ui.youtube_result_thumbnail import YouTubeResultThumbnail
-from core.youtube_api import YouTubeVideo
+from core.youtube_api import YouTubeVideo, ASPECT_RATIO_RANGES, RESOLUTION_THRESHOLDS, SIZE_LIMITS
+
+logger = logging.getLogger(__name__)
+
+
+class MetadataFetchWorker(QObject):
+    """Worker to fetch detailed video metadata via yt-dlp in background."""
+
+    progress = Signal(int, int)  # current, total
+    video_updated = Signal(str, dict)  # video_id, metadata dict
+    finished = Signal()
+    error = Signal(str)
+
+    def __init__(self, videos: list[YouTubeVideo]):
+        super().__init__()
+        self._videos = videos
+        self._cancelled = False
+
+    def cancel(self):
+        """Cancel the fetch operation."""
+        self._cancelled = True
+
+    def run(self):
+        """Fetch metadata for each video."""
+        try:
+            from core.downloader import VideoDownloader
+            downloader = VideoDownloader()
+        except Exception as e:
+            self.error.emit(f"Failed to initialize downloader: {e}")
+            self.finished.emit()
+            return
+
+        total = len(self._videos)
+        for i, video in enumerate(self._videos):
+            if self._cancelled:
+                break
+
+            self.progress.emit(i, total)
+
+            try:
+                info = downloader.get_video_info(
+                    video.youtube_url,
+                    include_format_details=True
+                )
+                metadata = {
+                    "width": info.get("width"),
+                    "height": info.get("height"),
+                    "aspect_ratio": info.get("aspect_ratio"),
+                    "filesize_approx": info.get("filesize_approx"),
+                }
+                self.video_updated.emit(video.video_id, metadata)
+            except Exception as e:
+                logger.warning(f"Failed to fetch metadata for {video.video_id}: {e}")
+
+        self.progress.emit(total, total)
+        self.finished.emit()
 
 
 class YouTubeSearchPanel(QWidget):
@@ -27,8 +87,8 @@ class YouTubeSearchPanel(QWidget):
     download_requested = Signal(list)  # list of YouTubeVideo
     error_occurred = Signal(str)
 
-    THUMB_WIDTH = 180
-    THUMB_SPACING = 8
+    THUMB_WIDTH = UISizes.GRID_CARD_MAX_WIDTH
+    THUMB_SPACING = UISizes.GRID_GUTTER
     MIN_COLUMNS = 2
 
     def __init__(self, parent=None):
@@ -38,6 +98,8 @@ class YouTubeSearchPanel(QWidget):
         self._thumbnails: list[YouTubeResultThumbnail] = []
         self._selected_videos: set[str] = set()  # video_ids
         self._columns = self.MIN_COLUMNS
+        self._metadata_thread: Optional[QThread] = None
+        self._metadata_worker: Optional[MetadataFetchWorker] = None
 
         # Shared network manager for thumbnail downloads (efficient resource usage)
         self._network_manager = QNetworkAccessManager(self)
@@ -77,6 +139,64 @@ class YouTubeSearchPanel(QWidget):
 
         self.content_layout.addLayout(search_row)
 
+        # Filter row
+        filter_row = QHBoxLayout()
+        filter_row.setSpacing(12)
+
+        # Aspect ratio filter
+        aspect_label = QLabel("Aspect:")
+        aspect_label.setStyleSheet(f"color: {theme().text_secondary};")
+        filter_row.addWidget(aspect_label)
+
+        self.aspect_combo = QComboBox()
+        self.aspect_combo.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
+        self.aspect_combo.addItem("Any", "any")
+        for name in ASPECT_RATIO_RANGES.keys():
+            self.aspect_combo.addItem(name, name.lower().replace(":", "-"))
+        self.aspect_combo.currentIndexChanged.connect(self._apply_filters)
+        filter_row.addWidget(self.aspect_combo)
+
+        # Resolution filter
+        res_label = QLabel("Resolution:")
+        res_label.setStyleSheet(f"color: {theme().text_secondary};")
+        filter_row.addWidget(res_label)
+
+        self.resolution_combo = QComboBox()
+        self.resolution_combo.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
+        self.resolution_combo.addItem("Any", "any")
+        self.resolution_combo.addItem("4K (2160p+)", "4k")
+        self.resolution_combo.addItem("1080p+", "1080p")
+        self.resolution_combo.addItem("720p+", "720p")
+        self.resolution_combo.addItem("480p+", "480p")
+        self.resolution_combo.currentIndexChanged.connect(self._apply_filters)
+        filter_row.addWidget(self.resolution_combo)
+
+        # Max size filter
+        size_label = QLabel("Max Size:")
+        size_label.setStyleSheet(f"color: {theme().text_secondary};")
+        filter_row.addWidget(size_label)
+
+        self.size_combo = QComboBox()
+        self.size_combo.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
+        self.size_combo.addItem("Any", "any")
+        self.size_combo.addItem("< 100 MB", "100mb")
+        self.size_combo.addItem("< 500 MB", "500mb")
+        self.size_combo.addItem("< 1 GB", "1gb")
+        self.size_combo.currentIndexChanged.connect(self._apply_filters)
+        filter_row.addWidget(self.size_combo)
+
+        filter_row.addStretch()
+
+        self.content_layout.addLayout(filter_row)
+
+        # Metadata fetch progress bar
+        self.metadata_progress = QProgressBar()
+        self.metadata_progress.setMaximumHeight(16)
+        self.metadata_progress.setTextVisible(True)
+        self.metadata_progress.setFormat("Fetching video details... %v/%m")
+        self.metadata_progress.hide()
+        self.content_layout.addWidget(self.metadata_progress)
+
         # Results scroll area
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -86,8 +206,9 @@ class YouTubeSearchPanel(QWidget):
 
         self.results_container = QWidget()
         self.results_grid = QGridLayout(self.results_container)
-        self.results_grid.setSpacing(8)
+        self.results_grid.setSpacing(UISizes.GRID_GUTTER)
         self.results_grid.setContentsMargins(0, 0, 0, 0)
+        self.results_grid.setAlignment(Qt.AlignTop | Qt.AlignLeft)
 
         self.scroll.setWidget(self.results_container)
         self.content_layout.addWidget(self.scroll)
@@ -161,6 +282,141 @@ class YouTubeSearchPanel(QWidget):
         self._reflow_grid()
         self._update_status()
 
+        # Start fetching metadata in background
+        self._start_metadata_fetch()
+
+    def _start_metadata_fetch(self):
+        """Start background worker to fetch detailed metadata for all results."""
+        if not self._results:
+            return
+
+        # Cancel any existing fetch
+        self._cancel_metadata_fetch()
+
+        # Show progress bar
+        self.metadata_progress.setMaximum(len(self._results))
+        self.metadata_progress.setValue(0)
+        self.metadata_progress.show()
+
+        # Create worker and thread
+        self._metadata_thread = QThread()
+        self._metadata_worker = MetadataFetchWorker(self._results)
+        self._metadata_worker.moveToThread(self._metadata_thread)
+
+        # Connect signals
+        self._metadata_thread.started.connect(self._metadata_worker.run)
+        self._metadata_worker.progress.connect(self._on_metadata_progress)
+        self._metadata_worker.video_updated.connect(self._on_video_metadata_updated)
+        self._metadata_worker.finished.connect(self._on_metadata_fetch_complete)
+        self._metadata_worker.error.connect(self._on_metadata_error)
+
+        # Connect thread finished to cleanup - ensures proper cleanup after thread stops
+        self._metadata_thread.finished.connect(self._on_metadata_thread_finished)
+
+        # Start
+        self._metadata_thread.start()
+
+    def _cancel_metadata_fetch(self):
+        """Cancel any running metadata fetch."""
+        if self._metadata_worker:
+            self._metadata_worker.cancel()
+        if self._metadata_thread and self._metadata_thread.isRunning():
+            self._metadata_thread.quit()
+            # Wait for thread to finish - this ensures clean shutdown
+            if not self._metadata_thread.wait(2000):
+                logger.warning("Metadata fetch thread did not stop in time, terminating")
+                self._metadata_thread.terminate()
+                self._metadata_thread.wait()
+
+    @Slot()
+    def _on_metadata_thread_finished(self):
+        """Handle thread cleanup after it has fully stopped."""
+        if self._metadata_worker:
+            self._metadata_worker.deleteLater()
+            self._metadata_worker = None
+        if self._metadata_thread:
+            self._metadata_thread.deleteLater()
+            self._metadata_thread = None
+
+    @Slot(int, int)
+    def _on_metadata_progress(self, current: int, total: int):
+        """Update metadata fetch progress bar."""
+        self.metadata_progress.setValue(current)
+
+    @Slot(str, dict)
+    def _on_video_metadata_updated(self, video_id: str, metadata: dict):
+        """Handle metadata update for a single video."""
+        # Update the video object
+        for video in self._results:
+            if video.video_id == video_id:
+                video.width = metadata.get("width")
+                video.height = metadata.get("height")
+                video.aspect_ratio = metadata.get("aspect_ratio")
+                video.filesize_approx = metadata.get("filesize_approx")
+                video.has_detailed_info = True
+                break
+
+        # Update the corresponding thumbnail
+        for thumb in self._thumbnails:
+            if thumb.video.video_id == video_id:
+                thumb.update_metadata_display()
+                break
+
+        # Re-apply filters to show/hide based on new metadata
+        self._apply_filters()
+
+    @Slot()
+    def _on_metadata_fetch_complete(self):
+        """Handle metadata fetch completion."""
+        self.metadata_progress.hide()
+        self._apply_filters()
+        # Tell thread to quit - cleanup happens in _on_metadata_thread_finished
+        if self._metadata_thread:
+            self._metadata_thread.quit()
+
+    @Slot(str)
+    def _on_metadata_error(self, error: str):
+        """Handle metadata fetch error."""
+        logger.error(f"Metadata fetch error: {error}")
+        self.metadata_progress.hide()
+
+    @Slot()
+    def _apply_filters(self):
+        """Apply current filter settings to show/hide thumbnails."""
+        aspect_filter = self.aspect_combo.currentData()
+        resolution_filter = self.resolution_combo.currentData()
+        size_filter = self.size_combo.currentData()
+
+        # Map combo data back to filter values
+        if aspect_filter and aspect_filter != "any":
+            # Convert "16-9" back to "16:9"
+            aspect_filter = aspect_filter.replace("-", ":")
+        else:
+            aspect_filter = "any"
+
+        visible_count = 0
+        for thumb in self._thumbnails:
+            video = thumb.video
+
+            # If no detailed info yet, show the video (pending metadata)
+            if not video.has_detailed_info:
+                thumb.setVisible(True)
+                visible_count += 1
+                continue
+
+            # Apply filters
+            matches = (
+                video.matches_aspect_ratio(aspect_filter) and
+                video.matches_resolution(resolution_filter or "any") and
+                video.matches_max_size(size_filter or "any")
+            )
+            thumb.setVisible(matches)
+            if matches:
+                visible_count += 1
+
+        # Reflow grid with only visible items
+        self._reflow_visible_grid()
+
     def _calculate_columns(self):
         """Calculate number of columns based on scroll area width."""
         available_width = self.scroll.viewport().width()
@@ -181,7 +437,22 @@ class YouTubeSearchPanel(QWidget):
         for i, thumb in enumerate(self._thumbnails):
             row = i // self._columns
             col = i % self._columns
-            self.results_grid.addWidget(thumb, row, col)
+            self.results_grid.addWidget(thumb, row, col, Qt.AlignTop | Qt.AlignLeft)
+
+    def _reflow_visible_grid(self):
+        """Reposition only visible thumbnails in the grid."""
+        # Remove all widgets from grid (but don't delete them)
+        for thumb in self._thumbnails:
+            self.results_grid.removeWidget(thumb)
+
+        # Re-add only visible ones in correct positions
+        visible_index = 0
+        for thumb in self._thumbnails:
+            if thumb.isVisible():
+                row = visible_index // self._columns
+                col = visible_index % self._columns
+                self.results_grid.addWidget(thumb, row, col, Qt.AlignTop | Qt.AlignLeft)
+                visible_index += 1
 
     def resizeEvent(self, event):
         """Handle resize to reflow grid."""
@@ -199,6 +470,8 @@ class YouTubeSearchPanel(QWidget):
 
     def _clear_results(self):
         """Clear all result thumbnails."""
+        self._cancel_metadata_fetch()
+        self.metadata_progress.hide()
         for thumb in self._thumbnails:
             self.results_grid.removeWidget(thumb)
             thumb.deleteLater()

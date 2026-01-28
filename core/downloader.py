@@ -91,11 +91,16 @@ class VideoDownloader:
         except (ValueError, AttributeError) as e:
             return False, f"URL parsing error: {e}"
 
-    def get_video_info(self, url: str) -> dict:
+    def get_video_info(self, url: str, include_format_details: bool = False) -> dict:
         """
         Get video metadata without downloading.
 
+        Args:
+            url: Video URL
+            include_format_details: If True, include width/height/filesize from best format
+
         Returns dict with: title, duration, uploader, thumbnail
+        If include_format_details is True, also includes: width, height, aspect_ratio, filesize_approx
         """
         valid, error = self.is_valid_url(url)
         if not valid:
@@ -118,12 +123,45 @@ class VideoDownloader:
             raise RuntimeError(f"Failed to get video info: {result.stderr}")
 
         data = json.loads(result.stdout)
-        return {
+        info = {
             "title": data.get("title", "Unknown"),
             "duration": data.get("duration", 0),
             "uploader": data.get("uploader", "Unknown"),
             "thumbnail": data.get("thumbnail"),
         }
+
+        if include_format_details:
+            # Try to get dimensions from the top-level (merged format) first
+            width = data.get("width")
+            height = data.get("height")
+            filesize = data.get("filesize") or data.get("filesize_approx")
+
+            # If not available at top level, find best video format
+            if not width or not height:
+                formats = data.get("formats", [])
+                # Look for best video format by height
+                best_video = None
+                for fmt in formats:
+                    if fmt.get("vcodec") != "none" and fmt.get("height"):
+                        if best_video is None or fmt.get("height", 0) > best_video.get("height", 0):
+                            best_video = fmt
+                if best_video:
+                    width = width or best_video.get("width")
+                    height = height or best_video.get("height")
+                    if not filesize:
+                        filesize = best_video.get("filesize") or best_video.get("filesize_approx")
+
+            info["width"] = width
+            info["height"] = height
+            info["filesize_approx"] = filesize
+
+            # Calculate aspect ratio
+            if width and height and height > 0:
+                info["aspect_ratio"] = round(width / height, 2)
+            else:
+                info["aspect_ratio"] = None
+
+        return info
 
     def download(
         self,

@@ -11,7 +11,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap, QKeyEvent
 
 from models.clip import Source
-from ui.theme import theme
+from ui.theme import theme, UISizes
 
 
 class SourceThumbnail(QFrame):
@@ -27,7 +27,7 @@ class SourceThumbnail(QFrame):
 
         self.setFrameStyle(QFrame.Panel | QFrame.Raised)
         self.setLineWidth(2)
-        self.setFixedSize(180, 150)
+        self.setFixedSize(UISizes.GRID_CARD_MAX_WIDTH, 200)
         self.setCursor(Qt.PointingHandCursor)
         self.setFocusPolicy(Qt.StrongFocus)
         self.setAccessibleName(source.filename)
@@ -39,7 +39,7 @@ class SourceThumbnail(QFrame):
 
         # Thumbnail image
         self.thumbnail_label = QLabel()
-        self.thumbnail_label.setFixedSize(160, 90)
+        self.thumbnail_label.setFixedSize(220, 124)
         self.thumbnail_label.setAlignment(Qt.AlignCenter)
         self.thumbnail_label.setStyleSheet(f"background-color: {theme().thumbnail_background};")
 
@@ -61,7 +61,7 @@ class SourceThumbnail(QFrame):
         self.filename_label.setMaximumHeight(30)
         # Truncate long filenames
         metrics = self.filename_label.fontMetrics()
-        elided = metrics.elidedText(source.filename, Qt.ElideMiddle, 160)
+        elided = metrics.elidedText(source.filename, Qt.ElideMiddle, 220)
         self.filename_label.setText(elided)
         self.filename_label.setToolTip(source.filename)
         layout.addWidget(self.filename_label)
@@ -84,7 +84,7 @@ class SourceThumbnail(QFrame):
         pixmap = QPixmap(str(path))
         if not pixmap.isNull():
             scaled = pixmap.scaled(
-                160, 90,
+                220, 124,
                 Qt.KeepAspectRatio,
                 Qt.SmoothTransformation
             )

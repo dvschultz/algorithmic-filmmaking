@@ -9,6 +9,30 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 
+# Filter constants for aspect ratio matching
+ASPECT_RATIO_RANGES = {
+    "16:9": (1.7, 1.85),
+    "4:3": (1.3, 1.4),
+    "9:16": (0.5, 0.6),
+    "1:1": (0.9, 1.1),
+}
+
+# Resolution thresholds (minimum height for each category)
+RESOLUTION_THRESHOLDS = {
+    "4k": 2160,
+    "1080p": 1080,
+    "720p": 720,
+    "480p": 480,
+}
+
+# File size limits in bytes
+SIZE_LIMITS = {
+    "100mb": 100 * 1024 * 1024,
+    "500mb": 500 * 1024 * 1024,
+    "1gb": 1024 * 1024 * 1024,
+}
+
+
 @dataclass
 class YouTubeVideo:
     """Video metadata from YouTube search."""
@@ -22,6 +46,12 @@ class YouTubeVideo:
     view_count: Optional[int] = None
     definition: Optional[str] = None  # 'hd' or 'sd'
     published_at: Optional[str] = None
+    # Resolution and size fields (populated from yt-dlp)
+    width: Optional[int] = None
+    height: Optional[int] = None
+    aspect_ratio: Optional[float] = None
+    filesize_approx: Optional[int] = None
+    has_detailed_info: bool = False
 
     @property
     def youtube_url(self) -> str:
@@ -37,6 +67,62 @@ class YouTubeVideo:
         if hours:
             return f"{hours}:{minutes:02d}:{seconds:02d}"
         return f"{minutes}:{seconds:02d}"
+
+    @property
+    def resolution_str(self) -> str:
+        """Return resolution string (e.g., '1080p', '4K')."""
+        if not self.height:
+            return ""
+        if self.height >= 2160:
+            return "4K"
+        elif self.height >= 1080:
+            return "1080p"
+        elif self.height >= 720:
+            return "720p"
+        elif self.height >= 480:
+            return "480p"
+        return f"{self.height}p"
+
+    @property
+    def aspect_ratio_str(self) -> str:
+        """Return aspect ratio as a string (e.g., '16:9')."""
+        if not self.aspect_ratio:
+            return ""
+        for name, (low, high) in ASPECT_RATIO_RANGES.items():
+            if low <= self.aspect_ratio <= high:
+                return name
+        return f"{self.aspect_ratio:.2f}"
+
+    def matches_aspect_ratio(self, filter_value: str) -> bool:
+        """Check if video matches the given aspect ratio filter."""
+        if filter_value == "any" or not filter_value:
+            return True
+        if not self.aspect_ratio:
+            return False
+        if filter_value not in ASPECT_RATIO_RANGES:
+            return False
+        low, high = ASPECT_RATIO_RANGES[filter_value]
+        return low <= self.aspect_ratio <= high
+
+    def matches_resolution(self, filter_value: str) -> bool:
+        """Check if video meets minimum resolution requirement."""
+        if filter_value == "any" or not filter_value:
+            return True
+        if not self.height:
+            return False
+        if filter_value not in RESOLUTION_THRESHOLDS:
+            return False
+        return self.height >= RESOLUTION_THRESHOLDS[filter_value]
+
+    def matches_max_size(self, filter_value: str) -> bool:
+        """Check if video is under the max file size."""
+        if filter_value == "any" or not filter_value:
+            return True
+        if not self.filesize_approx:
+            return False
+        if filter_value not in SIZE_LIMITS:
+            return False
+        return self.filesize_approx <= SIZE_LIMITS[filter_value]
 
 
 @dataclass

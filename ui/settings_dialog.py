@@ -253,6 +253,7 @@ class SettingsDialog(QDialog):
             description_model_gpu=settings.description_model_gpu,
             description_model_cloud=settings.description_model_cloud,
             description_temporal_frames=settings.description_temporal_frames,
+            use_video_for_gemini=settings.use_video_for_gemini,
         )
 
         self.setWindowTitle("Settings")
@@ -511,6 +512,15 @@ class SettingsDialog(QDialog):
         frames_layout.addWidget(self.vision_frames_spin)
         frames_layout.addStretch()
         vision_layout.addLayout(frames_layout)
+
+        # Video for Gemini checkbox
+        self.use_video_checkbox = QCheckBox("Send video clips to Gemini (instead of frames)")
+        self.use_video_checkbox.setToolTip(
+            "When enabled and Gemini is the cloud model, sends the actual\n"
+            "video clip for richer temporal understanding (motion, audio).\n"
+            "Falls back to single frames for non-Gemini models."
+        )
+        vision_layout.addWidget(self.use_video_checkbox)
 
         # Connect tier change to enable/disable appropriate model fields
         self.vision_tier_combo.currentIndexChanged.connect(self._on_vision_tier_changed)
@@ -1054,13 +1064,19 @@ class SettingsDialog(QDialog):
         )
 
         # Vision Description
-        tier_idx = 0 if self.settings.description_model_tier == "cpu" else 1
+        # Normalize "gpu" to "cloud" since GPU tier isn't in UI (not fully implemented)
+        tier = self.settings.description_model_tier
+        if tier == "gpu":
+            tier = "cloud"
+            self.settings.description_model_tier = "cloud"  # Also fix the setting
+        tier_idx = 0 if tier == "cpu" else 1
         self.vision_tier_combo.setCurrentIndex(tier_idx)
-        
+
         self._set_combo_text(self.vision_cpu_combo, self.settings.description_model_cpu)
         self._set_combo_text(self.vision_cloud_combo, self.settings.description_model_cloud)
         self.vision_frames_spin.setValue(self.settings.description_temporal_frames)
-        
+        self.use_video_checkbox.setChecked(self.settings.use_video_for_gemini)
+
         # Trigger enable/disable state
         self._on_vision_tier_changed(tier_idx)
 
@@ -1175,6 +1191,7 @@ class SettingsDialog(QDialog):
         self.settings.description_model_cpu = self.vision_cpu_combo.currentText()
         self.settings.description_model_cloud = self.vision_cloud_combo.currentText()
         self.settings.description_temporal_frames = self.vision_frames_spin.value()
+        self.settings.use_video_for_gemini = self.use_video_checkbox.isChecked()
 
         # Appearance
         theme_values = ["system", "light", "dark"]
@@ -1338,6 +1355,7 @@ class SettingsDialog(QDialog):
             or self.settings.description_model_cpu != self.original_settings.description_model_cpu
             or self.settings.description_model_cloud != self.original_settings.description_model_cloud
             or self.settings.description_temporal_frames != self.original_settings.description_temporal_frames
+            or self.settings.use_video_for_gemini != self.original_settings.use_video_for_gemini
             or self.settings.theme_preference != self.original_settings.theme_preference
             or self.settings.youtube_api_key != self.original_settings.youtube_api_key
             or self.settings.youtube_results_count != self.original_settings.youtube_results_count

@@ -242,9 +242,12 @@ class ToolRegistry:
         properties = {}
         required = []
 
+        # Parameters that are injected by the system, not provided by the LLM
+        injected_params = {"project", "gui_state", "main_window"}
+
         for param_name, param in sig.parameters.items():
-            # Skip 'project' parameter - it's injected by executor
-            if param_name == "project":
+            # Skip injected parameters - they're provided by the executor
+            if param_name in injected_params:
                 continue
 
             # Get type hint or default to string
@@ -2104,77 +2107,97 @@ def get_project_summary(project) -> dict:
 # =============================================================================
 
 @tools.register(
-    description="Detect scenes in a video file. Creates clips from detected scene boundaries. Returns the output project file path and clip count.",
-    requires_project=False,
-    modifies_gui_state=False
+    description="Detect scenes in a video file and add clips to the project. Creates clips from detected scene boundaries. Returns the clip count and clip IDs.",
+    requires_project=True,
+    modifies_gui_state=True
 )
 def detect_scenes(
+    project,
     video_path: str,
     sensitivity: float = 3.0,
-    output_path: Optional[str] = None
 ) -> dict:
-    """Run scene detection via CLI."""
+    """Run scene detection using Python API and add clips to project."""
+    from core.scene_detect import SceneDetector, DetectionConfig
+
     # Validate video path
     valid, error, video = _validate_path(video_path, must_exist=True)
     if not valid:
-        return {"error": error}
+        return {"success": False, "error": error}
 
     if not video.is_file():
-        return {"error": f"Path is not a file: {video_path}"}
-
-    # Validate and set output path
-    if output_path is None:
-        output_path = str(video.with_suffix(".json"))
-    else:
-        valid, error, validated_output = _validate_path(output_path)
-        if not valid:
-            return {"error": f"Invalid output path: {error}"}
-        output_path = str(validated_output)
-
-    cmd = [
-        "scene_ripper", "detect", str(video),
-        "--sensitivity", str(sensitivity),
-        "--output", output_path,
-    ]
+        return {"success": False, "error": f"Path is not a file: {video_path}"}
 
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=TOOL_TIMEOUTS.get("detect_scenes", 600)
-        )
-    except subprocess.TimeoutExpired:
-        return {"error": "Scene detection timed out. The video may be too large."}
-    except FileNotFoundError:
-        return {"error": "scene_ripper CLI not found. Is it installed?"}
+        # Check if source already exists in project (by resolved file path)
+        # Use resolve() to handle symlinks and relative paths consistently
+        resolved_video = video.resolve()
+        existing_source = None
+        for s in project.sources:
+            try:
+                if s.file_path.resolve() == resolved_video:
+                    existing_source = s
+                    break
+            except (OSError, ValueError):
+                # Handle edge cases where resolve() might fail
+                if s.file_path == video:
+                    existing_source = s
+                    break
 
-    if result.returncode != 0:
-        return {"error": result.stderr or "Detection failed"}
+        # Create detector with configured sensitivity
+        config = DetectionConfig(threshold=sensitivity)
+        detector = SceneDetector(config)
 
-    # Try to count clips from output
-    try:
-        with open(output_path) as f:
-            data = json.load(f)
-            clip_count = len(data.get("clips", []))
-    except Exception:
-        clip_count = "unknown"
+        # Run detection
+        source, clips = detector.detect_scenes(video)
 
-    return {
-        "success": True,
-        "output_path": output_path,
-        "clips_detected": clip_count,
-        "message": f"Detected scenes in {video.name}"
-    }
+        # If source already exists, use that source ID and update clips
+        if existing_source:
+            source = existing_source
+            # Mark source as analyzed
+            source.analyzed = True
+            # Update clip source IDs to match existing source
+            for clip in clips:
+                clip.source_id = source.id
+        else:
+            # Mark source as analyzed
+            source.analyzed = True
+            # Add new source using proper Project method (invalidates caches, notifies observers)
+            project.add_source(source)
+
+        # Add clips using proper Project method (invalidates caches, notifies observers)
+        project.add_clips(clips)
+
+        return {
+            "success": True,
+            "clips_detected": len(clips),
+            "clip_ids": [clip.id for clip in clips],
+            "source_id": source.id,
+            "message": f"Detected {len(clips)} scenes in {video.name} and added to project"
+        }
+
+    except FileNotFoundError as e:
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        return {"success": False, "error": f"Scene detection failed: {e}"}
 
 
 @tools.register(
-    description="Search YouTube for videos matching a query. Returns video titles, IDs, durations, and URLs.",
+    description="""Search YouTube for videos matching a query. Returns video titles, IDs, durations, and URLs.
+Optional filters (require fetching metadata from each video, which is slower):
+- aspect_ratio: "any", "16:9", "4:3", "9:16", or "1:1"
+- resolution: "any", "4k", "1080p", "720p", or "480p" (minimum resolution)
+- max_size: "any", "100mb", "500mb", or "1gb" (maximum file size)""",
     requires_project=False,
     modifies_gui_state=False
 )
-def search_youtube(query: str, max_results: int = 10) -> dict:
-    """Search YouTube using the Python API."""
+def search_youtube(
+    query: str,
+    max_results: int = 10,
+    aspect_ratio: str = "any",
+    resolution: str = "any",
+    max_size: str = "any"
+) -> dict:
+    """Search YouTube using the Python API with optional filters."""
     # Get API key from settings
     settings = load_settings()
     api_key = settings.youtube_api_key
@@ -2189,10 +2212,46 @@ def search_youtube(query: str, max_results: int = 10) -> dict:
         client = YouTubeSearchClient(api_key)
         result = client.search(query, max_results=min(max_results, 50))
 
+        # Check if filtering is needed
+        filters_active = any([
+            aspect_ratio != "any",
+            resolution != "any",
+            max_size != "any",
+        ])
+
+        videos_to_process = result.videos
+
+        # Apply filters if set (requires fetching metadata)
+        if filters_active and videos_to_process:
+            try:
+                downloader = VideoDownloader()
+                filtered = []
+                for video in videos_to_process:
+                    try:
+                        info = downloader.get_video_info(
+                            video.youtube_url,
+                            include_format_details=True
+                        )
+                        video.width = info.get("width")
+                        video.height = info.get("height")
+                        video.aspect_ratio = info.get("aspect_ratio")
+                        video.filesize_approx = info.get("filesize_approx")
+                        video.has_detailed_info = True
+
+                        if (video.matches_aspect_ratio(aspect_ratio) and
+                            video.matches_resolution(resolution) and
+                            video.matches_max_size(max_size)):
+                            filtered.append(video)
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch metadata for {video.video_id}: {e}")
+                videos_to_process = filtered
+            except Exception as e:
+                logger.warning(f"Could not apply filters: {e}")
+
         # Convert to serializable format
         videos = []
-        for video in result.videos:
-            videos.append({
+        for video in videos_to_process:
+            video_data = {
                 "video_id": video.video_id,
                 "title": video.title,
                 "channel": video.channel_title,
@@ -2200,13 +2259,25 @@ def search_youtube(query: str, max_results: int = 10) -> dict:
                 "url": video.youtube_url,
                 "thumbnail": video.thumbnail_url,
                 "view_count": video.view_count,
-            })
+            }
+            # Include metadata if available
+            if video.has_detailed_info:
+                video_data.update({
+                    "width": video.width,
+                    "height": video.height,
+                    "resolution": video.resolution_str,
+                    "aspect_ratio": video.aspect_ratio,
+                    "filesize_approx": video.filesize_approx,
+                })
+            videos.append(video_data)
 
         return {
             "success": True,
             "query": query,
+            "filters_applied": filters_active,
             "results": videos,
-            "total_results": result.total_results
+            "total_results": result.total_results,
+            "filtered_count": len(videos)
         }
 
     except QuotaExceededError as e:

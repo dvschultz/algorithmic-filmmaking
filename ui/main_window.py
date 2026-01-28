@@ -117,7 +117,7 @@ class ThumbnailWorker(QThread):
 
     progress = Signal(int, int)  # current, total
     thumbnail_ready = Signal(str, str)  # clip_id, thumbnail_path
-    finished = Signal()
+    # Note: Don't override QThread.finished - use the built-in signal instead
 
     def __init__(
         self,
@@ -164,9 +164,8 @@ class ThumbnailWorker(QThread):
 
             self.progress.emit(i + 1, total)
 
-        logger.info("ThumbnailWorker.run() emitting finished signal")
-        self.finished.emit()
         logger.info("ThumbnailWorker.run() COMPLETED")
+        # QThread's built-in finished signal will be emitted after run() returns
 
 
 class DownloadWorker(QThread):
@@ -579,11 +578,18 @@ class DescriptionWorker(QThread):
     error = Signal(str, str)  # clip_id, error_message
     finished = Signal()
 
-    def __init__(self, clips: list[Clip], tier: Optional[str] = None, prompt: Optional[str] = None):
+    def __init__(
+        self,
+        clips: list[Clip],
+        tier: Optional[str] = None,
+        prompt: Optional[str] = None,
+        sources: Optional[dict[str, Source]] = None,
+    ):
         super().__init__()
         self.clips = clips
         self.tier = tier
         self.prompt = prompt
+        self.sources = sources or {}  # source_id -> Source lookup
         self._cancelled = False
         self.error_count = 0
         self.success_count = 0
@@ -606,10 +612,18 @@ class DescriptionWorker(QThread):
                 break
             try:
                 if clip.thumbnail_path and clip.thumbnail_path.exists():
+                    # Get source for video extraction (if available)
+                    source = self.sources.get(clip.source_id)
+
                     description, model = describe_frame(
                         clip.thumbnail_path,
                         tier=self.tier,
-                        prompt=self.prompt or "Describe this video frame in 3 sentences or less. Focus on the main subjects, action, and setting."
+                        prompt=self.prompt or "Describe this video frame in 3 sentences or less. Focus on the main subjects, action, and setting.",
+                        # Pass video info for potential video extraction (Gemini)
+                        source_path=source.file_path if source else None,
+                        start_frame=clip.start_frame,
+                        end_frame=clip.end_frame,
+                        fps=source.fps if source else None,
                     )
                     # Only emit valid descriptions (not error messages)
                     if description and not description.startswith("Error"):
@@ -787,6 +801,8 @@ class MainWindow(QMainWindow):
 
         # Connect project adapter signals for view synchronization
         self._project_adapter.clips_updated.connect(self._on_clips_updated)
+        self._project_adapter.clips_added.connect(self._on_clips_added)
+        self._project_adapter.source_added.connect(self._on_source_added)
 
         # UI state (not part of Project - these are GUI-specific selections)
         self.current_source: Optional[Source] = None  # Currently active/selected source
@@ -1324,6 +1340,105 @@ class MainWindow(QMainWindow):
             self.cut_tab.clip_browser.update_clips(clips)
         if hasattr(self, 'analyze_tab') and hasattr(self.analyze_tab, 'clip_browser'):
             self.analyze_tab.clip_browser.update_clips(clips)
+
+    @Slot(list)
+    def _on_clips_added(self, clips: list):
+        """Handle clips added signal from project.
+
+        Refreshes lookups, sets current source, and generates thumbnails for new clips.
+        Clips are added to Cut tab via _on_thumbnail_ready when thumbnails complete.
+
+        Args:
+            clips: List of added clips
+        """
+        logger.info(f"Project clips_added event: {len(clips)} clips")
+
+        # Refresh Analyze tab lookups (cached properties may have been invalidated)
+        if hasattr(self, 'analyze_tab'):
+            self.analyze_tab.set_lookups(self.clips_by_id, self.sources_by_id)
+
+        # Determine which source these clips belong to
+        clip_source_id = clips[0].source_id if clips else None
+        clip_source = self.sources_by_id.get(clip_source_id) if clip_source_id else None
+
+        # Set current source if not already set (needed for _on_thumbnail_ready)
+        if clip_source and not self.current_source:
+            self.current_source = clip_source
+            logger.info(f"Set current_source to {clip_source.id}")
+
+        # Set source in Cut tab (prepares UI state, clips added via _on_thumbnail_ready)
+        if hasattr(self, 'cut_tab') and clip_source:
+            self.cut_tab.set_source(clip_source)
+
+        # Generate thumbnails - _on_thumbnail_ready will add clips to Cut tab
+        clips_needing_thumbnails = [c for c in clips if not c.thumbnail_path or not c.thumbnail_path.exists()]
+        if clips_needing_thumbnails:
+            logger.info(f"Starting thumbnail generation for {len(clips_needing_thumbnails)} clips")
+            # Don't start if another thumbnail worker is running
+            if self.thumbnail_worker and self.thumbnail_worker.isRunning():
+                logger.warning("ThumbnailWorker already running, queueing clips for later")
+                # Store clips for later processing
+                if not hasattr(self, '_pending_thumbnail_clips'):
+                    self._pending_thumbnail_clips = []
+                self._pending_thumbnail_clips.extend(clips_needing_thumbnails)
+            else:
+                # Get default source for thumbnails (first clip's source)
+                default_source = None
+                if clips_needing_thumbnails:
+                    first_clip = clips_needing_thumbnails[0]
+                    default_source = self.sources_by_id.get(first_clip.source_id)
+
+                if default_source:
+                    self.thumbnail_worker = ThumbnailWorker(
+                        default_source,
+                        clips_needing_thumbnails,
+                        self.settings.thumbnail_cache_dir,
+                        sources_by_id=self.sources_by_id,
+                    )
+                    # Connect to _on_thumbnail_ready - this adds clips to Cut tab!
+                    self.thumbnail_worker.thumbnail_ready.connect(self._on_thumbnail_ready)
+                    self.thumbnail_worker.finished.connect(self._on_agent_thumbnails_finished, Qt.UniqueConnection)
+                    logger.info("Starting ThumbnailWorker for agent-added clips...")
+                    self.thumbnail_worker.start()
+
+    @Slot()
+    def _on_agent_thumbnails_finished(self):
+        """Handle thumbnails completed for agent-added clips."""
+        logger.info("Agent thumbnail generation finished")
+
+        # Process any pending thumbnail clips
+        if hasattr(self, '_pending_thumbnail_clips') and self._pending_thumbnail_clips:
+            pending = self._pending_thumbnail_clips
+            self._pending_thumbnail_clips = []
+            logger.info(f"Processing {len(pending)} pending thumbnail clips")
+            clips_still_needing = [c for c in pending if not c.thumbnail_path or not c.thumbnail_path.exists()]
+            if clips_still_needing:
+                default_source = self.sources_by_id.get(clips_still_needing[0].source_id)
+                if default_source:
+                    self.thumbnail_worker = ThumbnailWorker(
+                        default_source,
+                        clips_still_needing,
+                        self.settings.thumbnail_cache_dir,
+                        sources_by_id=self.sources_by_id,
+                    )
+                    # Connect to _on_thumbnail_ready - this adds clips to Cut tab!
+                    self.thumbnail_worker.thumbnail_ready.connect(self._on_thumbnail_ready)
+                    self.thumbnail_worker.finished.connect(self._on_agent_thumbnails_finished, Qt.UniqueConnection)
+                    self.thumbnail_worker.start()
+
+    @Slot(object)
+    def _on_source_added(self, source):
+        """Handle source added signal from project.
+
+        Refreshes lookups for tabs that need to resolve source references.
+
+        Args:
+            source: The added Source object
+        """
+        logger.info(f"Project source_added event: {source.id}")
+        # Refresh Analyze tab lookups (cached properties may have been invalidated)
+        if hasattr(self, 'analyze_tab'):
+            self.analyze_tab.set_lookups(self.clips_by_id, self.sources_by_id)
 
     def _on_chat_message(self, message: str):
         """Handle user message from chat panel."""
@@ -2638,8 +2753,11 @@ class MainWindow(QMainWindow):
         # Use tier from settings
         tier = self.settings.description_model_tier
 
+        # Get sources for video extraction (Gemini video mode)
+        sources = self.project.sources_by_id
+
         logger.info(f"Creating DescriptionWorker (manual) with tier={tier}...")
-        self.description_worker = DescriptionWorker(clips, tier=tier)
+        self.description_worker = DescriptionWorker(clips, tier=tier, sources=sources)
         self.description_worker.progress.connect(self._on_description_progress)
         self.description_worker.description_ready.connect(self._on_description_ready)
         self.description_worker.error.connect(self._on_description_error)
@@ -4522,7 +4640,8 @@ class MainWindow(QMainWindow):
 
         # Start worker
         from PySide6.QtCore import Qt
-        self.description_worker = DescriptionWorker(clips, tier=tier, prompt=prompt)
+        sources = self.project.sources_by_id
+        self.description_worker = DescriptionWorker(clips, tier=tier, prompt=prompt, sources=sources)
         self.description_worker.progress.connect(self._on_description_progress)
         self.description_worker.description_ready.connect(self._on_description_ready)
         self.description_worker.error.connect(self._on_description_error)
