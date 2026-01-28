@@ -150,6 +150,7 @@ class ToolDefinition:
     parameters: dict
     requires_project: bool = True
     modifies_gui_state: bool = False
+    modifies_project_state: bool = False
 
 
 def _python_type_to_json_schema(python_type: type) -> dict:
@@ -204,7 +205,8 @@ class ToolRegistry:
         self,
         description: str,
         requires_project: bool = True,
-        modifies_gui_state: bool = False
+        modifies_gui_state: bool = False,
+        modifies_project_state: bool = False
     ):
         """Decorator to register a tool function.
 
@@ -213,6 +215,8 @@ class ToolRegistry:
             requires_project: Whether this tool needs an active project
             modifies_gui_state: Whether this tool modifies the GUI state
                 (GUI state tools should use core functions, not CLI)
+            modifies_project_state: Whether this tool modifies project data
+                (triggers auto-save after successful execution)
 
         Returns:
             Decorator function
@@ -225,7 +229,8 @@ class ToolRegistry:
                 func=func,
                 parameters=schema,
                 requires_project=requires_project,
-                modifies_gui_state=modifies_gui_state
+                modifies_gui_state=modifies_gui_state,
+                modifies_project_state=modifies_project_state
             )
             self._tools[tool.name] = tool
             return func
@@ -376,7 +381,8 @@ def get_project_state(project) -> dict:
 @tools.register(
     description="Add clips to the timeline sequence by their IDs. Clips will appear in the Sequence tab.",
     requires_project=True,
-    modifies_gui_state=True
+    modifies_gui_state=True,
+    modifies_project_state=True
 )
 def add_to_sequence(project, clip_ids: list[str]) -> dict:
     """Add clips to the timeline sequence."""
@@ -409,7 +415,8 @@ def add_to_sequence(project, clip_ids: list[str]) -> dict:
                 "Useful for understanding clip content beyond simple tags. "
                 "Supports tiers: 'cpu' (Moondream), 'gpu' (LLaVA), 'cloud' (GPT-4o/Claude).",
     requires_project=True,
-    modifies_gui_state=True
+    modifies_gui_state=True,
+    modifies_project_state=True
 )
 def describe_content_live(
     main_window,
@@ -631,7 +638,8 @@ def list_clips(project) -> list[dict]:
 @tools.register(
     description="Remove clips from the timeline sequence by their sequence clip IDs.",
     requires_project=True,
-    modifies_gui_state=True
+    modifies_gui_state=True,
+    modifies_project_state=True
 )
 def remove_from_sequence(project, clip_ids: list[str]) -> dict:
     """Remove clips from the timeline sequence."""
@@ -654,7 +662,8 @@ def remove_from_sequence(project, clip_ids: list[str]) -> dict:
 @tools.register(
     description="Clear all clips from the timeline sequence, resetting it to empty.",
     requires_project=True,
-    modifies_gui_state=True
+    modifies_gui_state=True,
+    modifies_project_state=True
 )
 def clear_sequence(project) -> dict:
     """Clear the timeline sequence."""
@@ -670,7 +679,8 @@ def clear_sequence(project) -> dict:
 @tools.register(
     description="Reorder clips in the timeline sequence. Provide sequence clip IDs in the desired order.",
     requires_project=True,
-    modifies_gui_state=True
+    modifies_gui_state=True,
+    modifies_project_state=True
 )
 def reorder_sequence(project, clip_ids: list[str]) -> dict:
     """Reorder clips in the sequence."""
@@ -1300,7 +1310,8 @@ def seek_to_time(main_window, seconds: float) -> dict:
     description="Remove a video source from the library. This also removes all clips generated from this source. "
                 "Use list_sources first to find the source ID.",
     requires_project=True,
-    modifies_gui_state=True
+    modifies_gui_state=True,
+    modifies_project_state=True
 )
 def remove_source(
     main_window,
@@ -1623,7 +1634,8 @@ def export_dataset(
 @tools.register(
     description="Set or update the project name. Use this when the project is unnamed ('Untitled Project') to give it a meaningful name before saving.",
     requires_project=True,
-    modifies_gui_state=True
+    modifies_gui_state=True,
+    modifies_project_state=True
 )
 def set_project_name(project, name: str) -> dict:
     """Set the project name."""
@@ -1789,7 +1801,8 @@ def new_project(name: str = "Untitled Project", main_window=None) -> dict:
 @tools.register(
     description="Add tags to one or more clips for organization and filtering.",
     requires_project=True,
-    modifies_gui_state=True
+    modifies_gui_state=True,
+    modifies_project_state=True
 )
 def add_tags(project, clip_ids: list[str], tags: list[str]) -> dict:
     """Add tags to specified clips."""
@@ -1828,7 +1841,8 @@ def add_tags(project, clip_ids: list[str], tags: list[str]) -> dict:
 @tools.register(
     description="Remove tags from one or more clips.",
     requires_project=True,
-    modifies_gui_state=True
+    modifies_gui_state=True,
+    modifies_project_state=True
 )
 def remove_tags(project, clip_ids: list[str], tags: list[str]) -> dict:
     """Remove tags from specified clips."""
@@ -1871,7 +1885,8 @@ def remove_tags(project, clip_ids: list[str], tags: list[str]) -> dict:
 @tools.register(
     description="Add or update a note on a clip.",
     requires_project=True,
-    modifies_gui_state=True
+    modifies_gui_state=True,
+    modifies_project_state=True
 )
 def add_note(project, clip_id: str, note: str) -> dict:
     """Set note text for a clip."""
@@ -1897,7 +1912,8 @@ VALID_SHOT_TYPES = set(SHOT_TYPES)
 @tools.register(
     description="Update clip metadata. Only specified fields are updated. Shot type must be one of: 'wide shot', 'medium shot', 'close-up', 'extreme close-up', or empty string to clear.",
     requires_project=True,
-    modifies_gui_state=True
+    modifies_gui_state=True,
+    modifies_project_state=True
 )
 def update_clip(
     project,
@@ -1970,7 +1986,8 @@ def update_clip(
 @tools.register(
     description="Update the text of a transcript segment by index. Use list_clips to see clip info including transcript segments.",
     requires_project=True,
-    modifies_gui_state=True
+    modifies_gui_state=True,
+    modifies_project_state=True
 )
 def update_clip_transcript(
     project,
@@ -2144,7 +2161,8 @@ def get_project_summary(project) -> dict:
 @tools.register(
     description="Detect scenes in a video file and add clips to the project. Creates clips from detected scene boundaries. Returns the clip count and clip IDs.",
     requires_project=True,
-    modifies_gui_state=True
+    modifies_gui_state=True,
+    modifies_project_state=True
 )
 def detect_scenes(
     project,
@@ -2596,7 +2614,8 @@ def export_clips(
 @tools.register(
     description="Import a local video file into the project library. The video will appear in the Collect tab.",
     requires_project=True,
-    modifies_gui_state=True
+    modifies_gui_state=True,
+    modifies_project_state=True
 )
 def import_video(main_window, path: str) -> dict:
     """Import a video file to the library.
@@ -2691,7 +2710,8 @@ def select_source(main_window, source_id: str) -> dict:
     description="Detect scenes in a video source with live GUI update. Updates the project with detected clips. "
                 "This may take a while for long videos.",
     requires_project=True,
-    modifies_gui_state=True
+    modifies_gui_state=True,
+    modifies_project_state=True
 )
 def detect_scenes_live(
     main_window,
@@ -2741,7 +2761,8 @@ def detect_scenes_live(
     description="Detect scenes in all unanalyzed video sources. Queues all sources that haven't been analyzed yet "
                 "and processes them sequentially. Equivalent to 'Cut New Videos' button in Collect tab.",
     requires_project=True,
-    modifies_gui_state=True
+    modifies_gui_state=True,
+    modifies_project_state=True
 )
 def detect_all_unanalyzed(
     main_window,
@@ -2793,7 +2814,8 @@ def detect_all_unanalyzed(
 @tools.register(
     description="Extract dominant colors from clips with live GUI update. Updates clip metadata.",
     requires_project=True,
-    modifies_gui_state=True
+    modifies_gui_state=True,
+    modifies_project_state=True
 )
 def analyze_colors_live(main_window, clip_ids: list[str]) -> dict:
     """Extract dominant colors from clips with live GUI update.
@@ -2821,7 +2843,8 @@ def analyze_colors_live(main_window, clip_ids: list[str]) -> dict:
 @tools.register(
     description="Classify shot types (close-up, medium, wide, etc.) for clips with live GUI update.",
     requires_project=True,
-    modifies_gui_state=True
+    modifies_gui_state=True,
+    modifies_project_state=True
 )
 def analyze_shots_live(main_window, clip_ids: list[str]) -> dict:
     """Classify shot types for clips with live GUI update.
@@ -2849,7 +2872,8 @@ def analyze_shots_live(main_window, clip_ids: list[str]) -> dict:
 @tools.register(
     description="Transcribe speech in clips using Whisper with live GUI update.",
     requires_project=True,
-    modifies_gui_state=True
+    modifies_gui_state=True,
+    modifies_project_state=True
 )
 def transcribe_live(main_window, clip_ids: list[str]) -> dict:
     """Transcribe speech in clips with live GUI update.
@@ -2885,7 +2909,8 @@ def transcribe_live(main_window, clip_ids: list[str]) -> dict:
 @tools.register(
     description="Classify frame content using ImageNet labels. Identifies objects like 'dog', 'car', 'tree' in clips using MobileNet. Updates clip.object_labels.",
     requires_project=True,
-    modifies_gui_state=True
+    modifies_gui_state=True,
+    modifies_project_state=True
 )
 def classify_content_live(main_window, clip_ids: list[str], top_k: int = 5) -> dict:
     """Classify content in clips with live GUI update.
@@ -2922,7 +2947,8 @@ def classify_content_live(main_window, clip_ids: list[str], top_k: int = 5) -> d
 @tools.register(
     description="Detect and count objects in clips using YOLO. Returns object labels, counts, and bounding boxes. Updates clip.detected_objects and clip.person_count.",
     requires_project=True,
-    modifies_gui_state=True
+    modifies_gui_state=True,
+    modifies_project_state=True
 )
 def detect_objects_live(main_window, clip_ids: list[str], confidence: float = 0.5) -> dict:
     """Detect objects in clips with live GUI update.
@@ -2959,7 +2985,8 @@ def detect_objects_live(main_window, clip_ids: list[str], confidence: float = 0.
 @tools.register(
     description="Count people in clips using YOLO. Faster than full object detection when you only need person counts. Updates clip.person_count.",
     requires_project=True,
-    modifies_gui_state=True
+    modifies_gui_state=True,
+    modifies_project_state=True
 )
 def count_people_live(main_window, clip_ids: list[str]) -> dict:
     """Count people in clips with live GUI update.
@@ -2994,7 +3021,8 @@ def count_people_live(main_window, clip_ids: list[str]) -> dict:
 @tools.register(
     description="Run all analysis (colors, shots, transcription) on clips sequentially with live GUI update.",
     requires_project=True,
-    modifies_gui_state=True
+    modifies_gui_state=True,
+    modifies_project_state=True
 )
 def analyze_all_live(main_window, clip_ids: list[str]) -> dict:
     """Run all analysis on clips with live GUI update.
