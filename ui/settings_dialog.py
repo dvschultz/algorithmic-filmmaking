@@ -1064,7 +1064,12 @@ class SettingsDialog(QDialog):
         )
 
         # Vision Description
-        tier_idx = 0 if self.settings.description_model_tier == "cpu" else 1
+        # Normalize "gpu" to "cloud" since GPU tier isn't in UI (not fully implemented)
+        tier = self.settings.description_model_tier
+        if tier == "gpu":
+            tier = "cloud"
+            self.settings.description_model_tier = "cloud"  # Also fix the setting
+        tier_idx = 0 if tier == "cpu" else 1
         self.vision_tier_combo.setCurrentIndex(tier_idx)
 
         self._set_combo_text(self.vision_cpu_combo, self.settings.description_model_cpu)
