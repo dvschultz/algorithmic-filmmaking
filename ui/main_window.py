@@ -1281,6 +1281,7 @@ class MainWindow(QMainWindow):
         self.chat_panel.cancel_requested.connect(self._on_chat_cancel)
         self.chat_panel.provider_changed.connect(self._on_chat_provider_changed)
         self.chat_panel.clear_requested.connect(self._on_chat_clear)
+        self.chat_panel.export_requested.connect(self._on_chat_export)
 
         # Connect plan signals
         self.chat_panel.plan_confirmed.connect(self._on_plan_confirmed)
@@ -2284,6 +2285,78 @@ class MainWindow(QMainWindow):
         logger.info("Clearing chat history")
         self._chat_history.clear()
         self._last_user_message = ""
+
+    def _on_chat_export(self):
+        """Handle chat export request - show export dialog and save files."""
+        from pathlib import Path
+        import subprocess
+        import sys
+
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+        from core.chat_export import export_chat
+        from ui.export_chat_dialog import ExportChatDialog
+
+        if not self._chat_history:
+            QMessageBox.information(
+                self,
+                "No Messages",
+                "There are no messages to export."
+            )
+            return
+
+        # Show export options dialog
+        dialog = ExportChatDialog(len(self._chat_history), self)
+        if dialog.exec() != ExportChatDialog.Accepted:
+            return
+
+        # Get export folder
+        output_dir = QFileDialog.getExistingDirectory(
+            self,
+            "Select Export Folder",
+            str(Path.home())
+        )
+        if not output_dir:
+            return  # User cancelled
+
+        # Get config with user selections
+        project_name = self.project.metadata.name if self.project else ""
+        config = dialog.get_config(Path(output_dir), project_name)
+
+        # Perform export
+        success, created_files, error = export_chat(self._chat_history, config)
+
+        if success and created_files:
+            # Build success message
+            file_list = "\n".join(f"  • {Path(f).name}" for f in created_files)
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Information)
+            msg.setWindowTitle("Export Complete")
+            msg.setText(f"Chat exported successfully:\n\n{file_list}")
+            msg.setStandardButtons(QMessageBox.Ok)
+
+            # Add "Open Folder" button
+            open_folder_btn = msg.addButton("Open Folder", QMessageBox.ActionRole)
+            msg.exec()
+
+            # Handle "Open Folder" click
+            if msg.clickedButton() == open_folder_btn:
+                # Open folder in system file manager
+                if sys.platform == "darwin":
+                    subprocess.run(["open", output_dir], check=False)
+                elif sys.platform == "win32":
+                    subprocess.run(["explorer", output_dir], check=False)
+                else:
+                    subprocess.run(["xdg-open", output_dir], check=False)
+
+            logger.info(f"Chat exported to: {created_files}")
+        else:
+            QMessageBox.warning(
+                self,
+                "Export Failed",
+                f"Failed to export chat:\n\n{error}"
+            )
+            logger.error(f"Chat export failed: {error}")
 
     def _on_chat_provider_changed(self, provider: str):
         """Handle provider selection change."""

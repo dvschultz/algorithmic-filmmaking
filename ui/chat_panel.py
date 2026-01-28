@@ -56,6 +56,7 @@ class ChatPanel(QWidget):
     cancel_requested = Signal()  # Cancel button clicked
     provider_changed = Signal(str)  # Provider selection changed
     clear_requested = Signal()  # Clear chat history requested
+    export_requested = Signal()  # Export chat history requested
 
     # Plan-related signals
     plan_confirmed = Signal(object)  # Emits Plan object when confirmed
@@ -90,10 +91,8 @@ class ChatPanel(QWidget):
         header.addWidget(header_label)
         header.addStretch()
 
-        # Clear chat button
-        self.clear_button = QPushButton("Clear")
-        self.clear_button.setToolTip("Clear chat history (helps avoid rate limits)")
-        self.clear_button.setStyleSheet("""
+        # Header button style (shared)
+        header_button_style = """
             QPushButton {
                 background-color: transparent;
                 border: 1px solid #d0d0d0;
@@ -109,7 +108,24 @@ class ChatPanel(QWidget):
             QPushButton:pressed {
                 background-color: #e0e0e0;
             }
-        """)
+            QPushButton:disabled {
+                color: #bbb;
+                border-color: #e0e0e0;
+            }
+        """
+
+        # Export chat button
+        self.export_button = QPushButton("Export")
+        self.export_button.setToolTip("Export chat history to file")
+        self.export_button.setStyleSheet(header_button_style)
+        self.export_button.clicked.connect(self._on_export_clicked)
+        self.export_button.setEnabled(False)  # Disabled until messages exist
+        header.addWidget(self.export_button)
+
+        # Clear chat button
+        self.clear_button = QPushButton("Clear")
+        self.clear_button.setToolTip("Clear chat history (helps avoid rate limits)")
+        self.clear_button.setStyleSheet(header_button_style)
         self.clear_button.clicked.connect(self._on_clear_clicked)
         header.addWidget(self.clear_button)
 
@@ -255,6 +271,10 @@ class ChatPanel(QWidget):
         self.clear_messages()
         self.clear_requested.emit()
 
+    def _on_export_clicked(self):
+        """Handle export button click."""
+        self.export_requested.emit()
+
     def _on_example_prompt_clicked(self, prompt_text: str):
         """Handle example prompt click - fill input field."""
         self.input_field.setText(prompt_text)
@@ -290,6 +310,11 @@ class ChatPanel(QWidget):
         self.send_button.setVisible(not is_streaming)
         self.cancel_button.setVisible(is_streaming)
 
+        # Disable export during streaming
+        if is_streaming:
+            self.export_button.setEnabled(False)
+            self.export_button.setToolTip("Wait for response to complete")
+
         # Disable example prompts during streaming
         if self._example_prompts_visible:
             self.example_prompts.setEnabled(not is_streaming)
@@ -308,6 +333,9 @@ class ChatPanel(QWidget):
         bubble = MessageBubble(text, is_user=True)
         self.messages_layout.addWidget(bubble)
         self._scroll_to_bottom()
+
+        # Enable export button now that we have messages
+        self._update_export_button_state(has_messages=True)
 
     def add_assistant_message(self, text: str):
         """Add a complete assistant message.
@@ -436,6 +464,9 @@ class ChatPanel(QWidget):
 
         self._set_streaming_state(False)
 
+        # Re-enable export button after streaming completes
+        self._update_export_button_state(has_messages=True)
+
     def on_stream_error(self, error: str):
         """Handle stream error.
 
@@ -474,6 +505,25 @@ class ChatPanel(QWidget):
         self.example_prompts.show()
         self.example_prompts.reset_guard()
         self._example_prompts_visible = True
+
+        # Disable export button - no messages to export
+        self._update_export_button_state(has_messages=False)
+
+    def _update_export_button_state(self, has_messages: bool):
+        """Update export button enabled state.
+
+        Args:
+            has_messages: Whether there are messages to export
+        """
+        if self._is_streaming:
+            # Don't enable during streaming
+            return
+
+        self.export_button.setEnabled(has_messages)
+        if has_messages:
+            self.export_button.setToolTip("Export chat history to file")
+        else:
+            self.export_button.setToolTip("No messages to export")
 
     def update_project_state(
         self,
