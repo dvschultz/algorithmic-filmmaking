@@ -220,3 +220,6 @@ __marimo__/
 *.mov
 *.webm
 *_dataset.json
+
+# YOLO model weights (download from ultralytics)
+*.pt
