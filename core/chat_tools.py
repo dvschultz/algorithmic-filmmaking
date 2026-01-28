@@ -355,7 +355,7 @@ def get_project_state(project) -> dict:
     return {
         "success": True,
         "name": project.metadata.name,
-        "path": str(project.path) if project.path else None,
+        "path": str(project.path) if project.path else "Unsaved",
         "sources": [
             {
                 "id": s.id,
@@ -783,13 +783,13 @@ def select_clips(project, clip_ids: list[str], gui_state=None) -> dict:
 
 
 @tools.register(
-    description="Switch to a specific tab in the application. Valid tabs: collect, cut, analyze, sequence, generate, render",
+    description="Switch to a specific tab in the application. Valid tabs: collect, cut, analyze, sequence, render",
     requires_project=False,
     modifies_gui_state=True
 )
 def navigate_to_tab(tab_name: str, gui_state=None) -> dict:
     """Switch active tab."""
-    valid_tabs = ["collect", "cut", "analyze", "sequence", "generate", "render"]
+    valid_tabs = ["collect", "cut", "analyze", "sequence", "render"]
 
     if tab_name not in valid_tabs:
         return {
@@ -1618,6 +1618,41 @@ def export_dataset(
             "success": False,
             "error": "Failed to write dataset file"
         }
+
+
+@tools.register(
+    description="Set or update the project name. Use this when the project is unnamed ('Untitled Project') to give it a meaningful name before saving.",
+    requires_project=True,
+    modifies_gui_state=True
+)
+def set_project_name(project, name: str) -> dict:
+    """Set the project name."""
+    import re
+
+    if not name or not name.strip():
+        return {
+            "success": False,
+            "error": "Project name cannot be empty"
+        }
+
+    # Sanitize the name to remove invalid filesystem characters
+    clean_name = re.sub(r'[<>:"/\\|?*]', '', name.strip())
+    if not clean_name:
+        return {
+            "success": False,
+            "error": "Project name cannot be empty or contain only invalid characters"
+        }
+
+    old_name = project.metadata.name
+    project.metadata.name = clean_name
+    project.mark_dirty()
+
+    return {
+        "success": True,
+        "old_name": old_name,
+        "new_name": project.metadata.name,
+        "message": f"Project renamed to '{project.metadata.name}'"
+    }
 
 
 @tools.register(
@@ -3080,13 +3115,14 @@ def list_sorting_algorithms(project) -> dict:
     }
 
 
-@tools.register(
-    description="Generate a sequence using a sorting algorithm and apply it to the timeline. "
-                "Available algorithms: color, duration, shuffle, sequential. "
-                "Returns the generated sequence with clip details.",
-    requires_project=True,
-    modifies_gui_state=True
-)
+# TODO: Re-enable when Generate tab is built
+# @tools.register(
+#     description="Generate a sequence using a sorting algorithm and apply it to the timeline. "
+#                 "Available algorithms: color, duration, shuffle, sequential. "
+#                 "Returns the generated sequence with clip details.",
+#     requires_project=True,
+#     modifies_gui_state=True
+# )
 def generate_remix(
     project,
     main_window,

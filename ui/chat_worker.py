@@ -607,6 +607,8 @@ IMPORTANT BEHAVIOR RULES:
 3. After completing a task, STOP and report results - do not chain additional actions
 4. If you think follow-up actions would help, SUGGEST them verbally - don't execute them
 5. When in doubt, ask the user before taking action
+6. PROJECT NAMING: Before executing any state-modifying tool (detect_scenes, download_video, add_to_sequence, etc.) on an unnamed project (Name: "Untitled Project", Path: Unsaved), FIRST ask the user what they'd like to name the project, then use set_project_name to set it.
+7. AUTO-SAVE OFFERS: After completing a state-modifying tool successfully, ask the user: "Would you like me to save the project now?" If they say yes, use save_project. If they say "always save" or similar, save without asking in future tool calls this session.
 
 WORKFLOW AUTOMATION (for multi-step requests):
 When the user requests compound operations like "download 5 videos and detect scenes in each":
