@@ -49,7 +49,7 @@ from core.project import (
 )
 from ui.project_adapter import ProjectSignalAdapter
 from ui.settings_dialog import SettingsDialog
-from ui.tabs import CollectTab, CutTab, AnalyzeTab, GenerateTab, SequenceTab, RenderTab
+from ui.tabs import CollectTab, CutTab, AnalyzeTab, SequenceTab, RenderTab
 from ui.theme import theme
 from ui.chat_panel import ChatPanel
 from ui.chat_worker import ChatAgentWorker
@@ -888,6 +888,12 @@ class MainWindow(QMainWindow):
         self._playback_timer = QTimer(self)  # Parent to self for proper lifecycle
         self._playback_timer.setInterval(33)  # ~30fps update rate
         self._playback_timer.timeout.connect(self._on_playback_tick)
+
+        # Auto-save timer for silent saves after tool execution
+        self._auto_save_timer = QTimer(self)
+        self._auto_save_timer.setSingleShot(True)
+        self._auto_save_timer.timeout.connect(self._do_auto_save)
+
         logger.info(f"=== MAINWINDOW INIT COMPLETE (instance #{self._instance_id}) ===")
 
     # --- Property delegates to Project for backward compatibility ---
@@ -960,7 +966,6 @@ class MainWindow(QMainWindow):
         self.collect_tab = CollectTab()
         self.cut_tab = CutTab()
         self.analyze_tab = AnalyzeTab()
-        self.generate_tab = GenerateTab()
         self.sequence_tab = SequenceTab()
         self.render_tab = RenderTab()
 
@@ -968,7 +973,6 @@ class MainWindow(QMainWindow):
         self.tab_widget.addTab(self.collect_tab, "Collect")
         self.tab_widget.addTab(self.cut_tab, "Cut")
         self.tab_widget.addTab(self.analyze_tab, "Analyze")
-        self.tab_widget.addTab(self.generate_tab, "Generate")
         self.tab_widget.addTab(self.sequence_tab, "Sequence")
         self.tab_widget.addTab(self.render_tab, "Render")
 
@@ -1000,13 +1004,12 @@ class MainWindow(QMainWindow):
             self.collect_tab,
             self.cut_tab,
             self.analyze_tab,
-            self.generate_tab,
             self.sequence_tab,
             self.render_tab,
         ]
 
         # Track active tab for agent context
-        tab_names = ["collect", "cut", "analyze", "generate", "sequence", "render"]
+        tab_names = ["collect", "cut", "analyze", "sequence", "render"]
         if 0 <= index < len(tab_names):
             active_tab = tab_names[index]
             self._gui_state.active_tab = active_tab
@@ -1027,7 +1030,7 @@ class MainWindow(QMainWindow):
                 tab.on_tab_deactivated()
 
         # Update Render tab with current sequence info when switching to it
-        if index == 5:  # Render tab
+        if index == 4:  # Render tab
             self._update_render_tab_sequence_info()
 
     def _create_menu_bar(self):
@@ -1547,6 +1550,42 @@ class MainWindow(QMainWindow):
         logger.info(f"Chat tool {name} completed: success={success}")
         if self._current_tool_indicator:
             self._current_tool_indicator.set_complete(success)
+
+        # Auto-save check: if tool modifies project state and succeeded, schedule save
+        if success:
+            from core.chat_tools import tools as tool_registry
+            tool_def = tool_registry.get(name)
+            if tool_def and tool_def.modifies_project_state:
+                self._schedule_auto_save()
+
+    def _schedule_auto_save(self):
+        """Schedule a debounced auto-save after tool execution.
+
+        Only saves if project has a path (was saved before) and is dirty.
+        Uses 300ms debounce to coalesce rapid consecutive tool calls.
+        """
+        if not self.project or not self.project.path:
+            return
+        if not self.project.is_dirty:
+            return
+
+        # Debounce: restart timer on each call
+        self._auto_save_timer.stop()
+        self._auto_save_timer.start(300)  # 300ms debounce
+
+    def _do_auto_save(self):
+        """Execute the auto-save."""
+        if not self.project or not self.project.path:
+            return
+        if not self.project.is_dirty:
+            return
+
+        try:
+            self.project.save()
+            logger.info(f"Auto-saved project to {self.project.path}")
+        except Exception as e:
+            logger.error(f"Auto-save failed: {e}")
+            # Keep project dirty so user can manually save
 
     @Slot(str)
     def _on_gui_tool_cancelled(self, tool_name: str):
