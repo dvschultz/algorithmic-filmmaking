@@ -1019,6 +1019,9 @@ class MainWindow(QMainWindow):
         # Set up Analyze tab lookups (it uses references, not copies)
         self.analyze_tab.set_lookups(self.clips_by_id, self.sources_by_id)
 
+        # Set up Sequence tab GUI state reference
+        self.sequence_tab.set_gui_state(self._gui_state)
+
         layout.addWidget(self.tab_widget)
 
         # Bottom: Progress bar (global, below tabs)
@@ -1865,24 +1868,30 @@ class MainWindow(QMainWindow):
             self.project.clips
         )
 
-        # Update sequence tab state to show timeline content
-        # The state stack controls visibility - need to show content area
-        if self.project.sequence.tracks[0].clips:
-            # Make content area visible (timeline is in content_widget)
-            self.sequence_tab.content_widget.setVisible(True)
+        # Update sequence tab's internal state
+        self.sequence_tab._sources.update(sources)
+        if self.project.clips:
+            # Build (Clip, Source) tuples for all clips
+            self.sequence_tab._available_clips = [
+                (clip, sources.get(clip.source_id))
+                for clip in self.project.clips
+                if sources.get(clip.source_id)
+            ]
+            self.sequence_tab._clips = self.project.clips
 
-            # Update sequence tab's internal state for multi-source clips
-            self.sequence_tab._sources.update(sources)
-            if self.project.clips:
-                # Build (Clip, Source) tuples for all clips
-                self.sequence_tab._available_clips = [
-                    (clip, sources.get(clip.source_id))
-                    for clip in self.project.clips
-                    if sources.get(clip.source_id)
-                ]
-                self.sequence_tab._clips = self.project.clips
-                # Switch state to card selection (which shows timeline)
-                self.sequence_tab._set_state(self.sequence_tab.STATE_CARD_SELECTION)
+        # Update state based on timeline content
+        if self.project.sequence.tracks[0].clips:
+            # Show timeline state (2-state model: CARDS vs TIMELINE)
+            self.sequence_tab._set_state(self.sequence_tab.STATE_TIMELINE)
+            # Update timeline preview
+            sorted_clips = [
+                (clip, sources.get(clip.source_id))
+                for clip in self.project.clips
+                if sources.get(clip.source_id)
+            ]
+            self.sequence_tab.timeline_preview.set_clips(sorted_clips, sources)
+        else:
+            self.sequence_tab._set_state(self.sequence_tab.STATE_CARDS)
 
         # Zoom to fit the content
         self.sequence_tab.timeline._on_zoom_fit()
@@ -2579,12 +2588,14 @@ class MainWindow(QMainWindow):
     def _on_cut_selection_changed(self, clip_ids: list[str]):
         """Handle selection change in Cut tab."""
         self._gui_state.selected_clip_ids = clip_ids
-        logger.debug(f"GUI State updated: {len(clip_ids)} clips selected")
+        self._gui_state.cut_selected_ids = clip_ids
+        logger.debug(f"GUI State updated: {len(clip_ids)} clips selected in Cut tab")
 
     def _on_analyze_selection_changed(self, clip_ids: list[str]):
         """Handle selection change in Analyze tab."""
         self._gui_state.selected_clip_ids = clip_ids
-        logger.debug(f"GUI State updated (Analyze): {len(clip_ids)} clips selected")
+        self._gui_state.analyze_selected_ids = clip_ids
+        logger.debug(f"GUI State updated: {len(clip_ids)} clips selected in Analyze tab")
 
     def _on_cut_filters_changed(self):
         """Handle filter change in Cut tab."""

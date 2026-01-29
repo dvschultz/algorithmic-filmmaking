@@ -6,8 +6,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QPushButton,
     QLabel,
-    QComboBox,
-    QSpinBox,
     QStyle,
 )
 from PySide6.QtCore import Qt, Signal
@@ -18,7 +16,6 @@ from ui.timeline.timeline_scene import TimelineScene
 from ui.timeline.timeline_view import TimelineView
 from ui.timeline.playhead import Playhead
 from ui.theme import theme
-from core.remix import generate_sequence
 
 
 class TimelineWidget(QWidget):
@@ -96,34 +93,6 @@ class TimelineWidget(QWidget):
 
         toolbar.addStretch()
 
-        # Remix algorithm selector
-        toolbar.addWidget(QLabel("Remix:"))
-        self.remix_combo = QComboBox()
-        self.remix_combo.addItems([
-            "Shuffle",
-            "Sequential",
-            "Color (HSV)",
-            "Shot Type",
-            "Duration (Long)",
-            "Duration (Short)",
-        ])
-        self.remix_combo.setToolTip("Algorithm for generating sequences")
-        self.remix_combo.setMinimumWidth(120)
-        toolbar.addWidget(self.remix_combo)
-
-        # Clip count spinner
-        toolbar.addWidget(QLabel("Clips:"))
-        self.clip_count_spin = QSpinBox()
-        self.clip_count_spin.setRange(1, 100)
-        self.clip_count_spin.setValue(10)
-        self.clip_count_spin.setToolTip("Number of clips to include")
-        toolbar.addWidget(self.clip_count_spin)
-
-        # Generate button
-        self.generate_btn = QPushButton("Generate")
-        self.generate_btn.setToolTip("Generate a remix sequence")
-        toolbar.addWidget(self.generate_btn)
-
         # Clear button
         self.clear_btn = QPushButton("Clear")
         self.clear_btn.setToolTip("Clear all clips from timeline")
@@ -173,7 +142,6 @@ class TimelineWidget(QWidget):
         self.add_track_btn.clicked.connect(self._on_add_track)
         self.zoom_fit_btn.clicked.connect(self._on_zoom_fit)
         self.zoom_reset_btn.clicked.connect(self.view.reset_zoom)
-        self.generate_btn.clicked.connect(self._on_generate)
         self.export_btn.clicked.connect(lambda: self.export_requested.emit())
         self.play_btn.clicked.connect(self._on_play_clicked)
         self.stop_btn.clicked.connect(self._on_stop_clicked)
@@ -221,41 +189,6 @@ class TimelineWidget(QWidget):
             self.view.set_zoom_to_fit(duration)
         else:
             self.view.reset_zoom()
-
-    # Map display names to algorithm keys
-    ALGORITHM_MAP = {
-        "Shuffle": "shuffle",
-        "Sequential": "sequential",
-        "Color (HSV)": "color",
-        "Shot Type": "shot_type",
-        "Duration (Long)": "duration_long",
-        "Duration (Short)": "duration_short",
-    }
-
-    def _on_generate(self):
-        """Handle Generate button click."""
-        if not self._available_clips:
-            return
-
-        display_name = self.remix_combo.currentText()
-        algorithm = self.ALGORITHM_MAP.get(display_name, "sequential")
-        clip_count = self.clip_count_spin.value()
-
-        # Clear existing timeline
-        self.clear_timeline()
-
-        # Generate sequence using core algorithm
-        sequenced = generate_sequence(algorithm, self._available_clips, clip_count)
-
-        # Add to timeline sequentially
-        current_frame = 0
-        for clip, source in sequenced:
-            self.add_clip(clip, source, track_index=0, start_frame=current_frame)
-            current_frame += clip.duration_frames
-
-        # Zoom to fit
-        self._on_zoom_fit()
-        self.sequence_changed.emit()
 
     def _rebuild_scene(self):
         """Rebuild scene from sequence data."""
@@ -420,9 +353,5 @@ class TimelineWidget(QWidget):
         return (None, None, None)
 
     def set_available_clips(self, clips: list[Clip], source: Source):
-        """Set the available clips for remix generation."""
+        """Set the available clips for the timeline."""
         self._available_clips = [(clip, source) for clip in clips]
-        # Update clip count max
-        self.clip_count_spin.setMaximum(len(clips))
-        if self.clip_count_spin.value() > len(clips):
-            self.clip_count_spin.setValue(len(clips))

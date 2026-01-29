@@ -32,6 +32,10 @@ class GUIState:
     selected_clip_ids: list[str] = field(default_factory=list)
     selected_source_id: Optional[str] = None
 
+    # Tab-specific selection state (for Sequence tab to read from)
+    analyze_selected_ids: list[str] = field(default_factory=list)
+    cut_selected_ids: list[str] = field(default_factory=list)
+
     # Analyze tab state
     analyze_tab_ids: list[str] = field(default_factory=list)
 
