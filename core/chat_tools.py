@@ -1375,7 +1375,7 @@ def remove_source(
                 "fps=float (target frame rate, defaults to sequence fps). "
                 "Runs in background - may take significant time for long sequences.",
     requires_project=True,
-    modifies_gui_state=False
+    modifies_gui_state=True  # Needs main_window to access sequence_tab
 )
 def export_sequence(
     main_window,
@@ -1662,17 +1662,39 @@ def set_project_name(project, name: str) -> dict:
     # Auto-save the project if it hasn't been saved yet
     # This enables future auto-saves (which require project.path to be set)
     save_path = None
+    save_error = None
     if not project.path:
         settings = load_settings()
-        save_path = settings.export_dir / f"{clean_name}.sceneripper"
-        save_path.parent.mkdir(parents=True, exist_ok=True)
+        export_dir = settings.export_dir
+
+        # Validate export directory is writable before attempting save
         try:
-            project.save(path=save_path)
-            logger.info(f"Auto-saved new project to {save_path}")
-        except Exception as e:
-            logger.error(f"Failed to auto-save project: {e}")
-            # Don't fail the rename just because save failed
-            save_path = None
+            export_dir.mkdir(parents=True, exist_ok=True)
+            # Test write access
+            test_file = export_dir / ".write_test"
+            test_file.touch()
+            test_file.unlink()
+        except PermissionError:
+            save_error = (
+                f"Cannot save project: No write access to export directory '{export_dir}'. "
+                "Please update your export directory in Settings > Directories, or ensure the "
+                "external drive is mounted and writable."
+            )
+        except OSError as e:
+            save_error = (
+                f"Cannot save project: Export directory '{export_dir}' is not accessible ({e}). "
+                "Please check the path in Settings > Directories."
+            )
+
+        if not save_error:
+            save_path = export_dir / f"{clean_name}.sceneripper"
+            try:
+                project.save(path=save_path)
+                logger.info(f"Auto-saved new project to {save_path}")
+            except Exception as e:
+                logger.error(f"Failed to auto-save project: {e}")
+                save_error = f"Failed to save project: {e}"
+                save_path = None
 
     result = {
         "success": True,
@@ -1684,6 +1706,10 @@ def set_project_name(project, name: str) -> dict:
     if save_path:
         result["saved_to"] = str(save_path)
         result["message"] += f" and saved to {save_path.name}"
+    elif save_error:
+        # Naming succeeded but saving failed - include warning
+        result["warning"] = save_error
+        result["message"] += f". Warning: {save_error}"
 
     return result
 
@@ -1713,8 +1739,25 @@ def save_project(project, path: Optional[str] = None) -> dict:
     if save_path.suffix.lower() != ".sceneripper":
         save_path = save_path.with_suffix(".sceneripper")
 
-    # Ensure parent directory exists
-    save_path.parent.mkdir(parents=True, exist_ok=True)
+    # Validate and create parent directory
+    try:
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        # Test write access
+        test_file = save_path.parent / ".write_test"
+        test_file.touch()
+        test_file.unlink()
+    except PermissionError:
+        return {
+            "success": False,
+            "error": f"Cannot save project: No write access to '{save_path.parent}'. "
+                     "Please check directory permissions or choose a different location."
+        }
+    except OSError as e:
+        return {
+            "success": False,
+            "error": f"Cannot save project: Directory '{save_path.parent}' is not accessible ({e}). "
+                     "Please check the path or choose a different location."
+        }
 
     try:
         success = project.save(path=save_path)

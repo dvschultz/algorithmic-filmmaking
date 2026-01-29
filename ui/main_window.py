@@ -956,6 +956,39 @@ class MainWindow(QMainWindow):
         """Whether project has unsaved changes (delegates to Project)."""
         return self.project.is_dirty
 
+    # --- Worker lifecycle management ---
+
+    def _stop_worker_safely(self, worker: Optional[QThread], name: str, timeout_ms: int = 3000) -> None:
+        """Safely stop a running QThread worker.
+
+        Prevents 'QThread: Destroyed while thread is still running' crashes by
+        ensuring the worker thread has stopped before the object is garbage collected.
+
+        Args:
+            worker: The QThread worker to stop (can be None)
+            name: Worker name for logging
+            timeout_ms: Maximum time to wait for graceful shutdown
+        """
+        if worker is None:
+            return
+
+        if not worker.isRunning():
+            return
+
+        logger.info(f"Stopping {name} worker before creating new one...")
+
+        # Try graceful cancellation if supported
+        if hasattr(worker, 'cancel'):
+            worker.cancel()
+
+        # Wait for worker to finish
+        if not worker.wait(timeout_ms):
+            logger.warning(f"{name} worker did not stop gracefully, terminating...")
+            worker.terminate()
+            worker.wait(1000)
+
+        logger.info(f"{name} worker stopped")
+
     def _setup_ui(self):
         """Set up the user interface."""
         # Create menu bar
@@ -1400,6 +1433,8 @@ class MainWindow(QMainWindow):
                     default_source = self.sources_by_id.get(first_clip.source_id)
 
                 if default_source:
+                    # Safely stop any running worker (shouldn't happen due to check above, but defensive)
+                    self._stop_worker_safely(self.thumbnail_worker, "thumbnail")
                     self.thumbnail_worker = ThumbnailWorker(
                         default_source,
                         clips_needing_thumbnails,
@@ -1426,6 +1461,8 @@ class MainWindow(QMainWindow):
             if clips_still_needing:
                 default_source = self.sources_by_id.get(clips_still_needing[0].source_id)
                 if default_source:
+                    # Safely stop worker (should be done already since we're in finished handler)
+                    self._stop_worker_safely(self.thumbnail_worker, "thumbnail")
                     self.thumbnail_worker = ThumbnailWorker(
                         default_source,
                         clips_still_needing,
@@ -3687,7 +3724,8 @@ class MainWindow(QMainWindow):
 
         self.status_bar.showMessage(f"Found {len(clips)} scenes. Generating thumbnails...")
 
-        # Start thumbnail generation
+        # Start thumbnail generation - safely stop any running worker first
+        self._stop_worker_safely(self.thumbnail_worker, "thumbnail")
         logger.info("Creating ThumbnailWorker...")
         self.thumbnail_worker = ThumbnailWorker(
             source, clips, cache_dir=self.settings.thumbnail_cache_dir
@@ -5685,6 +5723,9 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(f"Regenerating {len(clips_needing_thumbnails)} thumbnails...")
 
         try:
+            # Safely stop any running thumbnail worker first
+            self._stop_worker_safely(self.thumbnail_worker, "thumbnail")
+
             # Use existing ThumbnailWorker with project-load-specific handlers
             # Pass sources_by_id so each clip uses its correct source
             self.thumbnail_worker = ThumbnailWorker(
