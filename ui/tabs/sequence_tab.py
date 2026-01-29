@@ -196,8 +196,8 @@ class SequenceTab(BaseTab):
             QMessageBox.warning(
                 self,
                 "Clips Not Found",
-                "Selected clips are not available for sequencing. "
-                "Make sure the source video has been analyzed."
+                "Selected clips are not available in the Sequence tab. "
+                "The clips may be from a source that hasn't been loaded."
             )
             return
 

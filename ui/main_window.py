@@ -956,6 +956,32 @@ class MainWindow(QMainWindow):
         """Whether project has unsaved changes (delegates to Project)."""
         return self.project.is_dirty
 
+    # --- Sequence tab synchronization ---
+
+    def _refresh_sequence_tab_clips(self):
+        """Refresh the Sequence tab with all available clips from all sources.
+
+        This ensures _available_clips contains clips from ALL sources, not just
+        the most recently detected source. Called when switching to Sequence tab
+        and after detection completes.
+        """
+        if not self.clips:
+            return
+
+        # Build (Clip, Source) tuples for all clips
+        all_clips = []
+        for clip in self.clips:
+            source = self.sources_by_id.get(clip.source_id)
+            if source:
+                all_clips.append((clip, source))
+
+        # Update Sequence tab with all clips
+        self.sequence_tab._available_clips = all_clips
+        self.sequence_tab._clips = self.clips
+        self.sequence_tab._sources.update(self.sources_by_id)
+
+        logger.debug(f"Refreshed Sequence tab with {len(all_clips)} clips from {len(self.sources_by_id)} sources")
+
     # --- Worker lifecycle management ---
 
     def _stop_worker_safely(self, worker: Optional[QThread], name: str, timeout_ms: int = 3000) -> None:
@@ -1072,6 +1098,10 @@ class MainWindow(QMainWindow):
             else:
                 tab.on_tab_deactivated()
 
+        # Refresh Sequence tab with all clips when switching to it
+        if index == 3:  # Sequence tab
+            self._refresh_sequence_tab_clips()
+
         # Update Render tab with current sequence info when switching to it
         if index == 4:  # Render tab
             self._update_render_tab_sequence_info()
@@ -1117,6 +1147,11 @@ class MainWindow(QMainWindow):
         import_video_action.setShortcut(QKeySequence("Ctrl+I"))
         import_video_action.triggered.connect(self._on_import_click)
         import_menu.addAction(import_video_action)
+
+        import_folder_action = QAction("&Folder...", self)
+        import_folder_action.setShortcut(QKeySequence("Ctrl+Shift+I"))
+        import_folder_action.triggered.connect(self._on_import_folder_click)
+        import_menu.addAction(import_folder_action)
 
         import_url_action = QAction("From &URL...", self)
         import_url_action.triggered.connect(self._on_import_url_click)
@@ -3429,6 +3464,23 @@ class MainWindow(QMainWindow):
         if file_path:
             self._load_video(Path(file_path))
 
+    def _on_import_folder_click(self):
+        """Handle import folder menu action."""
+        from ui.source_browser import scan_folder_for_videos, AddVideoCard
+
+        folder_path = QFileDialog.getExistingDirectory(
+            self,
+            "Import Video Folder",
+            "",
+            QFileDialog.ShowDirsOnly,
+        )
+        if folder_path:
+            videos = scan_folder_for_videos(
+                Path(folder_path), AddVideoCard.VIDEO_EXTENSIONS
+            )
+            if videos:
+                self._on_videos_added(videos)
+
     def _load_video(self, path: Path):
         """Load a video file - adds to library and selects it."""
         # Check if already in library
@@ -3780,9 +3832,14 @@ class MainWindow(QMainWindow):
         logger.info(f"_on_thumbnail_ready called: clip_id={clip_id}, thumb_path={thumb_path}")
         clip = self.clips_by_id.get(clip_id)
         if clip:
-            logger.info(f"Found clip {clip_id}, thumbnail_path={clip.thumbnail_path}, adding to cut_tab")
-            # Add to Cut tab (primary clip browser for detection)
-            self.cut_tab.add_clip(clip, self.current_source)
+            # Look up the clip's actual source, not current_source which may have changed
+            clip_source = self.sources_by_id.get(clip.source_id)
+            if clip_source:
+                logger.info(f"Found clip {clip_id}, source={clip_source.id}, adding to cut_tab")
+                # Add to Cut tab (primary clip browser for detection)
+                self.cut_tab.add_clip(clip, clip_source)
+            else:
+                logger.warning(f"Source not found for clip {clip_id}: source_id={clip.source_id}")
         else:
             logger.warning(f"Clip not found in clips_by_id: {clip_id}")
             logger.warning(f"Available clip IDs: {list(self.clips_by_id.keys())[:5]}...")
@@ -3804,10 +3861,10 @@ class MainWindow(QMainWindow):
         # Refresh Analyze tab lookups (cached properties may have been invalidated)
         self.analyze_tab.set_lookups(self.clips_by_id, self.sources_by_id)
 
-        # Update Cut tab with all clips for this source
-        current_source_clips = self.clips_by_source.get(self.current_source.id, []) if self.current_source else []
-        logger.info(f"_on_thumbnails_finished: found {len(current_source_clips)} clips for source {self.current_source.id if self.current_source else 'None'}")
-        self.cut_tab.set_clips(current_source_clips)
+        # Update Cut tab with ALL clips from ALL sources (clips accumulate as sources are detected)
+        # This ensures the clip count label and _clips list match the browser contents
+        logger.info(f"_on_thumbnails_finished: total {len(self.clips)} clips from {len(self.sources)} sources")
+        self.cut_tab.set_clips(self.clips)
         self.cut_tab.set_detecting(False)
 
         # Make all clips available for timeline remix (via Sequence tab)
@@ -3815,6 +3872,10 @@ class MainWindow(QMainWindow):
         current_source_clips = self.clips_by_source.get(self.current_source.id, []) if self.current_source else []
         if self.current_source and current_source_clips:
             self.sequence_tab.set_clips_available(current_source_clips, self.current_source)
+
+        # Also refresh with ALL clips from ALL sources to handle multi-source workflows
+        self._refresh_sequence_tab_clips()
+
         # Update Render tab with total clip count from all sources
         self.render_tab.set_detected_clips_count(len(self.clips))
 
@@ -4021,28 +4082,44 @@ class MainWindow(QMainWindow):
 
     def _on_video_position_updated(self, position_ms: int):
         """Sync timeline playhead to video position during playback."""
-        if not self._is_playing or not self._current_playback_clip:
+        from PySide6.QtMultimedia import QMediaPlayer
+
+        # Case 1: Timeline-driven playback (existing behavior)
+        if self._is_playing and self._current_playback_clip:
+            seq_clip = self._current_playback_clip
+            clip_data = self.sequence_tab.timeline._clip_lookup.get(seq_clip.source_clip_id)
+            if not clip_data:
+                return
+
+            _, source = clip_data
+
+            # Convert video position to source frame
+            source_seconds = position_ms / 1000.0
+            source_frame = int(source_seconds * source.fps)
+
+            # Calculate timeline frame
+            # timeline_frame = start_frame + (source_frame - in_point)
+            frame_offset = source_frame - seq_clip.in_point
+            timeline_frame = seq_clip.start_frame + frame_offset
+            timeline_seconds = timeline_frame / self.sequence_tab.timeline.sequence.fps
+
+            # Update playhead position
+            self.sequence_tab.timeline.set_playhead_time(timeline_seconds)
             return
 
-        seq_clip = self._current_playback_clip
-        clip_data = self.sequence_tab.timeline._clip_lookup.get(seq_clip.source_clip_id)
-        if not clip_data:
+        # Case 2: Direct video playback (when user clicks play on VideoPlayer)
+        # Only sync if video is actually playing
+        if self.sequence_tab.video_player.player.playbackState() != QMediaPlayer.PlayingState:
             return
 
-        _, source = clip_data
+        # Only sync when in timeline state (not cards state)
+        if self.sequence_tab._current_state != self.sequence_tab.STATE_TIMELINE:
+            return
 
-        # Convert video position to source frame
-        source_seconds = position_ms / 1000.0
-        source_frame = int(source_seconds * source.fps)
-
-        # Calculate timeline frame
-        # timeline_frame = start_frame + (source_frame - in_point)
-        frame_offset = source_frame - seq_clip.in_point
-        timeline_frame = seq_clip.start_frame + frame_offset
-        timeline_seconds = timeline_frame / self.sequence_tab.timeline.sequence.fps
-
-        # Update playhead position
-        self.sequence_tab.timeline.set_playhead_time(timeline_seconds)
+        # Simple sync: convert video position to timeline seconds
+        # This assumes video position maps directly to timeline position
+        video_seconds = position_ms / 1000.0
+        self.sequence_tab.timeline.set_playhead_time(video_seconds)
 
     def _on_video_state_changed(self, state):
         """Handle video player state changes."""
@@ -5565,11 +5642,10 @@ class MainWindow(QMainWindow):
         # Set lookups for Analyze tab
         self.analyze_tab.set_lookups(self.clips_by_id, self.sources_by_id)
 
-        # Update Cut tab with clips for current source
+        # Update Cut tab with ALL clips from ALL sources
         self.cut_tab.set_source(self.current_source)
         self.cut_tab.clear_clips()
-        current_source_clips = self.clips_by_source.get(self.current_source.id, [])
-        self.cut_tab.set_clips(current_source_clips)
+        self.cut_tab.set_clips(self.clips)
 
         # Add clips to Cut tab browser with their correct source
         for clip in self.clips:
@@ -5654,11 +5730,10 @@ class MainWindow(QMainWindow):
             # Set lookups for Analyze tab
             self.analyze_tab.set_lookups(self.clips_by_id, self.sources_by_id)
 
-            # Update Cut tab with clips for current source
+            # Update Cut tab with ALL clips from ALL sources
             self.cut_tab.set_source(self.current_source)
             self.cut_tab.clear_clips()
-            current_source_clips = self.clips_by_source.get(self.current_source.id, [])
-            self.cut_tab.set_clips(current_source_clips)
+            self.cut_tab.set_clips(self.clips)
 
             # Add clips to Cut tab browser with their correct source
             for clip in self.clips:

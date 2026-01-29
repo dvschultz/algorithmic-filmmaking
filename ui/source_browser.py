@@ -22,6 +22,23 @@ from ui.source_thumbnail import SourceThumbnail
 from ui.theme import theme, UISizes
 
 
+def scan_folder_for_videos(folder_path: Path, extensions: set) -> list[Path]:
+    """Recursively scan a folder for video files matching extensions.
+
+    Args:
+        folder_path: The folder to scan.
+        extensions: Set of file extensions to match (e.g., {".mp4", ".mkv"}).
+
+    Returns:
+        Sorted list of video file paths found in the folder and subfolders.
+    """
+    videos = []
+    for item in folder_path.rglob("*"):
+        if item.is_file() and item.suffix.lower() in extensions:
+            videos.append(item)
+    return sorted(videos)
+
+
 class AddVideoCard(QFrame):
     """Card widget for adding new videos to the library."""
 
@@ -112,7 +129,8 @@ class AddVideoCard(QFrame):
             for url in event.mimeData().urls():
                 if url.isLocalFile():
                     path = Path(url.toLocalFile())
-                    if path.suffix.lower() in self.VIDEO_EXTENSIONS:
+                    # Accept if it's a video file OR a directory
+                    if path.is_dir() or path.suffix.lower() in self.VIDEO_EXTENSIONS:
                         event.acceptProposedAction()
                         self._apply_theme(dragging=True)
                         return
@@ -127,7 +145,10 @@ class AddVideoCard(QFrame):
         for url in event.mimeData().urls():
             if url.isLocalFile():
                 path = Path(url.toLocalFile())
-                if path.suffix.lower() in self.VIDEO_EXTENSIONS:
+                if path.is_dir():
+                    # Recursively scan folder for videos
+                    paths.extend(scan_folder_for_videos(path, self.VIDEO_EXTENSIONS))
+                elif path.suffix.lower() in self.VIDEO_EXTENSIONS:
                     paths.append(path)
         if paths:
             self.files_dropped.emit(paths)
