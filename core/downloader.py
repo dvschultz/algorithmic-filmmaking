@@ -111,6 +111,8 @@ class VideoDownloader:
             "--no-download",
             "--print-json",
             "--no-playlist",
+            # Use TV client to avoid SABR streaming issues (GitHub issue #12482)
+            "--extractor-args", "youtube:player_client=tv,default",
             "--",  # End of options
             url,
         ]
@@ -210,6 +212,8 @@ class VideoDownloader:
             "--no-playlist",  # Don't download playlists
             "--no-exec",  # Don't run post-processing scripts
             "--max-filesize", "4G",  # Limit file size
+            # Use TV client to avoid SABR streaming 403 errors (GitHub issue #12482)
+            "--extractor-args", "youtube:player_client=tv,default",
             "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
             "--merge-output-format", "mp4",
             "-o", output_template,
@@ -325,11 +329,24 @@ class VideoDownloader:
                     "Install Deno with: brew install deno (macOS) or see "
                     "https://github.com/yt-dlp/yt-dlp/wiki/EJS"
                 )
-            # 403 Forbidden often accompanies JS runtime issues
+            # 403 with JS runtime issue
             elif "HTTP Error 403: Forbidden" in recent_text and "JavaScript runtime" in recent_text:
                 error_msg = (
                     "YouTube download blocked (403). This is usually caused by missing "
                     "JavaScript runtime. Install Deno with: brew install deno"
+                )
+            # SABR streaming 403 errors (GitHub issue #12482)
+            elif "HTTP Error 403: Forbidden" in recent_text and "SABR" in recent_text:
+                error_msg = (
+                    "YouTube is blocking this download (SABR streaming restriction). "
+                    "Try updating yt-dlp: pip install -U yt-dlp"
+                )
+            # Generic 403 - could be geo-restriction, age-restriction, or other
+            elif "HTTP Error 403: Forbidden" in recent_text:
+                error_msg = (
+                    "YouTube blocked the download (403 Forbidden). This may be due to "
+                    "geo-restrictions, age-restrictions, or YouTube rate limiting. "
+                    "Try again later or try a different video."
                 )
             elif last_error:
                 error_msg = last_error
