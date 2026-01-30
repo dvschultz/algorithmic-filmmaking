@@ -2787,6 +2787,9 @@ class MainWindow(QMainWindow):
             f"Transcribing {len(clips)} clips using {self.settings.transcription_model} model ({model_size})..."
         )
 
+        # Safely stop any existing worker before creating new one
+        self._stop_worker_safely(self.transcription_worker, "Transcription")
+
         logger.info("Creating TranscriptionWorker (manual)...")
         self.transcription_worker = TranscriptionWorker(
             clips,
@@ -3144,6 +3147,9 @@ class MainWindow(QMainWindow):
                 f"Transcribing {len(next_clips)} clips (source {current_source_num}/{total_sources})..."
             )
 
+            # Safely stop previous worker before creating new one
+            self._stop_worker_safely(self.transcription_worker, "Transcription")
+
             # Start worker for next source
             self.transcription_worker = TranscriptionWorker(
                 next_clips,
@@ -3403,6 +3409,9 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(
             f"Transcribing {len(clips)} clips from source ({remaining_sources + 1} sources remaining)..."
         )
+
+        # Safely stop any existing worker before creating new one
+        self._stop_worker_safely(self.transcription_worker, "Transcription")
 
         logger.info(f"Creating TranscriptionWorker for source {source_id} ({len(clips)} clips)")
         self.transcription_worker = TranscriptionWorker(
@@ -4872,6 +4881,9 @@ class MainWindow(QMainWindow):
         self.progress_bar.setRange(0, 100)
         sources_info = f" (source 1/{len(source_queue)})" if len(source_queue) > 1 else ""
         self.status_bar.showMessage(f"Transcribing {len(first_clips)} clips{sources_info}...")
+
+        # Safely stop any existing worker before creating new one
+        self._stop_worker_safely(self.transcription_worker, "Transcription")
 
         # Start worker for first source
         from PySide6.QtCore import Qt
