@@ -5682,7 +5682,7 @@ class MainWindow(QMainWindow):
             self,
             "Open Project",
             str(Path.home()),
-            "Scene Ripper Projects (*.sceneripper);;Legacy Projects (*.json);;All Files (*)",
+            "Scene Ripper Projects (*.sceneripper);;All Files (*)",
         )
 
         if file_path:
@@ -5710,7 +5710,7 @@ class MainWindow(QMainWindow):
             self,
             "Save Project As",
             default_path,
-            "Scene Ripper Projects (*.sceneripper);;Legacy JSON (*.json);;All Files (*)",
+            "Scene Ripper Projects (*.sceneripper);;All Files (*)",
         )
 
         if file_path:

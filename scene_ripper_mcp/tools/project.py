@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 @mcp.tool()
 async def get_project_info(
-    project_path: Annotated[str, "Absolute path to .json project file"],
+    project_path: Annotated[str, "Absolute path to .sceneripper project file"],
     ctx: Context,
 ) -> str:
     """Get information about a Scene Ripper project.
@@ -209,12 +209,12 @@ async def create_project(
 
 @mcp.tool()
 async def list_projects(
-    directory: Annotated[str, "Directory to search for project files"],
+    directory: Annotated[str, "Directory to search for .sceneripper project files"],
     ctx: Context = None,
 ) -> str:
     """List Scene Ripper projects in a directory.
 
-    Searches for .sceneripper and .json files that appear to be Scene Ripper projects.
+    Searches for .sceneripper files that are Scene Ripper projects.
 
     Args:
         directory: Directory path to search
@@ -229,24 +229,23 @@ async def list_projects(
     try:
         projects = []
 
-        # Search for both .sceneripper and .json files (non-recursive for safety)
-        for pattern in ["*.sceneripper", "*.json"]:
-            for project_file in dir_path.glob(pattern):
-                try:
-                    with open(project_file, "r") as f:
-                        data = json.load(f)
+        # Search for .sceneripper files (non-recursive for safety)
+        for project_file in dir_path.glob("*.sceneripper"):
+            try:
+                with open(project_file, "r") as f:
+                    data = json.load(f)
 
-                    # Check if it looks like a Scene Ripper project
-                    if "version" in data and ("sources" in data or "clips" in data):
-                        projects.append(
-                            {
-                                "path": str(project_file),
-                                "name": data.get("project_name", project_file.stem),
-                                "modified": project_file.stat().st_mtime,
-                            }
-                        )
-                except (json.JSONDecodeError, OSError):
-                    continue
+                # Check if it looks like a Scene Ripper project
+                if "version" in data and ("sources" in data or "clips" in data):
+                    projects.append(
+                        {
+                            "path": str(project_file),
+                            "name": data.get("project_name", project_file.stem),
+                            "modified": project_file.stat().st_mtime,
+                        }
+                    )
+            except (json.JSONDecodeError, OSError):
+                continue
 
         # Sort by modification time (newest first)
         projects.sort(key=lambda p: p["modified"], reverse=True)

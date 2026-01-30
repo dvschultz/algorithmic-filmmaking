@@ -2222,7 +2222,7 @@ def save_project(project, path: Optional[str] = None) -> dict:
 
 
 @tools.register(
-    description="Load a project from a .sceneripper or .json file. This replaces the current project.",
+    description="Load a project from a .sceneripper file. This replaces the current project.",
     requires_project=False,
     modifies_gui_state=True
 )

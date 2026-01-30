@@ -130,7 +130,7 @@ def validate_project_path(path_str: str, must_exist: bool = True) -> Tuple[bool,
     Returns:
         Tuple of (is_valid, error_message, resolved_path)
     """
-    if not (path_str.endswith(".sceneripper") or path_str.endswith(".json")):
-        return False, "Project path must end with .sceneripper or .json", Path()
+    if not path_str.endswith(".sceneripper"):
+        return False, "Project path must end with .sceneripper", Path()
 
     return validate_path(path_str, must_exist=must_exist, must_be_file=must_exist)
