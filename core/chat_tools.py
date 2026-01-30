@@ -1045,6 +1045,88 @@ def reorder_sequence(project, clip_ids: list[str]) -> dict:
 
 
 @tools.register(
+    description=(
+        "Sort clips in the sequence by a specific criterion. "
+        "Supported criteria: 'color' (sort by dominant color hue), "
+        "'duration' (shortest to longest), 'shot_type' (alphabetical), "
+        "'random' (shuffle randomly). Use reverse=True for descending order."
+    ),
+    requires_project=True,
+    modifies_gui_state=True,
+    modifies_project_state=True
+)
+def sort_sequence(project, sort_by: str, reverse: bool = False) -> dict:
+    """Sort clips in the sequence by various criteria."""
+    import colorsys
+    import random
+
+    if project.sequence is None:
+        return {"success": False, "error": "No sequence exists"}
+
+    # Get all sequence clips with their source clip data
+    all_clips = []
+    for track in project.sequence.tracks:
+        for seq_clip in track.clips:
+            source_clip = project.clips_by_id.get(seq_clip.source_clip_id)
+            all_clips.append((seq_clip, source_clip))
+
+    if not all_clips:
+        return {"success": False, "error": "Sequence is empty"}
+
+    # Define sort key functions
+    def color_key(item):
+        seq_clip, source_clip = item
+        if source_clip and source_clip.dominant_colors:
+            # Use first dominant color's hue for sorting
+            r, g, b = source_clip.dominant_colors[0]
+            h, _, _ = colorsys.rgb_to_hls(r / 255, g / 255, b / 255)
+            return h
+        return 0.5  # Mid-gray for clips without color
+
+    def duration_key(item):
+        seq_clip, _ = item
+        return seq_clip.duration_frames
+
+    def shot_type_key(item):
+        _, source_clip = item
+        if source_clip and source_clip.shot_type:
+            return source_clip.shot_type.lower()
+        return "zzz"  # Sort unknowns to end
+
+    # Sort based on criterion
+    sort_by_lower = sort_by.lower()
+    if sort_by_lower == "color":
+        all_clips.sort(key=color_key, reverse=reverse)
+    elif sort_by_lower == "duration":
+        all_clips.sort(key=duration_key, reverse=reverse)
+    elif sort_by_lower == "shot_type":
+        all_clips.sort(key=shot_type_key, reverse=reverse)
+    elif sort_by_lower == "random":
+        random.shuffle(all_clips)
+    else:
+        return {
+            "success": False,
+            "error": f"Unknown sort criterion: {sort_by}. Use: color, duration, shot_type, random"
+        }
+
+    # Reorder the sequence using the sorted IDs
+    sorted_ids = [seq_clip.id for seq_clip, _ in all_clips]
+    success = project.reorder_sequence(sorted_ids)
+
+    if success:
+        return {
+            "success": True,
+            "message": f"Sorted {len(sorted_ids)} clips by {sort_by}" + (" (descending)" if reverse else ""),
+            "new_order": sorted_ids
+        }
+    else:
+        return {
+            "success": False,
+            "error": "Failed to reorder sequence after sorting"
+        }
+
+
+@tools.register(
     description="Get the current state of the timeline sequence including all clips, their positions, and durations.",
     requires_project=True,
     modifies_gui_state=False
@@ -1069,7 +1151,7 @@ def get_sequence_state(project) -> dict:
             source_clip = project.clips_by_id.get(seq_clip.source_clip_id)
             source = project.sources_by_id.get(seq_clip.source_id)
 
-            clips_data.append({
+            clip_data = {
                 "id": seq_clip.id,
                 "source_clip_id": seq_clip.source_clip_id,
                 "source_id": seq_clip.source_id,
@@ -1081,7 +1163,21 @@ def get_sequence_state(project) -> dict:
                 "duration_seconds": round(seq_clip.duration_seconds(fps), 2),
                 "in_point": seq_clip.in_point,
                 "out_point": seq_clip.out_point,
-            })
+            }
+
+            # Include source clip metadata for sorting/filtering
+            if source_clip:
+                if source_clip.dominant_colors:
+                    clip_data["dominant_colors"] = [
+                        f"#{r:02x}{g:02x}{b:02x}"
+                        for r, g, b in source_clip.dominant_colors
+                    ]
+                if source_clip.shot_type:
+                    clip_data["shot_type"] = source_clip.shot_type
+                if source_clip.description:
+                    clip_data["description"] = source_clip.description
+
+            clips_data.append(clip_data)
 
     return {
         "has_sequence": True,
