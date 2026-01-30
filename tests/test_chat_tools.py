@@ -1175,6 +1175,7 @@ class TestPendingActionTracking:
     def test_present_plan_stores_pending_action_for_unnamed_project(self):
         """Test that present_plan stores pending action when project is unnamed."""
         from core.chat_tools import present_plan
+        from core.gui_state import NameProjectThenPlanAction
 
         main_window = self._create_mock_main_window_with_project()
 
@@ -1188,8 +1189,8 @@ class TestPendingActionTracking:
         # Should store pending action in GUI state
         pending = main_window._gui_state.pending_action
         assert pending is not None
-        assert pending["type"] == "name_project_then_plan"
-        assert pending["pending_steps"] == steps
+        assert isinstance(pending, NameProjectThenPlanAction)
+        assert pending.pending_steps == steps
 
     def test_set_project_name_includes_next_action_when_pending(self):
         """Test that set_project_name reminds agent to call present_plan."""
@@ -1217,14 +1218,15 @@ class TestPendingActionTracking:
 
     def test_gui_state_context_shows_pending_action(self):
         """Test that GUI state context string includes pending action."""
-        from core.gui_state import GUIState
+        from core.gui_state import GUIState, NameProjectThenPlanAction
 
         state = GUIState()
-        state.set_pending_action(
-            "name_project_then_plan",
+        action = NameProjectThenPlanAction(
             pending_steps=["Step 1", "Step 2"],
+            pending_summary="Test plan",
             user_response="kittyjump"
         )
+        state.set_pending_action(action)
 
         context = state.to_context_string()
 
@@ -1235,10 +1237,15 @@ class TestPendingActionTracking:
 
     def test_pending_action_cleared_after_handling(self):
         """Test that pending action can be cleared."""
-        from core.gui_state import GUIState
+        from core.gui_state import GUIState, NameProjectThenPlanAction
 
         state = GUIState()
-        state.set_pending_action("test_action", data="test")
+        state.set_pending_action(
+            NameProjectThenPlanAction(
+                pending_steps=["Step 1"],
+                pending_summary="Test"
+            )
+        )
 
         assert state.pending_action is not None
 

@@ -133,6 +133,26 @@ class Plan:
             self.current_step.status = "running"
             self.current_step.error = None
 
+    def skip_current_step(self, error: str):
+        """Mark current step as failed and skip to next step.
+
+        Args:
+            error: Error message describing why the step was skipped
+        """
+        if self.status != "executing":
+            return
+
+        # Mark current step as failed
+        self.fail_current_step(error)
+
+        # Advance to next step
+        self.current_step_index += 1
+        if self.current_step_index >= len(self.steps):
+            self.status = "completed"
+            self.completed_at = datetime.now()
+        else:
+            self.steps[self.current_step_index].status = "running"
+
     def cancel(self):
         """Cancel the plan execution."""
         self.status = "cancelled"

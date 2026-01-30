@@ -975,10 +975,8 @@ class MainWindow(QMainWindow):
             if source:
                 all_clips.append((clip, source))
 
-        # Update Sequence tab with all clips
-        self.sequence_tab._available_clips = all_clips
-        self.sequence_tab._clips = self.clips
-        self.sequence_tab._sources.update(self.sources_by_id)
+        # Update Sequence tab with all clips via public method
+        self.sequence_tab.set_available_clips(all_clips, self.clips, self.sources_by_id)
 
         logger.debug(f"Refreshed Sequence tab with {len(all_clips)} clips from {len(self.sources_by_id)} sources")
 

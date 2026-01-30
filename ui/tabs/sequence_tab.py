@@ -159,6 +159,22 @@ class SequenceTab(BaseTab):
         """Set the GUI state reference (called by MainWindow)."""
         self._gui_state = gui_state
 
+    def set_available_clips(self, clips_with_sources: list, all_clips: list = None, sources_by_id: dict = None):
+        """Set the pool of all clips available for sequencing.
+
+        Args:
+            clips_with_sources: List of (Clip, Source) tuples
+            all_clips: Optional list of all Clip objects (derived from clips_with_sources if not provided)
+            sources_by_id: Optional dict mapping source_id -> Source (derived from clips_with_sources if not provided)
+        """
+        self._available_clips = clips_with_sources
+        self._clips = all_clips if all_clips is not None else [clip for clip, source in clips_with_sources]
+        if sources_by_id is not None:
+            self._sources.update(sources_by_id)
+        else:
+            self._sources.update({source.id: source for clip, source in clips_with_sources if source})
+        logger.debug(f"Set available clips in Sequence tab: {len(self._available_clips)}")
+
     # --- Signal handlers ---
 
     @Slot(str)

@@ -29,8 +29,16 @@ from core.youtube_api import (
 from core.downloader import VideoDownloader
 from core.settings import load_settings
 from core.analysis.shots import SHOT_TYPES
+from core.gui_state import NameProjectThenPlanAction
 
 logger = logging.getLogger(__name__)
+
+# Common error messages for plan execution tools
+_NO_PLAN_ERROR = (
+    "No plan exists. You must call present_plan first to create a plan object. "
+    "Describing steps in text is not sufficient - the present_plan tool must be "
+    "called with the steps array. After the user confirms, then call start_plan_execution."
+)
 
 
 def _validate_path(path_str: str, must_exist: bool = False, allow_relative: bool = False) -> tuple[bool, str, Optional[Path]]:
@@ -354,9 +362,10 @@ def present_plan(main_window, steps: list[str], summary: str) -> dict:
             # Store pending action in GUI state so agent is reminded after user responds
             if hasattr(main_window, '_gui_state'):
                 main_window._gui_state.set_pending_action(
-                    "name_project_then_plan",
-                    pending_steps=steps,
-                    pending_summary=summary
+                    NameProjectThenPlanAction(
+                        pending_steps=steps,
+                        pending_summary=summary
+                    )
                 )
 
             return {
@@ -408,11 +417,7 @@ def start_plan_execution(main_window) -> dict:
     if not hasattr(main_window, '_gui_state') or not main_window._gui_state.current_plan:
         return {
             "success": False,
-            "error": (
-                "No plan exists. You must call present_plan first to create a plan object. "
-                "Describing steps in text is not sufficient - the present_plan tool must be "
-                "called with the steps array. After the user confirms, then call start_plan_execution."
-            )
+            "error": _NO_PLAN_ERROR
         }
 
     plan = main_window._gui_state.current_plan
@@ -467,10 +472,7 @@ def complete_plan_step(main_window, result_summary: Optional[str] = None) -> dic
     if not hasattr(main_window, '_gui_state') or not main_window._gui_state.current_plan:
         return {
             "success": False,
-            "error": (
-                "No plan exists. Call present_plan first to create a plan, "
-                "wait for user confirmation, then call start_plan_execution."
-            )
+            "error": _NO_PLAN_ERROR
         }
 
     plan = main_window._gui_state.current_plan
@@ -607,12 +609,9 @@ def fail_plan_step(main_window, error: str, action: str = "stop") -> dict:
             "message": f"Retrying step {failed_step_number}: {failed_step}"
         }
     elif action == "skip":
-        # Mark as failed but advance anyway
-        plan.fail_current_step(error)
-        plan.current_step_index += 1
-        if plan.current_step_index >= len(plan.steps):
-            plan.status = "completed"
-            plan.completed_at = datetime.now()
+        # Mark as failed but advance anyway using Plan's encapsulated method
+        plan.skip_current_step(error)
+        if plan.status == "completed":
             return {
                 "success": True,
                 "action": "skip",
@@ -621,7 +620,6 @@ def fail_plan_step(main_window, error: str, action: str = "stop") -> dict:
                 "message": f"Skipped failed step {failed_step_number}. Plan completed (with failures)."
             }
         else:
-            plan.steps[plan.current_step_index].status = "running"
             return {
                 "success": True,
                 "action": "skip",
@@ -2008,11 +2006,11 @@ def set_project_name(main_window, project, name: str) -> dict:
     # Check for pending action that requires follow-up after naming
     if hasattr(main_window, '_gui_state') and main_window._gui_state.pending_action:
         pending = main_window._gui_state.pending_action
-        if pending.get("type") == "name_project_then_plan":
+        if isinstance(pending, NameProjectThenPlanAction):
             result["next_action"] = "present_plan"
             result["next_action_args"] = {
-                "steps": pending.get("pending_steps", []),
-                "summary": pending.get("pending_summary", "")
+                "steps": pending.pending_steps,
+                "summary": pending.pending_summary
             }
             result["message"] += ". IMPORTANT: Now call present_plan with the pending steps to continue."
             # Clear the pending action
