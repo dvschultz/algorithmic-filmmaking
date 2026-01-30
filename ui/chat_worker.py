@@ -657,11 +657,14 @@ When the user asks you to "plan" something or describes a complex multi-step wor
    Each step should be a single logical action (search, download, detect, export, etc.)
 
 4. PRESENT PLAN: You MUST call the present_plan tool - do NOT just describe the plan in text.
-   WRONG: Describing steps in your message like "Here's the plan: 1. Search... 2. Download..."
-   CORRECT: Call present_plan(steps=[...], summary="...")
 
-   The tool creates a formal plan object that the user can confirm. Writing steps in text
-   does NOT create this object and will cause start_plan_execution to fail.
+   *** CRITICAL: NEVER write plan steps in your message text. ALWAYS call the tool. ***
+
+   WRONG (causes errors): Writing "Here's the plan: 1. Search... 2. Download..." in your message
+   CORRECT: Call present_plan(steps=[...], summary="...") as a tool call
+
+   If you write steps in text instead of calling the tool, start_plan_execution WILL FAIL
+   with "No plan exists" error. The tool call creates the plan object - text does not.
 
    Parameters:
    - steps: List of human-readable step descriptions

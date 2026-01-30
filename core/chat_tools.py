@@ -35,9 +35,10 @@ logger = logging.getLogger(__name__)
 
 # Common error messages for plan execution tools
 _NO_PLAN_ERROR = (
-    "No plan exists. You must call present_plan first to create a plan object. "
-    "Describing steps in text is not sufficient - the present_plan tool must be "
-    "called with the steps array. After the user confirms, then call start_plan_execution."
+    "No plan exists. You must call the present_plan TOOL (not write text). "
+    "DO NOT describe steps in your message - that does not create a plan. "
+    "Instead, make a tool call: present_plan(steps=[\"Step 1\", \"Step 2\", ...], summary=\"...\"). "
+    "After the user confirms the plan widget, then call start_plan_execution."
 )
 
 
