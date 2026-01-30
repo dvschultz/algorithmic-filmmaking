@@ -3099,9 +3099,9 @@ def detect_all_unanalyzed(
 
 @tools.register(
     description="Check if scene detection is currently running and get progress. "
-                "Call this after detect_all_unanalyzed to verify completion before proceeding to list_clips or add_to_sequence. "
-                "IMPORTANT: Scene detection can take 1-5 minutes PER VIDEO. Do NOT assume failure if is_running=True - "
-                "keep checking periodically. Only conclude failure if is_running=False AND sources_analyzed < sources_total.",
+                "Call ONCE after detect_all_unanalyzed to confirm it started, then inform the user and WAIT for them to ask for updates. "
+                "Do NOT call this repeatedly in a loop - you cannot actually wait between calls. "
+                "Scene detection takes 1-5 minutes PER VIDEO. Only conclude failure if is_running=False AND sources_analyzed < sources_total.",
     requires_project=True,
     modifies_gui_state=True  # Needs main_window to check worker status
 )

@@ -644,13 +644,16 @@ When the user wants to work with videos:
 BATCH SCENE DETECTION (detect_all_unanalyzed):
 When detecting scenes in multiple videos:
 1. Call detect_all_unanalyzed to queue all unanalyzed sources
-2. Call check_detection_status periodically to monitor progress
-3. PATIENCE IS CRITICAL: Detection takes 1-5 minutes PER VIDEO
-4. Do NOT assume failure while is_running=True - the process is just slow
-5. Only conclude detection failed if:
-   - is_running=False AND sources_analyzed < sources_total, OR
-   - You've waited at least (number_of_videos × 5) minutes with no progress
-6. Keep checking status every 30-60 seconds until all_complete=True or is_running=False
+2. Call check_detection_status ONCE to confirm detection started
+3. IMPORTANT: Detection takes 1-5 minutes PER VIDEO. For many videos, this means HOURS.
+4. After confirming detection started, INFORM THE USER:
+   - Tell them how many videos are queued
+   - Estimate the time (videos × 2-3 minutes average)
+   - Tell them detection is running in the background
+   - Ask them to say "check status" or "continue" when they want an update
+5. Do NOT spam check_detection_status calls - you cannot actually wait between calls
+6. When the user asks for status, check once and report progress
+7. Only conclude detection failed if is_running=False AND sources_analyzed < sources_total
 
 If the user's request is unclear, ask clarifying questions.
 
