@@ -242,7 +242,6 @@ class VideoDownloader:
         # Build download command
         cmd = [
             self.ytdlp_path,
-            "--verbose",  # DEBUG: See JS runtime detection
             "--no-playlist",  # Don't download playlists
             "--no-exec",  # Don't run post-processing scripts
             "--max-filesize", "4G",  # Limit file size

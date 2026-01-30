@@ -375,8 +375,10 @@ class ChatAgentWorker(QThread):
 
                         # Wait for main thread to complete (with per-tool timeout)
                         tool_timeout = get_tool_timeout(name)
+                        logger.info(f"Waiting for GUI tool '{name}' with timeout {tool_timeout}s ({tool_timeout/60:.1f} min)")
                         completed = self._gui_tool_event.wait(timeout=tool_timeout)
                         if not completed or self._stop_requested:
+                            logger.warning(f"GUI tool '{name}' timed out after {tool_timeout}s or was cancelled (stop_requested={self._stop_requested})")
                             # Emit cancellation signal so MainWindow can stop orphaned workers
                             self.gui_tool_cancelled.emit(name)
                             result = {

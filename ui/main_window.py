@@ -264,11 +264,14 @@ class URLBulkDownloadWorker(QThread):
         """Download videos in parallel using ThreadPoolExecutor."""
         from concurrent.futures import ThreadPoolExecutor, as_completed
         import threading
+        import time
 
         total = len(self.urls)
         self._lock = threading.Lock()
         self._completed_count = 0
+        start_time = time.time()
 
+        logger.info(f"URLBulkDownloadWorker starting: {total} URLs")
         self.progress.emit(0, total, f"Starting {total} downloads...")
 
         with ThreadPoolExecutor(max_workers=self.MAX_WORKERS) as executor:
@@ -305,6 +308,9 @@ class URLBulkDownloadWorker(QThread):
                         self._results.append({"url": url, "success": False, "error": str(e)})
                         self._completed_count += 1
 
+        elapsed = time.time() - start_time
+        success_count = sum(1 for r in self._results if r.get("success"))
+        logger.info(f"URLBulkDownloadWorker finished: {success_count}/{total} succeeded in {elapsed:.1f}s")
         self.progress.emit(total, total, "Downloads complete")
         self.all_finished.emit(self._results)
 
@@ -4696,6 +4702,7 @@ class MainWindow(QMainWindow):
 
     def _on_agent_bulk_download_finished(self, results: list):
         """Handle bulk download completion."""
+        logger.info(f"Bulk download finished signal received: {len(results)} results, pending_agent_download={self._pending_agent_download}")
         self.progress_bar.setVisible(False)
         success_count = sum(1 for r in results if r.get("success"))
         self.status_bar.showMessage(f"Downloaded {success_count}/{len(results)} videos")
