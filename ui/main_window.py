@@ -2691,6 +2691,7 @@ class MainWindow(QMainWindow):
         self.color_worker.analysis_completed.connect(self._on_manual_color_analysis_finished, Qt.UniqueConnection)
         # Clean up thread safely after it finishes to prevent "QThread: Destroyed while running" crash
         self.color_worker.finished.connect(self.color_worker.deleteLater)
+        self.color_worker.finished.connect(lambda: setattr(self, 'color_worker', None))
         logger.info("Starting ColorAnalysisWorker (manual)...")
         self.color_worker.start()
 
@@ -2732,6 +2733,7 @@ class MainWindow(QMainWindow):
         self.shot_type_worker.analysis_completed.connect(self._on_manual_shot_type_finished, Qt.UniqueConnection)
         # Clean up thread safely after it finishes
         self.shot_type_worker.finished.connect(self.shot_type_worker.deleteLater)
+        self.shot_type_worker.finished.connect(lambda: setattr(self, 'shot_type_worker', None))
         logger.info("Starting ShotTypeWorker (manual)...")
         self.shot_type_worker.start()
 
@@ -2812,6 +2814,7 @@ class MainWindow(QMainWindow):
         self.transcription_worker.error.connect(self._on_transcription_error)
         # Clean up thread safely after it finishes
         self.transcription_worker.finished.connect(self.transcription_worker.deleteLater)
+        self.transcription_worker.finished.connect(lambda: setattr(self, 'transcription_worker', None))
         logger.info("Starting TranscriptionWorker (manual)...")
         self.transcription_worker.start()
 
@@ -2887,6 +2890,7 @@ class MainWindow(QMainWindow):
         self.classification_worker.classification_completed.connect(self._on_manual_classification_finished, Qt.UniqueConnection)
         # Clean up thread safely after it finishes
         self.classification_worker.finished.connect(self.classification_worker.deleteLater)
+        self.classification_worker.finished.connect(lambda: setattr(self, 'classification_worker', None))
         logger.info("Starting ClassificationWorker (manual)...")
         self.classification_worker.start()
 
@@ -2939,6 +2943,7 @@ class MainWindow(QMainWindow):
         self.detection_worker_yolo.detection_completed.connect(self._on_manual_object_detection_finished, Qt.UniqueConnection)
         # Clean up thread safely after it finishes
         self.detection_worker_yolo.finished.connect(self.detection_worker_yolo.deleteLater)
+        self.detection_worker_yolo.finished.connect(lambda: setattr(self, 'detection_worker_yolo', None))
         logger.info("Starting ObjectDetectionWorker (manual)...")
         self.detection_worker_yolo.start()
 
@@ -3001,6 +3006,7 @@ class MainWindow(QMainWindow):
         self.description_worker.description_completed.connect(self._on_manual_description_finished, Qt.UniqueConnection)
         # Clean up thread safely after it finishes
         self.description_worker.finished.connect(self.description_worker.deleteLater)
+        self.description_worker.finished.connect(lambda: setattr(self, 'description_worker', None))
         logger.info("Starting DescriptionWorker (manual)...")
         self.description_worker.start()
 
@@ -3180,6 +3186,7 @@ class MainWindow(QMainWindow):
             self.transcription_worker.error.connect(self._on_transcription_error)
             # Clean up thread safely after it finishes
             self.transcription_worker.finished.connect(self.transcription_worker.deleteLater)
+            self.transcription_worker.finished.connect(lambda: setattr(self, 'transcription_worker', None))
             self.transcription_worker.start()
             return
 
@@ -3319,6 +3326,7 @@ class MainWindow(QMainWindow):
         self.color_worker.analysis_completed.connect(self._on_analyze_all_color_finished, Qt.UniqueConnection)
         # Clean up thread safely after it finishes
         self.color_worker.finished.connect(self.color_worker.deleteLater)
+        self.color_worker.finished.connect(lambda: setattr(self, 'color_worker', None))
         self.color_worker.start()
 
     @Slot()
@@ -3356,6 +3364,7 @@ class MainWindow(QMainWindow):
         self.shot_type_worker.analysis_completed.connect(self._on_analyze_all_shot_finished, Qt.UniqueConnection)
         # Clean up thread safely after it finishes
         self.shot_type_worker.finished.connect(self.shot_type_worker.deleteLater)
+        self.shot_type_worker.finished.connect(lambda: setattr(self, 'shot_type_worker', None))
         self.shot_type_worker.start()
 
     @Slot()
@@ -3449,6 +3458,7 @@ class MainWindow(QMainWindow):
         self.transcription_worker.error.connect(self._on_transcription_error)
         # Clean up thread safely after it finishes
         self.transcription_worker.finished.connect(self.transcription_worker.deleteLater)
+        self.transcription_worker.finished.connect(lambda: setattr(self, 'transcription_worker', None))
         self.transcription_worker.start()
 
     @Slot()
@@ -3566,6 +3576,7 @@ class MainWindow(QMainWindow):
         self.download_worker.error.connect(self._on_download_error)
         # Clean up thread safely after it finishes to prevent "QThread: Destroyed while running" crash
         self.download_worker.finished.connect(self.download_worker.deleteLater)
+        self.download_worker.finished.connect(lambda: setattr(self, 'download_worker', None))
         self.download_worker.start()
 
     def _on_download_progress(self, progress: float, message: str):
@@ -3624,6 +3635,7 @@ class MainWindow(QMainWindow):
         self.youtube_search_worker.error.connect(self._on_youtube_search_error)
         # Clean up thread safely after it finishes to prevent "QThread: Destroyed while running" crash
         self.youtube_search_worker.finished.connect(self.youtube_search_worker.deleteLater)
+        self.youtube_search_worker.finished.connect(lambda: setattr(self, 'youtube_search_worker', None))
         self.youtube_search_worker.start()
 
     @Slot(object)
@@ -3680,6 +3692,7 @@ class MainWindow(QMainWindow):
         self.bulk_download_worker.all_finished.connect(self._on_bulk_finished)
         # Clean up thread safely after it finishes to prevent "QThread: Destroyed while running" crash
         self.bulk_download_worker.finished.connect(self.bulk_download_worker.deleteLater)
+        self.bulk_download_worker.finished.connect(lambda: setattr(self, 'bulk_download_worker', None))
         self.bulk_download_worker.start()
 
     @Slot(int, int, str)
@@ -3767,6 +3780,7 @@ class MainWindow(QMainWindow):
         self.detection_worker.error.connect(self._on_detection_error)
         # Clean up thread safely after it finishes to prevent "QThread: Destroyed while running" crash
         self.detection_worker.finished.connect(self.detection_worker.deleteLater)
+        self.detection_worker.finished.connect(lambda: setattr(self, 'detection_worker', None))
         logger.info("Starting DetectionWorker...")
         self.detection_worker.start()
         logger.info("DetectionWorker started")
@@ -4391,6 +4405,7 @@ class MainWindow(QMainWindow):
         self.export_worker.error.connect(self._on_sequence_export_error)
         # Clean up thread safely after it finishes
         self.export_worker.finished.connect(self.export_worker.deleteLater)
+        self.export_worker.finished.connect(lambda: setattr(self, 'export_worker', None))
         self.export_worker.start()
 
     def start_agent_export(self, sequence, sources: dict, clips: dict, config) -> bool:
@@ -4423,6 +4438,7 @@ class MainWindow(QMainWindow):
         self.export_worker.error.connect(self._on_sequence_export_error)
         # Clean up thread safely after it finishes
         self.export_worker.finished.connect(self.export_worker.deleteLater)
+        self.export_worker.finished.connect(lambda: setattr(self, 'export_worker', None))
         self.export_worker.start()
         return True
 
@@ -4642,6 +4658,7 @@ class MainWindow(QMainWindow):
         self.url_bulk_download_worker.all_finished.connect(self._on_agent_bulk_download_finished)
         # Clean up thread safely after it finishes to prevent "QThread: Destroyed while running" crash
         self.url_bulk_download_worker.finished.connect(self.url_bulk_download_worker.deleteLater)
+        self.url_bulk_download_worker.finished.connect(lambda: setattr(self, 'url_bulk_download_worker', None))
         self.url_bulk_download_worker.start()
         return True
 
@@ -4808,6 +4825,7 @@ class MainWindow(QMainWindow):
         self.color_worker.analysis_completed.connect(self._on_agent_color_analysis_finished, Qt.UniqueConnection)
         # Clean up thread safely after it finishes
         self.color_worker.finished.connect(self.color_worker.deleteLater)
+        self.color_worker.finished.connect(lambda: setattr(self, 'color_worker', None))
         self.color_worker.start()
 
         return True
@@ -4857,6 +4875,7 @@ class MainWindow(QMainWindow):
         self.shot_type_worker.analysis_completed.connect(self._on_agent_shot_analysis_finished, Qt.UniqueConnection)
         # Clean up thread safely after it finishes
         self.shot_type_worker.finished.connect(self.shot_type_worker.deleteLater)
+        self.shot_type_worker.finished.connect(lambda: setattr(self, 'shot_type_worker', None))
         self.shot_type_worker.start()
 
         return True
@@ -4942,6 +4961,7 @@ class MainWindow(QMainWindow):
         self.transcription_worker.error.connect(self._on_transcription_error)
         # Clean up thread safely after it finishes
         self.transcription_worker.finished.connect(self.transcription_worker.deleteLater)
+        self.transcription_worker.finished.connect(lambda: setattr(self, 'transcription_worker', None))
         self.transcription_worker.start()
 
         return True
@@ -4992,6 +5012,7 @@ class MainWindow(QMainWindow):
         self.classification_worker.classification_completed.connect(self._on_agent_classification_finished, Qt.UniqueConnection)
         # Clean up thread safely after it finishes
         self.classification_worker.finished.connect(self.classification_worker.deleteLater)
+        self.classification_worker.finished.connect(lambda: setattr(self, 'classification_worker', None))
         self.classification_worker.start()
 
         return True
@@ -5046,6 +5067,7 @@ class MainWindow(QMainWindow):
         self.detection_worker_yolo.detection_completed.connect(self._on_agent_object_detection_finished, Qt.UniqueConnection)
         # Clean up thread safely after it finishes
         self.detection_worker_yolo.finished.connect(self.detection_worker_yolo.deleteLater)
+        self.detection_worker_yolo.finished.connect(lambda: setattr(self, 'detection_worker_yolo', None))
         self.detection_worker_yolo.start()
 
         return True
@@ -5102,6 +5124,7 @@ class MainWindow(QMainWindow):
         self.description_worker.description_completed.connect(self._on_agent_description_finished, Qt.UniqueConnection)
         # Clean up thread safely after it finishes
         self.description_worker.finished.connect(self.description_worker.deleteLater)
+        self.description_worker.finished.connect(lambda: setattr(self, 'description_worker', None))
         self.description_worker.start()
 
         return True
