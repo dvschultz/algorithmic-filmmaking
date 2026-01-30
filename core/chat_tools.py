@@ -3099,7 +3099,9 @@ def detect_all_unanalyzed(
 
 @tools.register(
     description="Check if scene detection is currently running and get progress. "
-                "Call this after detect_all_unanalyzed to verify completion before proceeding to list_clips or add_to_sequence.",
+                "Call this after detect_all_unanalyzed to verify completion before proceeding to list_clips or add_to_sequence. "
+                "IMPORTANT: Scene detection can take 1-5 minutes PER VIDEO. Do NOT assume failure if is_running=True - "
+                "keep checking periodically. Only conclude failure if is_running=False AND sources_analyzed < sources_total.",
     requires_project=True,
     modifies_gui_state=True  # Needs main_window to check worker status
 )
@@ -3138,6 +3140,7 @@ def check_detection_status(main_window, project) -> dict:
 
     if all_complete:
         message = f"Detection complete. All {analyzed_count} sources analyzed, {clip_count} clips available."
+        patience_note = None
     elif is_running or queue_remaining > 0:
         current = queue_total - queue_remaining if queue_total > 0 else 0
         message = (
@@ -3145,14 +3148,23 @@ def check_detection_status(main_window, project) -> dict:
             f"{f', processing {current} of {queue_total}' if queue_total > 0 else ''}"
             f". {clip_count} clips so far."
         )
+        # Add patience guidance - detection is slow, especially for long videos
+        remaining_videos = total_count - analyzed_count
+        patience_note = (
+            f"PATIENCE REQUIRED: Detection takes 1-5 minutes per video. "
+            f"With {remaining_videos} videos remaining, expect up to {remaining_videos * 5} more minutes. "
+            f"Keep checking status - do NOT assume failure while is_running=True."
+        )
     else:
         unanalyzed = total_count - analyzed_count
         if unanalyzed > 0:
             message = f"Detection idle. {unanalyzed} sources not yet analyzed. Call detect_all_unanalyzed to start."
+            patience_note = None
         else:
             message = f"All {analyzed_count} sources analyzed. {clip_count} clips available."
+            patience_note = None
 
-    return {
+    result = {
         "success": True,
         "is_running": is_running,
         "queue_remaining": queue_remaining,
@@ -3163,6 +3175,9 @@ def check_detection_status(main_window, project) -> dict:
         "all_complete": all_complete,
         "message": message
     }
+    if patience_note:
+        result["patience_note"] = patience_note
+    return result
 
 
 @tools.register(

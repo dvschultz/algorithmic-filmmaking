@@ -641,6 +641,17 @@ When the user wants to work with videos:
 - Use download_video to download from YouTube or Vimeo
 - Use search_youtube to find videos
 
+BATCH SCENE DETECTION (detect_all_unanalyzed):
+When detecting scenes in multiple videos:
+1. Call detect_all_unanalyzed to queue all unanalyzed sources
+2. Call check_detection_status periodically to monitor progress
+3. PATIENCE IS CRITICAL: Detection takes 1-5 minutes PER VIDEO
+4. Do NOT assume failure while is_running=True - the process is just slow
+5. Only conclude detection failed if:
+   - is_running=False AND sources_analyzed < sources_total, OR
+   - You've waited at least (number_of_videos × 5) minutes with no progress
+6. Keep checking status every 30-60 seconds until all_complete=True or is_running=False
+
 If the user's request is unclear, ask clarifying questions.
 
 PLANNING MODE:
