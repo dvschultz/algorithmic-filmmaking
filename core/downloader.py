@@ -1,6 +1,7 @@
 """Video downloader using yt-dlp for YouTube/Vimeo support."""
 
 import logging
+import os
 import subprocess
 import shutil
 import re
@@ -12,6 +13,36 @@ from dataclasses import dataclass
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
+
+
+def _get_subprocess_env() -> dict:
+    """Get environment for subprocess with paths to find Deno and other tools.
+
+    macOS GUI apps don't inherit shell environment, so we need to explicitly
+    add common tool paths (Homebrew, etc.) to ensure yt-dlp can find Deno
+    for the JavaScript challenge solver.
+    """
+    env = os.environ.copy()
+    path = env.get("PATH", "")
+
+    # Common paths that might be missing in GUI apps
+    additional_paths = [
+        "/opt/homebrew/bin",  # Homebrew on Apple Silicon
+        "/opt/homebrew/sbin",
+        "/usr/local/bin",  # Homebrew on Intel Mac
+        "/usr/local/sbin",
+        str(Path.home() / ".local" / "bin"),  # User local bin
+        str(Path.home() / ".deno" / "bin"),  # Deno default install location
+    ]
+
+    # Add any paths not already present
+    path_parts = path.split(os.pathsep)
+    for p in additional_paths:
+        if p not in path_parts:
+            path_parts.insert(0, p)
+
+    env["PATH"] = os.pathsep.join(path_parts)
+    return env
 
 
 @dataclass
@@ -118,7 +149,9 @@ class VideoDownloader:
         ]
 
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=30, env=_get_subprocess_env()
+            )
         except subprocess.TimeoutExpired:
             raise RuntimeError("Timed out getting video info (30 seconds)")
         if result.returncode != 0:
@@ -225,11 +258,15 @@ class VideoDownloader:
         logger.debug(f"yt-dlp command: {' '.join(cmd)}")
 
         # Run download with progress parsing
+        # Use augmented environment to ensure Deno is findable for challenge solver
+        env = _get_subprocess_env()
+        logger.debug(f"Subprocess PATH includes /opt/homebrew/bin: {'/opt/homebrew/bin' in env.get('PATH', '')}")
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            env=env,
         )
 
         output_file = None
