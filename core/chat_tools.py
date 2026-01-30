@@ -122,15 +122,14 @@ TOOL_TIMEOUTS = {
     "download_video": 1800,    # 30 minutes for long videos
     "download_videos": 3600,   # 60 minutes for bulk downloads (up to 10 videos)
     "search_youtube": 30,      # 30 seconds
-    "analyze_colors": 300,     # 5 minutes
-    "analyze_shots": 300,      # 5 minutes
-    "classify_content_live": 300,  # 5 minutes for classification
-    "detect_objects_live": 300,    # 5 minutes for object detection
-    "count_people_live": 300,      # 5 minutes for person detection
-    "describe_content_live": 600,  # 10 minutes for descriptions
-    "transcribe": 1200,        # 20 minutes
-    "transcribe_clips": 1200,  # 20 minutes
-    "export_clips": 600,       # 10 minutes
+    "analyze_colors_live": 300,     # 5 minutes
+    "analyze_shots_live": 300,      # 5 minutes
+    "classify_content_live": 300,   # 5 minutes for classification
+    "detect_objects_live": 300,     # 5 minutes for object detection
+    "count_people_live": 300,       # 5 minutes for person detection
+    "describe_content_live": 600,   # 10 minutes for descriptions
+    "transcribe_live": 1200,        # 20 minutes
+    "transcribe_clips": 1200,       # 20 minutes
     "export_sequence": 600,    # 10 minutes
 }
 
@@ -2885,164 +2884,13 @@ def download_videos(
     }
 
 
-@tools.register(
-    description="Run color palette extraction on project clips. Adds dominant_colors metadata to clips.",
-    requires_project=False,
-    modifies_gui_state=False
-)
-def analyze_colors(project_path: str) -> dict:
-    """Run color analysis via CLI."""
-    # Validate project path
-    valid, error, validated_path = _validate_path(project_path, must_exist=True)
-    if not valid:
-        return {"error": error}
-
-    cmd = ["scene_ripper", "analyze", "colors", str(validated_path)]
-
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=TOOL_TIMEOUTS.get("analyze_colors", 300)
-        )
-    except subprocess.TimeoutExpired:
-        return {"error": "Color analysis timed out."}
-    except FileNotFoundError:
-        return {"error": "scene_ripper CLI not found."}
-
-    if result.returncode != 0:
-        return {"error": result.stderr or "Analysis failed"}
-
-    return {
-        "success": True,
-        "message": "Color analysis complete",
-        "output": result.stdout.strip()
-    }
-
-
-@tools.register(
-    description="Run shot type classification on project clips. Identifies close-ups, wide shots, medium shots, etc.",
-    requires_project=False,
-    modifies_gui_state=False
-)
-def analyze_shots(project_path: str) -> dict:
-    """Run shot classification via CLI."""
-    # Validate project path
-    valid, error, validated_path = _validate_path(project_path, must_exist=True)
-    if not valid:
-        return {"error": error}
-
-    cmd = ["scene_ripper", "analyze", "shots", str(validated_path)]
-
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=TOOL_TIMEOUTS.get("analyze_shots", 300)
-        )
-    except subprocess.TimeoutExpired:
-        return {"error": "Shot analysis timed out."}
-    except FileNotFoundError:
-        return {"error": "scene_ripper CLI not found."}
-
-    if result.returncode != 0:
-        return {"error": result.stderr or "Analysis failed"}
-
-    return {
-        "success": True,
-        "message": "Shot classification complete",
-        "output": result.stdout.strip()
-    }
-
-
-@tools.register(
-    description="Transcribe speech in project clips using Whisper. Adds transcript metadata to clips.",
-    requires_project=False,
-    modifies_gui_state=False
-)
-def transcribe(project_path: str, model: str = "small.en") -> dict:
-    """Run transcription via CLI."""
-    # Validate project path
-    valid, error, validated_path = _validate_path(project_path, must_exist=True)
-    if not valid:
-        return {"error": error}
-
-    cmd = ["scene_ripper", "transcribe", str(validated_path), "--model", model]
-
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=TOOL_TIMEOUTS.get("transcribe", 1200)
-        )
-    except subprocess.TimeoutExpired:
-        return {"error": "Transcription timed out."}
-    except FileNotFoundError:
-        return {"error": "scene_ripper CLI not found."}
-
-    if result.returncode != 0:
-        return {"error": result.stderr or "Transcription failed"}
-
-    return {
-        "success": True,
-        "message": "Transcription complete",
-        "output": result.stdout.strip()
-    }
-
-
-@tools.register(
-    description="Export clips from a project to individual video files.",
-    requires_project=False,
-    modifies_gui_state=False
-)
-def export_clips(
-    project_path: str,
-    output_dir: str,
-    clip_ids: Optional[list[str]] = None
-) -> dict:
-    """Export clips via CLI."""
-    # Validate project path
-    valid, error, validated_project = _validate_path(project_path, must_exist=True)
-    if not valid:
-        return {"error": f"Invalid project path: {error}"}
-
-    # Validate output directory
-    valid, error, validated_output = _validate_path(output_dir)
-    if not valid:
-        return {"error": f"Invalid output directory: {error}"}
-
-    cmd = ["scene_ripper", "export", "clips", str(validated_project), "--output-dir", str(validated_output)]
-
-    if clip_ids:
-        cmd.extend(["--clips", ",".join(clip_ids)])
-
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=TOOL_TIMEOUTS.get("export_clips", 600)
-        )
-    except subprocess.TimeoutExpired:
-        return {"error": "Export timed out."}
-    except FileNotFoundError:
-        return {"error": "scene_ripper CLI not found."}
-
-    if result.returncode != 0:
-        return {"error": result.stderr or "Export failed"}
-
-    return {
-        "success": True,
-        "output_dir": output_dir,
-        "message": result.stdout.strip()
-    }
-
-
 # =============================================================================
 # GUI-Aware Tools - Trigger workers and wait for completion
+#
+# Note: CLI-based analyze_colors, analyze_shots, transcribe, and export_clips
+# tools were removed because they required the scene_ripper CLI to be installed.
+# Use the *_live versions below instead (analyze_colors_live, analyze_shots_live,
+# transcribe_live) which work directly with the in-memory project.
 # =============================================================================
 
 @tools.register(

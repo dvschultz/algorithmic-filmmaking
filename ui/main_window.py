@@ -1583,9 +1583,9 @@ class MainWindow(QMainWindow):
             """Check if a conflicting worker is running."""
             worker_map = {
                 "detect_scenes": "detection_worker",
-                "analyze_colors": "color_worker",
-                "analyze_shots": "shot_type_worker",
-                "transcribe": "transcription_worker",
+                "analyze_colors_live": "color_worker",
+                "analyze_shots_live": "shot_type_worker",
+                "transcribe_live": "transcription_worker",
                 "download_video": "download_worker",
             }
             attr = worker_map.get(tool_name)

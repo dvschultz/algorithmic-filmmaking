@@ -23,11 +23,11 @@ BUSY_MAX_WAIT_SECONDS = 30.0    # Maximum total wait time
 
 # Tools that conflict with GUI workers
 CONFLICTING_TOOLS = {
-    "detect_scenes",      # Conflicts with DetectionWorker
-    "analyze_colors",     # Conflicts with ColorAnalysisWorker
-    "analyze_shots",      # Conflicts with ShotClassificationWorker
-    "transcribe",         # Conflicts with TranscriptionWorker
-    "download_video",     # Conflicts with DownloadWorker
+    "detect_scenes",          # Conflicts with DetectionWorker
+    "analyze_colors_live",    # Conflicts with ColorAnalysisWorker
+    "analyze_shots_live",     # Conflicts with ShotClassificationWorker
+    "transcribe_live",        # Conflicts with TranscriptionWorker
+    "download_video",         # Conflicts with DownloadWorker
 }
 
 
