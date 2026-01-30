@@ -207,6 +207,46 @@ class DownloadWorker(QThread):
             self.error.emit(str(e))
 
 
+def _calculate_download_timeout(duration_seconds: float, height: int | None) -> int:
+    """Calculate download timeout based on video duration and resolution.
+
+    Args:
+        duration_seconds: Video duration in seconds
+        height: Video height in pixels (e.g., 1080 for 1080p), or None if unknown
+
+    Returns:
+        Timeout in seconds
+    """
+    # Seconds of timeout per minute of video, by resolution
+    # Higher resolutions = larger files = more download time needed
+    TIMEOUT_MULTIPLIERS = {
+        4320: 180,  # 8K: 3 min timeout per video minute
+        2160: 120,  # 4K: 2 min timeout per video minute
+        1440: 90,   # 1440p: 1.5 min timeout per video minute
+        1080: 60,   # 1080p: 1 min timeout per video minute
+        720: 45,    # 720p: 45 sec timeout per video minute
+        480: 30,    # 480p: 30 sec timeout per video minute
+        360: 20,    # 360p: 20 sec timeout per video minute
+    }
+    MIN_TIMEOUT = 120   # 2 minutes minimum
+    MAX_TIMEOUT = 3600  # 1 hour cap
+    DEFAULT_MULTIPLIER = 60  # Default to 1080p assumption
+
+    # Find the appropriate multiplier based on resolution
+    if height is None:
+        multiplier = DEFAULT_MULTIPLIER
+    else:
+        # Find closest resolution tier (round down to nearest tier)
+        multiplier = DEFAULT_MULTIPLIER
+        for tier_height, tier_multiplier in sorted(TIMEOUT_MULTIPLIERS.items()):
+            if height >= tier_height:
+                multiplier = tier_multiplier
+
+    duration_minutes = duration_seconds / 60
+    timeout = int(duration_minutes * multiplier)
+    return max(MIN_TIMEOUT, min(timeout, MAX_TIMEOUT))
+
+
 class URLBulkDownloadWorker(QThread):
     """Background worker for downloading multiple videos from URLs in parallel."""
 
@@ -215,7 +255,6 @@ class URLBulkDownloadWorker(QThread):
     all_finished = Signal(list)  # list of result dicts
 
     MAX_WORKERS = 3  # Parallel download limit
-    PER_VIDEO_TIMEOUT = 600  # 10 minutes per video
 
     def __init__(self, urls: list[str], download_dir: Path):
         super().__init__()
@@ -239,7 +278,19 @@ class URLBulkDownloadWorker(QThread):
             if not valid:
                 return {"url": url, "success": False, "error": error, "result": None}
 
-            result = downloader.download(url, max_download_seconds=self.PER_VIDEO_TIMEOUT)
+            # Get video info first to calculate appropriate timeout
+            try:
+                info = downloader.get_video_info(url, include_format_details=True)
+                duration = info.get("duration", 0) or 0
+                height = info.get("height")
+                timeout = _calculate_download_timeout(duration, height)
+                logger.debug(f"Download timeout for {url}: {timeout}s (duration={duration}s, height={height})")
+            except Exception as e:
+                # If we can't get info, use a generous default
+                logger.warning(f"Could not get video info for timeout calc: {e}, using 10 min default")
+                timeout = 600
+
+            result = downloader.download(url, max_download_seconds=timeout)
 
             if result.success:
                 return {
