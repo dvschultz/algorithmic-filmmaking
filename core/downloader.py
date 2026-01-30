@@ -314,7 +314,24 @@ class VideoDownloader:
             # Use captured error message if available, otherwise show recent output
             logger.error(f"yt-dlp failed with code {process.returncode}")
             logger.error(f"Recent output: {recent_lines}")
-            if last_error:
+
+            # Check for specific known issues
+            recent_text = " ".join(recent_lines)
+
+            # JavaScript runtime missing (yt-dlp 2025+ requirement)
+            if "No supported JavaScript runtime" in recent_text:
+                error_msg = (
+                    "yt-dlp requires a JavaScript runtime for YouTube downloads. "
+                    "Install Deno with: brew install deno (macOS) or see "
+                    "https://github.com/yt-dlp/yt-dlp/wiki/EJS"
+                )
+            # 403 Forbidden often accompanies JS runtime issues
+            elif "HTTP Error 403: Forbidden" in recent_text and "JavaScript runtime" in recent_text:
+                error_msg = (
+                    "YouTube download blocked (403). This is usually caused by missing "
+                    "JavaScript runtime. Install Deno with: brew install deno"
+                )
+            elif last_error:
                 error_msg = last_error
             elif recent_lines:
                 # Show last few lines that might contain error info
