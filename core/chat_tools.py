@@ -893,12 +893,17 @@ def filter_clips(
 
 
 @tools.register(
-    description="List all clips in the project with their metadata.",
+    description="List all clips in the project with their metadata. "
+                "Returns clip details including duration, shot type, colors, transcript, etc.",
     requires_project=True,
-    modifies_gui_state=False
+    modifies_gui_state=True  # Needs main_window to check detection status
 )
-def list_clips(project) -> list[dict]:
-    """List all clips with metadata."""
+def list_clips(main_window, project) -> dict:
+    """List all clips with metadata.
+
+    Returns:
+        Dict with clips list, count, and detection status if relevant
+    """
     results = []
 
     for clip in project.clips:
@@ -924,7 +929,43 @@ def list_clips(project) -> list[dict]:
             "tags": getattr(clip, 'tags', []),
         })
 
-    return results
+    # Check if detection is in progress when no clips found
+    if not results and main_window is not None:
+        is_running = (
+            main_window.detection_worker is not None and
+            main_window.detection_worker.isRunning()
+        )
+        queue_remaining = len(getattr(main_window, '_analyze_queue', []))
+
+        if is_running or queue_remaining > 0:
+            return {
+                "success": True,
+                "clips": [],
+                "count": 0,
+                "message": f"No clips yet. Scene detection is still running "
+                          f"({queue_remaining} sources queued). "
+                          "Call check_detection_status to monitor progress, then retry.",
+                "detection_in_progress": True
+            }
+
+        # Check if there are unanalyzed sources
+        unanalyzed_count = sum(1 for s in project.sources if not s.analyzed)
+        if unanalyzed_count > 0:
+            return {
+                "success": True,
+                "clips": [],
+                "count": 0,
+                "message": f"No clips found. {unanalyzed_count} sources have not been analyzed. "
+                          "Call detect_all_unanalyzed to detect scenes.",
+                "detection_in_progress": False,
+                "unanalyzed_sources": unanalyzed_count
+            }
+
+    return {
+        "success": True,
+        "clips": results,
+        "count": len(results)
+    }
 
 
 @tools.register(
@@ -3197,10 +3238,81 @@ def detect_all_unanalyzed(
 
     return {
         "success": True,
-        "message": f"Queued {len(unanalyzed)} sources for scene detection",
+        "message": f"Queued {len(unanalyzed)} sources for scene detection. "
+                   "IMPORTANT: Detection runs in background. "
+                   "Call check_detection_status to monitor progress before calling list_clips.",
         "queued_count": len(unanalyzed),
         "source_ids": source_ids,
         "sensitivity": sensitivity,
+        "next_action": "Call check_detection_status periodically until all_complete is True, then call list_clips"
+    }
+
+
+@tools.register(
+    description="Check if scene detection is currently running and get progress. "
+                "Call this after detect_all_unanalyzed to verify completion before proceeding to list_clips or add_to_sequence.",
+    requires_project=True,
+    modifies_gui_state=True  # Needs main_window to check worker status
+)
+def check_detection_status(main_window, project) -> dict:
+    """Check scene detection status and progress.
+
+    Returns:
+        Dict with detection status, queue info, and progress
+    """
+    if main_window is None:
+        return {"success": False, "error": "Main window not available"}
+
+    # Check if detection worker is running
+    is_running = (
+        main_window.detection_worker is not None and
+        main_window.detection_worker.isRunning()
+    )
+
+    # Check queue status
+    queue_remaining = len(getattr(main_window, '_analyze_queue', []))
+    queue_total = getattr(main_window, '_analyze_queue_total', 0)
+
+    # Count analyzed vs total sources
+    analyzed_count = sum(1 for s in project.sources if s.analyzed)
+    total_count = len(project.sources)
+
+    # Count clips
+    clip_count = len(project.clips)
+
+    # Determine if all detection is complete
+    all_complete = (
+        analyzed_count == total_count and
+        not is_running and
+        queue_remaining == 0
+    )
+
+    if all_complete:
+        message = f"Detection complete. All {analyzed_count} sources analyzed, {clip_count} clips available."
+    elif is_running or queue_remaining > 0:
+        current = queue_total - queue_remaining if queue_total > 0 else 0
+        message = (
+            f"Detection in progress: {analyzed_count}/{total_count} sources analyzed"
+            f"{f', processing {current} of {queue_total}' if queue_total > 0 else ''}"
+            f". {clip_count} clips so far."
+        )
+    else:
+        unanalyzed = total_count - analyzed_count
+        if unanalyzed > 0:
+            message = f"Detection idle. {unanalyzed} sources not yet analyzed. Call detect_all_unanalyzed to start."
+        else:
+            message = f"All {analyzed_count} sources analyzed. {clip_count} clips available."
+
+    return {
+        "success": True,
+        "is_running": is_running,
+        "queue_remaining": queue_remaining,
+        "queue_total": queue_total,
+        "sources_analyzed": analyzed_count,
+        "sources_total": total_count,
+        "clips_available": clip_count,
+        "all_complete": all_complete,
+        "message": message
     }
 
 

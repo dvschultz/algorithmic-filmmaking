@@ -688,18 +688,19 @@ class TestToolExecutor:
 
         executor = ToolExecutor(project=project)
 
-        # Call a tool that requires project
+        # Call a tool that requires project (use get_project_state, not list_clips
+        # which now requires GUI handler for main_window injection)
         result = executor.execute({
             "id": "call_123",
             "type": "function",
             "function": {
-                "name": "list_clips",
+                "name": "get_project_state",
                 "arguments": "{}"
             }
         })
 
         assert result["success"] is True
-        assert len(result["result"]) == 1
+        assert result["result"]["clip_count"] == 1
 
     def test_executor_handles_missing_project(self):
         """Test ToolExecutor reports error when project required but missing."""
@@ -707,11 +708,12 @@ class TestToolExecutor:
 
         executor = ToolExecutor(project=None)
 
+        # Use get_project_state (list_clips now needs GUI handler)
         result = executor.execute({
             "id": "call_123",
             "type": "function",
             "function": {
-                "name": "list_clips",
+                "name": "get_project_state",
                 "arguments": "{}"
             }
         })
