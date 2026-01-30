@@ -111,8 +111,8 @@ class VideoDownloader:
             "--no-download",
             "--print-json",
             "--no-playlist",
-            # Use TV client to avoid SABR streaming issues (GitHub issue #12482)
-            "--extractor-args", "youtube:player_client=tv,default",
+            # Enable remote challenge solver for YouTube n-sig challenges (required for 2026+)
+            "--remote-components", "ejs:github",
             "--",  # End of options
             url,
         ]
@@ -212,8 +212,8 @@ class VideoDownloader:
             "--no-playlist",  # Don't download playlists
             "--no-exec",  # Don't run post-processing scripts
             "--max-filesize", "4G",  # Limit file size
-            # Use TV client to avoid SABR streaming 403 errors (GitHub issue #12482)
-            "--extractor-args", "youtube:player_client=tv,default",
+            # Enable remote challenge solver for YouTube n-sig challenges (required for 2026+)
+            "--remote-components", "ejs:github",
             "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
             "--merge-output-format", "mp4",
             "-o", output_template,
