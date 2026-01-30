@@ -238,6 +238,7 @@ class VideoDownloader:
         start_time = time.time()
         last_error = None  # Capture yt-dlp error messages
         recent_lines = []  # Keep recent output for debugging
+        deno_solver_ran = False  # Track if challenge solver was invoked
 
         try:
             for line in process.stdout:
@@ -257,6 +258,11 @@ class VideoDownloader:
                 recent_lines.append(line)
                 if len(recent_lines) > 10:
                     recent_lines.pop(0)
+
+                # Log challenge solver status for debugging
+                if "[jsc:deno]" in line:
+                    deno_solver_ran = True
+                    logger.info(f"yt-dlp challenge solver: {line}")
 
                 # Capture error messages from yt-dlp
                 if "ERROR:" in line:
@@ -318,6 +324,7 @@ class VideoDownloader:
             # Use captured error message if available, otherwise show recent output
             logger.error(f"yt-dlp failed with code {process.returncode}")
             logger.error(f"Recent output: {recent_lines}")
+            logger.error(f"Deno challenge solver ran: {deno_solver_ran}")
 
             # Check for specific known issues
             recent_text = " ".join(recent_lines)
@@ -337,10 +344,17 @@ class VideoDownloader:
                 )
             # SABR streaming 403 errors (GitHub issue #12482)
             elif "HTTP Error 403: Forbidden" in recent_text and "SABR" in recent_text:
-                error_msg = (
-                    "YouTube is blocking this download (SABR streaming restriction). "
-                    "Try updating yt-dlp: pip install -U yt-dlp"
-                )
+                if deno_solver_ran:
+                    error_msg = (
+                        "YouTube is blocking this download despite challenge solver running. "
+                        "This may be YouTube rate limiting. Try again in a few minutes or "
+                        "try a different video."
+                    )
+                else:
+                    error_msg = (
+                        "YouTube is blocking this download (SABR streaming restriction). "
+                        "Try updating yt-dlp: pip install -U yt-dlp"
+                    )
             # Generic 403 - could be geo-restriction, age-restriction, or other
             elif "HTTP Error 403: Forbidden" in recent_text:
                 error_msg = (
