@@ -266,6 +266,7 @@ class VideoDownloader:
         # Verify Deno is actually findable
         deno_check = subprocess.run(['which', 'deno'], capture_output=True, text=True, env=env)
         logger.debug(f"Deno location: {deno_check.stdout.strip()} (found: {deno_check.returncode == 0})")
+        logger.debug(f"Full PATH being used: {env.get('PATH', 'NOT SET')[:300]}...")
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
