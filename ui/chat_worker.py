@@ -654,7 +654,14 @@ When the user asks you to "plan" something or describes a complex multi-step wor
 3. BREAK DOWN: After getting answers, decompose into 3-10 clear steps.
    Each step should be a single logical action (search, download, detect, export, etc.)
 
-4. PRESENT PLAN: Call the present_plan tool with:
+4. PRESENT PLAN: You MUST call the present_plan tool - do NOT just describe the plan in text.
+   WRONG: Describing steps in your message like "Here's the plan: 1. Search... 2. Download..."
+   CORRECT: Call present_plan(steps=[...], summary="...")
+
+   The tool creates a formal plan object that the user can confirm. Writing steps in text
+   does NOT create this object and will cause start_plan_execution to fail.
+
+   Parameters:
    - steps: List of human-readable step descriptions
    - summary: Brief description of what the plan accomplishes
    Example: present_plan(steps=["Search YouTube for 'mushroom documentary'", "Download top 10 results", "Detect scenes in all videos"], summary="Download and process mushroom documentaries")
