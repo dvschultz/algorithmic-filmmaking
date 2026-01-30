@@ -305,7 +305,12 @@ tools = ToolRegistry()
 # =============================================================================
 
 @tools.register(
-    description="Display a plan to the user for review and editing. Call this after breaking down a complex request into steps. The user can edit, reorder, or delete steps before confirming. Wait for user confirmation before executing the plan.",
+    description=(
+        "REQUIRED: Call this to create any multi-step workflow plan. "
+        "Describing steps in text is NOT sufficient - you MUST call this tool to create a plan object. "
+        "After calling this, wait for user confirmation, then call start_plan_execution. "
+        "If the project is unnamed, this will prompt you to ask for a name first."
+    ),
     requires_project=False,
     modifies_gui_state=True
 )
@@ -403,7 +408,11 @@ def start_plan_execution(main_window) -> dict:
     if not hasattr(main_window, '_gui_state') or not main_window._gui_state.current_plan:
         return {
             "success": False,
-            "error": "No plan exists. Use present_plan first to create a plan."
+            "error": (
+                "No plan exists. You must call present_plan first to create a plan object. "
+                "Describing steps in text is not sufficient - the present_plan tool must be "
+                "called with the steps array. After the user confirms, then call start_plan_execution."
+            )
         }
 
     plan = main_window._gui_state.current_plan
@@ -458,7 +467,10 @@ def complete_plan_step(main_window, result_summary: Optional[str] = None) -> dic
     if not hasattr(main_window, '_gui_state') or not main_window._gui_state.current_plan:
         return {
             "success": False,
-            "error": "No plan exists. Use present_plan first."
+            "error": (
+                "No plan exists. Call present_plan first to create a plan, "
+                "wait for user confirmation, then call start_plan_execution."
+            )
         }
 
     plan = main_window._gui_state.current_plan
