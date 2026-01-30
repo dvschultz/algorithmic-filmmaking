@@ -340,7 +340,7 @@ def download(
             )
 
             # Save project
-            project_path = result.file_path.with_suffix(".json")
+            project_path = result.file_path.with_suffix(".sceneripper")
             save_project(
                 filepath=project_path,
                 sources=[source],

@@ -36,7 +36,7 @@ from cli.utils.signals import (
     "--output",
     "-o",
     type=click.Path(path_type=Path),
-    help="Output project file path (default: <video>.json)",
+    help="Output project file path (default: <video>.sceneripper)",
 )
 @click.option(
     "--force",
@@ -61,7 +61,7 @@ def detect(
     \b
     Examples:
         scene_ripper detect movie.mp4
-        scene_ripper detect movie.mp4 -s 5.0 -o my_project.json
+        scene_ripper detect movie.mp4 -s 5.0 -o my_project.sceneripper
         scene_ripper detect movie.mp4 --min-scene-length 1.0
     """
     # Load config for defaults
@@ -80,7 +80,7 @@ def detect(
 
     # Determine output path
     if output is None:
-        output = video.with_suffix(".json")
+        output = video.with_suffix(".sceneripper")
 
     # Check for existing file
     if output.exists() and not force:

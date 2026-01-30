@@ -5682,7 +5682,7 @@ class MainWindow(QMainWindow):
             self,
             "Open Project",
             str(Path.home()),
-            "Project Files (*.json);;All Files (*)",
+            "Scene Ripper Projects (*.sceneripper);;Legacy Projects (*.json);;All Files (*)",
         )
 
         if file_path:
@@ -5697,11 +5697,12 @@ class MainWindow(QMainWindow):
 
     def _on_save_project_as(self):
         """Handle Save Project As action."""
-        default_name = "project.json"
+        default_name = "project.sceneripper"
         if self.current_project_path:
-            default_path = str(self.current_project_path)
+            # Keep existing path but ensure .sceneripper extension for new saves
+            default_path = str(self.current_project_path.with_suffix(".sceneripper"))
         elif self.current_source:
-            default_path = str(self.current_source.file_path.parent / f"{self.current_source.file_path.stem}.json")
+            default_path = str(self.current_source.file_path.parent / f"{self.current_source.file_path.stem}.sceneripper")
         else:
             default_path = str(Path.home() / default_name)
 
@@ -5709,13 +5710,13 @@ class MainWindow(QMainWindow):
             self,
             "Save Project As",
             default_path,
-            "Project Files (*.json);;All Files (*)",
+            "Scene Ripper Projects (*.sceneripper);;Legacy JSON (*.json);;All Files (*)",
         )
 
         if file_path:
             path = Path(file_path)
             if not path.suffix:
-                path = path.with_suffix(".json")
+                path = path.with_suffix(".sceneripper")
             self._save_project_to_file(path)
 
     def _save_project_to_file(self, filepath: Path):

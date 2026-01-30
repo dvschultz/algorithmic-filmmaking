@@ -11,15 +11,15 @@ class ProjectPathInput(BaseModel):
 
     project_path: str = Field(
         ...,
-        description="Absolute path to .json project file",
+        description="Absolute path to project file (.sceneripper or .json)",
         min_length=1,
     )
 
     @field_validator("project_path")
     @classmethod
     def validate_path(cls, v: str) -> str:
-        if not v.endswith(".json"):
-            raise ValueError("Project path must end with .json")
+        if not (v.endswith(".sceneripper") or v.endswith(".json")):
+            raise ValueError("Project path must end with .sceneripper or .json")
         return v
 
 
@@ -177,7 +177,7 @@ class ListProjectsInput(BaseModel):
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    directory: str = Field(..., description="Directory to search for .json project files")
+    directory: str = Field(..., description="Directory to search for project files (.sceneripper or .json)")
 
 
 class CreateProjectInput(BaseModel):
