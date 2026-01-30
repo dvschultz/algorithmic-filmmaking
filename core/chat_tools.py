@@ -3111,6 +3111,8 @@ def check_detection_status(main_window, project) -> dict:
     Returns:
         Dict with detection status, queue info, and progress
     """
+    import time
+
     if main_window is None:
         return {"success": False, "error": "Main window not available"}
 
@@ -3123,6 +3125,11 @@ def check_detection_status(main_window, project) -> dict:
     # Check queue status
     queue_remaining = len(getattr(main_window, '_analyze_queue', []))
     queue_total = getattr(main_window, '_analyze_queue_total', 0)
+
+    # Get elapsed time and current video progress
+    start_time = getattr(main_window, '_detection_start_time', None)
+    current_progress = getattr(main_window, '_detection_current_progress', 0.0)
+    elapsed_seconds = int(time.time() - start_time) if start_time else 0
 
     # Count analyzed vs total sources
     analyzed_count = sum(1 for s in project.sources if s.analyzed)
@@ -3143,10 +3150,13 @@ def check_detection_status(main_window, project) -> dict:
         patience_note = None
     elif is_running or queue_remaining > 0:
         current = queue_total - queue_remaining if queue_total > 0 else 0
+        progress_pct = int(current_progress * 100)
         message = (
             f"Detection in progress: {analyzed_count}/{total_count} sources analyzed"
             f"{f', processing {current} of {queue_total}' if queue_total > 0 else ''}"
+            f" (current video: {progress_pct}%)"
             f". {clip_count} clips so far."
+            f" Elapsed: {elapsed_seconds // 60}m {elapsed_seconds % 60}s."
         )
         # Add patience guidance - detection is slow, especially for long videos
         remaining_videos = total_count - analyzed_count
@@ -3173,6 +3183,8 @@ def check_detection_status(main_window, project) -> dict:
         "sources_total": total_count,
         "clips_available": clip_count,
         "all_complete": all_complete,
+        "current_video_progress": current_progress,
+        "elapsed_seconds": elapsed_seconds,
         "message": message
     }
     if patience_note:

@@ -2,6 +2,7 @@
 
 import logging
 import re
+import time
 from collections import deque
 from datetime import timedelta
 from pathlib import Path
@@ -33,6 +34,7 @@ from core.dataset_export import export_dataset, DatasetExportConfig
 from core.edl_export import export_edl, EDLExportConfig
 from core.analysis.color import extract_dominant_colors
 from core.analysis.shots import classify_shot_type
+from core.ffmpeg import FFmpegProcessor
 from core.settings import (
     load_settings,
     save_settings,
@@ -873,6 +875,8 @@ class MainWindow(QMainWindow):
         self.current_source: Optional[Source] = None  # Currently active/selected source
         self._analyze_queue: deque[Source] = deque()  # Queue for batch analysis (O(1) popleft)
         self._analyze_queue_total: int = 0  # Total count for progress display
+        self._detection_start_time: Optional[float] = None  # When batch detection started
+        self._detection_current_progress: float = 0.0  # Current video progress (0-1)
         self.detection_worker: Optional[DetectionWorker] = None
         self.thumbnail_worker: Optional[ThumbnailWorker] = None
         self.download_worker: Optional[DownloadWorker] = None
@@ -2594,6 +2598,8 @@ class MainWindow(QMainWindow):
         # Queue all sources for batch analysis
         self._analyze_queue = deque(sources_to_analyze)
         self._analyze_queue_total = len(sources_to_analyze)
+        self._detection_start_time = time.time()  # Track when batch started
+        self._detection_current_progress = 0.0
         self._start_next_analysis()
 
     def _start_next_analysis(self):
@@ -2602,6 +2608,8 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("Batch analysis complete")
             self.queue_label.setVisible(False)
             self._analyze_queue_total = 0
+            self._detection_start_time = None  # Reset tracking
+            self._detection_current_progress = 0.0
             return
 
         # Pop the next source from the queue (O(1) with deque)
@@ -2638,6 +2646,32 @@ class MainWindow(QMainWindow):
         self._update_window_title()
         self.status_bar.showMessage(f"Selected: {source.filename}")
 
+    def _create_source_with_metadata(self, path: Path) -> Source:
+        """Create a Source with metadata extracted via FFprobe.
+
+        Args:
+            path: Path to the video file
+
+        Returns:
+            Source with duration, fps, width, height populated
+        """
+        source = Source(file_path=path)
+
+        # Try to extract metadata using FFprobe
+        try:
+            processor = FFmpegProcessor()
+            info = processor.get_video_info(path)
+            source.duration_seconds = info.get("duration", 0.0)
+            source.fps = info.get("fps", 30.0)
+            source.width = info.get("width", 0)
+            source.height = info.get("height", 0)
+            logger.debug(f"Extracted metadata for {path.name}: {source.duration_seconds:.1f}s, {source.fps:.1f}fps, {source.width}x{source.height}")
+        except Exception as e:
+            logger.warning(f"Failed to extract metadata for {path.name}: {e}")
+            # Source will have default values (duration=0, fps=30, etc.)
+
+        return source
+
     def _add_video_to_library(self, path: Path):
         """Add a video file to the library without making it active."""
         # Check if already in library
@@ -2646,8 +2680,8 @@ class MainWindow(QMainWindow):
                 self.status_bar.showMessage(f"Video already in library: {path.name}")
                 return
 
-        # Create new source and add to project
-        source = Source(file_path=path)
+        # Create new source with metadata and add to project
+        source = self._create_source_with_metadata(path)
         self.project.add_source(source)
 
         # Add to CollectTab grid
@@ -3594,8 +3628,8 @@ class MainWindow(QMainWindow):
             # Already in library, just select it
             self._select_source(existing)
         else:
-            # Add to library
-            source = Source(file_path=path)
+            # Add to library with metadata
+            source = self._create_source_with_metadata(path)
             self.project.add_source(source)
             self.collect_tab.add_source(source)
 
@@ -3847,6 +3881,7 @@ class MainWindow(QMainWindow):
         """Handle detection progress update."""
         self.progress_bar.setValue(int(progress * 100))
         self.status_bar.showMessage(message)
+        self._detection_current_progress = progress  # Track for agent status checks
 
     @Slot(object, list)
     def _on_detection_finished(self, source: Source, clips: list[Clip]):
@@ -4740,8 +4775,8 @@ class MainWindow(QMainWindow):
                     logger.info(f"Source already in project: {file_path.name}")
                     return
 
-            # Create source and add to project
-            source = Source(file_path=file_path)
+            # Create source with metadata and add to project
+            source = self._create_source_with_metadata(file_path)
             self.project.add_source(source)
 
             # Add to CollectTab grid
@@ -4750,7 +4785,7 @@ class MainWindow(QMainWindow):
             # Generate thumbnail for the source
             self._generate_source_thumbnail(source)
 
-            logger.info(f"Added downloaded source to project: {file_path.name}")
+            logger.info(f"Added downloaded source to project: {file_path.name} ({source.duration_seconds:.1f}s)")
 
     def _on_agent_bulk_download_finished(self, results: list):
         """Handle bulk download completion."""
@@ -5847,6 +5882,8 @@ class MainWindow(QMainWindow):
         self.current_source = None
         self._analyze_queue = deque()
         self._analyze_queue_total = 0
+        self._detection_start_time = None
+        self._detection_current_progress = 0.0
         self.queue_label.setVisible(False)
         self.collect_tab.clear()
         self.cut_tab.clear_clips()
