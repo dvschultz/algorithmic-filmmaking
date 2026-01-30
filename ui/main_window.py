@@ -1535,6 +1535,11 @@ class MainWindow(QMainWindow):
         # Store message for history
         self._last_user_message = message
 
+        # Update pending action with user's response (if any)
+        # This ensures the agent sees the actual user input in context
+        if self._gui_state.pending_action:
+            self._gui_state.update_pending_action_response(message)
+
         # Check for chat-based plan confirmation
         if self.chat_panel.has_pending_plan():
             if self._is_plan_confirmation(message):

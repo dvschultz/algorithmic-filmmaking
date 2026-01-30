@@ -138,15 +138,24 @@ class GUIState:
             if self.pending_action:
                 action = self.pending_action
                 lines.insert(0, "=" * 50)
-                lines.insert(1, "⚠️  PENDING ACTION REQUIRED")
+                lines.insert(1, "⚠️  PENDING ACTION REQUIRED - YOU MUST ACT NOW")
                 if isinstance(action, NameProjectThenPlanAction):
+                    user_name = action.user_response or ''
                     lines.insert(2, "Action: name_project_then_plan")
-                    lines.insert(3, f"User provided name: '{action.user_response or 'unknown'}'")
-                    lines.insert(4, "NEXT STEPS:")
-                    lines.insert(5, f"  1. Call set_project_name(name=\"{action.user_response or ''}\")")
-                    lines.insert(6, "  2. Call present_plan with the pending steps")
+                    lines.insert(3, f"User provided name: '{user_name}'")
+                    lines.insert(4, "")
+                    lines.insert(5, "YOU MUST CALL THESE TOOLS IN ORDER:")
+                    lines.insert(6, f'  1. set_project_name(name="{user_name}")')
+                    lines.insert(7, "  2. present_plan(steps=[...], summary=\"...\")")
+                    lines.insert(8, "")
                     if action.pending_steps:
-                        lines.insert(7, f"  Pending plan: {len(action.pending_steps)} steps")
+                        lines.insert(9, f"PENDING PLAN ({len(action.pending_steps)} steps):")
+                        lines.insert(10, f"  Summary: {action.pending_summary}")
+                        lines.insert(11, "  Steps:")
+                        for i, step in enumerate(action.pending_steps):
+                            lines.insert(12 + i, f"    {i+1}. {step}")
+                lines.insert(len(lines), "")
+                lines.insert(len(lines), "DO NOT respond with text. Call set_project_name NOW.")
                 lines.insert(len(lines), "=" * 50)
 
             # Plan state
