@@ -242,6 +242,7 @@ class VideoDownloader:
         # Build download command
         cmd = [
             self.ytdlp_path,
+            "--verbose",  # DEBUG: See JS runtime detection
             "--no-playlist",  # Don't download playlists
             "--no-exec",  # Don't run post-processing scripts
             "--max-filesize", "4G",  # Limit file size
@@ -261,6 +262,10 @@ class VideoDownloader:
         # Use augmented environment to ensure Deno is findable for challenge solver
         env = _get_subprocess_env()
         logger.debug(f"Subprocess PATH includes /opt/homebrew/bin: {'/opt/homebrew/bin' in env.get('PATH', '')}")
+
+        # Verify Deno is actually findable
+        deno_check = subprocess.run(['which', 'deno'], capture_output=True, text=True, env=env)
+        logger.debug(f"Deno location: {deno_check.stdout.strip()} (found: {deno_check.returncode == 0})")
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -291,15 +296,17 @@ class VideoDownloader:
 
                 line = line.strip()
 
-                # Keep last 10 lines for error reporting
+                # Keep last 30 lines for error reporting (increased for debugging)
                 recent_lines.append(line)
-                if len(recent_lines) > 10:
+                if len(recent_lines) > 30:
                     recent_lines.pop(0)
 
-                # Log challenge solver status for debugging
+                # Log challenge solver and JS runtime status for debugging
                 if "[jsc:deno]" in line:
                     deno_solver_ran = True
                     logger.info(f"yt-dlp challenge solver: {line}")
+                elif "JS runtime" in line or "[jsc]" in line:
+                    logger.info(f"yt-dlp JS runtime: {line}")
 
                 # Capture error messages from yt-dlp
                 if "ERROR:" in line:
