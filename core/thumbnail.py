@@ -68,6 +68,7 @@ class ThumbnailGenerator:
             "-vframes", "1",  # Extract 1 frame
             "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2",
             "-q:v", "2",  # High quality JPEG
+            "-strict", "unofficial",  # Allow non-full-range YUV (required for FFmpeg 8.x)
             str(output_path),
         ]
 
