@@ -120,7 +120,7 @@ TOOL_TIMEOUTS = {
     "detect_scenes": 600,      # 10 minutes for large videos
     "detect_scenes_live": 600, # 10 minutes for large videos
     "download_video": 1800,    # 30 minutes for long videos
-    "download_videos": 3600,   # 60 minutes for bulk downloads (up to 10 videos)
+    "download_videos": 7200,   # 2 hours for bulk downloads (10 videos × 10 min timeout + buffer)
     "search_youtube": 30,      # 30 seconds
     "analyze_colors_live": 300,     # 5 minutes
     "analyze_shots_live": 300,      # 5 minutes

@@ -215,6 +215,7 @@ class URLBulkDownloadWorker(QThread):
     all_finished = Signal(list)  # list of result dicts
 
     MAX_WORKERS = 3  # Parallel download limit
+    PER_VIDEO_TIMEOUT = 600  # 10 minutes per video
 
     def __init__(self, urls: list[str], download_dir: Path):
         super().__init__()
@@ -238,7 +239,7 @@ class URLBulkDownloadWorker(QThread):
             if not valid:
                 return {"url": url, "success": False, "error": error, "result": None}
 
-            result = downloader.download(url)
+            result = downloader.download(url, max_download_seconds=self.PER_VIDEO_TIMEOUT)
 
             if result.success:
                 return {
