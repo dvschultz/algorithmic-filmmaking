@@ -867,3 +867,381 @@ class TestSignalDeliveryGuards:
 
         # filter_clips returns a list directly, not a dict with success
         assert isinstance(result, list)
+
+
+class TestPlanExecutionTools:
+    """Tests for plan execution tools."""
+
+    def _create_mock_main_window(self):
+        """Create a mock main window with GUI state."""
+        from core.gui_state import GUIState
+
+        main_window = Mock()
+        main_window._gui_state = GUIState()
+        return main_window
+
+    def test_start_plan_execution_no_plan(self):
+        """Test start_plan_execution fails when no plan exists."""
+        from core.chat_tools import start_plan_execution
+
+        main_window = self._create_mock_main_window()
+
+        result = start_plan_execution(main_window)
+
+        assert result["success"] is False
+        assert "No plan exists" in result["error"]
+
+    def test_start_plan_execution_starts_plan(self):
+        """Test start_plan_execution transitions plan to executing."""
+        from core.chat_tools import present_plan, start_plan_execution
+
+        main_window = self._create_mock_main_window()
+
+        # Create a plan first
+        present_plan(main_window, ["Step 1", "Step 2", "Step 3"], "Test plan")
+
+        result = start_plan_execution(main_window)
+
+        assert result["success"] is True
+        assert result["status"] == "executing"
+        assert result["current_step_number"] == 1
+        assert result["total_steps"] == 3
+        assert result["current_step"] == "Step 1"
+        assert len(result["remaining_steps"]) == 2
+
+    def test_start_plan_execution_already_executing(self):
+        """Test start_plan_execution handles already executing plan."""
+        from core.chat_tools import present_plan, start_plan_execution
+
+        main_window = self._create_mock_main_window()
+
+        present_plan(main_window, ["Step 1", "Step 2"], "Test plan")
+        start_plan_execution(main_window)
+
+        # Call again
+        result = start_plan_execution(main_window)
+
+        assert result["success"] is True
+        assert result["already_executing"] is True
+
+    def test_complete_plan_step_no_plan(self):
+        """Test complete_plan_step fails when no plan exists."""
+        from core.chat_tools import complete_plan_step
+
+        main_window = self._create_mock_main_window()
+
+        result = complete_plan_step(main_window)
+
+        assert result["success"] is False
+        assert "No plan exists" in result["error"]
+
+    def test_complete_plan_step_not_executing(self):
+        """Test complete_plan_step fails when plan not executing."""
+        from core.chat_tools import present_plan, complete_plan_step
+
+        main_window = self._create_mock_main_window()
+
+        # Create plan but don't start it
+        present_plan(main_window, ["Step 1"], "Test plan")
+
+        result = complete_plan_step(main_window)
+
+        assert result["success"] is False
+        assert "not executing" in result["error"]
+
+    def test_complete_plan_step_advances(self):
+        """Test complete_plan_step advances to next step."""
+        from core.chat_tools import present_plan, start_plan_execution, complete_plan_step
+
+        main_window = self._create_mock_main_window()
+
+        present_plan(main_window, ["Step 1", "Step 2", "Step 3"], "Test plan")
+        start_plan_execution(main_window)
+
+        result = complete_plan_step(main_window, "Step 1 done")
+
+        assert result["success"] is True
+        assert result["plan_completed"] is False
+        assert result["completed_step"] == "Step 1"
+        assert result["completed_step_number"] == 1
+        assert result["current_step_number"] == 2
+        assert result["current_step"] == "Step 2"
+        assert "1/3" in result["progress"]
+
+    def test_complete_plan_step_finishes_plan(self):
+        """Test complete_plan_step completes plan on last step."""
+        from core.chat_tools import present_plan, start_plan_execution, complete_plan_step
+
+        main_window = self._create_mock_main_window()
+
+        present_plan(main_window, ["Step 1", "Step 2"], "Test plan")
+        start_plan_execution(main_window)
+
+        # Complete step 1
+        complete_plan_step(main_window)
+
+        # Complete step 2 (last)
+        result = complete_plan_step(main_window)
+
+        assert result["success"] is True
+        assert result["plan_completed"] is True
+        assert "All 2 steps finished" in result["message"]
+
+    def test_get_plan_status_no_plan(self):
+        """Test get_plan_status when no plan exists."""
+        from core.chat_tools import get_plan_status
+
+        main_window = self._create_mock_main_window()
+
+        result = get_plan_status(main_window)
+
+        assert result["has_plan"] is False
+
+    def test_get_plan_status_draft(self):
+        """Test get_plan_status shows draft status."""
+        from core.chat_tools import present_plan, get_plan_status
+
+        main_window = self._create_mock_main_window()
+
+        present_plan(main_window, ["Step 1", "Step 2"], "Test plan")
+
+        result = get_plan_status(main_window)
+
+        assert result["has_plan"] is True
+        assert result["status"] == "draft"
+        assert result["total_steps"] == 2
+        assert "awaiting" in result["message"].lower()
+
+    def test_get_plan_status_executing(self):
+        """Test get_plan_status shows executing status with current step."""
+        from core.chat_tools import present_plan, start_plan_execution, get_plan_status
+
+        main_window = self._create_mock_main_window()
+
+        present_plan(main_window, ["Step 1", "Step 2", "Step 3"], "Test plan")
+        start_plan_execution(main_window)
+
+        result = get_plan_status(main_window)
+
+        assert result["has_plan"] is True
+        assert result["status"] == "executing"
+        assert result["current_step_number"] == 1
+        assert result["current_step"] == "Step 1"
+        assert len(result["remaining_steps"]) == 2
+
+    def test_get_plan_status_shows_step_details(self):
+        """Test get_plan_status returns detailed step information."""
+        from core.chat_tools import present_plan, start_plan_execution, complete_plan_step, get_plan_status
+
+        main_window = self._create_mock_main_window()
+
+        present_plan(main_window, ["Step 1", "Step 2"], "Test plan")
+        start_plan_execution(main_window)
+        complete_plan_step(main_window, "First step done")
+
+        result = get_plan_status(main_window)
+
+        assert len(result["steps"]) == 2
+        # First step should be completed
+        assert result["steps"][0]["status"] == "completed"
+        assert result["steps"][0]["result_summary"] == "First step done"
+        # Second step should be running
+        assert result["steps"][1]["status"] == "running"
+
+    def test_fail_plan_step_stop(self):
+        """Test fail_plan_step with stop action."""
+        from core.chat_tools import present_plan, start_plan_execution, fail_plan_step
+
+        main_window = self._create_mock_main_window()
+
+        present_plan(main_window, ["Step 1", "Step 2"], "Test plan")
+        start_plan_execution(main_window)
+
+        result = fail_plan_step(main_window, "Something went wrong", action="stop")
+
+        assert result["success"] is True
+        assert result["action"] == "stop"
+        assert result["plan_status"] == "failed"
+        assert result["error"] == "Something went wrong"
+
+    def test_fail_plan_step_retry(self):
+        """Test fail_plan_step with retry action."""
+        from core.chat_tools import present_plan, start_plan_execution, fail_plan_step
+
+        main_window = self._create_mock_main_window()
+
+        present_plan(main_window, ["Step 1", "Step 2"], "Test plan")
+        start_plan_execution(main_window)
+
+        result = fail_plan_step(main_window, "Temporary error", action="retry")
+
+        assert result["success"] is True
+        assert result["action"] == "retry"
+        assert result["step_number"] == 1
+        assert "Retrying" in result["message"]
+
+    def test_fail_plan_step_skip(self):
+        """Test fail_plan_step with skip action."""
+        from core.chat_tools import present_plan, start_plan_execution, fail_plan_step
+
+        main_window = self._create_mock_main_window()
+
+        present_plan(main_window, ["Step 1", "Step 2", "Step 3"], "Test plan")
+        start_plan_execution(main_window)
+
+        result = fail_plan_step(main_window, "Skip this step", action="skip")
+
+        assert result["success"] is True
+        assert result["action"] == "skip"
+        assert result["skipped_step"] == "Step 1"
+        assert result["current_step_number"] == 2
+        assert result["current_step"] == "Step 2"
+
+    def test_fail_plan_step_skip_last(self):
+        """Test fail_plan_step skip on last step completes plan."""
+        from core.chat_tools import present_plan, start_plan_execution, complete_plan_step, fail_plan_step
+
+        main_window = self._create_mock_main_window()
+
+        present_plan(main_window, ["Step 1", "Step 2"], "Test plan")
+        start_plan_execution(main_window)
+        complete_plan_step(main_window)  # Complete step 1
+
+        # Skip step 2 (last step)
+        result = fail_plan_step(main_window, "Skip last step", action="skip")
+
+        assert result["success"] is True
+        assert result["action"] == "skip"
+        assert result["plan_completed"] is True
+
+    def test_full_plan_workflow(self):
+        """Test a complete plan execution workflow."""
+        from core.chat_tools import (
+            present_plan,
+            start_plan_execution,
+            complete_plan_step,
+            get_plan_status,
+        )
+
+        main_window = self._create_mock_main_window()
+
+        # 1. Present plan
+        steps = [
+            "Download videos",
+            "Run scene detection",
+            "Add clips to sequence",
+            "Export video"
+        ]
+        present_result = present_plan(main_window, steps, "Video editing workflow")
+        assert present_result["step_count"] == 4
+
+        # 2. Start execution
+        start_result = start_plan_execution(main_window)
+        assert start_result["current_step"] == "Download videos"
+
+        # 3. Complete each step
+        complete_plan_step(main_window, "Downloaded 8 videos")
+        complete_plan_step(main_window, "Detected scenes in all videos")
+        complete_plan_step(main_window, "Added 24 clips to sequence")
+
+        # 4. Check status before last step
+        status = get_plan_status(main_window)
+        assert status["current_step_number"] == 4
+        assert status["current_step"] == "Export video"
+        assert "3/4" in status["progress"]
+
+        # 5. Complete final step
+        final_result = complete_plan_step(main_window, "Exported to output.mp4")
+        assert final_result["plan_completed"] is True
+
+        # 6. Verify final status
+        final_status = get_plan_status(main_window)
+        assert final_status["status"] == "completed"
+
+
+class TestPendingActionTracking:
+    """Tests for pending action tracking in GUI state."""
+
+    def _create_mock_main_window_with_project(self):
+        """Create mock main window with GUI state and project."""
+        from core.gui_state import GUIState
+        from core.project import Project
+
+        main_window = Mock()
+        main_window._gui_state = GUIState()
+        main_window.project = Project.new(name="Untitled Project")
+        return main_window
+
+    def test_present_plan_stores_pending_action_for_unnamed_project(self):
+        """Test that present_plan stores pending action when project is unnamed."""
+        from core.chat_tools import present_plan
+
+        main_window = self._create_mock_main_window_with_project()
+
+        steps = ["Download videos", "Run detection", "Export"]
+        result = present_plan(main_window, steps, "Test workflow")
+
+        # Should return action_required
+        assert result["success"] is True
+        assert result["action_required"] == "name_project"
+
+        # Should store pending action in GUI state
+        pending = main_window._gui_state.pending_action
+        assert pending is not None
+        assert pending["type"] == "name_project_then_plan"
+        assert pending["pending_steps"] == steps
+
+    def test_set_project_name_includes_next_action_when_pending(self):
+        """Test that set_project_name reminds agent to call present_plan."""
+        from core.chat_tools import present_plan, set_project_name
+
+        main_window = self._create_mock_main_window_with_project()
+
+        # First, present_plan with unnamed project
+        # Steps must contain project keywords (download, detect, etc.) to trigger the check
+        steps = ["Download videos", "Detect scenes"]
+        present_plan(main_window, steps, "Test plan")
+
+        # Now set the project name
+        result = set_project_name(main_window, main_window.project, "My Project")
+
+        assert result["success"] is True
+        assert result["new_name"] == "My Project"
+        # Should include next action
+        assert result.get("next_action") == "present_plan"
+        assert result["next_action_args"]["steps"] == ["Download videos", "Detect scenes"]
+        assert "present_plan" in result["message"]
+
+        # Pending action should be cleared
+        assert main_window._gui_state.pending_action is None
+
+    def test_gui_state_context_shows_pending_action(self):
+        """Test that GUI state context string includes pending action."""
+        from core.gui_state import GUIState
+
+        state = GUIState()
+        state.set_pending_action(
+            "name_project_then_plan",
+            pending_steps=["Step 1", "Step 2"],
+            user_response="kittyjump"
+        )
+
+        context = state.to_context_string()
+
+        assert "PENDING ACTION" in context
+        assert "name_project_then_plan" in context
+        assert "kittyjump" in context
+        assert "set_project_name" in context
+
+    def test_pending_action_cleared_after_handling(self):
+        """Test that pending action can be cleared."""
+        from core.gui_state import GUIState
+
+        state = GUIState()
+        state.set_pending_action("test_action", data="test")
+
+        assert state.pending_action is not None
+
+        state.clear_pending_action()
+
+        assert state.pending_action is None

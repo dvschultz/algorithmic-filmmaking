@@ -48,6 +48,9 @@ class GUIState:
     # Active filters state
     active_filters: dict = field(default_factory=dict)
 
+    # Pending action state - tracks actions agent must complete after user responds
+    pending_action: Optional[dict] = None
+
     def to_context_string(self) -> str:
         """Generate context string for agent system prompt.
 
@@ -105,6 +108,22 @@ class GUIState:
             if active:
                 lines.append(f"ACTIVE FILTERS: {', '.join(active)}")
 
+        # Pending action (high priority - show first if exists)
+        if self.pending_action:
+            action = self.pending_action
+            action_type = action.get("type", "unknown")
+            lines.insert(0, "=" * 50)
+            lines.insert(1, "⚠️  PENDING ACTION REQUIRED")
+            lines.insert(2, f"Action: {action_type}")
+            if action_type == "name_project_then_plan":
+                lines.insert(3, f"User provided name: '{action.get('user_response', 'unknown')}'")
+                lines.insert(4, "NEXT STEPS:")
+                lines.insert(5, f"  1. Call set_project_name(name=\"{action.get('user_response', '')}\")")
+                lines.insert(6, "  2. Call present_plan with the pending steps")
+                if action.get("pending_steps"):
+                    lines.insert(7, f"  Pending plan: {len(action['pending_steps'])} steps")
+            lines.insert(len(lines), "=" * 50)
+
         # Plan state
         if self.current_plan:
             plan = self.current_plan
@@ -148,6 +167,28 @@ class GUIState:
             plan: Plan object to track
         """
         self.current_plan = plan
+
+    def set_pending_action(self, action_type: str, **kwargs):
+        """Set a pending action that must be completed.
+
+        Args:
+            action_type: Type of action (e.g., 'name_project_then_plan')
+            **kwargs: Additional action-specific data
+        """
+        self.pending_action = {"type": action_type, **kwargs}
+
+    def clear_pending_action(self):
+        """Clear the pending action after it's been handled."""
+        self.pending_action = None
+
+    def update_pending_action_response(self, user_response: str):
+        """Update pending action with user's response.
+
+        Args:
+            user_response: The user's response text
+        """
+        if self.pending_action:
+            self.pending_action["user_response"] = user_response
 
     def update_active_filters(self, filters: dict):
         """Update the active filters state.

@@ -17,6 +17,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from datetime import datetime
 from typing import Any, Callable, Optional, get_type_hints
 
 from core.youtube_api import (
@@ -332,6 +333,42 @@ def present_plan(main_window, steps: list[str], summary: str) -> dict:
             "error": f"Plan has {len(steps)} steps, maximum is 20. Please break into smaller plans."
         }
 
+    # Check if plan involves project work and project is unnamed
+    # Keywords that indicate the plan will modify/use a project
+    project_keywords = [
+        "download", "detect", "scene", "clip", "sequence", "export",
+        "analyze", "transcribe", "shuffle", "randomize", "import",
+        "add to", "render", "save"
+    ]
+    steps_text = " ".join(steps).lower()
+    involves_project = any(kw in steps_text for kw in project_keywords)
+
+    if involves_project and hasattr(main_window, 'project'):
+        project = main_window.project
+        if project and project.metadata.name == "Untitled Project":
+            # Store pending action in GUI state so agent is reminded after user responds
+            if hasattr(main_window, '_gui_state'):
+                main_window._gui_state.set_pending_action(
+                    "name_project_then_plan",
+                    pending_steps=steps,
+                    pending_summary=summary
+                )
+
+            return {
+                "success": True,
+                "action_required": "name_project",
+                "instruction": (
+                    "STOP. Do not call any tools. Ask the user directly: "
+                    "'What would you like to name this project?' "
+                    "Wait for their response. Then call set_project_name with "
+                    "the name they provide, and present_plan again with the same steps."
+                ),
+                "pending_plan": {
+                    "steps": steps,
+                    "summary": summary
+                }
+            }
+
     # Create the plan
     plan = Plan.from_steps(steps, summary)
 
@@ -348,6 +385,251 @@ def present_plan(main_window, steps: list[str], summary: str) -> dict:
         "step_count": len(steps),
         "message": "Plan presented to user. Waiting for confirmation or edits."
     }
+
+
+@tools.register(
+    description="Start executing a confirmed plan. Call this after the user confirms the plan. Returns the first step to execute.",
+    requires_project=False,
+    modifies_gui_state=True
+)
+def start_plan_execution(main_window) -> dict:
+    """Begin executing the current plan.
+
+    Call this after present_plan and user confirmation.
+
+    Returns:
+        Current step info and instructions
+    """
+    if not hasattr(main_window, '_gui_state') or not main_window._gui_state.current_plan:
+        return {
+            "success": False,
+            "error": "No plan exists. Use present_plan first to create a plan."
+        }
+
+    plan = main_window._gui_state.current_plan
+
+    if plan.status == "executing":
+        # Already executing, return current step
+        return {
+            "success": True,
+            "already_executing": True,
+            "current_step_number": plan.current_step_index + 1,
+            "total_steps": len(plan.steps),
+            "current_step": plan.current_step.description if plan.current_step else None,
+            "message": "Plan already executing. Continue with current step."
+        }
+
+    if plan.status == "completed":
+        return {
+            "success": False,
+            "error": "Plan already completed. Create a new plan with present_plan."
+        }
+
+    # Start execution
+    plan.confirm()  # Mark as confirmed if still draft
+    plan.start_execution()
+
+    return {
+        "success": True,
+        "plan_id": plan.id,
+        "status": "executing",
+        "current_step_number": 1,
+        "total_steps": len(plan.steps),
+        "current_step": plan.current_step.description if plan.current_step else None,
+        "remaining_steps": [s.description for s in plan.steps[1:]],
+        "message": f"Plan started. Execute step 1: {plan.current_step.description if plan.current_step else 'Unknown'}"
+    }
+
+
+@tools.register(
+    description="Mark the current plan step as complete and get the next step. Call this after successfully completing each step in the plan.",
+    requires_project=False,
+    modifies_gui_state=True
+)
+def complete_plan_step(main_window, result_summary: Optional[str] = None) -> dict:
+    """Mark current step complete and advance to next.
+
+    Args:
+        result_summary: Brief description of what was accomplished (optional)
+
+    Returns:
+        Next step info or completion status
+    """
+    if not hasattr(main_window, '_gui_state') or not main_window._gui_state.current_plan:
+        return {
+            "success": False,
+            "error": "No plan exists. Use present_plan first."
+        }
+
+    plan = main_window._gui_state.current_plan
+
+    if plan.status != "executing":
+        return {
+            "success": False,
+            "error": f"Plan is not executing (status: {plan.status}). Call start_plan_execution first."
+        }
+
+    completed_step = plan.current_step.description if plan.current_step else "Unknown"
+    completed_step_number = plan.current_step_index + 1
+
+    # Advance to next step
+    plan.advance_step(result_summary)
+
+    if plan.status == "completed":
+        return {
+            "success": True,
+            "plan_completed": True,
+            "completed_step": completed_step,
+            "completed_step_number": completed_step_number,
+            "total_steps": len(plan.steps),
+            "message": f"Step {completed_step_number} complete. All {len(plan.steps)} steps finished! Plan completed successfully."
+        }
+
+    # More steps remain
+    return {
+        "success": True,
+        "plan_completed": False,
+        "completed_step": completed_step,
+        "completed_step_number": completed_step_number,
+        "current_step_number": plan.current_step_index + 1,
+        "total_steps": len(plan.steps),
+        "current_step": plan.current_step.description if plan.current_step else None,
+        "remaining_steps": [s.description for s in plan.steps[plan.current_step_index + 1:]],
+        "progress": plan.get_progress_summary(),
+        "message": f"Step {completed_step_number} complete. Now execute step {plan.current_step_index + 1}: {plan.current_step.description if plan.current_step else 'Unknown'}"
+    }
+
+
+@tools.register(
+    description="Get current plan execution status including which step is active. Use this to check progress or remind yourself what step you're on.",
+    requires_project=False,
+    modifies_gui_state=False
+)
+def get_plan_status(main_window) -> dict:
+    """Get current plan status and step information.
+
+    Returns:
+        Plan status, current step, and remaining steps
+    """
+    if not hasattr(main_window, '_gui_state') or not main_window._gui_state.current_plan:
+        return {
+            "has_plan": False,
+            "message": "No active plan. Use present_plan to create one."
+        }
+
+    plan = main_window._gui_state.current_plan
+
+    steps_info = []
+    for i, step in enumerate(plan.steps):
+        steps_info.append({
+            "step_number": i + 1,
+            "description": step.description,
+            "status": step.status,
+            "result_summary": step.result_summary
+        })
+
+    result = {
+        "has_plan": True,
+        "plan_id": plan.id,
+        "summary": plan.summary,
+        "status": plan.status,
+        "total_steps": len(plan.steps),
+        "steps": steps_info,
+        "progress": plan.get_progress_summary()
+    }
+
+    if plan.status == "executing" and plan.current_step:
+        result["current_step_number"] = plan.current_step_index + 1
+        result["current_step"] = plan.current_step.description
+        result["remaining_steps"] = [s.description for s in plan.steps[plan.current_step_index + 1:]]
+        result["message"] = f"Executing step {plan.current_step_index + 1}/{len(plan.steps)}: {plan.current_step.description}"
+    elif plan.status == "completed":
+        result["message"] = "Plan completed successfully."
+    elif plan.status == "draft":
+        result["message"] = "Plan awaiting user confirmation. Call start_plan_execution after user confirms."
+    else:
+        result["message"] = f"Plan status: {plan.status}"
+
+    return result
+
+
+@tools.register(
+    description="Mark the current plan step as failed. Use this if a step cannot be completed. You can optionally retry or skip to handle the failure.",
+    requires_project=False,
+    modifies_gui_state=True
+)
+def fail_plan_step(main_window, error: str, action: str = "stop") -> dict:
+    """Mark current step as failed and handle the failure.
+
+    Args:
+        error: Description of what went wrong
+        action: How to handle - 'stop' (halt plan), 'retry' (try step again), 'skip' (move to next step)
+
+    Returns:
+        Updated plan status
+    """
+    if not hasattr(main_window, '_gui_state') or not main_window._gui_state.current_plan:
+        return {
+            "success": False,
+            "error": "No plan exists."
+        }
+
+    plan = main_window._gui_state.current_plan
+
+    if plan.status != "executing":
+        return {
+            "success": False,
+            "error": f"Plan is not executing (status: {plan.status})."
+        }
+
+    failed_step = plan.current_step.description if plan.current_step else "Unknown"
+    failed_step_number = plan.current_step_index + 1
+
+    if action == "retry":
+        plan.retry_current_step()
+        return {
+            "success": True,
+            "action": "retry",
+            "step_number": failed_step_number,
+            "current_step": failed_step,
+            "message": f"Retrying step {failed_step_number}: {failed_step}"
+        }
+    elif action == "skip":
+        # Mark as failed but advance anyway
+        plan.fail_current_step(error)
+        plan.current_step_index += 1
+        if plan.current_step_index >= len(plan.steps):
+            plan.status = "completed"
+            plan.completed_at = datetime.now()
+            return {
+                "success": True,
+                "action": "skip",
+                "plan_completed": True,
+                "skipped_step": failed_step,
+                "message": f"Skipped failed step {failed_step_number}. Plan completed (with failures)."
+            }
+        else:
+            plan.steps[plan.current_step_index].status = "running"
+            return {
+                "success": True,
+                "action": "skip",
+                "skipped_step": failed_step,
+                "current_step_number": plan.current_step_index + 1,
+                "current_step": plan.current_step.description if plan.current_step else None,
+                "message": f"Skipped failed step. Now on step {plan.current_step_index + 1}: {plan.current_step.description if plan.current_step else 'Unknown'}"
+            }
+    else:  # stop
+        plan.fail_current_step(error)
+        plan.stop_on_failure()
+        return {
+            "success": True,
+            "action": "stop",
+            "plan_status": "failed",
+            "failed_step_number": failed_step_number,
+            "failed_step": failed_step,
+            "error": error,
+            "message": f"Plan stopped at step {failed_step_number} due to error: {error}"
+        }
 
 
 @tools.register(
@@ -1637,7 +1919,7 @@ def export_dataset(
     modifies_gui_state=True,
     modifies_project_state=True
 )
-def set_project_name(project, name: str) -> dict:
+def set_project_name(main_window, project, name: str) -> dict:
     """Set the project name and auto-save."""
     import re
 
@@ -1710,6 +1992,19 @@ def set_project_name(project, name: str) -> dict:
         # Naming succeeded but saving failed - include warning
         result["warning"] = save_error
         result["message"] += f". Warning: {save_error}"
+
+    # Check for pending action that requires follow-up after naming
+    if hasattr(main_window, '_gui_state') and main_window._gui_state.pending_action:
+        pending = main_window._gui_state.pending_action
+        if pending.get("type") == "name_project_then_plan":
+            result["next_action"] = "present_plan"
+            result["next_action_args"] = {
+                "steps": pending.get("pending_steps", []),
+                "summary": pending.get("pending_summary", "")
+            }
+            result["message"] += ". IMPORTANT: Now call present_plan with the pending steps to continue."
+            # Clear the pending action
+            main_window._gui_state.clear_pending_action()
 
     return result
 
@@ -2281,15 +2576,39 @@ def detect_scenes(
             # Add new source using proper Project method (invalidates caches, notifies observers)
             project.add_source(source)
 
+        # Secondary fallback: ensure at least one clip exists (belt and suspenders)
+        # This handles edge cases where scene_detect might be bypassed or return empty
+        is_fallback = False
+        if not clips:
+            from models.clip import Clip
+            total_frames = source.total_frames
+            clips = [Clip(
+                source_id=source.id,
+                start_frame=0,
+                end_frame=total_frames,
+            )]
+            is_fallback = True
+
+        # Check if the single clip is a full-video fallback
+        if len(clips) == 1 and clips[0].start_frame == 0 and clips[0].end_frame == source.total_frames:
+            is_fallback = True
+
         # Add clips using proper Project method (invalidates caches, notifies observers)
         project.add_clips(clips)
+
+        # Build informative message
+        if is_fallback:
+            message = f"No scene cuts detected in {video.name} - created single clip spanning full video"
+        else:
+            message = f"Detected {len(clips)} scenes in {video.name} and added to project"
 
         return {
             "success": True,
             "clips_detected": len(clips),
             "clip_ids": [clip.id for clip in clips],
             "source_id": source.id,
-            "message": f"Detected {len(clips)} scenes in {video.name} and added to project"
+            "is_fallback_clip": is_fallback,
+            "message": message
         }
 
     except FileNotFoundError as e:

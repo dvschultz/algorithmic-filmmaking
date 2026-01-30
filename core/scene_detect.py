@@ -1,5 +1,6 @@
 """Scene detection module wrapping PySceneDetect."""
 
+import logging
 from pathlib import Path
 from typing import Callable, Optional
 from dataclasses import dataclass
@@ -10,6 +11,8 @@ from scenedetect.video_stream import VideoStream
 from scenedetect.backends.opencv import VideoStreamCv2
 
 from models.clip import Clip, Source
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -91,6 +94,17 @@ class SceneDetector:
             )
             clips.append(clip)
 
+        # Fallback: if no scenes detected, create a single clip spanning the entire video
+        if not clips:
+            total_frames = source.total_frames
+            fallback_clip = Clip(
+                source_id=source.id,
+                start_frame=0,
+                end_frame=total_frames,
+            )
+            clips = [fallback_clip]
+            logger.info(f"No scenes detected in {video_path.name}, created full-video clip")
+
         return source, clips
 
     def detect_scenes_with_progress(
@@ -163,6 +177,17 @@ class SceneDetector:
             )
             clips.append(clip)
 
-        progress_callback(1.0, f"Found {len(clips)} scenes")
+        # Fallback: if no scenes detected, create a single clip spanning the entire video
+        if not clips:
+            fallback_clip = Clip(
+                source_id=source.id,
+                start_frame=0,
+                end_frame=total_frames,
+            )
+            clips = [fallback_clip]
+            logger.info(f"No scenes detected in {video_path.name}, created full-video clip")
+            progress_callback(1.0, "No scenes found - using full video as single clip")
+        else:
+            progress_callback(1.0, f"Found {len(clips)} scenes")
 
         return source, clips
