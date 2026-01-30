@@ -81,7 +81,7 @@ class DetectionWorker(QThread):
     """Background worker for scene detection."""
 
     progress = Signal(float, str)  # progress (0-1), status message
-    finished = Signal(object, list)  # source, clips
+    detection_completed = Signal(object, list)  # source, clips (renamed from 'finished' to avoid shadowing QThread.finished)
     error = Signal(str)
 
     def __init__(self, video_path: Path, config: DetectionConfig):
@@ -110,8 +110,8 @@ class DetectionWorker(QThread):
             if self._cancelled:
                 logger.info("DetectionWorker cancelled after detection")
                 return
-            logger.info("DetectionWorker.run() emitting finished signal")
-            self.finished.emit(source, clips)
+            logger.info("DetectionWorker.run() emitting detection_completed signal")
+            self.detection_completed.emit(source, clips)
             logger.info("DetectionWorker.run() COMPLETED")
         except Exception as e:
             if not self._cancelled:
@@ -179,7 +179,7 @@ class DownloadWorker(QThread):
     """Background worker for video downloads."""
 
     progress = Signal(float, str)  # progress (0-100), status message
-    finished = Signal(object)  # DownloadResult
+    download_completed = Signal(object)  # DownloadResult (renamed from 'finished' to avoid shadowing QThread.finished)
     error = Signal(str)
 
     def __init__(self, url: str):
@@ -200,7 +200,7 @@ class DownloadWorker(QThread):
                 cancel_check=lambda: self._cancelled,
             )
             if result.success:
-                self.finished.emit(result)
+                self.download_completed.emit(result)
             else:
                 self.error.emit(result.error or "Download failed")
         except Exception as e:
@@ -313,7 +313,7 @@ class SequenceExportWorker(QThread):
     """Background worker for sequence export."""
 
     progress = Signal(float, str)  # progress (0-1), status message
-    finished = Signal(object)  # output path (Path)
+    export_completed = Signal(object)  # output path (Path) (renamed from 'finished' to avoid shadowing QThread.finished)
     error = Signal(str)
 
     def __init__(self, sequence, sources, clips, config):
@@ -334,7 +334,7 @@ class SequenceExportWorker(QThread):
                 progress_callback=lambda p, m: self.progress.emit(p, m),
             )
             if success:
-                self.finished.emit(self.config.output_path)
+                self.export_completed.emit(self.config.output_path)
             else:
                 self.error.emit("Export failed")
         except Exception as e:
@@ -346,7 +346,7 @@ class ColorAnalysisWorker(QThread):
 
     progress = Signal(int, int)  # current, total
     color_ready = Signal(str, list)  # clip_id, colors (list of RGB tuples)
-    finished = Signal()
+    analysis_completed = Signal()  # (renamed from 'finished' to avoid shadowing QThread.finished)
 
     def __init__(self, clips: list[Clip]):
         super().__init__()
@@ -373,8 +373,8 @@ class ColorAnalysisWorker(QThread):
             except Exception as e:
                 logger.warning(f"Failed to extract colors for clip {clip.id}: {e}")
             self.progress.emit(i + 1, total)
-        logger.info("ColorAnalysisWorker.run() emitting finished signal")
-        self.finished.emit()
+        logger.info("ColorAnalysisWorker.run() emitting analysis_completed signal")
+        self.analysis_completed.emit()
         logger.info("ColorAnalysisWorker.run() COMPLETED")
 
 
@@ -383,7 +383,7 @@ class ShotTypeWorker(QThread):
 
     progress = Signal(int, int)  # current, total
     shot_type_ready = Signal(str, str, float)  # clip_id, shot_type, confidence
-    finished = Signal()
+    analysis_completed = Signal()  # (renamed from 'finished' to avoid shadowing QThread.finished)
 
     def __init__(self, clips: list[Clip]):
         super().__init__()
@@ -410,8 +410,8 @@ class ShotTypeWorker(QThread):
             except Exception as e:
                 logger.warning(f"Shot type classification failed for {clip.id}: {e}")
             self.progress.emit(i + 1, total)
-        logger.info("ShotTypeWorker.run() emitting finished signal")
-        self.finished.emit()
+        logger.info("ShotTypeWorker.run() emitting analysis_completed signal")
+        self.analysis_completed.emit()
         logger.info("ShotTypeWorker.run() COMPLETED")
 
 
@@ -420,7 +420,7 @@ class TranscriptionWorker(QThread):
 
     progress = Signal(int, int)  # current, total
     transcript_ready = Signal(str, list)  # clip_id, segments (list of TranscriptSegment)
-    finished = Signal()
+    transcription_completed = Signal()  # (renamed from 'finished' to avoid shadowing QThread.finished)
     error = Signal(str)  # error message
 
     def __init__(self, clips: list[Clip], source: Source, model_name: str = "small.en", language: str = "en"):
@@ -475,8 +475,8 @@ class TranscriptionWorker(QThread):
                 logger.warning(f"Transcription failed for {clip.id}: {e}")
                 # Continue processing other clips
             self.progress.emit(i + 1, total)
-        logger.info("TranscriptionWorker.run() emitting finished signal")
-        self.finished.emit()
+        logger.info("TranscriptionWorker.run() emitting transcription_completed signal")
+        self.transcription_completed.emit()
         logger.info("TranscriptionWorker.run() COMPLETED")
 
 
@@ -485,7 +485,7 @@ class ClassificationWorker(QThread):
 
     progress = Signal(int, int)  # current, total
     labels_ready = Signal(str, list)  # clip_id, [(label, confidence), ...]
-    finished = Signal()
+    classification_completed = Signal()  # (renamed from 'finished' to avoid shadowing QThread.finished)
 
     def __init__(self, clips: list[Clip], top_k: int = 5, threshold: float = 0.1):
         super().__init__()
@@ -520,8 +520,8 @@ class ClassificationWorker(QThread):
             except Exception as e:
                 logger.warning(f"Classification failed for {clip.id}: {e}")
             self.progress.emit(i + 1, total)
-        logger.info("ClassificationWorker.run() emitting finished signal")
-        self.finished.emit()
+        logger.info("ClassificationWorker.run() emitting classification_completed signal")
+        self.classification_completed.emit()
         logger.info("ClassificationWorker.run() COMPLETED")
 
 
@@ -530,7 +530,7 @@ class ObjectDetectionWorker(QThread):
 
     progress = Signal(int, int)  # current, total
     objects_ready = Signal(str, list, int)  # clip_id, detections, person_count
-    finished = Signal()
+    detection_completed = Signal()  # (renamed from 'finished' to avoid shadowing QThread.finished)
 
     def __init__(self, clips: list[Clip], confidence: float = 0.5, detect_all: bool = True):
         super().__init__()
@@ -572,8 +572,8 @@ class ObjectDetectionWorker(QThread):
             except Exception as e:
                 logger.warning(f"Object detection failed for {clip.id}: {e}")
             self.progress.emit(i + 1, total)
-        logger.info("ObjectDetectionWorker.run() emitting finished signal")
-        self.finished.emit()
+        logger.info("ObjectDetectionWorker.run() emitting detection_completed signal")
+        self.detection_completed.emit()
         logger.info("ObjectDetectionWorker.run() COMPLETED")
 
 
@@ -583,7 +583,7 @@ class DescriptionWorker(QThread):
     progress = Signal(int, int)  # current, total
     description_ready = Signal(str, str, str)  # clip_id, description, model_name
     error = Signal(str, str)  # clip_id, error_message
-    finished = Signal()
+    description_completed = Signal()  # (renamed from 'finished' to avoid shadowing QThread.finished)
 
     def __init__(
         self,
@@ -649,14 +649,14 @@ class DescriptionWorker(QThread):
                 self.error.emit(clip.id, error_msg)
             self.progress.emit(i + 1, total)
         logger.info(f"DescriptionWorker.run() completed: {self.success_count} success, {self.error_count} errors")
-        self.finished.emit()
+        self.description_completed.emit()
         logger.info("DescriptionWorker.run() COMPLETED")
 
 
 class YouTubeSearchWorker(QThread):
     """Background worker for YouTube search."""
 
-    finished = Signal(object)  # YouTubeSearchResult
+    search_completed = Signal(object)  # YouTubeSearchResult (renamed from 'finished' to avoid shadowing QThread.finished)
     error = Signal(str)
 
     def __init__(self, client: YouTubeSearchClient, query: str, max_results: int = 25):
@@ -668,7 +668,7 @@ class YouTubeSearchWorker(QThread):
     def run(self):
         try:
             result = self.client.search(self.query, self.max_results)
-            self.finished.emit(result)
+            self.search_completed.emit(result)
         except QuotaExceededError as e:
             self.error.emit(str(e))
         except InvalidAPIKeyError as e:
@@ -2688,7 +2688,9 @@ class MainWindow(QMainWindow):
         self.color_worker = ColorAnalysisWorker(clips)
         self.color_worker.progress.connect(self._on_color_progress)
         self.color_worker.color_ready.connect(self._on_color_ready)
-        self.color_worker.finished.connect(self._on_manual_color_analysis_finished, Qt.UniqueConnection)
+        self.color_worker.analysis_completed.connect(self._on_manual_color_analysis_finished, Qt.UniqueConnection)
+        # Clean up thread safely after it finishes to prevent "QThread: Destroyed while running" crash
+        self.color_worker.finished.connect(self.color_worker.deleteLater)
         logger.info("Starting ColorAnalysisWorker (manual)...")
         self.color_worker.start()
 
@@ -2727,7 +2729,9 @@ class MainWindow(QMainWindow):
         self.shot_type_worker = ShotTypeWorker(clips)
         self.shot_type_worker.progress.connect(self._on_shot_type_progress)
         self.shot_type_worker.shot_type_ready.connect(self._on_shot_type_ready)
-        self.shot_type_worker.finished.connect(self._on_manual_shot_type_finished, Qt.UniqueConnection)
+        self.shot_type_worker.analysis_completed.connect(self._on_manual_shot_type_finished, Qt.UniqueConnection)
+        # Clean up thread safely after it finishes
+        self.shot_type_worker.finished.connect(self.shot_type_worker.deleteLater)
         logger.info("Starting ShotTypeWorker (manual)...")
         self.shot_type_worker.start()
 
@@ -2804,8 +2808,10 @@ class MainWindow(QMainWindow):
         )
         self.transcription_worker.progress.connect(self._on_transcription_progress)
         self.transcription_worker.transcript_ready.connect(self._on_transcript_ready)
-        self.transcription_worker.finished.connect(self._on_manual_transcription_finished, Qt.UniqueConnection)
+        self.transcription_worker.transcription_completed.connect(self._on_manual_transcription_finished, Qt.UniqueConnection)
         self.transcription_worker.error.connect(self._on_transcription_error)
+        # Clean up thread safely after it finishes
+        self.transcription_worker.finished.connect(self.transcription_worker.deleteLater)
         logger.info("Starting TranscriptionWorker (manual)...")
         self.transcription_worker.start()
 
@@ -2878,7 +2884,9 @@ class MainWindow(QMainWindow):
         self.classification_worker = ClassificationWorker(clips)
         self.classification_worker.progress.connect(self._on_classification_progress)
         self.classification_worker.labels_ready.connect(self._on_classification_ready)
-        self.classification_worker.finished.connect(self._on_manual_classification_finished, Qt.UniqueConnection)
+        self.classification_worker.classification_completed.connect(self._on_manual_classification_finished, Qt.UniqueConnection)
+        # Clean up thread safely after it finishes
+        self.classification_worker.finished.connect(self.classification_worker.deleteLater)
         logger.info("Starting ClassificationWorker (manual)...")
         self.classification_worker.start()
 
@@ -2928,7 +2936,9 @@ class MainWindow(QMainWindow):
         self.detection_worker_yolo = ObjectDetectionWorker(clips)
         self.detection_worker_yolo.progress.connect(self._on_object_detection_progress)
         self.detection_worker_yolo.objects_ready.connect(self._on_objects_ready)
-        self.detection_worker_yolo.finished.connect(self._on_manual_object_detection_finished, Qt.UniqueConnection)
+        self.detection_worker_yolo.detection_completed.connect(self._on_manual_object_detection_finished, Qt.UniqueConnection)
+        # Clean up thread safely after it finishes
+        self.detection_worker_yolo.finished.connect(self.detection_worker_yolo.deleteLater)
         logger.info("Starting ObjectDetectionWorker (manual)...")
         self.detection_worker_yolo.start()
 
@@ -2988,7 +2998,9 @@ class MainWindow(QMainWindow):
         self.description_worker.progress.connect(self._on_description_progress)
         self.description_worker.description_ready.connect(self._on_description_ready)
         self.description_worker.error.connect(self._on_description_error)
-        self.description_worker.finished.connect(self._on_manual_description_finished, Qt.UniqueConnection)
+        self.description_worker.description_completed.connect(self._on_manual_description_finished, Qt.UniqueConnection)
+        # Clean up thread safely after it finishes
+        self.description_worker.finished.connect(self.description_worker.deleteLater)
         logger.info("Starting DescriptionWorker (manual)...")
         self.description_worker.start()
 
@@ -3164,8 +3176,10 @@ class MainWindow(QMainWindow):
             )
             self.transcription_worker.progress.connect(self._on_transcription_progress)
             self.transcription_worker.transcript_ready.connect(self._on_transcript_ready)
-            self.transcription_worker.finished.connect(self._on_agent_transcription_finished, Qt.UniqueConnection)
+            self.transcription_worker.transcription_completed.connect(self._on_agent_transcription_finished, Qt.UniqueConnection)
             self.transcription_worker.error.connect(self._on_transcription_error)
+            # Clean up thread safely after it finishes
+            self.transcription_worker.finished.connect(self.transcription_worker.deleteLater)
             self.transcription_worker.start()
             return
 
@@ -3302,7 +3316,9 @@ class MainWindow(QMainWindow):
         self.color_worker = ColorAnalysisWorker(clips)
         self.color_worker.progress.connect(self._on_color_progress)
         self.color_worker.color_ready.connect(self._on_color_ready)
-        self.color_worker.finished.connect(self._on_analyze_all_color_finished, Qt.UniqueConnection)
+        self.color_worker.analysis_completed.connect(self._on_analyze_all_color_finished, Qt.UniqueConnection)
+        # Clean up thread safely after it finishes
+        self.color_worker.finished.connect(self.color_worker.deleteLater)
         self.color_worker.start()
 
     @Slot()
@@ -3337,7 +3353,9 @@ class MainWindow(QMainWindow):
         self.shot_type_worker = ShotTypeWorker(clips)
         self.shot_type_worker.progress.connect(self._on_shot_type_progress)
         self.shot_type_worker.shot_type_ready.connect(self._on_shot_type_ready)
-        self.shot_type_worker.finished.connect(self._on_analyze_all_shot_finished, Qt.UniqueConnection)
+        self.shot_type_worker.analysis_completed.connect(self._on_analyze_all_shot_finished, Qt.UniqueConnection)
+        # Clean up thread safely after it finishes
+        self.shot_type_worker.finished.connect(self.shot_type_worker.deleteLater)
         self.shot_type_worker.start()
 
     @Slot()
@@ -3427,8 +3445,10 @@ class MainWindow(QMainWindow):
         )
         self.transcription_worker.progress.connect(self._on_transcription_progress)
         self.transcription_worker.transcript_ready.connect(self._on_transcript_ready)
-        self.transcription_worker.finished.connect(self._on_analyze_all_source_transcription_finished, Qt.UniqueConnection)
+        self.transcription_worker.transcription_completed.connect(self._on_analyze_all_source_transcription_finished, Qt.UniqueConnection)
         self.transcription_worker.error.connect(self._on_transcription_error)
+        # Clean up thread safely after it finishes
+        self.transcription_worker.finished.connect(self.transcription_worker.deleteLater)
         self.transcription_worker.start()
 
     @Slot()
@@ -3542,8 +3562,10 @@ class MainWindow(QMainWindow):
 
         self.download_worker = DownloadWorker(url)
         self.download_worker.progress.connect(self._on_download_progress)
-        self.download_worker.finished.connect(self._on_download_finished)
+        self.download_worker.download_completed.connect(self._on_download_finished)
         self.download_worker.error.connect(self._on_download_error)
+        # Clean up thread safely after it finishes to prevent "QThread: Destroyed while running" crash
+        self.download_worker.finished.connect(self.download_worker.deleteLater)
         self.download_worker.start()
 
     def _on_download_progress(self, progress: float, message: str):
@@ -3598,8 +3620,10 @@ class MainWindow(QMainWindow):
         self.youtube_search_worker = YouTubeSearchWorker(
             self.youtube_client, query, self.settings.youtube_results_count
         )
-        self.youtube_search_worker.finished.connect(self._on_youtube_search_finished)
+        self.youtube_search_worker.search_completed.connect(self._on_youtube_search_finished)
         self.youtube_search_worker.error.connect(self._on_youtube_search_error)
+        # Clean up thread safely after it finishes to prevent "QThread: Destroyed while running" crash
+        self.youtube_search_worker.finished.connect(self.youtube_search_worker.deleteLater)
         self.youtube_search_worker.start()
 
     @Slot(object)
@@ -3654,6 +3678,8 @@ class MainWindow(QMainWindow):
         self.bulk_download_worker.video_finished.connect(self._on_bulk_video_finished)
         self.bulk_download_worker.video_error.connect(self._on_bulk_video_error)
         self.bulk_download_worker.all_finished.connect(self._on_bulk_finished)
+        # Clean up thread safely after it finishes to prevent "QThread: Destroyed while running" crash
+        self.bulk_download_worker.finished.connect(self.bulk_download_worker.deleteLater)
         self.bulk_download_worker.start()
 
     @Slot(int, int, str)
@@ -3737,8 +3763,10 @@ class MainWindow(QMainWindow):
             self.current_source.file_path, config
         )
         self.detection_worker.progress.connect(self._on_detection_progress)
-        self.detection_worker.finished.connect(self._on_detection_finished, Qt.UniqueConnection)
+        self.detection_worker.detection_completed.connect(self._on_detection_finished, Qt.UniqueConnection)
         self.detection_worker.error.connect(self._on_detection_error)
+        # Clean up thread safely after it finishes to prevent "QThread: Destroyed while running" crash
+        self.detection_worker.finished.connect(self.detection_worker.deleteLater)
         logger.info("Starting DetectionWorker...")
         self.detection_worker.start()
         logger.info("DetectionWorker started")
@@ -4359,8 +4387,10 @@ class MainWindow(QMainWindow):
 
         self.export_worker = SequenceExportWorker(sequence, sources, clips, config)
         self.export_worker.progress.connect(self._on_sequence_export_progress)
-        self.export_worker.finished.connect(self._on_sequence_export_finished)
+        self.export_worker.export_completed.connect(self._on_sequence_export_finished)
         self.export_worker.error.connect(self._on_sequence_export_error)
+        # Clean up thread safely after it finishes
+        self.export_worker.finished.connect(self.export_worker.deleteLater)
         self.export_worker.start()
 
     def start_agent_export(self, sequence, sources: dict, clips: dict, config) -> bool:
@@ -4389,8 +4419,10 @@ class MainWindow(QMainWindow):
 
         self.export_worker = SequenceExportWorker(sequence, sources, clips, config)
         self.export_worker.progress.connect(self._on_sequence_export_progress)
-        self.export_worker.finished.connect(self._on_sequence_export_finished)
+        self.export_worker.export_completed.connect(self._on_sequence_export_finished)
         self.export_worker.error.connect(self._on_sequence_export_error)
+        # Clean up thread safely after it finishes
+        self.export_worker.finished.connect(self.export_worker.deleteLater)
         self.export_worker.start()
         return True
 
@@ -4608,6 +4640,8 @@ class MainWindow(QMainWindow):
         self.url_bulk_download_worker.progress.connect(self._on_agent_download_progress)
         self.url_bulk_download_worker.video_finished.connect(self._on_agent_video_finished)
         self.url_bulk_download_worker.all_finished.connect(self._on_agent_bulk_download_finished)
+        # Clean up thread safely after it finishes to prevent "QThread: Destroyed while running" crash
+        self.url_bulk_download_worker.finished.connect(self.url_bulk_download_worker.deleteLater)
         self.url_bulk_download_worker.start()
         return True
 
@@ -4771,7 +4805,9 @@ class MainWindow(QMainWindow):
         self.color_worker = ColorAnalysisWorker(clips)
         self.color_worker.progress.connect(self._on_color_progress)
         self.color_worker.color_ready.connect(self._on_color_ready)
-        self.color_worker.finished.connect(self._on_agent_color_analysis_finished, Qt.UniqueConnection)
+        self.color_worker.analysis_completed.connect(self._on_agent_color_analysis_finished, Qt.UniqueConnection)
+        # Clean up thread safely after it finishes
+        self.color_worker.finished.connect(self.color_worker.deleteLater)
         self.color_worker.start()
 
         return True
@@ -4818,7 +4854,9 @@ class MainWindow(QMainWindow):
         self.shot_type_worker = ShotTypeWorker(clips)
         self.shot_type_worker.progress.connect(self._on_shot_type_progress)
         self.shot_type_worker.shot_type_ready.connect(self._on_shot_type_ready)
-        self.shot_type_worker.finished.connect(self._on_agent_shot_analysis_finished, Qt.UniqueConnection)
+        self.shot_type_worker.analysis_completed.connect(self._on_agent_shot_analysis_finished, Qt.UniqueConnection)
+        # Clean up thread safely after it finishes
+        self.shot_type_worker.finished.connect(self.shot_type_worker.deleteLater)
         self.shot_type_worker.start()
 
         return True
@@ -4900,8 +4938,10 @@ class MainWindow(QMainWindow):
         )
         self.transcription_worker.progress.connect(self._on_transcription_progress)
         self.transcription_worker.transcript_ready.connect(self._on_transcript_ready)
-        self.transcription_worker.finished.connect(self._on_agent_transcription_finished, Qt.UniqueConnection)
+        self.transcription_worker.transcription_completed.connect(self._on_agent_transcription_finished, Qt.UniqueConnection)
         self.transcription_worker.error.connect(self._on_transcription_error)
+        # Clean up thread safely after it finishes
+        self.transcription_worker.finished.connect(self.transcription_worker.deleteLater)
         self.transcription_worker.start()
 
         return True
@@ -4949,7 +4989,9 @@ class MainWindow(QMainWindow):
         self.classification_worker = ClassificationWorker(clips, top_k=top_k)
         self.classification_worker.progress.connect(self._on_classification_progress)
         self.classification_worker.labels_ready.connect(self._on_classification_ready)
-        self.classification_worker.finished.connect(self._on_agent_classification_finished, Qt.UniqueConnection)
+        self.classification_worker.classification_completed.connect(self._on_agent_classification_finished, Qt.UniqueConnection)
+        # Clean up thread safely after it finishes
+        self.classification_worker.finished.connect(self.classification_worker.deleteLater)
         self.classification_worker.start()
 
         return True
@@ -5001,7 +5043,9 @@ class MainWindow(QMainWindow):
         self.detection_worker_yolo = ObjectDetectionWorker(clips, confidence=confidence, detect_all=detect_all)
         self.detection_worker_yolo.progress.connect(self._on_object_detection_progress)
         self.detection_worker_yolo.objects_ready.connect(self._on_objects_ready)
-        self.detection_worker_yolo.finished.connect(self._on_agent_object_detection_finished, Qt.UniqueConnection)
+        self.detection_worker_yolo.detection_completed.connect(self._on_agent_object_detection_finished, Qt.UniqueConnection)
+        # Clean up thread safely after it finishes
+        self.detection_worker_yolo.finished.connect(self.detection_worker_yolo.deleteLater)
         self.detection_worker_yolo.start()
 
         return True
@@ -5055,7 +5099,9 @@ class MainWindow(QMainWindow):
         self.description_worker.progress.connect(self._on_description_progress)
         self.description_worker.description_ready.connect(self._on_description_ready)
         self.description_worker.error.connect(self._on_description_error)
-        self.description_worker.finished.connect(self._on_agent_description_finished, Qt.UniqueConnection)
+        self.description_worker.description_completed.connect(self._on_agent_description_finished, Qt.UniqueConnection)
+        # Clean up thread safely after it finishes
+        self.description_worker.finished.connect(self.description_worker.deleteLater)
         self.description_worker.start()
 
         return True
