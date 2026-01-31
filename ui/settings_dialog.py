@@ -268,6 +268,8 @@ class SettingsDialog(QDialog):
             use_video_for_gemini=settings.use_video_for_gemini,
             text_extraction_method=settings.text_extraction_method,
             text_extraction_vlm_model=settings.text_extraction_vlm_model,
+            text_detection_enabled=settings.text_detection_enabled,
+            text_detection_confidence=settings.text_detection_confidence,
         )
 
         self.setWindowTitle("Settings")
@@ -568,6 +570,15 @@ class SettingsDialog(QDialog):
         vlm_layout.addWidget(self.text_vlm_combo)
         vlm_layout.addStretch()
         text_layout.addLayout(vlm_layout)
+
+        # Text detection pre-filter checkbox
+        self.text_detection_checkbox = QCheckBox("Pre-filter frames without text (faster)")
+        self.text_detection_checkbox.setToolTip(
+            "Use EAST neural network to detect text presence before OCR.\n"
+            "Significantly faster on videos with few text frames.\n"
+            "Downloads a ~50MB model on first use."
+        )
+        text_layout.addWidget(self.text_detection_checkbox)
 
         # Connect method change to enable/disable VLM combo
         self.text_method_combo.currentIndexChanged.connect(self._on_text_method_changed)
@@ -1184,6 +1195,7 @@ class SettingsDialog(QDialog):
         idx = self.text_vlm_combo.findText(self.settings.text_extraction_vlm_model)
         if idx >= 0:
             self.text_vlm_combo.setCurrentIndex(idx)
+        self.text_detection_checkbox.setChecked(self.settings.text_detection_enabled)
         self._on_text_method_changed(self.text_method_combo.currentIndex())
 
         # Appearance
@@ -1305,6 +1317,7 @@ class SettingsDialog(QDialog):
         # Text Extraction
         self.settings.text_extraction_method = self.text_method_combo.currentData()
         self.settings.text_extraction_vlm_model = self.text_vlm_combo.currentText()
+        self.settings.text_detection_enabled = self.text_detection_checkbox.isChecked()
 
         # Appearance
         theme_values = ["system", "light", "dark"]
@@ -1482,4 +1495,5 @@ class SettingsDialog(QDialog):
             or self.settings.openrouter_model != self.original_settings.openrouter_model
             or self.settings.text_extraction_method != self.original_settings.text_extraction_method
             or self.settings.text_extraction_vlm_model != self.original_settings.text_extraction_vlm_model
+            or self.settings.text_detection_enabled != self.original_settings.text_detection_enabled
         )

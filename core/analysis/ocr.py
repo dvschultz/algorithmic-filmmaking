@@ -55,6 +55,7 @@ def extract_text_from_frame(
     vlm_model: Optional[str] = None,
     vlm_only: bool = False,
     confidence_threshold: float = 0.6,
+    skip_detection: bool = False,
 ) -> tuple[str, float, str]:
     """Extract text from a single video frame.
 
@@ -67,13 +68,29 @@ def extract_text_from_frame(
         vlm_model: VLM model to use for fallback (default: from settings)
         vlm_only: If True, skip Tesseract and only use VLM
         confidence_threshold: Minimum confidence to accept Tesseract result (0.0-1.0)
+        skip_detection: If True, bypass EAST pre-filter (default: False)
 
     Returns:
         Tuple of (text, confidence, source) where:
         - text: The extracted text content
         - confidence: Confidence score from 0.0 to 1.0
-        - source: "tesseract", "vlm", or "none"
+        - source: "tesseract", "vlm", "skipped", or "none"
     """
+    # Pre-filter with EAST detection if enabled
+    if not skip_detection:
+        try:
+            from core.settings import load_settings
+            settings = load_settings()
+            if settings.text_detection_enabled:
+                from core.analysis.text_detection import has_text_regions
+                if not has_text_regions(
+                    frame_path,
+                    confidence_threshold=settings.text_detection_confidence,
+                ):
+                    logger.debug(f"No text detected in {frame_path.name}, skipping OCR")
+                    return ("", 0.0, "skipped")
+        except Exception as e:
+            logger.warning(f"Text detection pre-filter failed, proceeding with OCR: {e}")
     # VLM-only mode: skip Tesseract entirely
     if vlm_only:
         if not use_vlm_fallback:
@@ -226,6 +243,7 @@ def extract_text_from_clip(
     vlm_model: Optional[str] = None,
     vlm_only: bool = False,
     progress_callback: Optional[Callable[[int, int], None]] = None,
+    use_text_detection: bool = True,
 ) -> list:
     """Extract text from multiple keyframes of a clip.
 
@@ -240,6 +258,7 @@ def extract_text_from_clip(
         vlm_model: VLM model to use (default: from settings)
         vlm_only: If True, skip Tesseract and only use VLM
         progress_callback: Optional callback(current, total) for progress updates
+        use_text_detection: Whether to use EAST pre-filter (default: True)
 
     Returns:
         List of ExtractedText objects from models/clip.py
@@ -297,6 +316,7 @@ def extract_text_from_clip(
                 use_vlm_fallback=use_vlm_fallback,
                 vlm_model=vlm_model,
                 vlm_only=vlm_only,
+                skip_detection=not use_text_detection,
             )
 
             if text:

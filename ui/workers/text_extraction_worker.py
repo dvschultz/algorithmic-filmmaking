@@ -39,6 +39,7 @@ class TextExtractionWorker(QThread):
         use_vlm_fallback: bool = True,
         vlm_model: Optional[str] = None,
         vlm_only: bool = False,
+        use_text_detection: bool = True,
         parent=None,
     ):
         """Initialize the text extraction worker.
@@ -50,6 +51,7 @@ class TextExtractionWorker(QThread):
             use_vlm_fallback: Whether to use VLM for low-confidence results
             vlm_model: VLM model to use (default: from settings)
             vlm_only: If True, skip Tesseract and only use VLM
+            use_text_detection: Whether to use EAST pre-filter (default: True)
             parent: Optional parent QObject
         """
         super().__init__(parent)
@@ -59,6 +61,7 @@ class TextExtractionWorker(QThread):
         self.use_vlm_fallback = use_vlm_fallback
         self.vlm_model = vlm_model
         self.vlm_only = vlm_only
+        self.use_text_detection = use_text_detection
         self._cancelled = False
 
     def cancel(self):
@@ -99,6 +102,7 @@ class TextExtractionWorker(QThread):
                     use_vlm_fallback=self.use_vlm_fallback,
                     vlm_model=self.vlm_model,
                     vlm_only=self.vlm_only,
+                    use_text_detection=self.use_text_detection,
                 )
                 results[clip.id] = extracted
                 self.clip_completed.emit(clip.id, extracted)

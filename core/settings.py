@@ -392,6 +392,8 @@ class Settings:
     # Text Extraction (OCR) Settings
     text_extraction_method: str = "hybrid"  # tesseract, vlm, hybrid
     text_extraction_vlm_model: str = "gpt-4o"
+    text_detection_enabled: bool = True  # Pre-filter frames without text using EAST
+    text_detection_confidence: float = 0.5  # EAST detection confidence threshold
 
     def get_quality_preset(self) -> dict:
         """Get FFmpeg parameters for current quality setting."""
@@ -634,6 +636,10 @@ def _load_from_json(config_path: Path, settings: Settings) -> Settings:
             settings.text_extraction_method = val
         if val := text_extraction.get("vlm_model"):
             settings.text_extraction_vlm_model = val
+        if "detection_enabled" in text_extraction:
+            settings.text_detection_enabled = bool(text_extraction["detection_enabled"])
+        if "detection_confidence" in text_extraction:
+            settings.text_detection_confidence = float(text_extraction["detection_confidence"])
 
     return settings
 
@@ -700,6 +706,8 @@ def _settings_to_json(settings: Settings) -> dict:
         "text_extraction": {
             "method": settings.text_extraction_method,
             "vlm_model": settings.text_extraction_vlm_model,
+            "detection_enabled": settings.text_detection_enabled,
+            "detection_confidence": settings.text_detection_confidence,
         },
     }
 

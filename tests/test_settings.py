@@ -61,6 +61,16 @@ class TestSettingsDefaults:
         assert isinstance(settings, Settings)
         assert settings.default_sensitivity == 3.0
 
+    def test_default_text_detection_enabled(self):
+        """Test default text detection enabled value."""
+        settings = Settings()
+        assert settings.text_detection_enabled is True
+
+    def test_default_text_detection_confidence(self):
+        """Test default text detection confidence threshold."""
+        settings = Settings()
+        assert settings.text_detection_confidence == 0.5
+
 
 class TestSettingsHelpers:
     """Tests for settings helper methods."""

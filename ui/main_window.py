@@ -3230,10 +3230,12 @@ class MainWindow(QMainWindow):
         vlm_only = (method == "vlm")
         use_vlm = (method in ("vlm", "hybrid"))
         vlm_model = self.settings.text_extraction_vlm_model if use_vlm else None
+        use_text_detection = self.settings.text_detection_enabled
 
         logger.info(
             f"Creating TextExtractionWorker for {len(clips_to_process)} clips "
-            f"(method={method}, vlm_only={vlm_only}, use_vlm={use_vlm}, vlm_model={vlm_model})"
+            f"(method={method}, vlm_only={vlm_only}, use_vlm={use_vlm}, vlm_model={vlm_model}, "
+            f"text_detection={use_text_detection})"
         )
         self.text_extraction_worker = TextExtractionWorker(
             clips=clips_to_process,
@@ -3242,6 +3244,7 @@ class MainWindow(QMainWindow):
             use_vlm_fallback=use_vlm,
             vlm_model=vlm_model,
             vlm_only=vlm_only,
+            use_text_detection=use_text_detection,
         )
         self.text_extraction_worker.progress.connect(self._on_text_extraction_progress)
         self.text_extraction_worker.clip_completed.connect(self._on_text_extraction_clip_ready)
