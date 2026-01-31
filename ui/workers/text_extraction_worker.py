@@ -37,6 +37,8 @@ class TextExtractionWorker(QThread):
         sources_by_id: dict,
         num_keyframes: int = 3,
         use_vlm_fallback: bool = True,
+        vlm_model: Optional[str] = None,
+        vlm_only: bool = False,
         parent=None,
     ):
         """Initialize the text extraction worker.
@@ -46,6 +48,8 @@ class TextExtractionWorker(QThread):
             sources_by_id: Dict mapping source_id to Source objects
             num_keyframes: Number of frames to sample per clip (1-5)
             use_vlm_fallback: Whether to use VLM for low-confidence results
+            vlm_model: VLM model to use (default: from settings)
+            vlm_only: If True, skip Tesseract and only use VLM
             parent: Optional parent QObject
         """
         super().__init__(parent)
@@ -53,6 +57,8 @@ class TextExtractionWorker(QThread):
         self.sources_by_id = sources_by_id
         self.num_keyframes = min(max(1, num_keyframes), 5)
         self.use_vlm_fallback = use_vlm_fallback
+        self.vlm_model = vlm_model
+        self.vlm_only = vlm_only
         self._cancelled = False
 
     def cancel(self):
@@ -91,6 +97,8 @@ class TextExtractionWorker(QThread):
                     source=source,
                     num_keyframes=self.num_keyframes,
                     use_vlm_fallback=self.use_vlm_fallback,
+                    vlm_model=self.vlm_model,
+                    vlm_only=self.vlm_only,
                 )
                 results[clip.id] = extracted
                 self.clip_completed.emit(clip.id, extracted)

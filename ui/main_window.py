@@ -941,6 +941,7 @@ class MainWindow(QMainWindow):
         self._description_finished_handled = False
         self._shot_type_finished_handled = False
         self._transcription_finished_handled = False
+        self._text_extraction_finished_handled = False
 
         # State for "Analyze All" sequential processing
         self._analyze_all_pending: list[str] = []  # Pending steps: "colors", "shots", "transcribe"
@@ -1392,6 +1393,7 @@ class MainWindow(QMainWindow):
         self.analyze_tab.classify_requested.connect(self._on_classify_from_tab)
         self.analyze_tab.detect_objects_requested.connect(self._on_detect_objects_from_tab)
         self.analyze_tab.describe_requested.connect(self._on_describe_from_tab)
+        self.analyze_tab.extract_text_requested.connect(self._on_extract_text_from_tab)
         self.analyze_tab.analyze_all_requested.connect(self._on_analyze_all_from_tab)
         self.analyze_tab.clip_dragged_to_timeline.connect(self._on_clip_dragged_to_timeline)
         self.analyze_tab.selection_changed.connect(self._on_analyze_selection_changed)
@@ -3185,6 +3187,106 @@ class MainWindow(QMainWindow):
                 self.status_bar.showMessage(f"Description generation complete - {success} clips")
         else:
             self.status_bar.showMessage(f"Description generation complete - {total_clips} clips")
+
+        # Save project if path is set
+        if self.project.path:
+            self.project.save()
+
+        # Update chat panel with project state
+        self._update_chat_project_state()
+
+    def _on_extract_text_from_tab(self):
+        """Handle text extraction request from Analyze tab."""
+        clips = self.analyze_tab.get_clips()
+        if not clips:
+            return
+
+        # Check if worker already running
+        if hasattr(self, 'text_extraction_worker') and self.text_extraction_worker and self.text_extraction_worker.isRunning():
+            return
+
+        sources_by_id = {s.id: s for s in self.sources}
+
+        # Filter to clips that need extraction (skip clips that already have text)
+        clips_to_process = [c for c in clips if not c.extracted_texts]
+        if not clips_to_process:
+            self.status_bar.showMessage("All clips already have extracted text")
+            return
+
+        # Reset guard
+        self._text_extraction_finished_handled = False
+
+        # Update UI state
+        self.analyze_tab.set_analyzing(True, "extract_text")
+
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 100)
+        self.status_bar.showMessage(f"Extracting text from {len(clips_to_process)} clips...")
+
+        from ui.workers.text_extraction_worker import TextExtractionWorker
+
+        # Determine extraction parameters from settings
+        method = self.settings.text_extraction_method
+        vlm_only = (method == "vlm")
+        use_vlm = (method in ("vlm", "hybrid"))
+        vlm_model = self.settings.text_extraction_vlm_model if use_vlm else None
+
+        logger.info(f"Creating TextExtractionWorker for {len(clips_to_process)} clips (method={method})...")
+        self.text_extraction_worker = TextExtractionWorker(
+            clips=clips_to_process,
+            sources_by_id=sources_by_id,
+            num_keyframes=3,
+            use_vlm_fallback=use_vlm,
+            vlm_model=vlm_model,
+            vlm_only=vlm_only,
+        )
+        self.text_extraction_worker.progress.connect(self._on_text_extraction_progress)
+        self.text_extraction_worker.clip_completed.connect(self._on_text_extraction_clip_ready)
+        self.text_extraction_worker.finished.connect(self._on_text_extraction_finished)
+        self.text_extraction_worker.error.connect(self._on_text_extraction_error)
+        # Clean up thread safely after it finishes
+        self.text_extraction_worker.finished.connect(self.text_extraction_worker.deleteLater)
+        self.text_extraction_worker.finished.connect(
+            lambda: setattr(self, 'text_extraction_worker', None)
+        )
+        logger.info("Starting TextExtractionWorker...")
+        self.text_extraction_worker.start()
+
+    @Slot(int, int, str)
+    def _on_text_extraction_progress(self, current: int, total: int, clip_id: str):
+        """Handle text extraction progress update."""
+        self.progress_bar.setValue(int((current / total) * 100))
+
+    @Slot(str, list)
+    def _on_text_extraction_clip_ready(self, clip_id: str, texts: list):
+        """Handle text extracted for single clip."""
+        clip = self.clips_by_id.get(clip_id)
+        if clip:
+            clip.extracted_texts = texts
+            self.analyze_tab.update_clip_extracted_text(clip_id, texts)
+            self._mark_dirty()
+
+    @Slot(str)
+    def _on_text_extraction_error(self, error_msg: str):
+        """Handle text extraction error."""
+        logger.warning(f"Text extraction error: {error_msg}")
+
+    @Slot(dict)
+    def _on_text_extraction_finished(self, results: dict):
+        """Handle text extraction completion."""
+        logger.info("=== TEXT EXTRACTION FINISHED ===")
+
+        # Guard against duplicate calls
+        if self._text_extraction_finished_handled:
+            logger.warning("_on_text_extraction_finished already handled, ignoring duplicate call")
+            return
+        self._text_extraction_finished_handled = True
+
+        self.progress_bar.setVisible(False)
+        self.analyze_tab.set_analyzing(False)
+
+        count = sum(1 for texts in results.values() if texts)
+        self.status_bar.showMessage(f"Text extraction complete - extracted text from {count} clips")
 
         # Save project if path is set
         if self.project.path:
@@ -5777,30 +5879,35 @@ class MainWindow(QMainWindow):
             if clip.id not in self.clips_by_id:
                 self.project.add_clips([clip])
 
-        # Apply sequence to the sequence tab
-        clips_with_sources = []
-        for clip in all_clips:
-            source = self.sources_by_id.get(clip.source_id)
-            if source:
-                clips_with_sources.append((clip, source))
-
-        result = self.sequence_tab.apply_intention_workflow_result(
-            algorithm=algorithm,
-            clips_with_sources=clips_with_sources,
-            direction=direction,
-        )
-
-        if result.get("success"):
-            self.status_bar.showMessage(
-                f"Created {algorithm} sequence with {result.get('clip_count', 0)} clips"
-            )
+        # Apply sequence to the sequence tab (skip for exquisite_corpus - already handled by dialog)
+        if algorithm == "exquisite_corpus":
+            # Sequence was already applied by _on_exquisite_corpus_sequence_ready
+            self.status_bar.showMessage("Exquisite Corpus sequence created")
             self._mark_dirty()
         else:
-            QMessageBox.warning(
-                self,
-                "Sequence Error",
-                f"Failed to create sequence: {result.get('error', 'Unknown error')}"
+            clips_with_sources = []
+            for clip in all_clips:
+                source = self.sources_by_id.get(clip.source_id)
+                if source:
+                    clips_with_sources.append((clip, source))
+
+            result = self.sequence_tab.apply_intention_workflow_result(
+                algorithm=algorithm,
+                clips_with_sources=clips_with_sources,
+                direction=direction,
             )
+
+            if result.get("success"):
+                self.status_bar.showMessage(
+                    f"Created {algorithm} sequence with {result.get('clip_count', 0)} clips"
+                )
+                self._mark_dirty()
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Sequence Error",
+                    f"Failed to create sequence: {result.get('error', 'Unknown error')}"
+                )
 
         # Refresh UI
         self._refresh_sequence_tab_clips()
@@ -6043,10 +6150,63 @@ class MainWindow(QMainWindow):
         if not self.intention_workflow:
             return
 
-        # Building happens in the coordinator's completion handler
-        # Just notify the coordinator that building is "done"
+        algorithm, direction = self.intention_workflow.get_algorithm_with_direction()
         all_clips = self.intention_workflow.get_all_clips()
-        self.intention_workflow.on_building_complete(all_clips)
+
+        if algorithm == "exquisite_corpus":
+            # Show the Exquisite Corpus dialog (handles prompt, OCR, poem generation)
+            self._show_exquisite_corpus_dialog_for_intention(all_clips)
+        else:
+            # Other algorithms complete immediately
+            self.intention_workflow.on_building_complete(all_clips)
+
+    def _show_exquisite_corpus_dialog_for_intention(self, clips: list):
+        """Show Exquisite Corpus dialog during intention workflow building phase.
+
+        Args:
+            clips: List of Clip objects to process
+        """
+        from ui.dialogs.exquisite_corpus_dialog import ExquisiteCorpusDialog
+        from PySide6.QtWidgets import QDialog
+
+        # Build sources lookup from workflow
+        all_sources = self.intention_workflow.get_all_sources() if self.intention_workflow else []
+        sources_by_id = {s.id: s for s in all_sources}
+
+        dialog = ExquisiteCorpusDialog(
+            clips=clips,
+            sources_by_id=sources_by_id,
+            project=self.project,
+            parent=self,
+        )
+
+        # Connect to sequence_ready signal - this is how the dialog returns results
+        dialog.sequence_ready.connect(self._on_exquisite_corpus_sequence_ready)
+
+        result = dialog.exec()
+
+        if result != QDialog.Accepted:
+            # User cancelled - cancel the workflow
+            if self.intention_workflow:
+                self.intention_workflow.cancel()
+
+    @Slot(list)
+    def _on_exquisite_corpus_sequence_ready(self, sequence_clips: list):
+        """Handle sequence ready from Exquisite Corpus dialog during intention workflow.
+
+        Args:
+            sequence_clips: List of (Clip, Source) tuples in poem order
+        """
+        logger.info(f"Exquisite Corpus sequence ready: {len(sequence_clips)} clips")
+
+        # Apply to sequence tab using existing method
+        self.sequence_tab._apply_exquisite_corpus_sequence(sequence_clips)
+
+        # Complete the workflow with just the clips (not tuples)
+        if self.intention_workflow:
+            # Extract clips from tuples for the workflow completion
+            clips_only = [clip for clip, source in sequence_clips]
+            self.intention_workflow.on_building_complete(clips_only)
 
     def _on_export_edl_click(self):
         """Export the timeline sequence as an EDL file."""

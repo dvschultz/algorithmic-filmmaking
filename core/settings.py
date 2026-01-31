@@ -389,6 +389,10 @@ class Settings:
     description_temporal_frames: int = 4
     use_video_for_gemini: bool = True  # Send video clips to Gemini instead of frames
 
+    # Text Extraction (OCR) Settings
+    text_extraction_method: str = "hybrid"  # tesseract, vlm, hybrid
+    text_extraction_vlm_model: str = "gpt-4o"
+
     def get_quality_preset(self) -> dict:
         """Get FFmpeg parameters for current quality setting."""
         return QUALITY_PRESETS.get(self.export_quality, QUALITY_PRESETS["medium"])
@@ -624,6 +628,13 @@ def _load_from_json(config_path: Path, settings: Settings) -> Settings:
         if "use_video_for_gemini" in description:
             settings.use_video_for_gemini = bool(description["use_video_for_gemini"])
 
+    # Text Extraction section
+    if text_extraction := data.get("text_extraction"):
+        if val := text_extraction.get("method"):
+            settings.text_extraction_method = val
+        if val := text_extraction.get("vlm_model"):
+            settings.text_extraction_vlm_model = val
+
     return settings
 
 
@@ -685,6 +696,10 @@ def _settings_to_json(settings: Settings) -> dict:
             "model_cloud": settings.description_model_cloud,
             "temporal_frames": settings.description_temporal_frames,
             "use_video_for_gemini": settings.use_video_for_gemini,
+        },
+        "text_extraction": {
+            "method": settings.text_extraction_method,
+            "vlm_model": settings.text_extraction_vlm_model,
         },
     }
 

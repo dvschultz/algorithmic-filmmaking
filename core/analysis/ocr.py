@@ -53,6 +53,7 @@ def extract_text_from_frame(
     frame_path: Path,
     use_vlm_fallback: bool = True,
     vlm_model: Optional[str] = None,
+    vlm_only: bool = False,
     confidence_threshold: float = 0.6,
 ) -> tuple[str, float, str]:
     """Extract text from a single video frame.
@@ -64,14 +65,32 @@ def extract_text_from_frame(
         frame_path: Path to the frame image file
         use_vlm_fallback: Whether to use VLM if Tesseract fails or has low confidence
         vlm_model: VLM model to use for fallback (default: from settings)
+        vlm_only: If True, skip Tesseract and only use VLM
         confidence_threshold: Minimum confidence to accept Tesseract result (0.0-1.0)
 
     Returns:
         Tuple of (text, confidence, source) where:
         - text: The extracted text content
         - confidence: Confidence score from 0.0 to 1.0
-        - source: "tesseract" or "vlm"
+        - source: "tesseract", "vlm", or "none"
     """
+    # VLM-only mode: skip Tesseract entirely
+    if vlm_only:
+        if not use_vlm_fallback:
+            logger.warning(
+                "extract_text_from_frame called with vlm_only=True but use_vlm_fallback=False. "
+                "This is a contradictory configuration; returning empty result."
+            )
+            return ("", 0.0, "none")
+        try:
+            text, conf = _vlm_text_extraction(frame_path, vlm_model)
+            if text:
+                logger.debug(f"VLM extracted (VLM-only): '{text[:50]}...' (confidence: {conf:.2f})")
+                return (text, conf, "vlm")
+        except Exception as e:
+            logger.warning(f"VLM text extraction failed: {e}")
+        return ("", 0.0, "none")
+
     text = ""
     confidence = 0.0
     source = "tesseract"
@@ -204,6 +223,8 @@ def extract_text_from_clip(
     source,
     num_keyframes: int = 3,
     use_vlm_fallback: bool = True,
+    vlm_model: Optional[str] = None,
+    vlm_only: bool = False,
     progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> list:
     """Extract text from multiple keyframes of a clip.
@@ -216,6 +237,8 @@ def extract_text_from_clip(
         source: Source object containing the video file path and fps
         num_keyframes: Number of frames to sample (default 3: start, middle, end)
         use_vlm_fallback: Whether to use VLM for low-confidence results
+        vlm_model: VLM model to use (default: from settings)
+        vlm_only: If True, skip Tesseract and only use VLM
         progress_callback: Optional callback(current, total) for progress updates
 
     Returns:
@@ -272,6 +295,8 @@ def extract_text_from_clip(
             text, confidence, ocr_source = extract_text_from_frame(
                 frame_path,
                 use_vlm_fallback=use_vlm_fallback,
+                vlm_model=vlm_model,
+                vlm_only=vlm_only,
             )
 
             if text:
