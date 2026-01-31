@@ -4659,13 +4659,19 @@ class MainWindow(QMainWindow):
         if not output_path.suffix:
             output_path = output_path.with_suffix(".mp4")
 
-        # Build sources and clips dictionaries
-        sources = {}
-        clips = {}
-        if self.current_source:
-            sources[self.current_source.id] = self.current_source
+        # Build sources and clips dictionaries from the timeline's actual content
+        # (not from self.current_source which may be different)
+        sources = dict(self.sequence_tab.timeline._source_lookup)
+        clips = dict(self.sequence_tab.timeline._clip_lookup)
+
+        # Fallback to project sources/clips if timeline lookups are empty
+        if not sources and self.sources_by_id:
+            sources = dict(self.sources_by_id)
+        if not clips:
             for clip in self.clips:
-                clips[clip.id] = (clip, self.current_source)
+                source = self.sources_by_id.get(clip.source_id)
+                if source:
+                    clips[clip.id] = (clip, source)
 
         # Get quality settings from RenderTab UI (not global settings)
         quality_setting = self.render_tab.get_quality_setting()
