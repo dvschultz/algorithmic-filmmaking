@@ -10,6 +10,49 @@ if TYPE_CHECKING:
 
 
 @dataclass
+class ExtractedText:
+    """Text extracted from a video frame using OCR or VLM.
+
+    Attributes:
+        frame_number: Frame number where text was extracted
+        text: The extracted text content
+        confidence: Confidence score from 0.0 to 1.0
+        source: Extraction method ("tesseract" or "vlm")
+        bounding_boxes: Optional list of text bounding boxes with format
+            [{"x": int, "y": int, "w": int, "h": int, "text": str}, ...]
+    """
+
+    frame_number: int
+    text: str
+    confidence: float
+    source: str  # "tesseract" or "vlm"
+    bounding_boxes: Optional[list[dict]] = None
+
+    def to_dict(self) -> dict:
+        """Serialize to dictionary for JSON export."""
+        data = {
+            "frame_number": self.frame_number,
+            "text": self.text,
+            "confidence": self.confidence,
+            "source": self.source,
+        }
+        if self.bounding_boxes:
+            data["bounding_boxes"] = self.bounding_boxes
+        return data
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ExtractedText":
+        """Deserialize from dictionary."""
+        return cls(
+            frame_number=data.get("frame_number", 0),
+            text=data.get("text", ""),
+            confidence=data.get("confidence", 0.0),
+            source=data.get("source", "unknown"),
+            bounding_boxes=data.get("bounding_boxes"),
+        )
+
+
+@dataclass
 class Source:
     """Represents an imported video file."""
 
@@ -134,6 +177,8 @@ class Clip:
     description: Optional[str] = None  # Natural language description
     description_model: Optional[str] = None  # Model that generated it (e.g., "moondream-2b", "gpt-4o")
     description_frames: Optional[int] = None  # 1 for single frame, N for temporal
+    # OCR extracted text
+    extracted_texts: Optional[list[ExtractedText]] = None  # Text extracted from frames
 
     @property
     def duration_frames(self) -> int:
@@ -178,6 +223,28 @@ class Clip:
             return ""
         return " ".join(seg.text for seg in self.transcript)
 
+    @property
+    def combined_text(self) -> Optional[str]:
+        """Get deduplicated text from all OCR extractions.
+
+        Combines text from all extracted frames, removing duplicates
+        while preserving the original text casing.
+
+        Returns:
+            Combined text with unique phrases separated by " | ",
+            or None if no text has been extracted.
+        """
+        if not self.extracted_texts:
+            return None
+        unique_texts = []
+        seen = set()
+        for et in self.extracted_texts:
+            normalized = et.text.strip().lower()
+            if normalized and normalized not in seen:
+                unique_texts.append(et.text.strip())
+                seen.add(normalized)
+        return " | ".join(unique_texts) if unique_texts else None
+
     def to_dict(self) -> dict:
         """Serialize to dictionary for JSON export."""
         data = {
@@ -219,6 +286,9 @@ class Clip:
             data["description_model"] = self.description_model
         if self.description_frames:
             data["description_frames"] = self.description_frames
+        # OCR extracted text
+        if self.extracted_texts:
+            data["extracted_texts"] = [et.to_dict() for et in self.extracted_texts]
         return data
 
     @classmethod
@@ -242,6 +312,14 @@ class Clip:
                 for seg in data["transcript"]
             ]
 
+        # Parse extracted text
+        extracted_texts = None
+        if "extracted_texts" in data:
+            extracted_texts = [
+                ExtractedText.from_dict(et)
+                for et in data["extracted_texts"]
+            ]
+
         return cls(
             id=data.get("id", str(uuid.uuid4())),
             source_id=data.get("source_id", ""),
@@ -262,4 +340,6 @@ class Clip:
             description=data.get("description"),
             description_model=data.get("description_model"),
             description_frames=data.get("description_frames"),
+            # OCR extracted text
+            extracted_texts=extracted_texts,
         )
