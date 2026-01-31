@@ -1,6 +1,8 @@
 """Sequence tab for timeline editing and playback with card-based sorting."""
 
 import logging
+from typing import Optional
+
 from PySide6.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
@@ -45,6 +47,10 @@ class SequenceTab(BaseTab):
     stop_requested = Signal()
     export_requested = Signal()
     clip_added = Signal(object, object)  # Clip, Source
+
+    # Intention-first workflow signal: emitted when card is clicked with no clips
+    # Parameters: algorithm (str), direction (str or None)
+    intention_import_requested = Signal(str, object)
 
     # State constants (2 states instead of 3)
     STATE_CARDS = 0      # Show card grid only
@@ -179,8 +185,20 @@ class SequenceTab(BaseTab):
 
     @Slot(str)
     def _on_card_clicked(self, algorithm: str):
-        """Handle card click - generate sequence from selected clips."""
+        """Handle card click - generate sequence from selected clips.
+
+        If no clips exist in the project, triggers the intention-first workflow
+        by emitting intention_import_requested signal.
+        """
         logger.debug(f"Card clicked: {algorithm}")
+
+        # Check if we have any clips in the project at all
+        # (not just selected - the intention workflow is for empty projects)
+        if not self._available_clips and not self._clips:
+            logger.info(f"No clips available, triggering intention workflow for {algorithm}")
+            # Emit signal with algorithm and direction (None for now, MainWindow handles)
+            self.intention_import_requested.emit(algorithm, None)
+            return
 
         # Get selected clips from GUI state (prefer Analyze, fallback to Cut)
         selected_ids = []
@@ -556,6 +574,93 @@ class SequenceTab(BaseTab):
         """
         self._on_clear_clicked()
         return {"success": True, "message": "Sequence cleared"}
+
+    def apply_intention_workflow_result(
+        self,
+        algorithm: str,
+        clips_with_sources: list,
+        direction: Optional[str] = None,
+        seed: Optional[int] = None,
+    ) -> dict:
+        """Apply sequence from intention workflow completion.
+
+        Called by MainWindow when the intention workflow finishes processing
+        all sources and clips.
+
+        Args:
+            algorithm: The sorting algorithm to apply
+            clips_with_sources: List of (Clip, Source) tuples from the workflow
+            direction: Optional sort direction (e.g., "rainbow" for color)
+            seed: Optional random seed for shuffle
+
+        Returns:
+            Dict with success status and clip info
+        """
+        if not clips_with_sources:
+            return {"success": False, "error": "No clips from workflow"}
+
+        # Update our available clips
+        self._available_clips = clips_with_sources
+        self._clips = [clip for clip, source in clips_with_sources]
+        for clip, source in clips_with_sources:
+            if source:
+                self._sources[source.id] = source
+
+        try:
+            # Generate sorted sequence
+            sorted_clips = generate_sequence(
+                algorithm=algorithm.lower(),
+                clips=clips_with_sources,
+                clip_count=len(clips_with_sources),
+                direction=direction,
+                seed=seed,
+            )
+
+            # Clear and populate timeline
+            self.timeline.clear_timeline()
+
+            # Set FPS from first source
+            if sorted_clips:
+                first_clip, first_source = sorted_clips[0]
+                self.timeline.set_fps(first_source.fps)
+                self.video_player.load_video(first_source.file_path)
+
+            current_frame = 0
+            for clip, source in sorted_clips:
+                self.timeline.add_clip(clip, source, track_index=0, start_frame=current_frame)
+                current_frame += clip.duration_frames
+                self.clip_added.emit(clip, source)
+
+            # Update preview
+            self.timeline_preview.set_clips(sorted_clips, self._sources)
+
+            # Zoom to fit
+            self.timeline._on_zoom_fit()
+
+            # Update dropdown
+            self.algorithm_dropdown.blockSignals(True)
+            self.algorithm_dropdown.setCurrentText(algorithm.capitalize())
+            self.algorithm_dropdown.blockSignals(False)
+
+            self._current_algorithm = algorithm.lower()
+
+            # Transition to timeline state
+            self._set_state(self.STATE_TIMELINE)
+
+            # Update card availability for future use
+            self._update_card_availability()
+
+            logger.info(f"Applied {len(sorted_clips)} clips from intention workflow with {algorithm}")
+
+            return {
+                "success": True,
+                "algorithm": algorithm,
+                "clip_count": len(sorted_clips),
+            }
+
+        except Exception as e:
+            logger.error(f"Error applying intention workflow result: {e}")
+            return {"success": False, "error": str(e)}
 
     def on_tab_activated(self):
         """Called when this tab becomes visible."""

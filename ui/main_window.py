@@ -63,7 +63,9 @@ from ui.theme import theme
 from ui.chat_panel import ChatPanel
 from ui.chat_worker import ChatAgentWorker
 from ui.clip_details_sidebar import ClipDetailsSidebar
+from ui.dialogs import IntentionImportDialog
 from core.gui_state import GUIState
+from core.intention_workflow import IntentionWorkflowCoordinator, WorkflowState
 
 # Set up logging
 logging.basicConfig(
@@ -926,6 +928,10 @@ class MainWindow(QMainWindow):
         self.bulk_download_worker: Optional[BulkDownloadWorker] = None
         self.youtube_client: Optional[YouTubeSearchClient] = None
 
+        # Intention-first workflow coordinator and dialog
+        self.intention_workflow: Optional[IntentionWorkflowCoordinator] = None
+        self.intention_import_dialog: Optional[IntentionImportDialog] = None
+
         # Guards to prevent duplicate signal handling
         self._detection_finished_handled = False
         self._thumbnails_finished_handled = False
@@ -1397,6 +1403,8 @@ class MainWindow(QMainWindow):
         self.sequence_tab.playback_requested.connect(self._on_playback_requested)
         self.sequence_tab.stop_requested.connect(self._on_stop_requested)
         self.sequence_tab.export_requested.connect(self._on_sequence_export_click)
+        # Intention-first workflow trigger
+        self.sequence_tab.intention_import_requested.connect(self._on_intention_import_requested)
         # Update Render tab when sequence changes (clips added/removed/generated)
         self.sequence_tab.timeline.sequence_changed.connect(self._update_render_tab_sequence_info)
         # Update EDL export menu item when sequence changes
@@ -5548,6 +5556,496 @@ class MainWindow(QMainWindow):
                 self._pending_agent_tool_name = None
                 self._chat_worker.set_gui_tool_result(result)
                 logger.info(f"Sent object detection result to agent: {detected_count}/{len(clips)} clips")
+
+    # ==================== Intention-First Workflow ====================
+
+    def _on_intention_import_requested(self, algorithm: str, direction: object):
+        """Handle intention import request from sequence tab.
+
+        Called when user clicks a sequence card but no clips exist.
+        Shows the import dialog and starts the workflow on confirmation.
+        """
+        logger.info(f"Intention import requested: algorithm={algorithm}, direction={direction}")
+
+        # Create dialog if needed
+        if not self.intention_import_dialog:
+            self.intention_import_dialog = IntentionImportDialog(self)
+            self.intention_import_dialog.import_requested.connect(
+                self._on_intention_import_confirmed
+            )
+            self.intention_import_dialog.cancelled.connect(
+                self._on_intention_import_cancelled
+            )
+
+        # Store the algorithm for when import is confirmed
+        self._intention_pending_algorithm = algorithm
+        self._intention_pending_direction = direction
+
+        # Reset and show dialog
+        self.intention_import_dialog.reset()
+        self.intention_import_dialog.show()
+
+    def _on_intention_import_confirmed(self, local_files: list, urls: list, algorithm: str):
+        """Handle confirmation of import in the intention workflow dialog.
+
+        Starts the workflow coordinator to process the sources.
+        """
+        logger.info(f"Intention import confirmed: {len(local_files)} files, {len(urls)} URLs")
+
+        # Use stored algorithm (from card click) if dialog didn't provide one
+        algorithm_to_use = algorithm or self._intention_pending_algorithm
+        direction = getattr(self, '_intention_pending_direction', None)
+
+        # Validate we have something to import
+        if not local_files and not urls:
+            QMessageBox.warning(
+                self,
+                "No Sources",
+                "Please add local files or URLs to import."
+            )
+            return
+
+        # Create coordinator if needed
+        if not self.intention_workflow:
+            self.intention_workflow = IntentionWorkflowCoordinator(self)
+            self._connect_intention_workflow_signals()
+
+        # Start the workflow
+        success = self.intention_workflow.start(
+            algorithm=algorithm_to_use,
+            local_files=[Path(f) for f in local_files],
+            urls=urls,
+            direction=direction,
+        )
+
+        if success:
+            # Switch dialog to progress view
+            self.intention_import_dialog.show_progress()
+
+            # Determine first step based on workflow state
+            if self.intention_workflow.state == WorkflowState.DOWNLOADING:
+                self._start_intention_downloads(urls)
+            elif self.intention_workflow.state == WorkflowState.DETECTING:
+                self._start_intention_detection()
+        else:
+            QMessageBox.warning(
+                self,
+                "Workflow Error",
+                "Could not start the import workflow. Another workflow may be in progress."
+            )
+
+    def _on_intention_import_cancelled(self):
+        """Handle cancellation of the import dialog."""
+        logger.info("Intention import cancelled by user")
+        if self.intention_workflow and self.intention_workflow.is_running:
+            self.intention_workflow.cancel()
+
+    def _connect_intention_workflow_signals(self):
+        """Connect all signals from the intention workflow coordinator."""
+        if not self.intention_workflow:
+            return
+
+        self.intention_workflow.step_started.connect(self._on_intention_step_started)
+        self.intention_workflow.step_completed.connect(self._on_intention_step_completed)
+        self.intention_workflow.step_skipped.connect(self._on_intention_step_skipped)
+        self.intention_workflow.progress_updated.connect(self._on_intention_progress)
+        self.intention_workflow.workflow_completed.connect(self._on_intention_workflow_completed)
+        self.intention_workflow.workflow_cancelled.connect(self._on_intention_workflow_cancelled)
+        self.intention_workflow.workflow_error.connect(self._on_intention_workflow_error)
+
+    def _on_intention_step_started(self, step_name: str, current: int, total: int):
+        """Handle workflow step starting."""
+        logger.info(f"Intention workflow step started: {step_name} ({current}/{total})")
+        if self.intention_import_dialog:
+            from ui.dialogs.intention_import_dialog import WorkflowStep
+            step_map = {
+                "downloading": WorkflowStep.DOWNLOADING,
+                "detecting": WorkflowStep.DETECTING,
+                "thumbnails": WorkflowStep.THUMBNAILS,
+                "analyzing": WorkflowStep.ANALYZING,
+                "building": WorkflowStep.BUILDING,
+            }
+            step = step_map.get(step_name)
+            if step:
+                self.intention_import_dialog.set_step_active(step)
+
+    def _on_intention_step_completed(self, step_name: str):
+        """Handle workflow step completion."""
+        logger.info(f"Intention workflow step completed: {step_name}")
+        if self.intention_import_dialog:
+            from ui.dialogs.intention_import_dialog import WorkflowStep
+            step_map = {
+                "downloading": WorkflowStep.DOWNLOADING,
+                "detecting": WorkflowStep.DETECTING,
+                "thumbnails": WorkflowStep.THUMBNAILS,
+                "analyzing": WorkflowStep.ANALYZING,
+                "building": WorkflowStep.BUILDING,
+            }
+            step = step_map.get(step_name)
+            if step:
+                self.intention_import_dialog.set_step_complete(step)
+
+        # Trigger next phase based on workflow state
+        if self.intention_workflow:
+            if self.intention_workflow.state == WorkflowState.DETECTING:
+                self._start_intention_detection()
+            elif self.intention_workflow.state == WorkflowState.THUMBNAILS:
+                self._start_intention_thumbnails()
+            elif self.intention_workflow.state == WorkflowState.ANALYZING:
+                self._start_intention_analysis()
+            elif self.intention_workflow.state == WorkflowState.BUILDING:
+                self._start_intention_building()
+
+    def _on_intention_step_skipped(self, step_name: str):
+        """Handle workflow step being skipped."""
+        logger.info(f"Intention workflow step skipped: {step_name}")
+        if self.intention_import_dialog:
+            from ui.dialogs.intention_import_dialog import WorkflowStep
+            step_map = {
+                "downloading": WorkflowStep.DOWNLOADING,
+                "detecting": WorkflowStep.DETECTING,
+                "thumbnails": WorkflowStep.THUMBNAILS,
+                "analyzing": WorkflowStep.ANALYZING,
+                "building": WorkflowStep.BUILDING,
+            }
+            step = step_map.get(step_name)
+            if step:
+                self.intention_import_dialog.set_step_skipped(step)
+
+    def _on_intention_progress(self, progress):
+        """Handle workflow progress update."""
+        if self.intention_import_dialog:
+            from ui.dialogs.intention_import_dialog import WorkflowStep
+            state_map = {
+                WorkflowState.DOWNLOADING: WorkflowStep.DOWNLOADING,
+                WorkflowState.DETECTING: WorkflowStep.DETECTING,
+                WorkflowState.THUMBNAILS: WorkflowStep.THUMBNAILS,
+                WorkflowState.ANALYZING: WorkflowStep.ANALYZING,
+                WorkflowState.BUILDING: WorkflowStep.BUILDING,
+            }
+            step = state_map.get(progress.state)
+            if step:
+                self.intention_import_dialog.set_step_progress(
+                    step, int(progress.step_progress * 100), progress.message
+                )
+
+    def _on_intention_workflow_completed(self, result):
+        """Handle workflow completion."""
+        logger.info(f"Intention workflow completed: {result.clips_created} clips, "
+                    f"{result.sources_processed} sources")
+
+        if self.intention_import_dialog:
+            self.intention_import_dialog.set_complete(
+                result.clips_created,
+                result.sources_processed,
+                result.sources_failed,
+            )
+
+        # Close dialog after brief delay
+        QTimer.singleShot(1500, self._finalize_intention_workflow)
+
+    def _finalize_intention_workflow(self):
+        """Finalize the intention workflow and apply results."""
+        if not self.intention_workflow:
+            return
+
+        # Close dialog
+        if self.intention_import_dialog:
+            self.intention_import_dialog.hide()
+
+        # Get results from coordinator
+        all_clips = self.intention_workflow.get_all_clips()
+        all_sources = self.intention_workflow.get_all_sources()
+        algorithm, direction = self.intention_workflow.get_algorithm_with_direction()
+
+        if not all_clips:
+            QMessageBox.warning(
+                self,
+                "Workflow Failed",
+                "No clips were created. Please check your video sources and try again."
+            )
+            return
+
+        # Add sources and clips to project
+        for source in all_sources:
+            if source.id not in self.sources_by_id:
+                self.project.add_source(source)
+                self._add_source_to_ui(source)
+
+        for clip in all_clips:
+            if clip.id not in self.clips_by_id:
+                self.project.add_clips([clip])
+
+        # Apply sequence to the sequence tab
+        clips_with_sources = []
+        for clip in all_clips:
+            source = self.sources_by_id.get(clip.source_id)
+            if source:
+                clips_with_sources.append((clip, source))
+
+        result = self.sequence_tab.apply_intention_workflow_result(
+            algorithm=algorithm,
+            clips_with_sources=clips_with_sources,
+            direction=direction,
+        )
+
+        if result.get("success"):
+            self.status_bar.showMessage(
+                f"Created {algorithm} sequence with {result.get('clip_count', 0)} clips"
+            )
+            self._mark_dirty()
+        else:
+            QMessageBox.warning(
+                self,
+                "Sequence Error",
+                f"Failed to create sequence: {result.get('error', 'Unknown error')}"
+            )
+
+        # Refresh UI
+        self._refresh_sequence_tab_clips()
+
+    def _on_intention_workflow_cancelled(self):
+        """Handle workflow cancellation."""
+        logger.info("Intention workflow cancelled")
+        if self.intention_import_dialog:
+            self.intention_import_dialog.hide()
+        self.status_bar.showMessage("Import cancelled")
+
+    def _on_intention_workflow_error(self, error: str):
+        """Handle workflow error."""
+        logger.error(f"Intention workflow error: {error}")
+        if self.intention_import_dialog:
+            self.intention_import_dialog.set_error(error)
+
+    # --- Intention workflow phase helpers ---
+
+    def _start_intention_downloads(self, urls: list):
+        """Start downloading URLs for the intention workflow."""
+        if not urls:
+            return
+
+        download_dir = validate_download_dir(self.settings.download_dir)
+        if not download_dir:
+            download_dir = get_default_download_dir()
+
+        self.url_bulk_download_worker = URLBulkDownloadWorker(urls, download_dir)
+
+        # Connect to coordinator handlers
+        self.url_bulk_download_worker.progress.connect(
+            self.intention_workflow.on_download_progress
+        )
+        self.url_bulk_download_worker.video_finished.connect(
+            self._on_intention_video_downloaded
+        )
+        self.url_bulk_download_worker.all_finished.connect(
+            self.intention_workflow.on_download_all_finished
+        )
+        # Clean up thread safely
+        self.url_bulk_download_worker.finished.connect(
+            self.url_bulk_download_worker.deleteLater
+        )
+        self.url_bulk_download_worker.finished.connect(
+            lambda: setattr(self, 'url_bulk_download_worker', None)
+        )
+
+        self.url_bulk_download_worker.start()
+
+    def _on_intention_video_downloaded(self, url: str, result):
+        """Handle individual video download completion during intention workflow."""
+        # Notify coordinator
+        if self.intention_workflow:
+            self.intention_workflow.on_download_video_finished(url, result)
+
+        # Also add to project and collect tab
+        if result and result.success and result.file_path:
+            from models.clip import Source
+            file_path = Path(result.file_path)
+
+            # Check if already in project
+            for existing in self.project.sources:
+                if existing.file_path == file_path:
+                    return
+
+            # Create source and add to project
+            source = Source(
+                file_path=file_path,
+                duration_seconds=result.duration or 0,
+                fps=result.fps or 30.0,
+                width=result.width or 1920,
+                height=result.height or 1080,
+            )
+            self.project.add_source(source)
+            self._add_source_to_ui(source)
+
+    def _start_intention_detection(self):
+        """Start scene detection for the intention workflow."""
+        if not self.intention_workflow:
+            return
+
+        source_path = self.intention_workflow.get_current_source_path()
+        if not source_path:
+            return
+
+        logger.info(f"Starting intention detection for: {source_path}")
+
+        config = DetectionConfig(
+            threshold=self.settings.default_sensitivity,
+            min_scene_length=15,
+            use_adaptive=True,
+        )
+
+        self.detection_worker = DetectionWorker(source_path, config)
+        self.detection_worker.progress.connect(
+            self.intention_workflow.on_detection_progress
+        )
+        self.detection_worker.detection_completed.connect(
+            self._on_intention_detection_completed
+        )
+        self.detection_worker.error.connect(
+            self.intention_workflow.on_detection_error
+        )
+        # Clean up
+        self.detection_worker.finished.connect(self.detection_worker.deleteLater)
+        self.detection_worker.finished.connect(
+            lambda: setattr(self, 'detection_worker', None)
+        )
+
+        self._detection_finished_handled = False
+        self.detection_worker.start()
+
+    def _on_intention_detection_completed(self, source, clips):
+        """Handle detection completion during intention workflow."""
+        if self._detection_finished_handled:
+            return
+        self._detection_finished_handled = True
+
+        logger.info(f"Intention detection completed: {len(clips)} clips")
+
+        # Add source and clips to project
+        if source.id not in self.sources_by_id:
+            self.project.add_source(source)
+            self._add_source_to_ui(source)
+
+        for clip in clips:
+            # Sync clip source_id to match the source we just added
+            clip.source_id = source.id
+
+        self.project.add_clips(clips)
+
+        # Notify coordinator
+        if self.intention_workflow:
+            self.intention_workflow.on_detection_completed(source, clips)
+
+    def _start_intention_thumbnails(self):
+        """Start thumbnail generation for the intention workflow."""
+        if not self.intention_workflow:
+            return
+
+        all_clips = self.intention_workflow.get_all_clips()
+        all_sources = self.intention_workflow.get_all_sources()
+
+        if not all_clips:
+            # No clips - skip to next step
+            if self.intention_workflow:
+                self.intention_workflow.on_thumbnails_finished()
+            return
+
+        # Build sources_by_id dict
+        sources_by_id = {s.id: s for s in all_sources}
+        default_source = all_sources[0] if all_sources else None
+
+        self.thumbnail_worker = ThumbnailWorker(
+            source=default_source,
+            clips=all_clips,
+            cache_dir=self.settings.cache_dir,
+            sources_by_id=sources_by_id,
+        )
+        self.thumbnail_worker.progress.connect(
+            self.intention_workflow.on_thumbnail_progress
+        )
+        self.thumbnail_worker.thumbnail_ready.connect(self._on_thumbnail_ready)
+        self.thumbnail_worker.finished.connect(
+            self._on_intention_thumbnails_finished
+        )
+        # Clean up
+        self.thumbnail_worker.finished.connect(self.thumbnail_worker.deleteLater)
+        self.thumbnail_worker.finished.connect(
+            lambda: setattr(self, 'thumbnail_worker', None)
+        )
+
+        self._thumbnails_finished_handled = False
+        self.thumbnail_worker.start()
+
+    def _on_intention_thumbnails_finished(self):
+        """Handle thumbnail generation completion during intention workflow."""
+        if self._thumbnails_finished_handled:
+            return
+        self._thumbnails_finished_handled = True
+
+        logger.info("Intention thumbnails finished")
+
+        if self.intention_workflow:
+            self.intention_workflow.on_thumbnails_finished()
+
+    def _start_intention_analysis(self):
+        """Start analysis for the intention workflow (if needed)."""
+        if not self.intention_workflow:
+            return
+
+        all_clips = self.intention_workflow.get_all_clips()
+
+        # Only color analysis is needed for now (color algorithm)
+        algorithm, _ = self.intention_workflow.get_algorithm_with_direction()
+
+        if algorithm == "color":
+            # Start color analysis
+            clips_needing_colors = [c for c in all_clips if not c.dominant_colors]
+
+            if not clips_needing_colors:
+                # All clips already have colors - skip
+                self.intention_workflow.on_analysis_finished()
+                return
+
+            self.color_worker = ColorAnalysisWorker(clips_needing_colors)
+            self.color_worker.progress.connect(
+                self.intention_workflow.on_analysis_progress
+            )
+            self.color_worker.color_ready.connect(self._on_color_ready)
+            self.color_worker.analysis_completed.connect(
+                self._on_intention_analysis_finished
+            )
+            # Clean up
+            self.color_worker.finished.connect(self.color_worker.deleteLater)
+            self.color_worker.finished.connect(
+                lambda: setattr(self, 'color_worker', None)
+            )
+
+            self._color_analysis_finished_handled = False
+            self.color_worker.start()
+        else:
+            # No analysis needed for this algorithm
+            self.intention_workflow.on_analysis_finished()
+
+    def _on_intention_analysis_finished(self):
+        """Handle analysis completion during intention workflow."""
+        if self._color_analysis_finished_handled:
+            return
+        self._color_analysis_finished_handled = True
+
+        logger.info("Intention analysis finished")
+
+        if self.intention_workflow:
+            self.intention_workflow.on_analysis_finished()
+
+    def _start_intention_building(self):
+        """Start building the sequence for the intention workflow."""
+        if not self.intention_workflow:
+            return
+
+        # Building happens in the coordinator's completion handler
+        # Just notify the coordinator that building is "done"
+        all_clips = self.intention_workflow.get_all_clips()
+        self.intention_workflow.on_building_complete(all_clips)
 
     def _on_export_edl_click(self):
         """Export the timeline sequence as an EDL file."""
