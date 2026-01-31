@@ -412,6 +412,17 @@ class SequenceTab(BaseTab):
         self._current_algorithm = None
         self._set_state(self.STATE_CARDS)
 
+    def clear(self):
+        """Clear all state including available clips (called on new project)."""
+        self._clips = []
+        self._available_clips = []
+        self._sources = {}
+        self._current_source = None
+        self._current_algorithm = None
+        self.timeline.clear_timeline()
+        self.timeline_preview.clear()
+        self._set_state(self.STATE_CARDS)
+
     def _on_playhead_changed(self, time_seconds: float):
         """Handle playhead position change."""
         pass  # Handled by MainWindow for cross-component coordination

@@ -6701,7 +6701,7 @@ class MainWindow(QMainWindow):
         self.cut_tab.clear_clips()
         self.cut_tab.set_source(None)
         self.analyze_tab.clear_clips()
-        self.sequence_tab.timeline.clear()
+        self.sequence_tab.clear()  # Clear all state including _clips and _available_clips
 
     def _refresh_ui_from_project(self):
         """Refresh all UI components after project load.
