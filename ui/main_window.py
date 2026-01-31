@@ -6022,11 +6022,17 @@ class MainWindow(QMainWindow):
 
         logger.info(f"Starting intention detection for: {source_path}")
 
-        config = DetectionConfig(
-            threshold=self.settings.default_sensitivity,
-            min_scene_length=15,
-            use_adaptive=True,
-        )
+        # Use crossfade preset for exquisite_corpus (footage often has soft transitions)
+        algorithm, _ = self.intention_workflow.get_algorithm_with_direction()
+        if algorithm == "exquisite_corpus":
+            config = DetectionConfig.crossfade()
+            logger.info("Using crossfade detection preset for Exquisite Corpus")
+        else:
+            config = DetectionConfig(
+                threshold=self.settings.default_sensitivity,
+                min_scene_length=15,
+                use_adaptive=True,
+            )
 
         self.detection_worker = DetectionWorker(source_path, config)
         self.detection_worker.progress.connect(

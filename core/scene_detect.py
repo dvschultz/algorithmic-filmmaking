@@ -29,6 +29,45 @@ class DetectionConfig:
     # Use adaptive detector (better for dynamic footage)
     use_adaptive: bool = True
 
+    # Minimum content value before a cut is detected (AdaptiveDetector only)
+    # Lower values = more sensitive to soft transitions like crossfades
+    min_content_val: float = 15.0
+
+    # Number of frames to average together (AdaptiveDetector only)
+    # Higher values = better for slow fades, but may miss quick cuts
+    window_width: int = 2
+
+    @classmethod
+    def default(cls) -> "DetectionConfig":
+        """Standard detection settings for hard cuts."""
+        return cls()
+
+    @classmethod
+    def crossfade(cls) -> "DetectionConfig":
+        """Optimized for footage with crossfades and soft transitions.
+
+        Uses lower thresholds and wider averaging window to catch
+        gradual scene changes that standard detection might miss.
+        """
+        return cls(
+            threshold=1.8,
+            min_scene_length=15,
+            use_adaptive=True,
+            min_content_val=10.0,
+            window_width=4,
+        )
+
+    @classmethod
+    def sensitive(cls) -> "DetectionConfig":
+        """Very sensitive detection for maximum scene granularity."""
+        return cls(
+            threshold=1.5,
+            min_scene_length=10,
+            use_adaptive=True,
+            min_content_val=8.0,
+            window_width=2,
+        )
+
 
 class SceneDetector:
     """Detects scenes in video files using PySceneDetect."""
@@ -70,6 +109,8 @@ class SceneDetector:
             detector = AdaptiveDetector(
                 adaptive_threshold=self.config.threshold,
                 min_scene_len=self.config.min_scene_length,
+                min_content_val=self.config.min_content_val,
+                window_width=self.config.window_width,
             )
         else:
             detector = ContentDetector(
@@ -145,6 +186,8 @@ class SceneDetector:
             detector = AdaptiveDetector(
                 adaptive_threshold=self.config.threshold,
                 min_scene_len=self.config.min_scene_length,
+                min_content_val=self.config.min_content_val,
+                window_width=self.config.window_width,
             )
         else:
             detector = ContentDetector(
