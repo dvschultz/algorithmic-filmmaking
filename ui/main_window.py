@@ -3231,7 +3231,10 @@ class MainWindow(QMainWindow):
         use_vlm = (method in ("vlm", "hybrid"))
         vlm_model = self.settings.text_extraction_vlm_model if use_vlm else None
 
-        logger.info(f"Creating TextExtractionWorker for {len(clips_to_process)} clips (method={method})...")
+        logger.info(
+            f"Creating TextExtractionWorker for {len(clips_to_process)} clips "
+            f"(method={method}, vlm_only={vlm_only}, use_vlm={use_vlm}, vlm_model={vlm_model})"
+        )
         self.text_extraction_worker = TextExtractionWorker(
             clips=clips_to_process,
             sources_by_id=sources_by_id,

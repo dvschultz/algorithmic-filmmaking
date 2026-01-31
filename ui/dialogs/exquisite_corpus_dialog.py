@@ -366,14 +366,28 @@ class ExquisiteCorpusDialog(QDialog):
     def _start_extraction(self):
         """Start the text extraction worker."""
         from ui.workers.text_extraction_worker import TextExtractionWorker
+        from core.settings import load_settings
 
-        logger.info(f"Starting text extraction for {len(self.clips)} clips")
+        settings = load_settings()
+
+        # Determine extraction parameters from settings
+        method = settings.text_extraction_method
+        vlm_only = (method == "vlm")
+        use_vlm = (method in ("vlm", "hybrid"))
+        vlm_model = settings.text_extraction_vlm_model if use_vlm else None
+
+        logger.info(
+            f"Starting text extraction for {len(self.clips)} clips "
+            f"(method={method}, vlm_only={vlm_only})"
+        )
 
         self.worker = TextExtractionWorker(
             clips=self.clips,
             sources_by_id=self.sources_by_id,
             num_keyframes=3,
-            use_vlm_fallback=True,
+            use_vlm_fallback=use_vlm,
+            vlm_model=vlm_model,
+            vlm_only=vlm_only,
             parent=self,
         )
         self.worker.progress.connect(self._on_extraction_progress, Qt.UniqueConnection)
