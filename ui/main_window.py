@@ -5882,7 +5882,10 @@ class MainWindow(QMainWindow):
             if clip.id not in self.clips_by_id:
                 self.project.add_clips([clip])
 
-        # Ensure Cut tab has all clips (thumbnails may have already added them via _on_thumbnail_ready)
+        # Ensure Cut tab has source and all clips
+        # (thumbnails may have already added them via _on_thumbnail_ready)
+        if all_sources:
+            self.cut_tab.set_source(all_sources[0])  # Set first source for state display
         self.cut_tab.set_clips(self.clips)
 
         # Populate Analyze tab with clips that were analyzed during the workflow
@@ -6054,6 +6057,9 @@ class MainWindow(QMainWindow):
             self.project.add_source(source)
             self.collect_tab.add_source(source)
 
+        # Set Cut tab source (needed for proper state display)
+        self.cut_tab.set_source(source)
+
         for clip in clips:
             # Sync clip source_id to match the source we just added
             clip.source_id = source.id
@@ -6139,8 +6145,19 @@ class MainWindow(QMainWindow):
         # Sync lookups for Analyze tab (same as normal flow)
         self.analyze_tab.set_lookups(self.clips_by_id, self.sources_by_id)
 
-        # Sync Cut tab clips state (same as normal flow)
+        # Ensure Cut tab has source set and all clips synced
+        # (thumbnails should have added clips via _on_thumbnail_ready, but sync state as fallback)
+        if self.intention_workflow:
+            all_sources = self.intention_workflow.get_all_sources()
+            if all_sources:
+                self.cut_tab.set_source(all_sources[0])
         self.cut_tab.set_clips(self.clips)
+
+        # Ensure clips are added to Cut tab browser
+        for clip in self.clips:
+            clip_source = self.sources_by_id.get(clip.source_id)
+            if clip_source:
+                self.cut_tab.add_clip(clip, clip_source)
 
         if self.intention_workflow:
             self.intention_workflow.on_thumbnails_finished()
