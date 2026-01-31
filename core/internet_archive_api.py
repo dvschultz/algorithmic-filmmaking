@@ -135,12 +135,25 @@ class InternetArchiveError(Exception):
 class InternetArchiveClient:
     """Client for searching Internet Archive videos."""
 
-    SCRAPE_API_URL = "https://archive.org/services/search/v1/scrape"
+    # Use Advanced Search API - more reliable than scrape API
+    SEARCH_API_URL = "https://archive.org/advancedsearch.php"
     VIDEO_MEDIATYPES = ["movies", "feature_films", "short_films", "animation"]
     USER_AGENT = "Scene-Ripper/1.0 (video editing tool; +https://github.com/)"
 
     def __init__(self, timeout: int = 30):
         self._timeout = timeout
+
+    @staticmethod
+    def _escape_query(text: str) -> str:
+        """Escape Lucene special characters in user query."""
+        special_chars = r'+-&|!(){}[]^"~*?:\/'
+        escaped = []
+        for char in text:
+            if char in special_chars:
+                escaped.append(f"\\{char}")
+            else:
+                escaped.append(char)
+        return "".join(escaped)
 
     def search(
         self,
@@ -163,19 +176,23 @@ class InternetArchiveClient:
         if not query.strip():
             return []
 
+        # Escape special characters in user query
+        escaped_query = self._escape_query(query)
+
         # Build query with video mediatype filter
         mediatype_filter = " OR ".join(
             f"mediatype:{mt}" for mt in self.VIDEO_MEDIATYPES
         )
-        full_query = f"({mediatype_filter}) AND ({query})"
+        full_query = f"({mediatype_filter}) AND ({escaped_query})"
 
         params = {
             "q": full_query,
-            "fields": "identifier,title,description,creator,date,runtime",
-            "count": str(max_results),
+            "fl[]": "identifier,title,description,creator,date,runtime",
+            "rows": max_results,
+            "output": "json",
         }
 
-        url = f"{self.SCRAPE_API_URL}?{urllib.parse.urlencode(params)}"
+        url = f"{self.SEARCH_API_URL}?{urllib.parse.urlencode(params, doseq=True)}"
 
         try:
             request = urllib.request.Request(
@@ -185,6 +202,8 @@ class InternetArchiveClient:
 
             with urllib.request.urlopen(request, timeout=self._timeout) as response:
                 data = json.loads(response.read().decode("utf-8", errors="replace"))
+                # Advanced Search API returns results under 'response.docs'
+                data = {"items": data.get("response", {}).get("docs", [])}
 
         except urllib.error.URLError as e:
             logger.error(f"Internet Archive API error: {e}")
