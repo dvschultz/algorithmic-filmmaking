@@ -291,8 +291,11 @@ class ClipDetailsSidebar(QDockWidget):
                 self.detected_objects_label.setStyleSheet(f"color: {theme().text_primary};")
             else:
                 self.detected_objects_label.setStyleSheet(f"color: {theme().text_muted}; font-style: italic;")
-            # Re-render extracted text styling
-            if self._clip_ref.extracted_texts:
+            # Re-render extracted text styling (check for non-empty text, not just list existence)
+            has_text = self._clip_ref.extracted_texts and any(
+                et.text for et in self._clip_ref.extracted_texts
+            )
+            if has_text:
                 self.extracted_text_label.setStyleSheet(f"color: {theme().text_primary};")
             else:
                 self.extracted_text_label.setStyleSheet(f"color: {theme().text_muted}; font-style: italic;")

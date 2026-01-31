@@ -4661,8 +4661,8 @@ class MainWindow(QMainWindow):
 
         # Build sources and clips dictionaries from the timeline's actual content
         # (not from self.current_source which may be different)
-        sources = dict(self.sequence_tab.timeline._source_lookup)
-        clips = dict(self.sequence_tab.timeline._clip_lookup)
+        sources = self.sequence_tab.timeline.get_sources_lookup()
+        clips = self.sequence_tab.timeline.get_clips_lookup()
 
         # Fallback to project sources/clips if timeline lookups are empty
         if not sources and self.sources_by_id:
@@ -5888,11 +5888,8 @@ class MainWindow(QMainWindow):
             if clip.id not in self.clips_by_id:
                 self.project.add_clips([clip])
 
-        # Ensure Cut tab has source and all clips
-        # (thumbnails may have already added them via _on_thumbnail_ready)
-        if all_sources:
-            self.cut_tab.set_source(all_sources[0])  # Set first source for state display
-        self.cut_tab.set_clips(self.clips)
+        # Sync UI state for intention workflow (Cut/Analyze tabs)
+        self._sync_intention_workflow_ui(sources=all_sources)
 
         # Populate Analyze tab with clips that were analyzed during the workflow
         if algorithm == "exquisite_corpus":
@@ -6140,6 +6137,29 @@ class MainWindow(QMainWindow):
         self._thumbnails_finished_handled = False
         self.thumbnail_worker.start()
 
+    def _sync_intention_workflow_ui(self, sources: list = None):
+        """Synchronize UI state for intention workflow (Cut/Analyze tabs).
+
+        This helper consolidates state synchronization that's needed after
+        detection and thumbnail generation in the intention workflow.
+
+        Args:
+            sources: Optional list of sources. If not provided, gets from intention_workflow.
+        """
+        # Get sources from intention workflow if not provided
+        if sources is None and self.intention_workflow:
+            sources = self.intention_workflow.get_all_sources()
+
+        # Sync lookups for Analyze tab (same as normal flow)
+        self.analyze_tab.set_lookups(self.clips_by_id, self.sources_by_id)
+
+        # Ensure Cut tab has source set
+        if sources:
+            self.cut_tab.set_source(sources[0])
+
+        # Sync all clips to Cut tab
+        self.cut_tab.set_clips(self.clips)
+
     def _on_intention_thumbnails_finished(self):
         """Handle thumbnail generation completion during intention workflow."""
         if self._thumbnails_finished_handled:
@@ -6148,22 +6168,8 @@ class MainWindow(QMainWindow):
 
         logger.info("Intention thumbnails finished")
 
-        # Sync lookups for Analyze tab (same as normal flow)
-        self.analyze_tab.set_lookups(self.clips_by_id, self.sources_by_id)
-
-        # Ensure Cut tab has source set and all clips synced
-        # (thumbnails should have added clips via _on_thumbnail_ready, but sync state as fallback)
-        if self.intention_workflow:
-            all_sources = self.intention_workflow.get_all_sources()
-            if all_sources:
-                self.cut_tab.set_source(all_sources[0])
-        self.cut_tab.set_clips(self.clips)
-
-        # Ensure clips are added to Cut tab browser
-        for clip in self.clips:
-            clip_source = self.sources_by_id.get(clip.source_id)
-            if clip_source:
-                self.cut_tab.add_clip(clip, clip_source)
+        # Sync UI state for intention workflow
+        self._sync_intention_workflow_ui()
 
         if self.intention_workflow:
             self.intention_workflow.on_thumbnails_finished()

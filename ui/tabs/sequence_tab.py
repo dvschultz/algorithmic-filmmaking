@@ -26,6 +26,52 @@ from core.remix import generate_sequence
 
 logger = logging.getLogger(__name__)
 
+# Configuration for each sorting algorithm
+# allow_duplicates: Whether the same clip can appear multiple times in the sequence
+ALGORITHM_CONFIG = {
+    "color": {
+        "label": "Color",
+        "description": "Sort clips by dominant colors",
+        "allow_duplicates": False,
+    },
+    "duration": {
+        "label": "Duration",
+        "description": "Sort clips by length",
+        "allow_duplicates": False,
+    },
+    "shuffle": {
+        "label": "Shuffle",
+        "description": "Randomly shuffle clips",
+        "allow_duplicates": False,
+    },
+    "sequential": {
+        "label": "Sequential",
+        "description": "Keep clips in original order",
+        "allow_duplicates": False,
+    },
+    "exquisite_corpus": {
+        "label": "Exquisite Corpus",
+        "description": "Generate poem from on-screen text",
+        "allow_duplicates": True,  # Poems may use the same clip multiple times
+    },
+}
+
+
+def get_algorithm_config(algorithm: str) -> dict:
+    """Get configuration for an algorithm.
+
+    Args:
+        algorithm: Algorithm name (lowercase)
+
+    Returns:
+        Configuration dict with 'label', 'description', 'allow_duplicates'
+    """
+    return ALGORITHM_CONFIG.get(algorithm.lower(), {
+        "label": algorithm.capitalize(),
+        "description": "",
+        "allow_duplicates": False,
+    })
+
 
 class SequenceTab(BaseTab):
     """Tab for arranging clips on the timeline and previewing.
