@@ -39,6 +39,7 @@ class AnalyzeTab(BaseTab):
     classify_requested = Signal()
     detect_objects_requested = Signal()
     describe_requested = Signal()
+    extract_text_requested = Signal()
     analyze_all_requested = Signal()
     clip_selected = Signal(object)  # Clip
     clip_double_clicked = Signal(object)  # Clip
@@ -143,6 +144,16 @@ class AnalyzeTab(BaseTab):
         self.describe_btn.clicked.connect(self._on_describe_click)
         controls.addWidget(self.describe_btn)
 
+        # Extract Text button
+        self.extract_text_btn = QPushButton("Extract Text")
+        self.extract_text_btn.setToolTip(
+            "Extract visible text from frames using OCR\n"
+            "Detects titles, labels, captions, and on-screen text"
+        )
+        self.extract_text_btn.setEnabled(False)
+        self.extract_text_btn.clicked.connect(self._on_extract_text_click)
+        controls.addWidget(self.extract_text_btn)
+
         controls.addSpacing(10)
 
         # Analyze All button - runs all operations sequentially
@@ -215,6 +226,10 @@ class AnalyzeTab(BaseTab):
         """Handle Describe button click."""
         self.describe_requested.emit()
 
+    def _on_extract_text_click(self):
+        """Handle Extract Text button click."""
+        self.extract_text_requested.emit()
+
     def _on_clear_click(self):
         """Handle clear all button click."""
         self.clear_clips()
@@ -269,6 +284,7 @@ class AnalyzeTab(BaseTab):
         self.classify_btn.setEnabled(has_clips)
         self.detect_btn.setEnabled(has_clips)
         self.describe_btn.setEnabled(has_clips)
+        self.extract_text_btn.setEnabled(has_clips)
         self.analyze_all_btn.setEnabled(has_clips)
         self.clear_btn.setEnabled(has_clips)
 
@@ -408,13 +424,18 @@ class AnalyzeTab(BaseTab):
         if clip_id in self._clip_ids:
             self.clip_browser.update_clip_transcript(clip_id, segments)
 
+    def update_clip_extracted_text(self, clip_id: str, texts: list):
+        """Update extracted text for a clip."""
+        if clip_id in self._clip_ids:
+            self.clip_browser.update_clip_extracted_text(clip_id, texts)
+
     def set_analyzing(self, is_analyzing: bool, operation: str = ""):
         """Update UI state during analysis operations.
 
         Args:
             is_analyzing: Whether an analysis operation is running
             operation: Which operation is running ("colors", "shots", "transcribe",
-                       "classify", "detect", "describe", "all")
+                       "classify", "detect", "describe", "extract_text", "all")
         """
         # Disable all buttons during any analysis
         has_clips = len(self._clip_ids) > 0
@@ -424,6 +445,7 @@ class AnalyzeTab(BaseTab):
         self.classify_btn.setEnabled(not is_analyzing and has_clips)
         self.detect_btn.setEnabled(not is_analyzing and has_clips)
         self.describe_btn.setEnabled(not is_analyzing and has_clips)
+        self.extract_text_btn.setEnabled(not is_analyzing and has_clips)
         self.analyze_all_btn.setEnabled(not is_analyzing and has_clips)
         self.clear_btn.setEnabled(not is_analyzing and has_clips)
 
@@ -441,6 +463,8 @@ class AnalyzeTab(BaseTab):
                 self.detect_btn.setText("Detecting...")
             elif operation == "describe":
                 self.describe_btn.setText("Describing...")
+            elif operation == "extract_text":
+                self.extract_text_btn.setText("Extracting...")
             elif operation == "all":
                 self.analyze_all_btn.setText("Analyzing...")
         else:
@@ -450,6 +474,7 @@ class AnalyzeTab(BaseTab):
             self.classify_btn.setText("Classify")
             self.detect_btn.setText("Detect Objects")
             self.describe_btn.setText("Describe")
+            self.extract_text_btn.setText("Extract Text")
             self.analyze_all_btn.setText("Analyze All")
 
     def get_active_filters(self) -> dict:
