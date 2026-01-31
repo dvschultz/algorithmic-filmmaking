@@ -5665,6 +5665,19 @@ class MainWindow(QMainWindow):
             if step:
                 self.intention_import_dialog.set_step_active(step)
 
+        # Start the work for the step that just started
+        if self.intention_workflow:
+            if step_name == "downloading":
+                self._start_intention_downloads()
+            elif step_name == "detecting":
+                self._start_intention_detection()
+            elif step_name == "thumbnails":
+                self._start_intention_thumbnails()
+            elif step_name == "analyzing":
+                self._start_intention_analysis()
+            elif step_name == "building":
+                self._start_intention_building()
+
     def _on_intention_step_completed(self, step_name: str):
         """Handle workflow step completion."""
         logger.info(f"Intention workflow step completed: {step_name}")
@@ -5680,17 +5693,8 @@ class MainWindow(QMainWindow):
             step = step_map.get(step_name)
             if step:
                 self.intention_import_dialog.set_step_complete(step)
-
-        # Trigger next phase based on workflow state
-        if self.intention_workflow:
-            if self.intention_workflow.state == WorkflowState.DETECTING:
-                self._start_intention_detection()
-            elif self.intention_workflow.state == WorkflowState.THUMBNAILS:
-                self._start_intention_thumbnails()
-            elif self.intention_workflow.state == WorkflowState.ANALYZING:
-                self._start_intention_analysis()
-            elif self.intention_workflow.state == WorkflowState.BUILDING:
-                self._start_intention_building()
+        # Note: Next step is triggered by _on_intention_step_started when
+        # the coordinator emits step_started for the new phase
 
     def _on_intention_step_skipped(self, step_name: str):
         """Handle workflow step being skipped."""
