@@ -5567,22 +5567,18 @@ class MainWindow(QMainWindow):
         """
         logger.info(f"Intention import requested: algorithm={algorithm}, direction={direction}")
 
-        # Create dialog if needed
-        if not self.intention_import_dialog:
-            self.intention_import_dialog = IntentionImportDialog(self)
-            self.intention_import_dialog.import_requested.connect(
-                self._on_intention_import_confirmed
-            )
-            self.intention_import_dialog.cancelled.connect(
-                self._on_intention_import_cancelled
-            )
-
         # Store the algorithm for when import is confirmed
         self._intention_pending_algorithm = algorithm
         self._intention_pending_direction = direction
 
-        # Reset and show dialog
-        self.intention_import_dialog.reset()
+        # Create fresh dialog for this algorithm
+        self.intention_import_dialog = IntentionImportDialog(algorithm, self)
+        self.intention_import_dialog.import_requested.connect(
+            self._on_intention_import_confirmed
+        )
+        self.intention_import_dialog.cancelled.connect(
+            self._on_intention_import_cancelled
+        )
         self.intention_import_dialog.show()
 
     def _on_intention_import_confirmed(self, local_files: list, urls: list, algorithm: str):
