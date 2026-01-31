@@ -151,6 +151,9 @@ class VideoDownloader:
             "--no-download",
             "--print-json",
             "--no-playlist",
+            # Limit to first item - fixes yt-dlp bug with Internet Archive multi-file items
+            # where some files are missing 'id' field in extractor result
+            "--playlist-items", "1",
             # Enable remote challenge solver for YouTube n-sig challenges (required for 2026+)
             "--remote-components", "ejs:github",
             "--",  # End of options
@@ -163,10 +166,23 @@ class VideoDownloader:
             )
         except subprocess.TimeoutExpired:
             raise RuntimeError("Timed out getting video info (30 seconds)")
-        if result.returncode != 0:
+
+        # For Internet Archive, yt-dlp may output valid JSON but still have non-zero exit
+        # due to errors processing other files in multi-file items. Try to parse JSON first.
+        if result.stdout.strip():
+            try:
+                # Take first line only (in case multiple JSON objects)
+                first_json = result.stdout.strip().split('\n')[0]
+                json.loads(first_json)  # Validate it's parseable
+            except json.JSONDecodeError:
+                if result.returncode != 0:
+                    raise RuntimeError(f"Failed to get video info: {result.stderr}")
+
+        if result.returncode != 0 and not result.stdout.strip():
             raise RuntimeError(f"Failed to get video info: {result.stderr}")
 
-        data = json.loads(result.stdout)
+        # Parse first JSON object (in case of multi-file items outputting multiple JSON lines)
+        data = json.loads(result.stdout.strip().split('\n')[0])
         info = {
             "title": data.get("title", "Unknown"),
             "duration": data.get("duration", 0),
@@ -252,6 +268,8 @@ class VideoDownloader:
         cmd = [
             self.ytdlp_path,
             "--no-playlist",  # Don't download playlists
+            # Limit to first item - fixes yt-dlp bug with Internet Archive multi-file items
+            "--playlist-items", "1",
             "--no-exec",  # Don't run post-processing scripts
             "--max-filesize", "4G",  # Limit file size
             # Enable remote challenge solver for YouTube n-sig challenges (required for 2026+)
