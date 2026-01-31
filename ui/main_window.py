@@ -5958,7 +5958,7 @@ class MainWindow(QMainWindow):
         self.thumbnail_worker = ThumbnailWorker(
             source=default_source,
             clips=all_clips,
-            cache_dir=self.settings.cache_dir,
+            cache_dir=self.settings.thumbnail_cache_dir,
             sources_by_id=sources_by_id,
         )
         self.thumbnail_worker.progress.connect(
