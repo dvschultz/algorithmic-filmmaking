@@ -1,7 +1,8 @@
-"""Expandable YouTube search panel for Collect tab."""
+"""Expandable video search panel for Collect tab (YouTube and Internet Archive)."""
 
 import logging
-from typing import Optional
+from enum import Enum
+from typing import Optional, Union
 
 from PySide6.QtWidgets import (
     QWidget,
@@ -22,6 +23,17 @@ from PySide6.QtNetwork import QNetworkAccessManager
 from ui.theme import theme, UISizes
 from ui.youtube_result_thumbnail import YouTubeResultThumbnail
 from core.youtube_api import YouTubeVideo, ASPECT_RATIO_RANGES, RESOLUTION_THRESHOLDS, SIZE_LIMITS
+from core.internet_archive_api import InternetArchiveVideo
+
+
+class SearchSource(Enum):
+    """Available video search sources."""
+    YOUTUBE = "youtube"
+    INTERNET_ARCHIVE = "internet_archive"
+
+
+# Union type for videos from any source
+VideoType = Union[YouTubeVideo, InternetArchiveVideo]
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +46,7 @@ class MetadataFetchWorker(QObject):
     finished = Signal()
     error = Signal(str)
 
-    def __init__(self, videos: list[YouTubeVideo]):
+    def __init__(self, videos: list[VideoType]):
         super().__init__()
         self._videos = videos
         self._cancelled = False
@@ -61,10 +73,15 @@ class MetadataFetchWorker(QObject):
             self.progress.emit(i, total)
 
             try:
-                info = downloader.get_video_info(
-                    video.youtube_url,
-                    include_format_details=True
-                )
+                # Get the appropriate URL based on video type
+                if isinstance(video, YouTubeVideo):
+                    url = video.youtube_url
+                elif isinstance(video, InternetArchiveVideo):
+                    url = video.download_url
+                else:
+                    continue
+
+                info = downloader.get_video_info(url, include_format_details=True)
                 metadata = {
                     "width": info.get("width"),
                     "height": info.get("height"),
@@ -80,11 +97,11 @@ class MetadataFetchWorker(QObject):
 
 
 class YouTubeSearchPanel(QWidget):
-    """Collapsible panel for YouTube search and results."""
+    """Collapsible panel for video search and results (YouTube and Internet Archive)."""
 
-    # Signals
-    search_requested = Signal(str)  # query
-    download_requested = Signal(list)  # list of YouTubeVideo
+    # Signals - now include source parameter
+    search_requested = Signal(str, str)  # source, query
+    download_requested = Signal(list)  # list of videos (YouTubeVideo or InternetArchiveVideo)
     error_occurred = Signal(str)
 
     THUMB_WIDTH = UISizes.GRID_CARD_MAX_WIDTH
@@ -94,12 +111,13 @@ class YouTubeSearchPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._expanded = False
-        self._results: list[YouTubeVideo] = []
+        self._results: list[VideoType] = []
         self._thumbnails: list[YouTubeResultThumbnail] = []
         self._selected_videos: set[str] = set()  # video_ids
         self._columns = self.MIN_COLUMNS
         self._metadata_thread: Optional[QThread] = None
         self._metadata_worker: Optional[MetadataFetchWorker] = None
+        self._current_source = SearchSource.YOUTUBE
 
         # Shared network manager for thumbnail downloads (efficient resource usage)
         self._network_manager = QNetworkAccessManager(self)
@@ -114,7 +132,7 @@ class YouTubeSearchPanel(QWidget):
         self.main_layout.setSpacing(0)
 
         # Toggle button
-        self.toggle_btn = QPushButton("Search YouTube")
+        self.toggle_btn = QPushButton("Search Videos")
         self.toggle_btn.setCheckable(True)
         self.toggle_btn.clicked.connect(self._on_toggle)
         self.main_layout.addWidget(self.toggle_btn)
@@ -125,8 +143,22 @@ class YouTubeSearchPanel(QWidget):
         self.content_layout = QVBoxLayout(self.content)
         self.content_layout.setContentsMargins(8, 8, 8, 8)
 
-        # Search row
+        # Source and search row
         search_row = QHBoxLayout()
+        search_row.setSpacing(8)
+
+        # Source selector
+        source_label = QLabel("Source:")
+        source_label.setStyleSheet(f"color: {theme().text_secondary};")
+        search_row.addWidget(source_label)
+
+        self.source_combo = QComboBox()
+        self.source_combo.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
+        self.source_combo.setMinimumWidth(140)
+        self.source_combo.addItem("YouTube", SearchSource.YOUTUBE)
+        self.source_combo.addItem("Internet Archive", SearchSource.INTERNET_ARCHIVE)
+        self.source_combo.currentIndexChanged.connect(self._on_source_changed)
+        search_row.addWidget(self.source_combo)
 
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Search YouTube videos...")
@@ -249,27 +281,52 @@ class YouTubeSearchPanel(QWidget):
         self._expanded = checked
 
         if checked:
-            self.toggle_btn.setText("Search YouTube")
             self._animation.setStartValue(0)
             self._animation.setEndValue(500)  # Max expanded height
         else:
-            self.toggle_btn.setText("Search YouTube")
             self._animation.setStartValue(self.content.height())
             self._animation.setEndValue(0)
 
         self._animation.start()
 
     @Slot()
+    def _on_source_changed(self):
+        """Handle source selection change."""
+        source = self.source_combo.currentData()
+        if source == self._current_source:
+            return
+
+        self._current_source = source
+
+        # Update placeholder text
+        if source == SearchSource.YOUTUBE:
+            self.search_input.setPlaceholderText("Search YouTube videos...")
+        else:
+            self.search_input.setPlaceholderText("Search Internet Archive videos...")
+
+        # Clear results when source changes
+        self._clear_results()
+
+    @Slot()
     def _on_search(self):
-        """Emit search request."""
+        """Emit search request with source."""
         query = self.search_input.text().strip()
         if query:
-            self.search_requested.emit(query)
+            source = self._current_source.value
+            self.search_requested.emit(source, query)
 
-    def display_results(self, videos: list[YouTubeVideo]):
+    def get_current_source(self) -> SearchSource:
+        """Get the currently selected search source."""
+        return self._current_source
+
+    def display_results(self, videos: list[VideoType]):
         """Display search results in the grid."""
         self._clear_results()
         self._results = videos
+
+        if not videos:
+            self.status_label.setText("No results found")
+            return
 
         # Calculate columns based on available width
         self._calculate_columns()

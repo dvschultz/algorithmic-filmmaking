@@ -1,4 +1,4 @@
-"""Individual YouTube search result thumbnail with selection."""
+"""Individual video search result thumbnail with selection."""
 
 from PySide6.QtWidgets import (
     QFrame,
@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QWidget,
 )
-from typing import Optional
+from typing import Optional, Union
 
 from PySide6.QtCore import Qt, Signal, Slot, QUrl
 from PySide6.QtGui import QPixmap, QCloseEvent
@@ -16,14 +16,18 @@ from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkRe
 
 from ui.theme import theme, UISizes
 from core.youtube_api import YouTubeVideo
+from core.internet_archive_api import InternetArchiveVideo
+
+# Union type for videos from any source
+VideoType = Union[YouTubeVideo, InternetArchiveVideo]
 
 
 class YouTubeResultThumbnail(QFrame):
-    """Thumbnail widget for a YouTube search result."""
+    """Thumbnail widget for a video search result (YouTube or Internet Archive)."""
 
     selection_changed = Signal(str, bool)  # video_id, selected
 
-    def __init__(self, video: YouTubeVideo, network_manager: QNetworkAccessManager, parent=None):
+    def __init__(self, video: VideoType, network_manager: QNetworkAccessManager, parent=None):
         super().__init__(parent)
         self.video = video
         self._selected = False
@@ -111,17 +115,30 @@ class YouTubeResultThumbnail(QFrame):
         meta_layout = QHBoxLayout()
         meta_layout.setContentsMargins(0, 0, 0, 0)
 
-        # View count
-        if self.video.view_count:
-            views_text = self._format_view_count(self.video.view_count)
-            views_label = QLabel(views_text)
-            views_label.setStyleSheet(f"font-size: 9px; color: {theme().text_muted};")
-            meta_layout.addWidget(views_label)
+        # For YouTube: show view count
+        # For Internet Archive: show creator or date
+        if isinstance(self.video, YouTubeVideo):
+            if self.video.view_count:
+                views_text = self._format_view_count(self.video.view_count)
+                views_label = QLabel(views_text)
+                views_label.setStyleSheet(f"font-size: 9px; color: {theme().text_muted};")
+                meta_layout.addWidget(views_label)
+        elif isinstance(self.video, InternetArchiveVideo):
+            # Show creator or date for IA videos
+            meta_text = self.video.creator or self.video.date or ""
+            if meta_text:
+                # Truncate long creator names
+                if len(meta_text) > 30:
+                    meta_text = meta_text[:27] + "..."
+                meta_label = QLabel(meta_text)
+                meta_label.setStyleSheet(f"font-size: 9px; color: {theme().text_muted};")
+                meta_label.setToolTip(self.video.creator or self.video.date or "")
+                meta_layout.addWidget(meta_label)
 
         meta_layout.addStretch()
 
-        # HD badge
-        if self.video.definition == "hd":
+        # HD badge - only for YouTube videos
+        if isinstance(self.video, YouTubeVideo) and getattr(self.video, "definition", None) == "hd":
             hd_label = QLabel("HD")
             hd_label.setStyleSheet(
                 f"font-size: 9px; color: {theme().text_inverted}; "
@@ -129,6 +146,17 @@ class YouTubeResultThumbnail(QFrame):
                 "padding: 1px 3px; border-radius: 2px;"
             )
             meta_layout.addWidget(hd_label)
+
+        # Source badge for Internet Archive
+        if isinstance(self.video, InternetArchiveVideo):
+            ia_label = QLabel("IA")
+            ia_label.setStyleSheet(
+                f"font-size: 9px; color: {theme().text_inverted}; "
+                f"background-color: {theme().accent_green}; "
+                "padding: 1px 3px; border-radius: 2px;"
+            )
+            ia_label.setToolTip("Internet Archive")
+            meta_layout.addWidget(ia_label)
 
         layout.addLayout(meta_layout)
 
@@ -158,6 +186,12 @@ class YouTubeResultThumbnail(QFrame):
                     228, 128, Qt.KeepAspectRatio, Qt.SmoothTransformation
                 )
                 self.thumbnail_label.setPixmap(scaled)
+            else:
+                # Handle broken/missing thumbnail image
+                self.thumbnail_label.setText("No preview")
+        else:
+            # Handle failed thumbnail load
+            self.thumbnail_label.setText("No preview")
 
         reply.deleteLater()
         self._pending_reply = None

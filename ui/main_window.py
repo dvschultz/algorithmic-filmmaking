@@ -739,6 +739,29 @@ class YouTubeSearchWorker(QThread):
             self.error.emit(f"Search failed: {e}")
 
 
+class InternetArchiveSearchWorker(QThread):
+    """Background worker for Internet Archive search."""
+
+    search_completed = Signal(list)  # list of InternetArchiveVideo
+    error = Signal(str)
+
+    def __init__(self, query: str, max_results: int = 25):
+        super().__init__()
+        self.query = query
+        self.max_results = max_results
+
+    def run(self):
+        try:
+            from core.internet_archive_api import InternetArchiveClient, InternetArchiveError
+            client = InternetArchiveClient()
+            results = client.search(self.query, self.max_results)
+            self.search_completed.emit(results)
+        except InternetArchiveError as e:
+            self.error.emit(str(e))
+        except Exception as e:
+            self.error.emit(f"Search failed: {e}")
+
+
 class BulkDownloadWorker(QThread):
     """Background worker for parallel bulk downloads."""
 
@@ -747,7 +770,7 @@ class BulkDownloadWorker(QThread):
     video_error = Signal(str, str)  # video_id, error message
     all_finished = Signal()
 
-    def __init__(self, videos: list[YouTubeVideo], download_dir: Path, max_parallel: int = 2):
+    def __init__(self, videos: list, download_dir: Path, max_parallel: int = 2):
         super().__init__()
         self.videos = videos
         self.download_dir = download_dir
@@ -804,12 +827,22 @@ class BulkDownloadWorker(QThread):
         logger.info(f"BulkDownloadWorker finished: {self._completed}/{total} completed")
         self.all_finished.emit()
 
-    def _download_one(self, video: YouTubeVideo):
-        """Download a single video."""
+    def _download_one(self, video):
+        """Download a single video (YouTube or Internet Archive)."""
         logger.debug(f"Starting download: {video.title} ({video.video_id}) to {self.download_dir}")
         downloader = VideoDownloader(download_dir=self.download_dir)
+
+        # Get the appropriate URL based on video type
+        if hasattr(video, 'youtube_url'):
+            url = video.youtube_url
+        elif hasattr(video, 'download_url'):
+            url = video.download_url
+        else:
+            # Fallback - should not happen
+            raise ValueError(f"Unknown video type: {type(video)}")
+
         result = downloader.download(
-            video.youtube_url,
+            url,
             cancel_check=self._cancel_event.is_set,
         )
         if result.success:
@@ -889,6 +922,7 @@ class MainWindow(QMainWindow):
         self.detection_worker_yolo: Optional[ObjectDetectionWorker] = None
         self.description_worker: Optional[DescriptionWorker] = None
         self.youtube_search_worker: Optional[YouTubeSearchWorker] = None
+        self.ia_search_worker: Optional[InternetArchiveSearchWorker] = None
         self.bulk_download_worker: Optional[BulkDownloadWorker] = None
         self.youtube_client: Optional[YouTubeSearchClient] = None
 
@@ -1285,6 +1319,7 @@ class MainWindow(QMainWindow):
             self.classification_worker,
             self.detection_worker_yolo,
             self.youtube_search_worker,
+            self.ia_search_worker,
             self.bulk_download_worker,
         ]
         return any(w and w.isRunning() for w in workers)
@@ -1328,9 +1363,9 @@ class MainWindow(QMainWindow):
         self.collect_tab.source_selected.connect(self._on_source_selected)
         self.collect_tab.download_requested.connect(self._on_download_requested_from_tab)
 
-        # YouTube search panel signals
+        # Video search panel signals (YouTube and Internet Archive)
         self.collect_tab.youtube_search_panel.search_requested.connect(
-            self._on_youtube_search
+            self._on_video_search
         )
         self.collect_tab.youtube_search_panel.download_requested.connect(
             self._on_bulk_download
@@ -3695,8 +3730,17 @@ class MainWindow(QMainWindow):
         self.collect_tab.set_downloading(False)
         QMessageBox.critical(self, "Download Error", error)
 
-    # YouTube search handlers
-    @Slot(str)
+    # Video search handlers (YouTube and Internet Archive)
+    @Slot(str, str)
+    def _on_video_search(self, source: str, query: str):
+        """Route search request to appropriate handler based on source."""
+        if source == "youtube":
+            self._on_youtube_search(query)
+        elif source == "internet_archive":
+            self._on_internet_archive_search(query)
+        else:
+            logger.warning(f"Unknown search source: {source}")
+
     def _on_youtube_search(self, query: str):
         """Handle YouTube search request."""
         if not self.settings.youtube_api_key:
@@ -3732,7 +3776,7 @@ class MainWindow(QMainWindow):
 
     @Slot(object)
     def _on_youtube_search_finished(self, result: YouTubeSearchResult):
-        """Handle search completion."""
+        """Handle YouTube search completion."""
         self.collect_tab.youtube_search_panel.set_searching(False)
         self.collect_tab.youtube_search_panel.display_results(result.videos)
         self.status_bar.showMessage(f"Found {len(result.videos)} videos")
@@ -3752,7 +3796,48 @@ class MainWindow(QMainWindow):
 
     @Slot(str)
     def _on_youtube_search_error(self, error: str):
-        """Handle search error."""
+        """Handle YouTube search error."""
+        self.collect_tab.youtube_search_panel.set_searching(False)
+        QMessageBox.critical(self, "Search Failed", error)
+
+    def _on_internet_archive_search(self, query: str):
+        """Handle Internet Archive search request."""
+        self.collect_tab.youtube_search_panel.set_searching(True)
+
+        # Run search in thread
+        self.ia_search_worker = InternetArchiveSearchWorker(
+            query, self.settings.youtube_results_count  # Reuse the same count setting
+        )
+        self.ia_search_worker.search_completed.connect(self._on_ia_search_finished)
+        self.ia_search_worker.error.connect(self._on_ia_search_error)
+        # Clean up thread safely after it finishes
+        self.ia_search_worker.finished.connect(self.ia_search_worker.deleteLater)
+        self.ia_search_worker.finished.connect(lambda: setattr(self, 'ia_search_worker', None))
+        self.ia_search_worker.start()
+
+    @Slot(list)
+    def _on_ia_search_finished(self, videos: list):
+        """Handle Internet Archive search completion."""
+        self.collect_tab.youtube_search_panel.set_searching(False)
+        self.collect_tab.youtube_search_panel.display_results(videos)
+        self.status_bar.showMessage(f"Found {len(videos)} videos on Internet Archive")
+
+        # Update GUI state for agent context
+        query = self.collect_tab.youtube_search_panel.get_search_query()
+        self._gui_state.update_from_search(query, [
+            {
+                "video_id": v.video_id,
+                "title": v.title,
+                "duration": v.duration_str,
+                "channel": v.channel_title,  # This returns creator for IA videos
+                "thumbnail": v.thumbnail_url,
+            }
+            for v in videos
+        ])
+
+    @Slot(str)
+    def _on_ia_search_error(self, error: str):
+        """Handle Internet Archive search error."""
         self.collect_tab.youtube_search_panel.set_searching(False)
         QMessageBox.critical(self, "Search Failed", error)
 

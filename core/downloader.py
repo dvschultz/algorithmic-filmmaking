@@ -61,12 +61,17 @@ class VideoDownloader:
 
     # Whitelist of allowed domains for security
     ALLOWED_DOMAINS = {
+        # YouTube
         "youtube.com",
         "www.youtube.com",
         "youtu.be",
+        # Vimeo
         "vimeo.com",
         "www.vimeo.com",
         "player.vimeo.com",
+        # Internet Archive
+        "archive.org",
+        "www.archive.org",
     }
 
     def __init__(self, download_dir: Optional[Path] = None):
@@ -114,10 +119,14 @@ class VideoDownloader:
                 host = host.rsplit("@", 1)[-1]
 
             # Check against whitelist
-            if host not in self.ALLOWED_DOMAINS:
-                return False, f"Domain not supported: {host}. Supported: YouTube, Vimeo"
+            if host in self.ALLOWED_DOMAINS:
+                return True, ""
 
-            return True, ""
+            # Check for Internet Archive CDN pattern (ia800.us.archive.org, etc.)
+            if host.endswith(".us.archive.org"):
+                return True, ""
+
+            return False, f"Domain not supported: {host}. Supported: YouTube, Vimeo, Internet Archive"
 
         except (ValueError, AttributeError) as e:
             return False, f"URL parsing error: {e}"
