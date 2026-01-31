@@ -6010,7 +6010,7 @@ class MainWindow(QMainWindow):
             self._on_intention_detection_completed
         )
         self.detection_worker.error.connect(
-            self.intention_workflow.on_detection_error
+            self._on_intention_detection_error
         )
         # Clean up
         self.detection_worker.finished.connect(self.detection_worker.deleteLater)
@@ -6043,6 +6043,30 @@ class MainWindow(QMainWindow):
         # Notify coordinator
         if self.intention_workflow:
             self.intention_workflow.on_detection_completed(source, clips)
+
+            # Check if there are more sources to process
+            next_source = self.intention_workflow.get_current_source_path()
+            if next_source:
+                # Start detection for next source
+                self._start_intention_detection()
+
+    def _on_intention_detection_error(self, error: str):
+        """Handle detection error during intention workflow."""
+        if self._detection_finished_handled:
+            return
+        self._detection_finished_handled = True
+
+        logger.error(f"Intention detection error: {error}")
+
+        # Notify coordinator
+        if self.intention_workflow:
+            self.intention_workflow.on_detection_error(error)
+
+            # Check if there are more sources to process
+            next_source = self.intention_workflow.get_current_source_path()
+            if next_source:
+                # Start detection for next source
+                self._start_intention_detection()
 
     def _start_intention_thumbnails(self):
         """Start thumbnail generation for the intention workflow."""
