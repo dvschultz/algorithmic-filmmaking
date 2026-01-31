@@ -1556,6 +1556,11 @@ class MainWindow(QMainWindow):
             self.cut_tab.set_source(clip_source)
 
         # Generate thumbnails - _on_thumbnail_ready will add clips to Cut tab
+        # Skip if intention workflow is running (it manages its own thumbnail generation)
+        if hasattr(self, 'intention_workflow') and self.intention_workflow and self.intention_workflow.is_running:
+            logger.info("Intention workflow running, skipping automatic thumbnail generation")
+            return
+
         clips_needing_thumbnails = [c for c in clips if not c.thumbnail_path or not c.thumbnail_path.exists()]
         if clips_needing_thumbnails:
             logger.info(f"Starting thumbnail generation for {len(clips_needing_thumbnails)} clips")
