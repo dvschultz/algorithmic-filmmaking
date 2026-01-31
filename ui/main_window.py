@@ -5882,6 +5882,23 @@ class MainWindow(QMainWindow):
             if clip.id not in self.clips_by_id:
                 self.project.add_clips([clip])
 
+        # Ensure Cut tab has all clips (thumbnails may have already added them via _on_thumbnail_ready)
+        self.cut_tab.set_clips(self.clips)
+
+        # Populate Analyze tab with clips that were analyzed during the workflow
+        if algorithm == "exquisite_corpus":
+            # Exquisite Corpus does OCR - add clips with extracted text
+            analyzed_clip_ids = [c.id for c in all_clips if c.extracted_texts]
+            if analyzed_clip_ids:
+                logger.info(f"Adding {len(analyzed_clip_ids)} analyzed clips to Analyze tab")
+                self.analyze_tab.add_clips(analyzed_clip_ids)
+        elif algorithm == "color":
+            # Color algorithm does color analysis
+            analyzed_clip_ids = [c.id for c in all_clips if c.dominant_colors]
+            if analyzed_clip_ids:
+                logger.info(f"Adding {len(analyzed_clip_ids)} color-analyzed clips to Analyze tab")
+                self.analyze_tab.add_clips(analyzed_clip_ids)
+
         # Apply sequence to the sequence tab (skip for exquisite_corpus - already handled by dialog)
         if algorithm == "exquisite_corpus":
             # Sequence was already applied by _on_exquisite_corpus_sequence_ready
@@ -6118,6 +6135,12 @@ class MainWindow(QMainWindow):
         self._thumbnails_finished_handled = True
 
         logger.info("Intention thumbnails finished")
+
+        # Sync lookups for Analyze tab (same as normal flow)
+        self.analyze_tab.set_lookups(self.clips_by_id, self.sources_by_id)
+
+        # Sync Cut tab clips state (same as normal flow)
+        self.cut_tab.set_clips(self.clips)
 
         if self.intention_workflow:
             self.intention_workflow.on_thumbnails_finished()
