@@ -348,14 +348,14 @@ class IntentionImportDialog(QDialog):
                 color: {theme().text_primary};
             }}
             QTextEdit {{
-                background-color: {theme().input_background};
+                background-color: {theme().background_tertiary};
                 color: {theme().text_primary};
                 border: 1px solid {theme().border_primary};
                 border-radius: 4px;
                 padding: 8px;
             }}
             QListWidget {{
-                background-color: {theme().input_background};
+                background-color: {theme().background_tertiary};
                 color: {theme().text_primary};
                 border: 1px solid {theme().border_primary};
                 border-radius: 4px;
@@ -364,14 +364,14 @@ class IntentionImportDialog(QDialog):
                 padding: 4px;
             }}
             QPushButton {{
-                background-color: {theme().button_background};
-                color: {theme().button_text};
+                background-color: {theme().background_tertiary};
+                color: {theme().text_primary};
                 border: 1px solid {theme().border_primary};
                 border-radius: 4px;
                 padding: 8px 16px;
             }}
             QPushButton:hover {{
-                background-color: {theme().button_hover};
+                background-color: {theme().background_elevated};
             }}
             QPushButton:disabled {{
                 background-color: {theme().background_secondary};
@@ -384,7 +384,7 @@ class IntentionImportDialog(QDialog):
                 text-align: center;
             }}
             QProgressBar::chunk {{
-                background-color: {theme().accent_primary};
+                background-color: {theme().accent_blue};
                 border-radius: 3px;
             }}
         """)
@@ -473,7 +473,7 @@ class IntentionImportDialog(QDialog):
         for s, label in self.step_labels.items():
             if s == step:
                 label.setText("●")
-                label.setStyleSheet(f"color: {theme().accent_primary}; font-size: 16px;")
+                label.setStyleSheet(f"color: {theme().accent_blue}; font-size: 16px;")
                 self.step_progress_bars[s].setVisible(True)
             elif self._step_progress.get(s, (False, 0))[0]:
                 label.setText("✓")
@@ -523,7 +523,7 @@ class IntentionImportDialog(QDialog):
     def set_error(self, message: str):
         """Show an error message."""
         self.status_label.setText(f"⚠️ {message}")
-        self.status_label.setStyleSheet(f"color: {theme().accent_warning};")
+        self.status_label.setStyleSheet(f"color: {theme().accent_orange};")
 
     def set_complete(
         self,
