@@ -466,6 +466,17 @@ class IntentionImportDialog(QDialog):
 
     # --- Progress update methods (called by coordinator) ---
 
+    def show_progress(self):
+        """Switch to the progress view.
+
+        Called externally when the workflow starts processing.
+        """
+        self.view_stack.setCurrentIndex(self.VIEW_PROGRESS)
+
+        # Initialize step states
+        for step in WorkflowStep:
+            self._step_progress[step] = (False, 0.0)
+
     def set_step_active(self, step: WorkflowStep, message: str = ""):
         """Mark a step as currently active."""
         self._current_step = step

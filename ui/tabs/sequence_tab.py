@@ -20,10 +20,57 @@ from .base_tab import BaseTab
 from ui.video_player import VideoPlayer
 from ui.timeline import TimelineWidget
 from ui.widgets import SortingCardGrid, TimelinePreview
+from ui.dialogs import ExquisiteCorpusDialog
 from ui.theme import theme
 from core.remix import generate_sequence
 
 logger = logging.getLogger(__name__)
+
+# Configuration for each sorting algorithm
+# allow_duplicates: Whether the same clip can appear multiple times in the sequence
+ALGORITHM_CONFIG = {
+    "color": {
+        "label": "Color",
+        "description": "Sort clips by dominant colors",
+        "allow_duplicates": False,
+    },
+    "duration": {
+        "label": "Duration",
+        "description": "Sort clips by length",
+        "allow_duplicates": False,
+    },
+    "shuffle": {
+        "label": "Shuffle",
+        "description": "Randomly shuffle clips",
+        "allow_duplicates": False,
+    },
+    "sequential": {
+        "label": "Sequential",
+        "description": "Keep clips in original order",
+        "allow_duplicates": False,
+    },
+    "exquisite_corpus": {
+        "label": "Exquisite Corpus",
+        "description": "Generate poem from on-screen text",
+        "allow_duplicates": True,  # Poems may use the same clip multiple times
+    },
+}
+
+
+def get_algorithm_config(algorithm: str) -> dict:
+    """Get configuration for an algorithm.
+
+    Args:
+        algorithm: Algorithm name (lowercase)
+
+    Returns:
+        Configuration dict with 'label', 'description', 'allow_duplicates'
+    """
+    return ALGORITHM_CONFIG.get(algorithm.lower(), {
+        "label": algorithm.capitalize(),
+        "description": "",
+        "allow_duplicates": False,
+    })
 
 
 class SequenceTab(BaseTab):
@@ -189,6 +236,9 @@ class SequenceTab(BaseTab):
 
         If no clips exist in the project, triggers the intention-first workflow
         by emitting intention_import_requested signal.
+
+        Special handling for "exquisite_corpus" - opens a dialog for the
+        text-to-poem workflow.
         """
         logger.debug(f"Card clicked: {algorithm}")
 
@@ -233,6 +283,11 @@ class SequenceTab(BaseTab):
                 "Selected clips are not available in the Sequence tab. "
                 "The clips may be from a source that hasn't been loaded."
             )
+            return
+
+        # Special handling for Exquisite Corpus - show dialog workflow
+        if algorithm == "exquisite_corpus":
+            self._show_exquisite_corpus_dialog(clips)
             return
 
         # Generate and apply
@@ -295,6 +350,80 @@ class SequenceTab(BaseTab):
         finally:
             self._apply_in_progress = False
 
+    def _show_exquisite_corpus_dialog(self, clips: list):
+        """Show the Exquisite Corpus dialog for text extraction and poem generation.
+
+        Args:
+            clips: List of (Clip, Source) tuples to process
+        """
+        # Build sources_by_id from the clips
+        sources_by_id = {source.id: source for clip, source in clips}
+
+        # Extract just the clip objects
+        clip_objects = [clip for clip, source in clips]
+
+        dialog = ExquisiteCorpusDialog(
+            clips=clip_objects,
+            sources_by_id=sources_by_id,
+            parent=self,
+        )
+
+        # Connect to sequence_ready signal
+        dialog.sequence_ready.connect(self._apply_exquisite_corpus_sequence)
+
+        dialog.exec()
+
+    @Slot(list)
+    def _apply_exquisite_corpus_sequence(self, sequence_clips: list):
+        """Apply the sequence from Exquisite Corpus dialog.
+
+        Args:
+            sequence_clips: List of (Clip, Source) tuples in poem order
+        """
+        if not sequence_clips:
+            logger.warning("No clips in Exquisite Corpus sequence")
+            return
+
+        try:
+            # Clear and populate timeline
+            self.timeline.clear_timeline()
+
+            # Set FPS from first source
+            first_clip, first_source = sequence_clips[0]
+            self.timeline.set_fps(first_source.fps)
+            self.video_player.load_video(first_source.file_path)
+
+            current_frame = 0
+            for clip, source in sequence_clips:
+                self.timeline.add_clip(clip, source, track_index=0, start_frame=current_frame)
+                current_frame += clip.duration_frames
+                self.clip_added.emit(clip, source)
+
+            # Update preview
+            self.timeline_preview.set_clips(sequence_clips, self._sources)
+
+            # Zoom to fit
+            self.timeline._on_zoom_fit()
+
+            # Update dropdown - Exquisite Corpus isn't in dropdown, so set to empty/custom
+            self.algorithm_dropdown.blockSignals(True)
+            # Add Exquisite Corpus to dropdown if not present
+            if self.algorithm_dropdown.findText("Exquisite Corpus") == -1:
+                self.algorithm_dropdown.addItem("Exquisite Corpus")
+            self.algorithm_dropdown.setCurrentText("Exquisite Corpus")
+            self.algorithm_dropdown.blockSignals(False)
+
+            self._current_algorithm = "exquisite_corpus"
+
+            # Transition to timeline state
+            self._set_state(self.STATE_TIMELINE)
+
+            logger.info(f"Applied {len(sequence_clips)} clips from Exquisite Corpus")
+
+        except Exception as e:
+            logger.error(f"Error applying Exquisite Corpus sequence: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to apply sequence: {e}")
+
     @Slot(str)
     def _on_algorithm_changed(self, algorithm: str):
         """Handle algorithm dropdown change - regenerate in place."""
@@ -327,6 +456,17 @@ class SequenceTab(BaseTab):
         self.timeline.clear_timeline()
         self.timeline_preview.clear()
         self._current_algorithm = None
+        self._set_state(self.STATE_CARDS)
+
+    def clear(self):
+        """Clear all state including available clips (called on new project)."""
+        self._clips = []
+        self._available_clips = []
+        self._sources = {}
+        self._current_source = None
+        self._current_algorithm = None
+        self.timeline.clear_timeline()
+        self.timeline_preview.clear()
         self._set_state(self.STATE_CARDS)
 
     def _on_playhead_changed(self, time_seconds: float):
@@ -403,11 +543,15 @@ class SequenceTab(BaseTab):
         # Check if any clips have dominant colors
         has_colors = any(clip.dominant_colors for clip in self._clips)
 
+        # Check if any clips have extracted text (for Exquisite Corpus)
+        has_text = any(clip.extracted_texts for clip in self._clips)
+
         availability = {
             "color": (has_colors, "Run color analysis first" if not has_colors else ""),
             "duration": True,
             "shuffle": True,
             "sequential": True,
+            "exquisite_corpus": True,  # Always available - dialog handles text extraction
         }
 
         self.card_grid.set_algorithm_availability(availability)
@@ -469,12 +613,13 @@ class SequenceTab(BaseTab):
 
     def set_sorting_algorithm(self, algorithm: str):
         """Set the sorting algorithm (for agent tools)."""
-        if algorithm.lower() in ["color", "duration", "shuffle", "sequential"]:
-            # If in timeline state, use the dropdown to regenerate
-            if self._current_state == self.STATE_TIMELINE:
+        valid_algorithms = ["color", "duration", "shuffle", "sequential", "exquisite_corpus"]
+        if algorithm.lower() in valid_algorithms:
+            # If in timeline state, use the dropdown to regenerate (except exquisite_corpus)
+            if self._current_state == self.STATE_TIMELINE and algorithm.lower() != "exquisite_corpus":
                 self.algorithm_dropdown.setCurrentText(algorithm.capitalize())
             else:
-                # If in cards state, simulate card click
+                # If in cards state or exquisite_corpus, simulate card click
                 self._on_card_clicked(algorithm)
 
     def generate_and_apply(

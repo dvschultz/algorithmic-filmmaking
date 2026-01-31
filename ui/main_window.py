@@ -941,6 +941,7 @@ class MainWindow(QMainWindow):
         self._description_finished_handled = False
         self._shot_type_finished_handled = False
         self._transcription_finished_handled = False
+        self._text_extraction_finished_handled = False
 
         # State for "Analyze All" sequential processing
         self._analyze_all_pending: list[str] = []  # Pending steps: "colors", "shots", "transcribe"
@@ -1392,6 +1393,7 @@ class MainWindow(QMainWindow):
         self.analyze_tab.classify_requested.connect(self._on_classify_from_tab)
         self.analyze_tab.detect_objects_requested.connect(self._on_detect_objects_from_tab)
         self.analyze_tab.describe_requested.connect(self._on_describe_from_tab)
+        self.analyze_tab.extract_text_requested.connect(self._on_extract_text_from_tab)
         self.analyze_tab.analyze_all_requested.connect(self._on_analyze_all_from_tab)
         self.analyze_tab.clip_dragged_to_timeline.connect(self._on_clip_dragged_to_timeline)
         self.analyze_tab.selection_changed.connect(self._on_analyze_selection_changed)
@@ -1556,6 +1558,11 @@ class MainWindow(QMainWindow):
             self.cut_tab.set_source(clip_source)
 
         # Generate thumbnails - _on_thumbnail_ready will add clips to Cut tab
+        # Skip if intention workflow is running (it manages its own thumbnail generation)
+        if hasattr(self, 'intention_workflow') and self.intention_workflow and self.intention_workflow.is_running:
+            logger.info("Intention workflow running, skipping automatic thumbnail generation")
+            return
+
         clips_needing_thumbnails = [c for c in clips if not c.thumbnail_path or not c.thumbnail_path.exists()]
         if clips_needing_thumbnails:
             logger.info(f"Starting thumbnail generation for {len(clips_needing_thumbnails)} clips")
@@ -3188,6 +3195,109 @@ class MainWindow(QMainWindow):
         # Update chat panel with project state
         self._update_chat_project_state()
 
+    def _on_extract_text_from_tab(self):
+        """Handle text extraction request from Analyze tab."""
+        clips = self.analyze_tab.get_clips()
+        if not clips:
+            return
+
+        # Check if worker already running
+        if hasattr(self, 'text_extraction_worker') and self.text_extraction_worker and self.text_extraction_worker.isRunning():
+            return
+
+        sources_by_id = {s.id: s for s in self.sources}
+
+        # Filter to clips that need extraction (skip clips that already have text)
+        clips_to_process = [c for c in clips if not c.extracted_texts]
+        if not clips_to_process:
+            self.status_bar.showMessage("All clips already have extracted text")
+            return
+
+        # Reset guard
+        self._text_extraction_finished_handled = False
+
+        # Update UI state
+        self.analyze_tab.set_analyzing(True, "extract_text")
+
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 100)
+        self.status_bar.showMessage(f"Extracting text from {len(clips_to_process)} clips...")
+
+        from ui.workers.text_extraction_worker import TextExtractionWorker
+
+        # Determine extraction parameters from settings
+        method = self.settings.text_extraction_method
+        vlm_only = (method == "vlm")
+        use_vlm = (method in ("vlm", "hybrid"))
+        vlm_model = self.settings.text_extraction_vlm_model if use_vlm else None
+
+        logger.info(
+            f"Creating TextExtractionWorker for {len(clips_to_process)} clips "
+            f"(method={method}, vlm_only={vlm_only}, use_vlm={use_vlm}, vlm_model={vlm_model})"
+        )
+        self.text_extraction_worker = TextExtractionWorker(
+            clips=clips_to_process,
+            sources_by_id=sources_by_id,
+            num_keyframes=3,
+            use_vlm_fallback=use_vlm,
+            vlm_model=vlm_model,
+            vlm_only=vlm_only,
+        )
+        self.text_extraction_worker.progress.connect(self._on_text_extraction_progress)
+        self.text_extraction_worker.clip_completed.connect(self._on_text_extraction_clip_ready)
+        self.text_extraction_worker.finished.connect(self._on_text_extraction_finished)
+        self.text_extraction_worker.error.connect(self._on_text_extraction_error)
+        # Clean up thread safely after it finishes
+        self.text_extraction_worker.finished.connect(self.text_extraction_worker.deleteLater)
+        self.text_extraction_worker.finished.connect(
+            lambda: setattr(self, 'text_extraction_worker', None)
+        )
+        logger.info("Starting TextExtractionWorker...")
+        self.text_extraction_worker.start()
+
+    @Slot(int, int, str)
+    def _on_text_extraction_progress(self, current: int, total: int, clip_id: str):
+        """Handle text extraction progress update."""
+        self.progress_bar.setValue(int((current / total) * 100))
+
+    @Slot(str, list)
+    def _on_text_extraction_clip_ready(self, clip_id: str, texts: list):
+        """Handle text extracted for single clip."""
+        clip = self.clips_by_id.get(clip_id)
+        if clip:
+            clip.extracted_texts = texts
+            self.analyze_tab.update_clip_extracted_text(clip_id, texts)
+            self._mark_dirty()
+
+    @Slot(str)
+    def _on_text_extraction_error(self, error_msg: str):
+        """Handle text extraction error."""
+        logger.warning(f"Text extraction error: {error_msg}")
+
+    @Slot(dict)
+    def _on_text_extraction_finished(self, results: dict):
+        """Handle text extraction completion."""
+        logger.info("=== TEXT EXTRACTION FINISHED ===")
+
+        # Guard against duplicate calls
+        if self._text_extraction_finished_handled:
+            logger.warning("_on_text_extraction_finished already handled, ignoring duplicate call")
+            return
+        self._text_extraction_finished_handled = True
+
+        self.progress_bar.setVisible(False)
+        self.analyze_tab.set_analyzing(False)
+
+        count = sum(1 for texts in results.values() if texts)
+        self.status_bar.showMessage(f"Text extraction complete - extracted text from {count} clips")
+
+        # Save project if path is set
+        if self.project.path:
+            self.project.save()
+
+        # Update chat panel with project state
+        self._update_chat_project_state()
+
     # Agent-triggered analysis completion handlers
     # These are separate from manual handlers to allow independent tracking
 
@@ -4549,13 +4659,19 @@ class MainWindow(QMainWindow):
         if not output_path.suffix:
             output_path = output_path.with_suffix(".mp4")
 
-        # Build sources and clips dictionaries
-        sources = {}
-        clips = {}
-        if self.current_source:
-            sources[self.current_source.id] = self.current_source
+        # Build sources and clips dictionaries from the timeline's actual content
+        # (not from self.current_source which may be different)
+        sources = self.sequence_tab.timeline.get_sources_lookup()
+        clips = self.sequence_tab.timeline.get_clips_lookup()
+
+        # Fallback to project sources/clips if timeline lookups are empty
+        if not sources and self.sources_by_id:
+            sources = dict(self.sources_by_id)
+        if not clips:
             for clip in self.clips:
-                clips[clip.id] = (clip, self.current_source)
+                source = self.sources_by_id.get(clip.source_id)
+                if source:
+                    clips[clip.id] = (clip, source)
 
         # Get quality settings from RenderTab UI (not global settings)
         quality_setting = self.render_tab.get_quality_setting()
@@ -5617,12 +5733,8 @@ class MainWindow(QMainWindow):
         if success:
             # Switch dialog to progress view
             self.intention_import_dialog.show_progress()
-
-            # Determine first step based on workflow state
-            if self.intention_workflow.state == WorkflowState.DOWNLOADING:
-                self._start_intention_downloads(urls)
-            elif self.intention_workflow.state == WorkflowState.DETECTING:
-                self._start_intention_detection()
+            # Note: Work is triggered by _on_intention_step_started when
+            # the coordinator emits step_started signal
         else:
             QMessageBox.warning(
                 self,
@@ -5665,6 +5777,19 @@ class MainWindow(QMainWindow):
             if step:
                 self.intention_import_dialog.set_step_active(step)
 
+        # Start the work for the step that just started
+        if self.intention_workflow:
+            if step_name == "downloading":
+                self._start_intention_downloads()
+            elif step_name == "detecting":
+                self._start_intention_detection()
+            elif step_name == "thumbnails":
+                self._start_intention_thumbnails()
+            elif step_name == "analyzing":
+                self._start_intention_analysis()
+            elif step_name == "building":
+                self._start_intention_building()
+
     def _on_intention_step_completed(self, step_name: str):
         """Handle workflow step completion."""
         logger.info(f"Intention workflow step completed: {step_name}")
@@ -5680,17 +5805,8 @@ class MainWindow(QMainWindow):
             step = step_map.get(step_name)
             if step:
                 self.intention_import_dialog.set_step_complete(step)
-
-        # Trigger next phase based on workflow state
-        if self.intention_workflow:
-            if self.intention_workflow.state == WorkflowState.DETECTING:
-                self._start_intention_detection()
-            elif self.intention_workflow.state == WorkflowState.THUMBNAILS:
-                self._start_intention_thumbnails()
-            elif self.intention_workflow.state == WorkflowState.ANALYZING:
-                self._start_intention_analysis()
-            elif self.intention_workflow.state == WorkflowState.BUILDING:
-                self._start_intention_building()
+        # Note: Next step is triggered by _on_intention_step_started when
+        # the coordinator emits step_started for the new phase
 
     def _on_intention_step_skipped(self, step_name: str):
         """Handle workflow step being skipped."""
@@ -5766,36 +5882,58 @@ class MainWindow(QMainWindow):
         for source in all_sources:
             if source.id not in self.sources_by_id:
                 self.project.add_source(source)
-                self._add_source_to_ui(source)
+                self.collect_tab.add_source(source)
 
         for clip in all_clips:
             if clip.id not in self.clips_by_id:
                 self.project.add_clips([clip])
 
-        # Apply sequence to the sequence tab
-        clips_with_sources = []
-        for clip in all_clips:
-            source = self.sources_by_id.get(clip.source_id)
-            if source:
-                clips_with_sources.append((clip, source))
+        # Sync UI state for intention workflow (Cut/Analyze tabs)
+        self._sync_intention_workflow_ui(sources=all_sources)
 
-        result = self.sequence_tab.apply_intention_workflow_result(
-            algorithm=algorithm,
-            clips_with_sources=clips_with_sources,
-            direction=direction,
-        )
+        # Populate Analyze tab with clips that were analyzed during the workflow
+        if algorithm == "exquisite_corpus":
+            # Exquisite Corpus does OCR - add clips with extracted text
+            analyzed_clip_ids = [c.id for c in all_clips if c.extracted_texts]
+            if analyzed_clip_ids:
+                logger.info(f"Adding {len(analyzed_clip_ids)} analyzed clips to Analyze tab")
+                self.analyze_tab.add_clips(analyzed_clip_ids)
+        elif algorithm == "color":
+            # Color algorithm does color analysis
+            analyzed_clip_ids = [c.id for c in all_clips if c.dominant_colors]
+            if analyzed_clip_ids:
+                logger.info(f"Adding {len(analyzed_clip_ids)} color-analyzed clips to Analyze tab")
+                self.analyze_tab.add_clips(analyzed_clip_ids)
 
-        if result.get("success"):
-            self.status_bar.showMessage(
-                f"Created {algorithm} sequence with {result.get('clip_count', 0)} clips"
-            )
+        # Apply sequence to the sequence tab (skip for exquisite_corpus - already handled by dialog)
+        if algorithm == "exquisite_corpus":
+            # Sequence was already applied by _on_exquisite_corpus_sequence_ready
+            self.status_bar.showMessage("Exquisite Corpus sequence created")
             self._mark_dirty()
         else:
-            QMessageBox.warning(
-                self,
-                "Sequence Error",
-                f"Failed to create sequence: {result.get('error', 'Unknown error')}"
+            clips_with_sources = []
+            for clip in all_clips:
+                source = self.sources_by_id.get(clip.source_id)
+                if source:
+                    clips_with_sources.append((clip, source))
+
+            result = self.sequence_tab.apply_intention_workflow_result(
+                algorithm=algorithm,
+                clips_with_sources=clips_with_sources,
+                direction=direction,
             )
+
+            if result.get("success"):
+                self.status_bar.showMessage(
+                    f"Created {algorithm} sequence with {result.get('clip_count', 0)} clips"
+                )
+                self._mark_dirty()
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Sequence Error",
+                    f"Failed to create sequence: {result.get('error', 'Unknown error')}"
+                )
 
         # Refresh UI
         self._refresh_sequence_tab_clips()
@@ -5871,7 +6009,7 @@ class MainWindow(QMainWindow):
                 height=result.height or 1080,
             )
             self.project.add_source(source)
-            self._add_source_to_ui(source)
+            self.collect_tab.add_source(source)
 
     def _start_intention_detection(self):
         """Start scene detection for the intention workflow."""
@@ -5898,7 +6036,7 @@ class MainWindow(QMainWindow):
             self._on_intention_detection_completed
         )
         self.detection_worker.error.connect(
-            self.intention_workflow.on_detection_error
+            self._on_intention_detection_error
         )
         # Clean up
         self.detection_worker.finished.connect(self.detection_worker.deleteLater)
@@ -5920,7 +6058,10 @@ class MainWindow(QMainWindow):
         # Add source and clips to project
         if source.id not in self.sources_by_id:
             self.project.add_source(source)
-            self._add_source_to_ui(source)
+            self.collect_tab.add_source(source)
+
+        # Set Cut tab source (needed for proper state display)
+        self.cut_tab.set_source(source)
 
         for clip in clips:
             # Sync clip source_id to match the source we just added
@@ -5931,6 +6072,30 @@ class MainWindow(QMainWindow):
         # Notify coordinator
         if self.intention_workflow:
             self.intention_workflow.on_detection_completed(source, clips)
+
+            # Check if there are more sources to process
+            next_source = self.intention_workflow.get_current_source_path()
+            if next_source:
+                # Start detection for next source
+                self._start_intention_detection()
+
+    def _on_intention_detection_error(self, error: str):
+        """Handle detection error during intention workflow."""
+        if self._detection_finished_handled:
+            return
+        self._detection_finished_handled = True
+
+        logger.error(f"Intention detection error: {error}")
+
+        # Notify coordinator
+        if self.intention_workflow:
+            self.intention_workflow.on_detection_error(error)
+
+            # Check if there are more sources to process
+            next_source = self.intention_workflow.get_current_source_path()
+            if next_source:
+                # Start detection for next source
+                self._start_intention_detection()
 
     def _start_intention_thumbnails(self):
         """Start thumbnail generation for the intention workflow."""
@@ -5953,7 +6118,7 @@ class MainWindow(QMainWindow):
         self.thumbnail_worker = ThumbnailWorker(
             source=default_source,
             clips=all_clips,
-            cache_dir=self.settings.cache_dir,
+            cache_dir=self.settings.thumbnail_cache_dir,
             sources_by_id=sources_by_id,
         )
         self.thumbnail_worker.progress.connect(
@@ -5972,6 +6137,29 @@ class MainWindow(QMainWindow):
         self._thumbnails_finished_handled = False
         self.thumbnail_worker.start()
 
+    def _sync_intention_workflow_ui(self, sources: list = None):
+        """Synchronize UI state for intention workflow (Cut/Analyze tabs).
+
+        This helper consolidates state synchronization that's needed after
+        detection and thumbnail generation in the intention workflow.
+
+        Args:
+            sources: Optional list of sources. If not provided, gets from intention_workflow.
+        """
+        # Get sources from intention workflow if not provided
+        if sources is None and self.intention_workflow:
+            sources = self.intention_workflow.get_all_sources()
+
+        # Sync lookups for Analyze tab (same as normal flow)
+        self.analyze_tab.set_lookups(self.clips_by_id, self.sources_by_id)
+
+        # Ensure Cut tab has source set
+        if sources:
+            self.cut_tab.set_source(sources[0])
+
+        # Sync all clips to Cut tab
+        self.cut_tab.set_clips(self.clips)
+
     def _on_intention_thumbnails_finished(self):
         """Handle thumbnail generation completion during intention workflow."""
         if self._thumbnails_finished_handled:
@@ -5979,6 +6167,9 @@ class MainWindow(QMainWindow):
         self._thumbnails_finished_handled = True
 
         logger.info("Intention thumbnails finished")
+
+        # Sync UI state for intention workflow
+        self._sync_intention_workflow_ui()
 
         if self.intention_workflow:
             self.intention_workflow.on_thumbnails_finished()
@@ -6038,10 +6229,63 @@ class MainWindow(QMainWindow):
         if not self.intention_workflow:
             return
 
-        # Building happens in the coordinator's completion handler
-        # Just notify the coordinator that building is "done"
+        algorithm, direction = self.intention_workflow.get_algorithm_with_direction()
         all_clips = self.intention_workflow.get_all_clips()
-        self.intention_workflow.on_building_complete(all_clips)
+
+        if algorithm == "exquisite_corpus":
+            # Show the Exquisite Corpus dialog (handles prompt, OCR, poem generation)
+            self._show_exquisite_corpus_dialog_for_intention(all_clips)
+        else:
+            # Other algorithms complete immediately
+            self.intention_workflow.on_building_complete(all_clips)
+
+    def _show_exquisite_corpus_dialog_for_intention(self, clips: list):
+        """Show Exquisite Corpus dialog during intention workflow building phase.
+
+        Args:
+            clips: List of Clip objects to process
+        """
+        from ui.dialogs.exquisite_corpus_dialog import ExquisiteCorpusDialog
+        from PySide6.QtWidgets import QDialog
+
+        # Build sources lookup from workflow
+        all_sources = self.intention_workflow.get_all_sources() if self.intention_workflow else []
+        sources_by_id = {s.id: s for s in all_sources}
+
+        dialog = ExquisiteCorpusDialog(
+            clips=clips,
+            sources_by_id=sources_by_id,
+            project=self.project,
+            parent=self,
+        )
+
+        # Connect to sequence_ready signal - this is how the dialog returns results
+        dialog.sequence_ready.connect(self._on_exquisite_corpus_sequence_ready)
+
+        result = dialog.exec()
+
+        if result != QDialog.Accepted:
+            # User cancelled - cancel the workflow
+            if self.intention_workflow:
+                self.intention_workflow.cancel()
+
+    @Slot(list)
+    def _on_exquisite_corpus_sequence_ready(self, sequence_clips: list):
+        """Handle sequence ready from Exquisite Corpus dialog during intention workflow.
+
+        Args:
+            sequence_clips: List of (Clip, Source) tuples in poem order
+        """
+        logger.info(f"Exquisite Corpus sequence ready: {len(sequence_clips)} clips")
+
+        # Apply to sequence tab using existing method
+        self.sequence_tab._apply_exquisite_corpus_sequence(sequence_clips)
+
+        # Complete the workflow with just the clips (not tuples)
+        if self.intention_workflow:
+            # Extract clips from tuples for the workflow completion
+            clips_only = [clip for clip, source in sequence_clips]
+            self.intention_workflow.on_building_complete(clips_only)
 
     def _on_export_edl_click(self):
         """Export the timeline sequence as an EDL file."""
@@ -6469,7 +6713,7 @@ class MainWindow(QMainWindow):
         self.cut_tab.clear_clips()
         self.cut_tab.set_source(None)
         self.analyze_tab.clear_clips()
-        self.sequence_tab.timeline.clear()
+        self.sequence_tab.clear()  # Clear all state including _clips and _available_clips
 
     def _refresh_ui_from_project(self):
         """Refresh all UI components after project load.

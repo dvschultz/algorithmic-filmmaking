@@ -332,6 +332,10 @@ class ClipThumbnail(QFrame):
         self.clip.transcript = segments
         self._update_transcript_overlay()
 
+    def set_extracted_text(self, texts: list | None):
+        """Set the extracted text for this clip."""
+        self.clip.extracted_texts = texts
+
     def _update_transcript_overlay(self):
         """Update the transcript overlay text."""
         if self.clip.transcript:
@@ -698,6 +702,12 @@ class ClipBrowser(QWidget):
         thumb = self._thumbnail_by_id.get(clip_id)
         if thumb:
             thumb.set_transcript(segments)
+
+    def update_clip_extracted_text(self, clip_id: str, texts: list):
+        """Update the extracted text for a specific clip thumbnail (O(1) lookup)."""
+        thumb = self._thumbnail_by_id.get(clip_id)
+        if thumb:
+            thumb.set_extracted_text(texts)
 
     def update_clip_thumbnail(self, clip_id: str, thumb_path: Path):
         """Update the thumbnail image for a specific clip (O(1) lookup)."""

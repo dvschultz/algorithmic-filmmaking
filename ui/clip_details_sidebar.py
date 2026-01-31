@@ -7,6 +7,7 @@ Provides a dismissable sidebar displaying detailed clip information:
 - Editable shot type dropdown
 - Editable transcript segments with timestamps
 - Dominant colors (read-only)
+- Extracted text from OCR (read-only)
 """
 
 import logging
@@ -50,6 +51,7 @@ class ClipDetailsSidebar(QDockWidget):
     - Editable shot type dropdown
     - Editable transcript with timestamps
     - Dominant colors display
+    - Extracted text from OCR (read-only)
     """
 
     # Signals
@@ -180,6 +182,20 @@ class ClipDetailsSidebar(QDockWidget):
         self.description_meta_label.setVisible(False)
         content_layout.addWidget(self.description_meta_label)
 
+        # Extracted Text section (read-only, from OCR)
+        self.extracted_text_header = QLabel("Extracted Text")
+        self._apply_section_header_style(self.extracted_text_header)
+        content_layout.addWidget(self.extracted_text_header)
+
+        self.extracted_text_label = QLabel("")
+        self.extracted_text_label.setWordWrap(True)
+        content_layout.addWidget(self.extracted_text_label)
+
+        self.extracted_text_meta_label = QLabel("")
+        self._apply_muted_style(self.extracted_text_meta_label)
+        self.extracted_text_meta_label.setVisible(False)
+        content_layout.addWidget(self.extracted_text_meta_label)
+
         # Transcript section (EDITABLE)
         self.transcript_header = QLabel("Transcript")
         self._apply_section_header_style(self.transcript_header)
@@ -257,12 +273,14 @@ class ClipDetailsSidebar(QDockWidget):
         self._apply_section_header_style(self.colors_header)
         self._apply_section_header_style(self.shot_type_header)
         self._apply_section_header_style(self.description_header)
+        self._apply_section_header_style(self.extracted_text_header)
         self._apply_section_header_style(self.transcript_header)
         self._apply_section_header_style(self.object_labels_header)
         self._apply_section_header_style(self.detected_objects_header)
         self._apply_secondary_style(self.metadata_label)
         self._apply_muted_style(self.source_label)
         self._apply_muted_style(self.description_meta_label)
+        self._apply_muted_style(self.extracted_text_meta_label)
         self._apply_muted_style(self.person_count_label)
 
         # Re-render color swatches with current clip
@@ -273,6 +291,14 @@ class ClipDetailsSidebar(QDockWidget):
                 self.detected_objects_label.setStyleSheet(f"color: {theme().text_primary};")
             else:
                 self.detected_objects_label.setStyleSheet(f"color: {theme().text_muted}; font-style: italic;")
+            # Re-render extracted text styling (check for non-empty text, not just list existence)
+            has_text = self._clip_ref.extracted_texts and any(
+                et.text for et in self._clip_ref.extracted_texts
+            )
+            if has_text:
+                self.extracted_text_label.setStyleSheet(f"color: {theme().text_primary};")
+            else:
+                self.extracted_text_label.setStyleSheet(f"color: {theme().text_muted}; font-style: italic;")
 
     @Slot(bool)
     def _on_visibility_changed(self, visible: bool):
@@ -445,6 +471,31 @@ class ClipDetailsSidebar(QDockWidget):
             self.description_edit.setText("")
             self.description_meta_label.setVisible(False)
 
+        # Extracted Text (read-only, from OCR)
+        if clip.extracted_texts:
+            # Combine all extracted text segments
+            all_texts = []
+            sources_used = set()
+            for et in clip.extracted_texts:
+                if et.text:
+                    all_texts.append(et.text)
+                    if et.source:
+                        sources_used.add(et.source)
+            if all_texts:
+                self.extracted_text_label.setText("\n\n".join(all_texts))
+                self.extracted_text_label.setStyleSheet(f"color: {theme().text_primary};")
+                # Show metadata about extraction source
+                if sources_used:
+                    source_str = ", ".join(sorted(sources_used))
+                    self.extracted_text_meta_label.setText(f"Extracted via {source_str}")
+                    self.extracted_text_meta_label.setVisible(True)
+                else:
+                    self.extracted_text_meta_label.setVisible(False)
+            else:
+                self._set_extracted_text_placeholder("No text found in clip")
+        else:
+            self._set_extracted_text_placeholder("Run Extract Text to analyze...")
+
         # Unblock signals and enable editing
         self._block_editable_signals(False)
         self._set_editing_enabled(True)
@@ -496,6 +547,7 @@ class ClipDetailsSidebar(QDockWidget):
         self.description_edit.setPlaceholder(f"{count} clips selected")
         self.description_edit.setText("")
         self.description_meta_label.setVisible(False)
+        self._set_extracted_text_placeholder("Select a single clip to view details")
 
         # Unblock signals and disable editing
         self._block_editable_signals(False)
@@ -541,6 +593,16 @@ class ClipDetailsSidebar(QDockWidget):
         """
         self.detected_objects_label.setText(text)
         self.detected_objects_label.setStyleSheet(f"color: {theme().text_muted}; font-style: italic;")
+
+    def _set_extracted_text_placeholder(self, text: str):
+        """Set extracted text label to placeholder style.
+
+        Args:
+            text: Placeholder text to display
+        """
+        self.extracted_text_label.setText(text)
+        self.extracted_text_label.setStyleSheet(f"color: {theme().text_muted}; font-style: italic;")
+        self.extracted_text_meta_label.setVisible(False)
 
     def _update_colors(self, colors: Optional[list[tuple[int, int, int]]]):
         """Update the color swatches display.
@@ -624,6 +686,7 @@ class ClipDetailsSidebar(QDockWidget):
         self.description_edit.setText("")
         self.description_edit.setPlaceholder("Run Describe to analyze...")
         self.description_meta_label.setVisible(False)
+        self._set_extracted_text_placeholder("Run Extract Text to analyze...")
 
         self._block_editable_signals(False)
         self._set_editing_enabled(False)

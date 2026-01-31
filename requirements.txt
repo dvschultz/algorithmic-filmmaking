@@ -24,3 +24,6 @@ httpx>=0.25.0
 ultralytics>=8.0.0  # YOLOv8
 torchvision>=0.15.0  # MobileNet (compatible with torch>=2.0)
 einops>=0.7.0
+
+# OCR / Text Extraction
+pytesseract>=0.3.10  # Tesseract OCR wrapper (requires tesseract binary)

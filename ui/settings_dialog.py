@@ -62,6 +62,18 @@ from ui.theme import theme, UISizes
 
 logger = logging.getLogger(__name__)
 
+# Shared list of VLM models for vision and text extraction
+VLM_MODELS = [
+    "gpt-4o",
+    "gpt-5.2",
+    "gpt-5",
+    "gpt-5-mini",
+    "claude-sonnet-4-5-20250929",
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gemini-2.0-flash",
+]
+
 
 def is_network_or_cloud_path(path: Path) -> tuple[bool, str]:
     """
@@ -254,6 +266,8 @@ class SettingsDialog(QDialog):
             description_model_cloud=settings.description_model_cloud,
             description_temporal_frames=settings.description_temporal_frames,
             use_video_for_gemini=settings.use_video_for_gemini,
+            text_extraction_method=settings.text_extraction_method,
+            text_extraction_vlm_model=settings.text_extraction_vlm_model,
         )
 
         self.setWindowTitle("Settings")
@@ -485,15 +499,7 @@ class SettingsDialog(QDialog):
         cloud_layout = QHBoxLayout()
         cloud_layout.addWidget(QLabel("Cloud Model:"))
         self.vision_cloud_combo = QComboBox()
-        self.vision_cloud_combo.addItems([
-            "gpt-5.2",
-            "gpt-5",
-            "gpt-5-mini",
-            "claude-sonnet-4-5-20250929",
-            "gemini-2.5-flash",
-            "gemini-2.5-pro",
-            "gemini-2.0-flash",
-        ])
+        self.vision_cloud_combo.addItems(VLM_MODELS)
         self.vision_cloud_combo.setEditable(False)
         self.vision_cloud_combo.setToolTip("Model ID for cloud analysis (via LiteLLM)")
         cloud_layout.addWidget(self.vision_cloud_combo)
@@ -526,6 +532,59 @@ class SettingsDialog(QDialog):
         self.vision_tier_combo.currentIndexChanged.connect(self._on_vision_tier_changed)
 
         layout.addWidget(vision_group)
+
+        # Text Extraction (OCR) group
+        text_group = QGroupBox("Text Extraction (OCR)")
+        text_layout = QVBoxLayout(text_group)
+
+        # Method selection
+        method_layout = QHBoxLayout()
+        method_label = QLabel("Method:")
+        method_label.setFixedWidth(UISizes.FORM_LABEL_WIDTH)
+        method_layout.addWidget(method_label)
+        self.text_method_combo = QComboBox()
+        self.text_method_combo.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
+        self.text_method_combo.addItem("Local OCR (Tesseract)", "tesseract")
+        self.text_method_combo.addItem("Cloud VLM", "vlm")
+        self.text_method_combo.addItem("Hybrid (Recommended)", "hybrid")
+        self.text_method_combo.setToolTip(
+            "Tesseract: Fast, free local OCR.\n"
+            "VLM: Cloud AI for stylized/difficult text (requires API key).\n"
+            "Hybrid: Tesseract first, VLM fallback for low confidence."
+        )
+        method_layout.addWidget(self.text_method_combo)
+        method_layout.addStretch()
+        text_layout.addLayout(method_layout)
+
+        # VLM Model selection (same models as Vision Description cloud)
+        vlm_layout = QHBoxLayout()
+        vlm_label = QLabel("VLM Model:")
+        vlm_label.setFixedWidth(UISizes.FORM_LABEL_WIDTH)
+        vlm_layout.addWidget(vlm_label)
+        self.text_vlm_combo = QComboBox()
+        self.text_vlm_combo.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
+        self.text_vlm_combo.addItems(VLM_MODELS)
+        self.text_vlm_combo.setToolTip("Model for cloud text extraction (requires API key)")
+        vlm_layout.addWidget(self.text_vlm_combo)
+        vlm_layout.addStretch()
+        text_layout.addLayout(vlm_layout)
+
+        # Connect method change to enable/disable VLM combo
+        self.text_method_combo.currentIndexChanged.connect(self._on_text_method_changed)
+
+        layout.addWidget(text_group)
+
+        # VLM API key warning label (shared for Vision and Text Extraction)
+        self.vlm_warning_label = QLabel("")
+        self.vlm_warning_label.setStyleSheet(f"color: {theme().accent_orange};")
+        self.vlm_warning_label.setWordWrap(True)
+        layout.addWidget(self.vlm_warning_label)
+
+        # Connect VLM model changes to validation
+        self.vision_tier_combo.currentIndexChanged.connect(self._validate_vlm_api_keys)
+        self.vision_cloud_combo.currentIndexChanged.connect(self._validate_vlm_api_keys)
+        self.text_method_combo.currentIndexChanged.connect(self._validate_vlm_api_keys)
+        self.text_vlm_combo.currentIndexChanged.connect(self._validate_vlm_api_keys)
 
         # Chat Agent group
         chat_group = QGroupBox("Chat Agent")
@@ -954,6 +1013,43 @@ class SettingsDialog(QDialog):
         self.vision_cpu_combo.setEnabled(is_cpu)
         self.vision_cloud_combo.setEnabled(not is_cpu)
 
+    def _on_text_method_changed(self, index: int):
+        """Enable/disable VLM model based on method."""
+        method = self.text_method_combo.currentData()
+        self.text_vlm_combo.setEnabled(method in ("vlm", "hybrid"))
+
+    def _validate_vlm_api_keys(self):
+        """Check if API keys exist for selected VLM models and show warning."""
+        warnings = []
+
+        # Check Vision Description model (if cloud tier selected)
+        if self.vision_tier_combo.currentIndex() == 1:  # Cloud
+            model = self.vision_cloud_combo.currentText().lower()
+            if "gpt" in model and not get_openai_api_key():
+                warnings.append("Vision Description: OpenAI API key missing")
+            elif "claude" in model and not get_anthropic_api_key():
+                warnings.append("Vision Description: Anthropic API key missing")
+            elif "gemini" in model and not get_gemini_api_key():
+                warnings.append("Vision Description: Gemini API key missing")
+
+        # Check Text Extraction model (if VLM or Hybrid method selected)
+        method = self.text_method_combo.currentData()
+        if method in ("vlm", "hybrid"):
+            model = self.text_vlm_combo.currentText().lower()
+            if "gpt" in model and not get_openai_api_key():
+                warnings.append("Text Extraction: OpenAI API key missing")
+            elif "claude" in model and not get_anthropic_api_key():
+                warnings.append("Text Extraction: Anthropic API key missing")
+            elif "gemini" in model and not get_gemini_api_key():
+                warnings.append("Text Extraction: Gemini API key missing")
+
+        # Remove duplicates and display
+        unique_warnings = sorted(set(warnings))
+        if unique_warnings:
+            self.vlm_warning_label.setText("⚠️ " + "; ".join(unique_warnings))
+        else:
+            self.vlm_warning_label.setText("")
+
     def _disable_path_settings(self):
         """Disable path-related settings when operations are running."""
         self.cache_path.set_enabled(False)
@@ -1080,6 +1176,16 @@ class SettingsDialog(QDialog):
         # Trigger enable/disable state
         self._on_vision_tier_changed(tier_idx)
 
+        # Text Extraction
+        method_map = {"tesseract": 0, "vlm": 1, "hybrid": 2}
+        self.text_method_combo.setCurrentIndex(
+            method_map.get(self.settings.text_extraction_method, 2)
+        )
+        idx = self.text_vlm_combo.findText(self.settings.text_extraction_vlm_model)
+        if idx >= 0:
+            self.text_vlm_combo.setCurrentIndex(idx)
+        self._on_text_method_changed(self.text_method_combo.currentIndex())
+
         # Appearance
         theme_map = {"system": 0, "light": 1, "dark": 2}
         self.theme_combo.setCurrentIndex(
@@ -1133,6 +1239,9 @@ class SettingsDialog(QDialog):
 
         # Update model dropdown availability based on API keys
         self._update_chat_model_availability()
+
+        # Validate VLM API keys and show warnings
+        self._validate_vlm_api_keys()
 
     def _apply_llm_env_override(self, provider: str, edit: QLineEdit, label: QLabel,
                                  show_btn: QPushButton, env_var: str):
@@ -1192,6 +1301,10 @@ class SettingsDialog(QDialog):
         self.settings.description_model_cloud = self.vision_cloud_combo.currentText()
         self.settings.description_temporal_frames = self.vision_frames_spin.value()
         self.settings.use_video_for_gemini = self.use_video_checkbox.isChecked()
+
+        # Text Extraction
+        self.settings.text_extraction_method = self.text_method_combo.currentData()
+        self.settings.text_extraction_vlm_model = self.text_vlm_combo.currentText()
 
         # Appearance
         theme_values = ["system", "light", "dark"]
@@ -1367,4 +1480,6 @@ class SettingsDialog(QDialog):
             or self.settings.anthropic_model != self.original_settings.anthropic_model
             or self.settings.gemini_model != self.original_settings.gemini_model
             or self.settings.openrouter_model != self.original_settings.openrouter_model
+            or self.settings.text_extraction_method != self.original_settings.text_extraction_method
+            or self.settings.text_extraction_vlm_model != self.original_settings.text_extraction_vlm_model
         )

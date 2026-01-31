@@ -145,3 +145,49 @@ class FFmpegProcessor:
             "height": int(video_stream.get("height", 0)),
             "codec": video_stream.get("codec_name", "unknown"),
         }
+
+
+def extract_frame(
+    video_path: Path,
+    frame_number: int,
+    output_path: Path,
+    fps: float,
+) -> bool:
+    """Extract a single frame from a video file.
+
+    Args:
+        video_path: Path to the video file
+        frame_number: The frame number to extract (0-indexed)
+        output_path: Path where the frame image will be saved
+        fps: Video frame rate (used to calculate timestamp)
+
+    Returns:
+        True if extraction was successful, False otherwise
+    """
+    ffmpeg_path = shutil.which("ffmpeg")
+    if ffmpeg_path is None:
+        raise RuntimeError("FFmpeg not found")
+
+    # Calculate timestamp from frame number
+    timestamp = frame_number / fps
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    cmd = [
+        ffmpeg_path,
+        "-y",
+        "-ss", str(timestamp),
+        "-i", str(video_path),
+        "-frames:v", "1",
+        "-q:v", "2",  # High quality JPEG
+        str(output_path),
+    ]
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    return result.returncode == 0 and output_path.exists()

@@ -287,6 +287,22 @@ class TimelineWidget(QWidget):
         """Get the current sequence."""
         return self.sequence
 
+    def get_sources_lookup(self) -> dict:
+        """Get a copy of the sources lookup dictionary.
+
+        Returns:
+            Dict mapping source_id to Source objects.
+        """
+        return dict(self._source_lookup)
+
+    def get_clips_lookup(self) -> dict:
+        """Get a copy of the clips lookup dictionary.
+
+        Returns:
+            Dict mapping clip_id to (Clip, Source) tuples.
+        """
+        return dict(self._clip_lookup)
+
     def clear(self):
         """Clear all clips and reset lookups."""
         self.scene.clear_all_clips()

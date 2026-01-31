@@ -30,6 +30,11 @@ ALGORITHMS = {
         "Sequential",
         "Keep clips in their original detection order"
     ),
+    "exquisite_corpus": (
+        "📝",
+        "Exquisite Corpus",
+        "Create a poem from on-screen text"
+    ),
 }
 
 
@@ -86,12 +91,13 @@ class SortingCardGrid(QWidget):
         grid_layout.setSpacing(20)
         grid_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Create cards in 2x2 grid
+        # Create cards in 3x2 grid (5 algorithms)
         positions = [
             ("color", 0, 0),
             ("duration", 0, 1),
-            ("shuffle", 1, 0),
-            ("sequential", 1, 1),
+            ("shuffle", 0, 2),
+            ("sequential", 1, 0),
+            ("exquisite_corpus", 1, 1),
         ]
 
         for key, row, col in positions:
