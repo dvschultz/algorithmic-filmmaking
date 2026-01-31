@@ -5920,7 +5920,7 @@ class MainWindow(QMainWindow):
         # Add source and clips to project
         if source.id not in self.sources_by_id:
             self.project.add_source(source)
-            self._add_source_to_ui(source)
+            self.source_browser.add_source(source)
 
         for clip in clips:
             # Sync clip source_id to match the source we just added
