@@ -270,6 +270,8 @@ class SettingsDialog(QDialog):
             text_extraction_vlm_model=settings.text_extraction_vlm_model,
             text_detection_enabled=settings.text_detection_enabled,
             text_detection_confidence=settings.text_detection_confidence,
+            exquisite_corpus_model=settings.exquisite_corpus_model,
+            exquisite_corpus_temperature=settings.exquisite_corpus_temperature,
         )
 
         self.setWindowTitle("Settings")
@@ -585,7 +587,47 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(text_group)
 
-        # VLM API key warning label (shared for Vision and Text Extraction)
+        # Exquisite Corpus (Poetry Generation) group
+        corpus_group = QGroupBox("Exquisite Corpus (Poetry Generation)")
+        corpus_layout = QVBoxLayout(corpus_group)
+
+        # Model selection
+        corpus_model_layout = QHBoxLayout()
+        corpus_model_label = QLabel("Model:")
+        corpus_model_label.setFixedWidth(UISizes.FORM_LABEL_WIDTH)
+        corpus_model_layout.addWidget(corpus_model_label)
+        self.corpus_model_combo = QComboBox()
+        self.corpus_model_combo.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
+        self.corpus_model_combo.addItems(VLM_MODELS)
+        self.corpus_model_combo.setToolTip(
+            "Model for generating poems from extracted text.\n"
+            "Creative models with good instruction-following work best."
+        )
+        corpus_model_layout.addWidget(self.corpus_model_combo)
+        corpus_model_layout.addStretch()
+        corpus_layout.addLayout(corpus_model_layout)
+
+        # Temperature/Creativity slider
+        corpus_temp_layout = QHBoxLayout()
+        corpus_temp_label = QLabel("Creativity:")
+        corpus_temp_label.setFixedWidth(UISizes.FORM_LABEL_WIDTH)
+        corpus_temp_layout.addWidget(corpus_temp_label)
+        self.corpus_temp_slider = StyledSlider(Qt.Horizontal)
+        self.corpus_temp_slider.setRange(0, 100)  # 0.0 to 1.0
+        self.corpus_temp_slider.setToolTip(
+            "Higher values = more creative/unpredictable poems\n"
+            "Lower values = more focused/deterministic results"
+        )
+        self.corpus_temp_slider.valueChanged.connect(self._on_corpus_temp_changed)
+        corpus_temp_layout.addWidget(self.corpus_temp_slider)
+        self.corpus_temp_value = QLabel("0.8")
+        self.corpus_temp_value.setFixedWidth(40)
+        corpus_temp_layout.addWidget(self.corpus_temp_value)
+        corpus_layout.addLayout(corpus_temp_layout)
+
+        layout.addWidget(corpus_group)
+
+        # VLM API key warning label (shared for Vision, Text Extraction, and Exquisite Corpus)
         self.vlm_warning_label = QLabel("")
         self.vlm_warning_label.setStyleSheet(f"color: {theme().accent_orange};")
         self.vlm_warning_label.setWordWrap(True)
@@ -596,6 +638,7 @@ class SettingsDialog(QDialog):
         self.vision_cloud_combo.currentIndexChanged.connect(self._validate_vlm_api_keys)
         self.text_method_combo.currentIndexChanged.connect(self._validate_vlm_api_keys)
         self.text_vlm_combo.currentIndexChanged.connect(self._validate_vlm_api_keys)
+        self.corpus_model_combo.currentIndexChanged.connect(self._validate_vlm_api_keys)
 
         # Chat Agent group
         chat_group = QGroupBox("Chat Agent")
@@ -1029,6 +1072,10 @@ class SettingsDialog(QDialog):
         method = self.text_method_combo.currentData()
         self.text_vlm_combo.setEnabled(method in ("vlm", "hybrid"))
 
+    def _on_corpus_temp_changed(self, value: int):
+        """Update creativity/temperature label."""
+        self.corpus_temp_value.setText(f"{value / 100:.2f}")
+
     def _validate_vlm_api_keys(self):
         """Check if API keys exist for selected VLM models and show warning."""
         warnings = []
@@ -1053,6 +1100,15 @@ class SettingsDialog(QDialog):
                 warnings.append("Text Extraction: Anthropic API key missing")
             elif "gemini" in model and not get_gemini_api_key():
                 warnings.append("Text Extraction: Gemini API key missing")
+
+        # Check Exquisite Corpus model
+        corpus_model = self.corpus_model_combo.currentText().lower()
+        if "gpt" in corpus_model and not get_openai_api_key():
+            warnings.append("Exquisite Corpus: OpenAI API key missing")
+        elif "claude" in corpus_model and not get_anthropic_api_key():
+            warnings.append("Exquisite Corpus: Anthropic API key missing")
+        elif "gemini" in corpus_model and not get_gemini_api_key():
+            warnings.append("Exquisite Corpus: Gemini API key missing")
 
         # Remove duplicates and display
         unique_warnings = sorted(set(warnings))
@@ -1198,6 +1254,13 @@ class SettingsDialog(QDialog):
         self.text_detection_checkbox.setChecked(self.settings.text_detection_enabled)
         self._on_text_method_changed(self.text_method_combo.currentIndex())
 
+        # Exquisite Corpus
+        corpus_idx = self.corpus_model_combo.findText(self.settings.exquisite_corpus_model)
+        if corpus_idx >= 0:
+            self.corpus_model_combo.setCurrentIndex(corpus_idx)
+        self.corpus_temp_slider.setValue(int(self.settings.exquisite_corpus_temperature * 100))
+        self._on_corpus_temp_changed(self.corpus_temp_slider.value())
+
         # Appearance
         theme_map = {"system": 0, "light": 1, "dark": 2}
         self.theme_combo.setCurrentIndex(
@@ -1318,6 +1381,10 @@ class SettingsDialog(QDialog):
         self.settings.text_extraction_method = self.text_method_combo.currentData()
         self.settings.text_extraction_vlm_model = self.text_vlm_combo.currentText()
         self.settings.text_detection_enabled = self.text_detection_checkbox.isChecked()
+
+        # Exquisite Corpus
+        self.settings.exquisite_corpus_model = self.corpus_model_combo.currentText()
+        self.settings.exquisite_corpus_temperature = self.corpus_temp_slider.value() / 100.0
 
         # Appearance
         theme_values = ["system", "light", "dark"]
@@ -1496,4 +1563,6 @@ class SettingsDialog(QDialog):
             or self.settings.text_extraction_method != self.original_settings.text_extraction_method
             or self.settings.text_extraction_vlm_model != self.original_settings.text_extraction_vlm_model
             or self.settings.text_detection_enabled != self.original_settings.text_detection_enabled
+            or self.settings.exquisite_corpus_model != self.original_settings.exquisite_corpus_model
+            or self.settings.exquisite_corpus_temperature != self.original_settings.exquisite_corpus_temperature
         )

@@ -395,6 +395,10 @@ class Settings:
     text_detection_enabled: bool = True  # Pre-filter frames without text using EAST
     text_detection_confidence: float = 0.5  # EAST detection confidence threshold
 
+    # Exquisite Corpus (Poetry Generation) Settings
+    exquisite_corpus_model: str = "gpt-4o"  # Model for poem generation
+    exquisite_corpus_temperature: float = 0.8  # Creativity level (0.0-1.0)
+
     def get_quality_preset(self) -> dict:
         """Get FFmpeg parameters for current quality setting."""
         return QUALITY_PRESETS.get(self.export_quality, QUALITY_PRESETS["medium"])
@@ -641,6 +645,13 @@ def _load_from_json(config_path: Path, settings: Settings) -> Settings:
         if "detection_confidence" in text_extraction:
             settings.text_detection_confidence = float(text_extraction["detection_confidence"])
 
+    # Exquisite Corpus section
+    if exquisite_corpus := data.get("exquisite_corpus"):
+        if val := exquisite_corpus.get("model"):
+            settings.exquisite_corpus_model = val
+        if "temperature" in exquisite_corpus:
+            settings.exquisite_corpus_temperature = float(exquisite_corpus["temperature"])
+
     return settings
 
 
@@ -708,6 +719,10 @@ def _settings_to_json(settings: Settings) -> dict:
             "vlm_model": settings.text_extraction_vlm_model,
             "detection_enabled": settings.text_detection_enabled,
             "detection_confidence": settings.text_detection_confidence,
+        },
+        "exquisite_corpus": {
+            "model": settings.exquisite_corpus_model,
+            "temperature": settings.exquisite_corpus_temperature,
         },
     }
 

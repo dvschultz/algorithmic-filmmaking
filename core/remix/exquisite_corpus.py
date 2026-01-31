@@ -80,10 +80,11 @@ def generate_poem(
     from core.settings import load_settings, get_llm_api_key
 
     settings = load_settings()
-    model = model or settings.llm_model or "gpt-4o"
+    model = model or settings.exquisite_corpus_model or "gpt-4o"
+    temperature = settings.exquisite_corpus_temperature
     original_model = model
 
-    logger.info(f"Generating poem with mood: '{mood_prompt}' using model: {model}")
+    logger.info(f"Generating poem with mood: '{mood_prompt}' using model: {model}, temperature: {temperature}")
 
     # Build the phrase inventory
     phrase_inventory = {}
@@ -134,7 +135,7 @@ Return ONLY the JSON array of clip_ids in the order they should appear in the po
         model=model,
         messages=messages,
         api_key=api_key,
-        temperature=0.8,  # Some creativity for poetry
+        temperature=temperature,
     )
 
     response_text = response.choices[0].message.content.strip()
