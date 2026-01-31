@@ -5617,12 +5617,8 @@ class MainWindow(QMainWindow):
         if success:
             # Switch dialog to progress view
             self.intention_import_dialog.show_progress()
-
-            # Determine first step based on workflow state
-            if self.intention_workflow.state == WorkflowState.DOWNLOADING:
-                self._start_intention_downloads(urls)
-            elif self.intention_workflow.state == WorkflowState.DETECTING:
-                self._start_intention_detection()
+            # Note: Work is triggered by _on_intention_step_started when
+            # the coordinator emits step_started signal
         else:
             QMessageBox.warning(
                 self,
@@ -5770,7 +5766,7 @@ class MainWindow(QMainWindow):
         for source in all_sources:
             if source.id not in self.sources_by_id:
                 self.project.add_source(source)
-                self._add_source_to_ui(source)
+                self.collect_tab.add_source(source)
 
         for clip in all_clips:
             if clip.id not in self.clips_by_id:
@@ -5875,7 +5871,7 @@ class MainWindow(QMainWindow):
                 height=result.height or 1080,
             )
             self.project.add_source(source)
-            self._add_source_to_ui(source)
+            self.collect_tab.add_source(source)
 
     def _start_intention_detection(self):
         """Start scene detection for the intention workflow."""
