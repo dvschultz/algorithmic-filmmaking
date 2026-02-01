@@ -7,12 +7,14 @@ emitting progress signals to keep the UI responsive.
 import logging
 from typing import Optional
 
-from PySide6.QtCore import QThread, Signal, Qt
+from PySide6.QtCore import Signal
+
+from ui.workers.base import CancellableWorker
 
 logger = logging.getLogger(__name__)
 
 
-class TextExtractionWorker(QThread):
+class TextExtractionWorker(CancellableWorker):
     """Extract text from multiple clips in background.
 
     Processes clips sequentially, running OCR on keyframes of each clip
@@ -22,14 +24,12 @@ class TextExtractionWorker(QThread):
         progress: Emitted with (current, total, clip_id) during processing
         clip_completed: Emitted with (clip_id, extracted_texts) when a clip finishes
         finished: Emitted with {clip_id: [ExtractedText, ...]} when all complete
-        error: Emitted with error message string on failure
+        error: Emitted with error message string on failure (inherited)
     """
 
-    # Signals
     progress = Signal(int, int, str)  # current, total, clip_id
     clip_completed = Signal(str, list)  # clip_id, extracted_texts
     finished = Signal(dict)  # {clip_id: [ExtractedText, ...]}
-    error = Signal(str)  # error message
 
     def __init__(
         self,
@@ -62,12 +62,6 @@ class TextExtractionWorker(QThread):
         self.vlm_model = vlm_model
         self.vlm_only = vlm_only
         self.use_text_detection = use_text_detection
-        self._cancelled = False
-
-    def cancel(self):
-        """Request cancellation of the extraction."""
-        logger.info("Text extraction cancellation requested")
-        self._cancelled = True
 
     def run(self):
         """Execute text extraction on all clips.
@@ -77,14 +71,16 @@ class TextExtractionWorker(QThread):
         """
         from core.analysis.ocr import extract_text_from_clip
 
+        self._log_start()
+
         results = {}
         total = len(self.clips)
 
         logger.info(f"Starting text extraction for {total} clips")
 
         for i, clip in enumerate(self.clips):
-            if self._cancelled:
-                logger.info("Text extraction cancelled")
+            if self.is_cancelled():
+                self._log_cancelled()
                 break
 
             source = self.sources_by_id.get(clip.source_id)
@@ -110,12 +106,12 @@ class TextExtractionWorker(QThread):
                 logger.debug(f"Extracted {len(extracted)} text segments from clip {clip.id}")
 
             except Exception as e:
-                error_msg = f"Error extracting text from clip {clip.id}: {e}"
-                logger.error(error_msg)
-                self.error.emit(error_msg)
+                self._log_error(str(e), clip.id)
+                self.error.emit(f"Error extracting text from clip {clip.id}: {e}")
                 # Continue with next clip rather than failing entirely
                 results[clip.id] = []
 
-        if not self._cancelled:
+        if not self.is_cancelled():
             logger.info(f"Text extraction complete: {len(results)} clips processed")
             self.finished.emit(results)
+            self._log_complete()

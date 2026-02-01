@@ -1,6 +1,7 @@
 """Expandable video search panel for Collect tab (YouTube and Internet Archive)."""
 
 import logging
+import threading
 from enum import Enum
 from typing import Optional, Union
 
@@ -49,11 +50,15 @@ class MetadataFetchWorker(QObject):
     def __init__(self, videos: list[VideoType]):
         super().__init__()
         self._videos = videos
-        self._cancelled = False
+        self._cancel_event = threading.Event()
 
     def cancel(self):
-        """Cancel the fetch operation."""
-        self._cancelled = True
+        """Cancel the fetch operation (thread-safe)."""
+        self._cancel_event.set()
+
+    def is_cancelled(self) -> bool:
+        """Thread-safe check for cancellation."""
+        return self._cancel_event.is_set()
 
     def run(self):
         """Fetch metadata for each video."""
@@ -67,7 +72,7 @@ class MetadataFetchWorker(QObject):
 
         total = len(self._videos)
         for i, video in enumerate(self._videos):
-            if self._cancelled:
+            if self.is_cancelled():
                 break
 
             self.progress.emit(i, total)

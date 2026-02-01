@@ -97,7 +97,7 @@ class DetectionWorker(CancellableWorker):
     def run(self):
         self._log_start()
         try:
-            if self._cancelled:
+            if self.is_cancelled():
                 self._log_cancelled()
                 return
             detector = SceneDetector(self.config)
@@ -105,13 +105,13 @@ class DetectionWorker(CancellableWorker):
                 self.video_path,
                 lambda p, m: self.progress.emit(p, m),
             )
-            if self._cancelled:
+            if self.is_cancelled():
                 self._log_cancelled()
                 return
             self.detection_completed.emit(source, clips)
             self._log_complete()
         except Exception as e:
-            if not self._cancelled:
+            if not self.is_cancelled():
                 self._log_error(str(e))
                 self.error.emit(str(e))
 
@@ -188,7 +188,7 @@ class DownloadWorker(CancellableWorker):
             result = downloader.download(
                 self.url,
                 progress_callback=lambda p, m: self.progress.emit(p, m),
-                cancel_check=lambda: self._cancelled,
+                cancel_check=lambda: self.is_cancelled(),
             )
             if result.success:
                 self.download_completed.emit(result)
@@ -318,7 +318,7 @@ class URLBulkDownloadWorker(CancellableWorker):
 
             # Process results as they complete
             for future in as_completed(future_to_url):
-                if self._cancelled:
+                if self.is_cancelled():
                     executor.shutdown(wait=False, cancel_futures=True)
                     break
 
@@ -400,7 +400,7 @@ class ColorAnalysisWorker(CancellableWorker):
         self._log_start()
         total = len(self.clips)
         for i, clip in enumerate(self.clips):
-            if self._cancelled:
+            if self.is_cancelled():
                 self._log_cancelled()
                 break
             try:
@@ -429,7 +429,7 @@ class ShotTypeWorker(CancellableWorker):
         self._log_start()
         total = len(self.clips)
         for i, clip in enumerate(self.clips):
-            if self._cancelled:
+            if self.is_cancelled():
                 self._log_cancelled()
                 break
             try:
@@ -468,7 +468,7 @@ class TranscriptionWorker(CancellableWorker):
 
         total = len(self.clips)
         for i, clip in enumerate(self.clips):
-            if self._cancelled:
+            if self.is_cancelled():
                 self._log_cancelled()
                 break
             try:
@@ -518,7 +518,7 @@ class ClassificationWorker(CancellableWorker):
 
         total = len(self.clips)
         for i, clip in enumerate(self.clips):
-            if self._cancelled:
+            if self.is_cancelled():
                 self._log_cancelled()
                 break
             try:
@@ -555,7 +555,7 @@ class ObjectDetectionWorker(CancellableWorker):
 
         total = len(self.clips)
         for i, clip in enumerate(self.clips):
-            if self._cancelled:
+            if self.is_cancelled():
                 self._log_cancelled()
                 break
             try:
@@ -610,7 +610,7 @@ class DescriptionWorker(CancellableWorker):
 
         total = len(self.clips)
         for i, clip in enumerate(self.clips):
-            if self._cancelled:
+            if self.is_cancelled():
                 self._log_cancelled()
                 break
             try:
