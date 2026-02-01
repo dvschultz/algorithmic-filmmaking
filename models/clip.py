@@ -175,7 +175,7 @@ class Clip:
     person_count: Optional[int] = None  # Number of people detected
     # Video description fields
     description: Optional[str] = None  # Natural language description
-    description_model: Optional[str] = None  # Model that generated it (e.g., "moondream-2b", "gpt-4o")
+    description_model: Optional[str] = None  # Model that generated it (e.g., "moondream-2b", "gpt-5.2")
     description_frames: Optional[int] = None  # 1 for single frame, N for temporal
     # OCR extracted text
     extracted_texts: Optional[list[ExtractedText]] = None  # Text extracted from frames

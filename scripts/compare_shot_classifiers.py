@@ -7,7 +7,7 @@ Usage:
 Methods compared:
     1. Current CLIP (baseline) - simple prompts
     2. Improved CLIP - cinematography-aware ensemble prompts
-    3. VLM (GPT-4o) - vision language model (requires API key)
+    3. VLM (GPT-5.2) - vision language model (requires API key)
 """
 
 import argparse
@@ -140,14 +140,14 @@ def classify_improved_clip(image_path: Path) -> tuple[str, float, dict]:
 
 
 # ============================================================================
-# Method 3: VLM (GPT-4o vision)
+# Method 3: VLM (GPT-5.2 vision)
 # ============================================================================
 
 VLM_SHOT_TYPES = ["extreme_closeup", "closeup", "medium_closeup", "medium", "full", "long"]
 
 
 def classify_vlm(image_path: Path) -> tuple[str, float, str]:
-    """Use GPT-4o vision for classification."""
+    """Use GPT-5.2 vision for classification."""
     import base64
 
     import litellm
@@ -175,7 +175,7 @@ Example: closeup,85"""
 
     try:
         response = litellm.completion(
-            model="gpt-4o",
+            model="gpt-5.2",
             messages=[
                 {
                     "role": "user",
@@ -260,10 +260,10 @@ def compare_methods(image_paths: list[Path], include_vlm: bool = True):
             if vlm_type != "error":
                 display_name = IMPROVED_DISPLAY_NAMES.get(vlm_type, vlm_type)
                 row["vlm"] = f"{display_name} ({vlm_conf:.0%})"
-                print(f"  VLM (GPT-4o):   {display_name:20} conf={vlm_conf:.2f}  ({vlm_time:.2f}s)")
+                print(f"  VLM (GPT-5.2):   {display_name:20} conf={vlm_conf:.2f}  ({vlm_time:.2f}s)")
             else:
                 row["vlm"] = f"Error: {vlm_raw}"
-                print(f"  VLM (GPT-4o):   ERROR - {vlm_raw}")
+                print(f"  VLM (GPT-5.2):   ERROR - {vlm_raw}")
 
         results.append(row)
 
@@ -271,7 +271,7 @@ def compare_methods(image_paths: list[Path], include_vlm: bool = True):
     print("\n" + "=" * 100)
     print("SUMMARY")
     print("=" * 100)
-    print(f"{'Image':<30} {'Baseline':<20} {'Improved':<20} {'VLM (GPT-4o)':<20}")
+    print(f"{'Image':<30} {'Baseline':<20} {'Improved':<20} {'VLM (GPT-5.2)':<20}")
     print("-" * 100)
     for row in results:
         print(
@@ -290,7 +290,7 @@ def main():
         help="Directory containing test images",
     )
     parser.add_argument("--limit", type=int, default=10, help="Max images to test")
-    parser.add_argument("--no-vlm", action="store_true", help="Skip VLM (GPT-4o) test")
+    parser.add_argument("--no-vlm", action="store_true", help="Skip VLM (GPT-5.2) test")
     args = parser.parse_args()
 
     # Find test images

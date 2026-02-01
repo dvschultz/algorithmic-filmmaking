@@ -64,14 +64,13 @@ logger = logging.getLogger(__name__)
 
 # Shared list of VLM models for vision and text extraction
 VLM_MODELS = [
-    "gpt-4o",
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gemini-2.0-flash",
     "gpt-5.2",
     "gpt-5",
     "gpt-5-mini",
     "claude-sonnet-4-5-20250929",
-    "gemini-2.5-flash",
-    "gemini-2.5-pro",
-    "gemini-2.0-flash",
 ]
 
 

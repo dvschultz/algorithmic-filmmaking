@@ -80,7 +80,7 @@ def generate_poem(
     from core.settings import load_settings, get_llm_api_key
 
     settings = load_settings()
-    model = model or settings.exquisite_corpus_model or "gpt-4o"
+    model = model or settings.exquisite_corpus_model or "gemini-2.5-flash"
     temperature = settings.exquisite_corpus_temperature
     original_model = model
 

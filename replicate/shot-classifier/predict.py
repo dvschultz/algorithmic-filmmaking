@@ -20,13 +20,13 @@ import torch
 from cog import BasePredictor, Input, Path as CogPath
 from transformers import AutoImageProcessor, VideoMAEForVideoClassification
 
-# Shot type labels (must match model training)
+# Shot type labels (must match model config.json id2label)
 SHOT_TYPES = {
-    0: "LS",   # Long Shot
-    1: "FS",   # Full Shot
-    2: "MS",   # Medium Shot
-    3: "CS",   # Close-up Shot
-    4: "ECS",  # Extreme Close-up Shot
+    0: "CS",   # Close-up Shot
+    1: "ECS",  # Extreme Close-up Shot
+    2: "FS",   # Full Shot
+    3: "LS",   # Long Shot
+    4: "MS",   # Medium Shot
 }
 
 SHOT_TYPE_DISPLAY = {
@@ -44,7 +44,7 @@ class Predictor(BasePredictor):
     def setup(self):
         """Load model into memory for fast inference."""
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        model_path = "/model"  # Bundled with container
+        model_path = "/src/model"  # Bundled with container via COPY . /src
 
         print(f"Loading model from {model_path} on {self.device}...")
 

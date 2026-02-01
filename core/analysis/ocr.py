@@ -173,7 +173,7 @@ def _vlm_text_extraction(
     from core.settings import load_settings, get_gemini_api_key, get_openai_api_key, get_anthropic_api_key
 
     settings = load_settings()
-    model = model or settings.description_model_cloud or "gpt-4o"
+    model = model or settings.description_model_cloud or "gemini-2.5-flash"
     original_model = model
 
     # Normalize model name for LiteLLM

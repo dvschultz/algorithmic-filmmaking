@@ -400,23 +400,23 @@ class Settings:
     description_model_tier: str = "cpu"  # cpu, gpu, cloud
     description_model_cpu: str = "vikhyatk/moondream2"
     description_model_gpu: str = "llava-hf/llava-onevision-qwen2-7b-ov-hf"
-    description_model_cloud: str = "gpt-5.2"
+    description_model_cloud: str = "gemini-2.5-flash"
     description_temporal_frames: int = 4
     description_input_mode: str = "frame"  # "frame" = single frame, "video" = video clip (Gemini only)
 
     # Text Extraction (OCR) Settings
     text_extraction_method: str = "hybrid"  # tesseract, vlm, hybrid
-    text_extraction_vlm_model: str = "gpt-4o"
+    text_extraction_vlm_model: str = "gemini-2.5-flash"
     text_detection_enabled: bool = True  # Pre-filter frames without text using EAST
     text_detection_confidence: float = 0.5  # EAST detection confidence threshold
 
     # Exquisite Corpus (Poetry Generation) Settings
-    exquisite_corpus_model: str = "gpt-4o"  # Model for poem generation
+    exquisite_corpus_model: str = "gemini-2.5-flash"  # Model for poem generation
     exquisite_corpus_temperature: float = 0.8  # Creativity level (0.0-1.0)
 
     # Shot Classification Settings
     shot_classifier_tier: str = "cpu"  # cpu, cloud (cloud uses Replicate VideoMAE)
-    shot_classifier_replicate_model: str = ""  # username/shot-type-classifier:version
+    shot_classifier_replicate_model: str = "dvschultz/shot-type-classifier"  # VideoMAE model
 
     def get_quality_preset(self) -> dict:
         """Get FFmpeg parameters for current quality setting."""
