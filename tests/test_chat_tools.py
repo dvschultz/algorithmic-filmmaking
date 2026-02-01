@@ -6,67 +6,32 @@ from unittest.mock import Mock
 import pytest
 
 from core.project import Project
-from core.transcription import TranscriptSegment
 from models.clip import Source, Clip
 
+# Import shared test helpers from conftest.py
+from tests.conftest import make_test_clip
 
-def create_test_project():
-    """Create a project with test data for chat tool testing."""
+
+def _create_chat_test_project() -> Project:
+    """Create a project with two sources for chat tool testing."""
     project = Project.new(name="Test Project")
-
-    # Add sources
-    source1 = Source(
+    project.add_source(Source(
         id="src-1",
         file_path=Path("/test/video1.mp4"),
         duration_seconds=120.0,
         fps=30.0,
         width=1920,
         height=1080,
-    )
-    source2 = Source(
+    ))
+    project.add_source(Source(
         id="src-2",
         file_path=Path("/test/video2.mp4"),
         duration_seconds=60.0,
         fps=24.0,
         width=1280,
         height=720,
-    )
-    project.add_source(source1)
-    project.add_source(source2)
-
+    ))
     return project
-
-
-def create_test_clip(
-    clip_id: str,
-    source_id: str = "src-1",
-    start_frame: int = 0,
-    end_frame: int = 90,
-    shot_type: str = None,
-    transcript_text: str = None,
-    dominant_colors: list = None,
-):
-    """Helper to create test clips with optional attributes."""
-    transcript = None
-    if transcript_text:
-        transcript = [
-            TranscriptSegment(
-                start_time=0.0,
-                end_time=3.0,
-                text=transcript_text,
-                confidence=0.95,
-            )
-        ]
-
-    return Clip(
-        id=clip_id,
-        source_id=source_id,
-        start_frame=start_frame,
-        end_frame=end_frame,
-        shot_type=shot_type,
-        transcript=transcript,
-        dominant_colors=dominant_colors,
-    )
 
 
 class TestSearchTranscripts:
@@ -76,11 +41,11 @@ class TestSearchTranscripts:
         """Test search finds clips with matching transcript text."""
         from core.chat_tools import search_transcripts
 
-        project = create_test_project()
+        project = _create_chat_test_project()
         project.add_clips([
-            create_test_clip("clip-1", transcript_text="Hello world, this is a test"),
-            create_test_clip("clip-2", transcript_text="Goodbye world, farewell"),
-            create_test_clip("clip-3", transcript_text="No match here"),
+            make_test_clip("clip-1", transcript_text="Hello world, this is a test"),
+            make_test_clip("clip-2", transcript_text="Goodbye world, farewell"),
+            make_test_clip("clip-3", transcript_text="No match here"),
         ])
 
         result = search_transcripts(project, "world")
@@ -97,10 +62,10 @@ class TestSearchTranscripts:
         """Test search is case insensitive by default."""
         from core.chat_tools import search_transcripts
 
-        project = create_test_project()
+        project = _create_chat_test_project()
         project.add_clips([
-            create_test_clip("clip-1", transcript_text="HELLO World"),
-            create_test_clip("clip-2", transcript_text="hello world"),
+            make_test_clip("clip-1", transcript_text="HELLO World"),
+            make_test_clip("clip-2", transcript_text="hello world"),
         ])
 
         result = search_transcripts(project, "HELLO")
@@ -112,10 +77,10 @@ class TestSearchTranscripts:
         """Test case sensitive search."""
         from core.chat_tools import search_transcripts
 
-        project = create_test_project()
+        project = _create_chat_test_project()
         project.add_clips([
-            create_test_clip("clip-1", transcript_text="HELLO World"),
-            create_test_clip("clip-2", transcript_text="hello world"),
+            make_test_clip("clip-1", transcript_text="HELLO World"),
+            make_test_clip("clip-2", transcript_text="hello world"),
         ])
 
         result = search_transcripts(project, "HELLO", case_sensitive=True)
@@ -128,7 +93,7 @@ class TestSearchTranscripts:
         """Test empty query returns error."""
         from core.chat_tools import search_transcripts
 
-        project = create_test_project()
+        project = _create_chat_test_project()
 
         result = search_transcripts(project, "")
 
@@ -139,9 +104,9 @@ class TestSearchTranscripts:
         """Test search returns empty results when no matches."""
         from core.chat_tools import search_transcripts
 
-        project = create_test_project()
+        project = _create_chat_test_project()
         project.add_clips([
-            create_test_clip("clip-1", transcript_text="Hello world"),
+            make_test_clip("clip-1", transcript_text="Hello world"),
         ])
 
         result = search_transcripts(project, "nonexistent")
@@ -154,10 +119,10 @@ class TestSearchTranscripts:
         """Test search skips clips without transcripts."""
         from core.chat_tools import search_transcripts
 
-        project = create_test_project()
+        project = _create_chat_test_project()
         project.add_clips([
-            create_test_clip("clip-1", transcript_text="Hello world"),
-            create_test_clip("clip-2", transcript_text=None),  # No transcript
+            make_test_clip("clip-1", transcript_text="Hello world"),
+            make_test_clip("clip-2", transcript_text=None),  # No transcript
         ])
 
         result = search_transcripts(project, "hello")
@@ -169,9 +134,9 @@ class TestSearchTranscripts:
         """Test search results include context around match."""
         from core.chat_tools import search_transcripts
 
-        project = create_test_project()
+        project = _create_chat_test_project()
         project.add_clips([
-            create_test_clip(
+            make_test_clip(
                 "clip-1",
                 transcript_text="This is some text before TARGET and some text after"
             ),
@@ -194,11 +159,11 @@ class TestFindSimilarClips:
         """Test finding clips with same shot type."""
         from core.chat_tools import find_similar_clips
 
-        project = create_test_project()
+        project = _create_chat_test_project()
         project.add_clips([
-            create_test_clip("clip-1", shot_type="close_up"),
-            create_test_clip("clip-2", shot_type="close_up"),
-            create_test_clip("clip-3", shot_type="wide_shot"),
+            make_test_clip("clip-1", shot_type="close_up"),
+            make_test_clip("clip-2", shot_type="close_up"),
+            make_test_clip("clip-3", shot_type="wide_shot"),
         ])
 
         result = find_similar_clips(project, "clip-1", criteria=["shot_type"])
@@ -215,16 +180,16 @@ class TestFindSimilarClips:
         """Test finding clips with similar colors."""
         from core.chat_tools import find_similar_clips
 
-        project = create_test_project()
+        project = _create_chat_test_project()
         # Red-ish colors
         red_colors = [(255, 0, 0), (200, 50, 50), (180, 30, 30)]
         # Blue-ish colors
         blue_colors = [(0, 0, 255), (50, 50, 200), (30, 30, 180)]
 
         project.add_clips([
-            create_test_clip("clip-1", dominant_colors=red_colors),
-            create_test_clip("clip-2", dominant_colors=red_colors),  # Similar to clip-1
-            create_test_clip("clip-3", dominant_colors=blue_colors),  # Different
+            make_test_clip("clip-1", dominant_colors=red_colors),
+            make_test_clip("clip-2", dominant_colors=red_colors),  # Similar to clip-1
+            make_test_clip("clip-3", dominant_colors=blue_colors),  # Different
         ])
 
         result = find_similar_clips(project, "clip-1", criteria=["color"])
@@ -239,11 +204,11 @@ class TestFindSimilarClips:
         """Test finding clips with similar duration."""
         from core.chat_tools import find_similar_clips
 
-        project = create_test_project()
+        project = _create_chat_test_project()
         project.add_clips([
-            create_test_clip("clip-1", start_frame=0, end_frame=90),  # 3 seconds at 30fps
-            create_test_clip("clip-2", start_frame=0, end_frame=90),  # Same duration
-            create_test_clip("clip-3", start_frame=0, end_frame=900),  # 30 seconds
+            make_test_clip("clip-1", start_frame=0, end_frame=90),  # 3 seconds at 30fps
+            make_test_clip("clip-2", start_frame=0, end_frame=90),  # Same duration
+            make_test_clip("clip-3", start_frame=0, end_frame=900),  # 30 seconds
         ])
 
         result = find_similar_clips(project, "clip-1", criteria=["duration"])
@@ -258,7 +223,7 @@ class TestFindSimilarClips:
         """Test invalid clip ID returns error."""
         from core.chat_tools import find_similar_clips
 
-        project = create_test_project()
+        project = _create_chat_test_project()
 
         result = find_similar_clips(project, "nonexistent")
 
@@ -269,8 +234,8 @@ class TestFindSimilarClips:
         """Test invalid criteria returns error."""
         from core.chat_tools import find_similar_clips
 
-        project = create_test_project()
-        project.add_clips([create_test_clip("clip-1")])
+        project = _create_chat_test_project()
+        project.add_clips([make_test_clip("clip-1")])
 
         result = find_similar_clips(project, "clip-1", criteria=["invalid_criterion"])
 
@@ -281,10 +246,10 @@ class TestFindSimilarClips:
         """Test result limit is respected."""
         from core.chat_tools import find_similar_clips
 
-        project = create_test_project()
+        project = _create_chat_test_project()
         # Add many clips
         clips = [
-            create_test_clip(f"clip-{i}", shot_type="close_up")
+            make_test_clip(f"clip-{i}", shot_type="close_up")
             for i in range(20)
         ]
         project.add_clips(clips)
@@ -298,10 +263,10 @@ class TestFindSimilarClips:
         """Test default criteria are used when none specified."""
         from core.chat_tools import find_similar_clips
 
-        project = create_test_project()
+        project = _create_chat_test_project()
         project.add_clips([
-            create_test_clip("clip-1", shot_type="close_up"),
-            create_test_clip("clip-2", shot_type="close_up"),
+            make_test_clip("clip-1", shot_type="close_up"),
+            make_test_clip("clip-2", shot_type="close_up"),
         ])
 
         result = find_similar_clips(project, "clip-1")
@@ -318,11 +283,11 @@ class TestGroupClipsBy:
         """Test grouping clips by shot type."""
         from core.chat_tools import group_clips_by
 
-        project = create_test_project()
+        project = _create_chat_test_project()
         project.add_clips([
-            create_test_clip("clip-1", shot_type="close_up"),
-            create_test_clip("clip-2", shot_type="close_up"),
-            create_test_clip("clip-3", shot_type="wide_shot"),
+            make_test_clip("clip-1", shot_type="close_up"),
+            make_test_clip("clip-2", shot_type="close_up"),
+            make_test_clip("clip-3", shot_type="wide_shot"),
         ])
 
         result = group_clips_by(project, "shot_type")
@@ -339,11 +304,11 @@ class TestGroupClipsBy:
         """Test grouping clips by duration category."""
         from core.chat_tools import group_clips_by
 
-        project = create_test_project()
+        project = _create_chat_test_project()
         project.add_clips([
-            create_test_clip("clip-1", start_frame=0, end_frame=30),   # 1 second (short)
-            create_test_clip("clip-2", start_frame=0, end_frame=150),  # 5 seconds (medium)
-            create_test_clip("clip-3", start_frame=0, end_frame=450),  # 15 seconds (long)
+            make_test_clip("clip-1", start_frame=0, end_frame=30),   # 1 second (short)
+            make_test_clip("clip-2", start_frame=0, end_frame=150),  # 5 seconds (medium)
+            make_test_clip("clip-3", start_frame=0, end_frame=450),  # 15 seconds (long)
         ])
 
         result = group_clips_by(project, "duration")
@@ -358,11 +323,11 @@ class TestGroupClipsBy:
         """Test grouping clips by source file."""
         from core.chat_tools import group_clips_by
 
-        project = create_test_project()
+        project = _create_chat_test_project()
         project.add_clips([
-            create_test_clip("clip-1", source_id="src-1"),
-            create_test_clip("clip-2", source_id="src-1"),
-            create_test_clip("clip-3", source_id="src-2"),
+            make_test_clip("clip-1", source_id="src-1"),
+            make_test_clip("clip-2", source_id="src-1"),
+            make_test_clip("clip-3", source_id="src-2"),
         ])
 
         result = group_clips_by(project, "source")
@@ -377,16 +342,16 @@ class TestGroupClipsBy:
         """Test grouping clips by color palette classification."""
         from core.chat_tools import group_clips_by
 
-        project = create_test_project()
+        project = _create_chat_test_project()
         # Warm colors (red/orange hues)
         warm_colors = [(255, 100, 50), (200, 80, 40)]
         # Cool colors (blue hues)
         cool_colors = [(50, 100, 255), (40, 80, 200)]
 
         project.add_clips([
-            create_test_clip("clip-1", dominant_colors=warm_colors),
-            create_test_clip("clip-2", dominant_colors=cool_colors),
-            create_test_clip("clip-3", dominant_colors=None),  # Unanalyzed
+            make_test_clip("clip-1", dominant_colors=warm_colors),
+            make_test_clip("clip-2", dominant_colors=cool_colors),
+            make_test_clip("clip-3", dominant_colors=None),  # Unanalyzed
         ])
 
         result = group_clips_by(project, "color")
@@ -400,7 +365,7 @@ class TestGroupClipsBy:
         """Test invalid criterion returns error."""
         from core.chat_tools import group_clips_by
 
-        project = create_test_project()
+        project = _create_chat_test_project()
 
         result = group_clips_by(project, "invalid")
 
@@ -411,10 +376,10 @@ class TestGroupClipsBy:
         """Test clips without shot type are grouped as 'unknown'."""
         from core.chat_tools import group_clips_by
 
-        project = create_test_project()
+        project = _create_chat_test_project()
         project.add_clips([
-            create_test_clip("clip-1", shot_type=None),
-            create_test_clip("clip-2", shot_type="close_up"),
+            make_test_clip("clip-1", shot_type=None),
+            make_test_clip("clip-2", shot_type="close_up"),
         ])
 
         result = group_clips_by(project, "shot_type")
@@ -430,11 +395,11 @@ class TestFilterClipsWithSearch:
         """Test filtering clips by transcript search query."""
         from core.chat_tools import filter_clips
 
-        project = create_test_project()
+        project = _create_chat_test_project()
         project.add_clips([
-            create_test_clip("clip-1", transcript_text="Hello world"),
-            create_test_clip("clip-2", transcript_text="Goodbye moon"),
-            create_test_clip("clip-3", transcript_text=None),
+            make_test_clip("clip-1", transcript_text="Hello world"),
+            make_test_clip("clip-2", transcript_text="Goodbye moon"),
+            make_test_clip("clip-3", transcript_text=None),
         ])
 
         result = filter_clips(project, search_query="world")
@@ -446,9 +411,9 @@ class TestFilterClipsWithSearch:
         """Test search query is case insensitive."""
         from core.chat_tools import filter_clips
 
-        project = create_test_project()
+        project = _create_chat_test_project()
         project.add_clips([
-            create_test_clip("clip-1", transcript_text="HELLO WORLD"),
+            make_test_clip("clip-1", transcript_text="HELLO WORLD"),
         ])
 
         result = filter_clips(project, search_query="hello")
@@ -459,19 +424,19 @@ class TestFilterClipsWithSearch:
         """Test search query combined with other filters."""
         from core.chat_tools import filter_clips
 
-        project = create_test_project()
+        project = _create_chat_test_project()
         project.add_clips([
-            create_test_clip(
+            make_test_clip(
                 "clip-1",
                 shot_type="close_up",
                 transcript_text="Hello world"
             ),
-            create_test_clip(
+            make_test_clip(
                 "clip-2",
                 shot_type="wide_shot",
                 transcript_text="Hello world"
             ),
-            create_test_clip(
+            make_test_clip(
                 "clip-3",
                 shot_type="close_up",
                 transcript_text="Goodbye moon"
@@ -491,10 +456,10 @@ class TestFilterClipsWithSearch:
         """Test clips without transcripts are excluded from search."""
         from core.chat_tools import filter_clips
 
-        project = create_test_project()
+        project = _create_chat_test_project()
         project.add_clips([
-            create_test_clip("clip-1", transcript_text=None),
-            create_test_clip("clip-2", transcript_text="Hello"),
+            make_test_clip("clip-1", transcript_text=None),
+            make_test_clip("clip-2", transcript_text="Hello"),
         ])
 
         result = filter_clips(project, search_query="anything")
@@ -506,10 +471,10 @@ class TestFilterClipsWithSearch:
         """Test existing filters still work without search_query."""
         from core.chat_tools import filter_clips
 
-        project = create_test_project()
+        project = _create_chat_test_project()
         project.add_clips([
-            create_test_clip("clip-1", shot_type="close_up"),
-            create_test_clip("clip-2", shot_type="wide_shot"),
+            make_test_clip("clip-1", shot_type="close_up"),
+            make_test_clip("clip-2", shot_type="wide_shot"),
         ])
 
         result = filter_clips(project, shot_type="close_up")
@@ -521,11 +486,11 @@ class TestFilterClipsWithSearch:
         """Test duration filters still work."""
         from core.chat_tools import filter_clips
 
-        project = create_test_project()
+        project = _create_chat_test_project()
         project.add_clips([
-            create_test_clip("clip-1", start_frame=0, end_frame=30),   # 1 second
-            create_test_clip("clip-2", start_frame=0, end_frame=150),  # 5 seconds
-            create_test_clip("clip-3", start_frame=0, end_frame=300),  # 10 seconds
+            make_test_clip("clip-1", start_frame=0, end_frame=30),   # 1 second
+            make_test_clip("clip-2", start_frame=0, end_frame=150),  # 5 seconds
+            make_test_clip("clip-3", start_frame=0, end_frame=300),  # 10 seconds
         ])
 
         result = filter_clips(project, min_duration=2.0, max_duration=8.0)
@@ -541,11 +506,11 @@ class TestToolIntegration:
         """Test searching transcripts then grouping results."""
         from core.chat_tools import search_transcripts, group_clips_by
 
-        project = create_test_project()
+        project = _create_chat_test_project()
         project.add_clips([
-            create_test_clip("clip-1", shot_type="close_up", transcript_text="Hello world"),
-            create_test_clip("clip-2", shot_type="wide_shot", transcript_text="Hello there"),
-            create_test_clip("clip-3", shot_type="close_up", transcript_text="Goodbye"),
+            make_test_clip("clip-1", shot_type="close_up", transcript_text="Hello world"),
+            make_test_clip("clip-2", shot_type="wide_shot", transcript_text="Hello there"),
+            make_test_clip("clip-3", shot_type="close_up", transcript_text="Goodbye"),
         ])
 
         # First search
@@ -560,11 +525,11 @@ class TestToolIntegration:
         """Test finding similar clips after filtering."""
         from core.chat_tools import filter_clips, find_similar_clips
 
-        project = create_test_project()
+        project = _create_chat_test_project()
         project.add_clips([
-            create_test_clip("clip-1", shot_type="close_up"),
-            create_test_clip("clip-2", shot_type="close_up"),
-            create_test_clip("clip-3", shot_type="wide_shot"),
+            make_test_clip("clip-1", shot_type="close_up"),
+            make_test_clip("clip-2", shot_type="close_up"),
+            make_test_clip("clip-3", shot_type="wide_shot"),
         ])
 
         # First filter
@@ -642,9 +607,9 @@ class TestGUIStateSynchronization:
         """Test update_clip modifies the actual project clips."""
         from core.chat_tools import update_clip
 
-        project = create_test_project()
+        project = _create_chat_test_project()
         project.add_clips([
-            create_test_clip("clip-1", shot_type="close_up"),
+            make_test_clip("clip-1", shot_type="close_up"),
         ])
 
         result = update_clip(
@@ -663,8 +628,8 @@ class TestGUIStateSynchronization:
         """Test update_clip rejects invalid shot types."""
         from core.chat_tools import update_clip
 
-        project = create_test_project()
-        project.add_clips([create_test_clip("clip-1")])
+        project = _create_chat_test_project()
+        project.add_clips([make_test_clip("clip-1")])
 
         result = update_clip(
             project,
@@ -683,8 +648,8 @@ class TestToolExecutor:
         """Test ToolExecutor injects project into tool calls."""
         from core.tool_executor import ToolExecutor
 
-        project = create_test_project()
-        project.add_clips([create_test_clip("clip-1")])
+        project = _create_chat_test_project()
+        project.add_clips([make_test_clip("clip-1")])
 
         executor = ToolExecutor(project=project)
 
@@ -766,7 +731,7 @@ class TestToolExecutor:
         busy_check = MagicMock(return_value=True)
 
         executor = ToolExecutor(
-            project=create_test_project(),
+            project=_create_chat_test_project(),
             busy_check=busy_check
         )
 
@@ -840,9 +805,9 @@ class TestSignalDeliveryGuards:
             group_clips_by,
         )
 
-        project = create_test_project()
+        project = _create_chat_test_project()
         project.add_clips([
-            create_test_clip("clip-1", transcript_text="hello"),
+            make_test_clip("clip-1", transcript_text="hello"),
         ])
 
         # All tools should return dict with "success" key
@@ -862,8 +827,8 @@ class TestSignalDeliveryGuards:
         """Test filter_clips returns a list (not wrapped in dict)."""
         from core.chat_tools import filter_clips
 
-        project = create_test_project()
-        project.add_clips([create_test_clip("clip-1")])
+        project = _create_chat_test_project()
+        project.add_clips([make_test_clip("clip-1")])
 
         result = filter_clips(project)
 

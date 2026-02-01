@@ -9,43 +9,22 @@ import pytest
 from models.clip import Source, Clip
 from core.project import Project
 
+# Import shared test helpers from conftest.py
+from tests.conftest import make_test_clip
 
-def create_test_project():
-    """Create a project with test data."""
+
+def _create_filter_test_project() -> Project:
+    """Create a simple project for filter tests (single source)."""
     project = Project.new(name="Test Project")
-
-    source = Source(
+    project.add_source(Source(
         id="src-1",
         file_path=Path("/test/video1.mp4"),
         duration_seconds=120.0,
         fps=30.0,
         width=1920,
         height=1080,
-    )
-    project.add_source(source)
-
+    ))
     return project
-
-
-def create_test_clip(
-    clip_id: str,
-    source_id: str = "src-1",
-    start_frame: int = 0,
-    end_frame: int = 90,
-    object_labels: list = None,
-    detected_objects: list = None,
-    person_count: int = None,
-):
-    """Helper to create test clips with content analysis attributes."""
-    return Clip(
-        id=clip_id,
-        source_id=source_id,
-        start_frame=start_frame,
-        end_frame=end_frame,
-        object_labels=object_labels,
-        detected_objects=detected_objects,
-        person_count=person_count,
-    )
 
 
 class TestClassificationModule:
@@ -282,11 +261,11 @@ class TestFilterClipsWithContentAnalysis:
         """Test filtering clips by object found in object_labels."""
         from core.chat_tools import filter_clips
 
-        project = create_test_project()
+        project = _create_filter_test_project()
         project.add_clips([
-            create_test_clip("clip-1", object_labels=["cat", "dog", "chair"]),
-            create_test_clip("clip-2", object_labels=["car", "bicycle"]),
-            create_test_clip("clip-3", object_labels=None),
+            make_test_clip("clip-1", object_labels=["cat", "dog", "chair"]),
+            make_test_clip("clip-2", object_labels=["car", "bicycle"]),
+            make_test_clip("clip-3", object_labels=None),
         ])
 
         result = filter_clips(project, has_object="dog")
@@ -298,13 +277,13 @@ class TestFilterClipsWithContentAnalysis:
         """Test filtering clips by object found in detected_objects."""
         from core.chat_tools import filter_clips
 
-        project = create_test_project()
+        project = _create_filter_test_project()
         project.add_clips([
-            create_test_clip("clip-1", detected_objects=[
+            make_test_clip("clip-1", detected_objects=[
                 {"label": "person", "confidence": 0.9, "bbox": [0, 0, 100, 100]},
                 {"label": "car", "confidence": 0.8, "bbox": [100, 0, 200, 100]},
             ]),
-            create_test_clip("clip-2", detected_objects=[
+            make_test_clip("clip-2", detected_objects=[
                 {"label": "dog", "confidence": 0.7, "bbox": [0, 0, 100, 100]},
             ]),
         ])
@@ -318,9 +297,9 @@ class TestFilterClipsWithContentAnalysis:
         """Test has_object filter is case insensitive."""
         from core.chat_tools import filter_clips
 
-        project = create_test_project()
+        project = _create_filter_test_project()
         project.add_clips([
-            create_test_clip("clip-1", object_labels=["CAT", "Dog"]),
+            make_test_clip("clip-1", object_labels=["CAT", "Dog"]),
         ])
 
         result = filter_clips(project, has_object="cat")
@@ -333,9 +312,9 @@ class TestFilterClipsWithContentAnalysis:
         """Test has_object filter returns empty when no matches."""
         from core.chat_tools import filter_clips
 
-        project = create_test_project()
+        project = _create_filter_test_project()
         project.add_clips([
-            create_test_clip("clip-1", object_labels=["cat", "dog"]),
+            make_test_clip("clip-1", object_labels=["cat", "dog"]),
         ])
 
         result = filter_clips(project, has_object="elephant")
@@ -345,12 +324,12 @@ class TestFilterClipsWithContentAnalysis:
         """Test filtering clips by minimum person count."""
         from core.chat_tools import filter_clips
 
-        project = create_test_project()
+        project = _create_filter_test_project()
         project.add_clips([
-            create_test_clip("clip-1", person_count=0),
-            create_test_clip("clip-2", person_count=2),
-            create_test_clip("clip-3", person_count=5),
-            create_test_clip("clip-4", person_count=None),  # Treated as 0
+            make_test_clip("clip-1", person_count=0),
+            make_test_clip("clip-2", person_count=2),
+            make_test_clip("clip-3", person_count=5),
+            make_test_clip("clip-4", person_count=None),  # Treated as 0
         ])
 
         result = filter_clips(project, min_people=2)
@@ -364,11 +343,11 @@ class TestFilterClipsWithContentAnalysis:
         """Test filtering clips by maximum person count."""
         from core.chat_tools import filter_clips
 
-        project = create_test_project()
+        project = _create_filter_test_project()
         project.add_clips([
-            create_test_clip("clip-1", person_count=0),
-            create_test_clip("clip-2", person_count=2),
-            create_test_clip("clip-3", person_count=5),
+            make_test_clip("clip-1", person_count=0),
+            make_test_clip("clip-2", person_count=2),
+            make_test_clip("clip-3", person_count=5),
         ])
 
         result = filter_clips(project, max_people=2)
@@ -382,12 +361,12 @@ class TestFilterClipsWithContentAnalysis:
         """Test filtering clips by min and max people together."""
         from core.chat_tools import filter_clips
 
-        project = create_test_project()
+        project = _create_filter_test_project()
         project.add_clips([
-            create_test_clip("clip-1", person_count=1),
-            create_test_clip("clip-2", person_count=3),
-            create_test_clip("clip-3", person_count=5),
-            create_test_clip("clip-4", person_count=7),
+            make_test_clip("clip-1", person_count=1),
+            make_test_clip("clip-2", person_count=3),
+            make_test_clip("clip-3", person_count=5),
+            make_test_clip("clip-4", person_count=7),
         ])
 
         result = filter_clips(project, min_people=2, max_people=6)
@@ -401,11 +380,11 @@ class TestFilterClipsWithContentAnalysis:
         """Test combining has_object and people count filters."""
         from core.chat_tools import filter_clips
 
-        project = create_test_project()
+        project = _create_filter_test_project()
         project.add_clips([
-            create_test_clip("clip-1", object_labels=["car"], person_count=2),
-            create_test_clip("clip-2", object_labels=["car"], person_count=0),
-            create_test_clip("clip-3", object_labels=["dog"], person_count=3),
+            make_test_clip("clip-1", object_labels=["car"], person_count=2),
+            make_test_clip("clip-2", object_labels=["car"], person_count=0),
+            make_test_clip("clip-3", object_labels=["dog"], person_count=3),
         ])
 
         result = filter_clips(project, has_object="car", min_people=1)
@@ -417,10 +396,10 @@ class TestFilterClipsWithContentAnalysis:
         """Test clips with null person_count are treated as 0."""
         from core.chat_tools import filter_clips
 
-        project = create_test_project()
+        project = _create_filter_test_project()
         project.add_clips([
-            create_test_clip("clip-1", person_count=None),
-            create_test_clip("clip-2", person_count=1),
+            make_test_clip("clip-1", person_count=None),
+            make_test_clip("clip-2", person_count=1),
         ])
 
         # min_people=1 should exclude clip-1 (treated as 0)

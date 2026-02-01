@@ -64,6 +64,7 @@ from ui.chat_panel import ChatPanel
 from ui.chat_worker import ChatAgentWorker
 from ui.clip_details_sidebar import ClipDetailsSidebar
 from ui.dialogs import IntentionImportDialog
+from ui.workers.base import CancellableWorker
 from core.gui_state import GUIState
 from core.intention_workflow import IntentionWorkflowCoordinator, WorkflowState
 
@@ -81,30 +82,22 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
-class DetectionWorker(QThread):
+class DetectionWorker(CancellableWorker):
     """Background worker for scene detection."""
 
     progress = Signal(float, str)  # progress (0-1), status message
     detection_completed = Signal(object, list)  # source, clips (renamed from 'finished' to avoid shadowing QThread.finished)
-    error = Signal(str)
 
     def __init__(self, video_path: Path, config: DetectionConfig):
         super().__init__()
         self.video_path = video_path
         self.config = config
-        self._cancelled = False
-        logger.debug("DetectionWorker created")
-
-    def cancel(self):
-        """Request cancellation of the detection."""
-        logger.info("DetectionWorker.cancel() called")
-        self._cancelled = True
 
     def run(self):
-        logger.info("DetectionWorker.run() STARTING")
+        self._log_start()
         try:
             if self._cancelled:
-                logger.info("DetectionWorker cancelled before start")
+                self._log_cancelled()
                 return
             detector = SceneDetector(self.config)
             source, clips = detector.detect_scenes_with_progress(
@@ -112,14 +105,13 @@ class DetectionWorker(QThread):
                 lambda p, m: self.progress.emit(p, m),
             )
             if self._cancelled:
-                logger.info("DetectionWorker cancelled after detection")
+                self._log_cancelled()
                 return
-            logger.info("DetectionWorker.run() emitting detection_completed signal")
             self.detection_completed.emit(source, clips)
-            logger.info("DetectionWorker.run() COMPLETED")
+            self._log_complete()
         except Exception as e:
             if not self._cancelled:
-                logger.error(f"DetectionWorker.run() ERROR: {e}")
+                self._log_error(str(e))
                 self.error.emit(str(e))
 
 
@@ -179,21 +171,15 @@ class ThumbnailWorker(QThread):
         # QThread's built-in finished signal will be emitted after run() returns
 
 
-class DownloadWorker(QThread):
+class DownloadWorker(CancellableWorker):
     """Background worker for video downloads."""
 
     progress = Signal(float, str)  # progress (0-100), status message
     download_completed = Signal(object)  # DownloadResult (renamed from 'finished' to avoid shadowing QThread.finished)
-    error = Signal(str)
 
     def __init__(self, url: str):
         super().__init__()
         self.url = url
-        self._cancelled = False
-
-    def cancel(self):
-        """Request cancellation of the download."""
-        self._cancelled = True
 
     def run(self):
         try:
@@ -251,7 +237,7 @@ def _calculate_download_timeout(duration_seconds: float, height: int | None) -> 
     return max(MIN_TIMEOUT, min(timeout, MAX_TIMEOUT))
 
 
-class URLBulkDownloadWorker(QThread):
+class URLBulkDownloadWorker(CancellableWorker):
     """Background worker for downloading multiple videos from URLs in parallel."""
 
     progress = Signal(int, int, str)  # current, total, message
@@ -264,14 +250,9 @@ class URLBulkDownloadWorker(QThread):
         super().__init__()
         self.urls = urls
         self.download_dir = download_dir
-        self._cancelled = False
         self._results = []
         self._completed_count = 0
         self._lock = None  # Initialized in run()
-
-    def cancel(self):
-        """Request cancellation."""
-        self._cancelled = True
 
     def _download_single(self, url: str) -> dict:
         """Download a single URL (called from thread pool)."""
@@ -403,7 +384,7 @@ class SequenceExportWorker(QThread):
             self.error.emit(str(e))
 
 
-class ColorAnalysisWorker(QThread):
+class ColorAnalysisWorker(CancellableWorker):
     """Background worker for color extraction from thumbnails."""
 
     progress = Signal(int, int)  # current, total
@@ -413,34 +394,26 @@ class ColorAnalysisWorker(QThread):
     def __init__(self, clips: list[Clip]):
         super().__init__()
         self.clips = clips
-        self._cancelled = False
-        logger.debug("ColorAnalysisWorker created")
-
-    def cancel(self):
-        """Request cancellation of the color analysis."""
-        logger.info("ColorAnalysisWorker.cancel() called")
-        self._cancelled = True
 
     def run(self):
-        logger.info("ColorAnalysisWorker.run() STARTING")
+        self._log_start()
         total = len(self.clips)
         for i, clip in enumerate(self.clips):
             if self._cancelled:
-                logger.info("ColorAnalysisWorker cancelled")
+                self._log_cancelled()
                 break
             try:
                 if clip.thumbnail_path and clip.thumbnail_path.exists():
                     colors = extract_dominant_colors(clip.thumbnail_path)
                     self.color_ready.emit(clip.id, colors)
             except Exception as e:
-                logger.warning(f"Failed to extract colors for clip {clip.id}: {e}")
+                self._log_error(str(e), clip.id)
             self.progress.emit(i + 1, total)
-        logger.info("ColorAnalysisWorker.run() emitting analysis_completed signal")
         self.analysis_completed.emit()
-        logger.info("ColorAnalysisWorker.run() COMPLETED")
+        self._log_complete()
 
 
-class ShotTypeWorker(QThread):
+class ShotTypeWorker(CancellableWorker):
     """Background worker for shot type classification using CLIP."""
 
     progress = Signal(int, int)  # current, total
@@ -450,40 +423,31 @@ class ShotTypeWorker(QThread):
     def __init__(self, clips: list[Clip]):
         super().__init__()
         self.clips = clips
-        self._cancelled = False
-        logger.debug("ShotTypeWorker created")
-
-    def cancel(self):
-        """Request cancellation of the shot type classification."""
-        logger.info("ShotTypeWorker.cancel() called")
-        self._cancelled = True
 
     def run(self):
-        logger.info("ShotTypeWorker.run() STARTING")
+        self._log_start()
         total = len(self.clips)
         for i, clip in enumerate(self.clips):
             if self._cancelled:
-                logger.info("ShotTypeWorker cancelled")
+                self._log_cancelled()
                 break
             try:
                 if clip.thumbnail_path and clip.thumbnail_path.exists():
                     shot_type, confidence = classify_shot_type(clip.thumbnail_path)
                     self.shot_type_ready.emit(clip.id, shot_type, confidence)
             except Exception as e:
-                logger.warning(f"Shot type classification failed for {clip.id}: {e}")
+                self._log_error(str(e), clip.id)
             self.progress.emit(i + 1, total)
-        logger.info("ShotTypeWorker.run() emitting analysis_completed signal")
         self.analysis_completed.emit()
-        logger.info("ShotTypeWorker.run() COMPLETED")
+        self._log_complete()
 
 
-class TranscriptionWorker(QThread):
+class TranscriptionWorker(CancellableWorker):
     """Background worker for transcribing clips using faster-whisper."""
 
     progress = Signal(int, int)  # current, total
     transcript_ready = Signal(str, list)  # clip_id, segments (list of TranscriptSegment)
     transcription_completed = Signal()  # (renamed from 'finished' to avoid shadowing QThread.finished)
-    error = Signal(str)  # error message
 
     def __init__(self, clips: list[Clip], source: Source, model_name: str = "small.en", language: str = "en"):
         super().__init__()
@@ -491,16 +455,9 @@ class TranscriptionWorker(QThread):
         self.source = source
         self.model_name = model_name
         self.language = language
-        self._cancelled = False
-        logger.debug("TranscriptionWorker created")
-
-    def cancel(self):
-        """Request cancellation of the transcription."""
-        logger.info("TranscriptionWorker.cancel() called")
-        self._cancelled = True
 
     def run(self):
-        logger.info("TranscriptionWorker.run() STARTING")
+        self._log_start()
         from core.transcription import (
             transcribe_clip,
             FasterWhisperNotInstalledError,
@@ -511,7 +468,7 @@ class TranscriptionWorker(QThread):
         total = len(self.clips)
         for i, clip in enumerate(self.clips):
             if self._cancelled:
-                logger.info("TranscriptionWorker cancelled")
+                self._log_cancelled()
                 break
             try:
                 segments = transcribe_clip(
@@ -531,18 +488,17 @@ class TranscriptionWorker(QThread):
                 self.error.emit(str(e))
                 break  # Stop processing - critical error
             except TranscriptionError as e:
-                logger.warning(f"Transcription error for {clip.id}: {e}")
+                self._log_error(str(e), clip.id)
                 # Continue processing other clips for non-critical errors
             except Exception as e:
-                logger.warning(f"Transcription failed for {clip.id}: {e}")
+                self._log_error(str(e), clip.id)
                 # Continue processing other clips
             self.progress.emit(i + 1, total)
-        logger.info("TranscriptionWorker.run() emitting transcription_completed signal")
         self.transcription_completed.emit()
-        logger.info("TranscriptionWorker.run() COMPLETED")
+        self._log_complete()
 
 
-class ClassificationWorker(QThread):
+class ClassificationWorker(CancellableWorker):
     """Background worker for frame classification using MobileNet."""
 
     progress = Signal(int, int)  # current, total
@@ -554,22 +510,15 @@ class ClassificationWorker(QThread):
         self.clips = clips
         self.top_k = top_k
         self.threshold = threshold
-        self._cancelled = False
-        logger.debug("ClassificationWorker created")
-
-    def cancel(self):
-        """Request cancellation of the classification."""
-        logger.info("ClassificationWorker.cancel() called")
-        self._cancelled = True
 
     def run(self):
-        logger.info("ClassificationWorker.run() STARTING")
+        self._log_start()
         from core.analysis.classification import classify_frame
 
         total = len(self.clips)
         for i, clip in enumerate(self.clips):
             if self._cancelled:
-                logger.info("ClassificationWorker cancelled")
+                self._log_cancelled()
                 break
             try:
                 if clip.thumbnail_path and clip.thumbnail_path.exists():
@@ -580,14 +529,13 @@ class ClassificationWorker(QThread):
                     )
                     self.labels_ready.emit(clip.id, results)
             except Exception as e:
-                logger.warning(f"Classification failed for {clip.id}: {e}")
+                self._log_error(str(e), clip.id)
             self.progress.emit(i + 1, total)
-        logger.info("ClassificationWorker.run() emitting classification_completed signal")
         self.classification_completed.emit()
-        logger.info("ClassificationWorker.run() COMPLETED")
+        self._log_complete()
 
 
-class ObjectDetectionWorker(QThread):
+class ObjectDetectionWorker(CancellableWorker):
     """Background worker for object detection using YOLOv8."""
 
     progress = Signal(int, int)  # current, total
@@ -599,22 +547,15 @@ class ObjectDetectionWorker(QThread):
         self.clips = clips
         self.confidence = confidence
         self.detect_all = detect_all  # False = persons only (faster)
-        self._cancelled = False
-        logger.debug("ObjectDetectionWorker created")
-
-    def cancel(self):
-        """Request cancellation of the object detection."""
-        logger.info("ObjectDetectionWorker.cancel() called")
-        self._cancelled = True
 
     def run(self):
-        logger.info("ObjectDetectionWorker.run() STARTING")
+        self._log_start()
         from core.analysis.detection import detect_objects, count_people
 
         total = len(self.clips)
         for i, clip in enumerate(self.clips):
             if self._cancelled:
-                logger.info("ObjectDetectionWorker cancelled")
+                self._log_cancelled()
                 break
             try:
                 if clip.thumbnail_path and clip.thumbnail_path.exists():
@@ -632,19 +573,18 @@ class ObjectDetectionWorker(QThread):
                         )
                     self.objects_ready.emit(clip.id, detections, person_count)
             except Exception as e:
-                logger.warning(f"Object detection failed for {clip.id}: {e}")
+                self._log_error(str(e), clip.id)
             self.progress.emit(i + 1, total)
-        logger.info("ObjectDetectionWorker.run() emitting detection_completed signal")
         self.detection_completed.emit()
-        logger.info("ObjectDetectionWorker.run() COMPLETED")
+        self._log_complete()
 
 
-class DescriptionWorker(QThread):
+class DescriptionWorker(CancellableWorker):
     """Background worker for generating video descriptions."""
 
     progress = Signal(int, int)  # current, total
     description_ready = Signal(str, str, str)  # clip_id, description, model_name
-    error = Signal(str, str)  # clip_id, error_message
+    error = Signal(str, str)  # clip_id, error_message (shadows base class error)
     description_completed = Signal()  # (renamed from 'finished' to avoid shadowing QThread.finished)
 
     def __init__(
@@ -659,25 +599,18 @@ class DescriptionWorker(QThread):
         self.tier = tier
         self.prompt = prompt
         self.sources = sources or {}  # source_id -> Source lookup
-        self._cancelled = False
         self.error_count = 0
         self.success_count = 0
         self.last_error = None
-        logger.debug("DescriptionWorker created")
-
-    def cancel(self):
-        """Request cancellation of the description generation."""
-        logger.info("DescriptionWorker.cancel() called")
-        self._cancelled = True
 
     def run(self):
-        logger.info("DescriptionWorker.run() STARTING")
+        self._log_start()
         from core.analysis.description import describe_frame
 
         total = len(self.clips)
         for i, clip in enumerate(self.clips):
             if self._cancelled:
-                logger.info("DescriptionWorker cancelled")
+                self._log_cancelled()
                 break
             try:
                 if clip.thumbnail_path and clip.thumbnail_path.exists():
@@ -699,20 +632,20 @@ class DescriptionWorker(QThread):
                         self.description_ready.emit(clip.id, description, model)
                         self.success_count += 1
                     else:
-                        logger.warning(f"Invalid description for {clip.id}: {description}")
+                        self._log_error(description, clip.id)
                         self.error_count += 1
                         self.last_error = description
                         self.error.emit(clip.id, description)
             except Exception as e:
                 error_msg = str(e)
-                logger.warning(f"Description failed for {clip.id}: {error_msg}")
+                self._log_error(error_msg, clip.id)
                 self.error_count += 1
                 self.last_error = error_msg
                 self.error.emit(clip.id, error_msg)
             self.progress.emit(i + 1, total)
         logger.info(f"DescriptionWorker.run() completed: {self.success_count} success, {self.error_count} errors")
         self.description_completed.emit()
-        logger.info("DescriptionWorker.run() COMPLETED")
+        self._log_complete()
 
 
 class YouTubeSearchWorker(QThread):
