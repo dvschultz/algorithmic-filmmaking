@@ -40,6 +40,7 @@ class AnalyzeTab(BaseTab):
     detect_objects_requested = Signal()
     describe_requested = Signal()
     extract_text_requested = Signal()
+    analyze_cinematography_requested = Signal()
     analyze_all_requested = Signal()
     clip_selected = Signal(object)  # Clip
     clip_double_clicked = Signal(object)  # Clip
@@ -154,6 +155,17 @@ class AnalyzeTab(BaseTab):
         self.extract_text_btn.clicked.connect(self._on_extract_text_click)
         controls.addWidget(self.extract_text_btn)
 
+        # Rich Cinematography Analysis button
+        self.cinematography_btn = QPushButton("Rich Analysis")
+        self.cinematography_btn.setToolTip(
+            "Comprehensive film language analysis using AI\n"
+            "Detects shot size, camera angle, movement,\n"
+            "composition, lighting, and emotional intensity"
+        )
+        self.cinematography_btn.setEnabled(False)
+        self.cinematography_btn.clicked.connect(self._on_cinematography_click)
+        controls.addWidget(self.cinematography_btn)
+
         controls.addSpacing(10)
 
         # Analyze All button - runs all operations sequentially
@@ -230,6 +242,10 @@ class AnalyzeTab(BaseTab):
         """Handle Extract Text button click."""
         self.extract_text_requested.emit()
 
+    def _on_cinematography_click(self):
+        """Handle Rich Analysis button click."""
+        self.analyze_cinematography_requested.emit()
+
     def _on_clear_click(self):
         """Handle clear all button click."""
         self.clear_clips()
@@ -285,6 +301,7 @@ class AnalyzeTab(BaseTab):
         self.detect_btn.setEnabled(has_clips)
         self.describe_btn.setEnabled(has_clips)
         self.extract_text_btn.setEnabled(has_clips)
+        self.cinematography_btn.setEnabled(has_clips)
         self.analyze_all_btn.setEnabled(has_clips)
         self.clear_btn.setEnabled(has_clips)
 
@@ -429,13 +446,24 @@ class AnalyzeTab(BaseTab):
         if clip_id in self._clip_ids:
             self.clip_browser.update_clip_extracted_text(clip_id, texts)
 
+    def update_clip_cinematography(self, clip_id: str, cinematography):
+        """Update cinematography analysis for a clip.
+
+        Args:
+            clip_id: ID of the clip to update
+            cinematography: CinematographyAnalysis object
+        """
+        if clip_id in self._clip_ids:
+            self.clip_browser.update_clip_cinematography(clip_id, cinematography)
+
     def set_analyzing(self, is_analyzing: bool, operation: str = ""):
         """Update UI state during analysis operations.
 
         Args:
             is_analyzing: Whether an analysis operation is running
             operation: Which operation is running ("colors", "shots", "transcribe",
-                       "classify", "detect", "describe", "extract_text", "all")
+                       "classify", "detect", "describe", "extract_text",
+                       "cinematography", "all")
         """
         # Disable all buttons during any analysis
         has_clips = len(self._clip_ids) > 0
@@ -446,6 +474,7 @@ class AnalyzeTab(BaseTab):
         self.detect_btn.setEnabled(not is_analyzing and has_clips)
         self.describe_btn.setEnabled(not is_analyzing and has_clips)
         self.extract_text_btn.setEnabled(not is_analyzing and has_clips)
+        self.cinematography_btn.setEnabled(not is_analyzing and has_clips)
         self.analyze_all_btn.setEnabled(not is_analyzing and has_clips)
         self.clear_btn.setEnabled(not is_analyzing and has_clips)
 
@@ -465,6 +494,8 @@ class AnalyzeTab(BaseTab):
                 self.describe_btn.setText("Describing...")
             elif operation == "extract_text":
                 self.extract_text_btn.setText("Extracting...")
+            elif operation == "cinematography":
+                self.cinematography_btn.setText("Analyzing...")
             elif operation == "all":
                 self.analyze_all_btn.setText("Analyzing...")
         else:
@@ -475,6 +506,7 @@ class AnalyzeTab(BaseTab):
             self.detect_btn.setText("Detect Objects")
             self.describe_btn.setText("Describe")
             self.extract_text_btn.setText("Extract Text")
+            self.cinematography_btn.setText("Rich Analysis")
             self.analyze_all_btn.setText("Analyze All")
 
     def get_active_filters(self) -> dict:

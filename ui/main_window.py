@@ -65,6 +65,7 @@ from ui.chat_worker import ChatAgentWorker
 from ui.clip_details_sidebar import ClipDetailsSidebar
 from ui.dialogs import IntentionImportDialog
 from ui.workers.base import CancellableWorker
+from ui.workers.cinematography_worker import CinematographyWorker
 from core.gui_state import GUIState
 from core.intention_workflow import IntentionWorkflowCoordinator, WorkflowState
 
@@ -875,6 +876,7 @@ class MainWindow(QMainWindow):
         self._shot_type_finished_handled = False
         self._transcription_finished_handled = False
         self._text_extraction_finished_handled = False
+        self._cinematography_finished_handled = False
 
         # Generation IDs for workers - used to ignore stale signals from cancelled workers
         # Incremented each time a new worker starts; signals with old generation are ignored
@@ -1332,6 +1334,7 @@ class MainWindow(QMainWindow):
         self.analyze_tab.detect_objects_requested.connect(self._on_detect_objects_from_tab)
         self.analyze_tab.describe_requested.connect(self._on_describe_from_tab)
         self.analyze_tab.extract_text_requested.connect(self._on_extract_text_from_tab)
+        self.analyze_tab.analyze_cinematography_requested.connect(self._on_cinematography_from_tab)
         self.analyze_tab.analyze_all_requested.connect(self._on_analyze_all_from_tab)
         self.analyze_tab.clip_dragged_to_timeline.connect(self._on_clip_dragged_to_timeline)
         self.analyze_tab.selection_changed.connect(self._on_analyze_selection_changed)
@@ -3231,6 +3234,103 @@ class MainWindow(QMainWindow):
 
         count = sum(1 for texts in results.values() if texts)
         self.status_bar.showMessage(f"Text extraction complete - extracted text from {count} clips")
+
+        # Save project if path is set
+        if self.project.path:
+            self.project.save()
+
+        # Update chat panel with project state
+        self._update_chat_project_state()
+
+    def _on_cinematography_from_tab(self):
+        """Handle cinematography analysis request from Analyze tab."""
+        clips = self.analyze_tab.get_clips()
+        if not clips:
+            return
+
+        # Check if worker already running
+        if hasattr(self, 'cinematography_worker') and self.cinematography_worker and self.cinematography_worker.isRunning():
+            return
+
+        sources_by_id = {s.id: s for s in self.sources}
+
+        # Reset guard
+        self._cinematography_finished_handled = False
+
+        # Update UI state
+        self.analyze_tab.set_analyzing(True, "cinematography")
+
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 100)
+        self.status_bar.showMessage(f"Analyzing cinematography for {len(clips)} clips...")
+
+        # Determine parameters from settings
+        mode = self.settings.cinematography_input_mode
+        model = self.settings.cinematography_model
+        parallelism = self.settings.cinematography_batch_parallelism
+
+        logger.info(
+            f"Creating CinematographyWorker for {len(clips)} clips "
+            f"(mode={mode}, model={model}, parallelism={parallelism})"
+        )
+        self.cinematography_worker = CinematographyWorker(
+            clips=clips,
+            sources_by_id=sources_by_id,
+            mode=mode,
+            model=model,
+            parallelism=parallelism,
+            skip_existing=True,
+        )
+        self.cinematography_worker.progress.connect(self._on_cinematography_progress)
+        self.cinematography_worker.clip_completed.connect(self._on_cinematography_clip_ready)
+        self.cinematography_worker.finished.connect(self._on_cinematography_finished)
+        self.cinematography_worker.error.connect(self._on_cinematography_error)
+        # Clean up thread safely after it finishes
+        self.cinematography_worker.finished.connect(self.cinematography_worker.deleteLater)
+        self.cinematography_worker.finished.connect(
+            lambda: setattr(self, 'cinematography_worker', None)
+        )
+        logger.info("Starting CinematographyWorker...")
+        self.cinematography_worker.start()
+
+    @Slot(int, int, str)
+    def _on_cinematography_progress(self, current: int, total: int, clip_id: str):
+        """Handle cinematography analysis progress update."""
+        self.progress_bar.setValue(int((current / total) * 100))
+
+    @Slot(str, object)
+    def _on_cinematography_clip_ready(self, clip_id: str, cinematography):
+        """Handle cinematography analyzed for single clip."""
+        clip = self.clips_by_id.get(clip_id)
+        if clip:
+            clip.cinematography = cinematography
+            # Also update shot_type for compatibility with existing filtering
+            clip.shot_type = cinematography.get_simple_shot_type()
+            self.analyze_tab.update_clip_cinematography(clip_id, cinematography)
+            self.analyze_tab.update_clip_shot_type(clip_id, clip.shot_type)
+            self._mark_dirty()
+
+    @Slot(str)
+    def _on_cinematography_error(self, error_msg: str):
+        """Handle cinematography analysis error."""
+        logger.warning(f"Cinematography analysis error: {error_msg}")
+
+    @Slot(dict)
+    def _on_cinematography_finished(self, results: dict):
+        """Handle cinematography analysis completion."""
+        logger.info("=== CINEMATOGRAPHY ANALYSIS FINISHED ===")
+
+        # Guard against duplicate calls
+        if self._cinematography_finished_handled:
+            logger.warning("_on_cinematography_finished already handled, ignoring duplicate call")
+            return
+        self._cinematography_finished_handled = True
+
+        self.progress_bar.setVisible(False)
+        self.analyze_tab.set_analyzing(False)
+
+        count = len(results)
+        self.status_bar.showMessage(f"Cinematography analysis complete - {count} clips analyzed")
 
         # Save project if path is set
         if self.project.path:

@@ -7,6 +7,7 @@ import uuid
 
 if TYPE_CHECKING:
     from core.transcription import TranscriptSegment
+    from models.cinematography import CinematographyAnalysis
 
 
 @dataclass
@@ -179,6 +180,8 @@ class Clip:
     description_frames: Optional[int] = None  # 1 for single frame, N for temporal
     # OCR extracted text
     extracted_texts: Optional[list[ExtractedText]] = None  # Text extracted from frames
+    # Rich cinematography analysis
+    cinematography: Optional["CinematographyAnalysis"] = None  # Film language metadata
 
     @property
     def duration_frames(self) -> int:
@@ -289,12 +292,16 @@ class Clip:
         # OCR extracted text
         if self.extracted_texts:
             data["extracted_texts"] = [et.to_dict() for et in self.extracted_texts]
+        # Rich cinematography analysis
+        if self.cinematography:
+            data["cinematography"] = self.cinematography.to_dict()
         return data
 
     @classmethod
     def from_dict(cls, data: dict) -> "Clip":
         """Deserialize from dictionary."""
         from core.transcription import TranscriptSegment
+        from models.cinematography import CinematographyAnalysis
 
         # Parse colors back to tuples
         colors = None
@@ -320,6 +327,11 @@ class Clip:
                 for et in data["extracted_texts"]
             ]
 
+        # Parse cinematography analysis
+        cinematography = None
+        if "cinematography" in data:
+            cinematography = CinematographyAnalysis.from_dict(data["cinematography"])
+
         return cls(
             id=data.get("id", str(uuid.uuid4())),
             source_id=data.get("source_id", ""),
@@ -342,4 +354,6 @@ class Clip:
             description_frames=data.get("description_frames"),
             # OCR extracted text
             extracted_texts=extracted_texts,
+            # Rich cinematography analysis
+            cinematography=cinematography,
         )

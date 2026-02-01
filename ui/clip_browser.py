@@ -27,6 +27,7 @@ from typing import Optional
 from ui.widgets.range_slider import RangeSlider
 
 from models.clip import Clip, Source
+from models.cinematography import CinematographyAnalysis
 from core.analysis.color import get_primary_hue, classify_color_palette, get_palette_display_name, COLOR_PALETTES
 from core.analysis.shots import get_display_name, SHOT_TYPES
 from ui.theme import theme, UISizes
@@ -89,7 +90,7 @@ class ClipThumbnail(QFrame):
 
         self.setFrameStyle(QFrame.Panel | QFrame.Raised)
         self.setLineWidth(2)
-        self.setFixedSize(UISizes.GRID_CARD_MAX_WIDTH, 210)  # 240px wide, proportionally scaled
+        self.setFixedSize(UISizes.GRID_CARD_MAX_WIDTH, 230)  # 240px wide, includes cinematography badges
         self.setCursor(Qt.PointingHandCursor)
         self.setFocusPolicy(Qt.StrongFocus)
         clip_name = clip.name if clip.name else f"Clip {clip.id[:8]}"
@@ -172,6 +173,22 @@ class ClipThumbnail(QFrame):
         info_layout.addWidget(self.shot_type_label)
 
         layout.addLayout(info_layout)
+
+        # Cinematography badges row (shown when rich analysis is available)
+        self.cinematography_container = QWidget()
+        self.cinematography_container.setVisible(False)
+        cinematography_layout = QHBoxLayout(self.cinematography_container)
+        cinematography_layout.setContentsMargins(0, 0, 0, 0)
+        cinematography_layout.setSpacing(3)
+
+        # Create badge labels (initially hidden)
+        self._cinematography_badges: list[QLabel] = []
+
+        # Show badges if clip has cinematography data
+        if clip.cinematography:
+            self._update_cinematography_badges(clip.cinematography)
+
+        layout.addWidget(self.cinematography_container)
 
         self._update_style()
 
@@ -335,6 +352,50 @@ class ClipThumbnail(QFrame):
     def set_extracted_text(self, texts: list | None):
         """Set the extracted text for this clip."""
         self.clip.extracted_texts = texts
+
+    def set_cinematography(self, cinematography: CinematographyAnalysis | None):
+        """Set the cinematography analysis for this clip."""
+        self.clip.cinematography = cinematography
+        self._update_cinematography_badges(cinematography)
+
+    def _update_cinematography_badges(self, cinematography: CinematographyAnalysis | None):
+        """Update the cinematography badge display."""
+        layout = self.cinematography_container.layout()
+
+        # Clear all existing items from the layout (widgets AND stretches)
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self._cinematography_badges.clear()
+
+        if not cinematography:
+            self.cinematography_container.setVisible(False)
+            return
+
+        # Get display badges from cinematography
+        badges = cinematography.get_display_badges()
+
+        if not badges:
+            self.cinematography_container.setVisible(False)
+            return
+
+        # Create badge labels (max 4 badges to fit in width)
+        badge_style = (
+            f"font-size: 9px; color: {theme().text_muted}; "
+            f"background-color: {theme().card_border}; "
+            "border-radius: 2px; padding: 1px 3px;"
+        )
+
+        for text in badges[:4]:
+            badge = QLabel(text)
+            badge.setStyleSheet(badge_style)
+            layout.addWidget(badge)
+            self._cinematography_badges.append(badge)
+
+        layout.addStretch()
+        self.cinematography_container.setVisible(True)
 
     def _update_transcript_overlay(self):
         """Update the transcript overlay text."""
@@ -708,6 +769,12 @@ class ClipBrowser(QWidget):
         thumb = self._thumbnail_by_id.get(clip_id)
         if thumb:
             thumb.set_extracted_text(texts)
+
+    def update_clip_cinematography(self, clip_id: str, cinematography):
+        """Update the cinematography for a specific clip thumbnail (O(1) lookup)."""
+        thumb = self._thumbnail_by_id.get(clip_id)
+        if thumb:
+            thumb.set_cinematography(cinematography)
 
     def update_clip_thumbnail(self, clip_id: str, thumb_path: Path):
         """Update the thumbnail image for a specific clip (O(1) lookup)."""

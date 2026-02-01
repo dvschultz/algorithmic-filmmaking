@@ -418,6 +418,11 @@ class Settings:
     shot_classifier_tier: str = "cpu"  # cpu, cloud (cloud uses Replicate VideoMAE)
     shot_classifier_replicate_model: str = "dvschultz/shot-type-classifier"  # VideoMAE model
 
+    # Rich Cinematography Analysis Settings
+    cinematography_input_mode: str = "frame"  # "frame" = single keyframe, "video" = video clip (Gemini only)
+    cinematography_model: str = "gemini-2.5-flash"  # VLM model for rich analysis
+    cinematography_batch_parallelism: int = 2  # Number of concurrent VLM requests (1-5)
+
     def get_quality_preset(self) -> dict:
         """Get FFmpeg parameters for current quality setting."""
         return QUALITY_PRESETS.get(self.export_quality, QUALITY_PRESETS["medium"])
@@ -681,6 +686,15 @@ def _load_from_json(config_path: Path, settings: Settings) -> Settings:
         if val := shot_classifier.get("replicate_model"):
             settings.shot_classifier_replicate_model = val
 
+    # Cinematography section
+    if cinematography := data.get("cinematography"):
+        if val := cinematography.get("input_mode"):
+            settings.cinematography_input_mode = val
+        if val := cinematography.get("model"):
+            settings.cinematography_model = val
+        if "batch_parallelism" in cinematography:
+            settings.cinematography_batch_parallelism = int(cinematography["batch_parallelism"])
+
     return settings
 
 
@@ -757,6 +771,11 @@ def _settings_to_json(settings: Settings) -> dict:
             "tier": settings.shot_classifier_tier,
             "replicate_model": settings.shot_classifier_replicate_model,
             # Note: API key is NOT stored here - it goes to keyring
+        },
+        "cinematography": {
+            "input_mode": settings.cinematography_input_mode,
+            "model": settings.cinematography_model,
+            "batch_parallelism": settings.cinematography_batch_parallelism,
         },
     }
 
