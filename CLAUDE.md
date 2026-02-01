@@ -120,13 +120,128 @@ python main.py
 python -m cli.main --help
 ```
 
-## Tab Workflow
+## Application Flows
 
-The application uses a tab-based workflow where each tab represents a stage. **The expected user flow is:**
+The application supports multiple workflows. Users rarely follow a strict linear path—they iterate between tabs as creative needs evolve.
 
+### Primary User Flows
+
+**Linear Flow (First-time / Simple projects):**
 ```
 Collect → Cut → Analyze → Sequence → Render
 ```
+
+**Iterative Flow (Most common in practice):**
+```
+Sequence → Collect → Cut → Analyze → Sequence → Render
+         ↑__________________________|
+```
+Users often start in Sequence with existing clips, realize they need more material, collect new sources, process them, and return to sequencing.
+
+**Analysis-First Flow (Research/archival projects):**
+```
+Collect → Cut → Analyze → (export metadata)
+```
+Some users only need clip analysis and metadata export without creating a final sequence.
+
+**Quick Assembly Flow (Rough cuts):**
+```
+Collect → Cut → Sequence → Render
+```
+Skip analysis entirely for fast rough cuts where metadata isn't needed.
+
+### Tab Navigation Patterns
+
+| From Tab | Common Next Steps |
+|----------|-------------------|
+| **Collect** | Cut (process new sources), Sequence (if sources already have clips) |
+| **Cut** | Analyze (enrich clips), Sequence (quick assembly), Collect (need more sources) |
+| **Analyze** | Sequence (use enriched clips), Cut (re-detect with different settings) |
+| **Sequence** | Render (finalize), Collect (need more material), Analyze (filter by metadata) |
+| **Render** | Sequence (adjust edit), done |
+
+### Data Transformation Flow
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        PROJECT STATE                            │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Source (video file)                                            │
+│      │                                                          │
+│      ├── file_path, fps, duration                               │
+│      └── analyzed: bool                                         │
+│          │                                                      │
+│          │ scene detection (Cut tab)                            │
+│          ▼                                                      │
+│  Clip[] (detected scenes)                                       │
+│      │                                                          │
+│      ├── start_frame, end_frame, source_id                      │
+│      ├── thumbnail_path                                         │
+│      │                                                          │
+│      │ analysis operations (Analyze tab) - all optional         │
+│      │    ├── Describe → description: str                       │
+│      │    ├── Classify → shot_type: str                         │
+│      │    ├── Colors → dominant_colors: list                    │
+│      │    ├── Transcribe → transcript: str                      │
+│      │    └── Objects → detected_objects: list                  │
+│      │                                                          │
+│      │ add to sequence (Sequence tab)                           │
+│      ▼                                                          │
+│  SequenceClip[] (timeline arrangement)                          │
+│      │                                                          │
+│      ├── references Clip via source_clip_id                     │
+│      ├── timeline position, in/out points                       │
+│      │                                                          │
+│      │ render (Render tab)                                      │
+│      ▼                                                          │
+│  Output file (MP4, EDL, individual clips)                       │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Background Processing Flow
+
+Heavy operations run in QThread workers to keep the UI responsive:
+
+```
+User Action → Worker Started → Progress Signals → Completion → UI Update
+                   │                   │
+                   │              progress(n, total)
+                   │              clip_ready(clip)
+                   │              error(message)
+                   │                   │
+                   └───────────────────┴─→ finished()
+```
+
+**Key worker patterns:**
+- All workers inherit from `CancellableWorker` (ui/workers/base.py)
+- Workers emit signals; main thread updates UI
+- User can cancel long-running operations
+- Errors are caught and emitted as signals, not raised
+
+### Agent Interaction Flow
+
+The chat agent can trigger any user action programmatically:
+
+```
+User Message → LLM Processing → Tool Calls → GUI Updates → Response
+                    │               │              │
+                    │          ToolExecutor   gui_state sync
+                    │               │              │
+                    └───────────────┴──────────────┴─→ visible feedback
+```
+
+**Agent capabilities mirror user capabilities:**
+- Navigate tabs
+- Select clips/sources
+- Trigger analysis operations
+- Modify sequence
+- The agent sees current GUI state via `gui_state.py`
+
+## Tab Workflow
+
+The application uses a tab-based workflow where each tab represents a stage:
 
 ### Data Model Flow
 
