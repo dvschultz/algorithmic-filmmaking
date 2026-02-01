@@ -8,19 +8,18 @@ build:
 
   system_packages:
     - "ffmpeg"
+    - "libavformat-dev"
+    - "libavcodec-dev"
+    - "libavdevice-dev"
+    - "libavutil-dev"
+    - "libavfilter-dev"
+    - "libswscale-dev"
+    - "libswresample-dev"
     - "libsm6"
     - "libxext6"
+    - "pkg-config"
+    - "build-essential"
 
-  python_packages:
-    - "torch==2.1.0"
-    - "torchvision==0.16.0"
-    - "transformers==4.36.0"
-    - "av==11.0.0"
-    - "numpy==1.24.0"
-    - "Pillow==10.0.0"
-
-  run:
-    # Copy model weights into container
-    - "mkdir -p /model"
+  python_requirements: "requirements.txt"
 
 predict: "predict.py:Predictor"
