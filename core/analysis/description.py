@@ -386,11 +386,12 @@ def describe_frame(
 
     elif tier == "cloud":
         model = settings.description_model_cloud
+        input_mode = settings.description_input_mode
 
-        # Check if we should use video input for Gemini
+        # Check if we should use video input (only for Gemini when mode is "video")
         if (
-            is_video_capable_model(model)
-            and settings.use_video_for_gemini
+            input_mode == "video"
+            and is_video_capable_model(model)
             and source_path is not None
             and start_frame is not None
             and end_frame is not None
@@ -413,7 +414,8 @@ def describe_frame(
                 logger.warning(f"Video description failed, falling back to frame: {e}")
                 # Fall through to frame-based description
 
-        # Frame-based description (default or fallback)
+        # Frame-based description (default or when video mode not selected)
+        logger.info(f"Using frame mode for description")
         desc = describe_frame_cloud(image_path, prompt)
         return desc, settings.description_model_cloud
 

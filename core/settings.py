@@ -387,7 +387,7 @@ class Settings:
     description_model_gpu: str = "llava-hf/llava-onevision-qwen2-7b-ov-hf"
     description_model_cloud: str = "gpt-5.2"
     description_temporal_frames: int = 4
-    use_video_for_gemini: bool = True  # Send video clips to Gemini instead of frames
+    description_input_mode: str = "frame"  # "frame" = single frame, "video" = video clip (Gemini only)
 
     # Text Extraction (OCR) Settings
     text_extraction_method: str = "hybrid"  # tesseract, vlm, hybrid
@@ -631,8 +631,11 @@ def _load_from_json(config_path: Path, settings: Settings) -> Settings:
             settings.description_model_cloud = val
         if "temporal_frames" in description:
             settings.description_temporal_frames = int(description["temporal_frames"])
-        if "use_video_for_gemini" in description:
-            settings.use_video_for_gemini = bool(description["use_video_for_gemini"])
+        if val := description.get("input_mode"):
+            settings.description_input_mode = val
+        # Migration: convert old use_video_for_gemini to new input_mode
+        elif "use_video_for_gemini" in description:
+            settings.description_input_mode = "video" if description["use_video_for_gemini"] else "frame"
 
     # Text Extraction section
     if text_extraction := data.get("text_extraction"):
@@ -712,7 +715,7 @@ def _settings_to_json(settings: Settings) -> dict:
             "model_gpu": settings.description_model_gpu,
             "model_cloud": settings.description_model_cloud,
             "temporal_frames": settings.description_temporal_frames,
-            "use_video_for_gemini": settings.use_video_for_gemini,
+            "input_mode": settings.description_input_mode,
         },
         "text_extraction": {
             "method": settings.text_extraction_method,

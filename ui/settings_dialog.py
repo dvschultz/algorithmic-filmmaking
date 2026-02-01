@@ -265,7 +265,7 @@ class SettingsDialog(QDialog):
             description_model_gpu=settings.description_model_gpu,
             description_model_cloud=settings.description_model_cloud,
             description_temporal_frames=settings.description_temporal_frames,
-            use_video_for_gemini=settings.use_video_for_gemini,
+            description_input_mode=settings.description_input_mode,
             text_extraction_method=settings.text_extraction_method,
             text_extraction_vlm_model=settings.text_extraction_vlm_model,
             text_detection_enabled=settings.text_detection_enabled,
@@ -523,14 +523,23 @@ class SettingsDialog(QDialog):
         frames_layout.addStretch()
         vision_layout.addLayout(frames_layout)
 
-        # Video for Gemini checkbox
-        self.use_video_checkbox = QCheckBox("Send video clips to Gemini (instead of frames)")
-        self.use_video_checkbox.setToolTip(
-            "When enabled and Gemini is the cloud model, sends the actual\n"
-            "video clip for richer temporal understanding (motion, audio).\n"
-            "Falls back to single frames for non-Gemini models."
+        # Input mode (frame vs video)
+        input_mode_layout = QHBoxLayout()
+        input_mode_label = QLabel("Input Mode:")
+        input_mode_label.setFixedWidth(UISizes.FORM_LABEL_WIDTH)
+        input_mode_layout.addWidget(input_mode_label)
+        self.input_mode_combo = QComboBox()
+        self.input_mode_combo.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
+        self.input_mode_combo.addItem("Single Frame", "frame")
+        self.input_mode_combo.addItem("Video Clip (Gemini only)", "video")
+        self.input_mode_combo.setToolTip(
+            "Frame: Analyze a single thumbnail frame (faster, cheaper)\n"
+            "Video: Send the full video clip to Gemini for temporal understanding\n"
+            "(motion, audio context). Video mode only works with Gemini models."
         )
-        vision_layout.addWidget(self.use_video_checkbox)
+        input_mode_layout.addWidget(self.input_mode_combo)
+        input_mode_layout.addStretch()
+        vision_layout.addLayout(input_mode_layout)
 
         # Connect tier change to enable/disable appropriate model fields
         self.vision_tier_combo.currentIndexChanged.connect(self._on_vision_tier_changed)
@@ -1238,7 +1247,9 @@ class SettingsDialog(QDialog):
         self._set_combo_text(self.vision_cpu_combo, self.settings.description_model_cpu)
         self._set_combo_text(self.vision_cloud_combo, self.settings.description_model_cloud)
         self.vision_frames_spin.setValue(self.settings.description_temporal_frames)
-        self.use_video_checkbox.setChecked(self.settings.use_video_for_gemini)
+        # Set input mode combo
+        input_mode_idx = 0 if self.settings.description_input_mode == "frame" else 1
+        self.input_mode_combo.setCurrentIndex(input_mode_idx)
 
         # Trigger enable/disable state
         self._on_vision_tier_changed(tier_idx)
@@ -1375,7 +1386,7 @@ class SettingsDialog(QDialog):
         self.settings.description_model_cpu = self.vision_cpu_combo.currentText()
         self.settings.description_model_cloud = self.vision_cloud_combo.currentText()
         self.settings.description_temporal_frames = self.vision_frames_spin.value()
-        self.settings.use_video_for_gemini = self.use_video_checkbox.isChecked()
+        self.settings.description_input_mode = self.input_mode_combo.currentData()
 
         # Text Extraction
         self.settings.text_extraction_method = self.text_method_combo.currentData()
@@ -1548,7 +1559,7 @@ class SettingsDialog(QDialog):
             or self.settings.description_model_cpu != self.original_settings.description_model_cpu
             or self.settings.description_model_cloud != self.original_settings.description_model_cloud
             or self.settings.description_temporal_frames != self.original_settings.description_temporal_frames
-            or self.settings.use_video_for_gemini != self.original_settings.use_video_for_gemini
+            or self.settings.description_input_mode != self.original_settings.description_input_mode
             or self.settings.theme_preference != self.original_settings.theme_preference
             or self.settings.youtube_api_key != self.original_settings.youtube_api_key
             or self.settings.youtube_results_count != self.original_settings.youtube_results_count
