@@ -876,6 +876,11 @@ class MainWindow(QMainWindow):
         self._transcription_finished_handled = False
         self._text_extraction_finished_handled = False
 
+        # Generation IDs for workers - used to ignore stale signals from cancelled workers
+        # Incremented each time a new worker starts; signals with old generation are ignored
+        self._detection_generation: int = 0
+        self._thumbnail_generation: int = 0
+
         # State for "Analyze All" sequential processing
         self._analyze_all_pending: list[str] = []  # Pending steps: "colors", "shots", "transcribe"
         self._analyze_all_clips: list = []  # Clips being analyzed
@@ -5681,8 +5686,26 @@ class MainWindow(QMainWindow):
     def _on_intention_import_cancelled(self):
         """Handle cancellation of the import dialog."""
         logger.info("Intention import cancelled by user")
+
+        # Cancel the workflow coordinator
         if self.intention_workflow and self.intention_workflow.is_running:
             self.intention_workflow.cancel()
+
+        # Also cancel any running workers owned by MainWindow
+        # The coordinator doesn't have references to these workers
+        if hasattr(self, 'detection_worker') and self.detection_worker is not None:
+            if self.detection_worker.isRunning():
+                logger.info("Cancelling detection worker due to workflow cancellation")
+                self.detection_worker.cancel()
+                # Don't wait here - let the worker finish in background
+                # Cleanup will happen in _start_intention_detection if needed
+
+        if hasattr(self, 'thumbnail_worker') and self.thumbnail_worker is not None:
+            if self.thumbnail_worker.isRunning():
+                logger.info("Cancelling thumbnail worker due to workflow cancellation")
+                # ThumbnailWorker may not have cancel() method, but we'll try
+                if hasattr(self.thumbnail_worker, 'cancel'):
+                    self.thumbnail_worker.cancel()
 
     def _connect_intention_workflow_signals(self):
         """Connect all signals from the intention workflow coordinator."""
@@ -5947,6 +5970,91 @@ class MainWindow(QMainWindow):
             self.project.add_source(source)
             self.collect_tab.add_source(source)
 
+    def _cleanup_worker(
+        self,
+        worker,
+        worker_name: str,
+        signal_names: list[str],
+        wait_timeout: int = 2000,
+        allow_terminate: bool = False,
+    ) -> bool:
+        """Clean up a QThread worker safely without blocking the GUI.
+
+        This helper prevents "QThread: Destroyed while thread is still running" crashes
+        by properly cancelling and cleaning up workers before they're replaced.
+
+        Args:
+            worker: The QThread worker to clean up (can be None)
+            worker_name: Name for logging (e.g., "detection", "thumbnail")
+            signal_names: List of signal attribute names to disconnect (e.g., ["progress", "finished"])
+            wait_timeout: Max ms to wait for graceful shutdown (default 2000ms)
+            allow_terminate: If True, terminate() as last resort (DANGEROUS - avoid if possible)
+
+        Returns:
+            True if worker was cleaned up or was None, False if cleanup is still in progress
+        """
+        if worker is None:
+            return True
+
+        if not worker.isRunning():
+            # Worker finished - just clean up references
+            for sig_name in signal_names:
+                try:
+                    sig = getattr(worker, sig_name, None)
+                    if sig:
+                        sig.disconnect()
+                except (RuntimeError, TypeError):
+                    pass  # Already disconnected
+            worker.deleteLater()
+            return True
+
+        # Worker still running - request cancellation
+        logger.warning(f"Previous {worker_name} worker still running, requesting cancellation")
+        if hasattr(worker, 'cancel'):
+            worker.cancel()
+
+        # Brief non-blocking wait - if it doesn't stop quickly, let it finish in background
+        if worker.wait(wait_timeout):
+            logger.info(f"{worker_name} worker stopped gracefully")
+            for sig_name in signal_names:
+                try:
+                    sig = getattr(worker, sig_name, None)
+                    if sig:
+                        sig.disconnect()
+                except (RuntimeError, TypeError):
+                    pass
+            worker.deleteLater()
+            return True
+
+        # Worker didn't stop in time
+        if allow_terminate:
+            # SEVERE WARNING: terminate() is dangerous and can corrupt state
+            logger.critical(
+                f"SEVERE: {worker_name} worker did not stop in {wait_timeout}ms, "
+                f"forcefully terminating. This may cause corruption or resource leaks!"
+            )
+            worker.terminate()
+            worker.wait(500)  # Brief wait after terminate
+            for sig_name in signal_names:
+                try:
+                    sig = getattr(worker, sig_name, None)
+                    if sig:
+                        sig.disconnect()
+                except (RuntimeError, TypeError):
+                    pass
+            worker.deleteLater()
+            return True
+        else:
+            # Don't terminate - let worker finish in background
+            # Use generation ID pattern to ignore its signals
+            logger.warning(
+                f"{worker_name} worker still running after {wait_timeout}ms, "
+                f"letting it finish in background (signals will be ignored via generation ID)"
+            )
+            # Don't disconnect signals - generation ID will handle stale signals
+            # Don't deleteLater - let the finished signal handle cleanup
+            return True  # Proceed anyway - generation ID protects against stale signals
+
     def _start_intention_detection(self):
         """Start scene detection for the intention workflow."""
         if not self.intention_workflow:
@@ -5957,6 +6065,21 @@ class MainWindow(QMainWindow):
             return
 
         logger.info(f"Starting intention detection for: {source_path}")
+
+        # Increment generation ID - signals from old workers will be ignored
+        self._detection_generation += 1
+        current_gen = self._detection_generation
+
+        # Clean up any existing detection worker (non-blocking, no terminate)
+        if hasattr(self, 'detection_worker') and self.detection_worker is not None:
+            self._cleanup_worker(
+                self.detection_worker,
+                "detection",
+                ["progress", "detection_completed", "error", "finished"],
+                wait_timeout=2000,
+                allow_terminate=False,  # Don't terminate - let it finish, ignore its signals
+            )
+            self.detection_worker = None
 
         # Use crossfade preset for exquisite_corpus (footage often has soft transitions)
         algorithm, _ = self.intention_workflow.get_algorithm_with_direction()
@@ -5971,26 +6094,51 @@ class MainWindow(QMainWindow):
             )
 
         self.detection_worker = DetectionWorker(source_path, config)
+
+        # Capture generation for lambda closures - used to ignore stale signals
+        gen = current_gen
+
         self.detection_worker.progress.connect(
             self.intention_workflow.on_detection_progress
         )
+        # Use lambda with generation check to ignore signals from old workers
         self.detection_worker.detection_completed.connect(
-            self._on_intention_detection_completed
+            lambda src, clps, g=gen: self._on_intention_detection_completed(src, clps, g)
         )
         self.detection_worker.error.connect(
-            self._on_intention_detection_error
+            lambda err, g=gen: self._on_intention_detection_error(err, g)
         )
-        # Clean up
-        self.detection_worker.finished.connect(self.detection_worker.deleteLater)
+        # Clean up - use generation check to avoid cleaning up wrong worker
         self.detection_worker.finished.connect(
-            lambda: setattr(self, 'detection_worker', None)
+            lambda g=gen: self._on_detection_worker_finished(g)
         )
 
         self._detection_finished_handled = False
         self.detection_worker.start()
 
-    def _on_intention_detection_completed(self, source, clips):
-        """Handle detection completion during intention workflow."""
+    def _on_detection_worker_finished(self, generation: int):
+        """Handle detection worker finished signal with generation check."""
+        if generation != self._detection_generation:
+            logger.debug(f"Ignoring finished signal from old detection worker (gen {generation} != {self._detection_generation})")
+            return
+        # Safe to clean up - this is the current worker
+        if self.detection_worker:
+            self.detection_worker.deleteLater()
+            self.detection_worker = None
+
+    def _on_intention_detection_completed(self, source, clips, generation: int = 0):
+        """Handle detection completion during intention workflow.
+
+        Args:
+            source: The detected Source object
+            clips: List of detected Clip objects
+            generation: Worker generation ID - used to ignore stale signals from old workers
+        """
+        # Check generation ID - ignore signals from old/cancelled workers
+        if generation != 0 and generation != self._detection_generation:
+            logger.info(f"Ignoring detection_completed from old worker (gen {generation} != {self._detection_generation})")
+            return
+
         if self._detection_finished_handled:
             return
         self._detection_finished_handled = True
@@ -6021,8 +6169,18 @@ class MainWindow(QMainWindow):
                 # Start detection for next source
                 self._start_intention_detection()
 
-    def _on_intention_detection_error(self, error: str):
-        """Handle detection error during intention workflow."""
+    def _on_intention_detection_error(self, error: str, generation: int = 0):
+        """Handle detection error during intention workflow.
+
+        Args:
+            error: Error message
+            generation: Worker generation ID - used to ignore stale signals from old workers
+        """
+        # Check generation ID - ignore signals from old/cancelled workers
+        if generation != 0 and generation != self._detection_generation:
+            logger.info(f"Ignoring detection_error from old worker (gen {generation} != {self._detection_generation})")
+            return
+
         if self._detection_finished_handled:
             return
         self._detection_finished_handled = True
@@ -6053,6 +6211,21 @@ class MainWindow(QMainWindow):
                 self.intention_workflow.on_thumbnails_finished()
             return
 
+        # Increment generation ID - signals from old workers will be ignored
+        self._thumbnail_generation += 1
+        current_gen = self._thumbnail_generation
+
+        # Clean up any existing thumbnail worker (non-blocking, no terminate)
+        if hasattr(self, 'thumbnail_worker') and self.thumbnail_worker is not None:
+            self._cleanup_worker(
+                self.thumbnail_worker,
+                "thumbnail",
+                ["progress", "thumbnail_ready", "finished"],
+                wait_timeout=2000,
+                allow_terminate=False,
+            )
+            self.thumbnail_worker = None
+
         # Build sources_by_id dict
         sources_by_id = {s.id: s for s in all_sources}
         default_source = all_sources[0] if all_sources else None
@@ -6063,17 +6236,17 @@ class MainWindow(QMainWindow):
             cache_dir=self.settings.thumbnail_cache_dir,
             sources_by_id=sources_by_id,
         )
+
+        # Capture generation for lambda closures
+        gen = current_gen
+
         self.thumbnail_worker.progress.connect(
             self.intention_workflow.on_thumbnail_progress
         )
         self.thumbnail_worker.thumbnail_ready.connect(self._on_thumbnail_ready)
+        # Use generation check for finished handler
         self.thumbnail_worker.finished.connect(
-            self._on_intention_thumbnails_finished
-        )
-        # Clean up
-        self.thumbnail_worker.finished.connect(self.thumbnail_worker.deleteLater)
-        self.thumbnail_worker.finished.connect(
-            lambda: setattr(self, 'thumbnail_worker', None)
+            lambda g=gen: self._on_intention_thumbnails_finished(g)
         )
 
         self._thumbnails_finished_handled = False
@@ -6102,11 +6275,25 @@ class MainWindow(QMainWindow):
         # Sync all clips to Cut tab
         self.cut_tab.set_clips(self.clips)
 
-    def _on_intention_thumbnails_finished(self):
-        """Handle thumbnail generation completion during intention workflow."""
+    def _on_intention_thumbnails_finished(self, generation: int = 0):
+        """Handle thumbnail generation completion during intention workflow.
+
+        Args:
+            generation: Worker generation ID - used to ignore stale signals from old workers
+        """
+        # Check generation ID - ignore signals from old/cancelled workers
+        if generation != 0 and generation != self._thumbnail_generation:
+            logger.info(f"Ignoring thumbnails_finished from old worker (gen {generation} != {self._thumbnail_generation})")
+            return
+
         if self._thumbnails_finished_handled:
             return
         self._thumbnails_finished_handled = True
+
+        # Clean up worker reference
+        if self.thumbnail_worker:
+            self.thumbnail_worker.deleteLater()
+            self.thumbnail_worker = None
 
         logger.info("Intention thumbnails finished")
 
@@ -6855,7 +7042,12 @@ class MainWindow(QMainWindow):
                         worker.cancel()
                     # Wait up to 3 seconds for graceful shutdown
                     if not worker.wait(3000):
-                        logger.warning(f"{name} worker did not stop gracefully, terminating...")
+                        # SEVERE WARNING: terminate() is dangerous but acceptable during shutdown
+                        # At app exit, we have no choice but to stop threads
+                        logger.critical(
+                            f"SEVERE: {name} worker did not stop gracefully after 3s, "
+                            f"forcefully terminating. This may cause corruption!"
+                        )
                         worker.terminate()
                         worker.wait(1000)
                     logger.info(f"{name} worker stopped")
