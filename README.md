@@ -1,18 +1,20 @@
 # Scene Ripper
 
-Automatic scene detection and algorithmic video remixing for filmmakers and video artists.
+Automatic scene detection, AI-powered analysis, and algorithmic video remixing for filmmakers and video artists.
 
 ## What It Does
 
-Scene Ripper analyzes video files to detect scene boundaries, displays them as browsable thumbnails, and lets you remix clips into new sequences using algorithmic composition.
+Scene Ripper analyzes video files to detect scene boundaries, enriches clips with AI-generated metadata (descriptions, shot types, transcripts), and lets you remix clips into new sequences using algorithmic composition or AI assistance.
 
 **Key Features:**
 - Automatic scene detection with adjustable sensitivity
+- AI-powered clip analysis (descriptions, shot types, transcription, colors)
+- Integrated chat agent for AI-assisted editing
 - Thumbnail grid browser with preview
-- Multi-track timeline for composition
-- Algorithmic remix (shuffle with constraints)
+- Multiple sequencing modes including Exquisite Corpus (poetry generation)
 - Export individual clips or complete sequences
-- YouTube/Vimeo URL import
+- YouTube/Internet Archive import
+- Project save/load with full state persistence
 
 ## Installation
 
@@ -84,12 +86,24 @@ python main.py
 python main.py
 ```
 
-**Basic Workflow:**
-1. Import a video file (drag-drop or Import button)
-2. Adjust sensitivity and click "Detect Scenes"
-3. Browse detected clips in the thumbnail grid
-4. Drag clips to the timeline to build a sequence
-5. Click "Export Sequence" to render the final video
+**Tab-Based Workflow:**
+
+The app uses a 5-tab workflow, though you can skip or revisit tabs as needed:
+
+| Tab | Purpose |
+|-----|---------|
+| **Collect** | Import videos (local files, YouTube, Internet Archive) |
+| **Cut** | Detect scenes and browse clips |
+| **Analyze** | Enrich clips with AI metadata (descriptions, transcripts, etc.) |
+| **Sequence** | Arrange clips using various sequencing modes |
+| **Render** | Export final video or EDL |
+
+**Basic Flow:**
+1. **Collect**: Import a video file (drag-drop or file browser)
+2. **Cut**: Adjust sensitivity and click "Detect Scenes"
+3. **Analyze**: (Optional) Run analysis to add descriptions, transcripts, shot types
+4. **Sequence**: Add clips to timeline, use shuffle or Exquisite Corpus mode
+5. **Render**: Export as MP4 or EDL for external editors
 
 ## Features
 
@@ -99,28 +113,62 @@ python main.py
 - Background processing keeps UI responsive
 - Progress reporting
 
+### AI-Powered Analysis
+
+Enrich clips with metadata using local or cloud AI models:
+
+| Analysis | Description | Models |
+|----------|-------------|--------|
+| **Describe** | Natural language description of clip content | GPT-4o, Claude, Gemini, Moondream (local) |
+| **Classify** | Shot type detection (close-up, medium, wide, etc.) | Vision models |
+| **Transcribe** | Speech-to-text | faster-whisper (local) |
+| **Colors** | Dominant color palette extraction | OpenCV |
+| **Objects** | Object detection | YOLO |
+
+Supports both local (free, private) and cloud (higher quality) processing tiers.
+
+### Chat Agent
+
+Integrated AI assistant that can help with editing tasks:
+- Navigate between tabs
+- Select and filter clips by metadata
+- Run analysis operations
+- Build sequences programmatically
+- Answer questions about your project
+
+Configure your preferred LLM provider (OpenAI, Anthropic, Gemini, Ollama) in Settings.
+
+### Sequencing Modes
+
+Multiple ways to arrange clips:
+
+- **Manual**: Drag-drop clips to timeline
+- **Shuffle**: Randomize with constraints (no same-source consecutive)
+- **Exquisite Corpus**: Generate poetry from extracted text, then sequence clips by matching lines
+
 ### Clip Browser
 - Thumbnail grid of detected scenes
 - Duration labels on each clip
 - Click to preview, double-click for full playback
-- Drag-drop to timeline
-
-### Timeline
-- Multi-track composition
-- Drag to reposition clips
-- Playhead synchronization with preview
-- Remix algorithms (Shuffle - no same-source consecutive)
-- "Generate" button for algorithmic sequencing
+- Filter by metadata (shot type, has transcript, etc.)
 
 ### Export
 - Individual clip export (frame-accurate)
 - Batch export (all or selected)
 - Sequence export (timeline → single video)
-- Opens output folder on completion
+- EDL export for external NLE software
+- Dataset export for ML training
 
-### URL Import
-- YouTube and Vimeo support via yt-dlp
+### Source Import
+- Local video files (drag-drop or browser)
+- YouTube via yt-dlp
+- Internet Archive collections
 - Automatic scene detection after download
+
+### Projects
+- Save/load project state (sources, clips, sequences, settings)
+- JSON-based project format
+- Auto-recovery support
 
 ## Project Structure
 
@@ -146,6 +194,23 @@ algorithmic-filmmaking/
     └── timeline/        # Timeline components
 ```
 
+## Configuration
+
+### API Keys (Optional)
+
+Cloud AI features require API keys. Configure in Settings → API Keys:
+
+| Provider | Features | Get Key |
+|----------|----------|---------|
+| OpenAI | GPT-4o descriptions, chat | [platform.openai.com](https://platform.openai.com) |
+| Anthropic | Claude descriptions, chat | [console.anthropic.com](https://console.anthropic.com) |
+| Google | Gemini descriptions (supports video input), chat | [aistudio.google.com](https://aistudio.google.com) |
+| YouTube | Search and metadata | [console.cloud.google.com](https://console.cloud.google.com) |
+
+Keys are stored securely in your system keyring. Environment variables (e.g., `ANTHROPIC_API_KEY`) take priority.
+
+**Local-only operation**: Scene detection, transcription (Whisper), and local vision (Moondream) work without any API keys.
+
 ## Technology Stack
 
 | Component | Technology |
@@ -155,9 +220,13 @@ algorithmic-filmmaking/
 | Video Processing | FFmpeg |
 | Video Download | yt-dlp |
 | Computer Vision | OpenCV |
+| Transcription | faster-whisper |
+| LLM Integration | LiteLLM (multi-provider) |
+| Local Vision | Moondream 2B |
 
 ## Requirements
 
+**Core:**
 ```
 PySide6>=6.6
 scenedetect[opencv]>=0.6.4
@@ -165,6 +234,15 @@ opencv-python>=4.8
 numpy>=1.24
 yt-dlp>=2024.1
 ```
+
+**AI Features (optional but recommended):**
+```
+litellm              # Multi-provider LLM support
+faster-whisper       # Local transcription
+transformers         # Local vision (Moondream)
+```
+
+See `requirements.txt` for the full list.
 
 ### System Dependencies
 
@@ -204,25 +282,53 @@ sudo pacman -S ffmpeg \
 **Windows:**
 Download FFmpeg from [ffmpeg.org](https://ffmpeg.org/download.html) and add to PATH
 
+## CLI
+
+Command-line interface for batch processing:
+
+```bash
+# Scene detection
+python -m cli.main detect video.mp4 --threshold 3.0
+
+# Transcription
+python -m cli.main transcribe video.mp4
+
+# YouTube search
+python -m cli.main youtube search "query"
+
+# Export project
+python -m cli.main export project.json --format edl
+
+# Full help
+python -m cli.main --help
+```
+
 ## Roadmap
 
 **Complete:**
-- [x] Scene detection
-- [x] Thumbnail browser
-- [x] Video preview
-- [x] Individual clip export
-- [x] URL import (YouTube/Vimeo)
-- [x] Basic timeline
-- [x] Sequence export
+- [x] Scene detection with AdaptiveDetector
+- [x] Thumbnail browser with filtering
+- [x] Video preview player
+- [x] Individual and batch clip export
+- [x] URL import (YouTube, Internet Archive)
+- [x] Multi-track timeline
+- [x] Sequence export (MP4, EDL)
 - [x] Shuffle remix algorithm
 - [x] Linux support (AppImage packaging)
+- [x] AI-powered descriptions (GPT-4o, Claude, Gemini, Moondream)
+- [x] Shot type classification
+- [x] Transcription (faster-whisper)
+- [x] Color analysis
+- [x] Integrated chat agent
+- [x] Exquisite Corpus sequencer
+- [x] CLI for batch processing
+- [x] Project save/load
 
 **In Progress:**
 - [ ] Timeline playback preview
-- [ ] Similarity-based sequencing
-- [ ] Motion-based ordering
+- [ ] Object detection (YOLO)
 
 **Future:**
-- [ ] Clip tagging (mood, motion, color)
 - [ ] FAISS vector similarity search
-- [ ] CLI for batch processing
+- [ ] Similarity-based sequencing
+- [ ] Motion-based ordering
