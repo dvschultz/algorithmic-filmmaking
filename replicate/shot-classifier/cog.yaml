@@ -1,0 +1,26 @@
+# Cog configuration for VideoMAE Shot Type Classifier
+# Documentation: https://github.com/replicate/cog/blob/main/docs/yaml.md
+
+build:
+  gpu: true
+  cuda: "11.8"
+  python_version: "3.10"
+
+  system_packages:
+    - "ffmpeg"
+    - "libsm6"
+    - "libxext6"
+
+  python_packages:
+    - "torch==2.1.0"
+    - "torchvision==0.16.0"
+    - "transformers==4.36.0"
+    - "av==11.0.0"
+    - "numpy==1.24.0"
+    - "Pillow==10.0.0"
+
+  run:
+    # Copy model weights into container
+    - "mkdir -p /model"
+
+predict: "predict.py:Predictor"

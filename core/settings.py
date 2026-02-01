@@ -29,6 +29,7 @@ KEYRING_ANTHROPIC_API_KEY = "anthropic_api_key"
 KEYRING_OPENAI_API_KEY = "openai_api_key"
 KEYRING_GEMINI_API_KEY = "gemini_api_key"
 KEYRING_OPENROUTER_API_KEY = "openrouter_api_key"
+KEYRING_REPLICATE_API_KEY = "replicate_api_key"
 
 # Config schema version
 CONFIG_VERSION = "1.0"
@@ -54,6 +55,7 @@ ENV_ANTHROPIC_API_KEY = "ANTHROPIC_API_KEY"
 ENV_OPENAI_API_KEY = "OPENAI_API_KEY"
 ENV_GEMINI_API_KEY = "GEMINI_API_KEY"
 ENV_OPENROUTER_API_KEY = "OPENROUTER_API_KEY"
+ENV_REPLICATE_API_KEY = "REPLICATE_API_TOKEN"
 
 
 def _get_api_key_from_keyring() -> str:
@@ -192,6 +194,18 @@ def set_openrouter_api_key(api_key: str) -> bool:
     return _set_provider_api_key_in_keyring(KEYRING_OPENROUTER_API_KEY, api_key)
 
 
+def get_replicate_api_key() -> str:
+    """Get Replicate API key with priority: env var > keyring."""
+    if api_key := os.environ.get(ENV_REPLICATE_API_KEY):
+        return api_key
+    return _get_provider_api_key_from_keyring(KEYRING_REPLICATE_API_KEY)
+
+
+def set_replicate_api_key(api_key: str) -> bool:
+    """Store Replicate API key in system keyring."""
+    return _set_provider_api_key_in_keyring(KEYRING_REPLICATE_API_KEY, api_key)
+
+
 def is_api_key_from_env(provider: str) -> bool:
     """Check if a provider's API key is set via environment variable.
 
@@ -206,6 +220,7 @@ def is_api_key_from_env(provider: str) -> bool:
         "openai": ENV_OPENAI_API_KEY,
         "gemini": ENV_GEMINI_API_KEY,
         "openrouter": ENV_OPENROUTER_API_KEY,
+        "replicate": ENV_REPLICATE_API_KEY,
     }
     env_var = env_map.get(provider)
     return bool(env_var and os.environ.get(env_var))
@@ -398,6 +413,10 @@ class Settings:
     # Exquisite Corpus (Poetry Generation) Settings
     exquisite_corpus_model: str = "gpt-4o"  # Model for poem generation
     exquisite_corpus_temperature: float = 0.8  # Creativity level (0.0-1.0)
+
+    # Shot Classification Settings
+    shot_classifier_tier: str = "cpu"  # cpu, cloud (cloud uses Replicate VideoMAE)
+    shot_classifier_replicate_model: str = ""  # username/shot-type-classifier:version
 
     def get_quality_preset(self) -> dict:
         """Get FFmpeg parameters for current quality setting."""
@@ -655,6 +674,13 @@ def _load_from_json(config_path: Path, settings: Settings) -> Settings:
         if "temperature" in exquisite_corpus:
             settings.exquisite_corpus_temperature = float(exquisite_corpus["temperature"])
 
+    # Shot Classifier section
+    if shot_classifier := data.get("shot_classifier"):
+        if val := shot_classifier.get("tier"):
+            settings.shot_classifier_tier = val
+        if val := shot_classifier.get("replicate_model"):
+            settings.shot_classifier_replicate_model = val
+
     return settings
 
 
@@ -726,6 +752,11 @@ def _settings_to_json(settings: Settings) -> dict:
         "exquisite_corpus": {
             "model": settings.exquisite_corpus_model,
             "temperature": settings.exquisite_corpus_temperature,
+        },
+        "shot_classifier": {
+            "tier": settings.shot_classifier_tier,
+            "replicate_model": settings.shot_classifier_replicate_model,
+            # Note: API key is NOT stored here - it goes to keyring
         },
     }
 
