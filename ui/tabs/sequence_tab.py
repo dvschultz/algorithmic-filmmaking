@@ -199,6 +199,20 @@ class SequenceTab(BaseTab):
         self.algorithm_dropdown.currentTextChanged.connect(self._on_algorithm_changed)
         layout.addWidget(self.algorithm_dropdown)
 
+        # Direction dropdown (visible for Duration and Color algorithms)
+        self.direction_label = QLabel("Direction:")
+        self.direction_label.setStyleSheet(f"color: {theme().text_secondary}; border: none; margin-left: 16px;")
+        layout.addWidget(self.direction_label)
+
+        self.direction_dropdown = QComboBox()
+        self.direction_dropdown.setMinimumWidth(140)
+        self.direction_dropdown.currentTextChanged.connect(self._on_direction_changed)
+        layout.addWidget(self.direction_dropdown)
+
+        # Initially hide direction controls
+        self.direction_label.hide()
+        self.direction_dropdown.hide()
+
         layout.addStretch()
 
         self.clear_btn = QPushButton("Clear Sequence")
@@ -293,12 +307,13 @@ class SequenceTab(BaseTab):
         # Generate and apply
         self._apply_algorithm(algorithm, clips)
 
-    def _apply_algorithm(self, algorithm: str, clips: list):
+    def _apply_algorithm(self, algorithm: str, clips: list, direction: str = None):
         """Generate sequence and transition to timeline state.
 
         Args:
             algorithm: Algorithm name (Color, Duration, Shuffle, Sequential)
             clips: List of (Clip, Source) tuples
+            direction: Sort direction (e.g., "short_first", "long_first" for duration)
         """
         if self._apply_in_progress:
             logger.warning("Apply already in progress, ignoring")
@@ -314,6 +329,7 @@ class SequenceTab(BaseTab):
                 algorithm=algo_lower,
                 clips=clips,
                 clip_count=len(clips),
+                direction=direction,
             )
 
             # Clear and populate timeline
@@ -331,10 +347,13 @@ class SequenceTab(BaseTab):
             # Zoom to fit
             self.timeline._on_zoom_fit()
 
-            # Update dropdown to show current algorithm (block signals to avoid recursion)
+            # Update dropdowns to show current algorithm (block signals to avoid recursion)
             self.algorithm_dropdown.blockSignals(True)
             self.algorithm_dropdown.setCurrentText(algorithm.capitalize())
             self.algorithm_dropdown.blockSignals(False)
+
+            # Update direction dropdown
+            self._update_direction_dropdown(algorithm)
 
             self._current_algorithm = algo_lower
 
@@ -424,12 +443,69 @@ class SequenceTab(BaseTab):
             logger.error(f"Error applying Exquisite Corpus sequence: {e}")
             QMessageBox.critical(self, "Error", f"Failed to apply sequence: {e}")
 
+    def _update_direction_dropdown(self, algorithm: str):
+        """Update direction dropdown options based on selected algorithm."""
+        algo_lower = algorithm.lower()
+
+        # Block signals while updating
+        self.direction_dropdown.blockSignals(True)
+        self.direction_dropdown.clear()
+
+        if algo_lower == "duration":
+            self.direction_dropdown.addItems(["Shortest First", "Longest First"])
+            self.direction_label.show()
+            self.direction_dropdown.show()
+        elif algo_lower == "color":
+            self.direction_dropdown.addItems(["Rainbow", "Warm to Cool", "Cool to Warm"])
+            self.direction_label.show()
+            self.direction_dropdown.show()
+        else:
+            self.direction_label.hide()
+            self.direction_dropdown.hide()
+
+        self.direction_dropdown.blockSignals(False)
+
+    def _get_current_direction(self) -> str | None:
+        """Get the current direction based on dropdown selection."""
+        algo = self.algorithm_dropdown.currentText().lower()
+        direction_text = self.direction_dropdown.currentText()
+
+        if algo == "duration":
+            if direction_text == "Longest First":
+                return "long_first"
+            return "short_first"
+        elif algo == "color":
+            if direction_text == "Warm to Cool":
+                return "warm_to_cool"
+            elif direction_text == "Cool to Warm":
+                return "cool_to_warm"
+            return "rainbow"
+        return None
+
+    @Slot(str)
+    def _on_direction_changed(self, direction_text: str):
+        """Handle direction dropdown change - regenerate with new direction."""
+        if self._current_state != self.STATE_TIMELINE:
+            return
+
+        # Regenerate with current algorithm and new direction
+        algorithm = self.algorithm_dropdown.currentText()
+        self._regenerate_sequence(algorithm)
+
     @Slot(str)
     def _on_algorithm_changed(self, algorithm: str):
         """Handle algorithm dropdown change - regenerate in place."""
         if self._current_state != self.STATE_TIMELINE:
             return
 
+        # Update direction dropdown for this algorithm
+        self._update_direction_dropdown(algorithm)
+
+        # Regenerate sequence
+        self._regenerate_sequence(algorithm)
+
+    def _regenerate_sequence(self, algorithm: str):
+        """Regenerate the sequence with current timeline clips."""
         # Use clips currently on timeline
         sequence = self.timeline.get_sequence()
         if not sequence.tracks or not sequence.tracks[0].clips:
@@ -448,7 +524,8 @@ class SequenceTab(BaseTab):
                     break
 
         if clips:
-            self._apply_algorithm(algorithm, clips)
+            direction = self._get_current_direction()
+            self._apply_algorithm(algorithm, clips, direction=direction)
 
     @Slot()
     def _on_clear_clicked(self):
