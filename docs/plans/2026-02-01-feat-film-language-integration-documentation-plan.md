@@ -1298,20 +1298,33 @@ def suggest_pacing_improvements(sequence: Sequence) -> list[str]:
 - Continuity checking needs embedding-based similarity, not pairwise
 - Run in background, show results progressively
 
-### Phase 5: Scene Report Generation (Medium Effort)
+### Phase 5: Scene Report Generation (Medium Effort) ✅ COMPLETED
 
 **Goal:** Generate human-readable film analysis reports.
 
-| Feature | Description | Effort |
-|---------|-------------|--------|
-| Report Generator | Synthesize clip analyses | 3 days |
-| Template System | Customizable report formats | 2 days |
-| Export Formats | Markdown, PDF, HTML | 2 days |
-| Integration | Button in Sequence tab | 1 day |
+| Feature | Description | Effort | Status |
+|---------|-------------|--------|--------|
+| Report Generator | Synthesize clip analyses | 3 days | ✅ Done |
+| Template System | Section-based markdown templates | 2 days | ✅ Done |
+| Export Formats | Markdown and HTML | 2 days | ✅ Done |
+| Agent Tool | `generate_analysis_report` | 1 day | ✅ Done |
+| UI Integration | Button in Sequence tab | 1 day | Deferred (UI work) |
 
-**Files to create:**
-- `core/export/scene_report.py` - Report generation
-- `ui/dialogs/report_dialog.py` - Configuration UI
+**Files created:**
+- `core/scene_report.py` - Report generation with section templates
+
+**Files modified:**
+- `core/__init__.py` - Export report functions
+- `core/chat_tools.py` - Added agent tool for report generation
+
+**Report Sections:**
+- `overview` - Summary stats, pacing classification, shot distribution
+- `cinematography` - Shot sizes, camera angles, movement, lighting
+- `pacing` - Duration statistics table with interpretation
+- `visual_consistency` - Color/lighting consistency scores
+- `continuity` - Advisory notes on potential issues
+- `recommendations` - Improvement suggestions
+- `clip_details` - Per-clip breakdown (optional)
 
 #### Research Insights
 
@@ -1461,8 +1474,9 @@ The agent should be able to execute this complete workflow:
 - [x] Pacing improvement suggestions (advisory)
 - [x] Continuity warnings (advisory mode - jump cuts, shot size jumps)
 - [x] Visual consistency metrics (color, lighting, shot variety)
-- [ ] Scene report generation (deferred to Phase 5)
+- [x] Scene report generation (markdown and HTML)
 - [x] Agent tool: `get_sequence_analysis`
+- [x] Agent tool: `generate_analysis_report`
 - [x] Agent tool: `check_continuity_issues`
 - [x] O(N) pacing analysis (scales to 1000+ clips)
 

@@ -4597,3 +4597,118 @@ def check_continuity_issues() -> dict:
             "success": False,
             "error": f"Continuity check failed: {str(e)}"
         }
+
+
+# =============================================================================
+# Scene Report Tools
+# =============================================================================
+
+@tools.register(
+    description=(
+        "Generate a film analysis report for the current sequence or selected clips. "
+        "Returns a markdown-formatted report with cinematography analysis, pacing metrics, "
+        "continuity notes, and advisory suggestions. "
+        "Sections: overview, cinematography, pacing, visual_consistency, continuity, recommendations, clip_details."
+    ),
+    requires_project=True,
+    modifies_gui_state=False
+)
+def generate_analysis_report(
+    sections: Optional[list[str]] = None,
+    include_clip_details: bool = False,
+    output_format: str = "markdown",
+    clip_ids: Optional[list[str]] = None,
+) -> dict:
+    """Generate a film analysis report.
+
+    Args:
+        sections: Which sections to include (default: overview, cinematography, pacing, recommendations)
+        include_clip_details: Whether to include per-clip breakdown
+        output_format: 'markdown' (default) or 'html'
+        clip_ids: Optional specific clips to report on (default: entire sequence)
+
+    Returns:
+        Dict with report content and metadata
+    """
+    from core.scene_report import (
+        generate_sequence_report,
+        generate_clips_report,
+        report_to_html,
+        REPORT_SECTIONS,
+        DEFAULT_SECTIONS,
+    )
+
+    # Validate sections
+    valid_sections = list(REPORT_SECTIONS.keys())
+    if sections:
+        invalid = [s for s in sections if s not in valid_sections]
+        if invalid:
+            return {
+                "success": False,
+                "error": f"Invalid sections: {invalid}. Valid sections: {valid_sections}"
+            }
+    else:
+        sections = DEFAULT_SECTIONS
+
+    # Validate output format
+    if output_format not in ("markdown", "html"):
+        return {
+            "success": False,
+            "error": f"Invalid output_format: {output_format}. Use 'markdown' or 'html'"
+        }
+
+    try:
+        if clip_ids:
+            # Report on specific clips
+            clips = [project.clips_by_id.get(cid) for cid in clip_ids]
+            clips = [c for c in clips if c is not None]
+
+            if not clips:
+                return {
+                    "success": False,
+                    "error": "No valid clips found for the provided IDs"
+                }
+
+            report = generate_clips_report(clips, project, title="Selected Clips Analysis")
+        else:
+            # Report on entire sequence
+            if not project.sequence:
+                return {
+                    "success": False,
+                    "error": "No sequence exists. Create a sequence first."
+                }
+
+            if not project.sequence.get_all_clips():
+                return {
+                    "success": False,
+                    "error": "Sequence is empty. Add clips to the sequence first."
+                }
+
+            report = generate_sequence_report(
+                project.sequence,
+                project,
+                sections=sections,
+                include_clip_details=include_clip_details,
+            )
+
+        # Convert to HTML if requested
+        if output_format == "html":
+            report = report_to_html(report)
+
+        # Calculate word count (for markdown)
+        word_count = len(report.split()) if output_format == "markdown" else 0
+
+        return {
+            "success": True,
+            "format": output_format,
+            "sections_included": sections,
+            "word_count": word_count,
+            "report": report,
+            "message": f"Generated {output_format} report with {len(sections)} sections"
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Report generation failed: {str(e)}"
+        }
