@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QProgressBar,
     QWidget,
+    QComboBox,
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QDragEnterEvent, QDropEvent
@@ -165,7 +166,7 @@ class IntentionImportDialog(QDialog):
         cancelled: Emitted when Cancel clicked during import or progress
     """
 
-    import_requested = Signal(list, list, str)  # local_paths, urls, algorithm
+    import_requested = Signal(list, list, str, str)  # local_paths, urls, algorithm, direction
     cancelled = Signal()
 
     # View indices
@@ -224,6 +225,34 @@ class IntentionImportDialog(QDialog):
         header.setFont(header_font)
         layout.addWidget(header)
         self._import_header = header
+
+        # Direction selector (for Duration and Color algorithms)
+        self._direction_container = QWidget()
+        direction_layout = QHBoxLayout(self._direction_container)
+        direction_layout.setContentsMargins(0, 0, 0, 8)
+
+        direction_label = QLabel("Sort order:")
+        direction_label.setStyleSheet(f"color: {theme().text_secondary};")
+        direction_layout.addWidget(direction_label)
+        self._direction_label = direction_label
+
+        self.direction_dropdown = QComboBox()
+        self.direction_dropdown.setMinimumWidth(160)
+
+        # Populate based on algorithm
+        if self._algorithm.lower() == "duration":
+            self.direction_dropdown.addItems(["Shortest First", "Longest First"])
+        elif self._algorithm.lower() == "color":
+            self.direction_dropdown.addItems(["Rainbow", "Warm to Cool", "Cool to Warm"])
+
+        direction_layout.addWidget(self.direction_dropdown)
+        direction_layout.addStretch()
+
+        layout.addWidget(self._direction_container)
+
+        # Hide if not applicable
+        if self._algorithm.lower() not in ("duration", "color"):
+            self._direction_container.hide()
 
         # Drop zone
         self.drop_zone = DropZone()
@@ -436,6 +465,22 @@ class IntentionImportDialog(QDialog):
         has_items = bool(self._local_paths or self._urls)
         self.start_btn.setEnabled(has_items)
 
+    def _get_direction(self) -> str | None:
+        """Get the selected direction based on algorithm and dropdown."""
+        if self._algorithm.lower() == "duration":
+            text = self.direction_dropdown.currentText()
+            if text == "Longest First":
+                return "long_first"
+            return "short_first"
+        elif self._algorithm.lower() == "color":
+            text = self.direction_dropdown.currentText()
+            if text == "Warm to Cool":
+                return "warm_to_cool"
+            elif text == "Cool to Warm":
+                return "cool_to_warm"
+            return "rainbow"
+        return None
+
     def _on_start(self):
         """Handle Start Import click."""
         if not self._local_paths and not self._urls:
@@ -448,8 +493,11 @@ class IntentionImportDialog(QDialog):
         for step in WorkflowStep:
             self._step_progress[step] = (False, 0.0)
 
+        # Get direction
+        direction = self._get_direction()
+
         # Emit signal to start workflow
-        self.import_requested.emit(self._local_paths.copy(), self._urls.copy(), self._algorithm)
+        self.import_requested.emit(self._local_paths.copy(), self._urls.copy(), self._algorithm, direction)
 
     def _on_cancel(self):
         """Handle Cancel click."""

@@ -5755,16 +5755,17 @@ class MainWindow(QMainWindow):
         )
         self.intention_import_dialog.show()
 
-    def _on_intention_import_confirmed(self, local_files: list, urls: list, algorithm: str):
+    def _on_intention_import_confirmed(self, local_files: list, urls: list, algorithm: str, direction: str = None):
         """Handle confirmation of import in the intention workflow dialog.
 
         Starts the workflow coordinator to process the sources.
         """
-        logger.info(f"Intention import confirmed: {len(local_files)} files, {len(urls)} URLs")
+        logger.info(f"Intention import confirmed: {len(local_files)} files, {len(urls)} URLs, direction={direction}")
 
         # Use stored algorithm (from card click) if dialog didn't provide one
         algorithm_to_use = algorithm or self._intention_pending_algorithm
-        direction = getattr(self, '_intention_pending_direction', None)
+        # Use direction from dialog if provided, otherwise fallback to stored
+        direction_to_use = direction or getattr(self, '_intention_pending_direction', None)
 
         # Validate we have something to import
         if not local_files and not urls:
@@ -5785,7 +5786,7 @@ class MainWindow(QMainWindow):
             algorithm=algorithm_to_use,
             local_files=[Path(f) for f in local_files],
             urls=urls,
-            direction=direction,
+            direction=direction_to_use,
         )
 
         if success:
