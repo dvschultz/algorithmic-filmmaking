@@ -1078,6 +1078,11 @@ class MainWindow(QMainWindow):
 
         Called when clearing project state to ensure no stale workers
         continue processing data from the old project.
+
+        MAINTAINABILITY NOTE: When adding new QThread workers to MainWindow,
+        you MUST add them to the workers_to_stop list below. Otherwise the
+        worker may continue running after New Project, causing state leakage
+        or "QThread: Destroyed while thread is still running" crashes.
         """
         # Stop chat worker if running
         if self._chat_worker and self._chat_worker.isRunning():
@@ -1791,7 +1796,7 @@ class MainWindow(QMainWindow):
         # Map tool names to their worker attributes
         worker_map = {
             "detect_scenes_live": "detection_worker",
-            "analyze_colors_live": "color_analysis_worker",
+            "analyze_colors_live": "color_worker",
             "analyze_shots_live": "shot_type_worker",
             "transcribe_live": "transcription_worker",
             "download_video": "download_worker",
@@ -6978,8 +6983,18 @@ class MainWindow(QMainWindow):
         self._regenerate_missing_thumbnails()
 
     def _clear_project_state(self):
-        """Clear current project state."""
-        # Stop any running workers first
+        """Clear current project state.
+
+        MAINTAINABILITY NOTE: When adding new workers, state flags, or clip lists
+        to MainWindow, you MUST also update this method and _stop_all_workers()
+        to ensure proper cleanup on New Project. Failure to do so will cause
+        state leakage between projects.
+        """
+        # Stop playback and timers first
+        self._stop_playback()
+        self._auto_save_timer.stop()
+
+        # Stop any running workers
         self._stop_all_workers()
 
         # Clear project data
