@@ -542,6 +542,12 @@ class YouTubeSearchPanel(QWidget):
         self._selected_videos = set()
         self._update_status()
 
+    def clear(self):
+        """Clear all state for new project - results, search input, and selections."""
+        self._clear_results()
+        self.search_input.clear()
+        self.status_label.setText("")
+
     @Slot(str, bool)
     def _on_selection_changed(self, video_id: str, selected: bool):
         """Handle thumbnail selection change."""

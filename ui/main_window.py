@@ -6961,6 +6961,18 @@ class MainWindow(QMainWindow):
         self.analyze_tab.clear_clips()
         self.sequence_tab.clear()  # Clear all state including _clips and _available_clips
 
+        # Clear progress bar
+        self.progress_bar.setValue(0)
+        self.progress_bar.setVisible(False)
+
+        # Clear YouTube search panel (results and search input)
+        self.collect_tab.youtube_search_panel.clear()
+
+        # Clear chat panel and history
+        self.chat_panel.clear_messages()
+        self._chat_history.clear()
+        self._last_user_message = ""
+
     def _refresh_ui_from_project(self):
         """Refresh all UI components after project load.
 
