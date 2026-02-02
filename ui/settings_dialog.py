@@ -47,6 +47,7 @@ from core.settings import (
     ENV_OPENAI_API_KEY,
     ENV_GEMINI_API_KEY,
     ENV_OPENROUTER_API_KEY,
+    ENV_REPLICATE_API_KEY,
     get_anthropic_api_key,
     set_anthropic_api_key,
     get_openai_api_key,
@@ -55,6 +56,8 @@ from core.settings import (
     set_gemini_api_key,
     get_openrouter_api_key,
     set_openrouter_api_key,
+    get_replicate_api_key,
+    set_replicate_api_key,
     is_api_key_from_env,
 )
 from core.llm_client import get_provider_models
@@ -271,6 +274,8 @@ class SettingsDialog(QDialog):
             text_detection_confidence=settings.text_detection_confidence,
             exquisite_corpus_model=settings.exquisite_corpus_model,
             exquisite_corpus_temperature=settings.exquisite_corpus_temperature,
+            shot_classifier_tier=settings.shot_classifier_tier,
+            shot_classifier_replicate_model=settings.shot_classifier_replicate_model,
         )
 
         self.setWindowTitle("Settings")
@@ -635,6 +640,47 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(corpus_group)
 
+        # Shot Classification group
+        shot_group = QGroupBox("Shot Type Classification")
+        shot_layout = QVBoxLayout(shot_group)
+
+        # Tier selection
+        shot_tier_layout = QHBoxLayout()
+        shot_tier_label = QLabel("Processing Tier:")
+        shot_tier_label.setFixedWidth(UISizes.FORM_LABEL_WIDTH)
+        shot_tier_layout.addWidget(shot_tier_label)
+        self.shot_tier_combo = QComboBox()
+        self.shot_tier_combo.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
+        self.shot_tier_combo.addItem("CPU (Local) - CLIP zero-shot", "cpu")
+        self.shot_tier_combo.addItem("Cloud (Replicate) - VideoMAE", "cloud")
+        self.shot_tier_combo.setToolTip(
+            "CPU: Free local CLIP-based classification from thumbnails.\n"
+            "Cloud: VideoMAE model on Replicate for video-based classification.\n"
+            "Cloud tier requires Replicate API key and uses video segments."
+        )
+        shot_tier_layout.addWidget(self.shot_tier_combo)
+        shot_tier_layout.addStretch()
+        shot_layout.addLayout(shot_tier_layout)
+
+        # Replicate model (for cloud tier)
+        replicate_model_layout = QHBoxLayout()
+        self.replicate_model_label = QLabel("Replicate Model:")
+        self.replicate_model_label.setFixedWidth(UISizes.FORM_LABEL_WIDTH)
+        replicate_model_layout.addWidget(self.replicate_model_label)
+        self.replicate_model_edit = QLineEdit()
+        self.replicate_model_edit.setPlaceholderText("dvschultz/shot-type-classifier")
+        self.replicate_model_edit.setToolTip(
+            "Replicate model identifier for VideoMAE shot classification.\n"
+            "Format: username/model-name"
+        )
+        replicate_model_layout.addWidget(self.replicate_model_edit)
+        shot_layout.addLayout(replicate_model_layout)
+
+        # Connect tier change to enable/disable Replicate model field
+        self.shot_tier_combo.currentIndexChanged.connect(self._on_shot_tier_changed)
+
+        layout.addWidget(shot_group)
+
         # VLM API key warning label (shared for Vision, Text Extraction, and Exquisite Corpus)
         self.vlm_warning_label = QLabel("")
         self.vlm_warning_label.setStyleSheet(f"color: {theme().accent_orange};")
@@ -848,6 +894,26 @@ class SettingsDialog(QDialog):
         openrouter_layout.addWidget(self.openrouter_show_btn)
 
         llm_layout.addLayout(openrouter_layout)
+
+        # Replicate API Key
+        replicate_layout = QHBoxLayout()
+        self.replicate_api_key_lbl = QLabel("Replicate:")
+        self.replicate_api_key_lbl.setFixedWidth(100)
+        replicate_layout.addWidget(self.replicate_api_key_lbl)
+
+        self.replicate_api_key_edit = QLineEdit()
+        self.replicate_api_key_edit.setEchoMode(QLineEdit.Password)
+        self.replicate_api_key_edit.setPlaceholderText("r8_...")
+        replicate_layout.addWidget(self.replicate_api_key_edit)
+
+        self.replicate_show_btn = QPushButton("Show")
+        self.replicate_show_btn.setCheckable(True)
+        self.replicate_show_btn.toggled.connect(
+            lambda show: self._toggle_llm_key_visibility(self.replicate_api_key_edit, self.replicate_show_btn, show)
+        )
+        replicate_layout.addWidget(self.replicate_show_btn)
+
+        llm_layout.addLayout(replicate_layout)
 
         # LLM Help text
         llm_help_label = QLabel(
@@ -1084,6 +1150,12 @@ class SettingsDialog(QDialog):
         """Update creativity/temperature label."""
         self.corpus_temp_value.setText(f"{value / 100:.2f}")
 
+    def _on_shot_tier_changed(self, index: int):
+        """Enable/disable Replicate model field based on tier."""
+        is_cloud = (index == 1)
+        self.replicate_model_edit.setEnabled(is_cloud)
+        self.replicate_model_label.setEnabled(is_cloud)
+
     def _validate_vlm_api_keys(self):
         """Check if API keys exist for selected VLM models and show warning."""
         warnings = []
@@ -1311,6 +1383,18 @@ class SettingsDialog(QDialog):
                                       self.openrouter_api_key_lbl, self.openrouter_show_btn,
                                       ENV_OPENROUTER_API_KEY)
 
+        # Replicate API key
+        self.replicate_api_key_edit.setText(get_replicate_api_key())
+        self._apply_llm_env_override("replicate", self.replicate_api_key_edit,
+                                      self.replicate_api_key_lbl, self.replicate_show_btn,
+                                      ENV_REPLICATE_API_KEY)
+
+        # Shot classifier settings
+        tier_map = {"cpu": 0, "cloud": 1}
+        self.shot_tier_combo.setCurrentIndex(tier_map.get(self.settings.shot_classifier_tier, 0))
+        self.replicate_model_edit.setText(self.settings.shot_classifier_replicate_model)
+        self._on_shot_tier_changed(self.shot_tier_combo.currentIndex())
+
         # Chat Agent settings
         provider_map = {"local": 0, "openai": 1, "anthropic": 2, "gemini": 3, "openrouter": 4}
         self.chat_provider_combo.setCurrentIndex(provider_map.get(self.settings.llm_provider, 0))
@@ -1395,6 +1479,10 @@ class SettingsDialog(QDialog):
         # Exquisite Corpus
         self.settings.exquisite_corpus_model = self.corpus_model_combo.currentText()
         self.settings.exquisite_corpus_temperature = self.corpus_temp_slider.value() / 100.0
+
+        # Shot Classifier
+        self.settings.shot_classifier_tier = self.shot_tier_combo.currentData()
+        self.settings.shot_classifier_replicate_model = self.replicate_model_edit.text()
 
         # Appearance
         theme_values = ["system", "light", "dark"]
@@ -1535,6 +1623,8 @@ class SettingsDialog(QDialog):
             set_gemini_api_key(self.gemini_api_key_edit.text())
         if not is_api_key_from_env("openrouter"):
             set_openrouter_api_key(self.openrouter_api_key_edit.text())
+        if not is_api_key_from_env("replicate"):
+            set_replicate_api_key(self.replicate_api_key_edit.text())
 
     def get_settings(self) -> Settings:
         """Get the current settings (after dialog closes)."""
@@ -1575,4 +1665,6 @@ class SettingsDialog(QDialog):
             or self.settings.text_detection_enabled != self.original_settings.text_detection_enabled
             or self.settings.exquisite_corpus_model != self.original_settings.exquisite_corpus_model
             or self.settings.exquisite_corpus_temperature != self.original_settings.exquisite_corpus_temperature
+            or self.settings.shot_classifier_tier != self.original_settings.shot_classifier_tier
+            or self.settings.shot_classifier_replicate_model != self.original_settings.shot_classifier_replicate_model
         )

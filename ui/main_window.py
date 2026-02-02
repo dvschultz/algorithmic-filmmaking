@@ -33,7 +33,7 @@ from core.sequence_export import SequenceExporter, ExportConfig
 from core.dataset_export import export_dataset, DatasetExportConfig
 from core.edl_export import export_edl, EDLExportConfig
 from core.analysis.color import extract_dominant_colors
-from core.analysis.shots import classify_shot_type
+from core.analysis.shots import classify_shot_type_tiered
 from core.ffmpeg import FFmpegProcessor
 from core.settings import (
     load_settings,
@@ -415,15 +415,21 @@ class ColorAnalysisWorker(CancellableWorker):
 
 
 class ShotTypeWorker(CancellableWorker):
-    """Background worker for shot type classification using CLIP."""
+    """Background worker for shot type classification using CLIP or VideoMAE.
+
+    Supports tiered processing:
+    - CPU: CLIP zero-shot classification from thumbnails (free, local)
+    - Cloud: VideoMAE model on Replicate for video-based classification (paid)
+    """
 
     progress = Signal(int, int)  # current, total
     shot_type_ready = Signal(str, str, float)  # clip_id, shot_type, confidence
     analysis_completed = Signal()  # (renamed from 'finished' to avoid shadowing QThread.finished)
 
-    def __init__(self, clips: list[Clip]):
+    def __init__(self, clips: list[Clip], sources_by_id: dict[str, Source]):
         super().__init__()
         self.clips = clips
+        self.sources_by_id = sources_by_id
 
     def run(self):
         self._log_start()
@@ -434,7 +440,18 @@ class ShotTypeWorker(CancellableWorker):
                 break
             try:
                 if clip.thumbnail_path and clip.thumbnail_path.exists():
-                    shot_type, confidence = classify_shot_type(clip.thumbnail_path)
+                    # Get source for video-based classification (cloud tier)
+                    source = self.sources_by_id.get(clip.source_id)
+                    source_path = source.file_path if source else None
+                    fps = source.fps if source else None
+
+                    shot_type, confidence = classify_shot_type_tiered(
+                        image_path=clip.thumbnail_path,
+                        source_path=source_path,
+                        start_frame=clip.start_frame,
+                        end_frame=clip.end_frame,
+                        fps=fps,
+                    )
                     self.shot_type_ready.emit(clip.id, shot_type, confidence)
             except Exception as e:
                 self._log_error(str(e), clip.id)
@@ -2810,7 +2827,7 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(f"Classifying shot types for {len(clips)} clips...")
 
         logger.info("Creating ShotTypeWorker (manual)...")
-        self.shot_type_worker = ShotTypeWorker(clips)
+        self.shot_type_worker = ShotTypeWorker(clips, self.project.sources_by_id)
         self.shot_type_worker.progress.connect(self._on_shot_type_progress)
         self.shot_type_worker.shot_type_ready.connect(self._on_shot_type_ready)
         self.shot_type_worker.analysis_completed.connect(self._on_manual_shot_type_finished, Qt.UniqueConnection)
@@ -3644,7 +3661,7 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(f"Classifying shot types for {len(clips)} clips...")
 
         logger.info("Creating ShotTypeWorker (Analyze All)...")
-        self.shot_type_worker = ShotTypeWorker(clips)
+        self.shot_type_worker = ShotTypeWorker(clips, self.project.sources_by_id)
         self.shot_type_worker.progress.connect(self._on_shot_type_progress)
         self.shot_type_worker.shot_type_ready.connect(self._on_shot_type_ready)
         self.shot_type_worker.analysis_completed.connect(self._on_analyze_all_shot_finished, Qt.UniqueConnection)
@@ -5213,7 +5230,7 @@ class MainWindow(QMainWindow):
 
         # Start worker
         from PySide6.QtCore import Qt
-        self.shot_type_worker = ShotTypeWorker(clips)
+        self.shot_type_worker = ShotTypeWorker(clips, self.project.sources_by_id)
         self.shot_type_worker.progress.connect(self._on_shot_type_progress)
         self.shot_type_worker.shot_type_ready.connect(self._on_shot_type_ready)
         self.shot_type_worker.analysis_completed.connect(self._on_agent_shot_analysis_finished, Qt.UniqueConnection)

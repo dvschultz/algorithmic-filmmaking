@@ -1,8 +1,14 @@
-"""Shot type classification using CLIP zero-shot."""
+"""Shot type classification using CLIP zero-shot or VideoMAE cloud inference.
+
+Supports two tiers:
+- CPU (default): CLIP-based zero-shot classification on thumbnails (free, local)
+- Cloud: VideoMAE model on Replicate for video-based classification (paid, more accurate)
+"""
 
 import logging
 import threading
 from pathlib import Path
+from typing import Optional
 
 from PIL import Image
 
@@ -193,3 +199,77 @@ def classify_shot_type(
 def get_display_name(shot_type: str) -> str:
     """Get human-readable display name for shot type."""
     return SHOT_TYPE_DISPLAY.get(shot_type, shot_type.title())
+
+
+def classify_shot_type_tiered(
+    image_path: Path,
+    source_path: Optional[Path] = None,
+    start_frame: Optional[int] = None,
+    end_frame: Optional[int] = None,
+    fps: Optional[float] = None,
+    threshold: float = 0.0,
+    use_ensemble: bool = True,
+) -> tuple[str, float]:
+    """Classify shot type using the configured tier (CPU or Cloud).
+
+    Routes to either local CLIP classification or Replicate VideoMAE based on
+    the shot_classifier_tier setting.
+
+    Args:
+        image_path: Path to the thumbnail image (used for CPU tier)
+        source_path: Path to source video (required for cloud tier)
+        start_frame: Clip start frame (required for cloud tier)
+        end_frame: Clip end frame (required for cloud tier)
+        fps: Video frame rate (required for cloud tier)
+        threshold: Minimum confidence threshold
+        use_ensemble: Whether to use ensemble prompts for CLIP (CPU tier only)
+
+    Returns:
+        Tuple of (shot_type, confidence)
+    """
+    from core.settings import load_settings
+
+    settings = load_settings()
+    tier = settings.shot_classifier_tier
+
+    if tier == "cloud":
+        # Cloud tier requires video info
+        if not all([source_path, start_frame is not None, end_frame is not None, fps]):
+            logger.warning(
+                "Cloud tier requires source_path, start_frame, end_frame, fps. "
+                "Falling back to CPU tier."
+            )
+            return classify_shot_type(image_path, threshold, use_ensemble)
+
+        try:
+            from core.analysis.shots_cloud import (
+                classify_shot_replicate,
+                get_simplified_type,
+            )
+
+            shot_type, confidence, _ = classify_shot_replicate(
+                source_path=source_path,
+                start_frame=start_frame,
+                end_frame=end_frame,
+                fps=fps,
+            )
+
+            # Convert VideoMAE label (LS, FS, MS, CS, ECS) to simplified label
+            simplified = get_simplified_type(shot_type)
+
+            if confidence < threshold:
+                return ("unknown", confidence)
+
+            return (simplified, confidence)
+
+        except ValueError as e:
+            # API key not configured
+            logger.warning(f"Cloud classification unavailable: {e}. Falling back to CPU.")
+            return classify_shot_type(image_path, threshold, use_ensemble)
+        except RuntimeError as e:
+            # Classification failed
+            logger.error(f"Cloud classification failed: {e}. Falling back to CPU.")
+            return classify_shot_type(image_path, threshold, use_ensemble)
+
+    # CPU tier (default): use local CLIP
+    return classify_shot_type(image_path, threshold, use_ensemble)
