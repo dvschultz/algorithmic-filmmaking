@@ -27,3 +27,6 @@ einops>=0.7.0
 
 # OCR / Text Extraction
 pytesseract>=0.3.10  # Tesseract OCR wrapper (requires tesseract binary)
+
+# Audio Analysis
+librosa>=0.10.0  # Beat detection, tempo analysis, onset detection

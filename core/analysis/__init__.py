@@ -1,4 +1,4 @@
-"""Color and visual analysis utilities."""
+"""Color, visual, and audio analysis utilities."""
 
 from .color import (
     extract_dominant_colors,
@@ -14,6 +14,14 @@ from .shots import (
     get_display_name,
     SHOT_TYPES,
 )
+from .audio import (
+    AudioAnalysis,
+    has_audio_track,
+    extract_audio,
+    analyze_audio,
+    analyze_audio_from_video,
+    analyze_music_file,
+)
 
 __all__ = [
     "extract_dominant_colors",
@@ -26,4 +34,11 @@ __all__ = [
     "classify_shot_type",
     "get_display_name",
     "SHOT_TYPES",
+    # Audio analysis
+    "AudioAnalysis",
+    "has_audio_track",
+    "extract_audio",
+    "analyze_audio",
+    "analyze_audio_from_video",
+    "analyze_music_file",
 ]

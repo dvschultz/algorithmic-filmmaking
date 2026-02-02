@@ -5,8 +5,28 @@ from typing import List, Tuple, Any, Optional
 from core.remix.shuffle import constrained_shuffle
 from core.analysis.color import get_primary_hue
 from core.analysis.shots import SHOT_TYPES
+from core.remix.audio_sync import (
+    AlignmentSuggestion,
+    suggest_beat_aligned_cuts,
+    align_times_to_beats,
+    calculate_beat_intervals,
+    get_beats_in_range,
+    estimate_clip_count_for_duration,
+    generate_cut_times_from_beats,
+)
 
-__all__ = ["constrained_shuffle", "generate_sequence"]
+__all__ = [
+    "constrained_shuffle",
+    "generate_sequence",
+    # Audio sync
+    "AlignmentSuggestion",
+    "suggest_beat_aligned_cuts",
+    "align_times_to_beats",
+    "calculate_beat_intervals",
+    "get_beats_in_range",
+    "estimate_clip_count_for_duration",
+    "generate_cut_times_from_beats",
+]
 
 # Shot type order for sorting (wide to close)
 SHOT_TYPE_ORDER = {shot: i for i, shot in enumerate(SHOT_TYPES)}
