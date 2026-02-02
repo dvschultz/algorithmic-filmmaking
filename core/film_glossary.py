@@ -361,6 +361,86 @@ FILM_GLOSSARY: dict[str, dict[str, str]] = {
         "category": "Camera Angles",
         "definition": "Psychological effect of worm's eye view. Maximum subject dominance.",
     },
+    # Phase 2: Dutch Tilt
+    "dutch_slight": {
+        "name": "Slight Dutch Tilt",
+        "category": "Composition",
+        "definition": "Horizon tilted 5-15 degrees. Subtle unease without overt disorientation.",
+    },
+    "dutch_moderate": {
+        "name": "Moderate Dutch Tilt",
+        "category": "Composition",
+        "definition": "Horizon tilted 15-30 degrees. Clear visual instability creating tension.",
+    },
+    "dutch_extreme": {
+        "name": "Extreme Dutch Tilt",
+        "category": "Composition",
+        "definition": "Horizon tilted over 30 degrees. Maximum disorientation, often used for chaos or madness.",
+    },
+    # Phase 2: Camera Position
+    "frontal": {
+        "name": "Frontal Position",
+        "category": "Camera Angles",
+        "definition": "Camera directly facing the subject. Creates confrontation and direct engagement.",
+    },
+    "profile": {
+        "name": "Profile Position",
+        "category": "Camera Angles",
+        "definition": "Camera at 90 degrees to subject showing side view. Creates observational distance.",
+    },
+    # Phase 2: Lens Types
+    "wide_lens": {
+        "name": "Wide-Angle Lens",
+        "category": "Focus",
+        "definition": "Exaggerated perspective with barrel distortion. Makes close objects larger, good for interiors and dramatic close-ups.",
+    },
+    "normal_lens": {
+        "name": "Normal Lens",
+        "category": "Focus",
+        "definition": "Natural perspective matching human eye. Standard coverage without distortion.",
+    },
+    "telephoto_lens": {
+        "name": "Telephoto Lens",
+        "category": "Focus",
+        "definition": "Compressed perspective flattening depth. Flattering for portraits, isolates subjects.",
+    },
+    # Phase 2: Light Quality
+    "hard_light": {
+        "name": "Hard Light",
+        "category": "Lighting",
+        "definition": "Direct light source creating sharp, defined shadows. Creates drama and harsh reality.",
+    },
+    "soft_light": {
+        "name": "Soft Light",
+        "category": "Lighting",
+        "definition": "Diffused light with gradual shadow transitions. Flattering and naturalistic.",
+    },
+    "mixed_light": {
+        "name": "Mixed Lighting",
+        "category": "Lighting",
+        "definition": "Combination of hard and soft light sources. Creates complex, layered illumination.",
+    },
+    # Phase 2: Color Temperature
+    "warm": {
+        "name": "Warm Color Temperature",
+        "category": "Lighting",
+        "definition": "Orange and yellow tones suggesting warmth, intimacy, or sunset/indoor lighting.",
+    },
+    "cool": {
+        "name": "Cool Color Temperature",
+        "category": "Lighting",
+        "definition": "Blue tones suggesting coldness, sterility, or night/fluorescent lighting.",
+    },
+    "warm_temp": {
+        "name": "Warm Color Temperature",
+        "category": "Lighting",
+        "definition": "Orange and yellow tones suggesting warmth, intimacy, or sunset/indoor lighting.",
+    },
+    "cool_temp": {
+        "name": "Cool Color Temperature",
+        "category": "Lighting",
+        "definition": "Blue tones suggesting coldness, sterility, or night/fluorescent lighting.",
+    },
 }
 
 

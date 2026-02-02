@@ -114,6 +114,31 @@ CINEMATOGRAPHY_SCHEMA = {
             "enum": ["front", "three_quarter", "side", "back", "below"],
             "description": "Primary light source direction"
         },
+        "dutch_tilt": {
+            "type": "string",
+            "enum": ["none", "slight", "moderate", "extreme", "unknown"],
+            "description": "Horizon tilt amount (none=level, slight=5-15°, moderate=15-30°, extreme=30°+)"
+        },
+        "camera_position": {
+            "type": "string",
+            "enum": ["frontal", "three_quarter", "profile", "back", "unknown"],
+            "description": "Camera position relative to subject facing (frontal=face visible, profile=90° side)"
+        },
+        "estimated_lens_type": {
+            "type": "string",
+            "enum": ["wide", "normal", "telephoto", "unknown"],
+            "description": "Estimated lens type from perspective distortion and depth characteristics"
+        },
+        "light_quality": {
+            "type": "string",
+            "enum": ["hard", "soft", "mixed", "unknown"],
+            "description": "Light quality based on shadow edge sharpness (hard=sharp shadows, soft=diffused)"
+        },
+        "color_temperature": {
+            "type": "string",
+            "enum": ["warm", "neutral", "cool", "unknown"],
+            "description": "Overall color temperature (warm=orange/yellow, cool=blue)"
+        },
         "emotional_intensity": {
             "type": "string",
             "enum": ["low", "medium", "high"],
@@ -175,6 +200,28 @@ Evaluate each dimension carefully:
 **Lighting**:
 - Style: high_key (bright, few shadows), low_key (dark, heavy shadows), natural, or dramatic
 - Direction: front, three_quarter, side, back, or below
+- Quality: hard (sharp shadow edges), soft (diffused, gradual shadows), mixed, or unknown
+- Color temperature: warm (orange/yellow tones), neutral, cool (blue tones), or unknown
+
+**Dutch Tilt** (horizon angle):
+- none: Horizon is level
+- slight: 5-15° tilt
+- moderate: 15-30° tilt
+- extreme: 30°+ tilt
+- unknown: Cannot determine
+
+**Camera Position** (relative to subject facing):
+- frontal: Camera faces subject directly, face fully visible
+- three_quarter: 45° angle to subject
+- profile: 90° side view
+- back: Behind subject
+- unknown: No clear subject or ambiguous
+
+**Lens Type** (estimate from visual characteristics):
+- wide: Exaggerated perspective, barrel distortion, deep depth of field
+- normal: Natural perspective matching human eye
+- telephoto: Compressed perspective, shallow depth of field
+- unknown: Cannot determine
 
 **Derived Properties**:
 - Emotional intensity: low, medium, or high (based on shot size + angle + lighting)
@@ -238,6 +285,28 @@ left, right, up, down, forward, backward, clockwise, counterclockwise
 **Lighting**:
 - Style: high_key (bright, few shadows), low_key (dark, heavy shadows), natural, or dramatic
 - Direction: front, three_quarter, side, back, or below
+- Quality: hard (sharp shadow edges), soft (diffused, gradual shadows), mixed, or unknown
+- Color temperature: warm (orange/yellow tones), neutral, cool (blue tones), or unknown
+
+**Dutch Tilt** (horizon angle):
+- none: Horizon is level
+- slight: 5-15° tilt
+- moderate: 15-30° tilt
+- extreme: 30°+ tilt
+- unknown: Cannot determine
+
+**Camera Position** (relative to subject facing):
+- frontal: Camera faces subject directly, face fully visible
+- three_quarter: 45° angle to subject
+- profile: 90° side view
+- back: Behind subject
+- unknown: No clear subject or ambiguous
+
+**Lens Type** (estimate from visual characteristics):
+- wide: Exaggerated perspective, barrel distortion, deep depth of field
+- normal: Natural perspective matching human eye
+- telephoto: Compressed perspective, shallow depth of field
+- unknown: Cannot determine
 
 **Derived Properties**:
 - Emotional intensity: low, medium, or high (based on shot size + angle + lighting)
@@ -312,6 +381,11 @@ def _validate_and_normalize(data: dict) -> dict:
     valid_bg = {"blurred", "sharp", "cluttered", "plain"}
     valid_lighting_style = {"high_key", "low_key", "natural", "dramatic"}
     valid_lighting_dir = {"front", "three_quarter", "side", "back", "below"}
+    valid_light_quality = {"hard", "soft", "mixed", "unknown"}
+    valid_color_temp = {"warm", "neutral", "cool", "unknown"}
+    valid_dutch_tilt = {"none", "slight", "moderate", "extreme", "unknown"}
+    valid_camera_pos = {"frontal", "three_quarter", "profile", "back", "unknown"}
+    valid_lens_type = {"wide", "normal", "telephoto", "unknown"}
     valid_intensity = {"low", "medium", "high"}
     valid_pacing = {"fast", "medium", "slow"}
 
@@ -385,6 +459,24 @@ def _validate_and_normalize(data: dict) -> dict:
 
     direction = data.get("lighting_direction", "front")
     result["lighting_direction"] = direction if direction in valid_lighting_dir else "front"
+
+    # Phase 2: Extended lighting
+    light_qual = data.get("light_quality", "unknown")
+    result["light_quality"] = light_qual if light_qual in valid_light_quality else "unknown"
+
+    color_temp = data.get("color_temperature", "unknown")
+    result["color_temperature"] = color_temp if color_temp in valid_color_temp else "unknown"
+
+    # Phase 2: Extended camera analysis
+    dutch = data.get("dutch_tilt", "unknown")
+    result["dutch_tilt"] = dutch if dutch in valid_dutch_tilt else "unknown"
+
+    cam_pos = data.get("camera_position", "unknown")
+    result["camera_position"] = cam_pos if cam_pos in valid_camera_pos else "unknown"
+
+    # Phase 2: Lens type
+    lens = data.get("estimated_lens_type", "unknown")
+    result["estimated_lens_type"] = lens if lens in valid_lens_type else "unknown"
 
     # Derived properties
     intensity = data.get("emotional_intensity", "medium")
@@ -464,6 +556,8 @@ def analyze_cinematography_frame(
             angle_effect=normalized["angle_effect"],
             camera_movement="n/a",  # Frame mode cannot detect movement
             movement_direction=None,
+            dutch_tilt=normalized["dutch_tilt"],
+            camera_position=normalized["camera_position"],
             subject_position=normalized["subject_position"],
             headroom=normalized["headroom"],
             lead_room=normalized["lead_room"],
@@ -472,8 +566,11 @@ def analyze_cinematography_frame(
             subject_type=normalized["subject_type"],
             focus_type=normalized["focus_type"],
             background_type=normalized["background_type"],
+            estimated_lens_type=normalized["estimated_lens_type"],
             lighting_style=normalized["lighting_style"],
             lighting_direction=normalized["lighting_direction"],
+            light_quality=normalized["light_quality"],
+            color_temperature=normalized["color_temperature"],
             emotional_intensity=normalized["emotional_intensity"],
             suggested_pacing=normalized["suggested_pacing"],
             analysis_model=model,
@@ -590,6 +687,8 @@ def analyze_cinematography_video(
             angle_effect=normalized["angle_effect"],
             camera_movement=normalized["camera_movement"],
             movement_direction=normalized["movement_direction"],
+            dutch_tilt=normalized["dutch_tilt"],
+            camera_position=normalized["camera_position"],
             subject_position=normalized["subject_position"],
             headroom=normalized["headroom"],
             lead_room=normalized["lead_room"],
@@ -598,8 +697,11 @@ def analyze_cinematography_video(
             subject_type=normalized["subject_type"],
             focus_type=normalized["focus_type"],
             background_type=normalized["background_type"],
+            estimated_lens_type=normalized["estimated_lens_type"],
             lighting_style=normalized["lighting_style"],
             lighting_direction=normalized["lighting_direction"],
+            light_quality=normalized["light_quality"],
+            color_temperature=normalized["color_temperature"],
             emotional_intensity=normalized["emotional_intensity"],
             suggested_pacing=normalized["suggested_pacing"],
             analysis_model=model,

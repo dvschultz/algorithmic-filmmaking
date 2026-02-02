@@ -949,21 +949,22 @@ FILM_GLOSSARY = {
 - Tooltip links may not be clickable on all platforms—provide "?" button as fallback
 - Long definitions should truncate in tooltip, expand in glossary dialog
 
-### Phase 2: Expanded Cinematography Analysis (Medium Effort)
+### Phase 2: Expanded Cinematography Analysis (Medium Effort) ✅ COMPLETED
 
 **Goal:** Add missing visual analysis concepts.
 
-| Feature | Description | Effort |
-|---------|-------------|--------|
-| Dutch Tilt Detection | Add horizon tilt analysis | 2 days |
-| Camera Position | Frontal/profile/back detection | 2 days |
-| Lens Type Estimation | Wide/normal/telephoto classification | 3 days |
-| Light Quality | Hard/soft classification | 2 days |
-| Color Temperature | Warm/cool estimation | 1 day |
+| Feature | Description | Effort | Status |
+|---------|-------------|--------|--------|
+| Dutch Tilt Detection | Add horizon tilt analysis | 2 days | ✅ Done |
+| Camera Position | Frontal/profile/back detection | 2 days | ✅ Done |
+| Lens Type Estimation | Wide/normal/telephoto classification | 3 days | ✅ Done |
+| Light Quality | Hard/soft classification | 2 days | ✅ Done |
+| Color Temperature | Warm/cool estimation | 1 day | ✅ Done |
 
-**Files to create/modify:**
-- `models/cinematography.py` - Add new fields
-- `core/analysis/cinematography.py` - Update VLM prompts
+**Files modified:**
+- `models/cinematography.py` - Added new fields and value lists
+- `core/analysis/cinematography.py` - Updated VLM schema and prompts
+- `core/film_glossary.py` - Added glossary entries for new terms
 
 #### Research Insights
 
@@ -1426,11 +1427,11 @@ The agent should be able to execute this complete workflow:
 
 ### Analysis Enhancements
 
-- [ ] Dutch tilt detection with confidence score
-- [ ] Camera position (frontal/profile/back) detection
-- [ ] Lens type estimation from visual characteristics
-- [ ] Light quality (hard/soft) classification
-- [ ] Color temperature estimation
+- [x] Dutch tilt detection (none/slight/moderate/extreme/unknown)
+- [x] Camera position (frontal/three_quarter/profile/back) detection
+- [x] Lens type estimation from visual characteristics
+- [x] Light quality (hard/soft/mixed) classification
+- [x] Color temperature estimation (warm/neutral/cool)
 
 ### Audio-Guided Sequencing
 
