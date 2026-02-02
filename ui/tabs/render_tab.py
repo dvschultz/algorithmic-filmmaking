@@ -252,3 +252,25 @@ class RenderTab(BaseTab):
         index = self.fps_combo.currentIndex()
         fps_values = [None, 60, 30, 24]
         return fps_values[index]
+
+    def clear(self):
+        """Clear render tab state for new project."""
+        # Reset counts
+        self._sequence_duration = 0
+        self._sequence_clip_count = 0
+        self._detected_clip_count = 0
+
+        # Reset dropdowns to defaults
+        self.quality_combo.setCurrentIndex(1)  # Medium
+        self.resolution_combo.setCurrentIndex(0)  # Original
+        self.fps_combo.setCurrentIndex(0)  # Original
+
+        # Update display
+        self.sequence_info_label.setText("Duration: 00:00:00    Clips: 0")
+        self.export_sequence_btn.setEnabled(False)
+        self.export_clips_btn.setEnabled(False)
+        self.export_all_clips_btn.setEnabled(False)
+        self.export_dataset_btn.setEnabled(False)
+
+        # Show empty state
+        self.state_stack.setCurrentIndex(self.STATE_NO_CONTENT)

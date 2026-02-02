@@ -1073,6 +1073,39 @@ class MainWindow(QMainWindow):
 
         logger.info(f"{name} worker stopped")
 
+    def _stop_all_workers(self):
+        """Stop all running workers for clean project reset.
+
+        Called when clearing project state to ensure no stale workers
+        continue processing data from the old project.
+        """
+        # Stop chat worker if running
+        if self._chat_worker and self._chat_worker.isRunning():
+            self._chat_worker.stop()
+            self._chat_worker.wait(1000)
+
+        # Stop all analysis workers
+        workers_to_stop = [
+            (getattr(self, 'thumbnail_worker', None), "Thumbnail"),
+            (getattr(self, 'detection_worker', None), "Detection"),
+            (getattr(self, 'color_worker', None), "Color"),
+            (getattr(self, 'shot_type_worker', None), "ShotType"),
+            (getattr(self, 'transcription_worker', None), "Transcription"),
+            (getattr(self, 'classification_worker', None), "Classification"),
+            (getattr(self, 'description_worker', None), "Description"),
+            (getattr(self, 'text_extraction_worker', None), "TextExtraction"),
+            (getattr(self, 'cinematography_worker', None), "Cinematography"),
+            (getattr(self, 'download_worker', None), "Download"),
+            (getattr(self, 'bulk_download_worker', None), "BulkDownload"),
+            (getattr(self, 'url_bulk_download_worker', None), "URLBulkDownload"),
+            (getattr(self, 'youtube_search_worker', None), "YouTubeSearch"),
+            (getattr(self, 'ia_search_worker', None), "InternetArchiveSearch"),
+            (getattr(self, 'export_worker', None), "Export"),
+        ]
+
+        for worker, name in workers_to_stop:
+            self._stop_worker_safely(worker, name, timeout_ms=2000)
+
     def _setup_ui(self):
         """Set up the user interface."""
         # Create menu bar
@@ -6946,6 +6979,9 @@ class MainWindow(QMainWindow):
 
     def _clear_project_state(self):
         """Clear current project state."""
+        # Stop any running workers first
+        self._stop_all_workers()
+
         # Clear project data
         self.project.clear()
 
@@ -6961,6 +6997,7 @@ class MainWindow(QMainWindow):
         self.cut_tab.set_source(None)
         self.analyze_tab.clear_clips()
         self.sequence_tab.clear()  # Clear all state including _clips and _available_clips
+        self.render_tab.clear()  # Clear render tab state
 
         # Clear progress bar
         self.progress_bar.setValue(0)
@@ -6973,6 +7010,40 @@ class MainWindow(QMainWindow):
         self.chat_panel.clear_messages()
         self._chat_history.clear()
         self._last_user_message = ""
+
+        # Clear all agent pending flags
+        self._pending_agent_detection = False
+        self._pending_agent_color_analysis = False
+        self._pending_agent_shot_analysis = False
+        self._pending_agent_transcription = False
+        self._pending_agent_classification = False
+        self._pending_agent_object_detection = False
+        self._pending_agent_description = False
+        self._pending_agent_analyze_all = False
+        self._pending_agent_export = False
+        self._pending_agent_download = False
+        self._pending_agent_tool_call_id = None
+        self._pending_agent_tool_name = None
+
+        # Clear agent clip tracking lists
+        self._agent_color_clips = []
+        self._agent_shot_clips = []
+        self._agent_transcription_clips = []
+        self._agent_classification_clips = []
+        self._agent_object_detection_clips = []
+        self._agent_description_clips = []
+        self._agent_download_results = []
+        if hasattr(self, '_agent_transcription_source_queue'):
+            self._agent_transcription_source_queue = []
+
+        # Clear intention workflow pending state
+        if hasattr(self, '_intention_pending_algorithm'):
+            self._intention_pending_algorithm = None
+        if hasattr(self, '_intention_pending_direction'):
+            self._intention_pending_direction = None
+
+        # Clear GUI state (for agent context)
+        self.gui_state.clear()
 
     def _refresh_ui_from_project(self):
         """Refresh all UI components after project load.

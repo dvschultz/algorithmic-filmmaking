@@ -244,3 +244,38 @@ class GUIState:
         """Clear the active filters state."""
         with self._lock:
             self.active_filters = {}
+
+    def clear(self):
+        """Clear all GUI state for new project.
+
+        Resets all state to initial values.
+        """
+        with self._lock:
+            # YouTube search state
+            self.last_search_query = ""
+            self.search_results = []
+            self.selected_video_ids = []
+
+            # Tab state
+            self.active_tab = "collect"
+
+            # Selection state
+            self.selected_clip_ids = []
+            self.selected_source_id = None
+            self.analyze_selected_ids = []
+            self.cut_selected_ids = []
+
+            # Analyze tab state
+            self.analyze_tab_ids = []
+
+            # Sequence state
+            self.sequence_ids = []
+
+            # Plan state
+            self.current_plan = None
+
+            # Active filters
+            self.active_filters = {}
+
+            # Pending action
+            self.pending_action = None

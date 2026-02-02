@@ -487,6 +487,10 @@ class ChatPanel(QWidget):
 
     def clear_messages(self):
         """Clear all messages from the chat."""
+        # Reset streaming state if active
+        if self._is_streaming:
+            self._set_streaming_state(False)
+
         # Clean up thinking indicator if present
         self._hide_thinking_indicator()
 

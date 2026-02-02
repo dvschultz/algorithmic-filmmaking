@@ -391,6 +391,9 @@ class AnalyzeTab(BaseTab):
         """Remove all clips from the analysis tab."""
         self._clip_ids.clear()
         self.clip_browser.clear()
+        # Clear lookup dictionaries (will be re-set on next project load)
+        self._clips_by_id = {}
+        self._sources_by_id = {}
         self._update_ui_state()
         self.clips_changed.emit([])
 
