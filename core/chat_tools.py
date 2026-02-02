@@ -4450,3 +4450,150 @@ def align_sequence_to_audio(
             "success": False,
             "error": f"Alignment analysis failed: {str(e)}"
         }
+
+
+# =============================================================================
+# Sequence Analysis Tools
+# =============================================================================
+
+@tools.register(
+    description=(
+        "Analyze the current sequence for pacing, continuity, and visual consistency. "
+        "Returns shot duration statistics, potential continuity issues, and advisory suggestions. "
+        "Optionally compare pacing to genre norms (action, drama, documentary, music_video)."
+    ),
+    requires_project=True,
+    modifies_gui_state=False
+)
+def get_sequence_analysis(
+    genre_comparison: Optional[str] = None
+) -> dict:
+    """Analyze the sequence for pacing and continuity metrics.
+
+    Args:
+        genre_comparison: Optional genre to compare pacing against
+            (action, drama, documentary, music_video, commercial, art_film)
+
+    Returns:
+        Dict with pacing stats, continuity warnings, and suggestions
+    """
+    from core.analysis.sequence import analyze_sequence, get_pacing_curve
+    from models.sequence_analysis import GENRE_PACING_NORMS
+
+    # Check sequence exists
+    if not project.sequence:
+        return {
+            "success": False,
+            "error": "No sequence exists. Create a sequence first."
+        }
+
+    all_clips = project.sequence.get_all_clips()
+    if not all_clips:
+        return {
+            "success": False,
+            "error": "Sequence is empty. Add clips to the sequence first."
+        }
+
+    try:
+        # Run analysis
+        analysis = analyze_sequence(project.sequence, project)
+
+        result = {
+            "success": True,
+            "sequence_name": project.sequence.name,
+            "clip_count": analysis.pacing.clip_count,
+            "pacing": analysis.pacing.to_dict(),
+            "visual_consistency": analysis.visual_consistency.to_dict(),
+            "continuity_warning_count": len(analysis.continuity_warnings),
+            "continuity_warnings": [w.to_dict() for w in analysis.continuity_warnings],
+            "suggestions": analysis.suggestions,
+        }
+
+        # Add genre comparison if requested
+        if genre_comparison:
+            genre_lower = genre_comparison.lower()
+            if genre_lower in GENRE_PACING_NORMS:
+                comparison = analysis.compare_to_genre(genre_lower)
+                if comparison:
+                    result["genre_comparison"] = comparison.to_dict()
+            else:
+                result["genre_comparison_error"] = (
+                    f"Unknown genre '{genre_comparison}'. "
+                    f"Valid genres: {list(GENRE_PACING_NORMS.keys())}"
+                )
+
+        # Add pacing curve for visualization
+        result["pacing_curve"] = get_pacing_curve(project.sequence, project)
+
+        return result
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Sequence analysis failed: {str(e)}"
+        }
+
+
+@tools.register(
+    description=(
+        "Check the current sequence for potential continuity issues. "
+        "Detects similar consecutive shots (jump cuts), large shot size jumps, "
+        "and other editing patterns that may need attention. "
+        "All warnings are advisory - many 'issues' are valid artistic choices."
+    ),
+    requires_project=True,
+    modifies_gui_state=False
+)
+def check_continuity_issues() -> dict:
+    """Check sequence for potential continuity problems.
+
+    Returns:
+        Dict with list of continuity warnings and their severities
+    """
+    from core.analysis.sequence import check_continuity, _resolve_source_clips
+
+    # Check sequence exists
+    if not project.sequence:
+        return {
+            "success": False,
+            "error": "No sequence exists. Create a sequence first."
+        }
+
+    all_clips = project.sequence.get_all_clips()
+    if len(all_clips) < 2:
+        return {
+            "success": True,
+            "message": "Need at least 2 clips to check continuity",
+            "warning_count": 0,
+            "warnings": []
+        }
+
+    try:
+        # Resolve clips and check continuity
+        resolved = _resolve_source_clips(all_clips, project)
+        warnings = check_continuity(resolved)
+
+        # Group by severity
+        by_severity = {"low": 0, "medium": 0, "high": 0}
+        for w in warnings:
+            by_severity[w.severity] = by_severity.get(w.severity, 0) + 1
+
+        return {
+            "success": True,
+            "sequence_name": project.sequence.name,
+            "clip_count": len(all_clips),
+            "warning_count": len(warnings),
+            "warnings_by_severity": by_severity,
+            "warnings": [w.to_dict() for w in warnings],
+            "message": (
+                f"Found {len(warnings)} potential continuity issues "
+                f"({by_severity['high']} high, {by_severity['medium']} medium, {by_severity['low']} low)"
+                if warnings else "No continuity issues detected"
+            )
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Continuity check failed: {str(e)}"
+        }
