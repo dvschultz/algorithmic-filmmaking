@@ -15,6 +15,7 @@ from PySide6.QtCore import Signal, Qt
 from .base_tab import BaseTab
 from ui.clip_browser import ClipBrowser
 from ui.widgets import EmptyStateWidget
+from ui.dialogs import GlossaryDialog
 
 logger = logging.getLogger(__name__)
 
@@ -191,6 +192,16 @@ class AnalyzeTab(BaseTab):
 
         controls.addStretch()
 
+        # Glossary button
+        self.glossary_btn = QPushButton("?")
+        self.glossary_btn.setToolTip("Open Film Language Glossary")
+        self.glossary_btn.setFixedWidth(32)
+        self.glossary_btn.setAccessibleName("Film Glossary")
+        self.glossary_btn.clicked.connect(self._on_glossary_click)
+        controls.addWidget(self.glossary_btn)
+
+        controls.addSpacing(8)
+
         # Clip count label
         self.clip_count_label = QLabel("")
         controls.addWidget(self.clip_count_label)
@@ -245,6 +256,11 @@ class AnalyzeTab(BaseTab):
     def _on_cinematography_click(self):
         """Handle Rich Analysis button click."""
         self.analyze_cinematography_requested.emit()
+
+    def _on_glossary_click(self):
+        """Handle glossary button click - open the film language glossary dialog."""
+        dialog = GlossaryDialog(self)
+        dialog.exec()
 
     def _on_clear_click(self):
         """Handle clear all button click."""

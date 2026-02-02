@@ -223,3 +223,11 @@ __marimo__/
 
 # YOLO model weights (download from ultralytics)
 *.pt
+
+# Test clips and media
+test_clips/
+
+# Replicate/Cog build artifacts and model weights
+.cog/
+**/model/
+!models/  # Keep our models/ source directory

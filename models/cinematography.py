@@ -282,34 +282,72 @@ class CinematographyAnalysis:
         """Get compact badges for UI display.
 
         Returns a list of the most informative attributes for display
-        as compact tags on clip cards.
+        as compact tags on clip cards. Badge text is formatted to match
+        film terminology standards and enable glossary tooltip lookup.
         """
         badges = []
 
-        # Shot size is always informative
+        # Shot size is always informative (use standard abbreviation)
         badges.append(self.shot_size)
 
         # Camera angle (only if not eye level - that's the default/neutral)
+        # Keep underscore format for glossary lookup compatibility
         if self.camera_angle != "eye_level":
-            # Format: "low" instead of "low_angle"
-            angle_display = self.camera_angle.replace("_angle", "").replace("_", " ")
-            badges.append(angle_display)
+            badges.append(self.camera_angle)
 
         # Lighting (only if notable)
+        # Keep underscore format for glossary lookup
         if self.lighting_style in ("low_key", "dramatic"):
-            badges.append(self.lighting_style.replace("_", " "))
+            badges.append(self.lighting_style)
 
         # Focus (only if shallow - that's notable)
         if self.focus_type == "shallow":
-            badges.append("shallow focus")
+            badges.append("shallow")
 
         # Camera movement (if detected)
         if self.camera_movement not in ("n/a", "static"):
             badges.append(self.camera_movement)
 
         # Subject count (only if not single)
+        # Keep underscore format for glossary lookup
         if self.subject_count in ("two_shot", "group"):
-            badges.append(self.subject_count.replace("_", " "))
+            badges.append(self.subject_count)
+
+        return badges
+
+    def get_display_badges_formatted(self) -> list[tuple[str, str]]:
+        """Get badges with both raw key and formatted display text.
+
+        Returns a list of (key, display_text) tuples where key is for
+        glossary lookup and display_text is for UI rendering.
+        """
+        badges = []
+
+        # Shot size
+        badges.append((self.shot_size, self.shot_size))
+
+        # Camera angle
+        if self.camera_angle != "eye_level":
+            display = self.camera_angle.replace("_angle", "").replace("_", " ")
+            badges.append((self.camera_angle, display))
+
+        # Lighting
+        if self.lighting_style in ("low_key", "dramatic"):
+            display = self.lighting_style.replace("_", " ")
+            badges.append((self.lighting_style, display))
+
+        # Focus
+        if self.focus_type == "shallow":
+            badges.append(("shallow", "shallow focus"))
+
+        # Camera movement
+        if self.camera_movement not in ("n/a", "static"):
+            badges.append((self.camera_movement, self.camera_movement))
+
+        # Subject count
+        if self.subject_count in ("two_shot", "group"):
+            display = self.subject_count.replace("_", " ")
+            badges.append((self.subject_count, display))
 
         return badges
 
