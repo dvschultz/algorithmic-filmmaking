@@ -859,10 +859,13 @@ class SequenceTab(BaseTab):
             # Zoom to fit
             self.timeline._on_zoom_fit()
 
-            # Update dropdown
+            # Update dropdowns
             self.algorithm_dropdown.blockSignals(True)
             self.algorithm_dropdown.setCurrentText(algorithm.capitalize())
             self.algorithm_dropdown.blockSignals(False)
+
+            # Update direction dropdown
+            self._update_direction_dropdown(algorithm)
 
             self._current_algorithm = algorithm.lower()
 
