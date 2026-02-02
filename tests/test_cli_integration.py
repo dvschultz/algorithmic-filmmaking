@@ -115,7 +115,8 @@ class TestCLIPipelineSetup:
         with tempfile.TemporaryDirectory() as tmpdir:
             video_path = Path(tmpdir) / "test.mp4"
             video_path.touch()
-            output_path = Path(tmpdir) / "test.json"
+            # Default output is <video>.sceneripper, not .json
+            output_path = Path(tmpdir) / "test.sceneripper"
             output_path.touch()
 
             result = runner.invoke(cli, ["detect", str(video_path)])
