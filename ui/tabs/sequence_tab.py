@@ -545,6 +545,8 @@ class SequenceTab(BaseTab):
         self.timeline.clear_timeline()
         self.timeline_preview.clear()
         self._set_state(self.STATE_CARDS)
+        # Reset all cards to enabled for intention flow (fresh project)
+        self._reset_card_availability()
 
     def _on_playhead_changed(self, time_seconds: float):
         """Handle playhead position change."""
@@ -631,6 +633,17 @@ class SequenceTab(BaseTab):
             "exquisite_corpus": True,  # Always available - dialog handles text extraction
         }
 
+        self.card_grid.set_algorithm_availability(availability)
+
+    def _reset_card_availability(self):
+        """Reset all cards to enabled state (for fresh project/intention flow)."""
+        availability = {
+            "color": True,
+            "duration": True,
+            "shuffle": True,
+            "sequential": True,
+            "exquisite_corpus": True,
+        }
         self.card_grid.set_algorithm_availability(availability)
 
     def add_clip_to_timeline(self, clip, source):
