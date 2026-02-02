@@ -4234,3 +4234,219 @@ def search_glossary(query: str, category: Optional[str] = None) -> dict:
             "terms": [],
             "message": f"No terms found matching '{query}'."
         }
+
+
+# =============================================================================
+# Audio-Guided Sequencing Tools
+# =============================================================================
+
+@tools.register(
+    description=(
+        "Analyze an audio or video file for beats, tempo, and onsets. "
+        "Returns beat timestamps for rhythm-based video editing. "
+        "Supports MP3, WAV, FLAC audio files and video files with audio tracks."
+    ),
+    requires_project=False,
+    modifies_gui_state=False
+)
+def detect_audio_beats(
+    audio_path: str,
+    include_onsets: bool = True
+) -> dict:
+    """Analyze audio for beats, tempo, and onset detection.
+
+    Args:
+        audio_path: Path to audio file (MP3, WAV, FLAC) or video file
+        include_onsets: Whether to detect onsets/transients (good for cut points)
+
+    Returns:
+        Dict with tempo_bpm, beat_times, onset_times, downbeat_times, duration
+    """
+    from pathlib import Path
+    from core.analysis.audio import (
+        analyze_music_file,
+        analyze_audio_from_video,
+        has_audio_track,
+    )
+
+    path = Path(audio_path)
+
+    if not path.exists():
+        return {
+            "success": False,
+            "error": f"File not found: {audio_path}"
+        }
+
+    # Determine if audio or video file
+    audio_extensions = {".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg"}
+    video_extensions = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
+
+    try:
+        if path.suffix.lower() in audio_extensions:
+            # Direct audio file
+            analysis = analyze_music_file(path, include_onsets=include_onsets)
+        elif path.suffix.lower() in video_extensions:
+            # Video file - extract and analyze audio
+            if not has_audio_track(path):
+                return {
+                    "success": False,
+                    "error": f"Video file has no audio track: {audio_path}"
+                }
+            analysis = analyze_audio_from_video(path, include_onsets=include_onsets)
+        else:
+            return {
+                "success": False,
+                "error": f"Unsupported file type: {path.suffix}. "
+                         f"Supported: {audio_extensions | video_extensions}"
+            }
+
+        return {
+            "success": True,
+            "file": str(path),
+            "tempo_bpm": round(analysis.tempo_bpm, 1),
+            "beat_count": len(analysis.beat_times),
+            "beat_times": [round(t, 3) for t in analysis.beat_times[:20]],  # First 20
+            "beat_times_truncated": len(analysis.beat_times) > 20,
+            "downbeat_count": len(analysis.downbeat_times),
+            "downbeat_times": [round(t, 3) for t in analysis.downbeat_times[:10]],
+            "onset_count": len(analysis.onset_times) if include_onsets else 0,
+            "onset_times": [round(t, 3) for t in analysis.onset_times[:20]] if include_onsets else [],
+            "duration_seconds": round(analysis.duration_seconds, 2),
+            "message": (
+                f"Detected {analysis.tempo_bpm:.1f} BPM with "
+                f"{len(analysis.beat_times)} beats over {analysis.duration_seconds:.1f}s"
+            )
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Audio analysis failed: {str(e)}"
+        }
+
+
+@tools.register(
+    description=(
+        "Suggest beat-aligned cut points for clips in the current sequence. "
+        "Analyzes an audio track and suggests adjustments to align clip transitions "
+        "with musical beats. Strategies: 'nearest' (snap to closest beat), "
+        "'downbeat' (prefer strong beats), 'onset' (align to transients/hits)."
+    ),
+    requires_project=True,
+    modifies_gui_state=False
+)
+def align_sequence_to_audio(
+    audio_path: str,
+    strategy: str = "nearest",
+    max_adjustment: float = 0.5
+) -> dict:
+    """Suggest beat-aligned adjustments for sequence clip cut points.
+
+    Args:
+        audio_path: Path to music/audio file to align with
+        strategy: Alignment strategy - 'nearest', 'downbeat', or 'onset'
+        max_adjustment: Maximum time shift in seconds (default 0.5)
+
+    Returns:
+        Dict with alignment suggestions for each clip
+    """
+    from pathlib import Path
+    from core.analysis.audio import analyze_music_file, analyze_audio_from_video, has_audio_track
+    from core.remix.audio_sync import suggest_beat_aligned_cuts
+
+    # Validate strategy
+    valid_strategies = ("nearest", "downbeat", "onset")
+    if strategy not in valid_strategies:
+        return {
+            "success": False,
+            "error": f"Invalid strategy '{strategy}'. Use: {valid_strategies}"
+        }
+
+    # Check sequence has clips
+    if not project.sequence or not project.sequence.clips:
+        return {
+            "success": False,
+            "error": "No clips in sequence. Add clips to the sequence first."
+        }
+
+    # Load and analyze audio
+    path = Path(audio_path)
+    if not path.exists():
+        return {
+            "success": False,
+            "error": f"Audio file not found: {audio_path}"
+        }
+
+    audio_extensions = {".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg"}
+    video_extensions = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
+
+    try:
+        if path.suffix.lower() in audio_extensions:
+            audio_analysis = analyze_music_file(path)
+        elif path.suffix.lower() in video_extensions:
+            if not has_audio_track(path):
+                return {
+                    "success": False,
+                    "error": f"Video file has no audio track: {audio_path}"
+                }
+            audio_analysis = analyze_audio_from_video(path)
+        else:
+            return {
+                "success": False,
+                "error": f"Unsupported file type: {path.suffix}"
+            }
+
+        # Build clip end times from sequence
+        # Calculate cumulative end times based on clip durations
+        clip_end_times = []
+        current_time = 0.0
+
+        for seq_clip in project.sequence.clips:
+            # Find the source clip to get FPS
+            source_clip = project.clips_by_id.get(seq_clip.source_clip_id)
+            source = project.sources_by_id.get(seq_clip.source_id)
+
+            if source_clip and source:
+                duration = source_clip.duration_seconds(source.fps)
+                current_time += duration
+                clip_end_times.append((seq_clip.id, current_time))
+
+        if not clip_end_times:
+            return {
+                "success": False,
+                "error": "Could not calculate clip durations. Check source clips exist."
+            }
+
+        # Get alignment suggestions
+        suggestions = suggest_beat_aligned_cuts(
+            clip_end_times=clip_end_times,
+            audio_analysis=audio_analysis,
+            strategy=strategy,
+            max_adjustment=max_adjustment,
+        )
+
+        return {
+            "success": True,
+            "audio_file": str(path),
+            "tempo_bpm": round(audio_analysis.tempo_bpm, 1),
+            "strategy": strategy,
+            "max_adjustment": max_adjustment,
+            "sequence_clip_count": len(project.sequence.clips),
+            "suggestions_count": len(suggestions),
+            "suggestions": [s.to_dict() for s in suggestions],
+            "message": (
+                f"Found {len(suggestions)} clips that could be adjusted to align with "
+                f"{audio_analysis.tempo_bpm:.1f} BPM beats (strategy: {strategy})"
+            )
+        }
+
+    except ValueError as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Alignment analysis failed: {str(e)}"
+        }
