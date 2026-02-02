@@ -22,6 +22,14 @@ from .audio import (
     analyze_audio_from_video,
     analyze_music_file,
 )
+from .sequence import (
+    analyze_sequence,
+    analyze_pacing,
+    check_continuity,
+    analyze_visual_consistency,
+    generate_suggestions,
+    get_pacing_curve,
+)
 
 __all__ = [
     "extract_dominant_colors",
@@ -41,4 +49,11 @@ __all__ = [
     "analyze_audio",
     "analyze_audio_from_video",
     "analyze_music_file",
+    # Sequence analysis
+    "analyze_sequence",
+    "analyze_pacing",
+    "check_continuity",
+    "analyze_visual_consistency",
+    "generate_suggestions",
+    "get_pacing_curve",
 ]
