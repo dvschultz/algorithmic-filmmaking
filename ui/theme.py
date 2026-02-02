@@ -119,6 +119,9 @@ class UISizes:
     GRID_CARD_MAX_WIDTH = 240  # Maximum width per card/column
     GRID_MARGIN = 16           # Outer margin around grid
 
+    # Source group header
+    SOURCE_HEADER_HEIGHT = 36  # Height of collapsible source headers in clip grid
+
 
 # Dark theme color definitions
 DARK_THEME = ThemeColors(
