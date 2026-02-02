@@ -5793,17 +5793,19 @@ class MainWindow(QMainWindow):
         )
         self.intention_import_dialog.show()
 
-    def _on_intention_import_confirmed(self, local_files: list, urls: list, algorithm: str, direction: str = None):
+    def _on_intention_import_confirmed(self, local_files: list, urls: list, algorithm: str, direction: str = None, shot_type: str = None):
         """Handle confirmation of import in the intention workflow dialog.
 
         Starts the workflow coordinator to process the sources.
         """
-        logger.info(f"Intention import confirmed: {len(local_files)} files, {len(urls)} URLs, direction={direction}")
+        logger.info(f"Intention import confirmed: {len(local_files)} files, {len(urls)} URLs, direction={direction}, shot_type={shot_type}")
 
         # Use stored algorithm (from card click) if dialog didn't provide one
         algorithm_to_use = algorithm or self._intention_pending_algorithm
         # Use direction from dialog if provided, otherwise fallback to stored
         direction_to_use = direction or getattr(self, '_intention_pending_direction', None)
+        # Store shot type for filtering when workflow completes
+        self._intention_pending_shot_type = shot_type
 
         # Validate we have something to import
         if not local_files and not urls:
@@ -6026,16 +6028,33 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("Exquisite Corpus sequence created")
             self._mark_dirty()
         else:
+            # Get shot type filter from pending state
+            shot_type = getattr(self, '_intention_pending_shot_type', None)
+
             clips_with_sources = []
             for clip in all_clips:
                 source = self.sources_by_id.get(clip.source_id)
                 if source:
+                    # Apply shot type filter if specified
+                    if shot_type and clip.shot_type != shot_type:
+                        continue
                     clips_with_sources.append((clip, source))
+
+            # Handle empty state after filtering
+            if not clips_with_sources and shot_type:
+                QMessageBox.information(
+                    self,
+                    "No Matching Clips",
+                    f"No clips match the selected shot type '{shot_type}'.\n"
+                    "Try selecting 'All' or analyzing clips for shot type first."
+                )
+                return
 
             result = self.sequence_tab.apply_intention_workflow_result(
                 algorithm=algorithm,
                 clips_with_sources=clips_with_sources,
                 direction=direction,
+                shot_type=shot_type,
             )
 
             if result.get("success"):
