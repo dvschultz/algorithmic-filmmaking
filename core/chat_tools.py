@@ -4121,3 +4121,116 @@ def group_clips_by(project, criterion: str) -> dict:
         "group_count": len(groups),
         "groups": formatted_groups
     }
+
+
+# =============================================================================
+# Film Language & Glossary Tools
+# =============================================================================
+
+@tools.register(
+    description=(
+        "Look up the definition of a film/cinematography term. "
+        "Accepts term keys (like 'CU', 'low_angle') or display names (like 'Close-Up'). "
+        "Returns the term's name, category, and definition."
+    ),
+    requires_project=False,
+    modifies_gui_state=False
+)
+def get_film_term_definition(term: str) -> dict:
+    """Look up a film term definition from the glossary.
+
+    Args:
+        term: The term to look up (case-insensitive, matches key or display name)
+
+    Returns:
+        Dict with success status and term data (name, category, definition)
+    """
+    from core.film_glossary import get_term_definition
+
+    if not term or not term.strip():
+        return {
+            "success": False,
+            "error": "No term provided. Please specify a film term to look up."
+        }
+
+    result = get_term_definition(term)
+
+    if result:
+        return {
+            "success": True,
+            "key": result["key"],
+            "name": result["name"],
+            "category": result["category"],
+            "definition": result["definition"]
+        }
+    else:
+        return {
+            "success": False,
+            "error": f"Term '{term}' not found in glossary.",
+            "suggestion": "Try searching with search_glossary for partial matches."
+        }
+
+
+@tools.register(
+    description=(
+        "Search the film glossary for terms matching a query. "
+        "Searches term names and definitions. Optionally filter by category: "
+        "'Shot Sizes', 'Camera Angles', 'Camera Movement', 'Composition', "
+        "'Lighting', 'Focus', 'Sound', 'Editing'."
+    ),
+    requires_project=False,
+    modifies_gui_state=False
+)
+def search_glossary(query: str, category: Optional[str] = None) -> dict:
+    """Search the film glossary for matching terms.
+
+    Args:
+        query: Search string to match against term names and definitions
+        category: Optional category filter (e.g., 'Shot Sizes', 'Lighting')
+
+    Returns:
+        Dict with success status and list of matching terms
+    """
+    from core.film_glossary import search_glossary as do_search, GLOSSARY_CATEGORIES
+
+    if not query or not query.strip():
+        return {
+            "success": False,
+            "error": "No search query provided."
+        }
+
+    # Validate category if provided
+    if category and category != "All" and category not in GLOSSARY_CATEGORIES:
+        return {
+            "success": False,
+            "error": f"Invalid category '{category}'.",
+            "valid_categories": GLOSSARY_CATEGORIES
+        }
+
+    results = do_search(query, category)
+
+    if results:
+        return {
+            "success": True,
+            "query": query,
+            "category_filter": category,
+            "result_count": len(results),
+            "terms": [
+                {
+                    "key": r["key"],
+                    "name": r["name"],
+                    "category": r["category"],
+                    "definition": r["definition"]
+                }
+                for r in results
+            ]
+        }
+    else:
+        return {
+            "success": True,
+            "query": query,
+            "category_filter": category,
+            "result_count": 0,
+            "terms": [],
+            "message": f"No terms found matching '{query}'."
+        }

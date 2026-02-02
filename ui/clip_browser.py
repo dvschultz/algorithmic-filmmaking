@@ -30,6 +30,7 @@ from models.clip import Clip, Source
 from models.cinematography import CinematographyAnalysis
 from core.analysis.color import get_primary_hue, classify_color_palette, get_palette_display_name, COLOR_PALETTES
 from core.analysis.shots import get_display_name, SHOT_TYPES
+from core.film_glossary import get_badge_tooltip
 from ui.theme import theme, UISizes
 
 
@@ -168,6 +169,10 @@ class ClipThumbnail(QFrame):
         )
         if clip.shot_type:
             self.shot_type_label.setText(get_display_name(clip.shot_type))
+            # Add film language tooltip
+            tooltip = get_badge_tooltip(clip.shot_type)
+            if tooltip:
+                self.shot_type_label.setToolTip(tooltip)
         else:
             self.shot_type_label.setVisible(False)
         info_layout.addWidget(self.shot_type_label)
@@ -340,6 +345,10 @@ class ClipThumbnail(QFrame):
         self.clip.shot_type = shot_type
         if shot_type:
             self.shot_type_label.setText(get_display_name(shot_type))
+            # Add film language tooltip
+            tooltip = get_badge_tooltip(shot_type)
+            if tooltip:
+                self.shot_type_label.setToolTip(tooltip)
             self.shot_type_label.setVisible(True)
         else:
             self.shot_type_label.setVisible(False)
@@ -374,8 +383,8 @@ class ClipThumbnail(QFrame):
             self.cinematography_container.setVisible(False)
             return
 
-        # Get display badges from cinematography
-        badges = cinematography.get_display_badges()
+        # Get display badges from cinematography (key, display_text tuples)
+        badges = cinematography.get_display_badges_formatted()
 
         if not badges:
             self.cinematography_container.setVisible(False)
@@ -388,9 +397,15 @@ class ClipThumbnail(QFrame):
             "border-radius: 2px; padding: 1px 3px;"
         )
 
-        for text in badges[:4]:
-            badge = QLabel(text)
+        for key, display_text in badges[:4]:
+            badge = QLabel(display_text)
             badge.setStyleSheet(badge_style)
+
+            # Add film language tooltip using the key for lookup
+            tooltip_html = get_badge_tooltip(key)
+            if tooltip_html:
+                badge.setToolTip(tooltip_html)
+
             layout.addWidget(badge)
             self._cinematography_badges.append(badge)
 
