@@ -57,10 +57,10 @@ The user's VideoMAE model requires GPU inference and processes 16-frame video cl
 
 ### Phase 1: Model Packaging for Replicate
 
-- [ ] Create Replicate account and install Cog CLI
-- [ ] Download model weights from Google Drive
-- [ ] Create `cog.yaml` with GPU environment (CUDA, PyTorch, transformers, av)
-- [ ] Write `predict.py` with Predictor class:
+- [x] Create Replicate account and install Cog CLI
+- [x] Download model weights from Google Drive
+- [x] Create `cog.yaml` with GPU environment (CUDA, PyTorch, transformers, av)
+- [x] Write `predict.py` with Predictor class:
   - Input: video file (URL or base64)
   - Output: shot_type, confidence, all_scores
 - [ ] Test locally with `cog predict`
@@ -68,49 +68,49 @@ The user's VideoMAE model requires GPU inference and processes 16-frame video cl
 
 ### Phase 2: Integration into Scene Ripper
 
-- [ ] Add Replicate API key to settings (`core/settings.py`)
-- [ ] Add Replicate key storage to keyring (`get_replicate_api_key()`)
-- [ ] Update `ui/settings_dialog.py` with Replicate API key field
-- [ ] Create new `core/analysis/shots_cloud.py`:
+- [x] Add Replicate API key to settings (`core/settings.py`)
+- [x] Add Replicate key storage to keyring (`get_replicate_api_key()`)
+- [x] Update `ui/settings_dialog.py` with Replicate API key field
+- [x] Create new `core/analysis/shots_cloud.py`:
   - `classify_shot_replicate(clip_path: Path) -> tuple[str, float]`
   - Handle video extraction (reuse `extract_clip_segment` from description.py)
   - Call Replicate API
   - Return shot type and confidence
-- [ ] Update `core/analysis/shots.py`:
+- [x] Update `core/analysis/shots.py`:
   - Add tier system like description.py (cpu/cloud)
   - CPU tier: keep current CLIP (free fallback)
   - Cloud tier: use Replicate VideoMAE
-- [ ] Update settings for shot classification tier choice
-- [ ] Update `ui/settings_dialog.py` with tier dropdown
+- [x] Update settings for shot classification tier choice
+- [x] Update `ui/settings_dialog.py` with tier dropdown
 
 ### Phase 3: UI and Worker Updates
 
-- [ ] Update `ui/workers/analysis_worker.py` to use new shot classification
-- [ ] Add progress reporting for cloud inference
-- [ ] Handle API errors gracefully (timeout, rate limit)
-- [ ] Update shot type labels in UI to match 5-class system
+- [x] Update `ShotTypeWorker` in `ui/main_window.py` to use tiered classification
+- [x] Add progress reporting for cloud inference
+- [x] Handle API errors gracefully (timeout, rate limit) - falls back to CPU tier
+- [x] Update shot type labels to 5-class system (wide, full, medium, close-up, extreme close-up)
 
 ### Phase 4: Testing and Polish
 
 - [ ] Test with various video types
 - [ ] Verify accuracy improvement over CLIP
-- [ ] Add logging for debugging
+- [x] Add logging for debugging
 - [ ] Document API costs in README
 
 ## Files to Create/Modify
 
-### New Files
+### New Files (Created)
 
-1. **`replicate-model/cog.yaml`** - Replicate model config
-2. **`replicate-model/predict.py`** - Inference code for Replicate
-3. **`core/analysis/shots_cloud.py`** - Replicate API client
+1. **`replicate/shot-classifier/cog.yaml`** - Replicate model config ✅
+2. **`replicate/shot-classifier/predict.py`** - Inference code for Replicate ✅
+3. **`core/analysis/shots_cloud.py`** - Replicate API client ✅
 
-### Modified Files
+### Modified Files (Completed)
 
-1. **`core/settings.py`** - Add Replicate key, shot tier setting
-2. **`ui/settings_dialog.py`** - Add Replicate key field, tier dropdown
-3. **`core/analysis/shots.py`** - Add tier routing, update shot types
-4. **`ui/workers/analysis_worker.py`** - Use new classification
+1. **`core/settings.py`** - Add Replicate key, shot tier setting ✅
+2. **`ui/settings_dialog.py`** - Add Replicate key field, tier dropdown ✅
+3. **`core/analysis/shots.py`** - Add tier routing (`classify_shot_type_tiered`) ✅
+4. **`ui/main_window.py`** - Update `ShotTypeWorker` to use tiered classification ✅
 
 ## Replicate Model Code
 
