@@ -9,12 +9,14 @@ Primary use case: Aligning video cuts to music beats for
 music videos, montages, and rhythm-driven editing.
 """
 
+import bisect
 import logging
 import subprocess
 import tempfile
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Generator, Optional
 
 import numpy as np
 
@@ -39,26 +41,18 @@ class AudioAnalysis:
 
     Attributes:
         tempo_bpm: Detected tempo in beats per minute
-        beat_times: Timestamps (seconds) of detected beats
-        onset_times: Timestamps of transients/hits (good cut points)
-        downbeat_times: Strong beats (measure starts in 4/4 time)
+        beat_times: Timestamps (seconds) of detected beats (sorted)
+        onset_times: Timestamps of transients/hits (good cut points, sorted)
+        downbeat_times: Strong beats (measure starts, assumes 4/4 time)
         duration_seconds: Total audio duration
         sample_rate: Audio sample rate used for analysis
     """
     tempo_bpm: float = 0.0
-    beat_times: list[float] = None
-    onset_times: list[float] = None
-    downbeat_times: list[float] = None
+    beat_times: list[float] = field(default_factory=list)
+    onset_times: list[float] = field(default_factory=list)
+    downbeat_times: list[float] = field(default_factory=list)
     duration_seconds: float = 0.0
     sample_rate: int = 22050
-
-    def __post_init__(self):
-        if self.beat_times is None:
-            self.beat_times = []
-        if self.onset_times is None:
-            self.onset_times = []
-        if self.downbeat_times is None:
-            self.downbeat_times = []
 
     def to_dict(self) -> dict:
         """Serialize for JSON storage."""
@@ -88,18 +82,20 @@ class AudioAnalysis:
     def nearest_beat(self, time: float) -> float:
         """Find the beat timestamp nearest to a given time.
 
+        Uses binary search for O(log n) performance.
+
         Args:
             time: Target time in seconds
 
         Returns:
             Nearest beat timestamp, or the input time if no beats
         """
-        if not self.beat_times:
-            return time
-        return min(self.beat_times, key=lambda b: abs(b - time))
+        return _find_nearest(self.beat_times, time)
 
     def nearest_onset(self, time: float) -> float:
         """Find the onset timestamp nearest to a given time.
+
+        Uses binary search for O(log n) performance.
 
         Args:
             time: Target time in seconds
@@ -107,9 +103,34 @@ class AudioAnalysis:
         Returns:
             Nearest onset timestamp, or the input time if no onsets
         """
-        if not self.onset_times:
-            return time
-        return min(self.onset_times, key=lambda o: abs(o - time))
+        return _find_nearest(self.onset_times, time)
+
+
+def _find_nearest(sorted_times: list[float], time: float) -> float:
+    """Find the nearest timestamp using binary search.
+
+    Args:
+        sorted_times: Sorted list of timestamps
+        time: Target time to find nearest match for
+
+    Returns:
+        Nearest timestamp, or the input time if list is empty
+    """
+    if not sorted_times:
+        return time
+
+    idx = bisect.bisect_left(sorted_times, time)
+
+    # Handle edge cases
+    if idx == 0:
+        return sorted_times[0]
+    if idx == len(sorted_times):
+        return sorted_times[-1]
+
+    # Compare neighbors and return closest
+    before = sorted_times[idx - 1]
+    after = sorted_times[idx]
+    return before if (time - before) <= (after - time) else after
 
 
 def has_audio_track(file_path: Path) -> bool:
@@ -130,10 +151,47 @@ def has_audio_track(file_path: Path) -> bool:
     ]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        # Check return code - ffprobe returns non-zero for errors
+        if result.returncode != 0:
+            logger.warning(f"ffprobe returned non-zero: {result.stderr.strip()}")
+            return False
         return bool(result.stdout.strip())
     except (subprocess.TimeoutExpired, FileNotFoundError) as e:
         logger.warning(f"ffprobe check failed: {e}")
         return False
+
+
+@contextmanager
+def extracted_audio(
+    video_path: Path,
+    sample_rate: int = 22050,
+) -> Generator[Path, None, None]:
+    """Context manager for temporary audio extraction.
+
+    Guarantees cleanup of temp files even if analysis fails.
+
+    Args:
+        video_path: Path to video file
+        sample_rate: Target sample rate
+
+    Yields:
+        Path to extracted WAV file
+
+    Example:
+        with extracted_audio(video_path) as audio_path:
+            result = analyze_audio(audio_path)
+    """
+    audio_path = extract_audio(video_path, sample_rate=sample_rate)
+    try:
+        yield audio_path
+    finally:
+        if audio_path.exists():
+            audio_path.unlink()
+        # Try to remove temp directory if empty
+        try:
+            audio_path.parent.rmdir()
+        except OSError:
+            pass
 
 
 def extract_audio(
@@ -274,18 +332,14 @@ def analyze_audio_from_video(
     if not has_audio_track(video_path):
         raise ValueError(f"Video has no audio track: {video_path}")
 
-    audio_path = extract_audio(video_path, sample_rate=sample_rate)
-
-    try:
+    if cleanup:
+        # Use context manager for guaranteed cleanup
+        with extracted_audio(video_path, sample_rate=sample_rate) as audio_path:
+            return analyze_audio(audio_path, sample_rate=sample_rate, include_onsets=include_onsets)
+    else:
+        # Caller is responsible for cleanup
+        audio_path = extract_audio(video_path, sample_rate=sample_rate)
         return analyze_audio(audio_path, sample_rate=sample_rate, include_onsets=include_onsets)
-    finally:
-        if cleanup and audio_path.exists():
-            audio_path.unlink()
-            # Try to remove temp directory if empty
-            try:
-                audio_path.parent.rmdir()
-            except OSError:
-                pass
 
 
 def analyze_music_file(

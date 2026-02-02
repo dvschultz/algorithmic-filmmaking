@@ -143,9 +143,15 @@ class ContinuityWarning:
     def from_dict(cls, data: dict) -> "ContinuityWarning":
         if data is None:
             return cls()
+        # Validate and coerce clip_pair to exactly 2 elements
+        raw_pair = data.get("clip_pair", ["", ""])
+        if len(raw_pair) >= 2:
+            clip_pair = (raw_pair[0], raw_pair[1])
+        else:
+            clip_pair = ("", "")
         return cls(
             warning_type=data.get("warning_type", ""),
-            clip_pair=tuple(data.get("clip_pair", ["", ""])),
+            clip_pair=clip_pair,
             severity=data.get("severity", "low"),
             explanation=data.get("explanation", ""),
             can_be_intentional=data.get("can_be_intentional", True),
@@ -217,6 +223,18 @@ class GenreComparison:
             "assessment": self.assessment,
         }
 
+    @classmethod
+    def from_dict(cls, data: dict) -> "GenreComparison":
+        if data is None:
+            return cls()
+        return cls(
+            genre=data.get("genre", ""),
+            genre_norm_duration=data.get("genre_norm_duration", 0.0),
+            actual_duration=data.get("actual_duration", 0.0),
+            difference_percent=data.get("difference_percent", 0.0),
+            assessment=data.get("assessment", ""),
+        )
+
 
 @dataclass
 class SequenceAnalysis:
@@ -260,15 +278,17 @@ class SequenceAnalysis:
             suggestions=data.get("suggestions", []),
         )
 
-    def compare_to_genre(self, genre: str) -> Optional[GenreComparison]:
+    def compare_to_genre(self, genre: Optional[str]) -> Optional[GenreComparison]:
         """Compare this sequence's pacing to a genre norm.
 
         Args:
             genre: Genre name (action, drama, documentary, music_video, etc.)
 
         Returns:
-            GenreComparison or None if genre not found
+            GenreComparison or None if genre not found or None
         """
+        if not genre:
+            return None
         norm = GENRE_PACING_NORMS.get(genre.lower())
         if not norm:
             return None
