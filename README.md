@@ -125,6 +125,7 @@ Enrich clips with metadata using local or cloud AI models:
 |----------|-------------|--------|
 | **Describe** | Natural language description of clip content | GPT-4o, Claude, Gemini, Moondream (local) |
 | **Classify** | Shot type detection (close-up, medium, wide, etc.) | CLIP (local), VideoMAE (cloud) |
+| **Cinematography** | Full film language analysis (shot size, angle, movement, lighting, composition) | Gemini (video or frame) |
 | **Transcribe** | Speech-to-text | faster-whisper (local) |
 | **Colors** | Dominant color palette extraction | OpenCV |
 | **Objects** | Object detection | YOLO |
@@ -134,6 +135,24 @@ Supports both local (free, private) and cloud (higher quality) processing tiers.
 **Shot Type Classification Tiers:**
 - **CPU (local)**: CLIP zero-shot classification with ensemble prompts—runs on thumbnails, free and private
 - **Cloud**: VideoMAE model on Replicate—analyzes video segments for significantly better accuracy, requires API key
+
+### Cinematography Analysis
+
+Rich VLM-powered analysis providing professional-grade film language breakdown:
+
+| Category | Properties |
+|----------|------------|
+| **Shot Size** | Granular classification: ELS, VLS, LS, MLS, MS, MCU, CU, BCU, ECU, Insert |
+| **Camera Angle** | low_angle, eye_level, high_angle, dutch_angle, birds_eye, worms_eye + emotional effect |
+| **Camera Movement** | static, pan, tilt, track, handheld, crane, arc (video mode only) |
+| **Composition** | Subject position, headroom, lead room, visual balance |
+| **Lighting** | Style (high/low key), direction, quality (hard/soft), color temperature |
+| **Technical** | Dutch tilt detection, lens type estimation, depth of field |
+| **Derived** | Emotional intensity, suggested pacing |
+
+**Analysis Modes:**
+- **Frame mode**: Fast analysis from thumbnails
+- **Video mode**: Analyzes full clip segment for camera movement detection (requires Gemini API)
 
 ### Film Language Analysis
 
@@ -350,6 +369,7 @@ python -m cli.main --help
 - [x] Linux support (AppImage packaging)
 - [x] AI-powered descriptions (GPT-4o, Claude, Gemini, Moondream)
 - [x] Shot type classification and filtering
+- [x] Cinematography analysis (VLM-powered film language breakdown)
 - [x] Transcription (faster-whisper)
 - [x] Color analysis with direction control
 - [x] Integrated chat agent
