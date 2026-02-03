@@ -3086,8 +3086,9 @@ def select_source(main_window, source_id: str) -> dict:
 
 
 @tools.register(
-    description="Detect scenes in a video source with live GUI update. Updates the project with detected clips. "
-                "This may take a while for long videos.",
+    description="Detect scenes in a video source with live GUI update. Supports visual detection (adaptive/content) "
+                "and text-based detection (karaoke) for videos with changing text overlays. "
+                "For karaoke mode, set mode='karaoke' and optionally adjust roi_top, text_threshold, etc.",
     requires_project=True,
     modifies_gui_state=True,
     modifies_project_state=True
@@ -3095,17 +3096,32 @@ def select_source(main_window, source_id: str) -> dict:
 def detect_scenes_live(
     main_window,
     source_id: str,
-    sensitivity: float = 3.0
+    mode: str = "adaptive",
+    sensitivity: float = 3.0,
+    roi_top: float = 0.0,
+    text_threshold: float = 60.0,
+    confirm_frames: int = 3,
+    cut_offset: int = 5,
 ) -> dict:
     """Detect scenes in a source video with live GUI update.
 
     Args:
         source_id: ID of the source to analyze
-        sensitivity: Detection sensitivity (1.0=sensitive, 10.0=less sensitive)
+        mode: Detection mode - 'adaptive' (visual), 'content' (visual), or 'karaoke' (text-based)
+        sensitivity: Detection sensitivity for visual modes (1.0=sensitive, 10.0=less sensitive)
+        roi_top: For karaoke mode - top of text region (0.0=full frame, 0.75=bottom 25%)
+        text_threshold: For karaoke mode - text similarity threshold (lower=more cuts)
+        confirm_frames: For karaoke mode - frames to confirm text change (reduces false positives)
+        cut_offset: For karaoke mode - shift cuts backward to catch fade-in starts
 
     Returns:
         Dict with detected clip count and IDs (after worker completes)
     """
+    # Validate mode
+    valid_modes = ["adaptive", "content", "karaoke"]
+    if mode not in valid_modes:
+        return {"success": False, "error": f"Invalid mode '{mode}'. Valid modes: {valid_modes}"}
+
     # Find source
     source = None
     for s in main_window.project.sources:
@@ -3126,14 +3142,28 @@ def detect_scenes_live(
     # Mark that we're waiting for detection result via agent
     main_window._pending_agent_detection = True
 
+    # Build config dict based on mode
+    if mode == "karaoke":
+        config = {
+            "roi_top_percent": roi_top,
+            "text_similarity_threshold": text_threshold,
+            "confirm_frames": confirm_frames,
+            "cut_offset": cut_offset,
+        }
+    else:
+        config = {
+            "threshold": sensitivity,
+            "use_adaptive": (mode == "adaptive"),
+        }
+
     # Start detection (this returns immediately, worker runs in background)
-    main_window._start_detection(sensitivity)
+    main_window._start_detection(mode, config)
 
     # Switch to Cut tab to show progress
     main_window._switch_to_tab("cut")
 
     # Return marker that tells GUI handler to wait for worker completion
-    return {"_wait_for_worker": "detection", "source_id": source_id}
+    return {"_wait_for_worker": "detection", "source_id": source_id, "mode": mode}
 
 
 @tools.register(

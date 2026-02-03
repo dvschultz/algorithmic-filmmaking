@@ -27,6 +27,8 @@ einops>=0.7.0
 
 # OCR / Text Extraction
 pytesseract>=0.3.10  # Tesseract OCR wrapper (requires tesseract binary)
+paddleocr>=3.0.0     # PaddleOCR for karaoke/text scene detection (requires paddlepaddle)
+rapidfuzz>=3.0.0     # Fast fuzzy string matching for text comparison
 
 # Audio Analysis
 librosa>=0.10.0  # Beat detection, tempo analysis, onset detection

@@ -26,7 +26,7 @@ from PySide6.QtCore import Qt, Signal, QThread, QUrl, QTimer, Slot
 from PySide6.QtGui import QDesktopServices, QKeySequence, QAction, QDragEnterEvent, QDropEvent
 
 from models.clip import Source, Clip
-from core.scene_detect import SceneDetector, DetectionConfig
+from core.scene_detect import SceneDetector, DetectionConfig, KaraokeDetectionConfig
 from core.thumbnail import ThumbnailGenerator
 from core.downloader import VideoDownloader
 from core.sequence_export import SequenceExporter, ExportConfig
@@ -84,15 +84,27 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 class DetectionWorker(CancellableWorker):
-    """Background worker for scene detection."""
+    """Background worker for scene detection.
+
+    Supports both visual detection (adaptive/content) and text-based
+    detection (karaoke mode).
+    """
 
     progress = Signal(float, str)  # progress (0-1), status message
     detection_completed = Signal(object, list)  # source, clips (renamed from 'finished' to avoid shadowing QThread.finished)
 
-    def __init__(self, video_path: Path, config: DetectionConfig):
+    def __init__(
+        self,
+        video_path: Path,
+        config: DetectionConfig = None,
+        mode: str = "adaptive",
+        karaoke_config: KaraokeDetectionConfig = None,
+    ):
         super().__init__()
         self.video_path = video_path
-        self.config = config
+        self.config = config or DetectionConfig()
+        self.mode = mode
+        self.karaoke_config = karaoke_config
 
     def run(self):
         self._log_start()
@@ -100,11 +112,23 @@ class DetectionWorker(CancellableWorker):
             if self.is_cancelled():
                 self._log_cancelled()
                 return
+
             detector = SceneDetector(self.config)
-            source, clips = detector.detect_scenes_with_progress(
-                self.video_path,
-                lambda p, m: self.progress.emit(p, m),
-            )
+
+            if self.mode == "karaoke":
+                # Use karaoke (text-based) detection
+                source, clips = detector.detect_karaoke_scenes_with_progress(
+                    self.video_path,
+                    lambda p, m: self.progress.emit(p, m),
+                    self.karaoke_config,
+                )
+            else:
+                # Use visual detection (adaptive or content)
+                source, clips = detector.detect_scenes_with_progress(
+                    self.video_path,
+                    lambda p, m: self.progress.emit(p, m),
+                )
+
             if self.is_cancelled():
                 self._log_cancelled()
                 return
@@ -2669,7 +2693,7 @@ class MainWindow(QMainWindow):
             self.queue_label.setVisible(True)
 
         self._select_source(source)
-        self._start_detection(self.settings.default_sensitivity)
+        self._start_detection("adaptive", {"threshold": self.settings.default_sensitivity})
         self.tab_widget.setCurrentIndex(1)  # Switch to Cut tab
 
     def _on_source_selected(self, source: Source):
@@ -2754,12 +2778,17 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.warning(f"Failed to generate source thumbnail: {e}")
 
-    def _on_detect_from_tab(self, threshold: float):
-        """Handle detection request from Cut tab."""
+    def _on_detect_from_tab(self, mode: str, config: dict):
+        """Handle detection request from Cut tab.
+
+        Args:
+            mode: Detection mode ('adaptive', 'content', or 'karaoke')
+            config: Configuration dict with mode-specific parameters
+        """
         if not self.current_source:
             return
-        # Start detection with the provided threshold
-        self._start_detection(threshold)
+        # Start detection with the provided mode and config
+        self._start_detection(mode, config)
 
     def _on_cut_selection_changed(self, clip_ids: list[str]):
         """Handle selection change in Cut tab."""
@@ -4135,11 +4164,18 @@ class MainWindow(QMainWindow):
         else:
             self.status_bar.showMessage(f"Downloaded {success} videos successfully")
 
-    def _start_detection(self, threshold: float):
-        """Start scene detection with given threshold."""
-        logger.info("=== START DETECTION ===")
+    def _start_detection(self, mode: str = "adaptive", config_dict: dict = None):
+        """Start scene detection with given mode and config.
+
+        Args:
+            mode: Detection mode ('adaptive', 'content', or 'karaoke')
+            config_dict: Configuration dictionary with mode-specific parameters
+        """
+        logger.info(f"=== START DETECTION (mode={mode}) ===")
         if not self.current_source:
             return
+
+        config_dict = config_dict or {}
 
         # Guard against concurrent detection
         if self.detection_worker and self.detection_worker.isRunning():
@@ -4156,7 +4192,23 @@ class MainWindow(QMainWindow):
         # Update Cut tab state
         self.cut_tab.set_detecting(True)
 
-        config = DetectionConfig(threshold=threshold)
+        # Build configuration based on mode
+        if mode == "karaoke":
+            # Karaoke mode uses KaraokeDetectionConfig
+            karaoke_config = KaraokeDetectionConfig(
+                roi_top_percent=config_dict.get("roi_top_percent", 0.0),
+                text_similarity_threshold=config_dict.get("text_similarity_threshold", 60.0),
+                confirm_frames=config_dict.get("confirm_frames", 3),
+                cut_offset=config_dict.get("cut_offset", 5),
+            )
+            visual_config = None
+        else:
+            # Visual mode uses DetectionConfig
+            visual_config = DetectionConfig(
+                threshold=config_dict.get("threshold", 3.0),
+                use_adaptive=(mode == "adaptive"),
+            )
+            karaoke_config = None
 
         # Start detection in background
         self.progress_bar.setVisible(True)
@@ -4164,7 +4216,10 @@ class MainWindow(QMainWindow):
 
         logger.info("Creating DetectionWorker...")
         self.detection_worker = DetectionWorker(
-            self.current_source.file_path, config
+            self.current_source.file_path,
+            config=visual_config,
+            mode=mode,
+            karaoke_config=karaoke_config,
         )
         self.detection_worker.progress.connect(self._on_detection_progress)
         self.detection_worker.detection_completed.connect(self._on_detection_finished, Qt.UniqueConnection)
