@@ -86,6 +86,7 @@ class IntentionWorkflowCoordinator(QObject):
         "duration": [],  # Duration comes from detection
         "shuffle": [],  # No analysis needed
         "sequential": [],  # No analysis needed
+        "exquisite_corpus": [],  # Text extraction happens in the dialog
     }
 
     def __init__(self, parent=None):

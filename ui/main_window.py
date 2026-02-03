@@ -6292,19 +6292,30 @@ class MainWindow(QMainWindow):
             )
             self.detection_worker = None
 
-        # Use crossfade preset for exquisite_corpus (footage often has soft transitions)
+        # Determine detection mode based on algorithm
         algorithm, _ = self.intention_workflow.get_algorithm_with_direction()
         if algorithm == "exquisite_corpus":
-            config = DetectionConfig.crossfade()
-            logger.info("Using crossfade detection preset for Exquisite Corpus")
+            # Use karaoke (text-based) detection for Exquisite Corpus
+            # Cuts scenes based on on-screen text changes, ideal for text-heavy content
+            karaoke_config = KaraokeDetectionConfig(
+                roi_top_percent=0.0,  # Full frame - let OCR find text anywhere
+                text_similarity_threshold=60.0,
+                confirm_frames=3,
+                cut_offset=5,
+            )
+            logger.info("Using karaoke (text-based) detection for Exquisite Corpus")
+            self.detection_worker = DetectionWorker(
+                source_path,
+                mode="karaoke",
+                karaoke_config=karaoke_config,
+            )
         else:
             config = DetectionConfig(
                 threshold=self.settings.default_sensitivity,
                 min_scene_length=15,
                 use_adaptive=True,
             )
-
-        self.detection_worker = DetectionWorker(source_path, config)
+            self.detection_worker = DetectionWorker(source_path, config)
 
         # Capture generation for lambda closures - used to ignore stale signals
         gen = current_gen
