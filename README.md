@@ -235,6 +235,7 @@ Cloud AI features require API keys. Configure in Settings → API Keys:
 | OpenAI | GPT-4o descriptions, chat | [platform.openai.com](https://platform.openai.com) |
 | Anthropic | Claude descriptions, chat | [console.anthropic.com](https://console.anthropic.com) |
 | Google | Gemini descriptions (supports video input), chat | [aistudio.google.com](https://aistudio.google.com) |
+| Replicate | VideoMAE shot classification (cloud tier) | [replicate.com](https://replicate.com) |
 | YouTube | Search and metadata | [console.cloud.google.com](https://console.cloud.google.com) |
 
 Keys are stored securely in your system keyring. Environment variables (e.g., `ANTHROPIC_API_KEY`) take priority.
