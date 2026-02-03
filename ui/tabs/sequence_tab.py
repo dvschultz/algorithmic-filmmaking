@@ -111,6 +111,7 @@ class SequenceTab(BaseTab):
         self._current_algorithm = None
         self._current_state = self.STATE_CARDS
         self._gui_state = None  # Set by MainWindow
+        self._current_shot_filter = None  # Current shot type filter
 
         # Guard flags
         self._apply_in_progress = False
@@ -810,12 +811,62 @@ class SequenceTab(BaseTab):
         self._on_clear_clicked()
         return {"success": True, "message": "Sequence cleared"}
 
+    def apply_shot_type_filter(self, shot_type: Optional[str] = None) -> int:
+        """Apply shot type filter to the current sequence (for agent tools).
+
+        Regenerates the sequence with only clips matching the specified shot type.
+
+        Args:
+            shot_type: Shot type to filter by (e.g., "wide shot", "close-up").
+                      Use None to show all clips.
+
+        Returns:
+            Number of clips in the filtered sequence.
+        """
+        self._current_shot_filter = shot_type
+
+        # If not in timeline state or no algorithm set, just store the filter
+        if self._current_state != self.STATE_TIMELINE or not self._current_algorithm:
+            return 0
+
+        # Get all available clips
+        clips_to_use = self._available_clips.copy()
+
+        # Apply shot type filter
+        if shot_type:
+            clips_to_use = [
+                (clip, source) for clip, source in clips_to_use
+                if clip.shot_type == shot_type
+            ]
+
+        if not clips_to_use:
+            # Show empty state
+            self.timeline.clear_timeline()
+            self.timeline_preview.clear()
+            logger.info(f"No clips match shot type filter: {shot_type}")
+            return 0
+
+        # Regenerate with current algorithm
+        direction = self._get_current_direction()
+        self._apply_algorithm(self._current_algorithm, clips_to_use, direction=direction)
+
+        return len(clips_to_use)
+
+    def get_current_shot_filter(self) -> Optional[str]:
+        """Get the current shot type filter.
+
+        Returns:
+            Current shot type filter string or None if no filter applied.
+        """
+        return self._current_shot_filter
+
     def apply_intention_workflow_result(
         self,
         algorithm: str,
         clips_with_sources: list,
         direction: Optional[str] = None,
         seed: Optional[int] = None,
+        shot_type: Optional[str] = None,
     ) -> dict:
         """Apply sequence from intention workflow completion.
 
@@ -827,6 +878,7 @@ class SequenceTab(BaseTab):
             clips_with_sources: List of (Clip, Source) tuples from the workflow
             direction: Optional sort direction (e.g., "rainbow" for color)
             seed: Optional random seed for shuffle
+            shot_type: Optional shot type filter that was applied
 
         Returns:
             Dict with success status and clip info
@@ -834,9 +886,10 @@ class SequenceTab(BaseTab):
         if not clips_with_sources:
             return {"success": False, "error": "No clips from workflow"}
 
-        # Update our available clips
+        # Update our available clips and shot filter
         self._available_clips = clips_with_sources
         self._clips = [clip for clip, source in clips_with_sources]
+        self._current_shot_filter = shot_type
         for clip, source in clips_with_sources:
             if source:
                 self._sources[source.id] = source
