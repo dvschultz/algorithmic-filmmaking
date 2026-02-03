@@ -435,7 +435,25 @@ class SceneDetector:
         video_stream = VideoStreamCv2(str(video_path))
         total_frames = video_stream.duration.get_frames()
 
-        scene_manager.detect_scenes(video_stream, show_progress=False)
+        # Define progress callback for frame-by-frame updates
+        last_logged_percent = -1
+
+        def frame_callback(frame_img, frame_num):
+            nonlocal last_logged_percent
+            # Calculate progress (10% to 90% range for detection phase)
+            progress = 0.1 + (frame_num / total_frames) * 0.8
+            percent = int((frame_num / total_frames) * 100)
+
+            # Log every 10% and update progress callback every 1%
+            if percent >= last_logged_percent + 10:
+                logger.info(f"Scene detection: {percent}% ({frame_num:,}/{total_frames:,} frames)")
+                last_logged_percent = percent
+
+            # Update progress callback every 1% to avoid too many UI updates
+            if percent % 1 == 0:
+                progress_callback(progress, f"Analyzing frames... {percent}%")
+
+        scene_manager.detect_scenes(video_stream, show_progress=False, callback=frame_callback)
 
         progress_callback(0.9, "Extracting scenes...")
 
