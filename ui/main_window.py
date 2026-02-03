@@ -3392,6 +3392,9 @@ class MainWindow(QMainWindow):
             clip.shot_type = cinematography.get_simple_shot_type()
             self.analyze_tab.update_clip_cinematography(clip_id, cinematography)
             self.analyze_tab.update_clip_shot_type(clip_id, clip.shot_type)
+            # Refresh sidebar if it's showing this clip
+            if hasattr(self, 'clip_details_sidebar'):
+                self.clip_details_sidebar.refresh_shot_type_if_showing(clip_id, clip.shot_type)
             self._mark_dirty()
 
     @Slot(str)
@@ -4440,6 +4443,9 @@ class MainWindow(QMainWindow):
             # Update both tabs' clip browsers
             self.cut_tab.update_clip_shot_type(clip_id, shot_type)
             self.analyze_tab.update_clip_shot_type(clip_id, shot_type)
+            # Refresh sidebar if it's showing this clip
+            if hasattr(self, 'clip_details_sidebar'):
+                self.clip_details_sidebar.refresh_shot_type_if_showing(clip_id, shot_type)
             self._mark_dirty()
             logger.debug(f"Clip {clip_id}: {shot_type} ({confidence:.2f})")
 

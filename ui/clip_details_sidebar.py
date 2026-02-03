@@ -694,6 +694,34 @@ class ClipDetailsSidebar(QDockWidget):
         if hasattr(self.video_player, 'player'):
             self.video_player.player.stop()
 
+    def refresh_if_showing(self, clip_id: str):
+        """Refresh the sidebar if currently showing the given clip.
+
+        Call this when clip data is updated externally (e.g., after analysis).
+
+        Args:
+            clip_id: ID of the clip that was updated
+        """
+        if self._clip_ref and self._clip_ref.id == clip_id and self._source_ref:
+            logger.debug(f"Refreshing sidebar for updated clip: {clip_id}")
+            # Re-show the clip to refresh all fields
+            self.show_clip(self._clip_ref, self._source_ref)
+
+    def refresh_shot_type_if_showing(self, clip_id: str, shot_type: Optional[str]):
+        """Refresh just the shot type display if showing the given clip.
+
+        Lightweight refresh for analysis completion.
+
+        Args:
+            clip_id: ID of the clip that was updated
+            shot_type: New shot type value
+        """
+        if self._clip_ref and self._clip_ref.id == clip_id:
+            logger.debug(f"Refreshing sidebar shot type for clip: {clip_id} -> {shot_type}")
+            self._block_editable_signals(True)
+            self.shot_type_dropdown.setValue(shot_type)
+            self._block_editable_signals(False)
+
     def keyPressEvent(self, event):
         """Handle key press events.
 
