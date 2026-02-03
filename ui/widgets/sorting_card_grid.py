@@ -30,6 +30,11 @@ ALGORITHMS = {
         "Sequential",
         "Keep clips in their original detection order"
     ),
+    "shot_type": (
+        "🎬",
+        "Shot Type",
+        "Arrange clips by camera framing (wide to close-up)"
+    ),
     "exquisite_corpus": (
         "📝",
         "Exquisite Corpus",
@@ -91,13 +96,14 @@ class SortingCardGrid(QWidget):
         grid_layout.setSpacing(20)
         grid_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Create cards in 3x2 grid (5 algorithms)
+        # Create cards in 3x2 grid (6 algorithms)
         positions = [
             ("color", 0, 0),
             ("duration", 0, 1),
             ("shuffle", 0, 2),
             ("sequential", 1, 0),
-            ("exquisite_corpus", 1, 1),
+            ("shot_type", 1, 1),
+            ("exquisite_corpus", 1, 2),
         ]
 
         for key, row, col in positions:

@@ -86,6 +86,7 @@ class IntentionWorkflowCoordinator(QObject):
         "duration": [],  # Duration comes from detection
         "shuffle": [],  # No analysis needed
         "sequential": [],  # No analysis needed
+        "shot_type": ["shot_type"],  # Needs shot type analysis
         "exquisite_corpus": [],  # Text extraction happens in the dialog
     }
 

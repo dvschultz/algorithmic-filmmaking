@@ -5848,19 +5848,17 @@ class MainWindow(QMainWindow):
         )
         self.intention_import_dialog.show()
 
-    def _on_intention_import_confirmed(self, local_files: list, urls: list, algorithm: str, direction: str = None, shot_type: str = None):
+    def _on_intention_import_confirmed(self, local_files: list, urls: list, algorithm: str, direction: str = None):
         """Handle confirmation of import in the intention workflow dialog.
 
         Starts the workflow coordinator to process the sources.
         """
-        logger.info(f"Intention import confirmed: {len(local_files)} files, {len(urls)} URLs, direction={direction}, shot_type={shot_type}")
+        logger.info(f"Intention import confirmed: {len(local_files)} files, {len(urls)} URLs, direction={direction}")
 
         # Use stored algorithm (from card click) if dialog didn't provide one
         algorithm_to_use = algorithm or self._intention_pending_algorithm
         # Use direction from dialog if provided, otherwise fallback to stored
         direction_to_use = direction or getattr(self, '_intention_pending_direction', None)
-        # Store shot type for filtering when workflow completes
-        self._intention_pending_shot_type = shot_type
 
         # Validate we have something to import
         if not local_files and not urls:
@@ -6076,6 +6074,12 @@ class MainWindow(QMainWindow):
             if analyzed_clip_ids:
                 logger.info(f"Adding {len(analyzed_clip_ids)} color-analyzed clips to Analyze tab")
                 self.analyze_tab.add_clips(analyzed_clip_ids)
+        elif algorithm == "shot_type":
+            # Shot type algorithm does shot classification
+            analyzed_clip_ids = [c.id for c in all_clips if c.shot_type]
+            if analyzed_clip_ids:
+                logger.info(f"Adding {len(analyzed_clip_ids)} shot-analyzed clips to Analyze tab")
+                self.analyze_tab.add_clips(analyzed_clip_ids)
 
         # Apply sequence to the sequence tab (skip for exquisite_corpus - already handled by dialog)
         if algorithm == "exquisite_corpus":
@@ -6083,33 +6087,16 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("Exquisite Corpus sequence created")
             self._mark_dirty()
         else:
-            # Get shot type filter from pending state
-            shot_type = getattr(self, '_intention_pending_shot_type', None)
-
             clips_with_sources = []
             for clip in all_clips:
                 source = self.sources_by_id.get(clip.source_id)
                 if source:
-                    # Apply shot type filter if specified
-                    if shot_type and clip.shot_type != shot_type:
-                        continue
                     clips_with_sources.append((clip, source))
-
-            # Handle empty state after filtering
-            if not clips_with_sources and shot_type:
-                QMessageBox.information(
-                    self,
-                    "No Matching Clips",
-                    f"No clips match the selected shot type '{shot_type}'.\n"
-                    "Try selecting 'All' or analyzing clips for shot type first."
-                )
-                return
 
             result = self.sequence_tab.apply_intention_workflow_result(
                 algorithm=algorithm,
                 clips_with_sources=clips_with_sources,
                 direction=direction,
-                shot_type=shot_type,
             )
 
             if result.get("success"):
@@ -6550,8 +6537,6 @@ class MainWindow(QMainWindow):
             return
 
         all_clips = self.intention_workflow.get_all_clips()
-
-        # Only color analysis is needed for now (color algorithm)
         algorithm, _ = self.intention_workflow.get_algorithm_with_direction()
 
         if algorithm == "color":
@@ -6579,6 +6564,33 @@ class MainWindow(QMainWindow):
 
             self._color_analysis_finished_handled = False
             self.color_worker.start()
+
+        elif algorithm == "shot_type":
+            # Start shot type analysis
+            clips_needing_shots = [c for c in all_clips if not c.shot_type]
+
+            if not clips_needing_shots:
+                # All clips already have shot types - skip
+                self.intention_workflow.on_analysis_finished()
+                return
+
+            self._shot_type_finished_handled = False
+            self.shot_type_worker = ShotTypeWorker(clips_needing_shots, self.project.sources_by_id)
+            self.shot_type_worker.progress.connect(
+                self.intention_workflow.on_analysis_progress
+            )
+            self.shot_type_worker.shot_type_ready.connect(self._on_shot_type_ready)
+            self.shot_type_worker.analysis_completed.connect(
+                self._on_intention_shot_analysis_finished, Qt.UniqueConnection
+            )
+            # Clean up
+            self.shot_type_worker.finished.connect(self.shot_type_worker.deleteLater)
+            self.shot_type_worker.finished.connect(
+                lambda: setattr(self, 'shot_type_worker', None)
+            )
+
+            self.shot_type_worker.start()
+
         else:
             # No analysis needed for this algorithm
             self.intention_workflow.on_analysis_finished()
@@ -6590,6 +6602,17 @@ class MainWindow(QMainWindow):
         self._color_analysis_finished_handled = True
 
         logger.info("Intention analysis finished")
+
+        if self.intention_workflow:
+            self.intention_workflow.on_analysis_finished()
+
+    def _on_intention_shot_analysis_finished(self):
+        """Handle shot type analysis completion during intention workflow."""
+        if self._shot_type_finished_handled:
+            return
+        self._shot_type_finished_handled = True
+
+        logger.info("Intention shot type analysis finished")
 
         if self.intention_workflow:
             self.intention_workflow.on_analysis_finished()
@@ -6914,14 +6937,6 @@ class MainWindow(QMainWindow):
 
     def _save_project_to_file(self, filepath: Path):
         """Save project to the specified file."""
-        if not self.sources:
-            QMessageBox.warning(
-                self,
-                "Save Project",
-                "No videos in library. Import a video first."
-            )
-            return
-
         self.status_bar.showMessage("Saving project...")
 
         # Get sequence from timeline and update project
@@ -7143,7 +7158,7 @@ class MainWindow(QMainWindow):
             self._intention_pending_direction = None
 
         # Clear GUI state (for agent context)
-        self.gui_state.clear()
+        self._gui_state.clear()
 
     def _refresh_ui_from_project(self):
         """Refresh all UI components after project load.

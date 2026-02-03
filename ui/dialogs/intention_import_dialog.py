@@ -29,7 +29,6 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QDragEnterEvent, QDropEvent
 
 from ui.theme import theme
-from core.analysis.shots import SHOT_TYPES, SHOT_TYPE_DISPLAY
 
 logger = logging.getLogger(__name__)
 
@@ -167,7 +166,7 @@ class IntentionImportDialog(QDialog):
         cancelled: Emitted when Cancel clicked during import or progress
     """
 
-    import_requested = Signal(list, list, str, str, object)  # local_paths, urls, algorithm, direction, shot_type
+    import_requested = Signal(list, list, str, str)  # local_paths, urls, algorithm, direction
     cancelled = Signal()
 
     # View indices
@@ -254,38 +253,6 @@ class IntentionImportDialog(QDialog):
         # Hide if not applicable
         if self._algorithm.lower() not in ("duration", "color"):
             self._direction_container.hide()
-
-        # Shot type filter selector (always visible)
-        self._shot_type_container = QWidget()
-        shot_type_layout = QHBoxLayout(self._shot_type_container)
-        shot_type_layout.setContentsMargins(0, 0, 0, 8)
-
-        shot_type_label = QLabel("Shot type:")
-        shot_type_label.setStyleSheet(f"color: {theme().text_secondary};")
-        shot_type_layout.addWidget(shot_type_label)
-        self._shot_type_label = shot_type_label
-
-        self.shot_type_dropdown = QComboBox()
-        self.shot_type_dropdown.setMinimumWidth(160)
-
-        # Add "All" option first
-        self.shot_type_dropdown.addItem("All", None)
-        # Add shot types with display names
-        for shot_type in SHOT_TYPES:
-            display_name = SHOT_TYPE_DISPLAY.get(shot_type, shot_type.title())
-            self.shot_type_dropdown.addItem(display_name, shot_type)
-
-        shot_type_layout.addWidget(self.shot_type_dropdown)
-
-        # Help text
-        shot_type_help = QLabel("(Optional filter)")
-        shot_type_help.setStyleSheet(f"color: {theme().text_muted}; font-size: 11px;")
-        shot_type_layout.addWidget(shot_type_help)
-        self._shot_type_help = shot_type_help
-
-        shot_type_layout.addStretch()
-
-        layout.addWidget(self._shot_type_container)
 
         # Drop zone
         self.drop_zone = DropZone()
@@ -514,14 +481,6 @@ class IntentionImportDialog(QDialog):
             return "rainbow"
         return None
 
-    def _get_shot_type(self) -> str | None:
-        """Get the selected shot type filter.
-
-        Returns:
-            Shot type string (e.g., "wide shot") or None for "All".
-        """
-        return self.shot_type_dropdown.currentData()
-
     def _on_start(self):
         """Handle Start Import click."""
         if not self._local_paths and not self._urls:
@@ -534,12 +493,11 @@ class IntentionImportDialog(QDialog):
         for step in WorkflowStep:
             self._step_progress[step] = (False, 0.0)
 
-        # Get direction and shot type
+        # Get direction
         direction = self._get_direction()
-        shot_type = self._get_shot_type()
 
         # Emit signal to start workflow
-        self.import_requested.emit(self._local_paths.copy(), self._urls.copy(), self._algorithm, direction, shot_type)
+        self.import_requested.emit(self._local_paths.copy(), self._urls.copy(), self._algorithm, direction)
 
     def _on_cancel(self):
         """Handle Cancel click."""

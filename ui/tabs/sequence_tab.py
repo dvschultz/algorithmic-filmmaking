@@ -49,6 +49,11 @@ ALGORITHM_CONFIG = {
         "description": "Keep clips in original order",
         "allow_duplicates": False,
     },
+    "shot_type": {
+        "label": "Shot Type",
+        "description": "Sort clips by camera shot scale",
+        "allow_duplicates": False,
+    },
     "exquisite_corpus": {
         "label": "Exquisite Corpus",
         "description": "Generate poem from on-screen text",
@@ -67,10 +72,25 @@ def get_algorithm_config(algorithm: str) -> dict:
         Configuration dict with 'label', 'description', 'allow_duplicates'
     """
     return ALGORITHM_CONFIG.get(algorithm.lower(), {
-        "label": algorithm.capitalize(),
+        "label": algorithm.replace("_", " ").title(),
         "description": "",
         "allow_duplicates": False,
     })
+
+
+def get_algorithm_label(algorithm: str) -> str:
+    """Get the display label for an algorithm.
+
+    Args:
+        algorithm: Algorithm name (lowercase with underscores, e.g., 'shot_type')
+
+    Returns:
+        Display label (e.g., 'Shot Type')
+    """
+    config = ALGORITHM_CONFIG.get(algorithm.lower())
+    if config:
+        return config["label"]
+    return algorithm.replace("_", " ").title()
 
 
 class SequenceTab(BaseTab):
@@ -111,7 +131,6 @@ class SequenceTab(BaseTab):
         self._current_algorithm = None
         self._current_state = self.STATE_CARDS
         self._gui_state = None  # Set by MainWindow
-        self._current_shot_filter = None  # Current shot type filter
 
         # Guard flags
         self._apply_in_progress = False
@@ -195,7 +214,7 @@ class SequenceTab(BaseTab):
         layout.addWidget(label)
 
         self.algorithm_dropdown = QComboBox()
-        self.algorithm_dropdown.addItems(["Color", "Duration", "Shuffle", "Sequential"])
+        self.algorithm_dropdown.addItems(["Color", "Duration", "Shuffle", "Sequential", "Shot Type"])
         self.algorithm_dropdown.setMinimumWidth(120)
         self.algorithm_dropdown.currentTextChanged.connect(self._on_algorithm_changed)
         layout.addWidget(self.algorithm_dropdown)
@@ -350,7 +369,7 @@ class SequenceTab(BaseTab):
 
             # Update dropdowns to show current algorithm (block signals to avoid recursion)
             self.algorithm_dropdown.blockSignals(True)
-            self.algorithm_dropdown.setCurrentText(algorithm.capitalize())
+            self.algorithm_dropdown.setCurrentText(get_algorithm_label(algorithm))
             self.algorithm_dropdown.blockSignals(False)
 
             # Update direction dropdown
@@ -623,6 +642,9 @@ class SequenceTab(BaseTab):
         # Check if any clips have dominant colors
         has_colors = any(clip.dominant_colors for clip in self._clips)
 
+        # Check if any clips have shot types
+        has_shot_types = any(clip.shot_type for clip in self._clips)
+
         # Check if any clips have extracted text (for Exquisite Corpus)
         has_text = any(clip.extracted_texts for clip in self._clips)
 
@@ -631,6 +653,7 @@ class SequenceTab(BaseTab):
             "duration": True,
             "shuffle": True,
             "sequential": True,
+            "shot_type": (has_shot_types, "Run shot type analysis first" if not has_shot_types else ""),
             "exquisite_corpus": True,  # Always available - dialog handles text extraction
         }
 
@@ -643,6 +666,7 @@ class SequenceTab(BaseTab):
             "duration": True,
             "shuffle": True,
             "sequential": True,
+            "shot_type": True,
             "exquisite_corpus": True,
         }
         self.card_grid.set_algorithm_availability(availability)
@@ -704,13 +728,13 @@ class SequenceTab(BaseTab):
 
     def set_sorting_algorithm(self, algorithm: str):
         """Set the sorting algorithm (for agent tools)."""
-        valid_algorithms = ["color", "duration", "shuffle", "sequential", "exquisite_corpus"]
+        valid_algorithms = ["color", "duration", "shuffle", "sequential", "shot_type", "exquisite_corpus"]
         if algorithm.lower() in valid_algorithms:
             # If in timeline state, use the dropdown to regenerate (except exquisite_corpus)
-            if self._current_state == self.STATE_TIMELINE and algorithm.lower() != "exquisite_corpus":
-                self.algorithm_dropdown.setCurrentText(algorithm.capitalize())
+            if self._current_state == self.STATE_TIMELINE and algorithm.lower() not in ("exquisite_corpus", "shot_type"):
+                self.algorithm_dropdown.setCurrentText(get_algorithm_label(algorithm))
             else:
-                # If in cards state or exquisite_corpus, simulate card click
+                # If in cards state or exquisite_corpus/shot_type, simulate card click
                 self._on_card_clicked(algorithm)
 
     def generate_and_apply(
@@ -775,7 +799,7 @@ class SequenceTab(BaseTab):
             # Update preview and dropdown
             self.timeline_preview.set_clips(sorted_clips, self._sources)
             self.algorithm_dropdown.blockSignals(True)
-            self.algorithm_dropdown.setCurrentText(algorithm.capitalize())
+            self.algorithm_dropdown.setCurrentText(get_algorithm_label(algorithm))
             self.algorithm_dropdown.blockSignals(False)
             self._current_algorithm = algorithm.lower()
 
@@ -811,62 +835,12 @@ class SequenceTab(BaseTab):
         self._on_clear_clicked()
         return {"success": True, "message": "Sequence cleared"}
 
-    def apply_shot_type_filter(self, shot_type: Optional[str] = None) -> int:
-        """Apply shot type filter to the current sequence (for agent tools).
-
-        Regenerates the sequence with only clips matching the specified shot type.
-
-        Args:
-            shot_type: Shot type to filter by (e.g., "wide shot", "close-up").
-                      Use None to show all clips.
-
-        Returns:
-            Number of clips in the filtered sequence.
-        """
-        self._current_shot_filter = shot_type
-
-        # If not in timeline state or no algorithm set, just store the filter
-        if self._current_state != self.STATE_TIMELINE or not self._current_algorithm:
-            return 0
-
-        # Get all available clips
-        clips_to_use = self._available_clips.copy()
-
-        # Apply shot type filter
-        if shot_type:
-            clips_to_use = [
-                (clip, source) for clip, source in clips_to_use
-                if clip.shot_type == shot_type
-            ]
-
-        if not clips_to_use:
-            # Show empty state
-            self.timeline.clear_timeline()
-            self.timeline_preview.clear()
-            logger.info(f"No clips match shot type filter: {shot_type}")
-            return 0
-
-        # Regenerate with current algorithm
-        direction = self._get_current_direction()
-        self._apply_algorithm(self._current_algorithm, clips_to_use, direction=direction)
-
-        return len(clips_to_use)
-
-    def get_current_shot_filter(self) -> Optional[str]:
-        """Get the current shot type filter.
-
-        Returns:
-            Current shot type filter string or None if no filter applied.
-        """
-        return self._current_shot_filter
-
     def apply_intention_workflow_result(
         self,
         algorithm: str,
         clips_with_sources: list,
         direction: Optional[str] = None,
         seed: Optional[int] = None,
-        shot_type: Optional[str] = None,
     ) -> dict:
         """Apply sequence from intention workflow completion.
 
@@ -878,7 +852,6 @@ class SequenceTab(BaseTab):
             clips_with_sources: List of (Clip, Source) tuples from the workflow
             direction: Optional sort direction (e.g., "rainbow" for color)
             seed: Optional random seed for shuffle
-            shot_type: Optional shot type filter that was applied
 
         Returns:
             Dict with success status and clip info
@@ -886,10 +859,9 @@ class SequenceTab(BaseTab):
         if not clips_with_sources:
             return {"success": False, "error": "No clips from workflow"}
 
-        # Update our available clips and shot filter
+        # Update our available clips
         self._available_clips = clips_with_sources
         self._clips = [clip for clip, source in clips_with_sources]
-        self._current_shot_filter = shot_type
         for clip, source in clips_with_sources:
             if source:
                 self._sources[source.id] = source
@@ -927,7 +899,7 @@ class SequenceTab(BaseTab):
 
             # Update dropdowns
             self.algorithm_dropdown.blockSignals(True)
-            self.algorithm_dropdown.setCurrentText(algorithm.capitalize())
+            self.algorithm_dropdown.setCurrentText(get_algorithm_label(algorithm))
             self.algorithm_dropdown.blockSignals(False)
 
             # Update direction dropdown

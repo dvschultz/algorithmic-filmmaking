@@ -63,7 +63,6 @@ class GUIState:
 
     # Sequence state
     sequence_ids: list[str] = field(default_factory=list)
-    sequence_shot_filter: Optional[str] = None  # Current shot type filter for sequence
 
     # Plan state
     current_plan: Optional["Plan"] = None
@@ -117,9 +116,6 @@ class GUIState:
                 if len(self.sequence_ids) > 20:
                     ids_str += ", ..."
                 lines.append(f"SEQUENCE_IDS: [{ids_str}]")
-
-            if self.sequence_shot_filter:
-                lines.append(f"SEQUENCE SHOT FILTER: {self.sequence_shot_filter}")
 
             if self.selected_clip_ids:
                 lines.append(f"SELECTED CLIPS: {len(self.selected_clip_ids)}")
@@ -274,7 +270,6 @@ class GUIState:
 
             # Sequence state
             self.sequence_ids = []
-            self.sequence_shot_filter = None
 
             # Plan state
             self.current_plan = None
