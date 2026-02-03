@@ -166,7 +166,7 @@ class IntentionImportDialog(QDialog):
         cancelled: Emitted when Cancel clicked during import or progress
     """
 
-    import_requested = Signal(list, list, str, str)  # local_paths, urls, algorithm, direction
+    import_requested = Signal(list, list, str, str, str)  # local_paths, urls, algorithm, direction, shot_type
     cancelled = Signal()
 
     # View indices
@@ -253,6 +253,35 @@ class IntentionImportDialog(QDialog):
         # Hide if not applicable
         if self._algorithm.lower() not in ("duration", "color"):
             self._direction_container.hide()
+
+        # Shot type selector (for Shot Type algorithm only)
+        self._shot_type_container = QWidget()
+        shot_type_layout = QHBoxLayout(self._shot_type_container)
+        shot_type_layout.setContentsMargins(0, 0, 0, 8)
+
+        shot_type_label = QLabel("Filter by shot type:")
+        shot_type_label.setStyleSheet(f"color: {theme().text_secondary};")
+        shot_type_layout.addWidget(shot_type_label)
+        self._shot_type_label = shot_type_label
+
+        self.shot_type_dropdown = QComboBox()
+        self.shot_type_dropdown.setMinimumWidth(160)
+        self.shot_type_dropdown.addItems([
+            "All",
+            "Wide Shot",
+            "Full Shot",
+            "Medium Shot",
+            "Close-up",
+            "Extreme Close-up",
+        ])
+        shot_type_layout.addWidget(self.shot_type_dropdown)
+        shot_type_layout.addStretch()
+
+        layout.addWidget(self._shot_type_container)
+
+        # Hide if not shot_type algorithm
+        if self._algorithm.lower() != "shot_type":
+            self._shot_type_container.hide()
 
         # Drop zone
         self.drop_zone = DropZone()
@@ -481,6 +510,16 @@ class IntentionImportDialog(QDialog):
             return "rainbow"
         return None
 
+    def _get_shot_type(self) -> str | None:
+        """Get the selected shot type filter (for shot_type algorithm)."""
+        if self._algorithm.lower() != "shot_type":
+            return None
+        text = self.shot_type_dropdown.currentText()
+        if text == "All":
+            return None
+        # Convert display text to internal format (lowercase)
+        return text.lower()
+
     def _on_start(self):
         """Handle Start Import click."""
         if not self._local_paths and not self._urls:
@@ -493,11 +532,12 @@ class IntentionImportDialog(QDialog):
         for step in WorkflowStep:
             self._step_progress[step] = (False, 0.0)
 
-        # Get direction
+        # Get direction and shot type
         direction = self._get_direction()
+        shot_type = self._get_shot_type()
 
         # Emit signal to start workflow
-        self.import_requested.emit(self._local_paths.copy(), self._urls.copy(), self._algorithm, direction)
+        self.import_requested.emit(self._local_paths.copy(), self._urls.copy(), self._algorithm, direction, shot_type)
 
     def _on_cancel(self):
         """Handle Cancel click."""
