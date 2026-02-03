@@ -8,10 +8,13 @@ Scene Ripper analyzes video files to detect scene boundaries, enriches clips wit
 
 **Key Features:**
 - Automatic scene detection with adjustable sensitivity
+- Text-based scene detection for karaoke, subtitles, and slides
+- Intention-first workflow (one-click sequence creation from URLs)
 - AI-powered clip analysis (descriptions, shot types, transcription, colors)
+- Film language analysis with scene reports and editing suggestions
 - Integrated chat agent for AI-assisted editing
-- Thumbnail grid browser with preview
-- Multiple sequencing modes including Exquisite Corpus (poetry generation)
+- Thumbnail grid browser with collapsible source headers
+- Multiple sequencing modes with shot type filtering and direction control
 - Export individual clips or complete sequences
 - YouTube/Internet Archive import
 - Project save/load with full state persistence
@@ -110,6 +113,7 @@ The app uses a 5-tab workflow, though you can skip or revisit tabs as needed:
 ### Scene Detection
 - PySceneDetect with AdaptiveDetector
 - Sensitivity slider (1.0 sensitive → 10.0 less sensitive)
+- **Text-based detection mode** for karaoke, subtitles, and presentation slides—uses OCR to detect text changes as scene boundaries with configurable ROI and similarity threshold
 - Background processing keeps UI responsive
 - Progress reporting
 
@@ -126,6 +130,14 @@ Enrich clips with metadata using local or cloud AI models:
 | **Objects** | Object detection | YOLO |
 
 Supports both local (free, private) and cloud (higher quality) processing tiers.
+
+### Film Language Analysis
+
+Generate scene reports with cinematography analysis:
+- **Pacing metrics**: Shot duration distribution, rhythm analysis
+- **Visual consistency**: Color palette coherence, lighting continuity
+- **Continuity warnings**: Potential jump cuts, axis crosses
+- **Editing suggestions**: AI-powered recommendations for improving flow
 
 ### Chat Agent
 
@@ -146,8 +158,22 @@ Multiple ways to arrange clips:
 - **Shuffle**: Randomize with constraints (no same-source consecutive)
 - **Exquisite Corpus**: Generate poetry from extracted text, then sequence clips by matching lines
 
+**Sorting options:**
+- **Shot Type**: Filter by Wide Shot, Full Shot, Medium Shot, Close-up, or Extreme Close-up
+- **Duration**: Sort by clip length (shortest first or longest first)
+- **Color**: Arrange by dominant color (rainbow, warm to cool, cool to warm)
+
+### Intention-First Workflow
+
+Start from a creative intention and let the app handle the rest:
+1. Click a sequence card or create a new intention
+2. Paste YouTube URLs or select local files in the import dialog
+3. The app automatically downloads, detects scenes, generates thumbnails, analyzes clips, and builds your sequence
+4. All in one flow—no tab-switching required
+
 ### Clip Browser
 - Thumbnail grid of detected scenes
+- **Collapsible source headers**: Clips grouped by source with expand/collapse, showing clip count and selection state—reduces clutter when working with many sources
 - Duration labels on each clip
 - Click to preview, double-click for full playback
 - Filter by metadata (shot type, has transcript, etc.)
@@ -307,7 +333,9 @@ python -m cli.main --help
 
 **Complete:**
 - [x] Scene detection with AdaptiveDetector
+- [x] Text-based scene detection (karaoke/subtitle mode)
 - [x] Thumbnail browser with filtering
+- [x] Collapsible source headers in clip browser
 - [x] Video preview player
 - [x] Individual and batch clip export
 - [x] URL import (YouTube, Internet Archive)
@@ -316,13 +344,15 @@ python -m cli.main --help
 - [x] Shuffle remix algorithm
 - [x] Linux support (AppImage packaging)
 - [x] AI-powered descriptions (GPT-4o, Claude, Gemini, Moondream)
-- [x] Shot type classification
+- [x] Shot type classification and filtering
 - [x] Transcription (faster-whisper)
-- [x] Color analysis
+- [x] Color analysis with direction control
 - [x] Integrated chat agent
 - [x] Exquisite Corpus sequencer
 - [x] CLI for batch processing
 - [x] Project save/load
+- [x] Intention-first workflow
+- [x] Film language analysis / scene reports
 
 **In Progress:**
 - [ ] Timeline playback preview
