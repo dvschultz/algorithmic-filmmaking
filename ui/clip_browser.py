@@ -22,9 +22,9 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal, QMimeData, QPoint
 from PySide6.QtGui import QPixmap, QDrag, QPainter, QColor, QKeyEvent
-from typing import Optional
 
 from ui.widgets.range_slider import RangeSlider
+from ui.widgets.source_group_header import SourceGroupHeader
 
 from models.clip import Clip, Source
 from models.cinematography import CinematographyAnalysis
@@ -486,6 +486,10 @@ class ClipBrowser(QWidget):
         self._aspect_ratio_filter: str = "All"  # "All", "16:9", "4:3", "9:16"
         self._filter_panel_visible = False
 
+        # Source grouping state
+        self._group_expanded_state: dict[str, bool] = {}  # source_id -> is_expanded
+        self._source_headers: dict[str, SourceGroupHeader] = {}  # source_id -> header widget
+
         self._setup_ui()
 
     def _setup_ui(self):
@@ -512,6 +516,19 @@ class ClipBrowser(QWidget):
         self.filters_btn.setToolTip("Show/hide duration and aspect ratio filters")
         self.filters_btn.clicked.connect(self._toggle_filter_panel)
         header_layout.addWidget(self.filters_btn)
+
+        header_layout.addSpacing(4)
+
+        # Expand/Collapse all buttons
+        self.expand_all_btn = QPushButton("Expand All")
+        self.expand_all_btn.setToolTip("Expand all source groups")
+        self.expand_all_btn.clicked.connect(self.expand_all_groups)
+        header_layout.addWidget(self.expand_all_btn)
+
+        self.collapse_all_btn = QPushButton("Collapse All")
+        self.collapse_all_btn.setToolTip("Collapse all source groups")
+        self.collapse_all_btn.clicked.connect(self.collapse_all_groups)
+        header_layout.addWidget(self.collapse_all_btn)
 
         header_layout.addSpacing(8)
 
@@ -608,9 +625,6 @@ class ClipBrowser(QWidget):
 
     def add_clip(self, clip: Clip, source: Source):
         """Add a clip to the browser."""
-        # Remove empty placeholder
-        self._hide_empty_state()
-
         # Store source reference
         self._source_lookup[clip.id] = source
 
@@ -624,13 +638,8 @@ class ClipBrowser(QWidget):
         self.thumbnails.append(thumb)
         self._thumbnail_by_id[clip.id] = thumb  # O(1) lookup
 
-        # Add to grid (only if it matches current filters)
-        if self._matches_filter(thumb):
-            row = (len(self.thumbnails) - 1) // self.COLUMNS
-            col = (len(self.thumbnails) - 1) % self.COLUMNS
-            self.grid.addWidget(thumb, row, col, Qt.AlignTop | Qt.AlignLeft)
-        else:
-            thumb.setVisible(False)
+        # Rebuild grid to handle grouping properly
+        self._rebuild_grid()
 
         # Update duration range for spinboxes
         self._update_duration_range()
@@ -641,10 +650,17 @@ class ClipBrowser(QWidget):
             self.grid.removeWidget(thumb)
             thumb.deleteLater()
 
+        # Clear source headers
+        for header in self._source_headers.values():
+            self.grid.removeWidget(header)
+            header.deleteLater()
+
         self.thumbnails = []
         self._thumbnail_by_id = {}
         self.selected_clips = set()
         self._source_lookup = {}
+        self._source_headers = {}
+        self._group_expanded_state = {}
 
         # Show empty state
         self._show_empty_state()
@@ -669,6 +685,13 @@ class ClipBrowser(QWidget):
             # Remove from lookups
             self._thumbnail_by_id.pop(thumb.clip.id, None)
             self._source_lookup.pop(thumb.clip.id, None)
+
+        # Clean up header for this source
+        if source_id in self._source_headers:
+            header = self._source_headers.pop(source_id)
+            self.grid.removeWidget(header)
+            header.deleteLater()
+            self._group_expanded_state.pop(source_id, None)
 
         # Replace list in one operation (avoids O(n) list.remove() calls)
         if remove:
@@ -843,53 +866,174 @@ class ClipBrowser(QWidget):
             self._sort_by_duration()
 
     def _sort_by_timeline(self):
-        """Sort clips by timeline order (start frame)."""
-        self.thumbnails.sort(key=lambda t: t.clip.start_frame)
-        self._rebuild_grid()
+        """Sort clips by timeline order (start frame) within each source group."""
+        self._sort_within_groups(key=lambda t: t.clip.start_frame)
 
     def _sort_by_color(self):
-        """Sort clips by primary hue (HSV color wheel order)."""
+        """Sort clips by primary hue (HSV color wheel order) within each source group."""
         def get_hue(thumb: ClipThumbnail) -> float:
             if thumb.clip.dominant_colors:
                 return get_primary_hue(thumb.clip.dominant_colors)
             return 0.0
 
-        self.thumbnails.sort(key=get_hue)
-        self._rebuild_grid()
+        self._sort_within_groups(key=get_hue)
 
     def _sort_by_duration(self):
-        """Sort clips by duration (longest first)."""
-        self.thumbnails.sort(
+        """Sort clips by duration (longest first) within each source group."""
+        self._sort_within_groups(
             key=lambda t: t.clip.duration_seconds(t.source.fps),
             reverse=True,
         )
+
+    def _sort_within_groups(self, key, reverse: bool = False):
+        """Sort thumbnails within each source group, preserving group order.
+
+        Args:
+            key: Sort key function for thumbnails
+            reverse: If True, sort in descending order
+        """
+        # Group by source_id
+        thumbs_by_source: dict[str, list[ClipThumbnail]] = {}
+        for thumb in self.thumbnails:
+            source_id = thumb.source.id
+            if source_id not in thumbs_by_source:
+                thumbs_by_source[source_id] = []
+            thumbs_by_source[source_id].append(thumb)
+
+        # Sort within each group
+        for source_id in thumbs_by_source:
+            thumbs_by_source[source_id].sort(key=key, reverse=reverse)
+
+        # Rebuild thumbnails list maintaining source group order
+        # (groups are sorted alphabetically by filename in _rebuild_grid)
+        sorted_source_ids = sorted(
+            thumbs_by_source.keys(),
+            key=lambda sid: thumbs_by_source[sid][0].source.filename.lower()
+            if thumbs_by_source[sid] else ""
+        )
+
+        self.thumbnails = []
+        for source_id in sorted_source_ids:
+            self.thumbnails.extend(thumbs_by_source[source_id])
+
         self._rebuild_grid()
 
     def _rebuild_grid(self):
-        """Rebuild the grid layout with current thumbnail order and filter."""
-        # Remove all thumbnails from grid
+        """Rebuild the grid layout with source grouping, current order, and filter."""
+        # Remove all thumbnails and headers from grid
         for thumb in self.thumbnails:
             self.grid.removeWidget(thumb)
             thumb.setVisible(False)
 
-        # Filter thumbnails based on current filter
-        visible_thumbs = []
-        for thumb in self.thumbnails:
-            if self._matches_filter(thumb):
-                visible_thumbs.append(thumb)
+        for header in self._source_headers.values():
+            self.grid.removeWidget(header)
+            header.setVisible(False)
 
-        # Manage empty label - only show if no clips at all (not just filtered)
+        # Handle empty state
         if not self.thumbnails:
             self._show_empty_state()
+            return
         else:
             self._hide_empty_state()
 
-        # Re-add visible thumbnails in order
-        for i, thumb in enumerate(visible_thumbs):
-            row = i // self.COLUMNS
-            col = i % self.COLUMNS
-            self.grid.addWidget(thumb, row, col, Qt.AlignTop | Qt.AlignLeft)
-            thumb.setVisible(True)
+        # Group thumbnails by source_id
+        thumbs_by_source: dict[str, list[ClipThumbnail]] = {}
+        for thumb in self.thumbnails:
+            source_id = thumb.source.id
+            if source_id not in thumbs_by_source:
+                thumbs_by_source[source_id] = []
+            thumbs_by_source[source_id].append(thumb)
+
+        # Sort groups alphabetically by filename
+        sorted_source_ids = sorted(
+            thumbs_by_source.keys(),
+            key=lambda sid: self._source_lookup.get(
+                next(iter(thumbs_by_source[sid])).clip.id, None
+            ).filename.lower() if thumbs_by_source[sid] else ""
+        )
+
+        # Build the grid row by row
+        current_row = 0
+
+        for source_id in sorted_source_ids:
+            source_thumbs = thumbs_by_source[source_id]
+            if not source_thumbs:
+                continue
+
+            source = source_thumbs[0].source
+
+            # Calculate counts for this group
+            total_count = len(source_thumbs)
+            visible_thumbs = [t for t in source_thumbs if self._matches_filter(t)]
+            visible_count = len(visible_thumbs)
+            selected_count = sum(
+                1 for t in source_thumbs if t.clip.id in self.selected_clips
+            )
+
+            # Get or create header for this source
+            header = self._get_or_create_header(source_id, source.filename, total_count)
+            header.set_clip_counts(total_count, visible_count, selected_count)
+
+            # Initialize expansion state if not set
+            if source_id not in self._group_expanded_state:
+                self._group_expanded_state[source_id] = True
+            header.set_expanded(self._group_expanded_state[source_id])
+
+            # Add header spanning all columns
+            self.grid.addWidget(header, current_row, 0, 1, self.COLUMNS)
+            header.setVisible(True)
+            current_row += 1
+
+            # Add clips if expanded
+            if self._group_expanded_state[source_id]:
+                col = 0
+                for thumb in visible_thumbs:
+                    self.grid.addWidget(
+                        thumb, current_row, col, Qt.AlignTop | Qt.AlignLeft
+                    )
+                    thumb.setVisible(True)
+                    col += 1
+                    if col >= self.COLUMNS:
+                        col = 0
+                        current_row += 1
+                # Move to next row if we have remaining clips
+                if col > 0:
+                    current_row += 1
+
+        # Clean up headers for sources that no longer exist
+        existing_source_ids = set(thumbs_by_source.keys())
+        stale_ids = set(self._source_headers.keys()) - existing_source_ids
+        for stale_id in stale_ids:
+            header = self._source_headers.pop(stale_id)
+            header.deleteLater()
+            self._group_expanded_state.pop(stale_id, None)
+
+    def _get_or_create_header(
+        self, source_id: str, filename: str, clip_count: int
+    ) -> SourceGroupHeader:
+        """Get existing header or create a new one for the source."""
+        if source_id not in self._source_headers:
+            header = SourceGroupHeader(source_id, filename, clip_count)
+            header.toggled.connect(self._on_header_toggled)
+            self._source_headers[source_id] = header
+        return self._source_headers[source_id]
+
+    def _on_header_toggled(self, source_id: str, is_expanded: bool):
+        """Handle source group header toggle."""
+        self._group_expanded_state[source_id] = is_expanded
+        self._rebuild_grid()
+
+    def expand_all_groups(self):
+        """Expand all source groups."""
+        for source_id in self._source_headers:
+            self._group_expanded_state[source_id] = True
+        self._rebuild_grid()
+
+    def collapse_all_groups(self):
+        """Collapse all source groups."""
+        for source_id in self._source_headers:
+            self._group_expanded_state[source_id] = False
+        self._rebuild_grid()
 
     def _matches_filter(self, thumb: ClipThumbnail) -> bool:
         """Check if a thumbnail matches all filters (AND logic)."""

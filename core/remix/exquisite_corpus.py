@@ -86,10 +86,18 @@ def generate_poem(
 
     logger.info(f"Generating poem with mood: '{mood_prompt}' using model: {model}, temperature: {temperature}")
 
-    # Build the phrase inventory
-    phrase_inventory = {}
-    for clip, text in clips_with_text:
-        phrase_inventory[clip.id] = text
+    # Build the phrase inventory with short IDs for LLM communication
+    # LLMs tend to truncate long UUIDs, so we use simple indexed IDs (c1, c2, ...)
+    # and map back to full clip IDs after getting the response
+    phrase_inventory = {}  # short_id -> text (for LLM)
+    short_to_full_id = {}  # short_id -> full clip.id (for mapping back)
+    full_to_short_id = {}  # full clip.id -> short_id (for debugging)
+
+    for i, (clip, text) in enumerate(clips_with_text, 1):
+        short_id = f"c{i}"
+        phrase_inventory[short_id] = text
+        short_to_full_id[short_id] = clip.id
+        full_to_short_id[clip.id] = short_id
 
     logger.debug(f"Phrase inventory: {len(phrase_inventory)} clips with text")
 
@@ -115,7 +123,7 @@ CRITICAL RULES:
 
 OUTPUT FORMAT:
 Return a JSON array where each element is the clip_id of the phrase to use, in poem order.
-Example: ["clip_abc123", "clip_def456", "clip_ghi789"]
+Example: ["c1", "c5", "c3"]
 
 Return ONLY the JSON array, no other text."""
 
@@ -163,17 +171,18 @@ Return ONLY the JSON array of clip_ids in the order they should appear in the po
         if not isinstance(clip_order, list):
             raise ValueError("Response is not a JSON array")
 
-        # Build poem lines
+        # Build poem lines, mapping short IDs back to full clip IDs
         poem_lines = []
-        for i, clip_id in enumerate(clip_order, 1):
-            if clip_id in phrase_inventory:
+        for i, short_id in enumerate(clip_order, 1):
+            if short_id in phrase_inventory:
+                full_clip_id = short_to_full_id[short_id]
                 poem_lines.append(PoemLine(
-                    text=phrase_inventory[clip_id],
-                    clip_id=clip_id,
+                    text=phrase_inventory[short_id],
+                    clip_id=full_clip_id,
                     line_number=i,
                 ))
             else:
-                logger.warning(f"Unknown clip_id in response: {clip_id}")
+                logger.warning(f"Unknown clip_id in response: {short_id}")
 
         if not poem_lines:
             raise ValueError("No valid poem lines generated")
