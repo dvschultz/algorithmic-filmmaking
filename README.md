@@ -124,12 +124,16 @@ Enrich clips with metadata using local or cloud AI models:
 | Analysis | Description | Models |
 |----------|-------------|--------|
 | **Describe** | Natural language description of clip content | GPT-4o, Claude, Gemini, Moondream (local) |
-| **Classify** | Shot type detection (close-up, medium, wide, etc.) | Vision models |
+| **Classify** | Shot type detection (close-up, medium, wide, etc.) | CLIP (local), VideoMAE (cloud) |
 | **Transcribe** | Speech-to-text | faster-whisper (local) |
 | **Colors** | Dominant color palette extraction | OpenCV |
 | **Objects** | Object detection | YOLO |
 
 Supports both local (free, private) and cloud (higher quality) processing tiers.
+
+**Shot Type Classification Tiers:**
+- **CPU (local)**: CLIP zero-shot classification with ensemble prompts—runs on thumbnails, free and private
+- **Cloud**: VideoMAE model on Replicate—analyzes video segments for significantly better accuracy, requires API key
 
 ### Film Language Analysis
 
