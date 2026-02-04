@@ -6636,6 +6636,38 @@ class MainWindow(QMainWindow):
 
             self.shot_type_worker.start()
 
+        elif algorithm == "storyteller":
+            # Start description analysis - Storyteller needs clip descriptions
+            clips_needing_descriptions = [c for c in all_clips if not c.description]
+
+            if not clips_needing_descriptions:
+                # All clips already have descriptions - skip
+                self.intention_workflow.on_analysis_finished()
+                return
+
+            # Get description settings
+            tier = self.settings.description_model_tier
+            sources = self.project.sources_by_id
+
+            self._description_finished_handled = False
+            logger.info(f"Creating DescriptionWorker (intention) for {len(clips_needing_descriptions)} clips with tier={tier}")
+            self.description_worker = DescriptionWorker(clips_needing_descriptions, tier=tier, sources=sources)
+            self.description_worker.progress.connect(
+                self.intention_workflow.on_analysis_progress
+            )
+            self.description_worker.description_ready.connect(self._on_description_ready)
+            self.description_worker.error.connect(self._on_description_error)
+            self.description_worker.description_completed.connect(
+                self._on_intention_description_analysis_finished, Qt.UniqueConnection
+            )
+            # Clean up
+            self.description_worker.finished.connect(self.description_worker.deleteLater)
+            self.description_worker.finished.connect(
+                lambda: setattr(self, 'description_worker', None)
+            )
+
+            self.description_worker.start()
+
         else:
             # No analysis needed for this algorithm
             self.intention_workflow.on_analysis_finished()
@@ -6658,6 +6690,17 @@ class MainWindow(QMainWindow):
         self._shot_type_finished_handled = True
 
         logger.info("Intention shot type analysis finished")
+
+        if self.intention_workflow:
+            self.intention_workflow.on_analysis_finished()
+
+    def _on_intention_description_analysis_finished(self):
+        """Handle description analysis completion during intention workflow (for Storyteller)."""
+        if self._description_finished_handled:
+            return
+        self._description_finished_handled = True
+
+        logger.info("Intention description analysis finished")
 
         if self.intention_workflow:
             self.intention_workflow.on_analysis_finished()
