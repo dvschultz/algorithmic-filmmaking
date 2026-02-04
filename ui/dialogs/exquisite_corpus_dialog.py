@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QWidget,
     QMessageBox,
+    QComboBox,
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
@@ -49,7 +50,7 @@ class ExquisiteCorpusDialog(QDialog):
     PAGE_PROGRESS = 1
     PAGE_PREVIEW = 2
 
-    def __init__(self, clips, sources_by_id, project, parent=None):
+    def __init__(self, clips, sources_by_id, project, parent=None, initial_poem_length: str = None):
         """Initialize the dialog.
 
         Args:
@@ -57,6 +58,7 @@ class ExquisiteCorpusDialog(QDialog):
             sources_by_id: Dict mapping source_id to Source objects
             project: Project object (for access to clips_by_id if needed)
             parent: Parent widget
+            initial_poem_length: Optional pre-selected poem length ("short", "medium", "long")
         """
         super().__init__(parent)
         self.clips = clips
@@ -65,6 +67,7 @@ class ExquisiteCorpusDialog(QDialog):
         self.extraction_results = {}
         self.poem_lines = []
         self.worker = None
+        self._initial_poem_length = initial_poem_length
 
         self.setWindowTitle("Exquisite Corpus")
         self.setMinimumSize(600, 500)
@@ -153,6 +156,27 @@ class ExquisiteCorpusDialog(QDialog):
         )
         self.mood_input.setMaximumHeight(100)
         layout.addWidget(self.mood_input)
+
+        layout.addSpacing(16)
+
+        # Length selection
+        length_label = QLabel("Poem length:")
+        layout.addWidget(length_label)
+        self._length_label = length_label
+
+        self.length_combo = QComboBox()
+        self.length_combo.addItems([
+            "Short (up to 11 lines)",
+            "Medium (12-25 lines)",
+            "Long (26+ lines)",
+        ])
+        # Set initial index based on pre-selected length or default to Medium
+        length_to_index = {"short": 0, "medium": 1, "long": 2}
+        initial_index = length_to_index.get(self._initial_poem_length, 1)
+        self.length_combo.setCurrentIndex(initial_index)
+        layout.addWidget(self.length_combo)
+
+        layout.addSpacing(16)
 
         # Info about what happens
         info = QLabel(
@@ -266,6 +290,21 @@ class ExquisiteCorpusDialog(QDialog):
                 border: 1px solid {theme().border_primary};
                 border-radius: 4px;
                 padding: 8px;
+            }}
+            QComboBox {{
+                background-color: {theme().background_tertiary};
+                color: {theme().text_primary};
+                border: 1px solid {theme().border_primary};
+                border-radius: 4px;
+                padding: 6px 12px;
+                min-height: 28px;
+            }}
+            QComboBox:hover {{
+                background-color: {theme().background_elevated};
+            }}
+            QComboBox::drop-down {{
+                border: none;
+                padding-right: 8px;
             }}
             QListWidget {{
                 background-color: {theme().background_tertiary};
@@ -464,8 +503,12 @@ class ExquisiteCorpusDialog(QDialog):
 
         mood = self.mood_input.toPlainText().strip()
 
+        # Map combo index to length key
+        length_map = {0: "short", 1: "medium", 2: "long"}
+        length = length_map.get(self.length_combo.currentIndex(), "medium")
+
         try:
-            self.poem_lines = generate_poem(clips_with_text, mood)
+            self.poem_lines = generate_poem(clips_with_text, mood, length=length)
             self._display_poem()
             self.stack.setCurrentIndex(self.PAGE_PREVIEW)
             self._update_nav_buttons()

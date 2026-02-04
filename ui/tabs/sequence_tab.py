@@ -20,7 +20,7 @@ from .base_tab import BaseTab
 from ui.video_player import VideoPlayer
 from ui.timeline import TimelineWidget
 from ui.widgets import SortingCardGrid, TimelinePreview
-from ui.dialogs import ExquisiteCorpusDialog
+from ui.dialogs import ExquisiteCorpusDialog, StorytellerDialog, MissingDescriptionsDialog
 from ui.theme import theme
 from core.remix import generate_sequence
 
@@ -58,6 +58,11 @@ ALGORITHM_CONFIG = {
         "label": "Exquisite Corpus",
         "description": "Generate poem from on-screen text",
         "allow_duplicates": True,  # Poems may use the same clip multiple times
+    },
+    "storyteller": {
+        "label": "Storyteller",
+        "description": "Create narrative from clip descriptions",
+        "allow_duplicates": False,
     },
 }
 
@@ -324,6 +329,11 @@ class SequenceTab(BaseTab):
             self._show_exquisite_corpus_dialog(clips)
             return
 
+        # Special handling for Storyteller - show dialog workflow
+        if algorithm == "storyteller":
+            self._show_storyteller_dialog(clips)
+            return
+
         # Generate and apply
         self._apply_algorithm(algorithm, clips)
 
@@ -461,6 +471,143 @@ class SequenceTab(BaseTab):
 
         except Exception as e:
             logger.error(f"Error applying Exquisite Corpus sequence: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to apply sequence: {e}")
+
+    def _show_storyteller_dialog(self, clips: list):
+        """Show the Storyteller dialog for narrative sequence generation.
+
+        Handles missing descriptions by prompting user to either exclude
+        clips without descriptions or navigate to Analyze tab.
+
+        Args:
+            clips: List of (Clip, Source) tuples to process
+        """
+        # Build sources_by_id from the clips
+        sources_by_id = {source.id: source for clip, source in clips}
+
+        # Extract just the clip objects
+        clip_objects = [clip for clip, source in clips]
+
+        # Check for clips with descriptions
+        clips_with_desc = [c for c in clip_objects if c.description]
+        clips_without_desc = [c for c in clip_objects if not c.description]
+
+        if not clips_with_desc:
+            # No clips have descriptions
+            QMessageBox.warning(
+                self,
+                "No Descriptions",
+                "None of the selected clips have descriptions.\n\n"
+                "Run description analysis in the Analyze tab first, "
+                "then return to create a narrative sequence."
+            )
+            return
+
+        # If some clips are missing descriptions, show prompt
+        if clips_without_desc:
+            missing_dialog = MissingDescriptionsDialog(
+                clips_without_descriptions=clips_without_desc,
+                total_clips=len(clip_objects),
+                parent=self,
+            )
+
+            # Connect signals
+            missing_dialog.analyze_selected.connect(
+                lambda: self._on_storyteller_analyze_requested()
+            )
+
+            result = missing_dialog.exec()
+            if result == 0:  # Rejected/cancelled
+                return
+
+            # If analyze was selected, the signal handler navigated away
+            # Only continue if exclude was selected (result == 1 means accepted)
+            if not missing_dialog.result():
+                return
+
+            # User chose to exclude - filter to only clips with descriptions
+            clip_objects = clips_with_desc
+            # Update sources_by_id to match
+            sources_by_id = {
+                source.id: source for clip, source in clips
+                if clip.description
+            }
+
+        # Show the Storyteller dialog
+        dialog = StorytellerDialog(
+            clips=clip_objects,
+            sources_by_id=sources_by_id,
+            project=None,  # Not needed for basic operation
+            parent=self,
+        )
+
+        # Connect to sequence_ready signal
+        dialog.sequence_ready.connect(self._apply_storyteller_sequence)
+
+        dialog.exec()
+
+    def _on_storyteller_analyze_requested(self):
+        """Handle user choosing to run analysis before Storyteller.
+
+        Signals the main window to navigate to the Analyze tab.
+        """
+        # This will be handled by the parent (MainWindow)
+        # For now, just show a message
+        QMessageBox.information(
+            self,
+            "Run Analysis",
+            "Please run 'Describe' analysis on your clips in the Analyze tab, "
+            "then return here to create a narrative sequence."
+        )
+
+    @Slot(list)
+    def _apply_storyteller_sequence(self, sequence_clips: list):
+        """Apply the sequence from Storyteller dialog.
+
+        Args:
+            sequence_clips: List of (Clip, Source) tuples in narrative order
+        """
+        if not sequence_clips:
+            logger.warning("No clips in Storyteller sequence")
+            return
+
+        try:
+            # Clear and populate timeline
+            self.timeline.clear_timeline()
+
+            # Set FPS from first source
+            first_clip, first_source = sequence_clips[0]
+            self.timeline.set_fps(first_source.fps)
+            self.video_player.load_video(first_source.file_path)
+
+            current_frame = 0
+            for clip, source in sequence_clips:
+                self.timeline.add_clip(clip, source, track_index=0, start_frame=current_frame)
+                current_frame += clip.duration_frames
+                self.clip_added.emit(clip, source)
+
+            # Update preview
+            self.timeline_preview.set_clips(sequence_clips, self._sources)
+
+            # Zoom to fit
+            self.timeline._on_zoom_fit()
+
+            # Update dropdown
+            self.algorithm_dropdown.blockSignals(True)
+            if self.algorithm_dropdown.findText("Storyteller") == -1:
+                self.algorithm_dropdown.addItem("Storyteller")
+            self.algorithm_dropdown.setCurrentText("Storyteller")
+            self.algorithm_dropdown.blockSignals(False)
+
+            self._current_algorithm = "storyteller"
+
+            # Transition to timeline state
+            self._set_state(self.STATE_TIMELINE)
+
+            logger.info(f"Applied {len(sequence_clips)} clips from Storyteller")
+
+        except Exception as e:
+            logger.error(f"Error applying Storyteller sequence: {e}")
             QMessageBox.critical(self, "Error", f"Failed to apply sequence: {e}")
 
     def _update_direction_dropdown(self, algorithm: str):

@@ -57,6 +57,7 @@ def generate_poem(
     clips_with_text: list[tuple],  # [(clip, extracted_text_string), ...]
     mood_prompt: str,
     model: Optional[str] = None,
+    length: str = "medium",
 ) -> list[PoemLine]:
     """Generate a poem using LLM from extracted clip texts.
 
@@ -69,6 +70,8 @@ def generate_poem(
             extracted on-screen text from the clip
         mood_prompt: User's description of the desired mood/vibe
         model: LLM model to use (default: from settings)
+        length: Target poem length - "short" (up to 11 lines), "medium" (12-25 lines),
+            or "long" (26+ lines). Default: "medium"
 
     Returns:
         List of PoemLine objects in poem order
@@ -84,7 +87,7 @@ def generate_poem(
     temperature = settings.exquisite_corpus_temperature
     original_model = model
 
-    logger.info(f"Generating poem with mood: '{mood_prompt}' using model: {model}, temperature: {temperature}")
+    logger.info(f"Generating poem with mood: '{mood_prompt}', length: '{length}' using model: {model}, temperature: {temperature}")
 
     # Build the phrase inventory with short IDs for LLM communication
     # LLMs tend to truncate long UUIDs, so we use simple indexed IDs (c1, c2, ...)
@@ -109,17 +112,25 @@ def generate_poem(
 
     api_key = get_llm_api_key()
 
+    # Length guidance for the LLM
+    length_guidance = {
+        "short": "Create a SHORT poem with up to 11 lines. Be selective and choose impactful phrases.",
+        "medium": "Create a MEDIUM poem with 12-25 lines. Balance breadth and focus.",
+        "long": "Create a LONG poem with 26 or more lines. Use as many phrases as create a cohesive whole.",
+    }
+    length_instruction = length_guidance.get(length, length_guidance["medium"])
+
     # Create the LLM prompt
-    system_prompt = """You are a poet creating visual poetry from found text.
+    system_prompt = f"""You are a poet creating visual poetry from found text.
 
 CRITICAL RULES:
 1. You MUST use phrases EXACTLY as provided - no modifications whatsoever
 2. Each line of your poem must be one complete phrase from the inventory
 3. You cannot split phrases, combine words from different phrases, or change any words
 4. You may choose which phrases to use and in what order
-5. Not all phrases need to be used, but try to use as many as make sense
-6. Create a cohesive poem that evokes the requested mood
-7. Consider the visual and sonic qualities of the phrases
+5. Create a cohesive poem that evokes the requested mood
+6. Consider the visual and sonic qualities of the phrases
+7. LENGTH REQUIREMENT: {length_instruction}
 
 OUTPUT FORMAT:
 Return a JSON array where each element is the clip_id of the phrase to use, in poem order.

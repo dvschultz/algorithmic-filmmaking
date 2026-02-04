@@ -5854,12 +5854,27 @@ class MainWindow(QMainWindow):
         )
         self.intention_import_dialog.show()
 
-    def _on_intention_import_confirmed(self, local_files: list, urls: list, algorithm: str, direction: str = None, shot_type: str = None):
+    def _on_intention_import_confirmed(
+        self,
+        local_files: list,
+        urls: list,
+        algorithm: str,
+        direction: str = None,
+        shot_type: str = None,
+        poem_length: str = None,
+        storyteller_duration: str = None,
+        storyteller_structure: str = None,
+        storyteller_theme: str = None,
+    ):
         """Handle confirmation of import in the intention workflow dialog.
 
         Starts the workflow coordinator to process the sources.
         """
-        logger.info(f"Intention import confirmed: {len(local_files)} files, {len(urls)} URLs, direction={direction}, shot_type={shot_type}")
+        logger.info(
+            f"Intention import confirmed: {len(local_files)} files, {len(urls)} URLs, "
+            f"direction={direction}, shot_type={shot_type}, poem_length={poem_length}, "
+            f"storyteller_duration={storyteller_duration}"
+        )
 
         # Use stored algorithm (from card click) if dialog didn't provide one
         algorithm_to_use = algorithm or self._intention_pending_algorithm
@@ -5867,6 +5882,12 @@ class MainWindow(QMainWindow):
         direction_to_use = direction or getattr(self, '_intention_pending_direction', None)
         # Store shot type for filtering when workflow completes
         self._intention_pending_shot_type = shot_type
+        # Store poem length for exquisite_corpus
+        self._intention_pending_poem_length = poem_length
+        # Store storyteller params
+        self._intention_pending_storyteller_duration = storyteller_duration
+        self._intention_pending_storyteller_structure = storyteller_structure
+        self._intention_pending_storyteller_theme = storyteller_theme
 
         # Validate we have something to import
         if not local_files and not urls:
@@ -6652,6 +6673,9 @@ class MainWindow(QMainWindow):
         if algorithm == "exquisite_corpus":
             # Show the Exquisite Corpus dialog (handles prompt, OCR, poem generation)
             self._show_exquisite_corpus_dialog_for_intention(all_clips)
+        elif algorithm == "storyteller":
+            # Show the Storyteller dialog (handles theme, structure, LLM narrative generation)
+            self._show_storyteller_dialog_for_intention(all_clips)
         else:
             # Other algorithms complete immediately
             self.intention_workflow.on_building_complete(all_clips)
@@ -6669,11 +6693,15 @@ class MainWindow(QMainWindow):
         all_sources = self.intention_workflow.get_all_sources() if self.intention_workflow else []
         sources_by_id = {s.id: s for s in all_sources}
 
+        # Get poem length from import dialog if set
+        poem_length = getattr(self, '_intention_pending_poem_length', None)
+
         dialog = ExquisiteCorpusDialog(
             clips=clips,
             sources_by_id=sources_by_id,
             project=self.project,
             parent=self,
+            initial_poem_length=poem_length,
         )
 
         # Connect to sequence_ready signal - this is how the dialog returns results
@@ -6701,6 +6729,61 @@ class MainWindow(QMainWindow):
         # Complete the workflow with just the clips (not tuples)
         if self.intention_workflow:
             # Extract clips from tuples for the workflow completion
+            clips_only = [clip for clip, source in sequence_clips]
+            self.intention_workflow.on_building_complete(clips_only)
+
+    def _show_storyteller_dialog_for_intention(self, clips: list):
+        """Show Storyteller dialog during intention workflow building phase.
+
+        Args:
+            clips: List of Clip objects to process
+        """
+        from ui.dialogs.storyteller_dialog import StorytellerDialog
+        from PySide6.QtWidgets import QDialog
+
+        # Build sources lookup from workflow
+        all_sources = self.intention_workflow.get_all_sources() if self.intention_workflow else []
+        sources_by_id = {s.id: s for s in all_sources}
+
+        # Get storyteller params from import dialog if set
+        duration = getattr(self, '_intention_pending_storyteller_duration', None)
+        structure = getattr(self, '_intention_pending_storyteller_structure', None)
+        theme = getattr(self, '_intention_pending_storyteller_theme', None)
+
+        dialog = StorytellerDialog(
+            clips=clips,
+            sources_by_id=sources_by_id,
+            project=self.project,
+            parent=self,
+            initial_duration=duration,
+            initial_structure=structure,
+            initial_theme=theme,
+        )
+
+        # Connect to sequence_ready signal
+        dialog.sequence_ready.connect(self._on_storyteller_sequence_ready)
+
+        result = dialog.exec()
+
+        if result != QDialog.Accepted:
+            # User cancelled - cancel the workflow
+            if self.intention_workflow:
+                self.intention_workflow.cancel()
+
+    @Slot(list)
+    def _on_storyteller_sequence_ready(self, sequence_clips: list):
+        """Handle sequence ready from Storyteller dialog during intention workflow.
+
+        Args:
+            sequence_clips: List of (Clip, Source) tuples in narrative order
+        """
+        logger.info(f"Storyteller sequence ready: {len(sequence_clips)} clips")
+
+        # Apply to sequence tab using existing method
+        self.sequence_tab._apply_storyteller_sequence(sequence_clips)
+
+        # Complete the workflow with just the clips (not tuples)
+        if self.intention_workflow:
             clips_only = [clip for clip, source in sequence_clips]
             self.intention_workflow.on_building_complete(clips_only)
 
@@ -7182,6 +7265,14 @@ class MainWindow(QMainWindow):
             self._intention_pending_direction = None
         if hasattr(self, '_intention_pending_shot_type'):
             self._intention_pending_shot_type = None
+        if hasattr(self, '_intention_pending_poem_length'):
+            self._intention_pending_poem_length = None
+        if hasattr(self, '_intention_pending_storyteller_duration'):
+            self._intention_pending_storyteller_duration = None
+        if hasattr(self, '_intention_pending_storyteller_structure'):
+            self._intention_pending_storyteller_structure = None
+        if hasattr(self, '_intention_pending_storyteller_theme'):
+            self._intention_pending_storyteller_theme = None
 
         # Clear GUI state (for agent context)
         self._gui_state.clear()

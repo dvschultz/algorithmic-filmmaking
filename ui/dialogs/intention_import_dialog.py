@@ -162,11 +162,12 @@ class IntentionImportDialog(QDialog):
     2. Progress view: step indicators + progress bar
 
     Signals:
-        import_requested: Emitted with (local_paths, urls, algorithm) when Start Import clicked
+        import_requested: Emitted with (local_paths, urls, algorithm, ...) when Start Import clicked
         cancelled: Emitted when Cancel clicked during import or progress
     """
 
-    import_requested = Signal(list, list, str, str, str)  # local_paths, urls, algorithm, direction, shot_type
+    # local_paths, urls, algorithm, direction, shot_type, poem_length, storyteller_duration, storyteller_structure, storyteller_theme
+    import_requested = Signal(list, list, str, str, str, str, str, str, str)
     cancelled = Signal()
 
     # View indices
@@ -282,6 +283,106 @@ class IntentionImportDialog(QDialog):
         # Hide if not shot_type algorithm
         if self._algorithm.lower() != "shot_type":
             self._shot_type_container.hide()
+
+        # Poem length selector (for Exquisite Corpus algorithm only)
+        # Use a simple horizontal layout directly instead of a container widget
+        # to avoid background color issues in dark mode
+        if self._algorithm.lower() == "exquisite_corpus":
+            poem_length_layout = QHBoxLayout()
+            poem_length_layout.setContentsMargins(0, 0, 0, 8)
+
+            poem_length_label = QLabel("Poem length:")
+            poem_length_layout.addWidget(poem_length_label)
+            self._poem_length_label = poem_length_label
+
+            self.poem_length_dropdown = QComboBox()
+            self.poem_length_dropdown.setMinimumWidth(160)
+            self.poem_length_dropdown.addItems([
+                "Short (up to 11 lines)",
+                "Medium (12-25 lines)",
+                "Long (26+ lines)",
+            ])
+            self.poem_length_dropdown.setCurrentIndex(1)  # Default to Medium
+            poem_length_layout.addWidget(self.poem_length_dropdown)
+            poem_length_layout.addStretch()
+
+            layout.addLayout(poem_length_layout)
+        else:
+            # Create dummy dropdown so _get_poem_length doesn't fail
+            self.poem_length_dropdown = QComboBox()
+            self.poem_length_dropdown.setCurrentIndex(1)
+
+        # Storyteller configuration (for storyteller algorithm only)
+        if self._algorithm.lower() == "storyteller":
+            # Theme input (optional)
+            theme_layout = QHBoxLayout()
+            theme_layout.setContentsMargins(0, 0, 0, 8)
+
+            theme_label = QLabel("Theme (optional):")
+            theme_label.setStyleSheet(f"color: {theme().text_secondary};")
+            theme_layout.addWidget(theme_label)
+            self._storyteller_theme_label = theme_label
+
+            self.storyteller_theme_input = QTextEdit()
+            self.storyteller_theme_input.setPlaceholderText("e.g., urban isolation, joy, transformation...")
+            self.storyteller_theme_input.setMaximumHeight(50)
+            theme_layout.addWidget(self.storyteller_theme_input)
+
+            layout.addLayout(theme_layout)
+
+            # Structure dropdown
+            structure_layout = QHBoxLayout()
+            structure_layout.setContentsMargins(0, 0, 0, 8)
+
+            structure_label = QLabel("Narrative structure:")
+            structure_label.setStyleSheet(f"color: {theme().text_secondary};")
+            structure_layout.addWidget(structure_label)
+            self._storyteller_structure_label = structure_label
+
+            self.storyteller_structure_dropdown = QComboBox()
+            self.storyteller_structure_dropdown.setMinimumWidth(200)
+            self.storyteller_structure_dropdown.addItems([
+                "Auto (LLM chooses)",
+                "Three-Act (setup, conflict, resolution)",
+                "Chronological (time-based)",
+                "Thematic (grouped by theme)",
+            ])
+            self.storyteller_structure_dropdown.setCurrentIndex(0)  # Default to Auto
+            structure_layout.addWidget(self.storyteller_structure_dropdown)
+            structure_layout.addStretch()
+
+            layout.addLayout(structure_layout)
+
+            # Duration dropdown
+            duration_layout = QHBoxLayout()
+            duration_layout.setContentsMargins(0, 0, 0, 8)
+
+            duration_label = QLabel("Target duration:")
+            duration_label.setStyleSheet(f"color: {theme().text_secondary};")
+            duration_layout.addWidget(duration_label)
+            self._storyteller_duration_label = duration_label
+
+            self.storyteller_duration_dropdown = QComboBox()
+            self.storyteller_duration_dropdown.setMinimumWidth(160)
+            self.storyteller_duration_dropdown.addItems([
+                "Use all clips",
+                "~10 minutes",
+                "~30 minutes",
+                "~1 hour",
+                "~90 minutes",
+            ])
+            self.storyteller_duration_dropdown.setCurrentIndex(0)  # Default to all
+            duration_layout.addWidget(self.storyteller_duration_dropdown)
+            duration_layout.addStretch()
+
+            layout.addLayout(duration_layout)
+        else:
+            # Create dummy widgets so getters don't fail
+            self.storyteller_theme_input = QTextEdit()
+            self.storyteller_structure_dropdown = QComboBox()
+            self.storyteller_structure_dropdown.setCurrentIndex(0)
+            self.storyteller_duration_dropdown = QComboBox()
+            self.storyteller_duration_dropdown.setCurrentIndex(0)
 
         # Drop zone
         self.drop_zone = DropZone()
@@ -412,6 +513,26 @@ class IntentionImportDialog(QDialog):
                 border-radius: 4px;
                 padding: 8px;
             }}
+            QComboBox {{
+                background-color: {theme().background_tertiary};
+                color: {theme().text_primary};
+                border: 1px solid {theme().border_primary};
+                border-radius: 4px;
+                padding: 6px 12px;
+                min-height: 24px;
+            }}
+            QComboBox:hover {{
+                background-color: {theme().background_elevated};
+            }}
+            QComboBox::drop-down {{
+                border: none;
+                padding-right: 8px;
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: {theme().background_tertiary};
+                color: {theme().text_primary};
+                selection-background-color: {theme().accent_blue};
+            }}
             QListWidget {{
                 background-color: {theme().background_tertiary};
                 color: {theme().text_primary};
@@ -520,6 +641,37 @@ class IntentionImportDialog(QDialog):
         # Convert display text to internal format (lowercase)
         return text.lower()
 
+    def _get_poem_length(self) -> str | None:
+        """Get the selected poem length (for exquisite_corpus algorithm)."""
+        if self._algorithm.lower() != "exquisite_corpus":
+            return None
+        # Map dropdown index to length key
+        length_map = {0: "short", 1: "medium", 2: "long"}
+        return length_map.get(self.poem_length_dropdown.currentIndex(), "medium")
+
+    def _get_storyteller_duration(self) -> str | None:
+        """Get the selected target duration (for storyteller algorithm)."""
+        if self._algorithm.lower() != "storyteller":
+            return None
+        # Map dropdown index to duration key
+        duration_map = {0: "all", 1: "10min", 2: "30min", 3: "1hr", 4: "90min"}
+        return duration_map.get(self.storyteller_duration_dropdown.currentIndex(), "all")
+
+    def _get_storyteller_structure(self) -> str | None:
+        """Get the selected narrative structure (for storyteller algorithm)."""
+        if self._algorithm.lower() != "storyteller":
+            return None
+        # Map dropdown index to structure key
+        structure_map = {0: "auto", 1: "three_act", 2: "chronological", 3: "thematic"}
+        return structure_map.get(self.storyteller_structure_dropdown.currentIndex(), "auto")
+
+    def _get_storyteller_theme(self) -> str | None:
+        """Get the theme text (for storyteller algorithm)."""
+        if self._algorithm.lower() != "storyteller":
+            return None
+        text = self.storyteller_theme_input.toPlainText().strip()
+        return text if text else None
+
     def _on_start(self):
         """Handle Start Import click."""
         if not self._local_paths and not self._urls:
@@ -532,12 +684,26 @@ class IntentionImportDialog(QDialog):
         for step in WorkflowStep:
             self._step_progress[step] = (False, 0.0)
 
-        # Get direction and shot type
+        # Get algorithm-specific parameters
         direction = self._get_direction()
         shot_type = self._get_shot_type()
+        poem_length = self._get_poem_length()
+        storyteller_duration = self._get_storyteller_duration()
+        storyteller_structure = self._get_storyteller_structure()
+        storyteller_theme = self._get_storyteller_theme()
 
         # Emit signal to start workflow
-        self.import_requested.emit(self._local_paths.copy(), self._urls.copy(), self._algorithm, direction, shot_type)
+        self.import_requested.emit(
+            self._local_paths.copy(),
+            self._urls.copy(),
+            self._algorithm,
+            direction,
+            shot_type,
+            poem_length,
+            storyteller_duration,
+            storyteller_structure,
+            storyteller_theme,
+        )
 
     def _on_cancel(self):
         """Handle Cancel click."""

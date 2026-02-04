@@ -40,6 +40,11 @@ ALGORITHMS = {
         "Exquisite Corpus",
         "Create a poem from on-screen text"
     ),
+    "storyteller": (
+        "📖",
+        "Storyteller",
+        "Create narrative sequence from clip descriptions"
+    ),
 }
 
 
@@ -96,14 +101,17 @@ class SortingCardGrid(QWidget):
         grid_layout.setSpacing(20)
         grid_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Create cards in 3x2 grid (6 algorithms)
+        # Create cards in grid layout (7 algorithms)
+        # Row 1: basic sorting (color, duration, shuffle, sequential)
+        # Row 2: analysis-based (shot_type, exquisite_corpus, storyteller)
         positions = [
             ("color", 0, 0),
             ("duration", 0, 1),
             ("shuffle", 0, 2),
-            ("sequential", 1, 0),
-            ("shot_type", 1, 1),
-            ("exquisite_corpus", 1, 2),
+            ("sequential", 0, 3),
+            ("shot_type", 1, 0),
+            ("exquisite_corpus", 1, 1),
+            ("storyteller", 1, 2),
         ]
 
         for key, row, col in positions:
