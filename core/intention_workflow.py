@@ -88,6 +88,7 @@ class IntentionWorkflowCoordinator(QObject):
         "sequential": [],  # No analysis needed
         "shot_type": ["shot_type"],  # Needs shot type analysis
         "exquisite_corpus": [],  # Text extraction happens in the dialog
+        "storyteller": ["descriptions"],  # Needs description analysis
     }
 
     def __init__(self, parent=None):
