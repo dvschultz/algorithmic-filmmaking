@@ -24,12 +24,14 @@ class RenderTab(BaseTab):
         export_clips_requested: Emitted when selected clips export is requested
         export_all_clips_requested: Emitted when all clips export is requested
         export_dataset_requested: Emitted when dataset export is requested
+        export_srt_requested: Emitted when SRT subtitle export is requested
     """
 
     export_sequence_requested = Signal()
     export_clips_requested = Signal()
     export_all_clips_requested = Signal()
     export_dataset_requested = Signal()
+    export_srt_requested = Signal()
 
     # State constants
     STATE_NO_CONTENT = 0
@@ -172,6 +174,12 @@ class RenderTab(BaseTab):
         self.export_dataset_btn.clicked.connect(self._on_export_dataset_click)
         other_layout.addWidget(self.export_dataset_btn)
 
+        # Export SRT button
+        self.export_srt_btn = QPushButton("Export SRT")
+        self.export_srt_btn.setToolTip("Export sequence metadata as subtitles")
+        self.export_srt_btn.clicked.connect(self._on_export_srt_click)
+        other_layout.addWidget(self.export_srt_btn)
+
         other_layout.addStretch()
         layout.addWidget(other_group)
 
@@ -194,6 +202,10 @@ class RenderTab(BaseTab):
         """Handle export dataset button click."""
         self.export_dataset_requested.emit()
 
+    def _on_export_srt_click(self):
+        """Handle export SRT button click."""
+        self.export_srt_requested.emit()
+
     # Public methods for MainWindow to call
 
     def set_sequence_info(self, duration_seconds: float, clip_count: int):
@@ -209,6 +221,7 @@ class RenderTab(BaseTab):
 
         self.sequence_info_label.setText(f"Duration: {duration_str}    Clips: {clip_count}")
         self.export_sequence_btn.setEnabled(clip_count > 0)
+        self.export_srt_btn.setEnabled(clip_count > 0)
 
         # Update state
         if clip_count > 0 or self._detected_clip_count > 0:
@@ -271,6 +284,7 @@ class RenderTab(BaseTab):
         self.export_clips_btn.setEnabled(False)
         self.export_all_clips_btn.setEnabled(False)
         self.export_dataset_btn.setEnabled(False)
+        self.export_srt_btn.setEnabled(False)
 
         # Show empty state
         self.state_stack.setCurrentIndex(self.STATE_NO_CONTENT)

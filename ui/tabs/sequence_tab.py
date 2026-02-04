@@ -387,6 +387,10 @@ class SequenceTab(BaseTab):
 
             self._current_algorithm = algo_lower
 
+            # Persist algorithm on the sequence for SRT export
+            sequence = self.timeline.get_sequence()
+            sequence.algorithm = algo_lower
+
             # Transition to timeline state
             self._set_state(self.STATE_TIMELINE)
 
@@ -463,6 +467,10 @@ class SequenceTab(BaseTab):
             self.algorithm_dropdown.blockSignals(False)
 
             self._current_algorithm = "exquisite_corpus"
+
+            # Persist algorithm on the sequence for SRT export
+            sequence = self.timeline.get_sequence()
+            sequence.algorithm = "exquisite_corpus"
 
             # Transition to timeline state
             self._set_state(self.STATE_TIMELINE)
@@ -600,6 +608,10 @@ class SequenceTab(BaseTab):
             self.algorithm_dropdown.blockSignals(False)
 
             self._current_algorithm = "storyteller"
+
+            # Persist algorithm on the sequence for SRT export
+            sequence = self.timeline.get_sequence()
+            sequence.algorithm = "storyteller"
 
             # Transition to timeline state
             self._set_state(self.STATE_TIMELINE)

@@ -117,6 +117,7 @@ class Sequence:
     name: str = "Untitled Sequence"
     fps: float = 30.0
     tracks: list[Track] = field(default_factory=list)
+    algorithm: Optional[str] = None  # e.g., "storyteller", "color", "shot_type"
 
     def __post_init__(self):
         """Ensure at least one track exists."""
@@ -161,12 +162,15 @@ class Sequence:
 
     def to_dict(self) -> dict:
         """Serialize to dictionary for JSON export."""
-        return {
+        data = {
             "id": self.id,
             "name": self.name,
             "fps": self.fps,
             "tracks": [track.to_dict() for track in self.tracks],
         }
+        if self.algorithm:
+            data["algorithm"] = self.algorithm
+        return data
 
     @classmethod
     def from_dict(cls, data: dict) -> "Sequence":
@@ -180,6 +184,7 @@ class Sequence:
             name=data.get("name", "Untitled Sequence"),
             fps=data.get("fps", 30.0),
             tracks=tracks if tracks else [],  # Empty list to skip __post_init__ default
+            algorithm=data.get("algorithm"),
         )
         # If no tracks were loaded, ensure at least one exists
         if not seq.tracks:

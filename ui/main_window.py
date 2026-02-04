@@ -32,6 +32,7 @@ from core.downloader import VideoDownloader
 from core.sequence_export import SequenceExporter, ExportConfig
 from core.dataset_export import export_dataset, DatasetExportConfig
 from core.edl_export import export_edl, EDLExportConfig
+from core.srt_export import export_srt, SRTExportConfig
 from core.analysis.color import extract_dominant_colors
 from core.analysis.shots import classify_shot_type_tiered
 from core.ffmpeg import FFmpegProcessor
@@ -1441,6 +1442,7 @@ class MainWindow(QMainWindow):
         self.render_tab.export_clips_requested.connect(self._on_export_click)
         self.render_tab.export_all_clips_requested.connect(self._on_export_all_click)
         self.render_tab.export_dataset_requested.connect(self._on_export_dataset_click)
+        self.render_tab.export_srt_requested.connect(self._on_export_srt_click)
 
         # Sequence tab timeline signals for playback sync
         self.sequence_tab.timeline.playhead_changed.connect(self._on_timeline_playhead_changed)
@@ -4727,6 +4729,65 @@ class MainWindow(QMainWindow):
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(output_path.parent)))
         else:
             QMessageBox.critical(self, "Export Error", "Failed to export dataset")
+
+    def _on_export_srt_click(self):
+        """Export sequence metadata as SRT subtitle file."""
+        sequence = self.sequence_tab.get_sequence()
+        all_clips = sequence.get_all_clips()
+
+        if not all_clips:
+            QMessageBox.information(self, "Export SRT", "No clips in timeline to export")
+            return
+
+        # Build lookups
+        sources = self.sequence_tab.timeline.get_sources_lookup()
+        clips_lookup = {}
+        for clip in self.clips:
+            clips_lookup[clip.id] = clip
+
+        # Fallback to project data
+        if not sources and self.sources_by_id:
+            sources = dict(self.sources_by_id)
+
+        # Get default filename from sequence name
+        default_name = f"{sequence.name}.srt"
+        if sequence.name == "Untitled Sequence" and self.project_metadata:
+            default_name = f"{self.project_metadata.name}.srt"
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export SRT",
+            default_name,
+            "SRT Subtitle Files (*.srt);;All Files (*)",
+        )
+        if not file_path:
+            return
+
+        output_path = Path(file_path)
+        if not output_path.suffix:
+            output_path = output_path.with_suffix(".srt")
+
+        config = SRTExportConfig(output_path=output_path)
+        success, exported, skipped = export_srt(
+            sequence, clips_lookup, sources, config
+        )
+
+        if success:
+            if exported == 0:
+                # All clips skipped - warn user
+                QMessageBox.warning(
+                    self,
+                    "Export SRT",
+                    f"No clips have the required metadata for this sequence type.\n"
+                    f"An empty SRT file was created.\n\n"
+                    f"Skipped: {skipped} clips",
+                )
+            else:
+                self.status_bar.showMessage(
+                    f"SRT exported: {exported} entries ({skipped} skipped)"
+                )
+        else:
+            QMessageBox.critical(self, "Export Error", "Failed to export SRT file")
 
     def _export_clips(self, clips: list[Clip]):
         """Export clips to a folder."""
