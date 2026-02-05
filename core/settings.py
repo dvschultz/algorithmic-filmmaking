@@ -418,6 +418,17 @@ class Settings:
     shot_classifier_tier: str = "cpu"  # cpu, cloud (cloud uses Replicate VideoMAE)
     shot_classifier_replicate_model: str = "dvschultz/shot-type-classifier"  # VideoMAE model
 
+    # Analysis Picker - remembered selection
+    analysis_selected_operations: list = field(
+        default_factory=lambda: ["colors", "shots", "transcribe"]
+    )
+
+    # Analysis Parallelism Settings
+    color_analysis_parallelism: int = 4  # 1-8, I/O-bound image loading
+    description_parallelism: int = 3  # 1-5, cloud API I/O-bound
+    transcription_parallelism: int = 2  # 1-4, FFmpeg + Whisper memory-limited
+    local_model_parallelism: int = 1  # 1-4, CLIP/MobileNet/YOLO not thread-safe
+
     # Rich Cinematography Analysis Settings
     cinematography_input_mode: str = "frame"  # "frame" = single keyframe, "video" = video clip (Gemini only)
     cinematography_model: str = "gemini-2.5-flash"  # VLM model for rich analysis
@@ -686,6 +697,21 @@ def _load_from_json(config_path: Path, settings: Settings) -> Settings:
         if val := shot_classifier.get("replicate_model"):
             settings.shot_classifier_replicate_model = val
 
+    # Analysis parallelism section
+    if analysis := data.get("analysis"):
+        if "color_analysis_parallelism" in analysis:
+            settings.color_analysis_parallelism = int(analysis["color_analysis_parallelism"])
+        if "description_parallelism" in analysis:
+            settings.description_parallelism = int(analysis["description_parallelism"])
+        if "transcription_parallelism" in analysis:
+            settings.transcription_parallelism = int(analysis["transcription_parallelism"])
+        if "local_model_parallelism" in analysis:
+            settings.local_model_parallelism = int(analysis["local_model_parallelism"])
+        if "selected_operations" in analysis:
+            val = analysis["selected_operations"]
+            if isinstance(val, list):
+                settings.analysis_selected_operations = val
+
     # Cinematography section
     if cinematography := data.get("cinematography"):
         if val := cinematography.get("input_mode"):
@@ -771,6 +797,13 @@ def _settings_to_json(settings: Settings) -> dict:
             "tier": settings.shot_classifier_tier,
             "replicate_model": settings.shot_classifier_replicate_model,
             # Note: API key is NOT stored here - it goes to keyring
+        },
+        "analysis": {
+            "color_analysis_parallelism": settings.color_analysis_parallelism,
+            "description_parallelism": settings.description_parallelism,
+            "transcription_parallelism": settings.transcription_parallelism,
+            "local_model_parallelism": settings.local_model_parallelism,
+            "selected_operations": settings.analysis_selected_operations,
         },
         "cinematography": {
             "input_mode": settings.cinematography_input_mode,

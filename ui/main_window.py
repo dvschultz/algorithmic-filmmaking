@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QLabel,
     QDockWidget,
+    QDialog,
 )
 from PySide6.QtCore import Qt, Signal, QThread, QUrl, QTimer, Slot
 from PySide6.QtGui import QDesktopServices, QKeySequence, QAction, QDragEnterEvent, QDropEvent
@@ -33,8 +34,6 @@ from core.sequence_export import SequenceExporter, ExportConfig
 from core.dataset_export import export_dataset, DatasetExportConfig
 from core.edl_export import export_edl, EDLExportConfig
 from core.srt_export import export_srt, SRTExportConfig
-from core.analysis.color import extract_dominant_colors
-from core.analysis.shots import classify_shot_type_tiered
 from core.ffmpeg import FFmpegProcessor
 from core.settings import (
     load_settings,
@@ -64,9 +63,23 @@ from ui.theme import theme
 from ui.chat_panel import ChatPanel
 from ui.chat_worker import ChatAgentWorker
 from ui.clip_details_sidebar import ClipDetailsSidebar
-from ui.dialogs import IntentionImportDialog
+from ui.dialogs import IntentionImportDialog, AnalysisPickerDialog
+from core.analysis_operations import (
+    OPERATIONS_BY_KEY,
+    LOCAL_OPS,
+    SEQUENTIAL_OPS,
+    CLOUD_OPS,
+    PHASE_ORDER,
+    DEFAULT_SELECTED,
+)
 from ui.workers.base import CancellableWorker
 from ui.workers.cinematography_worker import CinematographyWorker
+from ui.workers.color_worker import ColorAnalysisWorker
+from ui.workers.shot_type_worker import ShotTypeWorker
+from ui.workers.transcription_worker import TranscriptionWorker
+from ui.workers.classification_worker import ClassificationWorker
+from ui.workers.object_detection_worker import ObjectDetectionWorker
+from ui.workers.description_worker import DescriptionWorker
 from core.gui_state import GUIState
 from core.intention_workflow import IntentionWorkflowCoordinator, WorkflowState
 
@@ -410,287 +423,6 @@ class SequenceExportWorker(QThread):
             self.error.emit(str(e))
 
 
-class ColorAnalysisWorker(CancellableWorker):
-    """Background worker for color extraction from thumbnails."""
-
-    progress = Signal(int, int)  # current, total
-    color_ready = Signal(str, list)  # clip_id, colors (list of RGB tuples)
-    analysis_completed = Signal()  # (renamed from 'finished' to avoid shadowing QThread.finished)
-
-    def __init__(self, clips: list[Clip]):
-        super().__init__()
-        self.clips = clips
-
-    def run(self):
-        self._log_start()
-        total = len(self.clips)
-        for i, clip in enumerate(self.clips):
-            if self.is_cancelled():
-                self._log_cancelled()
-                break
-            try:
-                if clip.thumbnail_path and clip.thumbnail_path.exists():
-                    colors = extract_dominant_colors(clip.thumbnail_path)
-                    self.color_ready.emit(clip.id, colors)
-            except Exception as e:
-                self._log_error(str(e), clip.id)
-            self.progress.emit(i + 1, total)
-        self.analysis_completed.emit()
-        self._log_complete()
-
-
-class ShotTypeWorker(CancellableWorker):
-    """Background worker for shot type classification using CLIP or VideoMAE.
-
-    Supports tiered processing:
-    - CPU: CLIP zero-shot classification from thumbnails (free, local)
-    - Cloud: VideoMAE model on Replicate for video-based classification (paid)
-    """
-
-    progress = Signal(int, int)  # current, total
-    shot_type_ready = Signal(str, str, float)  # clip_id, shot_type, confidence
-    analysis_completed = Signal()  # (renamed from 'finished' to avoid shadowing QThread.finished)
-
-    def __init__(self, clips: list[Clip], sources_by_id: dict[str, Source]):
-        super().__init__()
-        self.clips = clips
-        self.sources_by_id = sources_by_id
-
-    def run(self):
-        self._log_start()
-        total = len(self.clips)
-        for i, clip in enumerate(self.clips):
-            if self.is_cancelled():
-                self._log_cancelled()
-                break
-            try:
-                if clip.thumbnail_path and clip.thumbnail_path.exists():
-                    # Get source for video-based classification (cloud tier)
-                    source = self.sources_by_id.get(clip.source_id)
-                    source_path = source.file_path if source else None
-                    fps = source.fps if source else None
-
-                    shot_type, confidence = classify_shot_type_tiered(
-                        image_path=clip.thumbnail_path,
-                        source_path=source_path,
-                        start_frame=clip.start_frame,
-                        end_frame=clip.end_frame,
-                        fps=fps,
-                    )
-                    self.shot_type_ready.emit(clip.id, shot_type, confidence)
-            except Exception as e:
-                self._log_error(str(e), clip.id)
-            self.progress.emit(i + 1, total)
-        self.analysis_completed.emit()
-        self._log_complete()
-
-
-class TranscriptionWorker(CancellableWorker):
-    """Background worker for transcribing clips using faster-whisper."""
-
-    progress = Signal(int, int)  # current, total
-    transcript_ready = Signal(str, list)  # clip_id, segments (list of TranscriptSegment)
-    transcription_completed = Signal()  # (renamed from 'finished' to avoid shadowing QThread.finished)
-
-    def __init__(self, clips: list[Clip], source: Source, model_name: str = "small.en", language: str = "en"):
-        super().__init__()
-        self.clips = clips
-        self.source = source
-        self.model_name = model_name
-        self.language = language
-
-    def run(self):
-        self._log_start()
-        from core.transcription import (
-            transcribe_clip,
-            FasterWhisperNotInstalledError,
-            ModelDownloadError,
-            TranscriptionError,
-        )
-
-        total = len(self.clips)
-        for i, clip in enumerate(self.clips):
-            if self.is_cancelled():
-                self._log_cancelled()
-                break
-            try:
-                segments = transcribe_clip(
-                    self.source.file_path,
-                    clip.start_time(self.source.fps),
-                    clip.end_time(self.source.fps),
-                    self.model_name,
-                    self.language,
-                )
-                self.transcript_ready.emit(clip.id, segments)
-            except FasterWhisperNotInstalledError as e:
-                logger.error(f"faster-whisper not installed: {e}")
-                self.error.emit(str(e))
-                break  # Stop processing - critical error
-            except ModelDownloadError as e:
-                logger.error(f"Model download failed: {e}")
-                self.error.emit(str(e))
-                break  # Stop processing - critical error
-            except TranscriptionError as e:
-                self._log_error(str(e), clip.id)
-                # Continue processing other clips for non-critical errors
-            except Exception as e:
-                self._log_error(str(e), clip.id)
-                # Continue processing other clips
-            self.progress.emit(i + 1, total)
-        self.transcription_completed.emit()
-        self._log_complete()
-
-
-class ClassificationWorker(CancellableWorker):
-    """Background worker for frame classification using MobileNet."""
-
-    progress = Signal(int, int)  # current, total
-    labels_ready = Signal(str, list)  # clip_id, [(label, confidence), ...]
-    classification_completed = Signal()  # (renamed from 'finished' to avoid shadowing QThread.finished)
-
-    def __init__(self, clips: list[Clip], top_k: int = 5, threshold: float = 0.1):
-        super().__init__()
-        self.clips = clips
-        self.top_k = top_k
-        self.threshold = threshold
-
-    def run(self):
-        self._log_start()
-        from core.analysis.classification import classify_frame
-
-        total = len(self.clips)
-        for i, clip in enumerate(self.clips):
-            if self.is_cancelled():
-                self._log_cancelled()
-                break
-            try:
-                if clip.thumbnail_path and clip.thumbnail_path.exists():
-                    results = classify_frame(
-                        clip.thumbnail_path,
-                        top_k=self.top_k,
-                        threshold=self.threshold,
-                    )
-                    self.labels_ready.emit(clip.id, results)
-            except Exception as e:
-                self._log_error(str(e), clip.id)
-            self.progress.emit(i + 1, total)
-        self.classification_completed.emit()
-        self._log_complete()
-
-
-class ObjectDetectionWorker(CancellableWorker):
-    """Background worker for object detection using YOLOv8."""
-
-    progress = Signal(int, int)  # current, total
-    objects_ready = Signal(str, list, int)  # clip_id, detections, person_count
-    detection_completed = Signal()  # (renamed from 'finished' to avoid shadowing QThread.finished)
-
-    def __init__(self, clips: list[Clip], confidence: float = 0.5, detect_all: bool = True):
-        super().__init__()
-        self.clips = clips
-        self.confidence = confidence
-        self.detect_all = detect_all  # False = persons only (faster)
-
-    def run(self):
-        self._log_start()
-        from core.analysis.detection import detect_objects, count_people
-
-        total = len(self.clips)
-        for i, clip in enumerate(self.clips):
-            if self.is_cancelled():
-                self._log_cancelled()
-                break
-            try:
-                if clip.thumbnail_path and clip.thumbnail_path.exists():
-                    if self.detect_all:
-                        detections = detect_objects(
-                            clip.thumbnail_path,
-                            confidence_threshold=self.confidence,
-                        )
-                        person_count = sum(1 for d in detections if d["label"] == "person")
-                    else:
-                        detections = []
-                        person_count = count_people(
-                            clip.thumbnail_path,
-                            confidence_threshold=self.confidence,
-                        )
-                    self.objects_ready.emit(clip.id, detections, person_count)
-            except Exception as e:
-                self._log_error(str(e), clip.id)
-            self.progress.emit(i + 1, total)
-        self.detection_completed.emit()
-        self._log_complete()
-
-
-class DescriptionWorker(CancellableWorker):
-    """Background worker for generating video descriptions."""
-
-    progress = Signal(int, int)  # current, total
-    description_ready = Signal(str, str, str)  # clip_id, description, model_name
-    error = Signal(str, str)  # clip_id, error_message (shadows base class error)
-    description_completed = Signal()  # (renamed from 'finished' to avoid shadowing QThread.finished)
-
-    def __init__(
-        self,
-        clips: list[Clip],
-        tier: Optional[str] = None,
-        prompt: Optional[str] = None,
-        sources: Optional[dict[str, Source]] = None,
-    ):
-        super().__init__()
-        self.clips = clips
-        self.tier = tier
-        self.prompt = prompt
-        self.sources = sources or {}  # source_id -> Source lookup
-        self.error_count = 0
-        self.success_count = 0
-        self.last_error = None
-
-    def run(self):
-        self._log_start()
-        from core.analysis.description import describe_frame
-
-        total = len(self.clips)
-        for i, clip in enumerate(self.clips):
-            if self.is_cancelled():
-                self._log_cancelled()
-                break
-            try:
-                if clip.thumbnail_path and clip.thumbnail_path.exists():
-                    # Get source for video extraction (if available)
-                    source = self.sources.get(clip.source_id)
-
-                    description, model = describe_frame(
-                        clip.thumbnail_path,
-                        tier=self.tier,
-                        prompt=self.prompt or "Describe this video frame in 3 sentences or less. Focus on the main subjects, action, and setting.",
-                        # Pass video info for potential video extraction (Gemini)
-                        source_path=source.file_path if source else None,
-                        start_frame=clip.start_frame,
-                        end_frame=clip.end_frame,
-                        fps=source.fps if source else None,
-                    )
-                    # Only emit valid descriptions (not error messages)
-                    if description and not description.startswith("Error"):
-                        self.description_ready.emit(clip.id, description, model)
-                        self.success_count += 1
-                    else:
-                        self._log_error(description, clip.id)
-                        self.error_count += 1
-                        self.last_error = description
-                        self.error.emit(clip.id, description)
-            except Exception as e:
-                error_msg = str(e)
-                self._log_error(error_msg, clip.id)
-                self.error_count += 1
-                self.last_error = error_msg
-                self.error.emit(clip.id, error_msg)
-            self.progress.emit(i + 1, total)
-        logger.info(f"DescriptionWorker.run() completed: {self.success_count} success, {self.error_count} errors")
-        self.description_completed.emit()
-        self._log_complete()
-
-
 class YouTubeSearchWorker(QThread):
     """Background worker for YouTube search."""
 
@@ -925,9 +657,13 @@ class MainWindow(QMainWindow):
         self._detection_generation: int = 0
         self._thumbnail_generation: int = 0
 
-        # State for "Analyze All" sequential processing
-        self._analyze_all_pending: list[str] = []  # Pending steps: "colors", "shots", "transcribe"
-        self._analyze_all_clips: list = []  # Clips being analyzed
+        # State for analysis pipeline (phase-based execution)
+        self._analysis_selected_ops: list[str] = []  # Operations to run
+        self._analysis_clips: list = []  # Clips being analyzed
+        self._analysis_current_phase: str = ""  # "local"|"sequential"|"cloud"|""
+        self._analysis_phase_remaining: int = 0  # Concurrent worker counter
+        self._analysis_completed_ops: list[str] = []  # Ops finished so far
+        self._analysis_pending_phases: list[str] = []  # Phases still to run
         self._transcription_source_queue: list = []  # Queue for multi-source transcription
 
         # Agent tool waiting state - tracks when agent is waiting for worker completion
@@ -1365,9 +1101,6 @@ class MainWindow(QMainWindow):
 
     def _apply_settings(self):
         """Apply current settings to the UI and components."""
-        # Update sensitivity in Cut tab
-        self.cut_tab.set_sensitivity(self.settings.default_sensitivity)
-
         # Apply theme preference
         theme().set_preference(self.settings.theme_preference)
 
@@ -1399,23 +1132,15 @@ class MainWindow(QMainWindow):
         )
 
         # Cut tab signals
-        self.cut_tab.detect_requested.connect(self._on_detect_from_tab)
         self.cut_tab.clip_dragged_to_timeline.connect(self._on_clip_dragged_to_timeline)
-        self.cut_tab.clips_sent_to_analyze.connect(self._on_clips_sent_to_analyze)
+        self.cut_tab.analyze_selected_requested.connect(self._on_analyze_selected_from_cut)
         self.cut_tab.selection_changed.connect(self._on_cut_selection_changed)
         self.cut_tab.clip_browser.filters_changed.connect(self._on_cut_filters_changed)
         self.cut_tab.clip_browser.view_details_requested.connect(self.show_clip_details)
 
         # Analyze tab signals
-        self.analyze_tab.transcribe_requested.connect(self._on_transcribe_from_tab)
-        self.analyze_tab.analyze_colors_requested.connect(self._on_analyze_colors_from_tab)
-        self.analyze_tab.analyze_shots_requested.connect(self._on_analyze_shots_from_tab)
-        self.analyze_tab.classify_requested.connect(self._on_classify_from_tab)
-        self.analyze_tab.detect_objects_requested.connect(self._on_detect_objects_from_tab)
-        self.analyze_tab.describe_requested.connect(self._on_describe_from_tab)
-        self.analyze_tab.extract_text_requested.connect(self._on_extract_text_from_tab)
-        self.analyze_tab.analyze_cinematography_requested.connect(self._on_cinematography_from_tab)
-        self.analyze_tab.analyze_all_requested.connect(self._on_analyze_all_from_tab)
+        self.analyze_tab.quick_run_requested.connect(self._on_quick_run_from_tab)
+        self.analyze_tab.analyze_picker_requested.connect(self._on_analyze_picker_from_tab)
         self.analyze_tab.clip_dragged_to_timeline.connect(self._on_clip_dragged_to_timeline)
         self.analyze_tab.selection_changed.connect(self._on_analyze_selection_changed)
         self.analyze_tab.clips_changed.connect(self._on_analyze_clips_changed)
@@ -2782,18 +2507,6 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.warning(f"Failed to generate source thumbnail: {e}")
 
-    def _on_detect_from_tab(self, mode: str, config: dict):
-        """Handle detection request from Cut tab.
-
-        Args:
-            mode: Detection mode ('adaptive', 'content', or 'karaoke')
-            config: Configuration dict with mode-specific parameters
-        """
-        if not self.current_source:
-            return
-        # Start detection with the provided mode and config
-        self._start_detection(mode, config)
-
     def _on_cut_selection_changed(self, clip_ids: list[str]):
         """Handle selection change in Cut tab."""
         self._gui_state.selected_clip_ids = clip_ids
@@ -2830,170 +2543,495 @@ class MainWindow(QMainWindow):
         self._gui_state.sequence_ids = clip_ids
         logger.debug(f"GUI State updated: {len(clip_ids)} clips in sequence")
 
-    def _on_clips_sent_to_analyze(self, clip_ids: list[str]):
-        """Handle clips being sent from Cut to Analyze tab."""
-        self.analyze_tab.add_clips(clip_ids)
-        self.tab_widget.setCurrentWidget(self.analyze_tab)
-        self.status_bar.showMessage(f"Sent {len(clip_ids)} clips to Analyze")
+    def _on_analyze_selected_from_cut(self, clip_ids: list[str]):
+        """Handle clips being sent from Cut tab for analysis - opens picker modal."""
+        if not clip_ids:
+            return
 
-        # Automatically start "Analyze All" on the sent clips
-        self._on_analyze_all_from_tab()
+        dialog = AnalysisPickerDialog(
+            len(clip_ids), "selected clips", self.settings, self
+        )
+        if dialog.exec() == QDialog.Accepted:
+            operations = dialog.selected_operations()
+            if not operations:
+                return
+            # Save settings with new selection
+            save_settings(self.settings)
+            # Add clips to Analyze tab and switch
+            self.analyze_tab.add_clips(clip_ids)
+            self.tab_widget.setCurrentWidget(self.analyze_tab)
+            # Resolve clips and run pipeline
+            clips = [self.project.clips_by_id[cid] for cid in clip_ids
+                     if cid in self.project.clips_by_id]
+            if clips:
+                self._run_analysis_pipeline(clips, operations)
 
-    def _on_analyze_colors_from_tab(self):
-        """Handle color extraction request from Analyze tab."""
+    # ------------------------------------------------------------------
+    # Analysis Pipeline: Quick Run / Picker / Phase-Based Engine
+    # ------------------------------------------------------------------
+
+    def _on_quick_run_from_tab(self, op_key: str):
+        """Handle quick-run dropdown from Analyze tab (single operation, immediate)."""
+        clips = self.analyze_tab.get_clips()
+        if clips:
+            self._run_analysis_pipeline(clips, [op_key])
+
+    def _on_analyze_picker_from_tab(self):
+        """Handle 'Analyze...' button from Analyze tab - open picker modal."""
         clips = self.analyze_tab.get_clips()
         if not clips:
             return
+        dialog = AnalysisPickerDialog(
+            len(clips), f"clips in Analyze tab", self.settings, self
+        )
+        if dialog.exec() == QDialog.Accepted:
+            operations = dialog.selected_operations()
+            if operations:
+                save_settings(self.settings)
+                self._run_analysis_pipeline(clips, operations)
 
-        # Reset guard
-        self._color_analysis_finished_handled = False
+    def _run_analysis_pipeline(self, clips: list, operations: list[str]):
+        """Central entry point for running analysis operations.
+
+        Organizes operations into phases (local → sequential → cloud) and
+        executes them with smart concurrency. Called from:
+        - Analyze tab "Analyze..." dialog result
+        - Analyze tab dropdown "Quick Run"
+        - Cut tab "Analyze Selected" dialog result
+        - Agent tool analyze_all_live
+
+        Args:
+            clips: List of Clip objects to analyze
+            operations: List of operation keys to run
+        """
+        if not clips or not operations:
+            return
+
+        # Validate operation keys
+        valid_ops = [op for op in operations if op in OPERATIONS_BY_KEY]
+        if not valid_ops:
+            return
+
+        logger.info(f"Starting analysis pipeline: {valid_ops} on {len(clips)} clips")
+
+        # Store state
+        self._analysis_clips = clips
+        self._analysis_selected_ops = valid_ops
+        self._analysis_completed_ops = []
+        self._analysis_current_phase = ""
+        self._analysis_phase_remaining = 0
+
+        # Build phase queue: only phases that have selected operations
+        self._analysis_pending_phases = [
+            phase for phase in PHASE_ORDER
+            if any(OPERATIONS_BY_KEY[op].phase == phase for op in valid_ops)
+        ]
 
         # Update UI state
-        self.analyze_tab.set_analyzing(True, "colors")
+        self.analyze_tab.set_analyzing(True, "pipeline")
 
+        # Start first phase
+        self._start_next_analysis_phase()
+
+    def _start_next_analysis_phase(self):
+        """Start the next phase in the analysis pipeline."""
+        if not self._analysis_pending_phases:
+            # All phases done
+            self._on_analysis_pipeline_complete()
+            return
+
+        phase = self._analysis_pending_phases.pop(0)
+        self._analysis_current_phase = phase
+
+        # Get operations for this phase
+        phase_ops = [
+            op for op in self._analysis_selected_ops
+            if OPERATIONS_BY_KEY[op].phase == phase
+        ]
+
+        if not phase_ops:
+            # No ops in this phase, skip
+            self._start_next_analysis_phase()
+            return
+
+        clips = self._analysis_clips
+        logger.info(f"Starting analysis phase '{phase}': {phase_ops} on {len(clips)} clips")
+
+        if phase == "local":
+            # Local ops run concurrently
+            self._analysis_phase_remaining = len(phase_ops)
+            for op_key in phase_ops:
+                self._launch_analysis_worker(op_key, clips)
+        elif phase == "sequential":
+            # Sequential ops run one at a time (e.g., transcription is memory-heavy)
+            self._analysis_phase_remaining = len(phase_ops)
+            # Start first sequential op
+            self._launch_analysis_worker(phase_ops[0], clips)
+        elif phase == "cloud":
+            # Cloud ops run concurrently (I/O-bound API calls)
+            self._analysis_phase_remaining = len(phase_ops)
+            for op_key in phase_ops:
+                self._launch_analysis_worker(op_key, clips)
+
+    def _launch_analysis_worker(self, op_key: str, clips: list):
+        """Launch a worker for a specific analysis operation.
+
+        Args:
+            op_key: Operation key (e.g., "colors", "shots")
+            clips: List of clips to process
+        """
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 100)
-        self.status_bar.showMessage(f"Extracting colors from {len(clips)} clips...")
 
-        logger.info("Creating ColorAnalysisWorker (manual)...")
-        self.color_worker = ColorAnalysisWorker(clips)
+        op = OPERATIONS_BY_KEY[op_key]
+        self.status_bar.showMessage(f"{op.label}: processing {len(clips)} clips...")
+
+        if op_key == "colors":
+            self._launch_colors_worker(clips)
+        elif op_key == "shots":
+            self._launch_shots_worker(clips)
+        elif op_key == "classify":
+            self._launch_classification_worker(clips)
+        elif op_key == "detect_objects":
+            self._launch_object_detection_worker(clips)
+        elif op_key == "extract_text":
+            self._launch_text_extraction_worker(clips)
+        elif op_key == "transcribe":
+            self._launch_transcription_worker(clips)
+        elif op_key == "describe":
+            self._launch_description_worker(clips)
+        elif op_key == "cinematography":
+            self._launch_cinematography_worker(clips)
+        else:
+            logger.warning(f"Unknown analysis operation: {op_key}")
+            self._on_analysis_phase_worker_finished(op_key)
+
+    def _launch_colors_worker(self, clips: list):
+        """Launch color analysis worker."""
+        self._color_analysis_finished_handled = False
+        logger.info(f"Creating ColorAnalysisWorker (pipeline) for {len(clips)} clips...")
+        self.color_worker = ColorAnalysisWorker(clips, parallelism=self.settings.color_analysis_parallelism)
         self.color_worker.progress.connect(self._on_color_progress)
         self.color_worker.color_ready.connect(self._on_color_ready)
-        self.color_worker.analysis_completed.connect(self._on_manual_color_analysis_finished, Qt.UniqueConnection)
-        # Clean up thread safely after it finishes to prevent "QThread: Destroyed while running" crash
+        self.color_worker.analysis_completed.connect(
+            lambda: self._on_analysis_phase_worker_finished("colors"), Qt.UniqueConnection
+        )
         self.color_worker.finished.connect(self.color_worker.deleteLater)
         self.color_worker.finished.connect(lambda: setattr(self, 'color_worker', None))
-        logger.info("Starting ColorAnalysisWorker (manual)...")
         self.color_worker.start()
 
-    @Slot()
-    def _on_manual_color_analysis_finished(self):
-        """Handle manual color analysis completion."""
-        logger.info("=== MANUAL COLOR ANALYSIS FINISHED ===")
-
-        # Guard against duplicate calls
-        if self._color_analysis_finished_handled:
-            logger.warning("_on_manual_color_analysis_finished already handled, ignoring duplicate call")
-            return
-        self._color_analysis_finished_handled = True
-
-        self.progress_bar.setVisible(False)
-        self.analyze_tab.set_analyzing(False)
-        self.status_bar.showMessage(f"Color extraction complete - {len(self.analyze_tab.get_clips())} clips")
-
-    def _on_analyze_shots_from_tab(self):
-        """Handle shot type classification request from Analyze tab."""
-        clips = self.analyze_tab.get_clips()
-        if not clips:
-            return
-
-        # Reset guard
+    def _launch_shots_worker(self, clips: list):
+        """Launch shot type classification worker."""
         self._shot_type_finished_handled = False
-
-        # Update UI state
-        self.analyze_tab.set_analyzing(True, "shots")
-
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 100)
-        self.status_bar.showMessage(f"Classifying shot types for {len(clips)} clips...")
-
-        logger.info("Creating ShotTypeWorker (manual)...")
-        self.shot_type_worker = ShotTypeWorker(clips, self.project.sources_by_id)
+        logger.info(f"Creating ShotTypeWorker (pipeline) for {len(clips)} clips...")
+        self.shot_type_worker = ShotTypeWorker(clips, self.project.sources_by_id, parallelism=self.settings.local_model_parallelism)
         self.shot_type_worker.progress.connect(self._on_shot_type_progress)
         self.shot_type_worker.shot_type_ready.connect(self._on_shot_type_ready)
-        self.shot_type_worker.analysis_completed.connect(self._on_manual_shot_type_finished, Qt.UniqueConnection)
-        # Clean up thread safely after it finishes
+        self.shot_type_worker.analysis_completed.connect(
+            lambda: self._on_analysis_phase_worker_finished("shots"), Qt.UniqueConnection
+        )
         self.shot_type_worker.finished.connect(self.shot_type_worker.deleteLater)
         self.shot_type_worker.finished.connect(lambda: setattr(self, 'shot_type_worker', None))
-        logger.info("Starting ShotTypeWorker (manual)...")
         self.shot_type_worker.start()
 
-    @Slot()
-    def _on_manual_shot_type_finished(self):
-        """Handle manual shot type classification completion."""
-        logger.info("=== MANUAL SHOT TYPE FINISHED ===")
+    def _launch_classification_worker(self, clips: list):
+        """Launch content classification worker."""
+        self._classification_finished_handled = False
+        logger.info(f"Creating ClassificationWorker (pipeline) for {len(clips)} clips...")
+        self.classification_worker = ClassificationWorker(clips, parallelism=self.settings.local_model_parallelism)
+        self.classification_worker.progress.connect(self._on_classification_progress)
+        self.classification_worker.labels_ready.connect(self._on_classification_ready)
+        self.classification_worker.classification_completed.connect(
+            lambda: self._on_analysis_phase_worker_finished("classify"), Qt.UniqueConnection
+        )
+        self.classification_worker.finished.connect(self.classification_worker.deleteLater)
+        self.classification_worker.finished.connect(lambda: setattr(self, 'classification_worker', None))
+        self.classification_worker.start()
 
-        # Guard against duplicate calls
-        if self._shot_type_finished_handled:
-            logger.warning("_on_manual_shot_type_finished already handled, ignoring duplicate call")
-            return
-        self._shot_type_finished_handled = True
+    def _launch_object_detection_worker(self, clips: list):
+        """Launch object detection worker."""
+        self._object_detection_finished_handled = False
+        logger.info(f"Creating ObjectDetectionWorker (pipeline) for {len(clips)} clips...")
+        self.detection_worker_yolo = ObjectDetectionWorker(clips, parallelism=self.settings.local_model_parallelism)
+        self.detection_worker_yolo.progress.connect(self._on_object_detection_progress)
+        self.detection_worker_yolo.objects_ready.connect(self._on_objects_ready)
+        self.detection_worker_yolo.detection_completed.connect(
+            lambda: self._on_analysis_phase_worker_finished("detect_objects"), Qt.UniqueConnection
+        )
+        self.detection_worker_yolo.finished.connect(self.detection_worker_yolo.deleteLater)
+        self.detection_worker_yolo.finished.connect(lambda: setattr(self, 'detection_worker_yolo', None))
+        self.detection_worker_yolo.start()
 
-        self.progress_bar.setVisible(False)
-        self.analyze_tab.set_analyzing(False)
-        self.status_bar.showMessage(f"Shot type classification complete - {len(self.analyze_tab.get_clips())} clips")
+    def _launch_text_extraction_worker(self, clips: list):
+        """Launch text extraction worker."""
+        self._text_extraction_finished_handled = False
+        sources_by_id = {s.id: s for s in self.sources}
 
-        # Update chat panel with project state (clips now have shot types)
-        self._update_chat_project_state()
-
-    def _on_transcribe_from_tab(self):
-        """Handle manual transcription request from Analyze tab."""
-        clips = self.analyze_tab.get_clips()
-        if not clips:
-            return
-
-        # Check if faster-whisper is available
-        from core.transcription import is_faster_whisper_available, WHISPER_MODELS
-        if not is_faster_whisper_available():
-            QMessageBox.critical(
-                self,
-                "Transcription Unavailable",
-                "The faster-whisper package is not installed.\n\n"
-                "To enable transcription, install it with:\n"
-                "pip install faster-whisper\n\n"
-                "Then restart the application."
-            )
-            return
-
-        # Get source for the first clip (for audio extraction)
-        # Note: All clips should have the same source for transcription to work
-        first_clip = clips[0]
-        source = self.sources_by_id.get(first_clip.source_id)
-        if not source:
-            logger.error(f"Source not found for clip {first_clip.id}")
+        # Filter to clips needing extraction
+        clips_to_process = [c for c in clips if not c.extracted_texts]
+        if not clips_to_process:
+            logger.info("All clips already have extracted text, skipping")
+            self._on_analysis_phase_worker_finished("extract_text")
             return
 
-        # Reset transcription guard
+        from ui.workers.text_extraction_worker import TextExtractionWorker
+
+        method = self.settings.text_extraction_method
+        vlm_only = (method == "vlm")
+        use_vlm = (method in ("vlm", "hybrid"))
+        vlm_model = self.settings.text_extraction_vlm_model if use_vlm else None
+        use_text_detection = self.settings.text_detection_enabled
+
+        logger.info(f"Creating TextExtractionWorker (pipeline) for {len(clips_to_process)} clips")
+        self.text_extraction_worker = TextExtractionWorker(
+            clips=clips_to_process,
+            sources_by_id=sources_by_id,
+            num_keyframes=3,
+            use_vlm_fallback=use_vlm,
+            vlm_model=vlm_model,
+            vlm_only=vlm_only,
+            use_text_detection=use_text_detection,
+        )
+        self.text_extraction_worker.progress.connect(self._on_text_extraction_progress)
+        self.text_extraction_worker.clip_completed.connect(self._on_text_extraction_clip_ready)
+        self.text_extraction_worker.finished.connect(
+            lambda results: self._on_analysis_phase_worker_finished("extract_text")
+        )
+        self.text_extraction_worker.error.connect(self._on_text_extraction_error)
+        self.text_extraction_worker.finished.connect(self.text_extraction_worker.deleteLater)
+        self.text_extraction_worker.finished.connect(
+            lambda results: setattr(self, 'text_extraction_worker', None)
+        )
+        self.text_extraction_worker.start()
+
+    def _launch_transcription_worker(self, clips: list):
+        """Launch transcription worker (handles multi-source sequentially)."""
         self._transcription_finished_handled = False
 
-        # Update UI state
-        self.analyze_tab.set_analyzing(True, "transcribe")
+        # Check if faster-whisper is available
+        from core.transcription import is_faster_whisper_available
+        if not is_faster_whisper_available():
+            logger.warning("Transcription skipped: faster-whisper not installed")
+            self.status_bar.showMessage(
+                "Transcription unavailable - install faster-whisper"
+            )
+            self._on_analysis_phase_worker_finished("transcribe")
+            return
 
+        # Group clips by source_id for multi-source transcription
+        clips_by_source: dict = {}
+        for clip in clips:
+            if clip.source_id not in clips_by_source:
+                clips_by_source[clip.source_id] = []
+            clips_by_source[clip.source_id].append(clip)
+
+        logger.info(f"Transcription: {len(clips)} clips from {len(clips_by_source)} sources")
+
+        # Queue transcription for each source
+        self._transcription_source_queue = list(clips_by_source.items())
+        self._start_next_source_transcription_pipeline()
+
+    def _start_next_source_transcription_pipeline(self):
+        """Start transcription for the next source in the pipeline queue."""
+        if not self._transcription_source_queue:
+            logger.info("All source transcriptions complete")
+            self._on_analysis_phase_worker_finished("transcribe")
+            return
+
+        source_id, clips = self._transcription_source_queue.pop(0)
+        source = self.sources_by_id.get(source_id)
+
+        if not source:
+            logger.warning(f"Source {source_id} not found, skipping {len(clips)} clips")
+            self._start_next_source_transcription_pipeline()
+            return
+
+        self._transcription_finished_handled = False
+
+        remaining = len(self._transcription_source_queue)
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 100)
-
-        # Show model info in status
-        model_info = WHISPER_MODELS.get(self.settings.transcription_model, {})
-        model_size = model_info.get("size", "unknown")
         self.status_bar.showMessage(
-            f"Transcribing {len(clips)} clips using {self.settings.transcription_model} model ({model_size})..."
+            f"Transcribing {len(clips)} clips ({remaining + 1} sources remaining)..."
         )
 
-        # Safely stop any existing worker before creating new one
         self._stop_worker_safely(self.transcription_worker, "Transcription")
 
-        logger.info("Creating TranscriptionWorker (manual)...")
+        logger.info(f"Creating TranscriptionWorker for source {source_id} ({len(clips)} clips)")
         self.transcription_worker = TranscriptionWorker(
             clips,
             source,
             self.settings.transcription_model,
             self.settings.transcription_language,
+            parallelism=self.settings.transcription_parallelism,
         )
         self.transcription_worker.progress.connect(self._on_transcription_progress)
         self.transcription_worker.transcript_ready.connect(self._on_transcript_ready)
-        self.transcription_worker.transcription_completed.connect(self._on_manual_transcription_finished, Qt.UniqueConnection)
+        self.transcription_worker.transcription_completed.connect(
+            self._on_pipeline_source_transcription_finished, Qt.UniqueConnection
+        )
         self.transcription_worker.error.connect(self._on_transcription_error)
-        # Clean up thread safely after it finishes
         self.transcription_worker.finished.connect(self.transcription_worker.deleteLater)
         self.transcription_worker.finished.connect(lambda: setattr(self, 'transcription_worker', None))
-        logger.info("Starting TranscriptionWorker (manual)...")
         self.transcription_worker.start()
+
+    @Slot()
+    def _on_pipeline_source_transcription_finished(self):
+        """Handle transcription completion for one source in pipeline flow."""
+        logger.info("=== PIPELINE: SOURCE TRANSCRIPTION FINISHED ===")
+        if self._transcription_finished_handled:
+            return
+        self._transcription_finished_handled = True
+        self._start_next_source_transcription_pipeline()
+
+    def _launch_description_worker(self, clips: list):
+        """Launch description worker."""
+        self._description_finished_handled = False
+        tier = self.settings.description_model_tier
+        sources = self.project.sources_by_id
+
+        logger.info(f"Creating DescriptionWorker (pipeline) with tier={tier}...")
+        self.description_worker = DescriptionWorker(
+            clips, tier=tier, sources=sources,
+            parallelism=self.settings.description_parallelism,
+        )
+        self.description_worker.progress.connect(self._on_description_progress)
+        self.description_worker.description_ready.connect(self._on_description_ready)
+        self.description_worker.error.connect(self._on_description_error)
+        self.description_worker.description_completed.connect(
+            lambda: self._on_analysis_phase_worker_finished("describe"), Qt.UniqueConnection
+        )
+        self.description_worker.finished.connect(self.description_worker.deleteLater)
+        self.description_worker.finished.connect(lambda: setattr(self, 'description_worker', None))
+        self.description_worker.start()
+
+    def _launch_cinematography_worker(self, clips: list):
+        """Launch cinematography analysis worker."""
+        self._cinematography_finished_handled = False
+        sources_by_id = {s.id: s for s in self.sources}
+        mode = self.settings.cinematography_input_mode
+        model = self.settings.cinematography_model
+        parallelism = self.settings.cinematography_batch_parallelism
+
+        logger.info(f"Creating CinematographyWorker (pipeline) for {len(clips)} clips")
+        self.cinematography_worker = CinematographyWorker(
+            clips=clips,
+            sources_by_id=sources_by_id,
+            mode=mode,
+            model=model,
+            parallelism=parallelism,
+            skip_existing=True,
+        )
+        self.cinematography_worker.progress.connect(self._on_cinematography_progress)
+        self.cinematography_worker.clip_completed.connect(self._on_cinematography_clip_ready)
+        self.cinematography_worker.finished.connect(
+            lambda results: self._on_analysis_phase_worker_finished("cinematography")
+        )
+        self.cinematography_worker.error.connect(self._on_cinematography_error)
+        self.cinematography_worker.finished.connect(self.cinematography_worker.deleteLater)
+        self.cinematography_worker.finished.connect(
+            lambda results: setattr(self, 'cinematography_worker', None)
+        )
+        self.cinematography_worker.start()
+
+    def _on_analysis_phase_worker_finished(self, op_key: str):
+        """Handle completion of one worker in the analysis pipeline.
+
+        Decrements phase counter and advances to next phase when all workers
+        in the current phase are done.
+        """
+        self._analysis_completed_ops.append(op_key)
+        self._analysis_phase_remaining -= 1
+        logger.info(
+            f"=== PIPELINE: {op_key} finished "
+            f"({self._analysis_phase_remaining} remaining in phase '{self._analysis_current_phase}') ==="
+        )
+
+        if self._analysis_phase_remaining <= 0:
+            self._start_next_analysis_phase()
+
+    def _on_analysis_pipeline_complete(self):
+        """Handle completion of the entire analysis pipeline."""
+        clips = self._analysis_clips
+        completed = self._analysis_completed_ops
+        clip_count = len(clips)
+
+        logger.info(f"Analysis pipeline complete: {completed} on {clip_count} clips")
+
+        self.analyze_tab.set_analyzing(False)
+        self.progress_bar.setVisible(False)
+        self.status_bar.showMessage(
+            f"Analysis complete - {clip_count} clips ({', '.join(completed)})"
+        )
+
+        # Save project
+        if self.project.path:
+            self.project.save()
+
+        # Update chat panel
+        self._update_chat_project_state()
+
+        # If agent was waiting for analyze_all, send result back
+        if self._pending_agent_analyze_all and self._chat_worker:
+            self._pending_agent_analyze_all = False
+
+            shot_types = {}
+            transcribed_count = 0
+            for clip in clips:
+                if clip.shot_type:
+                    shot_types[clip.shot_type] = shot_types.get(clip.shot_type, 0) + 1
+                if clip.transcript:
+                    transcribed_count += 1
+
+            result = {
+                "tool_call_id": self._pending_agent_tool_call_id,
+                "name": self._pending_agent_tool_name,
+                "success": True,
+                "result": {
+                    "success": True,
+                    "clip_count": clip_count,
+                    "clip_ids": [c.id for c in clips],
+                    "operations_completed": completed,
+                    "shot_type_summary": shot_types,
+                    "transcribed_count": transcribed_count,
+                    "message": f"Analyzed {clip_count} clips ({', '.join(completed)})"
+                }
+            }
+            self._pending_agent_tool_call_id = None
+            self._pending_agent_tool_name = None
+            self._chat_worker.set_gui_tool_result(result)
+            logger.info(f"Sent analysis result to agent: {clip_count} clips")
+
+        self._analysis_clips = []
+        self._analysis_selected_ops = []
+
+    # ------------------------------------------------------------------
+    # Individual analysis handlers (kept for manual standalone + backward compat)
+    # ------------------------------------------------------------------
+
+    def _on_analyze_colors_from_tab(self):
+        """Handle color extraction request from Analyze tab (standalone)."""
+        clips = self.analyze_tab.get_clips()
+        if not clips:
+            return
+        self._run_analysis_pipeline(clips, ["colors"])
+
+    def _on_analyze_shots_from_tab(self):
+        """Handle shot type classification request (standalone redirect to pipeline)."""
+        clips = self.analyze_tab.get_clips()
+        if clips:
+            self._run_analysis_pipeline(clips, ["shots"])
+
+    def _on_transcribe_from_tab(self):
+        """Handle transcription request (standalone redirect to pipeline)."""
+        clips = self.analyze_tab.get_clips()
+        if clips:
+            self._run_analysis_pipeline(clips, ["transcribe"])
 
     def _on_transcription_error(self, error: str):
         """Handle transcription error."""
         logger.error(f"Transcription error: {error}")
         self.progress_bar.setVisible(False)
-        self.analyze_tab.set_analyzing(False)
 
         if "not installed" in error.lower():
             QMessageBox.critical(
@@ -3016,213 +3054,28 @@ class MainWindow(QMainWindow):
                 f"An error occurred during transcription:\n\n{error}"
             )
 
-    @Slot()
-    def _on_manual_transcription_finished(self):
-        """Handle manual transcription completion."""
-        logger.info("=== MANUAL TRANSCRIPTION FINISHED ===")
-
-        # Guard against duplicate calls
-        if self._transcription_finished_handled:
-            logger.warning("_on_manual_transcription_finished already handled, ignoring duplicate call")
-            return
-        self._transcription_finished_handled = True
-
-        self.progress_bar.setVisible(False)
-        self.analyze_tab.set_analyzing(False)
-        self.status_bar.showMessage(f"Transcription complete - {len(self.analyze_tab.get_clips())} clips")
-
-        # Update chat panel with project state (clips now have transcripts)
-        self._update_chat_project_state()
-
     def _on_classify_from_tab(self):
-        """Handle classification request from Analyze tab."""
+        """Handle classification request (standalone redirect to pipeline)."""
         clips = self.analyze_tab.get_clips()
-        if not clips:
-            return
-
-        # Check if worker already running
-        if hasattr(self, 'classification_worker') and self.classification_worker and self.classification_worker.isRunning():
-            return
-
-        # Reset guard
-        self._classification_finished_handled = False
-
-        # Update UI state
-        self.analyze_tab.set_analyzing(True, "classify")
-
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 100)
-        self.status_bar.showMessage(f"Classifying content in {len(clips)} clips...")
-
-        logger.info("Creating ClassificationWorker (manual)...")
-        self.classification_worker = ClassificationWorker(clips)
-        self.classification_worker.progress.connect(self._on_classification_progress)
-        self.classification_worker.labels_ready.connect(self._on_classification_ready)
-        self.classification_worker.classification_completed.connect(self._on_manual_classification_finished, Qt.UniqueConnection)
-        # Clean up thread safely after it finishes
-        self.classification_worker.finished.connect(self.classification_worker.deleteLater)
-        self.classification_worker.finished.connect(lambda: setattr(self, 'classification_worker', None))
-        logger.info("Starting ClassificationWorker (manual)...")
-        self.classification_worker.start()
-
-    @Slot()
-    def _on_manual_classification_finished(self):
-        """Handle manual classification completion."""
-        logger.info("=== MANUAL CLASSIFICATION FINISHED ===")
-
-        # Guard against duplicate calls
-        if self._classification_finished_handled:
-            logger.warning("_on_manual_classification_finished already handled, ignoring duplicate call")
-            return
-        self._classification_finished_handled = True
-
-        self.progress_bar.setVisible(False)
-        self.analyze_tab.set_analyzing(False)
-        self.status_bar.showMessage(f"Classification complete - {len(self.analyze_tab.get_clips())} clips")
-
-        # Save project if path is set
-        if self.project.path:
-            self.project.save()
-
-        # Update chat panel with project state
-        self._update_chat_project_state()
+        if clips:
+            self._run_analysis_pipeline(clips, ["classify"])
 
     def _on_detect_objects_from_tab(self):
-        """Handle object detection request from Analyze tab."""
+        """Handle object detection request (standalone redirect to pipeline)."""
         clips = self.analyze_tab.get_clips()
-        if not clips:
-            return
-
-        # Check if worker already running
-        if hasattr(self, 'detection_worker_yolo') and self.detection_worker_yolo and self.detection_worker_yolo.isRunning():
-            return
-
-        # Reset guard
-        self._object_detection_finished_handled = False
-
-        # Update UI state
-        self.analyze_tab.set_analyzing(True, "detect")
-
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 100)
-        self.status_bar.showMessage(f"Detecting objects in {len(clips)} clips...")
-
-        logger.info("Creating ObjectDetectionWorker (manual)...")
-        self.detection_worker_yolo = ObjectDetectionWorker(clips)
-        self.detection_worker_yolo.progress.connect(self._on_object_detection_progress)
-        self.detection_worker_yolo.objects_ready.connect(self._on_objects_ready)
-        self.detection_worker_yolo.detection_completed.connect(self._on_manual_object_detection_finished, Qt.UniqueConnection)
-        # Clean up thread safely after it finishes
-        self.detection_worker_yolo.finished.connect(self.detection_worker_yolo.deleteLater)
-        self.detection_worker_yolo.finished.connect(lambda: setattr(self, 'detection_worker_yolo', None))
-        logger.info("Starting ObjectDetectionWorker (manual)...")
-        self.detection_worker_yolo.start()
-
-    @Slot()
-    def _on_manual_object_detection_finished(self):
-        """Handle manual object detection completion."""
-        logger.info("=== MANUAL OBJECT DETECTION FINISHED ===")
-
-        # Guard against duplicate calls
-        if self._object_detection_finished_handled:
-            logger.warning("_on_manual_object_detection_finished already handled, ignoring duplicate call")
-            return
-        self._object_detection_finished_handled = True
-
-        self.progress_bar.setVisible(False)
-        self.analyze_tab.set_analyzing(False)
-        self.status_bar.showMessage(f"Object detection complete - {len(self.analyze_tab.get_clips())} clips")
-
-        # Save project if path is set
-        if self.project.path:
-            self.project.save()
-
-        # Update chat panel with project state
-        self._update_chat_project_state()
+        if clips:
+            self._run_analysis_pipeline(clips, ["detect_objects"])
 
     def _on_describe_from_tab(self):
-        """Handle description request from Analyze tab."""
+        """Handle description request (standalone redirect to pipeline)."""
         clips = self.analyze_tab.get_clips()
-        if not clips:
-            return
-
-        # Check if worker already running
-        if hasattr(self, 'description_worker') and self.description_worker and self.description_worker.isRunning():
-            return
-
-        # Reset guard
-        self._description_finished_handled = False
-
-        # Update UI state
-        self.analyze_tab.set_analyzing(True, "describe")
-
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 100)
-        self.status_bar.showMessage(
-            f"Generating descriptions for {len(clips)} clips... "
-            "(First run may take several minutes to download models)"
-        )
-
-        # Use tier from settings
-        tier = self.settings.description_model_tier
-
-        # Get sources for video extraction (Gemini video mode)
-        sources = self.project.sources_by_id
-
-        logger.info(f"Creating DescriptionWorker (manual) with tier={tier}...")
-        self.description_worker = DescriptionWorker(clips, tier=tier, sources=sources)
-        self.description_worker.progress.connect(self._on_description_progress)
-        self.description_worker.description_ready.connect(self._on_description_ready)
-        self.description_worker.error.connect(self._on_description_error)
-        self.description_worker.description_completed.connect(self._on_manual_description_finished, Qt.UniqueConnection)
-        # Clean up thread safely after it finishes
-        self.description_worker.finished.connect(self.description_worker.deleteLater)
-        self.description_worker.finished.connect(lambda: setattr(self, 'description_worker', None))
-        logger.info("Starting DescriptionWorker (manual)...")
-        self.description_worker.start()
+        if clips:
+            self._run_analysis_pipeline(clips, ["describe"])
 
     @Slot(str, str)
     def _on_description_error(self, clip_id: str, error_msg: str):
         """Handle description error for a single clip."""
         logger.warning(f"Description error for clip {clip_id}: {error_msg}")
-        # Show error in status bar (will be overwritten by progress updates)
-        # The full error summary is shown when finished
-
-    @Slot()
-    def _on_manual_description_finished(self):
-        """Handle manual description completion."""
-        logger.info("=== MANUAL DESCRIPTION FINISHED ===")
-
-        # Guard against duplicate calls
-        if self._description_finished_handled:
-            logger.warning("_on_manual_description_finished already handled, ignoring duplicate call")
-            return
-        self._description_finished_handled = True
-
-        self.progress_bar.setVisible(False)
-        self.analyze_tab.set_analyzing(False)
-
-        # Build status message with error info if applicable
-        total_clips = len(self.analyze_tab.get_clips())
-        if hasattr(self, 'description_worker') and self.description_worker:
-            success = self.description_worker.success_count
-            errors = self.description_worker.error_count
-            if errors > 0:
-                self.status_bar.showMessage(
-                    f"Description complete: {success} succeeded, {errors} failed. "
-                    f"Last error: {self.description_worker.last_error[:100] if self.description_worker.last_error else 'Unknown'}"
-                )
-            else:
-                self.status_bar.showMessage(f"Description generation complete - {success} clips")
-        else:
-            self.status_bar.showMessage(f"Description generation complete - {total_clips} clips")
-
-        # Save project if path is set
-        if self.project.path:
-            self.project.save()
-
-        # Update chat panel with project state
-        self._update_chat_project_state()
 
     def _on_description_analysis_requested(self, clip_ids: list):
         """Handle description analysis request from Sequence tab (Storyteller).
@@ -3259,67 +3112,10 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(f"Running description analysis on {len(clips)} clips...")
 
     def _on_extract_text_from_tab(self):
-        """Handle text extraction request from Analyze tab."""
+        """Handle text extraction request (standalone redirect to pipeline)."""
         clips = self.analyze_tab.get_clips()
-        if not clips:
-            return
-
-        # Check if worker already running
-        if hasattr(self, 'text_extraction_worker') and self.text_extraction_worker and self.text_extraction_worker.isRunning():
-            return
-
-        sources_by_id = {s.id: s for s in self.sources}
-
-        # Filter to clips that need extraction (skip clips that already have text)
-        clips_to_process = [c for c in clips if not c.extracted_texts]
-        if not clips_to_process:
-            self.status_bar.showMessage("All clips already have extracted text")
-            return
-
-        # Reset guard
-        self._text_extraction_finished_handled = False
-
-        # Update UI state
-        self.analyze_tab.set_analyzing(True, "extract_text")
-
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 100)
-        self.status_bar.showMessage(f"Extracting text from {len(clips_to_process)} clips...")
-
-        from ui.workers.text_extraction_worker import TextExtractionWorker
-
-        # Determine extraction parameters from settings
-        method = self.settings.text_extraction_method
-        vlm_only = (method == "vlm")
-        use_vlm = (method in ("vlm", "hybrid"))
-        vlm_model = self.settings.text_extraction_vlm_model if use_vlm else None
-        use_text_detection = self.settings.text_detection_enabled
-
-        logger.info(
-            f"Creating TextExtractionWorker for {len(clips_to_process)} clips "
-            f"(method={method}, vlm_only={vlm_only}, use_vlm={use_vlm}, vlm_model={vlm_model}, "
-            f"text_detection={use_text_detection})"
-        )
-        self.text_extraction_worker = TextExtractionWorker(
-            clips=clips_to_process,
-            sources_by_id=sources_by_id,
-            num_keyframes=3,
-            use_vlm_fallback=use_vlm,
-            vlm_model=vlm_model,
-            vlm_only=vlm_only,
-            use_text_detection=use_text_detection,
-        )
-        self.text_extraction_worker.progress.connect(self._on_text_extraction_progress)
-        self.text_extraction_worker.clip_completed.connect(self._on_text_extraction_clip_ready)
-        self.text_extraction_worker.finished.connect(self._on_text_extraction_finished)
-        self.text_extraction_worker.error.connect(self._on_text_extraction_error)
-        # Clean up thread safely after it finishes
-        self.text_extraction_worker.finished.connect(self.text_extraction_worker.deleteLater)
-        self.text_extraction_worker.finished.connect(
-            lambda: setattr(self, 'text_extraction_worker', None)
-        )
-        logger.info("Starting TextExtractionWorker...")
-        self.text_extraction_worker.start()
+        if clips:
+            self._run_analysis_pipeline(clips, ["extract_text"])
 
     @Slot(int, int, str)
     def _on_text_extraction_progress(self, current: int, total: int, clip_id: str):
@@ -3340,80 +3136,11 @@ class MainWindow(QMainWindow):
         """Handle text extraction error."""
         logger.warning(f"Text extraction error: {error_msg}")
 
-    @Slot(dict)
-    def _on_text_extraction_finished(self, results: dict):
-        """Handle text extraction completion."""
-        logger.info("=== TEXT EXTRACTION FINISHED ===")
-
-        # Guard against duplicate calls
-        if self._text_extraction_finished_handled:
-            logger.warning("_on_text_extraction_finished already handled, ignoring duplicate call")
-            return
-        self._text_extraction_finished_handled = True
-
-        self.progress_bar.setVisible(False)
-        self.analyze_tab.set_analyzing(False)
-
-        count = sum(1 for texts in results.values() if texts)
-        self.status_bar.showMessage(f"Text extraction complete - extracted text from {count} clips")
-
-        # Save project if path is set
-        if self.project.path:
-            self.project.save()
-
-        # Update chat panel with project state
-        self._update_chat_project_state()
-
     def _on_cinematography_from_tab(self):
-        """Handle cinematography analysis request from Analyze tab."""
+        """Handle cinematography analysis request (standalone redirect to pipeline)."""
         clips = self.analyze_tab.get_clips()
-        if not clips:
-            return
-
-        # Check if worker already running
-        if hasattr(self, 'cinematography_worker') and self.cinematography_worker and self.cinematography_worker.isRunning():
-            return
-
-        sources_by_id = {s.id: s for s in self.sources}
-
-        # Reset guard
-        self._cinematography_finished_handled = False
-
-        # Update UI state
-        self.analyze_tab.set_analyzing(True, "cinematography")
-
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 100)
-        self.status_bar.showMessage(f"Analyzing cinematography for {len(clips)} clips...")
-
-        # Determine parameters from settings
-        mode = self.settings.cinematography_input_mode
-        model = self.settings.cinematography_model
-        parallelism = self.settings.cinematography_batch_parallelism
-
-        logger.info(
-            f"Creating CinematographyWorker for {len(clips)} clips "
-            f"(mode={mode}, model={model}, parallelism={parallelism})"
-        )
-        self.cinematography_worker = CinematographyWorker(
-            clips=clips,
-            sources_by_id=sources_by_id,
-            mode=mode,
-            model=model,
-            parallelism=parallelism,
-            skip_existing=True,
-        )
-        self.cinematography_worker.progress.connect(self._on_cinematography_progress)
-        self.cinematography_worker.clip_completed.connect(self._on_cinematography_clip_ready)
-        self.cinematography_worker.finished.connect(self._on_cinematography_finished)
-        self.cinematography_worker.error.connect(self._on_cinematography_error)
-        # Clean up thread safely after it finishes
-        self.cinematography_worker.finished.connect(self.cinematography_worker.deleteLater)
-        self.cinematography_worker.finished.connect(
-            lambda: setattr(self, 'cinematography_worker', None)
-        )
-        logger.info("Starting CinematographyWorker...")
-        self.cinematography_worker.start()
+        if clips:
+            self._run_analysis_pipeline(clips, ["cinematography"])
 
     @Slot(int, int, str)
     def _on_cinematography_progress(self, current: int, total: int, clip_id: str):
@@ -3439,30 +3166,6 @@ class MainWindow(QMainWindow):
     def _on_cinematography_error(self, error_msg: str):
         """Handle cinematography analysis error."""
         logger.warning(f"Cinematography analysis error: {error_msg}")
-
-    @Slot(dict)
-    def _on_cinematography_finished(self, results: dict):
-        """Handle cinematography analysis completion."""
-        logger.info("=== CINEMATOGRAPHY ANALYSIS FINISHED ===")
-
-        # Guard against duplicate calls
-        if self._cinematography_finished_handled:
-            logger.warning("_on_cinematography_finished already handled, ignoring duplicate call")
-            return
-        self._cinematography_finished_handled = True
-
-        self.progress_bar.setVisible(False)
-        self.analyze_tab.set_analyzing(False)
-
-        count = len(results)
-        self.status_bar.showMessage(f"Cinematography analysis complete - {count} clips analyzed")
-
-        # Save project if path is set
-        if self.project.path:
-            self.project.save()
-
-        # Update chat panel with project state
-        self._update_chat_project_state()
 
     # Agent-triggered analysis completion handlers
     # These are separate from manual handlers to allow independent tracking
@@ -3590,6 +3293,7 @@ class MainWindow(QMainWindow):
                 next_source,
                 self.settings.transcription_model,
                 self.settings.transcription_language,
+                parallelism=self.settings.transcription_parallelism,
             )
             self.transcription_worker.progress.connect(self._on_transcription_progress)
             self.transcription_worker.transcript_ready.connect(self._on_transcript_ready)
@@ -3636,255 +3340,6 @@ class MainWindow(QMainWindow):
 
         # Update chat panel with project state
         self._update_chat_project_state()
-
-    # "Analyze All" handlers - sequential colors → shots → transcribe
-
-    def _on_analyze_all_from_tab(self):
-        """Handle 'Analyze All' request from Analyze tab.
-
-        Runs colors, shots, and transcribe sequentially on all clips in the tab.
-        """
-        clips = self.analyze_tab.get_clips()
-        if not clips:
-            return
-
-        logger.info(f"Starting 'Analyze All' for {len(clips)} clips")
-
-        # Store state for sequential processing
-        self._analyze_all_pending = ["colors", "shots", "transcribe"]
-        self._analyze_all_clips = clips
-
-        # Update UI state
-        self.analyze_tab.set_analyzing(True, "all")
-
-        # Start with colors
-        self._start_next_analyze_all_step()
-
-    def _start_next_analyze_all_step(self):
-        """Start the next step in the 'Analyze All' sequence."""
-        if not self._analyze_all_pending:
-            # All done
-            logger.info("'Analyze All' complete")
-            self.analyze_tab.set_analyzing(False)
-            self.progress_bar.setVisible(False)
-
-            clips = self._analyze_all_clips
-            clip_count = len(clips)
-            self.status_bar.showMessage(f"Analysis complete - {clip_count} clips")
-
-            # If agent was waiting for analyze_all, send result back
-            if self._pending_agent_analyze_all and self._chat_worker:
-                self._pending_agent_analyze_all = False
-
-                # Build summary
-                shot_types = {}
-                transcribed_count = 0
-                for clip in clips:
-                    if clip.shot_type:
-                        shot_types[clip.shot_type] = shot_types.get(clip.shot_type, 0) + 1
-                    if clip.transcript:
-                        transcribed_count += 1
-
-                result = {
-                    "tool_call_id": self._pending_agent_tool_call_id,
-                    "name": self._pending_agent_tool_name,
-                    "success": True,
-                    "result": {
-                        "success": True,
-                        "clip_count": clip_count,
-                        "clip_ids": [c.id for c in clips],
-                        "shot_type_summary": shot_types,
-                        "transcribed_count": transcribed_count,
-                        "message": f"Analyzed {clip_count} clips (colors, shots, transcription)"
-                    }
-                }
-                self._pending_agent_tool_call_id = None
-                self._pending_agent_tool_name = None
-                self._chat_worker.set_gui_tool_result(result)
-                logger.info(f"Sent analyze_all result to agent: {clip_count} clips")
-
-            self._analyze_all_clips = []
-            return
-
-        next_step = self._analyze_all_pending.pop(0)
-        logger.info(f"'Analyze All' starting step: {next_step}")
-
-        if next_step == "colors":
-            self._start_color_analysis_for_analyze_all()
-        elif next_step == "shots":
-            self._start_shot_analysis_for_analyze_all()
-        elif next_step == "transcribe":
-            self._start_transcription_for_analyze_all()
-
-    def _start_color_analysis_for_analyze_all(self):
-        """Start color analysis as part of 'Analyze All' sequence."""
-        clips = self._analyze_all_clips
-        if not clips:
-            self._start_next_analyze_all_step()
-            return
-
-        # Reset guard
-        self._color_analysis_finished_handled = False
-
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 100)
-        self.status_bar.showMessage(f"Extracting colors from {len(clips)} clips...")
-
-        logger.info("Creating ColorAnalysisWorker (Analyze All)...")
-        self.color_worker = ColorAnalysisWorker(clips)
-        self.color_worker.progress.connect(self._on_color_progress)
-        self.color_worker.color_ready.connect(self._on_color_ready)
-        self.color_worker.analysis_completed.connect(self._on_analyze_all_color_finished, Qt.UniqueConnection)
-        # Clean up thread safely after it finishes
-        self.color_worker.finished.connect(self.color_worker.deleteLater)
-        self.color_worker.finished.connect(lambda: setattr(self, 'color_worker', None))
-        self.color_worker.start()
-
-    @Slot()
-    def _on_analyze_all_color_finished(self):
-        """Handle color analysis completion in 'Analyze All' flow."""
-        logger.info("=== ANALYZE ALL: COLOR ANALYSIS FINISHED ===")
-
-        # Guard against duplicate calls
-        if self._color_analysis_finished_handled:
-            logger.warning("_on_analyze_all_color_finished already handled, ignoring duplicate")
-            return
-        self._color_analysis_finished_handled = True
-
-        # Continue to next step
-        self._start_next_analyze_all_step()
-
-    def _start_shot_analysis_for_analyze_all(self):
-        """Start shot type classification as part of 'Analyze All' sequence."""
-        clips = self._analyze_all_clips
-        if not clips:
-            self._start_next_analyze_all_step()
-            return
-
-        # Reset guard
-        self._shot_type_finished_handled = False
-
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 100)
-        self.status_bar.showMessage(f"Classifying shot types for {len(clips)} clips...")
-
-        logger.info("Creating ShotTypeWorker (Analyze All)...")
-        self.shot_type_worker = ShotTypeWorker(clips, self.project.sources_by_id)
-        self.shot_type_worker.progress.connect(self._on_shot_type_progress)
-        self.shot_type_worker.shot_type_ready.connect(self._on_shot_type_ready)
-        self.shot_type_worker.analysis_completed.connect(self._on_analyze_all_shot_finished, Qt.UniqueConnection)
-        # Clean up thread safely after it finishes
-        self.shot_type_worker.finished.connect(self.shot_type_worker.deleteLater)
-        self.shot_type_worker.finished.connect(lambda: setattr(self, 'shot_type_worker', None))
-        self.shot_type_worker.start()
-
-    @Slot()
-    def _on_analyze_all_shot_finished(self):
-        """Handle shot type classification completion in 'Analyze All' flow."""
-        logger.info("=== ANALYZE ALL: SHOT TYPE FINISHED ===")
-
-        # Guard against duplicate calls
-        if self._shot_type_finished_handled:
-            logger.warning("_on_analyze_all_shot_finished already handled, ignoring duplicate")
-            return
-        self._shot_type_finished_handled = True
-
-        # Continue to next step
-        self._start_next_analyze_all_step()
-
-    def _start_transcription_for_analyze_all(self):
-        """Start transcription as part of 'Analyze All' sequence.
-
-        Handles clips from multiple sources by grouping and processing sequentially.
-        """
-        clips = self._analyze_all_clips
-        if not clips:
-            self._start_next_analyze_all_step()
-            return
-
-        # Check if faster-whisper is available
-        from core.transcription import is_faster_whisper_available
-        if not is_faster_whisper_available():
-            logger.warning("Transcription skipped in 'Analyze All': faster-whisper not installed")
-            self.status_bar.showMessage(
-                "Analysis complete (transcription unavailable - install faster-whisper)"
-            )
-            # Skip transcription, continue to next step (which will complete the flow)
-            self._start_next_analyze_all_step()
-            return
-
-        # Group clips by source_id for multi-source transcription
-        clips_by_source: dict = {}
-        for clip in clips:
-            if clip.source_id not in clips_by_source:
-                clips_by_source[clip.source_id] = []
-            clips_by_source[clip.source_id].append(clip)
-
-        logger.info(f"Transcription: {len(clips)} clips from {len(clips_by_source)} sources")
-
-        # Queue transcription for each source
-        self._transcription_source_queue = list(clips_by_source.items())
-        self._start_next_source_transcription()
-
-    def _start_next_source_transcription(self):
-        """Start transcription for the next source in the multi-source queue."""
-        if not self._transcription_source_queue:
-            # All sources done
-            logger.info("All source transcriptions complete")
-            self._start_next_analyze_all_step()
-            return
-
-        source_id, clips = self._transcription_source_queue.pop(0)
-        source = self.sources_by_id.get(source_id)
-
-        if not source:
-            logger.warning(f"Source {source_id} not found, skipping transcription for {len(clips)} clips")
-            # Try next source
-            self._start_next_source_transcription()
-            return
-
-        # Reset guard
-        self._transcription_finished_handled = False
-
-        remaining_sources = len(self._transcription_source_queue)
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 100)
-        self.status_bar.showMessage(
-            f"Transcribing {len(clips)} clips from source ({remaining_sources + 1} sources remaining)..."
-        )
-
-        # Safely stop any existing worker before creating new one
-        self._stop_worker_safely(self.transcription_worker, "Transcription")
-
-        logger.info(f"Creating TranscriptionWorker for source {source_id} ({len(clips)} clips)")
-        self.transcription_worker = TranscriptionWorker(
-            clips,
-            source,
-            self.settings.transcription_model,
-            self.settings.transcription_language,
-        )
-        self.transcription_worker.progress.connect(self._on_transcription_progress)
-        self.transcription_worker.transcript_ready.connect(self._on_transcript_ready)
-        self.transcription_worker.transcription_completed.connect(self._on_analyze_all_source_transcription_finished, Qt.UniqueConnection)
-        self.transcription_worker.error.connect(self._on_transcription_error)
-        # Clean up thread safely after it finishes
-        self.transcription_worker.finished.connect(self.transcription_worker.deleteLater)
-        self.transcription_worker.finished.connect(lambda: setattr(self, 'transcription_worker', None))
-        self.transcription_worker.start()
-
-    @Slot()
-    def _on_analyze_all_source_transcription_finished(self):
-        """Handle transcription completion for one source in 'Analyze All' flow."""
-        logger.info("=== ANALYZE ALL: SOURCE TRANSCRIPTION FINISHED ===")
-
-        # Guard against duplicate calls
-        if self._transcription_finished_handled:
-            logger.warning("_on_analyze_all_source_transcription_finished already handled, ignoring duplicate")
-            return
-        self._transcription_finished_handled = True
-
-        # Continue to next source (or finish if all done)
-        self._start_next_source_transcription()
 
     # Drag and drop handlers
     def dragEnterEvent(self, event: QDragEnterEvent):
@@ -3957,9 +3412,6 @@ class MainWindow(QMainWindow):
 
             # Select it
             self._select_source(source)
-
-        # Set sensitivity on Cut tab
-        self.cut_tab.set_sensitivity(self.settings.default_sensitivity)
 
     def _on_import_url_click(self):
         """Handle import URL button click."""
@@ -4230,9 +3682,6 @@ class MainWindow(QMainWindow):
         self._shot_type_finished_handled = False
         self._transcription_finished_handled = False
 
-        # Update Cut tab state
-        self.cut_tab.set_detecting(True)
-
         # Build configuration based on mode
         if mode == "karaoke":
             # Karaoke mode uses KaraokeDetectionConfig
@@ -4347,7 +3796,6 @@ class MainWindow(QMainWindow):
         """Handle detection error."""
         logger.error(f"=== DETECTION ERROR: {error} ===")
         self.progress_bar.setVisible(False)
-        self.cut_tab.set_detecting(False)
 
         # If agent was waiting for detection, send error result
         if self._pending_agent_detection and self._chat_worker:
@@ -4408,7 +3856,6 @@ class MainWindow(QMainWindow):
         # This ensures the clip count label and _clips list match the browser contents
         logger.info(f"_on_thumbnails_finished: total {len(self.clips)} clips from {len(self.sources)} sources")
         self.cut_tab.set_clips(self.clips)
-        self.cut_tab.set_detecting(False)
 
         # Make all clips available for timeline remix (via Sequence tab)
         # Pass clips for the current source being analyzed
@@ -5377,7 +4824,7 @@ class MainWindow(QMainWindow):
 
         # Start worker
         from PySide6.QtCore import Qt
-        self.color_worker = ColorAnalysisWorker(clips)
+        self.color_worker = ColorAnalysisWorker(clips, parallelism=self.settings.color_analysis_parallelism)
         self.color_worker.progress.connect(self._on_color_progress)
         self.color_worker.color_ready.connect(self._on_color_ready)
         self.color_worker.analysis_completed.connect(self._on_agent_color_analysis_finished, Qt.UniqueConnection)
@@ -5427,7 +4874,7 @@ class MainWindow(QMainWindow):
 
         # Start worker
         from PySide6.QtCore import Qt
-        self.shot_type_worker = ShotTypeWorker(clips, self.project.sources_by_id)
+        self.shot_type_worker = ShotTypeWorker(clips, self.project.sources_by_id, parallelism=self.settings.local_model_parallelism)
         self.shot_type_worker.progress.connect(self._on_shot_type_progress)
         self.shot_type_worker.shot_type_ready.connect(self._on_shot_type_ready)
         self.shot_type_worker.analysis_completed.connect(self._on_agent_shot_analysis_finished, Qt.UniqueConnection)
@@ -5512,6 +4959,7 @@ class MainWindow(QMainWindow):
             first_source,
             self.settings.transcription_model,
             self.settings.transcription_language,
+            parallelism=self.settings.transcription_parallelism,
         )
         self.transcription_worker.progress.connect(self._on_transcription_progress)
         self.transcription_worker.transcript_ready.connect(self._on_transcript_ready)
@@ -5564,7 +5012,7 @@ class MainWindow(QMainWindow):
 
         # Start worker
         from PySide6.QtCore import Qt
-        self.classification_worker = ClassificationWorker(clips, top_k=top_k)
+        self.classification_worker = ClassificationWorker(clips, top_k=top_k, parallelism=self.settings.local_model_parallelism)
         self.classification_worker.progress.connect(self._on_classification_progress)
         self.classification_worker.labels_ready.connect(self._on_classification_ready)
         self.classification_worker.classification_completed.connect(self._on_agent_classification_finished, Qt.UniqueConnection)
@@ -5619,7 +5067,7 @@ class MainWindow(QMainWindow):
 
         # Start worker
         from PySide6.QtCore import Qt
-        self.detection_worker_yolo = ObjectDetectionWorker(clips, confidence=confidence, detect_all=detect_all)
+        self.detection_worker_yolo = ObjectDetectionWorker(clips, confidence=confidence, detect_all=detect_all, parallelism=self.settings.local_model_parallelism)
         self.detection_worker_yolo.progress.connect(self._on_object_detection_progress)
         self.detection_worker_yolo.objects_ready.connect(self._on_objects_ready)
         self.detection_worker_yolo.detection_completed.connect(self._on_agent_object_detection_finished, Qt.UniqueConnection)
@@ -5675,7 +5123,7 @@ class MainWindow(QMainWindow):
         # Start worker
         from PySide6.QtCore import Qt
         sources = self.project.sources_by_id
-        self.description_worker = DescriptionWorker(clips, tier=tier, prompt=prompt, sources=sources)
+        self.description_worker = DescriptionWorker(clips, tier=tier, prompt=prompt, sources=sources, parallelism=self.settings.description_parallelism)
         self.description_worker.progress.connect(self._on_description_progress)
         self.description_worker.description_ready.connect(self._on_description_ready)
         self.description_worker.error.connect(self._on_description_error)
@@ -6692,7 +6140,7 @@ class MainWindow(QMainWindow):
                 self.intention_workflow.on_analysis_finished()
                 return
 
-            self.color_worker = ColorAnalysisWorker(clips_needing_colors)
+            self.color_worker = ColorAnalysisWorker(clips_needing_colors, parallelism=self.settings.color_analysis_parallelism)
             self.color_worker.progress.connect(
                 self.intention_workflow.on_analysis_progress
             )
@@ -6719,7 +6167,7 @@ class MainWindow(QMainWindow):
                 return
 
             self._shot_type_finished_handled = False
-            self.shot_type_worker = ShotTypeWorker(clips_needing_shots, self.project.sources_by_id)
+            self.shot_type_worker = ShotTypeWorker(clips_needing_shots, self.project.sources_by_id, parallelism=self.settings.local_model_parallelism)
             self.shot_type_worker.progress.connect(
                 self.intention_workflow.on_analysis_progress
             )
@@ -6750,7 +6198,7 @@ class MainWindow(QMainWindow):
 
             self._description_finished_handled = False
             logger.info(f"Creating DescriptionWorker (intention) for {len(clips_needing_descriptions)} clips with tier={tier}")
-            self.description_worker = DescriptionWorker(clips_needing_descriptions, tier=tier, sources=sources)
+            self.description_worker = DescriptionWorker(clips_needing_descriptions, tier=tier, sources=sources, parallelism=self.settings.description_parallelism)
             self.description_worker.progress.connect(
                 self.intention_workflow.on_analysis_progress
             )
@@ -7306,8 +6754,6 @@ class MainWindow(QMainWindow):
 
         # Restore UI state
         ui_state = self.project.ui_state
-        if "sensitivity" in ui_state:
-            self.cut_tab.set_sensitivity(ui_state["sensitivity"])
 
         # Restore Analyze tab clips
         if "analyze_clip_ids" in ui_state:
@@ -7466,8 +6912,6 @@ class MainWindow(QMainWindow):
 
         # Restore UI state
         ui_state = self.project.ui_state
-        if "sensitivity" in ui_state:
-            self.cut_tab.set_sensitivity(ui_state["sensitivity"])
 
         # Restore Analyze tab clips
         if "analyze_clip_ids" in ui_state:

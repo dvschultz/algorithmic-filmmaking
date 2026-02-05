@@ -1497,9 +1497,13 @@ def send_to_analyze(
     if gui_state:
         gui_state.active_tab = "analyze"
 
-    # Optionally start analysis
+    # Optionally start analysis via the pipeline
     if auto_analyze:
-        main_window._on_analyze_all_from_tab()
+        from core.analysis_operations import DEFAULT_SELECTED
+        clips = [project.clips_by_id[cid] for cid in valid_ids if cid in project.clips_by_id]
+        if clips:
+            main_window._pending_agent_analyze_all = True
+            main_window._run_analysis_pipeline(clips, list(DEFAULT_SELECTED))
 
     return {
         "success": True,
@@ -3532,22 +3536,47 @@ def count_people_live(main_window, clip_ids: list[str]) -> dict:
 
 
 @tools.register(
-    description="Run all analysis (colors, shots, transcription) on clips sequentially with live GUI update.",
+    description="Run analysis operations on clips with live GUI update. "
+                "Supports smart concurrency: local ops run in parallel, then sequential, then cloud. "
+                "Default operations: colors, shots, transcribe. "
+                "Available operations: colors, shots, classify, detect_objects, extract_text, transcribe, describe, cinematography.",
     requires_project=True,
     modifies_gui_state=True,
     modifies_project_state=True
 )
-def analyze_all_live(main_window, clip_ids: list[str]) -> dict:
-    """Run all analysis on clips with live GUI update.
+def analyze_all_live(
+    main_window,
+    clip_ids: list[str],
+    operations: Optional[list[str]] = None,
+) -> dict:
+    """Run analysis operations on clips with live GUI update.
 
-    Runs colors, shots, and transcription sequentially.
+    Uses the phase-based pipeline: local ops concurrent, sequential ops
+    one-at-a-time, cloud ops concurrent.
 
     Args:
         clip_ids: List of clip IDs to analyze
+        operations: List of operation keys to run (default: colors, shots, transcribe).
+            Valid keys: colors, shots, classify, detect_objects, extract_text,
+            transcribe, describe, cinematography.
 
     Returns:
         Dict with analysis summary (after all workers complete)
     """
+    from core.analysis_operations import OPERATIONS_BY_KEY, DEFAULT_SELECTED
+
+    # Default operations
+    if operations is None:
+        operations = list(DEFAULT_SELECTED)
+
+    # Validate operation keys
+    valid_ops = [op for op in operations if op in OPERATIONS_BY_KEY]
+    if not valid_ops:
+        return {
+            "success": False,
+            "error": f"No valid operations. Valid keys: {', '.join(OPERATIONS_BY_KEY.keys())}"
+        }
+
     # Resolve clips
     clips = []
     for clip_id in clip_ids:
@@ -3558,34 +3587,19 @@ def analyze_all_live(main_window, clip_ids: list[str]) -> dict:
     if not clips:
         return {"success": False, "error": "No valid clips found"}
 
-    # Check if any analysis already running
-    if main_window.color_worker and main_window.color_worker.isRunning():
-        return {"success": False, "error": "Color analysis already in progress"}
-    if main_window.shot_type_worker and main_window.shot_type_worker.isRunning():
-        return {"success": False, "error": "Shot analysis already in progress"}
-    if main_window.transcription_worker and main_window.transcription_worker.isRunning():
-        return {"success": False, "error": "Transcription already in progress"}
-
-    # Use existing analyze_all mechanism
-    main_window._analyze_all_pending = ["colors", "shots", "transcribe"]
-    main_window._analyze_all_clips = clips
-
-    # Mark that agent is waiting for analyze_all completion
+    # Mark that agent is waiting for pipeline completion
     main_window._pending_agent_analyze_all = True
 
-    # Add clips to Analyze tab (mirrors "Analyze Selected" behavior)
+    # Add clips to Analyze tab
     main_window.analyze_tab.add_clips(clip_ids)
-
-    # Update UI state
-    main_window.analyze_tab.set_analyzing(True, "all")
 
     # Switch to Analyze tab to show progress
     main_window._switch_to_tab("analyze")
 
-    # Start the sequential analysis
-    main_window._start_next_analyze_all_step()
+    # Start the pipeline
+    main_window._run_analysis_pipeline(clips, valid_ops)
 
-    return {"_wait_for_worker": "analyze_all", "clip_count": len(clips)}
+    return {"_wait_for_worker": "analyze_all", "clip_count": len(clips), "operations": valid_ops}
 
 
 # =============================================================================

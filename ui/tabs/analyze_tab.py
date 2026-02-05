@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QWidget,
     QStackedWidget,
+    QComboBox,
 )
 from PySide6.QtCore import Signal, Qt
 
@@ -16,6 +17,8 @@ from .base_tab import BaseTab
 from ui.clip_browser import ClipBrowser
 from ui.widgets import EmptyStateWidget
 from ui.dialogs import GlossaryDialog
+from ui.theme import UISizes
+from core.analysis_operations import ANALYSIS_OPERATIONS
 
 logger = logging.getLogger(__name__)
 
@@ -24,25 +27,16 @@ class AnalyzeTab(BaseTab):
     """Tab for analyzing clips sent from the Cut tab.
 
     Signals:
-        analyze_colors_requested: Emitted when color extraction is requested
-        analyze_shots_requested: Emitted when shot type classification is requested
-        transcribe_requested: Emitted when transcription is requested
-        analyze_all_requested: Emitted when "Analyze All" is requested
+        quick_run_requested: Emitted for single-operation immediate run (op_key: str)
+        analyze_picker_requested: Emitted to open the analysis picker modal
         clip_selected: Emitted when a clip is selected (clip: Clip)
         clip_double_clicked: Emitted when a clip is double-clicked (clip: Clip)
         clip_dragged_to_timeline: Emitted when a clip is dragged to timeline (clip: Clip)
         clips_cleared: Emitted when all clips are cleared
     """
 
-    analyze_colors_requested = Signal()
-    analyze_shots_requested = Signal()
-    transcribe_requested = Signal()
-    classify_requested = Signal()
-    detect_objects_requested = Signal()
-    describe_requested = Signal()
-    extract_text_requested = Signal()
-    analyze_cinematography_requested = Signal()
-    analyze_all_requested = Signal()
+    quick_run_requested = Signal(str)  # operation key
+    analyze_picker_requested = Signal()
     clip_selected = Signal(object)  # Clip
     clip_double_clicked = Signal(object)  # Clip
     clip_dragged_to_timeline = Signal(object)  # Clip
@@ -95,91 +89,32 @@ class AnalyzeTab(BaseTab):
         controls = QHBoxLayout()
         controls.setContentsMargins(10, 10, 10, 10)
 
-        # Extract Colors button
-        self.colors_btn = QPushButton("Extract Colors")
-        self.colors_btn.setToolTip("Extract dominant colors from clips")
-        self.colors_btn.setEnabled(False)
-        self.colors_btn.clicked.connect(self._on_colors_click)
-        controls.addWidget(self.colors_btn)
+        # Quick Run dropdown + button
+        self.quick_run_combo = QComboBox()
+        self.quick_run_combo.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
+        self.quick_run_combo.setMinimumWidth(UISizes.COMBO_BOX_MIN_WIDTH)
+        for op in ANALYSIS_OPERATIONS:
+            self.quick_run_combo.addItem(op.label, op.key)
+            # Set tooltip on each item via the combo's model
+            idx = self.quick_run_combo.count() - 1
+            self.quick_run_combo.setItemData(idx, op.tooltip, Qt.ToolTipRole)
+        self.quick_run_combo.setEnabled(False)
+        controls.addWidget(self.quick_run_combo)
 
-        # Classify Shots button
-        self.shots_btn = QPushButton("Classify Shots")
-        self.shots_btn.setToolTip("Classify shot types (close-up, wide, etc.)")
-        self.shots_btn.setEnabled(False)
-        self.shots_btn.clicked.connect(self._on_shots_click)
-        controls.addWidget(self.shots_btn)
-
-        # Transcribe button
-        self.transcribe_btn = QPushButton("Transcribe")
-        self.transcribe_btn.setToolTip("Transcribe speech in clips")
-        self.transcribe_btn.setEnabled(False)
-        self.transcribe_btn.clicked.connect(self._on_transcribe_click)
-        controls.addWidget(self.transcribe_btn)
-
-        # Classify Content button
-        self.classify_btn = QPushButton("Classify")
-        self.classify_btn.setToolTip(
-            "Classify frame content using ImageNet labels\n"
-            "(dog, car, tree, person, etc.)"
-        )
-        self.classify_btn.setEnabled(False)
-        self.classify_btn.clicked.connect(self._on_classify_click)
-        controls.addWidget(self.classify_btn)
-
-        # Detect Objects button
-        self.detect_btn = QPushButton("Detect Objects")
-        self.detect_btn.setToolTip(
-            "Detect and locate objects using YOLO\n"
-            "Includes bounding boxes and person count"
-        )
-        self.detect_btn.setEnabled(False)
-        self.detect_btn.clicked.connect(self._on_detect_click)
-        controls.addWidget(self.detect_btn)
-
-        # Describe Content button
-        self.describe_btn = QPushButton("Describe")
-        self.describe_btn.setToolTip(
-            "Generate AI descriptions of frame content\n"
-            "Uses model configured in Settings > Vision Description"
-        )
-        self.describe_btn.setEnabled(False)
-        self.describe_btn.clicked.connect(self._on_describe_click)
-        controls.addWidget(self.describe_btn)
-
-        # Extract Text button
-        self.extract_text_btn = QPushButton("Extract Text")
-        self.extract_text_btn.setToolTip(
-            "Extract visible text from frames using OCR\n"
-            "Detects titles, labels, captions, and on-screen text"
-        )
-        self.extract_text_btn.setEnabled(False)
-        self.extract_text_btn.clicked.connect(self._on_extract_text_click)
-        controls.addWidget(self.extract_text_btn)
-
-        # Rich Cinematography Analysis button
-        self.cinematography_btn = QPushButton("Rich Analysis")
-        self.cinematography_btn.setToolTip(
-            "Comprehensive film language analysis using AI\n"
-            "Detects shot size, camera angle, movement,\n"
-            "composition, lighting, and emotional intensity"
-        )
-        self.cinematography_btn.setEnabled(False)
-        self.cinematography_btn.clicked.connect(self._on_cinematography_click)
-        controls.addWidget(self.cinematography_btn)
+        self.quick_run_btn = QPushButton("Run")
+        self.quick_run_btn.setToolTip("Run the selected operation immediately")
+        self.quick_run_btn.setEnabled(False)
+        self.quick_run_btn.clicked.connect(self._on_quick_run_click)
+        controls.addWidget(self.quick_run_btn)
 
         controls.addSpacing(10)
 
-        # Analyze All button - runs all operations sequentially
-        self.analyze_all_btn = QPushButton("Analyze All")
-        self.analyze_all_btn.setToolTip(
-            "Run all analysis operations sequentially:\n"
-            "1. Extract colors\n"
-            "2. Classify shot types\n"
-            "3. Transcribe speech"
-        )
-        self.analyze_all_btn.setEnabled(False)
-        self.analyze_all_btn.clicked.connect(self._on_analyze_all_click)
-        controls.addWidget(self.analyze_all_btn)
+        # Analyze... button (opens picker modal)
+        self.analyze_btn = QPushButton("Analyze...")
+        self.analyze_btn.setToolTip("Choose multiple operations to run")
+        self.analyze_btn.setEnabled(False)
+        self.analyze_btn.clicked.connect(self._on_analyze_click)
+        controls.addWidget(self.analyze_btn)
 
         controls.addSpacing(20)
 
@@ -225,37 +160,15 @@ class AnalyzeTab(BaseTab):
 
         return content
 
-    def _on_colors_click(self):
-        """Handle extract colors button click."""
-        self.analyze_colors_requested.emit()
+    def _on_quick_run_click(self):
+        """Handle quick run button click - immediate single operation."""
+        op_key = self.quick_run_combo.currentData()
+        if op_key:
+            self.quick_run_requested.emit(op_key)
 
-    def _on_shots_click(self):
-        """Handle classify shots button click."""
-        self.analyze_shots_requested.emit()
-
-    def _on_transcribe_click(self):
-        """Handle transcribe button click."""
-        self.transcribe_requested.emit()
-
-    def _on_classify_click(self):
-        """Handle Classify button click."""
-        self.classify_requested.emit()
-
-    def _on_detect_click(self):
-        """Handle Detect Objects button click."""
-        self.detect_objects_requested.emit()
-
-    def _on_describe_click(self):
-        """Handle Describe button click."""
-        self.describe_requested.emit()
-
-    def _on_extract_text_click(self):
-        """Handle Extract Text button click."""
-        self.extract_text_requested.emit()
-
-    def _on_cinematography_click(self):
-        """Handle Rich Analysis button click."""
-        self.analyze_cinematography_requested.emit()
+    def _on_analyze_click(self):
+        """Handle analyze button click - open picker modal."""
+        self.analyze_picker_requested.emit()
 
     def _on_glossary_click(self):
         """Handle glossary button click - open the film language glossary dialog."""
@@ -301,24 +214,14 @@ class AnalyzeTab(BaseTab):
         else:
             self.clip_count_label.setText(f"{total} clips")
 
-    def _on_analyze_all_click(self):
-        """Handle analyze all button click."""
-        self.analyze_all_requested.emit()
-
     def _update_ui_state(self):
         """Update UI based on current clip count."""
         count = len(self._clip_ids)
         has_clips = count > 0
 
-        self.colors_btn.setEnabled(has_clips)
-        self.shots_btn.setEnabled(has_clips)
-        self.transcribe_btn.setEnabled(has_clips)
-        self.classify_btn.setEnabled(has_clips)
-        self.detect_btn.setEnabled(has_clips)
-        self.describe_btn.setEnabled(has_clips)
-        self.extract_text_btn.setEnabled(has_clips)
-        self.cinematography_btn.setEnabled(has_clips)
-        self.analyze_all_btn.setEnabled(has_clips)
+        self.quick_run_combo.setEnabled(has_clips)
+        self.quick_run_btn.setEnabled(has_clips)
+        self.analyze_btn.setEnabled(has_clips)
         self.clear_btn.setEnabled(has_clips)
 
         if has_clips:
@@ -480,53 +383,18 @@ class AnalyzeTab(BaseTab):
 
         Args:
             is_analyzing: Whether an analysis operation is running
-            operation: Which operation is running ("colors", "shots", "transcribe",
-                       "classify", "detect", "describe", "extract_text",
-                       "cinematography", "all")
+            operation: Which operation is running (operation key or "pipeline")
         """
-        # Disable all buttons during any analysis
         has_clips = len(self._clip_ids) > 0
-        self.colors_btn.setEnabled(not is_analyzing and has_clips)
-        self.shots_btn.setEnabled(not is_analyzing and has_clips)
-        self.transcribe_btn.setEnabled(not is_analyzing and has_clips)
-        self.classify_btn.setEnabled(not is_analyzing and has_clips)
-        self.detect_btn.setEnabled(not is_analyzing and has_clips)
-        self.describe_btn.setEnabled(not is_analyzing and has_clips)
-        self.extract_text_btn.setEnabled(not is_analyzing and has_clips)
-        self.cinematography_btn.setEnabled(not is_analyzing and has_clips)
-        self.analyze_all_btn.setEnabled(not is_analyzing and has_clips)
+        self.quick_run_combo.setEnabled(not is_analyzing and has_clips)
+        self.quick_run_btn.setEnabled(not is_analyzing and has_clips)
+        self.analyze_btn.setEnabled(not is_analyzing and has_clips)
         self.clear_btn.setEnabled(not is_analyzing and has_clips)
 
-        # Update button text based on operation
         if is_analyzing:
-            if operation == "colors":
-                self.colors_btn.setText("Extracting...")
-            elif operation == "shots":
-                self.shots_btn.setText("Classifying...")
-            elif operation == "transcribe":
-                self.transcribe_btn.setText("Transcribing...")
-            elif operation == "classify":
-                self.classify_btn.setText("Classifying...")
-            elif operation == "detect":
-                self.detect_btn.setText("Detecting...")
-            elif operation == "describe":
-                self.describe_btn.setText("Describing...")
-            elif operation == "extract_text":
-                self.extract_text_btn.setText("Extracting...")
-            elif operation == "cinematography":
-                self.cinematography_btn.setText("Analyzing...")
-            elif operation == "all":
-                self.analyze_all_btn.setText("Analyzing...")
+            self.analyze_btn.setText("Analyzing...")
         else:
-            self.colors_btn.setText("Extract Colors")
-            self.shots_btn.setText("Classify Shots")
-            self.transcribe_btn.setText("Transcribe")
-            self.classify_btn.setText("Classify")
-            self.detect_btn.setText("Detect Objects")
-            self.describe_btn.setText("Describe")
-            self.extract_text_btn.setText("Extract Text")
-            self.cinematography_btn.setText("Rich Analysis")
-            self.analyze_all_btn.setText("Analyze All")
+            self.analyze_btn.setText("Analyze...")
 
     def get_active_filters(self) -> dict:
         """Get the current filter state from the clip browser.

@@ -1,4 +1,4 @@
-"""Cut tab for scene detection and clip browsing."""
+"""Cut tab for clip browsing and selection."""
 
 from PySide6.QtWidgets import (
     QVBoxLayout,
@@ -7,36 +7,28 @@ from PySide6.QtWidgets import (
     QPushButton,
     QWidget,
     QStackedWidget,
-    QComboBox,
-    QDoubleSpinBox,
-    QSpinBox,
-    QFormLayout,
 )
-from PySide6.QtCore import Signal, Qt
+from PySide6.QtCore import Signal
 
 from .base_tab import BaseTab
 from ui.clip_browser import ClipBrowser
 from ui.widgets import EmptyStateWidget
-from ui.widgets.styled_slider import StyledSlider
-from ui.theme import UISizes
 
 
 class CutTab(BaseTab):
-    """Tab for scene detection and clip browsing.
+    """Tab for browsing and selecting detected clips.
 
     Signals:
-        detect_requested: Emitted when detection is requested (mode: str, config: dict)
         clip_selected: Emitted when a clip is selected (clip: Clip)
         clip_double_clicked: Emitted when a clip is double-clicked (clip: Clip)
         clip_dragged_to_timeline: Emitted when a clip is dragged to timeline (clip: Clip)
-        clips_sent_to_analyze: Emitted when clips are sent to Analyze tab (clip_ids: list[str])
+        analyze_selected_requested: Emitted when clips are sent to Analyze tab (clip_ids: list[str])
     """
 
-    detect_requested = Signal(str, dict)  # mode, config dict
     clip_selected = Signal(object)  # Clip
     clip_double_clicked = Signal(object)  # Clip
     clip_dragged_to_timeline = Signal(object)  # Clip
-    clips_sent_to_analyze = Signal(list)  # list[str] clip IDs
+    analyze_selected_requested = Signal(list)  # list[str] clip IDs
     selection_changed = Signal(list)  # list[str] selected clip IDs
 
     # State constants for stacked widget
@@ -72,8 +64,8 @@ class CutTab(BaseTab):
 
         # State 1: Video loaded but no clips detected
         self.no_clips_widget = EmptyStateWidget(
-            "Ready to Cut",
-            "Click 'Detect Scenes' to find clips in your video"
+            "No Clips Detected",
+            "Run scene detection in the Collect tab first"
         )
         self.state_stack.addWidget(self.no_clips_widget)
 
@@ -90,101 +82,6 @@ class CutTab(BaseTab):
         """Create the top controls bar."""
         controls = QHBoxLayout()
         controls.setContentsMargins(10, 10, 10, 10)
-
-        # Detection mode dropdown
-        controls.addWidget(QLabel("Mode:"))
-        self.mode_dropdown = QComboBox()
-        self.mode_dropdown.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
-        self.mode_dropdown.addItem("Visual (Adaptive)", "adaptive")
-        self.mode_dropdown.addItem("Visual (Content)", "content")
-        self.mode_dropdown.addItem("Text/Karaoke", "karaoke")
-        self.mode_dropdown.setToolTip("Detection mode: Visual detects scene changes, Text/Karaoke detects text changes")
-        self.mode_dropdown.currentIndexChanged.connect(self._on_mode_changed)
-        controls.addWidget(self.mode_dropdown)
-
-        controls.addSpacing(10)
-
-        # Visual mode: Sensitivity slider (shown by default)
-        self.sensitivity_widget = QWidget()
-        sensitivity_layout = QHBoxLayout(self.sensitivity_widget)
-        sensitivity_layout.setContentsMargins(0, 0, 0, 0)
-        sensitivity_layout.addWidget(QLabel("Sensitivity:"))
-
-        self.sensitivity_slider = StyledSlider(Qt.Horizontal)
-        self.sensitivity_slider.setRange(10, 100)  # 1.0 to 10.0
-        self.sensitivity_slider.setValue(30)  # Default 3.0
-        self.sensitivity_slider.setMaximumWidth(150)
-        self.sensitivity_slider.setToolTip("Lower = more scenes detected")
-        sensitivity_layout.addWidget(self.sensitivity_slider)
-
-        self.sensitivity_label = QLabel("3.0")
-        self.sensitivity_slider.valueChanged.connect(
-            lambda v: self.sensitivity_label.setText(f"{v/10:.1f}")
-        )
-        sensitivity_layout.addWidget(self.sensitivity_label)
-        controls.addWidget(self.sensitivity_widget)
-
-        # Karaoke mode: Options (hidden by default)
-        self.karaoke_widget = QWidget()
-        karaoke_layout = QHBoxLayout(self.karaoke_widget)
-        karaoke_layout.setContentsMargins(0, 0, 0, 0)
-
-        # ROI Top (0.0 = full frame, 0.75 = bottom 25%)
-        karaoke_layout.addWidget(QLabel("ROI Top:"))
-        self.roi_top_spin = QDoubleSpinBox()
-        self.roi_top_spin.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
-        self.roi_top_spin.setRange(0.0, 0.95)
-        self.roi_top_spin.setValue(0.0)  # Full frame by default
-        self.roi_top_spin.setSingleStep(0.05)
-        self.roi_top_spin.setToolTip("Top of text region (0.0=full frame, 0.75=bottom 25%)")
-        karaoke_layout.addWidget(self.roi_top_spin)
-
-        karaoke_layout.addSpacing(5)
-
-        # Text similarity threshold
-        karaoke_layout.addWidget(QLabel("Threshold:"))
-        self.text_threshold_spin = QDoubleSpinBox()
-        self.text_threshold_spin.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
-        self.text_threshold_spin.setRange(10.0, 100.0)
-        self.text_threshold_spin.setValue(60.0)  # Tuned default
-        self.text_threshold_spin.setSingleStep(5.0)
-        self.text_threshold_spin.setToolTip("Text similarity threshold (lower = more cuts)")
-        karaoke_layout.addWidget(self.text_threshold_spin)
-
-        karaoke_layout.addSpacing(5)
-
-        # Confirm frames
-        karaoke_layout.addWidget(QLabel("Confirm:"))
-        self.confirm_frames_spin = QSpinBox()
-        self.confirm_frames_spin.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
-        self.confirm_frames_spin.setRange(1, 10)
-        self.confirm_frames_spin.setValue(3)  # Reduces OCR jitter
-        self.confirm_frames_spin.setToolTip("Frames to confirm text change (reduces false positives)")
-        karaoke_layout.addWidget(self.confirm_frames_spin)
-
-        karaoke_layout.addSpacing(5)
-
-        # Cut offset
-        karaoke_layout.addWidget(QLabel("Offset:"))
-        self.cut_offset_spin = QSpinBox()
-        self.cut_offset_spin.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
-        self.cut_offset_spin.setRange(0, 30)
-        self.cut_offset_spin.setValue(5)  # Compensates for fade-in delay
-        self.cut_offset_spin.setToolTip("Shift cuts backward to catch fade-in starts")
-        karaoke_layout.addWidget(self.cut_offset_spin)
-
-        controls.addWidget(self.karaoke_widget)
-        self.karaoke_widget.setVisible(False)  # Hidden by default
-
-        controls.addSpacing(10)
-
-        # Detect button
-        self.detect_btn = QPushButton("Detect Scenes")
-        self.detect_btn.setEnabled(False)
-        self.detect_btn.clicked.connect(self._on_detect_click)
-        controls.addWidget(self.detect_btn)
-
-        controls.addSpacing(20)
 
         # Analyze Selected button
         self.analyze_btn = QPushButton("Analyze Selected")
@@ -207,18 +104,6 @@ class CutTab(BaseTab):
 
         return controls
 
-    def _on_mode_changed(self, index):
-        """Handle detection mode change."""
-        mode = self.mode_dropdown.currentData()
-        is_karaoke = mode == "karaoke"
-        self.sensitivity_widget.setVisible(not is_karaoke)
-        self.karaoke_widget.setVisible(is_karaoke)
-        # Update button text
-        if is_karaoke:
-            self.detect_btn.setText("Detect Text Changes")
-        else:
-            self.detect_btn.setText("Detect Scenes")
-
     def _create_content_area(self) -> QWidget:
         """Create the main content area with clip browser and video player."""
         content = QWidget()
@@ -236,31 +121,12 @@ class CutTab(BaseTab):
 
         return content
 
-    def _on_detect_click(self):
-        """Handle detect button click."""
-        mode = self.mode_dropdown.currentData()
-
-        if mode == "karaoke":
-            config = {
-                "roi_top_percent": self.roi_top_spin.value(),
-                "text_similarity_threshold": self.text_threshold_spin.value(),
-                "confirm_frames": self.confirm_frames_spin.value(),
-                "cut_offset": self.cut_offset_spin.value(),
-            }
-        else:
-            config = {
-                "threshold": self.sensitivity_slider.value() / 10.0,
-                "use_adaptive": mode == "adaptive",
-            }
-
-        self.detect_requested.emit(mode, config)
-
     def _on_analyze_click(self):
         """Handle analyze selected button click."""
         selected_clips = self.clip_browser.get_selected_clips()
         if selected_clips:
             clip_ids = [clip.id for clip in selected_clips]
-            self.clips_sent_to_analyze.emit(clip_ids)
+            self.analyze_selected_requested.emit(clip_ids)
 
     def _on_clip_selected(self, clip):
         """Handle clip selection."""
@@ -295,7 +161,7 @@ class CutTab(BaseTab):
         else:
             self.selection_label.setText("")
             self.analyze_btn.setEnabled(False)
-        
+
         # Notify parent of selection change
         self.selection_changed.emit([c.id for c in selected])
 
@@ -305,12 +171,10 @@ class CutTab(BaseTab):
         """Set the current video source."""
         self._current_source = source
         if source:
-            self.detect_btn.setEnabled(True)
             # Only show "no clips" state if we don't already have clips visible
             if not self._clips and not self.clip_browser.thumbnails:
                 self.state_stack.setCurrentIndex(self.STATE_NO_CLIPS)
         else:
-            self.detect_btn.setEnabled(False)
             self.state_stack.setCurrentIndex(self.STATE_NO_VIDEO)
 
     def set_clips(self, clips):
@@ -368,35 +232,6 @@ class CutTab(BaseTab):
     def update_clip_thumbnail(self, clip_id: str, thumb_path):
         """Update thumbnail for a clip."""
         self.clip_browser.update_clip_thumbnail(clip_id, thumb_path)
-
-    def set_sensitivity(self, value: float):
-        """Set the sensitivity slider value."""
-        self.sensitivity_slider.setValue(int(value * 10))
-
-    def set_detecting(self, is_detecting: bool):
-        """Update UI state during detection."""
-        self.detect_btn.setEnabled(not is_detecting)
-        self.mode_dropdown.setEnabled(not is_detecting)
-        self.analyze_btn.setEnabled(not is_detecting and len(self.clip_browser.get_selected_clips()) > 0)
-
-        mode = self.mode_dropdown.currentData()
-        if is_detecting:
-            self.detect_btn.setText("Detecting...")
-        elif mode == "karaoke":
-            self.detect_btn.setText("Detect Text Changes")
-        else:
-            self.detect_btn.setText("Detect Scenes")
-
-    def get_detection_mode(self) -> str:
-        """Get the current detection mode."""
-        return self.mode_dropdown.currentData()
-
-    def set_detection_mode(self, mode: str):
-        """Set the detection mode programmatically."""
-        for i in range(self.mode_dropdown.count()):
-            if self.mode_dropdown.itemData(i) == mode:
-                self.mode_dropdown.setCurrentIndex(i)
-                break
 
     def update_clip_transcript(self, clip_id: str, segments: list):
         """Update transcript for a clip."""

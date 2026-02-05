@@ -349,6 +349,67 @@ class TestJSONSettings:
                         assert loaded.default_sensitivity == 9.0
 
 
+class TestAnalysisSelectedOperations:
+    """Tests for analysis_selected_operations persistence."""
+
+    def test_default_analysis_selected_operations(self):
+        """Test default selected operations value."""
+        settings = Settings()
+        assert settings.analysis_selected_operations == ["colors", "shots", "transcribe"]
+
+    def test_save_and_load_analysis_selected_operations(self):
+        """Test round-trip save/load of analysis_selected_operations."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.json"
+
+            with patch("core.settings._get_config_path", return_value=config_path):
+                with patch("core.settings._get_api_key_from_keyring", return_value=""):
+                    with patch("core.settings._set_api_key_in_keyring", return_value=True):
+                        # Save with custom selection
+                        settings = Settings()
+                        settings.analysis_selected_operations = [
+                            "colors", "shots", "describe", "cinematography"
+                        ]
+                        assert save_settings(settings) is True
+
+                        # Load and verify
+                        loaded = load_settings()
+                        assert loaded.analysis_selected_operations == [
+                            "colors", "shots", "describe", "cinematography"
+                        ]
+
+    def test_save_and_load_empty_analysis_selected_operations(self):
+        """Test round-trip with empty selection."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.json"
+
+            with patch("core.settings._get_config_path", return_value=config_path):
+                with patch("core.settings._get_api_key_from_keyring", return_value=""):
+                    with patch("core.settings._set_api_key_in_keyring", return_value=True):
+                        settings = Settings()
+                        settings.analysis_selected_operations = []
+                        assert save_settings(settings) is True
+
+                        loaded = load_settings()
+                        assert loaded.analysis_selected_operations == []
+
+    def test_analysis_selected_in_json_schema(self):
+        """Test that selected_operations appears in the analysis section of JSON."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.json"
+
+            with patch("core.settings._get_config_path", return_value=config_path):
+                with patch("core.settings._set_api_key_in_keyring", return_value=True):
+                    settings = Settings()
+                    settings.analysis_selected_operations = ["colors", "shots"]
+                    save_settings(settings)
+
+                    data = json.loads(config_path.read_text())
+                    assert "analysis" in data
+                    assert "selected_operations" in data["analysis"]
+                    assert data["analysis"]["selected_operations"] == ["colors", "shots"]
+
+
 class TestFilePermissions:
     """Tests for file permission handling."""
 
