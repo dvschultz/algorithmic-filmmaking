@@ -65,6 +65,7 @@ class Source:
     height: int = 0
     analyzed: bool = False  # Has this source been analyzed for scenes?
     thumbnail_path: Optional[Path] = None  # Thumbnail for library grid
+    color_profile: Optional[str] = None  # "grayscale", "sepia", "mixed", "color"
 
     @property
     def filename(self) -> str:
@@ -99,6 +100,8 @@ class Source:
             "height": self.height,
             "analyzed": self.analyzed,
         }
+        if self.color_profile is not None:
+            data["color_profile"] = self.color_profile
         # Store relative path if base_path provided, with absolute fallback
         if base_path:
             try:
@@ -152,6 +155,7 @@ class Source:
             height=data.get("height", 0),
             analyzed=data.get("analyzed", False),
             thumbnail_path=None,  # Regenerate on load
+            color_profile=data.get("color_profile"),
         )
 
 

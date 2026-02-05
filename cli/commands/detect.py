@@ -44,6 +44,11 @@ from cli.utils.signals import (
     is_flag=True,
     help="Overwrite existing output file",
 )
+@click.option(
+    "--luma-only/--no-luma-only",
+    default=None,
+    help="Force luma-only detection (for B&W video). Default: auto-detect.",
+)
 @click.pass_context
 def detect(
     ctx: click.Context,
@@ -52,6 +57,7 @@ def detect(
     min_scene_length: float,
     output: Path | None,
     force: bool,
+    luma_only: bool | None,
 ) -> None:
     """Detect scenes in a video file.
 
@@ -102,6 +108,7 @@ def detect(
         threshold=sensitivity,
         min_scene_length=int(min_scene_length * fps_estimate),
         use_adaptive=True,
+        luma_only=luma_only,
     )
 
     detector = SceneDetector(config=detection_config)

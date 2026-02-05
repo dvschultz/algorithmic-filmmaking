@@ -12,6 +12,7 @@ from scenedetect.scene_manager import SceneManager
 from scenedetect.video_stream import VideoStream
 from scenedetect.backends.opencv import VideoStreamCv2
 
+from core.analysis.color import detect_video_color_profile
 from models.clip import Clip, Source
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,10 @@ class DetectionConfig:
     # Number of frames to average together (AdaptiveDetector only)
     # Higher values = better for slow fades, but may miss quick cuts
     window_width: int = 2
+
+    # Luma-only mode: None=auto-detect (check if video is B&W),
+    # True=force luma-only, False=force standard color detection
+    luma_only: Optional[bool] = None
 
     @classmethod
     def default(cls) -> "DetectionConfig":
@@ -68,6 +73,17 @@ class DetectionConfig:
             use_adaptive=True,
             min_content_val=8.0,
             window_width=2,
+        )
+
+    @classmethod
+    def grayscale(cls) -> "DetectionConfig":
+        """Optimized for black-and-white / grayscale footage.
+
+        Uses luma-only detection to avoid noise from meaningless
+        hue and saturation channels in B&W content.
+        """
+        return cls(
+            luma_only=True,
         )
 
 
@@ -307,6 +323,37 @@ class SceneDetector:
     def __init__(self, config: Optional[DetectionConfig] = None):
         self.config = config or DetectionConfig()
 
+    def _resolve_luma_only(self, video_path: Path, source: Source) -> bool:
+        """Determine whether to use luma-only detection.
+
+        If config.luma_only is explicitly set, use that value.
+        If None (auto-detect), run grayscale pre-check on the video.
+        Stores the detected color_profile on the source.
+
+        Returns:
+            True if luma-only detection should be used.
+        """
+        if self.config.luma_only is not None:
+            return self.config.luma_only
+
+        result = detect_video_color_profile(video_path)
+        source.color_profile = result.classification
+
+        if result.is_grayscale:
+            logger.info(
+                f"Video color profile: {result.classification} "
+                f"(mean saturation: {result.mean_saturation:.1f}) — "
+                f"using luma-only detection for {video_path.name}"
+            )
+        else:
+            logger.info(
+                f"Video color profile: {result.classification} "
+                f"(mean saturation: {result.mean_saturation:.1f}) — "
+                f"using standard detection for {video_path.name}"
+            )
+
+        return result.is_grayscale
+
     def detect_scenes(
         self,
         video_path: Path,
@@ -336,6 +383,9 @@ class SceneDetector:
             height=video.frame_size[1],
         )
 
+        # Auto-detect grayscale and resolve luma_only
+        use_luma_only = self._resolve_luma_only(video_path, source)
+
         # Create detector based on config
         if self.config.use_adaptive:
             detector = AdaptiveDetector(
@@ -343,11 +393,13 @@ class SceneDetector:
                 min_scene_len=self.config.min_scene_length,
                 min_content_val=self.config.min_content_val,
                 window_width=self.config.window_width,
+                luma_only=use_luma_only,
             )
         else:
             detector = ContentDetector(
                 threshold=self.config.threshold * 9,  # Scale for ContentDetector
                 min_scene_len=self.config.min_scene_length,
+                luma_only=use_luma_only,
             )
 
         # Detect scenes
@@ -411,6 +463,10 @@ class SceneDetector:
             height=video.frame_size[1],
         )
 
+        # Auto-detect grayscale and resolve luma_only
+        progress_callback(0.05, "Checking video color profile...")
+        use_luma_only = self._resolve_luma_only(video_path, source)
+
         progress_callback(0.1, "Analyzing frames...")
 
         # Create detector
@@ -420,11 +476,13 @@ class SceneDetector:
                 min_scene_len=self.config.min_scene_length,
                 min_content_val=self.config.min_content_val,
                 window_width=self.config.window_width,
+                luma_only=use_luma_only,
             )
         else:
             detector = ContentDetector(
                 threshold=self.config.threshold * 9,
                 min_scene_len=self.config.min_scene_length,
+                luma_only=use_luma_only,
             )
 
         # Create scene manager for manual processing with progress

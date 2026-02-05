@@ -4248,6 +4248,7 @@ class MainWindow(QMainWindow):
             visual_config = DetectionConfig(
                 threshold=config_dict.get("threshold", 3.0),
                 use_adaptive=(mode == "adaptive"),
+                luma_only=config_dict.get("luma_only"),
             )
             karaoke_config = None
 

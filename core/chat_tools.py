@@ -2674,6 +2674,7 @@ def detect_scenes(
     project,
     video_path: str,
     sensitivity: float = 3.0,
+    luma_only: bool | None = None,
 ) -> dict:
     """Run scene detection using Python API and add clips to project."""
     from core.scene_detect import SceneDetector, DetectionConfig
@@ -2703,7 +2704,7 @@ def detect_scenes(
                     break
 
         # Create detector with configured sensitivity
-        config = DetectionConfig(threshold=sensitivity)
+        config = DetectionConfig(threshold=sensitivity, luma_only=luma_only)
         detector = SceneDetector(config)
 
         # Run detection
@@ -3098,6 +3099,7 @@ def detect_scenes_live(
     source_id: str,
     mode: str = "adaptive",
     sensitivity: float = 3.0,
+    luma_only: bool | None = None,
     roi_top: float = 0.0,
     text_threshold: float = 60.0,
     confirm_frames: int = 3,
@@ -3109,6 +3111,7 @@ def detect_scenes_live(
         source_id: ID of the source to analyze
         mode: Detection mode - 'adaptive' (visual), 'content' (visual), or 'karaoke' (text-based)
         sensitivity: Detection sensitivity for visual modes (1.0=sensitive, 10.0=less sensitive)
+        luma_only: Force luma-only detection for B&W video. None=auto-detect.
         roi_top: For karaoke mode - top of text region (0.0=full frame, 0.75=bottom 25%)
         text_threshold: For karaoke mode - text similarity threshold (lower=more cuts)
         confirm_frames: For karaoke mode - frames to confirm text change (reduces false positives)
@@ -3154,6 +3157,7 @@ def detect_scenes_live(
         config = {
             "threshold": sensitivity,
             "use_adaptive": (mode == "adaptive"),
+            "luma_only": luma_only,
         }
 
     # Start detection (this returns immediately, worker runs in background)
@@ -3176,12 +3180,14 @@ def detect_scenes_live(
 def detect_all_unanalyzed(
     main_window,
     project,
-    sensitivity: float = 3.0
+    sensitivity: float = 3.0,
+    luma_only: bool | None = None,
 ) -> dict:
     """Detect scenes in all unanalyzed video sources.
 
     Args:
         sensitivity: Detection sensitivity (1.0=sensitive, 10.0=less sensitive)
+        luma_only: Force luma-only detection for B&W video. None=auto-detect.
 
     Returns:
         Dict with queued source count
