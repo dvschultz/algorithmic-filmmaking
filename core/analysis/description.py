@@ -192,6 +192,18 @@ def describe_video_cloud(
             api_key=api_key,
         )
         description = response.choices[0].message.content
+
+        # Validate response content
+        if description is None:
+            finish_reason = getattr(response.choices[0], 'finish_reason', 'unknown')
+            logger.warning(f"Video API returned None content, finish_reason={finish_reason}")
+            if finish_reason == 'content_filter':
+                raise RuntimeError(f"Video content filtered by {original_model} safety policy")
+            raise RuntimeError(f"Video API returned empty response (finish_reason={finish_reason})")
+
+        if not description.strip():
+            raise RuntimeError(f"Video API returned blank response from {original_model}")
+
         return description, f"{original_model} (video)"
     except Exception as e:
         logger.error(f"Video description failed for model {model}: {e}")
@@ -338,7 +350,21 @@ def describe_frame_cloud(image_path: Path, prompt: str = "Describe this image.")
             messages=messages,
             api_key=api_key,
         )
-        return response.choices[0].message.content
+        content = response.choices[0].message.content
+
+        # Validate response content
+        if content is None:
+            # Check for content filtering
+            finish_reason = getattr(response.choices[0], 'finish_reason', 'unknown')
+            logger.warning(f"API returned None content, finish_reason={finish_reason}")
+            if finish_reason == 'content_filter':
+                raise RuntimeError(f"Content filtered by {original_model} safety policy")
+            raise RuntimeError(f"API returned empty response (finish_reason={finish_reason})")
+
+        if not content.strip():
+            raise RuntimeError(f"API returned blank response from {original_model}")
+
+        return content
     except Exception as e:
         logger.error(f"Cloud inference failed for model {model}: {e}")
         raise RuntimeError(f"Cloud inference failed ({original_model}): {e}") from e

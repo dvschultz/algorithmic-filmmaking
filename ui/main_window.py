@@ -1428,6 +1428,8 @@ class MainWindow(QMainWindow):
         self.sequence_tab.export_requested.connect(self._on_sequence_export_click)
         # Intention-first workflow trigger
         self.sequence_tab.intention_import_requested.connect(self._on_intention_import_requested)
+        # Description analysis request from Storyteller
+        self.sequence_tab.description_analysis_requested.connect(self._on_description_analysis_requested)
         # Update Render tab when sequence changes (clips added/removed/generated)
         self.sequence_tab.timeline.sequence_changed.connect(self._update_render_tab_sequence_info)
         # Update EDL export menu item when sequence changes
@@ -3221,6 +3223,40 @@ class MainWindow(QMainWindow):
 
         # Update chat panel with project state
         self._update_chat_project_state()
+
+    def _on_description_analysis_requested(self, clip_ids: list):
+        """Handle description analysis request from Sequence tab (Storyteller).
+
+        Navigates to Analyze tab, adds the specified clips, and runs description analysis.
+
+        Args:
+            clip_ids: List of clip IDs that need description analysis
+        """
+        if not clip_ids:
+            return
+
+        logger.info(f"Description analysis requested for {len(clip_ids)} clips")
+
+        # Get clips from project
+        clips = [self.clips_by_id.get(cid) for cid in clip_ids if cid in self.clips_by_id]
+        if not clips:
+            QMessageBox.warning(
+                self,
+                "No Clips Found",
+                "Could not find the specified clips for analysis."
+            )
+            return
+
+        # Navigate to Analyze tab
+        self.tab_widget.setCurrentWidget(self.analyze_tab)
+
+        # Add clips to Analyze tab
+        self.analyze_tab.add_clips(clip_ids)
+
+        # Wait a moment for UI to update, then trigger description analysis
+        QTimer.singleShot(100, self._on_describe_from_tab)
+
+        self.status_bar.showMessage(f"Running description analysis on {len(clips)} clips...")
 
     def _on_extract_text_from_tab(self):
         """Handle text extraction request from Analyze tab."""
@@ -6171,10 +6207,11 @@ class MainWindow(QMainWindow):
                 logger.info(f"Adding {len(analyzed_clip_ids)} shot-analyzed clips to Analyze tab")
                 self.analyze_tab.add_clips(analyzed_clip_ids)
 
-        # Apply sequence to the sequence tab (skip for exquisite_corpus - already handled by dialog)
-        if algorithm == "exquisite_corpus":
-            # Sequence was already applied by _on_exquisite_corpus_sequence_ready
-            self.status_bar.showMessage("Exquisite Corpus sequence created")
+        # Apply sequence to the sequence tab (skip for dialog-based algorithms - already handled by their dialogs)
+        if algorithm in ("exquisite_corpus", "storyteller"):
+            # Sequence was already applied by _on_exquisite_corpus_sequence_ready or _on_storyteller_sequence_ready
+            status_msg = "Exquisite Corpus" if algorithm == "exquisite_corpus" else "Storyteller"
+            self.status_bar.showMessage(f"{status_msg} sequence created")
             self._mark_dirty()
         else:
             # Get shot type filter from pending state

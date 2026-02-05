@@ -124,6 +124,10 @@ class SequenceTab(BaseTab):
     # Parameters: algorithm (str), direction (str or None)
     intention_import_requested = Signal(str, object)
 
+    # Request description analysis on specific clips (for Storyteller)
+    # Parameters: list of clip IDs that need descriptions
+    description_analysis_requested = Signal(list)
+
     # State constants (2 states instead of 3)
     STATE_CARDS = 0      # Show card grid only
     STATE_TIMELINE = 1   # Show header + timeline + preview
@@ -519,9 +523,10 @@ class SequenceTab(BaseTab):
                 parent=self,
             )
 
-            # Connect signals
+            # Connect signals - pass clips without descriptions for analysis
+            clips_needing_analysis = clips_without_desc
             missing_dialog.analyze_selected.connect(
-                lambda: self._on_storyteller_analyze_requested()
+                lambda: self._on_storyteller_analyze_requested(clips_needing_analysis)
             )
 
             result = missing_dialog.exec()
@@ -554,19 +559,17 @@ class SequenceTab(BaseTab):
 
         dialog.exec()
 
-    def _on_storyteller_analyze_requested(self):
+    def _on_storyteller_analyze_requested(self, clips_without_descriptions: list):
         """Handle user choosing to run analysis before Storyteller.
 
-        Signals the main window to navigate to the Analyze tab.
+        Emits signal to MainWindow to run description analysis on the specified clips.
+
+        Args:
+            clips_without_descriptions: List of Clip objects that need descriptions
         """
-        # This will be handled by the parent (MainWindow)
-        # For now, just show a message
-        QMessageBox.information(
-            self,
-            "Run Analysis",
-            "Please run 'Describe' analysis on your clips in the Analyze tab, "
-            "then return here to create a narrative sequence."
-        )
+        clip_ids = [clip.id for clip in clips_without_descriptions]
+        logger.info(f"Requesting description analysis for {len(clip_ids)} clips")
+        self.description_analysis_requested.emit(clip_ids)
 
     @Slot(list)
     def _apply_storyteller_sequence(self, sequence_clips: list):
