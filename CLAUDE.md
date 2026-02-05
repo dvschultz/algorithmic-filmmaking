@@ -488,6 +488,40 @@ When given a bug or error report, the first step is to spawn a subagent to write
 
 If the bug is truly environment-specific or transient, document why a test isn't feasible rather than skipping silently.
 
+## Debugging
+
+When debugging bugs in this codebase, follow these principles:
+
+### Output-First Investigation
+- **Always verify export/output logic first** before investigating upstream data sources (algorithms, generators). The bug is more likely in the final transformation step.
+- For bugs involving "X does Y instead of Z", trace the data flow **backwards** from the incorrect output, not forwards from the input.
+- Find the exact function that produces the wrong output and add logging to see what data it receives before blaming upstream components.
+
+### Media Processing Bugs
+When debugging export or rendering issues, check in this order:
+1. What data is being passed to the export function?
+2. How does the export function filter/transform that data?
+3. What actually gets written to the output file?
+
+### Common Bug Patterns
+- **Sequence overwrite**: Dialog-based workflows (Storyteller, Exquisite Corpus) may have their sequences overwritten by generic handlers. Check if the algorithm is properly excluded from fallback paths.
+- **Empty API responses**: LLM APIs can return `None` content without exceptions (content filtering). Always validate response content.
+- **Worker state**: QThread workers may have stale references. Check signal connections and worker lifecycle.
+
+### Before Investigating Upstream
+Do NOT blame upstream components (algorithms, data generators) until you've verified:
+1. The export/output function is receiving incorrect data (add a print/log)
+2. The function's transformation logic is correct
+3. Only then trace backwards to find where bad data originates
+
+### Bug Report Format
+When a user reports a bug, confirm these before investigating:
+1. **Symptom**: What happens? (e.g., "SRT exports 1242 clips")
+2. **Expected**: What should happen? (e.g., "SRT should export only 50 sequence clips")
+3. **Success criteria**: How do we verify the fix? (e.g., "SRT file contains only clips within 10-minute duration limit")
+
+If any are unclear, ask before diving in. Sessions without clear success criteria tend to end mid-investigation.
+
 ## Common Commands
 
 ```bash
