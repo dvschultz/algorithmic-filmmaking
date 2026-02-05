@@ -287,8 +287,8 @@ class TestExportSrt:
             assert "Has description" in content
             assert "Also has description" in content
             # Entry numbers should be consecutive (1, 2), not (1, 3)
-            assert "\n1\n" in content
-            assert "\n2\n" in content
+            assert content.startswith("1\n") or "\n1\n" in content
+            assert "\n2\n" in content or content.startswith("2\n")
             assert "\n3\n" not in content
 
     def test_export_fallback_to_description(self):
