@@ -460,7 +460,7 @@ class ClipBrowser(QWidget):
     filters_changed = Signal()  # Emitted when any filter changes
     view_details_requested = Signal(object, object)  # Clip, Source - request to show clip details
 
-    COLUMNS = 4
+    _MIN_COLUMNS = 2
 
     # Aspect ratio tolerance ranges (5% tolerance)
     ASPECT_RATIOS = {
@@ -468,6 +468,11 @@ class ClipBrowser(QWidget):
         "4:3": (1.333, 1.27, 1.40),     # 1.333 ± 5%
         "9:16": (0.5625, 0.53, 0.59),   # 0.5625 ± 5%
     }
+
+    @property
+    def COLUMNS(self) -> int:
+        """Calculate number of columns based on available width."""
+        return self._calculate_columns()
 
     def __init__(self):
         super().__init__()
@@ -479,6 +484,7 @@ class ClipBrowser(QWidget):
         self._current_filter = "All"  # Current shot type filter
         self._current_color_filter = "All"  # Current color palette filter
         self._current_search_query = ""  # Current transcript search query
+        self._last_column_count = 0  # Track columns to detect changes on resize
 
         # Duration and aspect ratio filters
         self._min_duration: Optional[float] = None
@@ -608,6 +614,30 @@ class ClipBrowser(QWidget):
         self.empty_label.setAlignment(Qt.AlignCenter)
         self._empty_label_in_grid = False
         self._show_empty_state()  # Show initially since no clips
+
+    def _calculate_columns(self) -> int:
+        """Calculate number of columns that fit in the available width."""
+        if not hasattr(self, 'scroll'):
+            return self._MIN_COLUMNS
+        viewport_width = self.scroll.viewport().width()
+        if viewport_width <= 0:
+            return self._MIN_COLUMNS
+        card_width = UISizes.GRID_CARD_MAX_WIDTH
+        gutter = UISizes.GRID_GUTTER
+        margin = UISizes.GRID_MARGIN
+        available = viewport_width - 2 * margin
+        cols = max(self._MIN_COLUMNS, (available + gutter) // (card_width + gutter))
+        return cols
+
+    def resizeEvent(self, event):
+        """Recalculate grid columns when widget is resized."""
+        super().resizeEvent(event)
+        new_cols = self._calculate_columns()
+        if new_cols != self._last_column_count and self._last_column_count > 0:
+            self._last_column_count = new_cols
+            self._rebuild_grid()
+        else:
+            self._last_column_count = new_cols
 
     def _show_empty_state(self):
         """Show the empty state label in the grid."""
