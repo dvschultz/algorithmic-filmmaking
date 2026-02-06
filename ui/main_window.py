@@ -2714,7 +2714,7 @@ class MainWindow(QMainWindow):
         self.color_worker.progress.connect(self._on_color_progress)
         self.color_worker.color_ready.connect(self._on_color_ready)
         self.color_worker.analysis_completed.connect(
-            lambda: self._on_analysis_phase_worker_finished("colors"), Qt.UniqueConnection
+            self._on_pipeline_colors_finished, Qt.UniqueConnection
         )
         self.color_worker.finished.connect(self.color_worker.deleteLater)
         self.color_worker.finished.connect(lambda: setattr(self, 'color_worker', None))
@@ -2728,7 +2728,7 @@ class MainWindow(QMainWindow):
         self.shot_type_worker.progress.connect(self._on_shot_type_progress)
         self.shot_type_worker.shot_type_ready.connect(self._on_shot_type_ready)
         self.shot_type_worker.analysis_completed.connect(
-            lambda: self._on_analysis_phase_worker_finished("shots"), Qt.UniqueConnection
+            self._on_pipeline_shots_finished, Qt.UniqueConnection
         )
         self.shot_type_worker.finished.connect(self.shot_type_worker.deleteLater)
         self.shot_type_worker.finished.connect(lambda: setattr(self, 'shot_type_worker', None))
@@ -2742,7 +2742,7 @@ class MainWindow(QMainWindow):
         self.classification_worker.progress.connect(self._on_classification_progress)
         self.classification_worker.labels_ready.connect(self._on_classification_ready)
         self.classification_worker.classification_completed.connect(
-            lambda: self._on_analysis_phase_worker_finished("classify"), Qt.UniqueConnection
+            self._on_pipeline_classify_finished, Qt.UniqueConnection
         )
         self.classification_worker.finished.connect(self.classification_worker.deleteLater)
         self.classification_worker.finished.connect(lambda: setattr(self, 'classification_worker', None))
@@ -2756,7 +2756,7 @@ class MainWindow(QMainWindow):
         self.detection_worker_yolo.progress.connect(self._on_object_detection_progress)
         self.detection_worker_yolo.objects_ready.connect(self._on_objects_ready)
         self.detection_worker_yolo.detection_completed.connect(
-            lambda: self._on_analysis_phase_worker_finished("detect_objects"), Qt.UniqueConnection
+            self._on_pipeline_detect_objects_finished, Qt.UniqueConnection
         )
         self.detection_worker_yolo.finished.connect(self.detection_worker_yolo.deleteLater)
         self.detection_worker_yolo.finished.connect(lambda: setattr(self, 'detection_worker_yolo', None))
@@ -2795,7 +2795,7 @@ class MainWindow(QMainWindow):
         self.text_extraction_worker.progress.connect(self._on_text_extraction_progress)
         self.text_extraction_worker.clip_completed.connect(self._on_text_extraction_clip_ready)
         self.text_extraction_worker.finished.connect(
-            lambda results: self._on_analysis_phase_worker_finished("extract_text")
+            self._on_pipeline_extract_text_finished
         )
         self.text_extraction_worker.error.connect(self._on_text_extraction_error)
         self.text_extraction_worker.finished.connect(self.text_extraction_worker.deleteLater)
@@ -2899,7 +2899,7 @@ class MainWindow(QMainWindow):
         self.description_worker.description_ready.connect(self._on_description_ready)
         self.description_worker.error.connect(self._on_description_error)
         self.description_worker.description_completed.connect(
-            lambda: self._on_analysis_phase_worker_finished("describe"), Qt.UniqueConnection
+            self._on_pipeline_describe_finished, Qt.UniqueConnection
         )
         self.description_worker.finished.connect(self.description_worker.deleteLater)
         self.description_worker.finished.connect(lambda: setattr(self, 'description_worker', None))
@@ -2925,7 +2925,7 @@ class MainWindow(QMainWindow):
         self.cinematography_worker.progress.connect(self._on_cinematography_progress)
         self.cinematography_worker.clip_completed.connect(self._on_cinematography_clip_ready)
         self.cinematography_worker.finished.connect(
-            lambda results: self._on_analysis_phase_worker_finished("cinematography")
+            self._on_pipeline_cinematography_finished
         )
         self.cinematography_worker.error.connect(self._on_cinematography_error)
         self.cinematography_worker.finished.connect(self.cinematography_worker.deleteLater)
@@ -2933,6 +2933,36 @@ class MainWindow(QMainWindow):
             lambda results: setattr(self, 'cinematography_worker', None)
         )
         self.cinematography_worker.start()
+
+    # Named slots for pipeline phase completion (Qt.UniqueConnection requires
+    # pointer-to-member, not lambdas — lambdas silently fail to connect).
+    @Slot()
+    def _on_pipeline_colors_finished(self):
+        self._on_analysis_phase_worker_finished("colors")
+
+    @Slot()
+    def _on_pipeline_shots_finished(self):
+        self._on_analysis_phase_worker_finished("shots")
+
+    @Slot()
+    def _on_pipeline_classify_finished(self):
+        self._on_analysis_phase_worker_finished("classify")
+
+    @Slot()
+    def _on_pipeline_detect_objects_finished(self):
+        self._on_analysis_phase_worker_finished("detect_objects")
+
+    @Slot()
+    def _on_pipeline_extract_text_finished(self):
+        self._on_analysis_phase_worker_finished("extract_text")
+
+    @Slot()
+    def _on_pipeline_describe_finished(self):
+        self._on_analysis_phase_worker_finished("describe")
+
+    @Slot()
+    def _on_pipeline_cinematography_finished(self):
+        self._on_analysis_phase_worker_finished("cinematography")
 
     def _on_analysis_phase_worker_finished(self, op_key: str):
         """Handle completion of one worker in the analysis pipeline.
