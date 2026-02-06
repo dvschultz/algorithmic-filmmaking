@@ -45,9 +45,10 @@ class EmptyStateWidget(QWidget):
         """Paint a subtle gradient wash backdrop."""
         painter = QPainter(self)
         gradient = QLinearGradient(0, 0, self.width(), self.height())
-        gradient.setColorAt(0.0, QColor(99, 102, 241, 30))   # Very faint indigo
-        gradient.setColorAt(0.5, QColor(139, 92, 246, 20))    # Very faint violet
-        gradient.setColorAt(1.0, QColor(59, 130, 246, 25))    # Very faint blue
+        colors = theme().gradient.default_colors
+        gradient.setColorAt(0.0, QColor(*colors[0], 30))
+        gradient.setColorAt(0.5, QColor(*colors[1], 20))
+        gradient.setColorAt(1.0, QColor(*colors[2], 25))
         painter.fillRect(self.rect(), QBrush(gradient))
         painter.end()
         super().paintEvent(event)

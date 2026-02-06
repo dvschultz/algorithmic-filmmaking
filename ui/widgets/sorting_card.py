@@ -161,7 +161,7 @@ class SortingCard(QFrame):
         if not self._enabled:
             color = theme().text_muted
         elif self._selected:
-            color = theme().text_primary
+            color = theme().accent_blue
         else:
             color = theme().text_primary
 

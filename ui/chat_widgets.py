@@ -1142,7 +1142,6 @@ class PlanWidget(QFrame):
             }}
             QPushButton:hover {{
                 background-color: {t.accent_red};
-                opacity: 0.9;
             }}
         """)
         self.stop_btn.clicked.connect(self._on_stop)
@@ -1162,7 +1161,6 @@ class PlanWidget(QFrame):
             }}
             QPushButton:hover {{
                 background-color: {t.accent_orange};
-                opacity: 0.9;
             }}
         """)
         self.retry_btn.clicked.connect(self._on_retry)

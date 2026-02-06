@@ -4,7 +4,7 @@ from PySide6.QtWidgets import QWidget, QGridLayout, QVBoxLayout, QLabel
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QFont
 
-from ui.theme import theme, Spacing
+from ui.theme import theme, Spacing, TypeScale
 from ui.widgets.sorting_card import SortingCard
 
 
@@ -73,12 +73,12 @@ class SortingCardGrid(QWidget):
     def _setup_ui(self):
         """Set up the grid UI."""
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setContentsMargins(Spacing.XL, Spacing.XL, Spacing.XL, Spacing.XL)
 
         # Header
         header = QLabel("Choose a Sorting Method")
         header_font = QFont()
-        header_font.setPointSize(18)
+        header_font.setPointSize(TypeScale.XL)
         header_font.setBold(True)
         header.setFont(header_font)
         header.setAlignment(Qt.AlignCenter)
@@ -98,7 +98,7 @@ class SortingCardGrid(QWidget):
         # Grid container (centered)
         grid_container = QWidget()
         grid_layout = QGridLayout(grid_container)
-        grid_layout.setSpacing(20)
+        grid_layout.setSpacing(Spacing.XL)
         grid_layout.setContentsMargins(0, 0, 0, 0)
 
         # Create cards in grid layout (7 algorithms)

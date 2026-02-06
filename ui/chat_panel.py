@@ -232,7 +232,6 @@ class ChatPanel(QWidget):
             }}
             QPushButton:hover {{
                 background-color: {t.accent_red};
-                opacity: 0.9;
             }}
         """)
         self.cancel_button.clicked.connect(self._on_cancel_clicked)

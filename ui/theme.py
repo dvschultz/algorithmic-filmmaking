@@ -813,7 +813,12 @@ class Theme:
     # Convenience properties for direct color access
     def __getattr__(self, name: str):
         """Allow direct attribute access to colors, e.g., theme().text_secondary."""
-        return getattr(self.colors, name)
+        try:
+            return getattr(self.colors, name)
+        except AttributeError:
+            raise AttributeError(
+                f"ThemeColors has no attribute {name!r}"
+            ) from None
 
 
 def theme() -> Theme:

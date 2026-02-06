@@ -278,6 +278,7 @@ class ClipThumbnail(QFrame):
 
     def paintEvent(self, event):
         """Custom paint for gradient glow on selected/disabled cards."""
+        super().paintEvent(event)
         if self._show_glow or self.disabled:
             from PySide6.QtCore import QRectF
             painter = QPainter(self)
@@ -307,7 +308,6 @@ class ClipThumbnail(QFrame):
                     Radii.MD, 2,
                 )
             painter.end()
-        super().paintEvent(event)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
