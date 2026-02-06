@@ -3625,8 +3625,8 @@ def list_sorting_algorithms(project) -> dict:
     algorithms = [
         {
             "key": "color",
-            "name": "Color",
-            "description": "Sort clips by dominant color along the color wheel",
+            "name": "Chromatic Flow",
+            "description": "Arrange clips along a color gradient",
             "available": has_colors,
             "reason": None if has_colors else "Run color analysis on clips first",
             "parameters": [
@@ -3635,8 +3635,8 @@ def list_sorting_algorithms(project) -> dict:
         },
         {
             "key": "duration",
-            "name": "Duration",
-            "description": "Sort clips by length (shortest or longest first)",
+            "name": "Tempo Shift",
+            "description": "Order clips from shortest to longest (or reverse)",
             "available": True,
             "reason": None,
             "parameters": [
@@ -3645,8 +3645,8 @@ def list_sorting_algorithms(project) -> dict:
         },
         {
             "key": "shuffle",
-            "name": "Shuffle",
-            "description": "Randomize clip order with no repeating sources back-to-back",
+            "name": "Dice Roll",
+            "description": "Randomly shuffle clips into a new order",
             "available": True,
             "reason": None,
             "parameters": [
@@ -3655,8 +3655,8 @@ def list_sorting_algorithms(project) -> dict:
         },
         {
             "key": "sequential",
-            "name": "Sequential",
-            "description": "Keep clips in their original detection order",
+            "name": "Time Capsule",
+            "description": "Keep clips in their original order",
             "available": True,
             "reason": None,
             "parameters": []

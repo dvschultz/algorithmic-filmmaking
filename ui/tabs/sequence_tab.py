@@ -30,38 +30,38 @@ logger = logging.getLogger(__name__)
 # allow_duplicates: Whether the same clip can appear multiple times in the sequence
 ALGORITHM_CONFIG = {
     "color": {
-        "label": "Color",
-        "description": "Sort clips by dominant colors",
+        "label": "Chromatic Flow",
+        "description": "Arrange clips along a color gradient",
         "allow_duplicates": False,
     },
     "duration": {
-        "label": "Duration",
-        "description": "Sort clips by length",
+        "label": "Tempo Shift",
+        "description": "Order clips from shortest to longest (or reverse)",
         "allow_duplicates": False,
     },
     "shuffle": {
-        "label": "Shuffle",
-        "description": "Randomly shuffle clips",
+        "label": "Dice Roll",
+        "description": "Randomly shuffle clips into a new order",
         "allow_duplicates": False,
     },
     "sequential": {
-        "label": "Sequential",
-        "description": "Keep clips in original order",
+        "label": "Time Capsule",
+        "description": "Keep clips in their original order",
         "allow_duplicates": False,
     },
     "shot_type": {
-        "label": "Shot Type",
-        "description": "Sort clips by camera shot scale",
+        "label": "Focal Ladder",
+        "description": "Arrange clips by camera shot scale",
         "allow_duplicates": False,
     },
     "exquisite_corpus": {
         "label": "Exquisite Corpus",
-        "description": "Generate poem from on-screen text",
+        "description": "Generate a poem from on-screen text",
         "allow_duplicates": True,  # Poems may use the same clip multiple times
     },
     "storyteller": {
         "label": "Storyteller",
-        "description": "Create narrative from clip descriptions",
+        "description": "Create a narrative from clip descriptions",
         "allow_duplicates": False,
     },
 }
@@ -87,15 +87,31 @@ def get_algorithm_label(algorithm: str) -> str:
     """Get the display label for an algorithm.
 
     Args:
-        algorithm: Algorithm name (lowercase with underscores, e.g., 'shot_type')
+        algorithm: Algorithm key (lowercase with underscores, e.g., 'shot_type')
 
     Returns:
-        Display label (e.g., 'Shot Type')
+        Display label (e.g., 'Focal Ladder')
     """
     config = ALGORITHM_CONFIG.get(algorithm.lower())
     if config:
         return config["label"]
     return algorithm.replace("_", " ").title()
+
+
+# Reverse lookup: display label -> algorithm key
+_LABEL_TO_KEY = {cfg["label"]: key for key, cfg in ALGORITHM_CONFIG.items()}
+
+
+def get_algorithm_key(label: str) -> str:
+    """Get the algorithm key from a display label.
+
+    Args:
+        label: Display label (e.g., 'Chromatic Flow')
+
+    Returns:
+        Algorithm key (e.g., 'color')
+    """
+    return _LABEL_TO_KEY.get(label, label.lower().replace(" ", "_"))
 
 
 class SequenceTab(BaseTab):
@@ -223,8 +239,10 @@ class SequenceTab(BaseTab):
         layout.addWidget(label)
 
         self.algorithm_dropdown = QComboBox()
-        self.algorithm_dropdown.addItems(["Color", "Duration", "Shuffle", "Sequential", "Shot Type"])
-        self.algorithm_dropdown.setMinimumWidth(120)
+        # Populate with labels from non-dialog algorithms (exclude exquisite_corpus, storyteller)
+        _dropdown_keys = ["color", "duration", "shuffle", "sequential", "shot_type"]
+        self.algorithm_dropdown.addItems([get_algorithm_label(k) for k in _dropdown_keys])
+        self.algorithm_dropdown.setMinimumWidth(140)
         self.algorithm_dropdown.currentTextChanged.connect(self._on_algorithm_changed)
         layout.addWidget(self.algorithm_dropdown)
 
@@ -649,14 +667,14 @@ class SequenceTab(BaseTab):
 
     def _get_current_direction(self) -> str | None:
         """Get the current direction based on dropdown selection."""
-        algo = self.algorithm_dropdown.currentText().lower()
+        algo_key = get_algorithm_key(self.algorithm_dropdown.currentText())
         direction_text = self.direction_dropdown.currentText()
 
-        if algo == "duration":
+        if algo_key == "duration":
             if direction_text == "Longest First":
                 return "long_first"
             return "short_first"
-        elif algo == "color":
+        elif algo_key == "color":
             if direction_text == "Warm to Cool":
                 return "warm_to_cool"
             elif direction_text == "Cool to Warm":
@@ -671,20 +689,22 @@ class SequenceTab(BaseTab):
             return
 
         # Regenerate with current algorithm and new direction
-        algorithm = self.algorithm_dropdown.currentText()
-        self._regenerate_sequence(algorithm)
+        algo_key = get_algorithm_key(self.algorithm_dropdown.currentText())
+        self._regenerate_sequence(algo_key)
 
     @Slot(str)
-    def _on_algorithm_changed(self, algorithm: str):
+    def _on_algorithm_changed(self, label: str):
         """Handle algorithm dropdown change - regenerate in place."""
         if self._current_state != self.STATE_TIMELINE:
             return
 
+        algo_key = get_algorithm_key(label)
+
         # Update direction dropdown for this algorithm
-        self._update_direction_dropdown(algorithm)
+        self._update_direction_dropdown(algo_key)
 
         # Regenerate sequence
-        self._regenerate_sequence(algorithm)
+        self._regenerate_sequence(algo_key)
 
     def _regenerate_sequence(self, algorithm: str):
         """Regenerate the sequence with current timeline clips."""

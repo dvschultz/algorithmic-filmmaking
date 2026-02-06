@@ -12,38 +12,38 @@ from ui.widgets.sorting_card import SortingCard
 ALGORITHMS = {
     "color": (
         "🎨",
-        "Color",
-        "Sort clips by dominant color along the color wheel"
+        "Chromatic Flow",
+        "Arrange clips along a color gradient"
     ),
     "duration": (
         "⏱️",
-        "Duration",
-        "Sort clips by length (shortest or longest first)"
+        "Tempo Shift",
+        "Order clips from shortest to longest (or reverse)"
     ),
     "shuffle": (
         "🎲",
-        "Shuffle",
-        "Randomize clip order with no repeating sources"
+        "Dice Roll",
+        "Randomly shuffle clips into a new order"
     ),
     "sequential": (
         "📋",
-        "Sequential",
-        "Keep clips in their original detection order"
+        "Time Capsule",
+        "Keep clips in their original order"
     ),
     "shot_type": (
         "🎬",
-        "Shot Type",
-        "Arrange clips by camera framing (wide to close-up)"
+        "Focal Ladder",
+        "Arrange clips by camera shot scale"
     ),
     "exquisite_corpus": (
         "📝",
         "Exquisite Corpus",
-        "Create a poem from on-screen text"
+        "Generate a poem from on-screen text"
     ),
     "storyteller": (
         "📖",
         "Storyteller",
-        "Create narrative sequence from clip descriptions"
+        "Create a narrative from clip descriptions"
     ),
 }
 
