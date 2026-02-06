@@ -6,7 +6,8 @@ premium visual refresh.
 """
 
 from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QPainter, QColor, QBrush, QRadialGradient
+from PySide6.QtGui import QPainter, QColor, QBrush, QRadialGradient, QPainterPath
+from PySide6.QtWidgets import QLabel
 
 from ui.theme import Radii
 
@@ -80,3 +81,50 @@ def paint_card_body(
         painter.setPen(Qt.NoPen)
     painter.drawRoundedRect(rect, radius, radius)
     painter.restore()
+
+
+class RoundedTopLabel(QLabel):
+    """QLabel that clips its pixmap with rounded top corners.
+
+    Used for thumbnail images inside rounded cards so the image doesn't
+    poke out of the card's top corners.
+    """
+
+    def __init__(self, radius: int = Radii.MD, parent=None):
+        super().__init__(parent)
+        self._radius = radius
+
+    def paintEvent(self, event):
+        pixmap = self.pixmap()
+        if pixmap is None or pixmap.isNull():
+            super().paintEvent(event)
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        r = self._radius
+        rect = QRectF(self.rect())
+
+        # Build clip path: rounded top corners, square bottom corners
+        path = QPainterPath()
+        path.moveTo(rect.left(), rect.top() + r)
+        path.arcTo(rect.left(), rect.top(), r * 2, r * 2, 180, -90)
+        path.lineTo(rect.right() - r, rect.top())
+        path.arcTo(rect.right() - r * 2, rect.top(), r * 2, r * 2, 90, -90)
+        path.lineTo(rect.right(), rect.bottom())
+        path.lineTo(rect.left(), rect.bottom())
+        path.closeSubpath()
+
+        painter.setClipPath(path)
+
+        # Draw background first (visible when pixmap doesn't fill entirely)
+        painter.fillRect(rect, self.palette().window())
+
+        # Center the pixmap
+        px_rect = pixmap.rect()
+        x = (rect.width() - px_rect.width()) / 2
+        y = (rect.height() - px_rect.height()) / 2
+        painter.drawPixmap(int(x), int(y), pixmap)
+
+        painter.end()

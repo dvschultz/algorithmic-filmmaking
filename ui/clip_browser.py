@@ -32,7 +32,7 @@ from core.analysis.color import get_primary_hue, classify_color_palette, get_pal
 from core.analysis.shots import get_display_name, SHOT_TYPES
 from core.film_glossary import get_badge_tooltip
 from ui.theme import theme, UISizes, TypeScale, Spacing, Radii
-from ui.gradient_glow import paint_gradient_glow, paint_card_body
+from ui.gradient_glow import paint_gradient_glow, paint_card_body, RoundedTopLabel
 
 
 class ColorSwatchBar(QWidget):
@@ -113,8 +113,8 @@ class ClipThumbnail(QFrame):
         thumb_layout.setContentsMargins(0, 0, 0, 0)
         thumb_layout.setSpacing(0)
 
-        # Thumbnail image
-        self.thumbnail_label = QLabel(self.thumb_container)
+        # Thumbnail image (rounded top corners to match card radius)
+        self.thumbnail_label = RoundedTopLabel(Radii.MD, self.thumb_container)
         self.thumbnail_label.setFixedSize(220, 124)
         self.thumbnail_label.setAlignment(Qt.AlignCenter)
         self.thumbnail_label.setStyleSheet(f"background-color: {theme().thumbnail_background};")

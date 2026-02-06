@@ -151,7 +151,7 @@ class YouTubeResultThumbnail(QFrame):
         if isinstance(self.video, InternetArchiveVideo):
             ia_label = QLabel("IA")
             ia_label.setStyleSheet(
-                f"font-size: {TypeScale.XS}px; color: {theme().text_inverted}; "
+                f"font-size: {TypeScale.XS}px; color: {theme().badge_analyzed_text}; "
                 f"background-color: {theme().accent_green}; "
                 f"padding: 1px 3px; border-radius: {Radii.SM}px;"
             )

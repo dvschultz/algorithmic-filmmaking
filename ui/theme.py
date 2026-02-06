@@ -148,6 +148,7 @@ class ThemeColors:
     card_border: str             # Card border
     card_hover: str              # Card hover state
     badge_analyzed: str          # "Analyzed" badge
+    badge_analyzed_text: str     # Text on "Analyzed" badge (dark for contrast on green)
     badge_not_analyzed: str      # "Not Analyzed" badge
     shot_type_badge: str         # Shot type label background
     surface_highlight: str       # Highlighted surface (env override indicator)
@@ -217,7 +218,7 @@ DARK_THEME = ThemeColors(
     # Text — slightly warm white, not pure #ffffff
     text_primary="#e8eaf0",
     text_secondary="#8b92a8",
-    text_muted="#525a72",
+    text_muted="#6f7a9b",      # Lightened for WCAG AA (4.50:1 on primary)
     text_inverted="#ffffff",
 
     # Borders — subtle, blends with navy
@@ -252,12 +253,13 @@ DARK_THEME = ThemeColors(
     card_border="#2a3045",
     card_hover="#1c2030",
     badge_analyzed="#3ecf6e",
-    badge_not_analyzed="#525a72",
+    badge_analyzed_text="#0d0f14",  # Dark text on green (9.45:1)
+    badge_not_analyzed="#5e6880",   # Lightened for visibility on card_bg (3.18:1)
     shot_type_badge="#2a3045",
     surface_highlight="#1c2545",
 
     # Chat
-    chat_user_bubble="#5b8def",
+    chat_user_bubble="#3a6dd4",    # Darkened for white text contrast (4.86:1)
     chat_assistant_bubble="#1c2030",
     chat_user_text="#ffffff",
     chat_assistant_text="#e8eaf0",
@@ -290,7 +292,7 @@ LIGHT_THEME = ThemeColors(
     # Text
     text_primary="#1a1d28",
     text_secondary="#525a72",
-    text_muted="#8b92a8",
+    text_muted="#6d7384",          # Darkened for WCAG AA (4.58:1 on primary)
     text_inverted="#ffffff",
 
     # Borders
@@ -325,12 +327,13 @@ LIGHT_THEME = ThemeColors(
     card_border="#dde0e8",
     card_hover="#e4e8f0",
     badge_analyzed="#28a745",
-    badge_not_analyzed="#8b92a8",
+    badge_analyzed_text="#1a1d28",  # Dark text on green (5.36:1)
+    badge_not_analyzed="#6d7384",   # Darkened for visibility on card_bg (4.23:1)
     shot_type_badge="#525a72",
     surface_highlight="#e4e8f0",
 
     # Chat/Plan widget colors
-    chat_user_bubble="#5b8def",
+    chat_user_bubble="#3a6dd4",    # Darkened for white text contrast (4.86:1)
     chat_assistant_bubble="#e4e8f0",
     chat_user_text="#ffffff",
     chat_assistant_text="#1a1d28",

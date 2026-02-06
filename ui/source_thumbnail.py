@@ -12,6 +12,7 @@ from PySide6.QtGui import QPixmap, QKeyEvent
 
 from models.clip import Source
 from ui.theme import theme, UISizes, TypeScale, Spacing, Radii
+from ui.gradient_glow import RoundedTopLabel
 
 
 class SourceThumbnail(QFrame):
@@ -36,8 +37,8 @@ class SourceThumbnail(QFrame):
         layout.setContentsMargins(Spacing.XS, Spacing.XS, Spacing.XS, Spacing.XS)
         layout.setSpacing(Spacing.XS)
 
-        # Thumbnail image
-        self.thumbnail_label = QLabel()
+        # Thumbnail image (rounded top corners to match card radius)
+        self.thumbnail_label = RoundedTopLabel(Radii.MD)
         self.thumbnail_label.setFixedSize(220, 124)
         self.thumbnail_label.setAlignment(Qt.AlignCenter)
         self.thumbnail_label.setStyleSheet(f"background-color: {theme().thumbnail_background};")
@@ -104,7 +105,7 @@ class SourceThumbnail(QFrame):
         if self.source.analyzed:
             self.badge_label.setText("Analyzed")
             self.badge_label.setStyleSheet(
-                f"font-size: {TypeScale.XS}px; color: {theme().text_inverted}; background-color: {theme().badge_analyzed}; "
+                f"font-size: {TypeScale.XS}px; color: {theme().badge_analyzed_text}; background-color: {theme().badge_analyzed}; "
                 f"border-radius: {Radii.SM}px; padding: {Spacing.XXS}px {Spacing.SM}px;"
             )
         else:
