@@ -19,7 +19,7 @@ from PySide6.QtGui import QFont, QDragEnterEvent, QDropEvent, QPalette
 
 from models.clip import Source
 from ui.source_thumbnail import SourceThumbnail
-from ui.theme import theme, UISizes
+from ui.theme import theme, UISizes, TypeScale, Spacing, Radii
 
 
 def scan_folder_for_videos(folder_path: Path, extensions: set) -> list[Path]:
@@ -91,7 +91,7 @@ class AddVideoCard(QFrame):
         if dragging:
             self.setStyleSheet(f"""
                 AddVideoCard {{
-                    background-color: rgba(76, 175, 80, 0.1);
+                    background-color: {theme().surface_success};
                     border: 2px dashed {theme().accent_green};
                 }}
             """)
@@ -107,8 +107,8 @@ class AddVideoCard(QFrame):
                 }}
             """)
         self.icon_label.setStyleSheet(f"color: {theme().text_secondary};")
-        self.text_label.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {theme().text_secondary};")
-        self.sub_label.setStyleSheet(f"font-size: 10px; color: {theme().text_muted};")
+        self.text_label.setStyleSheet(f"font-size: {TypeScale.SM}px; font-weight: bold; color: {theme().text_secondary};")
+        self.sub_label.setStyleSheet(f"font-size: {TypeScale.XS}px; color: {theme().text_muted};")
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:

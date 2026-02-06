@@ -27,6 +27,7 @@ from ui.chat_widgets import (
     MessageBubble, StreamingBubble, ToolIndicator, ThinkingIndicator,
     ExamplePromptsWidget, PlanWidget
 )
+from ui.theme import theme, TypeScale, Spacing, Radii
 from core.settings import (
     get_anthropic_api_key,
     get_openai_api_key,
@@ -87,31 +88,32 @@ class ChatPanel(QWidget):
         # Header with provider selector
         header = QHBoxLayout()
         header_label = QLabel("Agent Chat")
-        header_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+        header_label.setStyleSheet(f"font-weight: bold; font-size: {TypeScale.MD}px;")
         header.addWidget(header_label)
         header.addStretch()
 
         # Header button style (shared)
-        header_button_style = """
-            QPushButton {
+        t = theme()
+        header_button_style = f"""
+            QPushButton {{
                 background-color: transparent;
-                border: 1px solid #d0d0d0;
-                border-radius: 4px;
-                padding: 4px 8px;
-                color: #666;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: #f0f0f0;
-                border-color: #999;
-            }
-            QPushButton:pressed {
-                background-color: #e0e0e0;
-            }
-            QPushButton:disabled {
-                color: #bbb;
-                border-color: #e0e0e0;
-            }
+                border: 1px solid {t.border_secondary};
+                border-radius: {Radii.SM}px;
+                padding: {Spacing.XS}px {Spacing.SM}px;
+                color: {t.text_secondary};
+                font-size: {TypeScale.SM}px;
+            }}
+            QPushButton:hover {{
+                background-color: {t.background_tertiary};
+                border-color: {t.text_muted};
+            }}
+            QPushButton:pressed {{
+                background-color: {t.background_elevated};
+            }}
+            QPushButton:disabled {{
+                color: {t.text_muted};
+                border-color: {t.border_secondary};
+            }}
         """
 
         # Export chat button
@@ -155,12 +157,12 @@ class ChatPanel(QWidget):
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.scroll_area.setStyleSheet("""
-            QScrollArea {
-                border: 1px solid #d0d0d0;
-                border-radius: 8px;
-                background-color: white;
-            }
+        self.scroll_area.setStyleSheet(f"""
+            QScrollArea {{
+                border: 1px solid {t.border_secondary};
+                border-radius: {Radii.LG}px;
+                background-color: {t.background_primary};
+            }}
         """)
 
         self.messages_widget = QWidget()
@@ -183,12 +185,14 @@ class ChatPanel(QWidget):
         self.input_field = QTextEdit()
         self.input_field.setPlaceholderText("Describe what you want to create...")
         self.input_field.setMaximumHeight(80)
-        self.input_field.setStyleSheet("""
-            QTextEdit {
-                border: 1px solid #d0d0d0;
-                border-radius: 8px;
-                padding: 8px;
-            }
+        self.input_field.setStyleSheet(f"""
+            QTextEdit {{
+                border: 1px solid {t.border_secondary};
+                border-radius: {Radii.LG}px;
+                padding: {Spacing.SM}px;
+                background-color: {t.background_primary};
+                color: {t.text_primary};
+            }}
         """)
         # Handle Enter key to send (Shift+Enter for newline)
         self.input_field.installEventFilter(self)
@@ -199,36 +203,37 @@ class ChatPanel(QWidget):
         button_layout.setSpacing(4)
 
         self.send_button = QPushButton("Send")
-        self.send_button.setStyleSheet("""
-            QPushButton {
-                background-color: #0084ff;
-                color: white;
+        self.send_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {t.accent_blue};
+                color: {t.text_inverted};
                 border: none;
-                border-radius: 4px;
-                padding: 8px 16px;
-            }
-            QPushButton:hover {
-                background-color: #0073e6;
-            }
-            QPushButton:disabled {
-                background-color: #b0b0b0;
-            }
+                border-radius: {Radii.SM}px;
+                padding: {Spacing.SM}px {Spacing.LG}px;
+            }}
+            QPushButton:hover {{
+                background-color: {t.accent_blue_hover};
+            }}
+            QPushButton:disabled {{
+                background-color: {t.text_muted};
+            }}
         """)
         self.send_button.clicked.connect(self._on_send_clicked)
         button_layout.addWidget(self.send_button)
 
         self.cancel_button = QPushButton("Cancel")
-        self.cancel_button.setStyleSheet("""
-            QPushButton {
-                background-color: #ff4444;
-                color: white;
+        self.cancel_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {t.accent_red};
+                color: {t.text_inverted};
                 border: none;
-                border-radius: 4px;
-                padding: 8px 16px;
-            }
-            QPushButton:hover {
-                background-color: #ff2222;
-            }
+                border-radius: {Radii.SM}px;
+                padding: {Spacing.SM}px {Spacing.LG}px;
+            }}
+            QPushButton:hover {{
+                background-color: {t.accent_red};
+                opacity: 0.9;
+            }}
         """)
         self.cancel_button.clicked.connect(self._on_cancel_clicked)
         self.cancel_button.setVisible(False)

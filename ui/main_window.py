@@ -59,7 +59,7 @@ from core.project import (
 from ui.project_adapter import ProjectSignalAdapter
 from ui.settings_dialog import SettingsDialog
 from ui.tabs import CollectTab, CutTab, AnalyzeTab, SequenceTab, RenderTab
-from ui.theme import theme
+from ui.theme import theme, Spacing
 from ui.chat_panel import ChatPanel
 from ui.chat_worker import ChatAgentWorker
 from ui.clip_details_sidebar import ClipDetailsSidebar
@@ -919,7 +919,7 @@ class MainWindow(QMainWindow):
 
         # Queue indicator (permanent widget on right side)
         self.queue_label = QLabel("")
-        self.queue_label.setStyleSheet(f"color: {theme().text_secondary}; padding-right: 10px;")
+        self.queue_label.setStyleSheet(f"color: {theme().text_secondary}; padding-right: {Spacing.MD}px;")
         self.queue_label.setVisible(False)
         self.status_bar.addPermanentWidget(self.queue_label)
 

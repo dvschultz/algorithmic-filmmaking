@@ -11,7 +11,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap, QKeyEvent
 
 from models.clip import Source
-from ui.theme import theme, UISizes
+from ui.theme import theme, UISizes, TypeScale, Spacing, Radii
 
 
 class SourceThumbnail(QFrame):
@@ -25,8 +25,7 @@ class SourceThumbnail(QFrame):
         self.source = source
         self.selected = False
 
-        self.setFrameStyle(QFrame.Panel | QFrame.Raised)
-        self.setLineWidth(2)
+        self.setFrameStyle(QFrame.NoFrame)
         self.setFixedSize(UISizes.GRID_CARD_MAX_WIDTH, 200)
         self.setCursor(Qt.PointingHandCursor)
         self.setFocusPolicy(Qt.StrongFocus)
@@ -34,8 +33,8 @@ class SourceThumbnail(QFrame):
         self.setAccessibleDescription(f"Video source: {source.filename}")
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(4)
+        layout.setContentsMargins(Spacing.XS, Spacing.XS, Spacing.XS, Spacing.XS)
+        layout.setSpacing(Spacing.XS)
 
         # Thumbnail image
         self.thumbnail_label = QLabel()
@@ -48,7 +47,7 @@ class SourceThumbnail(QFrame):
         else:
             self.thumbnail_label.setText("No Preview")
             self.thumbnail_label.setStyleSheet(
-                f"background-color: {theme().thumbnail_background}; color: {theme().text_muted}; font-size: 11px;"
+                f"background-color: {theme().thumbnail_background}; color: {theme().text_muted}; font-size: {TypeScale.SM}px;"
             )
 
         layout.addWidget(self.thumbnail_label)
@@ -56,7 +55,7 @@ class SourceThumbnail(QFrame):
         # Filename label
         self.filename_label = QLabel(source.filename)
         self.filename_label.setAlignment(Qt.AlignCenter)
-        self.filename_label.setStyleSheet(f"font-size: 11px; color: {theme().text_primary};")
+        self.filename_label.setStyleSheet(f"font-size: {TypeScale.SM}px; color: {theme().text_primary};")
         self.filename_label.setWordWrap(True)
         self.filename_label.setMaximumHeight(30)
         # Truncate long filenames
@@ -105,14 +104,14 @@ class SourceThumbnail(QFrame):
         if self.source.analyzed:
             self.badge_label.setText("Analyzed")
             self.badge_label.setStyleSheet(
-                f"font-size: 9px; color: {theme().text_inverted}; background-color: {theme().badge_analyzed}; "
-                "border-radius: 3px; padding: 1px 6px;"
+                f"font-size: {TypeScale.XS}px; color: {theme().text_inverted}; background-color: {theme().badge_analyzed}; "
+                f"border-radius: {Radii.SM}px; padding: {Spacing.XXS}px {Spacing.SM}px;"
             )
         else:
             self.badge_label.setText("Not Analyzed")
             self.badge_label.setStyleSheet(
-                f"font-size: 9px; color: {theme().text_inverted}; background-color: {theme().badge_not_analyzed}; "
-                "border-radius: 3px; padding: 1px 6px;"
+                f"font-size: {TypeScale.XS}px; color: {theme().text_inverted}; background-color: {theme().badge_not_analyzed}; "
+                f"border-radius: {Radii.SM}px; padding: {Spacing.XXS}px {Spacing.SM}px;"
             )
 
     def set_selected(self, selected: bool):
@@ -125,8 +124,9 @@ class SourceThumbnail(QFrame):
         if self.selected:
             self.setStyleSheet(f"""
                 SourceThumbnail {{
-                    background-color: {theme().accent_blue};
-                    border: 2px solid {theme().accent_blue_hover};
+                    background-color: {theme().card_background};
+                    border: 2px solid {theme().accent_blue};
+                    border-radius: {Radii.MD}px;
                 }}
             """)
         else:
@@ -134,10 +134,12 @@ class SourceThumbnail(QFrame):
                 SourceThumbnail {{
                     background-color: {theme().card_background};
                     border: 1px solid {theme().card_border};
+                    border-radius: {Radii.MD}px;
                 }}
                 SourceThumbnail:hover {{
                     background-color: {theme().card_hover};
                     border: 1px solid {theme().border_focus};
+                    border-radius: {Radii.MD}px;
                 }}
             """)
 
@@ -148,12 +150,12 @@ class SourceThumbnail(QFrame):
         # Update thumbnail background if no preview
         if not self.thumbnail_label.pixmap():
             self.thumbnail_label.setStyleSheet(
-                f"background-color: {theme().thumbnail_background}; color: {theme().text_muted}; font-size: 11px;"
+                f"background-color: {theme().thumbnail_background}; color: {theme().text_muted}; font-size: {TypeScale.SM}px;"
             )
         else:
             self.thumbnail_label.setStyleSheet(f"background-color: {theme().thumbnail_background};")
         # Update filename label
-        self.filename_label.setStyleSheet(f"font-size: 11px; color: {theme().text_primary};")
+        self.filename_label.setStyleSheet(f"font-size: {TypeScale.SM}px; color: {theme().text_primary};")
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -177,6 +179,7 @@ class SourceThumbnail(QFrame):
                 SourceThumbnail {{
                     background-color: {theme().card_hover};
                     border: 2px solid {theme().border_focus};
+                    border-radius: {Radii.MD}px;
                 }}
             """)
 

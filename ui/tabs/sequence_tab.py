@@ -21,7 +21,7 @@ from ui.video_player import VideoPlayer
 from ui.timeline import TimelineWidget
 from ui.widgets import SortingCardGrid, TimelinePreview
 from ui.dialogs import ExquisiteCorpusDialog, StorytellerDialog, MissingDescriptionsDialog
-from ui.theme import theme
+from ui.theme import theme, Spacing
 from core.remix import generate_sequence
 
 logger = logging.getLogger(__name__)
@@ -248,7 +248,7 @@ class SequenceTab(BaseTab):
 
         # Direction dropdown (visible for Duration and Color algorithms)
         self.direction_label = QLabel("Direction:")
-        self.direction_label.setStyleSheet(f"color: {theme().text_secondary}; border: none; margin-left: 16px;")
+        self.direction_label.setStyleSheet(f"color: {theme().text_secondary}; border: none; margin-left: {Spacing.LG}px;")
         layout.addWidget(self.direction_label)
 
         self.direction_dropdown = QComboBox()

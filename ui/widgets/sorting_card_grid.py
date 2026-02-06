@@ -4,7 +4,7 @@ from PySide6.QtWidgets import QWidget, QGridLayout, QVBoxLayout, QLabel
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QFont
 
-from ui.theme import theme
+from ui.theme import theme, Spacing
 from ui.widgets.sorting_card import SortingCard
 
 
@@ -82,14 +82,14 @@ class SortingCardGrid(QWidget):
         header_font.setBold(True)
         header.setFont(header_font)
         header.setAlignment(Qt.AlignCenter)
-        header.setStyleSheet(f"color: {theme().text_primary}; margin-bottom: 16px;")
+        header.setStyleSheet(f"color: {theme().text_primary}; margin-bottom: {Spacing.LG}px;")
         main_layout.addWidget(header)
         self._header = header
 
         # Subheader
         subheader = QLabel("Select how you want to arrange your clips")
         subheader.setAlignment(Qt.AlignCenter)
-        subheader.setStyleSheet(f"color: {theme().text_secondary}; margin-bottom: 24px;")
+        subheader.setStyleSheet(f"color: {theme().text_secondary}; margin-bottom: {Spacing.XL}px;")
         main_layout.addWidget(subheader)
         self._subheader = subheader
 
@@ -170,5 +170,5 @@ class SortingCardGrid(QWidget):
 
     def _refresh_theme(self):
         """Refresh styles when theme changes."""
-        self._header.setStyleSheet(f"color: {theme().text_primary}; margin-bottom: 16px;")
-        self._subheader.setStyleSheet(f"color: {theme().text_secondary}; margin-bottom: 24px;")
+        self._header.setStyleSheet(f"color: {theme().text_primary}; margin-bottom: {Spacing.LG}px;")
+        self._subheader.setStyleSheet(f"color: {theme().text_secondary}; margin-bottom: {Spacing.XL}px;")

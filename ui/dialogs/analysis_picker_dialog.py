@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 
-from ui.theme import theme
+from ui.theme import theme, TypeScale, Spacing
 from core.analysis_operations import (
     ANALYSIS_OPERATIONS,
     OPERATIONS_BY_KEY,
@@ -76,11 +76,11 @@ class AnalysisPickerDialog(QDialog):
 
         # Header
         title = QLabel("Analyze Clips")
-        title.setStyleSheet("font-size: 16px; font-weight: bold;")
+        title.setStyleSheet(f"font-size: {TypeScale.LG}px; font-weight: bold;")
         layout.addWidget(title)
 
         scope = QLabel(f"{self._clip_count} {self._scope_label}")
-        scope.setStyleSheet("color: gray; margin-bottom: 8px;")
+        scope.setStyleSheet(f"color: gray; margin-bottom: {Spacing.SM}px;")
         layout.addWidget(scope)
 
         # Phase groups
@@ -97,7 +97,7 @@ class AnalysisPickerDialog(QDialog):
 
             # Phase label
             phase_label = QLabel(self._PHASE_LABELS.get(phase, phase))
-            phase_label.setStyleSheet("font-weight: bold; color: gray; font-size: 11px;")
+            phase_label.setStyleSheet(f"font-weight: bold; color: gray; font-size: {TypeScale.SM}px;")
             layout.addWidget(phase_label)
 
             # Checkboxes for operations in this phase

@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QMenu,
 )
 from PySide6.QtCore import Qt, Signal, QMimeData, QPoint
-from PySide6.QtGui import QPixmap, QDrag, QPainter, QColor, QKeyEvent
+from PySide6.QtGui import QPixmap, QDrag, QPainter, QColor, QKeyEvent, QPainterPath
 
 from ui.widgets.range_slider import RangeSlider
 from ui.widgets.source_group_header import SourceGroupHeader
@@ -31,7 +31,8 @@ from models.cinematography import CinematographyAnalysis
 from core.analysis.color import get_primary_hue, classify_color_palette, get_palette_display_name, COLOR_PALETTES
 from core.analysis.shots import get_display_name, SHOT_TYPES
 from core.film_glossary import get_badge_tooltip
-from ui.theme import theme, UISizes
+from ui.theme import theme, UISizes, TypeScale, Spacing, Radii
+from ui.gradient_glow import paint_gradient_glow, paint_card_body
 
 
 class ColorSwatchBar(QWidget):
@@ -86,12 +87,14 @@ class ClipThumbnail(QFrame):
         self.clip = clip
         self.source = source
         self.selected = False
+        self.disabled = False
         self._drag_enabled = drag_enabled
         self._drag_start_pos = None
+        self._show_glow = False
+        self._glow_colors: list[tuple[int, int, int]] = []
 
-        self.setFrameStyle(QFrame.Panel | QFrame.Raised)
-        self.setLineWidth(2)
-        self.setFixedSize(UISizes.GRID_CARD_MAX_WIDTH, 230)  # 240px wide, includes cinematography badges
+        self.setFrameStyle(QFrame.NoFrame)
+        self.setFixedSize(UISizes.GRID_CARD_MAX_WIDTH, 230)
         self.setCursor(Qt.PointingHandCursor)
         self.setFocusPolicy(Qt.StrongFocus)
         clip_name = clip.name if clip.name else f"Clip {clip.id[:8]}"
@@ -127,11 +130,11 @@ class ClipThumbnail(QFrame):
         self.transcript_overlay.setAlignment(Qt.AlignCenter)
         self.transcript_overlay.setWordWrap(True)
         self.transcript_overlay.setStyleSheet(
-            "background-color: rgba(0, 0, 0, 0.85); "
+            f"background-color: {theme().overlay_dark}; "
             "color: white; "
-            "font-size: 10px; "
-            "padding: 6px; "
-            "border-radius: 0px;"
+            f"font-size: {TypeScale.XS}px; "
+            f"padding: {Spacing.SM}px; "
+            f"border-radius: {Radii.MD}px;"
         )
         self.transcript_overlay.setGeometry(0, 0, 220, 124)
         self.transcript_overlay.raise_()  # Ensure overlay is on top
@@ -155,7 +158,7 @@ class ClipThumbnail(QFrame):
         duration = clip.duration_seconds(source.fps)
         self.duration_label = QLabel(self._format_duration(duration))
         self.duration_label.setAlignment(Qt.AlignLeft)
-        self.duration_label.setStyleSheet(f"font-size: 11px; color: {theme().text_muted};")
+        self.duration_label.setStyleSheet(f"font-size: {TypeScale.SM}px; color: {theme().text_muted};")
         info_layout.addWidget(self.duration_label)
 
         info_layout.addStretch()
@@ -164,8 +167,8 @@ class ClipThumbnail(QFrame):
         self.shot_type_label = QLabel()
         self.shot_type_label.setAlignment(Qt.AlignRight)
         self.shot_type_label.setStyleSheet(
-            f"font-size: 10px; color: {theme().text_inverted}; background-color: {theme().shot_type_badge}; "
-            "border-radius: 3px; padding: 1px 4px;"
+            f"font-size: {TypeScale.XS}px; color: {theme().text_inverted}; background-color: {theme().shot_type_badge}; "
+            f"border-radius: {Radii.SM}px; padding: {Spacing.XXS}px {Spacing.XS}px;"
         )
         if clip.shot_type:
             self.shot_type_label.setText(get_display_name(clip.shot_type))
@@ -230,24 +233,75 @@ class ClipThumbnail(QFrame):
 
     def _update_style(self):
         """Update visual style based on state."""
-        if self.selected:
+        if self.disabled:
+            self._thumbnail_opacity.setOpacity(0.5)
+            self._show_glow = False
             self.setStyleSheet(f"""
                 ClipThumbnail {{
-                    background-color: {theme().accent_blue};
-                    border: 2px solid {theme().accent_blue_hover};
+                    background-color: transparent;
+                    border: none;
                 }}
             """)
+            self.update()
+            return
+
+        self._thumbnail_opacity.setOpacity(1.0)
+        if self.selected:
+            # Content-aware gradient glow for selected state
+            if self.clip and self.clip.dominant_colors:
+                self._glow_colors = self.clip.dominant_colors[:3]
+            else:
+                self._glow_colors = theme().gradient.default_colors
+            self._show_glow = True
+            self.setStyleSheet("ClipThumbnail { background-color: transparent; border: none; }")
         else:
+            self._show_glow = False
             self.setStyleSheet(f"""
                 ClipThumbnail {{
                     background-color: {theme().card_background};
                     border: 1px solid {theme().card_border};
+                    border-radius: {Radii.MD}px;
                 }}
                 ClipThumbnail:hover {{
                     background-color: {theme().card_hover};
                     border: 1px solid {theme().border_focus};
+                    border-radius: {Radii.MD}px;
                 }}
             """)
+        self.update()
+
+    def paintEvent(self, event):
+        """Custom paint for gradient glow on selected/disabled cards."""
+        if self._show_glow or self.disabled:
+            from PySide6.QtCore import QRectF
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.Antialiasing)
+            card_rect = QRectF(self.rect())
+            grad = theme().gradient
+
+            if self.disabled:
+                paint_card_body(
+                    painter, card_rect,
+                    QColor(theme().background_tertiary),
+                    QColor(theme().card_border),
+                    Radii.MD,
+                )
+            elif self._show_glow:
+                paint_gradient_glow(
+                    painter, card_rect,
+                    self._glow_colors,
+                    grad.active_opacity,
+                    grad.glow_spread,
+                    Radii.MD,
+                )
+                paint_card_body(
+                    painter, card_rect,
+                    QColor(theme().card_background),
+                    QColor(theme().accent_blue),
+                    Radii.MD, 2,
+                )
+            painter.end()
+        super().paintEvent(event)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -323,6 +377,7 @@ class ClipThumbnail(QFrame):
                 ClipThumbnail {{
                     background-color: {theme().card_hover};
                     border: 2px solid {theme().border_focus};
+                    border-radius: {Radii.MD}px;
                 }}
             """)
 
@@ -392,9 +447,9 @@ class ClipThumbnail(QFrame):
 
         # Create badge labels (max 4 badges to fit in width)
         badge_style = (
-            f"font-size: 9px; color: {theme().text_muted}; "
+            f"font-size: {TypeScale.XS}px; color: {theme().text_muted}; "
             f"background-color: {theme().card_border}; "
-            "border-radius: 2px; padding: 1px 3px;"
+            f"border-radius: {Radii.SM}px; padding: {Spacing.XXS}px {Spacing.XS}px;"
         )
 
         for key, display_text in badges[:4]:
@@ -442,12 +497,12 @@ class ClipThumbnail(QFrame):
         # Update thumbnail background
         self.thumbnail_label.setStyleSheet(f"background-color: {theme().thumbnail_background};")
         # Update duration label
-        self.duration_label.setStyleSheet(f"font-size: 11px; color: {theme().text_muted};")
+        self.duration_label.setStyleSheet(f"font-size: {TypeScale.SM}px; color: {theme().text_muted};")
         # Update shot type badge
         if self.clip.shot_type:
             self.shot_type_label.setStyleSheet(
-                f"font-size: 10px; color: {theme().text_inverted}; background-color: {theme().shot_type_badge}; "
-                "border-radius: 3px; padding: 1px 4px;"
+                f"font-size: {TypeScale.XS}px; color: {theme().text_inverted}; background-color: {theme().shot_type_badge}; "
+                f"border-radius: {Radii.SM}px; padding: {Spacing.XXS}px {Spacing.XS}px;"
             )
 
 
@@ -511,7 +566,7 @@ class ClipBrowser(QWidget):
         header_layout.setContentsMargins(8, 8, 8, 4)
 
         header_label = QLabel("Detected Scenes")
-        header_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+        header_label.setStyleSheet(f"font-weight: bold; font-size: {TypeScale.MD}px;")
         header_layout.addWidget(header_label)
 
         header_layout.addStretch()

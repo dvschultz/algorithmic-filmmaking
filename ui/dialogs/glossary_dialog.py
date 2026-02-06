@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 
-from ui.theme import theme, UISizes
+from ui.theme import theme, UISizes, TypeScale, Spacing, Radii
 from core.film_glossary import (
     FILM_GLOSSARY,
     GLOSSARY_CATEGORIES,
@@ -60,7 +60,7 @@ class GlossaryDialog(QDialog):
 
         # Header
         header_label = QLabel("Film Language Glossary")
-        header_label.setStyleSheet("font-size: 16px; font-weight: bold;")
+        header_label.setStyleSheet(f"font-size: {TypeScale.LG}px; font-weight: bold;")
         layout.addWidget(header_label)
 
         description = QLabel(
@@ -121,7 +121,7 @@ class GlossaryDialog(QDialog):
         list_layout.addWidget(self.term_list)
 
         self.result_count_label = QLabel("")
-        self.result_count_label.setStyleSheet(f"color: {theme().text_muted}; font-size: 11px;")
+        self.result_count_label.setStyleSheet(f"color: {theme().text_muted}; font-size: {TypeScale.SM}px;")
         list_layout.addWidget(self.result_count_label)
 
         splitter.addWidget(list_container)
@@ -131,7 +131,7 @@ class GlossaryDialog(QDialog):
         definition_container.setFrameStyle(QFrame.StyledPanel)
         definition_container.setStyleSheet(
             f"QFrame {{ background-color: {theme().background_secondary}; "
-            f"border: 1px solid {theme().border_secondary}; border-radius: 4px; }}"
+            f"border: 1px solid {theme().border_secondary}; border-radius: {Radii.SM}px; }}"
         )
         definition_layout = QVBoxLayout(definition_container)
         definition_layout.setContentsMargins(12, 12, 12, 12)
@@ -246,7 +246,7 @@ class GlossaryDialog(QDialog):
     def _refresh_theme(self):
         """Refresh styles when theme changes."""
         # Re-apply styles that depend on theme colors
-        self.result_count_label.setStyleSheet(f"color: {theme().text_muted}; font-size: 11px;")
+        self.result_count_label.setStyleSheet(f"color: {theme().text_muted}; font-size: {TypeScale.SM}px;")
 
         # If a term is selected, refresh its display
         current = self.term_list.currentItem()

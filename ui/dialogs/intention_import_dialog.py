@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QDragEnterEvent, QDropEvent
 
-from ui.theme import theme
+from ui.theme import theme, TypeScale, Spacing, Radii
 
 logger = logging.getLogger(__name__)
 
@@ -83,9 +83,9 @@ class DropZone(QFrame):
         if dragging:
             self.setStyleSheet(f"""
                 DropZone {{
-                    background-color: rgba(76, 175, 80, 0.1);
+                    background-color: {theme().surface_success};
                     border: 2px dashed {theme().accent_green};
-                    border-radius: 8px;
+                    border-radius: {Radii.MD}px;
                 }}
             """)
         else:
@@ -93,15 +93,15 @@ class DropZone(QFrame):
                 DropZone {{
                     background-color: {theme().card_background};
                     border: 2px dashed {theme().border_primary};
-                    border-radius: 8px;
+                    border-radius: {Radii.MD}px;
                 }}
                 DropZone:hover {{
                     background-color: {theme().card_hover};
                     border-color: {theme().border_focus};
                 }}
             """)
-        self.text_label.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {theme().text_secondary};")
-        self.sub_label.setStyleSheet(f"font-size: 11px; color: {theme().text_muted};")
+        self.text_label.setStyleSheet(f"font-size: {TypeScale.MD}px; font-weight: bold; color: {theme().text_secondary};")
+        self.sub_label.setStyleSheet(f"font-size: {TypeScale.SM}px; color: {theme().text_muted};")
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -510,15 +510,15 @@ class IntentionImportDialog(QDialog):
                 background-color: {theme().background_tertiary};
                 color: {theme().text_primary};
                 border: 1px solid {theme().border_primary};
-                border-radius: 4px;
-                padding: 8px;
+                border-radius: {Radii.SM}px;
+                padding: {Spacing.SM}px;
             }}
             QComboBox {{
                 background-color: {theme().background_tertiary};
                 color: {theme().text_primary};
                 border: 1px solid {theme().border_primary};
-                border-radius: 4px;
-                padding: 6px 12px;
+                border-radius: {Radii.SM}px;
+                padding: 6px {Spacing.MD}px;
                 min-height: 24px;
             }}
             QComboBox:hover {{
@@ -526,7 +526,7 @@ class IntentionImportDialog(QDialog):
             }}
             QComboBox::drop-down {{
                 border: none;
-                padding-right: 8px;
+                padding-right: {Spacing.SM}px;
             }}
             QComboBox QAbstractItemView {{
                 background-color: {theme().background_tertiary};
@@ -537,17 +537,17 @@ class IntentionImportDialog(QDialog):
                 background-color: {theme().background_tertiary};
                 color: {theme().text_primary};
                 border: 1px solid {theme().border_primary};
-                border-radius: 4px;
+                border-radius: {Radii.SM}px;
             }}
             QListWidget::item {{
-                padding: 4px;
+                padding: {Spacing.XS}px;
             }}
             QPushButton {{
                 background-color: {theme().background_tertiary};
                 color: {theme().text_primary};
                 border: 1px solid {theme().border_primary};
-                border-radius: 4px;
-                padding: 8px 16px;
+                border-radius: {Radii.SM}px;
+                padding: {Spacing.SM}px {Spacing.LG}px;
             }}
             QPushButton:hover {{
                 background-color: {theme().background_elevated};
@@ -559,7 +559,7 @@ class IntentionImportDialog(QDialog):
             QProgressBar {{
                 background-color: {theme().background_secondary};
                 border: 1px solid {theme().border_primary};
-                border-radius: 4px;
+                border-radius: {Radii.SM}px;
                 text-align: center;
             }}
             QProgressBar::chunk {{

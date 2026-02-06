@@ -5,7 +5,7 @@ from PySide6.QtGui import QFont
 from PySide6.QtCore import Qt
 
 from .base_tab import BaseTab
-from ui.theme import theme
+from ui.theme import theme, Spacing
 
 
 class GenerateTab(BaseTab):
@@ -35,7 +35,7 @@ class GenerateTab(BaseTab):
 
         # Description
         desc_label = QLabel("Algorithmic remix features will appear here.")
-        desc_label.setStyleSheet(f"color: {theme().text_muted}; margin-top: 10px;")
+        desc_label.setStyleSheet(f"color: {theme().text_muted}; margin-top: {Spacing.MD}px;")
         desc_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(desc_label)
 
@@ -48,7 +48,7 @@ Planned capabilities:
 • Color-based sequencing
         """
         features_label = QLabel(features_text.strip())
-        features_label.setStyleSheet(f"color: {theme().text_muted}; margin-top: 20px;")
+        features_label.setStyleSheet(f"color: {theme().text_muted}; margin-top: {Spacing.XL}px;")
         features_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(features_label)
 
