@@ -314,13 +314,24 @@ class AnalyzeTab(BaseTab):
             logger.warning(f"Removing {len(orphaned)} orphaned clips from Analyze tab")
             for clip_id in orphaned:
                 self._clip_ids.discard(clip_id)
-            # Rebuild ClipBrowser
+            # Rebuild ClipBrowser — also discard IDs that can't be resolved
+            # (_clips_by_id may be stale if set_lookups hasn't been called yet)
             self.clip_browser.clear()
+            unresolvable = []
             for clip_id in self._clip_ids:
                 clip = self._clips_by_id.get(clip_id)
                 source = self._sources_by_id.get(clip.source_id) if clip else None
                 if clip and source:
                     self.clip_browser.add_clip(clip, source)
+                else:
+                    unresolvable.append(clip_id)
+            for clip_id in unresolvable:
+                self._clip_ids.discard(clip_id)
+            if unresolvable:
+                logger.warning(
+                    f"Discarded {len(unresolvable)} unresolvable clip IDs "
+                    f"during orphan rebuild"
+                )
             self._update_ui_state()
             self.clips_changed.emit(self.get_clip_ids())
             return len(orphaned)
@@ -340,8 +351,15 @@ class AnalyzeTab(BaseTab):
         Returns:
             List of Clip objects (resolved from IDs)
         """
-        return [self._clips_by_id[cid] for cid in self._clip_ids
-                if cid in self._clips_by_id]
+        clips = [self._clips_by_id[cid] for cid in self._clip_ids
+                 if cid in self._clips_by_id]
+        if len(clips) != len(self._clip_ids):
+            unresolved = len(self._clip_ids) - len(clips)
+            logger.warning(
+                f"get_clips: {unresolved} of {len(self._clip_ids)} clip IDs "
+                f"could not be resolved (stale _clips_by_id reference?)"
+            )
+        return clips
 
     def update_clip_colors(self, clip_id: str, colors: list):
         """Update colors for a clip."""
