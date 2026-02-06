@@ -481,6 +481,11 @@ class Theme:
                 color: {c.text_primary};
             }}
 
+            /* Custom-painted widgets: transparent so QPainter gradient glow is visible */
+            SortingCard, ClipThumbnail, EmptyStateWidget {{
+                background-color: transparent;
+            }}
+
             /* Tab widget */
             QTabWidget::pane {{
                 background-color: {c.background_primary};
