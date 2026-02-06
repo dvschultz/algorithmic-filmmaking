@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget
 )
 
-from ui.theme import theme
+from ui.theme import theme, TypeScale, Spacing, Radii
 
 
 class MessageBubble(QFrame):
@@ -333,7 +333,7 @@ class ToolIndicator(QFrame):
 
         # Tool name and status
         self.name_label = QLabel(self._get_status_text())
-        self.name_label.setStyleSheet(f"color: {theme().text_secondary}; font-size: 12px;")
+        self.name_label.setStyleSheet(f"color: {theme().text_secondary}; font-size: {TypeScale.SM}px;")
         layout.addWidget(self.name_label)
 
         layout.addStretch()
@@ -357,7 +357,7 @@ class ToolIndicator(QFrame):
     def _on_theme_changed(self):
         """Handle theme changes."""
         self._apply_style()
-        self.name_label.setStyleSheet(f"color: {theme().text_secondary}; font-size: 12px;")
+        self.name_label.setStyleSheet(f"color: {theme().text_secondary}; font-size: {TypeScale.SM}px;")
 
     def _get_status_icon(self) -> str:
         """Get icon for current status."""
@@ -433,7 +433,7 @@ class ThinkingIndicator(QFrame):
 
         # Thinking text with animated dots
         self.label = QLabel("Thinking")
-        self.label.setStyleSheet(f"color: {theme().text_secondary}; font-size: 13px; font-style: italic;")
+        self.label.setStyleSheet(f"color: {theme().text_secondary}; font-size: {TypeScale.BASE}px; font-style: italic;")
         layout.addWidget(self.label)
         layout.addStretch()
 
@@ -455,7 +455,7 @@ class ThinkingIndicator(QFrame):
     def _on_theme_changed(self):
         """Handle theme changes."""
         self._apply_style()
-        self.label.setStyleSheet(f"color: {theme().text_secondary}; font-size: 13px; font-style: italic;")
+        self.label.setStyleSheet(f"color: {theme().text_secondary}; font-size: {TypeScale.BASE}px; font-style: italic;")
 
     def _animate(self):
         """Animate the thinking dots."""
@@ -623,7 +623,7 @@ class ExamplePromptsWidget(QWidget):
 
         # Header text
         self._header = QLabel("Try asking...")
-        self._header.setStyleSheet(f"color: {theme().text_secondary}; font-size: 14px; font-weight: 500;")
+        self._header.setStyleSheet(f"color: {theme().text_secondary}; font-size: {TypeScale.MD}px; font-weight: 500;")
         self._header.setAlignment(Qt.AlignCenter)
         layout.addWidget(self._header)
 
@@ -643,7 +643,7 @@ class ExamplePromptsWidget(QWidget):
 
     def _on_theme_changed(self):
         """Handle theme changes."""
-        self._header.setStyleSheet(f"color: {theme().text_secondary}; font-size: 14px; font-weight: 500;")
+        self._header.setStyleSheet(f"color: {theme().text_secondary}; font-size: {TypeScale.MD}px; font-weight: 500;")
         self._rebuild_prompt_buttons()
 
     def _rebuild_prompt_buttons(self):
@@ -673,7 +673,7 @@ class ExamplePromptsWidget(QWidget):
                     padding: 10px 16px;
                     color: {t.text_primary};
                     text-align: left;
-                    font-size: 13px;
+                    font-size: {TypeScale.BASE}px;
                 }}
                 QPushButton:hover {{
                     background-color: {t.background_elevated};
@@ -779,7 +779,7 @@ class PlanStepWidget(QFrame):
         self.status_icon = QLabel(self.STATUS_ICONS.get(self._status, "\u2610"))
         self.status_icon.setFixedWidth(20)
         self.status_icon.setAlignment(Qt.AlignTop)
-        self.status_icon.setStyleSheet("font-size: 14px;")
+        self.status_icon.setStyleSheet(f"font-size: {TypeScale.MD}px;")
         layout.addWidget(self.status_icon)
 
         t = theme()
@@ -825,7 +825,7 @@ class PlanStepWidget(QFrame):
                 background: transparent;
                 border: none;
                 color: {t.text_secondary};
-                font-size: 10px;
+                font-size: {TypeScale.XS}px;
             }}
             QPushButton:hover {{ color: {t.accent_blue}; }}
         """)
@@ -842,7 +842,7 @@ class PlanStepWidget(QFrame):
                 background: transparent;
                 border: none;
                 color: {t.text_secondary};
-                font-size: 10px;
+                font-size: {TypeScale.XS}px;
             }}
             QPushButton:hover {{ color: {t.accent_blue}; }}
         """)
@@ -859,7 +859,7 @@ class PlanStepWidget(QFrame):
                 background: transparent;
                 border: none;
                 color: {t.text_secondary};
-                font-size: 12px;
+                font-size: {TypeScale.SM}px;
             }}
             QPushButton:hover {{ color: {t.accent_red}; }}
         """)
@@ -881,7 +881,7 @@ class PlanStepWidget(QFrame):
                 background: transparent;
                 border: none;
                 color: {t.text_secondary};
-                font-size: 10px;
+                font-size: {TypeScale.XS}px;
             }}
             QPushButton:hover {{ color: {t.accent_blue}; }}
         """)
@@ -890,7 +890,7 @@ class PlanStepWidget(QFrame):
                 background: transparent;
                 border: none;
                 color: {t.text_secondary};
-                font-size: 10px;
+                font-size: {TypeScale.XS}px;
             }}
             QPushButton:hover {{ color: {t.accent_blue}; }}
         """)
@@ -899,7 +899,7 @@ class PlanStepWidget(QFrame):
                 background: transparent;
                 border: none;
                 color: {t.text_secondary};
-                font-size: 12px;
+                font-size: {TypeScale.SM}px;
             }}
             QPushButton:hover {{ color: {t.accent_red}; }}
         """)
@@ -976,13 +976,13 @@ class PlanStepWidget(QFrame):
         # Update icon color based on status
         t = theme()
         if status == "completed":
-            self.status_icon.setStyleSheet(f"font-size: 14px; color: {t.plan_completed_border};")
+            self.status_icon.setStyleSheet(f"font-size: {TypeScale.MD}px; color: {t.plan_completed_border};")
         elif status == "failed":
-            self.status_icon.setStyleSheet(f"font-size: 14px; color: {t.plan_failed_border};")
+            self.status_icon.setStyleSheet(f"font-size: {TypeScale.MD}px; color: {t.plan_failed_border};")
         elif status == "running":
-            self.status_icon.setStyleSheet(f"font-size: 14px; color: {t.plan_running_border};")
+            self.status_icon.setStyleSheet(f"font-size: {TypeScale.MD}px; color: {t.plan_running_border};")
         else:
-            self.status_icon.setStyleSheet("font-size: 14px;")
+            self.status_icon.setStyleSheet(f"font-size: {TypeScale.MD}px;")
 
         # Hide controls for non-pending steps (gives text more room)
         editable = status == "pending"
@@ -1048,11 +1048,11 @@ class PlanWidget(QFrame):
         # Header
         header_layout = QHBoxLayout()
         header_icon = QLabel("\U0001f4cb")  # 📋 clipboard
-        header_icon.setStyleSheet("font-size: 18px;")
+        header_icon.setStyleSheet(f"font-size: {TypeScale.XL}px;")
         header_layout.addWidget(header_icon)
 
         self._header_text = QLabel(f"Plan: {self._plan.summary}")
-        self._header_text.setStyleSheet(f"font-weight: bold; font-size: 14px; color: {t.text_primary};")
+        self._header_text.setStyleSheet(f"font-weight: bold; font-size: {TypeScale.MD}px; color: {t.text_primary};")
         self._header_text.setWordWrap(True)
         header_layout.addWidget(self._header_text, 1)
 
@@ -1142,7 +1142,6 @@ class PlanWidget(QFrame):
             }}
             QPushButton:hover {{
                 background-color: {t.accent_red};
-                opacity: 0.9;
             }}
         """)
         self.stop_btn.clicked.connect(self._on_stop)
@@ -1162,7 +1161,6 @@ class PlanWidget(QFrame):
             }}
             QPushButton:hover {{
                 background-color: {t.accent_orange};
-                opacity: 0.9;
             }}
         """)
         self.retry_btn.clicked.connect(self._on_retry)
@@ -1187,7 +1185,7 @@ class PlanWidget(QFrame):
                 border-radius: 12px;
             }}
         """)
-        self._header_text.setStyleSheet(f"font-weight: bold; font-size: 14px; color: {t.text_primary};")
+        self._header_text.setStyleSheet(f"font-weight: bold; font-size: {TypeScale.MD}px; color: {t.text_primary};")
         self._separator1.setStyleSheet(f"background-color: {t.border_secondary};")
         self._separator2.setStyleSheet(f"background-color: {t.border_secondary};")
         # Button styles would need to be refreshed too but they're less critical

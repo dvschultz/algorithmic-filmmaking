@@ -17,7 +17,7 @@ from .base_tab import BaseTab
 from models.clip import Source
 from ui.source_browser import SourceBrowser
 from ui.youtube_search_panel import YouTubeSearchPanel
-from ui.theme import theme
+from ui.theme import theme, TypeScale
 
 
 class CollectTab(BaseTab):
@@ -64,7 +64,7 @@ class CollectTab(BaseTab):
 
         # Title
         title = QLabel("Video Library")
-        title.setStyleSheet("font-weight: bold; font-size: 14px;")
+        title.setStyleSheet(f"font-weight: bold; font-size: {TypeScale.MD}px;")
         toolbar.addWidget(title)
 
         toolbar.addSpacing(16)

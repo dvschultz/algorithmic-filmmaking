@@ -14,6 +14,7 @@ from PySide6.QtCore import Signal, Qt
 
 from .base_tab import BaseTab
 from ui.widgets import EmptyStateWidget
+from ui.theme import TypeScale, Spacing
 
 
 class RenderTab(BaseTab):
@@ -137,12 +138,12 @@ class RenderTab(BaseTab):
 
         # Export sequence button
         self.export_sequence_btn = QPushButton("Export Sequence")
-        self.export_sequence_btn.setStyleSheet("""
-            QPushButton {
-                padding: 12px 24px;
-                font-size: 14px;
+        self.export_sequence_btn.setStyleSheet(f"""
+            QPushButton {{
+                padding: {Spacing.MD}px {Spacing.XL}px;
+                font-size: {TypeScale.MD}px;
                 font-weight: bold;
-            }
+            }}
         """)
         self.export_sequence_btn.clicked.connect(self._on_export_sequence_click)
         btn_layout = QHBoxLayout()

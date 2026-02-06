@@ -16,7 +16,7 @@ from PySide6.QtCore import Qt, QUrl, Slot, Signal
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QVideoWidget
 
-from ui.theme import theme
+from ui.theme import theme, TypeScale, Spacing
 
 
 class VideoPlayer(QWidget):
@@ -43,7 +43,7 @@ class VideoPlayer(QWidget):
 
         # Header
         header = QLabel("Preview")
-        header.setStyleSheet("font-weight: bold; font-size: 14px; padding: 8px;")
+        header.setStyleSheet(f"font-weight: bold; font-size: {TypeScale.MD}px; padding: {Spacing.SM}px;")
         layout.addWidget(header)
 
         # Video widget (always black background for video)

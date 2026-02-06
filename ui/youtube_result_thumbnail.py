@@ -14,7 +14,7 @@ from PySide6.QtCore import Qt, Signal, Slot, QUrl
 from PySide6.QtGui import QPixmap, QCloseEvent
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 
-from ui.theme import theme, UISizes
+from ui.theme import theme, UISizes, TypeScale, Spacing, Radii
 from core.youtube_api import YouTubeVideo
 from core.internet_archive_api import InternetArchiveVideo
 
@@ -35,7 +35,7 @@ class YouTubeResultThumbnail(QFrame):
         self._pending_reply: Optional[QNetworkReply] = None
 
         self.setFixedSize(UISizes.GRID_CARD_MAX_WIDTH, 186)
-        self.setFrameStyle(QFrame.Panel | QFrame.Raised)
+        self.setFrameStyle(QFrame.NoFrame)
         self.setCursor(Qt.PointingHandCursor)
 
         self._setup_ui()
@@ -71,9 +71,9 @@ class YouTubeResultThumbnail(QFrame):
         self.duration_label = QLabel(thumb_container)
         self.duration_label.setAlignment(Qt.AlignCenter)
         self.duration_label.setStyleSheet(
-            "background-color: rgba(0, 0, 0, 0.8); "
-            "color: white; font-size: 10px; padding: 2px 4px; "
-            "border-radius: 2px;"
+            f"background-color: {theme().overlay_dark}; "
+            f"color: white; font-size: {TypeScale.XS}px; padding: {Spacing.XXS}px {Spacing.XS}px; "
+            f"border-radius: {Radii.SM}px;"
         )
         if self.video.duration_str:
             self.duration_label.setText(self.video.duration_str)
@@ -90,8 +90,8 @@ class YouTubeResultThumbnail(QFrame):
         self.resolution_label.setAlignment(Qt.AlignCenter)
         self.resolution_label.setStyleSheet(
             f"background-color: {theme().accent_purple}; "
-            "color: white; font-size: 9px; font-weight: bold; padding: 2px 4px; "
-            "border-radius: 2px;"
+            f"color: white; font-size: {TypeScale.XS}px; font-weight: bold; padding: {Spacing.XXS}px {Spacing.XS}px; "
+            f"border-radius: {Radii.SM}px;"
         )
         self.resolution_label.hide()  # Hidden until metadata is fetched
         self.resolution_label.raise_()
@@ -107,7 +107,7 @@ class YouTubeResultThumbnail(QFrame):
         self.title_label.setText(elided)
         self.title_label.setToolTip(self.video.title)
         self.title_label.setStyleSheet(
-            f"font-size: 10px; color: {theme().text_primary};"
+            f"font-size: {TypeScale.XS}px; color: {theme().text_primary};"
         )
         layout.addWidget(self.title_label)
 
@@ -121,7 +121,7 @@ class YouTubeResultThumbnail(QFrame):
             if self.video.view_count:
                 views_text = self._format_view_count(self.video.view_count)
                 views_label = QLabel(views_text)
-                views_label.setStyleSheet(f"font-size: 9px; color: {theme().text_muted};")
+                views_label.setStyleSheet(f"font-size: {TypeScale.XS}px; color: {theme().text_muted};")
                 meta_layout.addWidget(views_label)
         elif isinstance(self.video, InternetArchiveVideo):
             # Show creator or date for IA videos
@@ -131,7 +131,7 @@ class YouTubeResultThumbnail(QFrame):
                 if len(meta_text) > 30:
                     meta_text = meta_text[:27] + "..."
                 meta_label = QLabel(meta_text)
-                meta_label.setStyleSheet(f"font-size: 9px; color: {theme().text_muted};")
+                meta_label.setStyleSheet(f"font-size: {TypeScale.XS}px; color: {theme().text_muted};")
                 meta_label.setToolTip(self.video.creator or self.video.date or "")
                 meta_layout.addWidget(meta_label)
 
@@ -141,9 +141,9 @@ class YouTubeResultThumbnail(QFrame):
         if isinstance(self.video, YouTubeVideo) and getattr(self.video, "definition", None) == "hd":
             hd_label = QLabel("HD")
             hd_label.setStyleSheet(
-                f"font-size: 9px; color: {theme().text_inverted}; "
+                f"font-size: {TypeScale.XS}px; color: {theme().text_inverted}; "
                 f"background-color: {theme().accent_blue}; "
-                "padding: 1px 3px; border-radius: 2px;"
+                f"padding: 1px 3px; border-radius: {Radii.SM}px;"
             )
             meta_layout.addWidget(hd_label)
 
@@ -151,9 +151,9 @@ class YouTubeResultThumbnail(QFrame):
         if isinstance(self.video, InternetArchiveVideo):
             ia_label = QLabel("IA")
             ia_label.setStyleSheet(
-                f"font-size: 9px; color: {theme().text_inverted}; "
+                f"font-size: {TypeScale.XS}px; color: {theme().badge_analyzed_text}; "
                 f"background-color: {theme().accent_green}; "
-                "padding: 1px 3px; border-radius: 2px;"
+                f"padding: 1px 3px; border-radius: {Radii.SM}px;"
             )
             ia_label.setToolTip("Internet Archive")
             meta_layout.addWidget(ia_label)

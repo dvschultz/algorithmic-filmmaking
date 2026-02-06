@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from models.clip import Clip, Source
-from ui.theme import theme
+from ui.theme import theme, TypeScale
 from ui.video_player import VideoPlayer
 from ui.widgets.editable_label import EditableLabel
 from ui.widgets.editable_text_area import EditableTextArea
@@ -250,7 +250,7 @@ class ClipDetailsSidebar(QDockWidget):
     def _apply_section_header_style(self, label: QLabel):
         """Apply section header styling."""
         label.setStyleSheet(f"""
-            font-size: 12px;
+            font-size: {TypeScale.SM}px;
             font-weight: bold;
             color: {theme().text_muted};
             text-transform: uppercase;
@@ -263,7 +263,7 @@ class ClipDetailsSidebar(QDockWidget):
 
     def _apply_muted_style(self, label: QLabel):
         """Apply muted text styling."""
-        label.setStyleSheet(f"color: {theme().text_muted}; font-size: 12px;")
+        label.setStyleSheet(f"color: {theme().text_muted}; font-size: {TypeScale.SM}px;")
 
     @Slot()
     def _refresh_theme(self):

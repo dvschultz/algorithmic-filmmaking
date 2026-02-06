@@ -4,7 +4,7 @@ from PySide6.QtWidgets import QWidget, QGridLayout, QVBoxLayout, QLabel
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QFont
 
-from ui.theme import theme
+from ui.theme import theme, Spacing, TypeScale
 from ui.widgets.sorting_card import SortingCard
 
 
@@ -12,38 +12,38 @@ from ui.widgets.sorting_card import SortingCard
 ALGORITHMS = {
     "color": (
         "🎨",
-        "Color",
-        "Sort clips by dominant color along the color wheel"
+        "Chromatic Flow",
+        "Arrange clips along a color gradient"
     ),
     "duration": (
         "⏱️",
-        "Duration",
-        "Sort clips by length (shortest or longest first)"
+        "Tempo Shift",
+        "Order clips from shortest to longest (or reverse)"
     ),
     "shuffle": (
         "🎲",
-        "Shuffle",
-        "Randomize clip order with no repeating sources"
+        "Dice Roll",
+        "Randomly shuffle clips into a new order"
     ),
     "sequential": (
         "📋",
-        "Sequential",
-        "Keep clips in their original detection order"
+        "Time Capsule",
+        "Keep clips in their original order"
     ),
     "shot_type": (
         "🎬",
-        "Shot Type",
-        "Arrange clips by camera framing (wide to close-up)"
+        "Focal Ladder",
+        "Arrange clips by camera shot scale"
     ),
     "exquisite_corpus": (
         "📝",
         "Exquisite Corpus",
-        "Create a poem from on-screen text"
+        "Generate a poem from on-screen text"
     ),
     "storyteller": (
         "📖",
         "Storyteller",
-        "Create narrative sequence from clip descriptions"
+        "Create a narrative from clip descriptions"
     ),
 }
 
@@ -73,23 +73,23 @@ class SortingCardGrid(QWidget):
     def _setup_ui(self):
         """Set up the grid UI."""
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setContentsMargins(Spacing.XL, Spacing.XL, Spacing.XL, Spacing.XL)
 
         # Header
         header = QLabel("Choose a Sorting Method")
         header_font = QFont()
-        header_font.setPointSize(18)
+        header_font.setPointSize(TypeScale.XL)
         header_font.setBold(True)
         header.setFont(header_font)
         header.setAlignment(Qt.AlignCenter)
-        header.setStyleSheet(f"color: {theme().text_primary}; margin-bottom: 16px;")
+        header.setStyleSheet(f"color: {theme().text_primary}; margin-bottom: {Spacing.LG}px;")
         main_layout.addWidget(header)
         self._header = header
 
         # Subheader
         subheader = QLabel("Select how you want to arrange your clips")
         subheader.setAlignment(Qt.AlignCenter)
-        subheader.setStyleSheet(f"color: {theme().text_secondary}; margin-bottom: 24px;")
+        subheader.setStyleSheet(f"color: {theme().text_secondary}; margin-bottom: {Spacing.XL}px;")
         main_layout.addWidget(subheader)
         self._subheader = subheader
 
@@ -98,7 +98,7 @@ class SortingCardGrid(QWidget):
         # Grid container (centered)
         grid_container = QWidget()
         grid_layout = QGridLayout(grid_container)
-        grid_layout.setSpacing(20)
+        grid_layout.setSpacing(Spacing.XL)
         grid_layout.setContentsMargins(0, 0, 0, 0)
 
         # Create cards in grid layout (7 algorithms)
@@ -170,5 +170,5 @@ class SortingCardGrid(QWidget):
 
     def _refresh_theme(self):
         """Refresh styles when theme changes."""
-        self._header.setStyleSheet(f"color: {theme().text_primary}; margin-bottom: 16px;")
-        self._subheader.setStyleSheet(f"color: {theme().text_secondary}; margin-bottom: 24px;")
+        self._header.setStyleSheet(f"color: {theme().text_primary}; margin-bottom: {Spacing.LG}px;")
+        self._subheader.setStyleSheet(f"color: {theme().text_secondary}; margin-bottom: {Spacing.XL}px;")
