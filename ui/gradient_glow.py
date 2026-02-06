@@ -103,8 +103,8 @@ class RoundedTopLabel(QLabel):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
 
-        r = self._radius
         rect = QRectF(self.rect())
+        r = min(self._radius, rect.width() / 2, rect.height() / 2)
 
         # Build clip path: rounded top corners, square bottom corners
         path = QPainterPath()

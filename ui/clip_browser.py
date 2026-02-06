@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QMenu,
+    QGraphicsOpacityEffect,
 )
 from PySide6.QtCore import Qt, Signal, QMimeData, QPoint
 from PySide6.QtGui import QPixmap, QDrag, QPainter, QColor, QKeyEvent, QPainterPath
@@ -118,6 +119,11 @@ class ClipThumbnail(QFrame):
         self.thumbnail_label.setFixedSize(220, 124)
         self.thumbnail_label.setAlignment(Qt.AlignCenter)
         self.thumbnail_label.setStyleSheet(f"background-color: {theme().thumbnail_background};")
+
+        # Opacity effect for disabled state dimming
+        self._thumbnail_opacity = QGraphicsOpacityEffect(self.thumbnail_label)
+        self._thumbnail_opacity.setOpacity(1.0)
+        self.thumbnail_label.setGraphicsEffect(self._thumbnail_opacity)
 
         if clip.thumbnail_path and clip.thumbnail_path.exists():
             self._load_thumbnail(clip.thumbnail_path)
