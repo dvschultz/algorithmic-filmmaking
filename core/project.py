@@ -12,12 +12,13 @@ from typing import Any, Callable, Optional
 import uuid
 
 from models.clip import Source, Clip
+from models.frame import Frame
 from models.sequence import Sequence
 
 logger = logging.getLogger(__name__)
 
 # Current project file schema version
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"
 
 
 class ProjectError(Exception):
@@ -80,6 +81,7 @@ def save_project(
     ui_state: Optional[dict] = None,
     metadata: Optional[ProjectMetadata] = None,
     progress_callback: Optional[Callable[[float, str], None]] = None,
+    frames: Optional[list[Frame]] = None,
 ) -> bool:
     """Save project to JSON file with relative paths.
 
@@ -91,6 +93,7 @@ def save_project(
         ui_state: Optional UI state dict (sensitivity, etc.)
         metadata: Optional ProjectMetadata (created if not provided)
         progress_callback: Optional callback(progress, message)
+        frames: Optional list of Frame objects
 
     Returns:
         True if save succeeded, False otherwise
@@ -133,6 +136,13 @@ def save_project(
         project_data["sequence"] = sequence.to_dict()
     else:
         project_data["sequence"] = None
+
+    # Serialize frames
+    if frames:
+        project_data["frames"] = [
+            frame.to_dict(base_path=base_path)
+            for frame in frames
+        ]
 
     # Add UI state
     if ui_state:
@@ -233,6 +243,20 @@ def _validate_project_structure(data: dict) -> list[str]:
         if "source_id" not in clip:
             errors.append(f"clips[{i}] missing required field: source_id")
 
+    # Frames must be a list (optional - not present in old projects)
+    if "frames" in data and not isinstance(data["frames"], list):
+        errors.append("Field 'frames' must be a list")
+
+    # Validate frame entries have required fields
+    for i, frame in enumerate(data.get("frames", [])):
+        if not isinstance(frame, dict):
+            errors.append(f"frames[{i}] must be an object")
+            continue
+        if "id" not in frame:
+            errors.append(f"frames[{i}] missing required field: id")
+        if "file_path" not in frame:
+            errors.append(f"frames[{i}] missing required field: file_path")
+
     return errors
 
 
@@ -240,7 +264,7 @@ def load_project(
     filepath: Path,
     progress_callback: Optional[Callable[[float, str], None]] = None,
     missing_source_callback: Optional[Callable[[Path, str], Optional[Path]]] = None,
-) -> tuple[list[Source], list[Clip], Optional[Sequence], ProjectMetadata, dict]:
+) -> tuple[list[Source], list[Clip], Optional[Sequence], ProjectMetadata, dict, list[Frame]]:
     """Load project from JSON file, resolving paths and validating sources.
 
     Args:
@@ -250,7 +274,7 @@ def load_project(
             Called when a source video is not found. Return new path to remap, or None to skip.
 
     Returns:
-        Tuple of (sources, clips, sequence, metadata, ui_state)
+        Tuple of (sources, clips, sequence, metadata, ui_state, frames)
 
     Raises:
         ProjectLoadError: If the project file cannot be loaded
@@ -367,14 +391,23 @@ def load_project(
             for invalid_clip in invalid_clips:
                 track.clips.remove(invalid_clip)
 
+    # Load frames (optional - not present in old projects)
+    frames = []
+    for frame_data in data.get("frames", []):
+        frame = Frame.from_dict(frame_data, base_path=base_path)
+        frames.append(frame)
+
     # Load UI state
     ui_state = data.get("ui_state", {})
 
     if progress_callback:
-        progress_callback(1.0, f"Loaded {len(clips)} clips")
+        progress_callback(1.0, f"Loaded {len(clips)} clips, {len(frames)} frames")
 
-    logger.info(f"Project loaded from {filepath}: {len(sources)} sources, {len(clips)} clips")
-    return sources, clips, sequence, metadata, ui_state
+    logger.info(
+        f"Project loaded from {filepath}: "
+        f"{len(sources)} sources, {len(clips)} clips, {len(frames)} frames"
+    )
+    return sources, clips, sequence, metadata, ui_state, frames
 
 
 def get_project_name_from_path(filepath: Path) -> str:
@@ -402,6 +435,7 @@ class Project:
         clips: Optional[list[Clip]] = None,
         sequence: Optional[Sequence] = None,
         ui_state: Optional[dict] = None,
+        frames: Optional[list[Frame]] = None,
     ):
         """Initialize a Project.
 
@@ -412,11 +446,13 @@ class Project:
             clips: List of detected clips
             sequence: Timeline sequence
             ui_state: Optional UI state dict
+            frames: List of extracted/imported frames
         """
         self.path = path
         self.metadata = metadata or ProjectMetadata()
         self._sources = sources or []
         self._clips = clips or []
+        self._frames: list[Frame] = frames or []
         self.sequence = sequence
         self.ui_state = ui_state or {}
 
@@ -434,6 +470,11 @@ class Project:
     def clips(self) -> list[Clip]:
         """All clips from all analyzed sources."""
         return self._clips
+
+    @property
+    def frames(self) -> list[Frame]:
+        """All frames (extracted and imported)."""
+        return self._frames
 
     # --- Cached property indexes ---
 
@@ -455,9 +496,35 @@ class Project:
             result.setdefault(clip.source_id, []).append(clip)
         return result
 
+    @cached_property
+    def frames_by_id(self) -> dict[str, Frame]:
+        """Frame lookup by ID."""
+        return {f.id: f for f in self._frames}
+
+    @cached_property
+    def frames_by_source(self) -> dict[str, list[Frame]]:
+        """Frames organized by source ID."""
+        result: dict[str, list[Frame]] = {}
+        for frame in self._frames:
+            if frame.source_id:
+                result.setdefault(frame.source_id, []).append(frame)
+        return result
+
+    @cached_property
+    def frames_by_clip(self) -> dict[str, list[Frame]]:
+        """Frames organized by clip ID."""
+        result: dict[str, list[Frame]] = {}
+        for frame in self._frames:
+            if frame.clip_id:
+                result.setdefault(frame.clip_id, []).append(frame)
+        return result
+
     def _invalidate_caches(self) -> None:
         """Clear cached properties when data changes."""
-        for attr in ("sources_by_id", "clips_by_id", "clips_by_source"):
+        for attr in (
+            "sources_by_id", "clips_by_id", "clips_by_source",
+            "frames_by_id", "frames_by_source", "frames_by_clip",
+        ):
             self.__dict__.pop(attr, None)
 
     # --- Observer pattern ---
@@ -514,8 +581,9 @@ class Project:
             return None
 
         self._sources.remove(source)
-        # Remove associated clips
+        # Remove associated clips and frames
         self._clips = [c for c in self._clips if c.source_id != source_id]
+        self._frames = [f for f in self._frames if f.source_id != source_id]
         self._invalidate_caches()
         self._dirty = True
         self._notify_observers("source_removed", source)
@@ -556,6 +624,97 @@ class Project:
         self._invalidate_caches()
         self._dirty = True
         self._notify_observers("clips_added", new_clips)
+
+    # --- Frame state operations ---
+
+    def add_frames(self, frames: list[Frame]) -> None:
+        """Add frames to the project.
+
+        Args:
+            frames: Frame objects to add
+        """
+        self._frames.extend(frames)
+        self._invalidate_caches()
+        self._dirty = True
+        self._notify_observers("frames_added", frames)
+
+    def remove_frames(self, frame_ids: list[str]) -> list[Frame]:
+        """Remove frames by ID.
+
+        Args:
+            frame_ids: IDs of frames to remove
+
+        Returns:
+            List of removed Frame objects
+        """
+        ids_to_remove = set(frame_ids)
+        removed = [f for f in self._frames if f.id in ids_to_remove]
+        self._frames = [f for f in self._frames if f.id not in ids_to_remove]
+        if removed:
+            self._invalidate_caches()
+            self._dirty = True
+            self._notify_observers("frames_removed", removed)
+        return removed
+
+    def update_frame(self, frame_id: str, **kwargs) -> Optional[Frame]:
+        """Update a frame's fields.
+
+        Args:
+            frame_id: ID of the frame to update
+            **kwargs: Fields to update (e.g., shot_type="wide", analyzed=True)
+
+        Returns:
+            Updated Frame, or None if not found
+        """
+        frame = self.frames_by_id.get(frame_id)
+        if frame is None:
+            logger.warning(f"Frame not found: {frame_id}")
+            return None
+        for key, value in kwargs.items():
+            if hasattr(frame, key):
+                setattr(frame, key, value)
+        self._dirty = True
+        self._notify_observers("frames_updated", [frame])
+        return frame
+
+    def add_frames_to_sequence(
+        self, frame_ids: list[str], hold_frames: int = 1
+    ) -> None:
+        """Add frames to the sequence.
+
+        Args:
+            frame_ids: IDs of frames to add
+            hold_frames: Number of timeline frames each frame occupies
+        """
+        from models.sequence import SequenceClip
+
+        if self.sequence is None:
+            fps = self._sources[0].fps if self._sources else 30.0
+            self.sequence = Sequence(name=self.metadata.name, fps=fps)
+
+        current_frame = self.sequence.duration_frames
+        track = self.sequence.tracks[0]
+
+        for frame_id in frame_ids:
+            frame = self.frames_by_id.get(frame_id)
+            if frame is None:
+                logger.warning(f"Frame not found: {frame_id}")
+                continue
+
+            seq_clip = SequenceClip(
+                frame_id=frame.id,
+                source_id=frame.source_id or "",
+                track_index=0,
+                start_frame=current_frame,
+                hold_frames=hold_frames,
+            )
+            track.add_clip(seq_clip)
+            current_frame += seq_clip.duration_frames
+
+        self._dirty = True
+        self._notify_observers("sequence_changed", frame_ids)
+
+    # --- Sequence operations ---
 
     def add_to_sequence(self, clip_ids: list[str]) -> None:
         """Add clips to the sequence by ID.
@@ -744,6 +903,7 @@ class Project:
             ui_state=self.ui_state,
             metadata=self.metadata,
             progress_callback=progress_callback,
+            frames=self._frames,
         )
 
         if success:
@@ -774,7 +934,7 @@ class Project:
             ProjectLoadError: If the project file cannot be loaded
             MissingSourceError: If a source video is missing
         """
-        sources, clips, sequence, metadata, ui_state = load_project(
+        sources, clips, sequence, metadata, ui_state, frames = load_project(
             filepath=path,
             missing_source_callback=missing_source_callback,
             progress_callback=progress_callback,
@@ -787,6 +947,7 @@ class Project:
             clips=clips,
             sequence=sequence,
             ui_state=ui_state,
+            frames=frames,
         )
         project._dirty = False
         return project
@@ -807,6 +968,7 @@ class Project:
         """Clear all project data (for 'New Project')."""
         self._sources = []
         self._clips = []
+        self._frames = []
         self.sequence = None
         self.ui_state = {}
         self.path = None
@@ -819,5 +981,5 @@ class Project:
         return (
             f"Project(name={self.metadata.name!r}, "
             f"sources={len(self._sources)}, clips={len(self._clips)}, "
-            f"dirty={self._dirty})"
+            f"frames={len(self._frames)}, dirty={self._dirty})"
         )

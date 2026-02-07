@@ -58,6 +58,11 @@ class GUIState:
     analyze_selected_ids: list[str] = field(default_factory=list)
     cut_selected_ids: list[str] = field(default_factory=list)
 
+    # Frame selection state
+    selected_frame_ids: list[str] = field(default_factory=list)
+    frames_tab_frame_ids: list[str] = field(default_factory=list)
+    frames_tab_source_filter: Optional[str] = None
+
     # Analyze tab state
     analyze_tab_ids: list[str] = field(default_factory=list)
 
@@ -124,6 +129,16 @@ class GUIState:
                 if len(self.selected_clip_ids) > 20:
                     ids_str += ", ..."
                 lines.append(f"SELECTED_IDS: [{ids_str}]")
+
+            if self.frames_tab_frame_ids:
+                lines.append(f"FRAMES TAB: {len(self.frames_tab_frame_ids)} frames visible")
+
+            if self.selected_frame_ids:
+                lines.append(f"SELECTED FRAMES: {len(self.selected_frame_ids)}")
+                ids_str = ", ".join(self.selected_frame_ids[:20])
+                if len(self.selected_frame_ids) > 20:
+                    ids_str += ", ..."
+                lines.append(f"SELECTED_FRAME_IDS: [{ids_str}]")
 
             if self.selected_source_id:
                 lines.append(f"ACTIVE SOURCE: {self.selected_source_id[:8]}...")
@@ -270,6 +285,11 @@ class GUIState:
 
             # Sequence state
             self.sequence_ids = []
+
+            # Frame state
+            self.selected_frame_ids = []
+            self.frames_tab_frame_ids = []
+            self.frames_tab_source_filter = None
 
             # Plan state
             self.current_plan = None

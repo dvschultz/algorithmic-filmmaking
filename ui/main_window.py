@@ -58,7 +58,7 @@ from core.project import (
 )
 from ui.project_adapter import ProjectSignalAdapter
 from ui.settings_dialog import SettingsDialog
-from ui.tabs import CollectTab, CutTab, AnalyzeTab, SequenceTab, RenderTab
+from ui.tabs import CollectTab, CutTab, AnalyzeTab, FramesTab, SequenceTab, RenderTab
 from ui.theme import theme, Spacing
 from ui.chat_panel import ChatPanel
 from ui.chat_worker import ChatAgentWorker
@@ -889,6 +889,7 @@ class MainWindow(QMainWindow):
         self.collect_tab = CollectTab()
         self.cut_tab = CutTab()
         self.analyze_tab = AnalyzeTab()
+        self.frames_tab = FramesTab()
         self.sequence_tab = SequenceTab()
         self.render_tab = RenderTab()
 
@@ -896,11 +897,15 @@ class MainWindow(QMainWindow):
         self.tab_widget.addTab(self.collect_tab, "Collect")
         self.tab_widget.addTab(self.cut_tab, "Cut")
         self.tab_widget.addTab(self.analyze_tab, "Analyze")
+        self.tab_widget.addTab(self.frames_tab, "Frames")
         self.tab_widget.addTab(self.sequence_tab, "Sequence")
         self.tab_widget.addTab(self.render_tab, "Render")
 
         # Set up Analyze tab lookups (it uses references, not copies)
         self.analyze_tab.set_lookups(self.clips_by_id, self.sources_by_id)
+
+        # Set up Frames tab project reference
+        self.frames_tab.set_project(self.project)
 
         # Set up Sequence tab GUI state reference
         self.sequence_tab.set_gui_state(self._gui_state)
@@ -930,16 +935,17 @@ class MainWindow(QMainWindow):
             self.collect_tab,
             self.cut_tab,
             self.analyze_tab,
+            self.frames_tab,
             self.sequence_tab,
             self.render_tab,
         ]
 
         # Track active tab for agent context
-        tab_names = ["collect", "cut", "analyze", "sequence", "render"]
+        tab_names = ["collect", "cut", "analyze", "frames", "sequence", "render"]
         if 0 <= index < len(tab_names):
             active_tab = tab_names[index]
             self._gui_state.active_tab = active_tab
-            
+
             # Sync selection state for the new tab
             if active_tab == "cut":
                 selected = self.cut_tab.clip_browser.get_selected_clips()
@@ -947,6 +953,9 @@ class MainWindow(QMainWindow):
             elif active_tab == "analyze":
                 selected = self.analyze_tab.clip_browser.get_selected_clips()
                 self._gui_state.selected_clip_ids = [c.id for c in selected]
+            elif active_tab == "frames":
+                selected = self.frames_tab.frame_browser.get_selected_frame_ids()
+                self._gui_state.selected_frame_ids = selected
 
         # Notify tabs of activation/deactivation
         for i, tab in enumerate(tabs):
@@ -956,11 +965,11 @@ class MainWindow(QMainWindow):
                 tab.on_tab_deactivated()
 
         # Refresh Sequence tab with all clips when switching to it
-        if index == 3:  # Sequence tab
+        if index == 4:  # Sequence tab
             self._refresh_sequence_tab_clips()
 
         # Update Render tab with current sequence info when switching to it
-        if index == 4:  # Render tab
+        if index == 5:  # Render tab
             self._update_render_tab_sequence_info()
 
     def _create_menu_bar(self):
@@ -1057,7 +1066,7 @@ class MainWindow(QMainWindow):
         # View menu with tab shortcuts
         view_menu = menu_bar.addMenu("&View")
 
-        tab_names = ["&Collect", "&Analyze", "&Generate", "&Sequence", "&Render"]
+        tab_names = ["&Collect", "C&ut", "&Analyze", "&Frames", "&Sequence", "&Render"]
         for i, name in enumerate(tab_names):
             action = QAction(name, self)
             action.setShortcut(QKeySequence(f"Ctrl+{i + 1}"))
@@ -1163,6 +1172,13 @@ class MainWindow(QMainWindow):
         self.sequence_tab.timeline.sequence_changed.connect(self._on_sequence_ids_changed)
         # Mark project dirty when sequence changes
         self.sequence_tab.timeline.sequence_changed.connect(self._mark_dirty)
+
+        # Frames tab signals
+        self.frames_tab.extract_frames_requested.connect(self._on_extract_frames_requested)
+        self.frames_tab.import_images_requested.connect(self._on_import_images_requested)
+        self.frames_tab.analyze_frames_requested.connect(self._on_analyze_frames_requested)
+        self.frames_tab.add_to_sequence_requested.connect(self._on_add_frames_to_sequence)
+        self.frames_tab.frames_selected.connect(self._on_frames_selection_changed)
 
         # Render tab signals
         self.render_tab.export_sequence_requested.connect(self._on_sequence_export_click)
@@ -1723,7 +1739,7 @@ class MainWindow(QMainWindow):
         if tool_name == "navigate_to_tab":
             # Actually switch the tab in the UI
             tab_name = args.get("tab_name", "")
-            tab_names = ["collect", "cut", "analyze", "sequence", "generate", "render"]
+            tab_names = ["collect", "cut", "analyze", "frames", "sequence", "render"]
             if tab_name in tab_names:
                 index = tab_names.index(tab_name)
                 self.tab_widget.setCurrentIndex(index)
@@ -2159,13 +2175,14 @@ class MainWindow(QMainWindow):
         """Switch to a specific tab by name.
 
         Args:
-            tab_name: Tab name ("collect", "cut", "analyze", "sequence", "generate", "render")
+            tab_name: Tab name ("collect", "cut", "analyze", "frames", "sequence", "render")
         """
         tab_map = {
             "collect": 0,
             "cut": 1,
             "analyze": 2,
-            "sequence": 3,
+            "frames": 3,
+            "sequence": 4,
             "generate": 4,
             "render": 5,
         }
@@ -3154,11 +3171,17 @@ class MainWindow(QMainWindow):
 
     @Slot(str, list)
     def _on_text_extraction_clip_ready(self, clip_id: str, texts: list):
-        """Handle text extracted for single clip."""
+        """Handle text extracted for single clip or frame."""
         clip = self.clips_by_id.get(clip_id)
         if clip:
             clip.extracted_texts = texts
             self.analyze_tab.update_clip_extracted_text(clip_id, texts)
+            self._mark_dirty()
+            return
+        # Try frame
+        frame = self.project.frames_by_id.get(clip_id)
+        if frame:
+            self.project.update_frame(clip_id, extracted_texts=texts)
             self._mark_dirty()
 
     @Slot(str)
@@ -3179,7 +3202,7 @@ class MainWindow(QMainWindow):
 
     @Slot(str, object)
     def _on_cinematography_clip_ready(self, clip_id: str, cinematography):
-        """Handle cinematography analyzed for single clip."""
+        """Handle cinematography analyzed for single clip or frame."""
         clip = self.clips_by_id.get(clip_id)
         if clip:
             clip.cinematography = cinematography
@@ -3190,6 +3213,17 @@ class MainWindow(QMainWindow):
             # Refresh sidebar if it's showing this clip
             if hasattr(self, 'clip_details_sidebar'):
                 self.clip_details_sidebar.refresh_shot_type_if_showing(clip_id, clip.shot_type)
+            self._mark_dirty()
+            return
+        # Try frame
+        frame = self.project.frames_by_id.get(clip_id)
+        if frame:
+            shot_type = cinematography.get_simple_shot_type()
+            self.project.update_frame(
+                clip_id,
+                cinematography=cinematography,
+                shot_type=shot_type,
+            )
             self._mark_dirty()
 
     @Slot(str)
@@ -3936,8 +3970,8 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(int((current / total) * 100))
 
     def _on_color_ready(self, clip_id: str, colors: list):
-        """Handle color extraction complete for a clip."""
-        # Update the clip model
+        """Handle color extraction complete for a clip or frame."""
+        # Try clip first
         clip = self.clips_by_id.get(clip_id)
         if clip:
             clip.dominant_colors = colors
@@ -3945,14 +3979,20 @@ class MainWindow(QMainWindow):
             self.cut_tab.update_clip_colors(clip_id, colors)
             self.analyze_tab.update_clip_colors(clip_id, colors)
             self._mark_dirty()
+            return
+        # Try frame
+        frame = self.project.frames_by_id.get(clip_id)
+        if frame:
+            self.project.update_frame(clip_id, dominant_colors=colors)
+            self._mark_dirty()
 
     def _on_shot_type_progress(self, current: int, total: int):
         """Handle shot type classification progress."""
         self.progress_bar.setValue(int((current / total) * 100))
 
     def _on_shot_type_ready(self, clip_id: str, shot_type: str, confidence: float):
-        """Handle shot type classification complete for a clip."""
-        # Update the clip model
+        """Handle shot type classification complete for a clip or frame."""
+        # Try clip first
         clip = self.clips_by_id.get(clip_id)
         if clip:
             clip.shot_type = shot_type
@@ -3964,6 +4004,13 @@ class MainWindow(QMainWindow):
                 self.clip_details_sidebar.refresh_shot_type_if_showing(clip_id, shot_type)
             self._mark_dirty()
             logger.debug(f"Clip {clip_id}: {shot_type} ({confidence:.2f})")
+            return
+        # Try frame
+        frame = self.project.frames_by_id.get(clip_id)
+        if frame:
+            self.project.update_frame(clip_id, shot_type=shot_type)
+            self._mark_dirty()
+            logger.debug(f"Frame {clip_id}: {shot_type} ({confidence:.2f})")
 
     def _on_transcription_progress(self, current: int, total: int):
         """Handle transcription progress."""
@@ -4302,6 +4349,312 @@ class MainWindow(QMainWindow):
                 )
         else:
             QMessageBox.critical(self, "Export Error", "Failed to export SRT file")
+
+    # ------------------------------------------------------------------
+    # Frames tab handlers
+    # ------------------------------------------------------------------
+
+    def _on_extract_frames_requested(self, source_id: str, mode: str, interval: int):
+        """Launch frame extraction worker for the given source."""
+        source = self.sources_by_id.get(source_id)
+        if not source:
+            self.status_bar.showMessage("Source not found")
+            return
+
+        # Output dir for extracted frames
+        output_dir = self.project.path.parent / "frames" / source_id if self.project.path else Path.home() / ".cache" / "scene-ripper" / "frames" / source_id
+
+        from ui.workers.frame_extraction_worker import FrameExtractionWorker
+
+        worker = FrameExtractionWorker(
+            source=source,
+            clip=None,
+            mode=mode,
+            interval=interval,
+            output_dir=output_dir,
+        )
+        worker.progress.connect(
+            lambda cur, tot: self.status_bar.showMessage(
+                f"Extracting frames: {cur}/{tot}"
+            )
+        )
+        worker.extraction_completed.connect(
+            lambda frames: self._on_frames_extracted(frames, source_id)
+        )
+        worker.error.connect(
+            lambda msg: self.status_bar.showMessage(f"Extraction error: {msg}")
+        )
+
+        self._frame_extraction_worker = worker
+        worker.start()
+        self.status_bar.showMessage("Extracting frames...")
+
+    def _on_frames_extracted(self, frames: list, source_id: str):
+        """Handle completed frame extraction."""
+        if not frames:
+            self.status_bar.showMessage("No frames extracted")
+            return
+
+        self.project.add_frames(frames)
+        self.frames_tab.update_frame_browser()
+        self.status_bar.showMessage(f"Extracted {len(frames)} frames")
+        self._mark_dirty()
+
+    def _on_import_images_requested(self, paths: list):
+        """Import image files as Frame objects."""
+        from models.frame import Frame
+        from core.thumbnail import generate_image_thumbnail
+
+        frames = []
+        thumb_dir = self.project.path.parent / "thumbnails" if self.project.path else Path.home() / ".cache" / "scene-ripper" / "thumbnails"
+        thumb_dir.mkdir(parents=True, exist_ok=True)
+
+        for image_path in paths:
+            frame = Frame(file_path=image_path)
+
+            # Generate thumbnail
+            thumb_path = thumb_dir / f"{frame.id}_thumb.jpg"
+            try:
+                generate_image_thumbnail(image_path, thumb_path)
+                frame.thumbnail_path = thumb_path
+            except Exception:
+                pass
+
+            frames.append(frame)
+
+        if frames:
+            self.project.add_frames(frames)
+            self.frames_tab.update_frame_browser()
+            self.status_bar.showMessage(f"Imported {len(frames)} images")
+            self._mark_dirty()
+
+    def _on_analyze_frames_requested(self, frame_ids: list):
+        """Analyze selected frames using AnalysisTarget-based pipeline.
+
+        Converts Frame objects to AnalysisTarget instances and runs them
+        through the same workers used for clip analysis. Excludes
+        transcription (no audio in still images).
+        """
+        from core.analysis_target import AnalysisTarget
+
+        if not frame_ids:
+            return
+
+        frames = [
+            self.project.frames_by_id.get(fid)
+            for fid in frame_ids
+            if fid in self.project.frames_by_id
+        ]
+        if not frames:
+            self.status_bar.showMessage("No valid frames found for analysis")
+            return
+
+        targets = [AnalysisTarget.from_frame(f) for f in frames]
+
+        # Run all frame-compatible operations (exclude transcribe - no audio)
+        frame_ops = ["colors", "shots", "classify", "detect_objects", "extract_text"]
+        self._run_frame_analysis(targets, frame_ops)
+
+    def _run_frame_analysis(self, targets: list, operations: list[str]):
+        """Run analysis operations on AnalysisTarget objects.
+
+        Launches workers with the analysis_targets parameter instead of clips.
+        Reuses existing result handlers which now support frame write-back.
+
+        Args:
+            targets: List of AnalysisTarget objects
+            operations: List of operation keys to run
+        """
+        if not targets or not operations:
+            return
+
+        logger.info(
+            f"Starting frame analysis: {operations} on {len(targets)} targets"
+        )
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 100)
+        self.status_bar.showMessage(
+            f"Analyzing {len(targets)} frames..."
+        )
+
+        # Track running workers for completion
+        self._frame_analysis_remaining = len(operations)
+        self._frame_analysis_targets = targets
+
+        for op_key in operations:
+            self._launch_frame_analysis_worker(op_key, targets)
+
+    def _launch_frame_analysis_worker(self, op_key: str, targets: list):
+        """Launch a worker for frame analysis using AnalysisTarget objects.
+
+        Args:
+            op_key: Operation key (e.g., "colors", "shots")
+            targets: List of AnalysisTarget objects
+        """
+        if op_key == "colors":
+            from ui.workers.color_worker import ColorAnalysisWorker
+            worker = ColorAnalysisWorker(
+                clips=[],
+                analysis_targets=targets,
+                parallelism=self.settings.color_analysis_parallelism,
+            )
+            worker.progress.connect(self._on_color_progress)
+            worker.color_ready.connect(self._on_color_ready)
+            worker.analysis_completed.connect(
+                lambda: self._on_frame_analysis_op_finished("colors")
+            )
+            worker.finished.connect(worker.deleteLater)
+            self._frame_color_worker = worker
+            worker.start()
+
+        elif op_key == "shots":
+            from ui.workers.shot_type_worker import ShotTypeWorker
+            worker = ShotTypeWorker(
+                clips=[],
+                sources_by_id={},
+                analysis_targets=targets,
+                parallelism=self.settings.local_model_parallelism,
+            )
+            worker.progress.connect(self._on_shot_type_progress)
+            worker.shot_type_ready.connect(self._on_shot_type_ready)
+            worker.analysis_completed.connect(
+                lambda: self._on_frame_analysis_op_finished("shots")
+            )
+            worker.finished.connect(worker.deleteLater)
+            self._frame_shot_worker = worker
+            worker.start()
+
+        elif op_key == "classify":
+            from ui.workers.classification_worker import ClassificationWorker
+            worker = ClassificationWorker(
+                clips=[],
+                analysis_targets=targets,
+                parallelism=self.settings.local_model_parallelism,
+            )
+            worker.progress.connect(self._on_classification_progress)
+            worker.labels_ready.connect(self._on_classification_ready)
+            worker.classification_completed.connect(
+                lambda: self._on_frame_analysis_op_finished("classify")
+            )
+            worker.finished.connect(worker.deleteLater)
+            self._frame_classify_worker = worker
+            worker.start()
+
+        elif op_key == "detect_objects":
+            from ui.workers.object_detection_worker import ObjectDetectionWorker
+            worker = ObjectDetectionWorker(
+                clips=[],
+                analysis_targets=targets,
+                parallelism=self.settings.local_model_parallelism,
+            )
+            worker.progress.connect(self._on_object_detection_progress)
+            worker.objects_ready.connect(self._on_objects_ready)
+            worker.detection_completed.connect(
+                lambda: self._on_frame_analysis_op_finished("detect_objects")
+            )
+            worker.finished.connect(worker.deleteLater)
+            self._frame_detect_worker = worker
+            worker.start()
+
+        elif op_key == "extract_text":
+            from ui.workers.text_extraction_worker import TextExtractionWorker
+            worker = TextExtractionWorker(
+                clips=[],
+                sources_by_id={},
+                analysis_targets=targets,
+            )
+            worker.progress.connect(self._on_text_extraction_progress)
+            worker.clip_completed.connect(self._on_text_extraction_clip_ready)
+            worker.finished.connect(
+                lambda _: self._on_frame_analysis_op_finished("extract_text")
+            )
+            worker.error.connect(self._on_text_extraction_error)
+            worker.finished.connect(worker.deleteLater)
+            self._frame_text_worker = worker
+            worker.start()
+
+        elif op_key == "describe":
+            from ui.workers.description_worker import DescriptionWorker
+            worker = DescriptionWorker(
+                clips=[],
+                analysis_targets=targets,
+                parallelism=self.settings.description_parallelism,
+            )
+            worker.progress.connect(self._on_description_progress)
+            worker.description_ready.connect(self._on_description_ready)
+            worker.error.connect(self._on_description_error)
+            worker.description_completed.connect(
+                lambda: self._on_frame_analysis_op_finished("describe")
+            )
+            worker.finished.connect(worker.deleteLater)
+            self._frame_desc_worker = worker
+            worker.start()
+
+        elif op_key == "cinematography":
+            from ui.workers.cinematography_worker import CinematographyWorker
+            worker = CinematographyWorker(
+                clips=[],
+                sources_by_id={},
+                analysis_targets=targets,
+                parallelism=min(self.settings.description_parallelism, 2),
+            )
+            worker.progress.connect(self._on_cinematography_progress)
+            worker.clip_completed.connect(self._on_cinematography_clip_ready)
+            worker.error.connect(self._on_cinematography_error)
+            worker.finished.connect(
+                lambda _: self._on_frame_analysis_op_finished("cinematography")
+            )
+            worker.finished.connect(worker.deleteLater)
+            self._frame_cine_worker = worker
+            worker.start()
+
+        else:
+            logger.warning(f"Unknown frame analysis operation: {op_key}")
+            self._on_frame_analysis_op_finished(op_key)
+
+    def _on_frame_analysis_op_finished(self, op_key: str):
+        """Handle completion of a single frame analysis operation."""
+        self._frame_analysis_remaining -= 1
+        logger.info(
+            f"Frame analysis op '{op_key}' finished "
+            f"({self._frame_analysis_remaining} remaining)"
+        )
+        if self._frame_analysis_remaining <= 0:
+            self._on_frame_analysis_complete()
+
+    def _on_frame_analysis_complete(self):
+        """Handle completion of all frame analysis operations."""
+        logger.info("Frame analysis complete")
+        self.progress_bar.setVisible(False)
+        self.status_bar.showMessage("Frame analysis complete", 3000)
+
+        # Mark analyzed frames
+        targets = getattr(self, '_frame_analysis_targets', [])
+        for target in targets:
+            self.project.update_frame(target.id, analyzed=True)
+
+        # Refresh the frame browser to show updated metadata
+        self.frames_tab.update_frame_browser()
+        self._mark_dirty()
+
+        # Save project
+        if self.project.path:
+            self.project.save()
+
+    def _on_add_frames_to_sequence(self, frame_ids: list):
+        """Add selected frames to the active sequence."""
+        if not frame_ids:
+            return
+
+        sequence = self.sequence_tab.get_sequence()
+        self.project.add_frames_to_sequence(frame_ids, sequence)
+        self.sequence_tab.timeline.refresh()
+        self.status_bar.showMessage(f"Added {len(frame_ids)} frames to sequence")
+        self._mark_dirty()
+
+    def _on_frames_selection_changed(self, frame_ids: list):
+        """Update GUI state when frame selection changes."""
+        self._gui_state.selected_frame_ids = frame_ids
 
     def _export_clips(self, clips: list[Clip]):
         """Export clips to a folder."""
@@ -5175,13 +5528,23 @@ class MainWindow(QMainWindow):
 
     @Slot(str, str, str)
     def _on_description_ready(self, clip_id: str, description: str, model_name: str):
-        """Handle description results for a single clip."""
+        """Handle description results for a single clip or frame."""
         clip = self.project.clips_by_id.get(clip_id)
         if clip:
             clip.description = description
             clip.description_model = model_name
             clip.description_frames = 1
             logger.debug(f"Description for {clip_id}: {description[:50]}...")
+            return
+        # Try frame
+        frame = self.project.frames_by_id.get(clip_id)
+        if frame:
+            self.project.update_frame(
+                clip_id,
+                description=description,
+                description_model=model_name,
+            )
+            logger.debug(f"Description for frame {clip_id}: {description[:50]}...")
 
     @Slot()
     def _on_agent_description_finished(self):
@@ -5267,12 +5630,26 @@ class MainWindow(QMainWindow):
 
     @Slot(str, list)
     def _on_classification_ready(self, clip_id: str, results: list):
-        """Handle classification results for a single clip."""
+        """Handle classification results for a single clip or frame.
+
+        Note: Frame model doesn't have object_labels, so frame results
+        are stored as detected_objects for consistency.
+        """
         clip = self.project.clips_by_id.get(clip_id)
         if clip:
             # Store labels (just the label strings, not confidences)
             clip.object_labels = [label for label, _ in results]
             logger.debug(f"Classification for {clip_id}: {clip.object_labels[:3]}")
+            return
+        # Try frame - store as detected_objects since Frame has no object_labels
+        frame = self.project.frames_by_id.get(clip_id)
+        if frame:
+            objects = [
+                {"label": label, "confidence": conf}
+                for label, conf in results
+            ]
+            self.project.update_frame(clip_id, detected_objects=objects)
+            logger.debug(f"Classification for frame {clip_id}: {[l for l, _ in results[:3]]}")
 
     @Slot()
     def _on_agent_classification_finished(self):
@@ -5340,12 +5717,18 @@ class MainWindow(QMainWindow):
 
     @Slot(str, list, int)
     def _on_objects_ready(self, clip_id: str, detections: list, person_count: int):
-        """Handle object detection results for a single clip."""
+        """Handle object detection results for a single clip or frame."""
         clip = self.project.clips_by_id.get(clip_id)
         if clip:
             clip.detected_objects = detections
             clip.person_count = person_count
             logger.debug(f"Detection for {clip_id}: {len(detections)} objects, {person_count} people")
+            return
+        # Try frame
+        frame = self.project.frames_by_id.get(clip_id)
+        if frame:
+            self.project.update_frame(clip_id, detected_objects=detections)
+            logger.debug(f"Detection for frame {clip_id}: {len(detections)} objects, {person_count} people")
 
     @Slot()
     def _on_agent_object_detection_finished(self):
@@ -6743,6 +7126,9 @@ class MainWindow(QMainWindow):
         self.project = loaded_project
         self._project_adapter.set_project(self.project)
 
+        # Set project on Frames tab
+        self.frames_tab.set_project(self.project)
+
         # Add all sources to CollectTab
         for source in self.sources:
             self.collect_tab.add_source(source)
@@ -6836,6 +7222,7 @@ class MainWindow(QMainWindow):
         self.cut_tab.clear_clips()
         self.cut_tab.set_source(None)
         self.analyze_tab.clear_clips()
+        self.frames_tab.frame_browser.clear()
         self.sequence_tab.clear()  # Clear all state including _clips and _available_clips
         self.render_tab.clear()  # Clear render tab state
 

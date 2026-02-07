@@ -31,6 +31,8 @@ class ClassificationWorker(CancellableWorker):
     Uses ThreadPoolExecutor for parallel processing. Default parallelism is 1
     because the MobileNet model singleton is not thread-safe for inference.
 
+    Supports both Clip and Frame inputs via AnalysisTarget.
+
     Signals:
         progress: Emitted with (current, total) during processing
         labels_ready: Emitted with (clip_id, labels) when a clip finishes
@@ -49,13 +51,19 @@ class ClassificationWorker(CancellableWorker):
         threshold: float = 0.1,
         parallelism: int = 1,
         skip_existing: bool = True,
+        analysis_targets: Optional[list] = None,
         parent=None,
     ):
         super().__init__(parent)
         self._top_k = top_k
         self._threshold = threshold
         self._parallelism = min(max(1, parallelism), 4)
-        self._tasks = self._build_tasks(clips, skip_existing)
+        if analysis_targets:
+            self._tasks = self._build_tasks_from_targets(
+                analysis_targets, skip_existing
+            )
+        else:
+            self._tasks = self._build_tasks(clips, skip_existing)
 
     def _build_tasks(
         self, clips: list, skip_existing: bool
@@ -72,6 +80,28 @@ class ClassificationWorker(CancellableWorker):
                 ClassificationTask(
                     clip_id=clip.id,
                     thumbnail_path=clip.thumbnail_path,
+                )
+            )
+        return tasks
+
+    def _build_tasks_from_targets(
+        self, targets: list, skip_existing: bool
+    ) -> list[ClassificationTask]:
+        """Build immutable task list from AnalysisTarget objects."""
+        tasks = []
+        for target in targets:
+            if skip_existing and target.object_labels is not None:
+                continue
+            image_path = target.image_path
+            if not image_path or not image_path.exists():
+                logger.warning(
+                    f"Skipping target {target.id}: image not found"
+                )
+                continue
+            tasks.append(
+                ClassificationTask(
+                    clip_id=target.id,
+                    thumbnail_path=image_path,
                 )
             )
         return tasks

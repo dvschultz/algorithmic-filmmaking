@@ -77,7 +77,7 @@ def describe(
     config = CLIConfig.load()
 
     try:
-        sources, clips, sequence, metadata, ui_state = load_project(
+        sources, clips, sequence, metadata, ui_state, _ = load_project(
             filepath=project_file,
             missing_source_callback=lambda path, sid: None,
         )
@@ -254,7 +254,7 @@ def colors(
     config = CLIConfig.load()
 
     try:
-        sources, clips, sequence, metadata, ui_state = load_project(
+        sources, clips, sequence, metadata, ui_state, _ = load_project(
             filepath=project_file,
             missing_source_callback=lambda path, sid: None,
         )
@@ -407,7 +407,7 @@ def shots(
     config = CLIConfig.load()
 
     try:
-        sources, clips, sequence, metadata, ui_state = load_project(
+        sources, clips, sequence, metadata, ui_state, _ = load_project(
             filepath=project_file,
             missing_source_callback=lambda path, sid: None,
         )
@@ -583,7 +583,7 @@ def classify(
     config = CLIConfig.load()
 
     try:
-        sources, clips, sequence, metadata, ui_state = load_project(
+        sources, clips, sequence, metadata, ui_state, _ = load_project(
             filepath=project_file,
             missing_source_callback=lambda path, sid: None,
         )
@@ -757,7 +757,7 @@ def objects(
     config = CLIConfig.load()
 
     try:
-        sources, clips, sequence, metadata, ui_state = load_project(
+        sources, clips, sequence, metadata, ui_state, _ = load_project(
             filepath=project_file,
             missing_source_callback=lambda path, sid: None,
         )
@@ -935,7 +935,7 @@ def people(
     config = CLIConfig.load()
 
     try:
-        sources, clips, sequence, metadata, ui_state = load_project(
+        sources, clips, sequence, metadata, ui_state, _ = load_project(
             filepath=project_file,
             missing_source_callback=lambda path, sid: None,
         )

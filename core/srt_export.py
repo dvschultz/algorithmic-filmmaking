@@ -4,12 +4,18 @@ Exports sequence clips as SRT subtitle files with metadata specific to
 each sequence algorithm type (descriptions, colors, shot types, OCR text).
 """
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, TYPE_CHECKING
 
 from models.clip import Clip, Source
 from models.sequence import Sequence
+
+if TYPE_CHECKING:
+    from models.frame import Frame
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -88,6 +94,7 @@ def export_srt(
     sources_by_id: dict[str, Source],
     config: SRTExportConfig,
     progress_callback: Optional[Callable[[float, str], None]] = None,
+    frames: Optional[dict[str, "Frame"]] = None,
 ) -> tuple[bool, int, int]:
     """Export sequence metadata as SRT subtitle file.
 
@@ -97,6 +104,7 @@ def export_srt(
         sources_by_id: Dict mapping source_id to Source
         config: Export configuration
         progress_callback: Optional callback (progress 0-1, message)
+        frames: Optional dict of frame_id -> Frame for frame-based entries
 
     Returns:
         Tuple of (success, exported_count, skipped_count)
@@ -121,17 +129,36 @@ def export_srt(
         if progress_callback:
             progress_callback(i / total, f"Processing clip {i + 1}/{total}")
 
-        # Get source clip for metadata
-        clip = clips_by_id.get(seq_clip.source_clip_id)
-        if not clip:
-            skipped += 1
-            continue
+        if seq_clip.is_frame_entry:
+            # Frame-based entry
+            if not frames:
+                logger.warning(
+                    "Frame entry %s skipped: no frames dict provided",
+                    seq_clip.id,
+                )
+                skipped += 1
+                continue
+            frame = frames.get(seq_clip.frame_id)
+            if not frame:
+                logger.warning(
+                    "Frame entry %s skipped: frame_id %s not found",
+                    seq_clip.id,
+                    seq_clip.frame_id,
+                )
+                skipped += 1
+                continue
+            text = frame.description or frame.display_name()
+        else:
+            # Clip-based entry
+            clip = clips_by_id.get(seq_clip.source_clip_id)
+            if not clip:
+                skipped += 1
+                continue
 
-        # Extract metadata
-        text = extractor(clip)
-        if not text:
-            skipped += 1
-            continue
+            text = extractor(clip)
+            if not text:
+                skipped += 1
+                continue
 
         # Calculate timecodes using sequence fps
         start_time = seq_clip.start_frame / sequence.fps

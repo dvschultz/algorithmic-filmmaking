@@ -1222,13 +1222,13 @@ def select_clips(project, clip_ids: list[str], gui_state=None) -> dict:
 
 
 @tools.register(
-    description="Switch to a specific tab in the application. Valid tabs: collect, cut, analyze, sequence, render",
+    description="Switch to a specific tab in the application. Valid tabs: collect, cut, analyze, frames, sequence, render",
     requires_project=False,
     modifies_gui_state=True
 )
 def navigate_to_tab(tab_name: str, gui_state=None) -> dict:
     """Switch active tab."""
-    valid_tabs = ["collect", "cut", "analyze", "sequence", "render"]
+    valid_tabs = ["collect", "cut", "analyze", "frames", "sequence", "render"]
 
     if tab_name not in valid_tabs:
         return {
@@ -4762,3 +4762,374 @@ def generate_analysis_report(
             "success": False,
             "error": f"Report generation failed: {str(e)}"
         }
+
+
+# =============================================================================
+# Frame Tools - Manage extracted/imported frames
+# =============================================================================
+
+@tools.register(
+    description="Extract frames from a video source. Modes: 'interval' (every N frames), "
+                "'all' (every frame from a clip), or 'smart' (key frames only). "
+                "Optionally restrict to a specific clip.",
+    requires_project=True,
+    modifies_gui_state=True,
+    modifies_project_state=True
+)
+def extract_frames(
+    project, main_window,
+    source_id: str,
+    mode: str = "interval",
+    interval: int = 10,
+    clip_id: Optional[str] = None,
+) -> dict:
+    """Extract frames from a video source.
+
+    Args:
+        source_id: ID of the source video
+        mode: Extraction mode - "all", "interval", or "smart"
+        interval: Frame interval for "interval" mode (default 10)
+        clip_id: Optional clip ID to extract frames from specific clip
+    """
+    valid_modes = ("all", "interval", "smart")
+    if mode not in valid_modes:
+        return {
+            "success": False,
+            "error": f"Invalid mode '{mode}'. Valid modes: {', '.join(valid_modes)}"
+        }
+
+    source = project.sources_by_id.get(source_id)
+    if not source:
+        return {
+            "success": False,
+            "error": f"Source not found: {source_id}"
+        }
+
+    if clip_id:
+        clip = project.clips_by_id.get(clip_id)
+        if not clip:
+            return {
+                "success": False,
+                "error": f"Clip not found: {clip_id}"
+            }
+        if clip.source_id != source_id:
+            return {
+                "success": False,
+                "error": f"Clip {clip_id} does not belong to source {source_id}"
+            }
+
+    if interval < 1:
+        return {
+            "success": False,
+            "error": "Interval must be at least 1"
+        }
+
+    # Return a marker for the GUI to start the async worker
+    return {
+        "success": True,
+        "_wait_for_worker": "extract_frames",
+        "_source_id": source_id,
+        "_mode": mode,
+        "_interval": interval,
+        "_clip_id": clip_id,
+        "message": f"Starting frame extraction from source '{source.file_path.name}' "
+                   f"(mode={mode}, interval={interval})"
+    }
+
+
+@tools.register(
+    description="Import image files as frames into the project.",
+    requires_project=True,
+    modifies_gui_state=True,
+    modifies_project_state=True
+)
+def import_frames(project, file_paths: list[str]) -> dict:
+    """Import image files as frames.
+
+    Args:
+        file_paths: List of absolute paths to image files
+    """
+    from models.frame import Frame
+    import shutil
+
+    if not file_paths:
+        return {"success": False, "error": "No file paths provided"}
+
+    valid_extensions = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".webp"}
+    frames_created = []
+    errors = []
+
+    # Determine project frames directory
+    project_dir = project.project_dir
+    if project_dir is None:
+        return {"success": False, "error": "Project must be saved before importing frames"}
+
+    frames_dir = project_dir / "frames"
+    frames_dir.mkdir(parents=True, exist_ok=True)
+
+    for path_str in file_paths:
+        valid, err_msg, resolved = _validate_path(path_str, must_exist=True)
+        if not valid:
+            errors.append(f"{path_str}: {err_msg}")
+            continue
+
+        if resolved.suffix.lower() not in valid_extensions:
+            errors.append(f"{path_str}: Unsupported image format '{resolved.suffix}'")
+            continue
+
+        # Copy to project directory
+        dest = frames_dir / resolved.name
+        if dest.exists():
+            stem = resolved.stem
+            suffix = resolved.suffix
+            counter = 1
+            while dest.exists():
+                dest = frames_dir / f"{stem}_{counter}{suffix}"
+                counter += 1
+
+        try:
+            shutil.copy2(str(resolved), str(dest))
+        except OSError as e:
+            errors.append(f"{path_str}: Copy failed: {e}")
+            continue
+
+        frame = Frame(file_path=dest)
+        frames_created.append(frame)
+
+    if frames_created:
+        project.add_frames(frames_created)
+
+    result = {
+        "success": len(frames_created) > 0,
+        "imported_count": len(frames_created),
+        "frame_ids": [f.id for f in frames_created],
+    }
+    if errors:
+        result["errors"] = errors
+    return result
+
+
+@tools.register(
+    description="List frames in the project with optional filters. "
+                "Filter by source_id, clip_id, shot_type, or whether frames have descriptions.",
+    requires_project=True,
+)
+def list_frames(
+    project,
+    source_id: Optional[str] = None,
+    clip_id: Optional[str] = None,
+    shot_type: Optional[str] = None,
+    has_description: Optional[bool] = None,
+) -> dict:
+    """List frames in the project with optional filters.
+
+    Args:
+        source_id: Filter by source video ID
+        clip_id: Filter by clip ID
+        shot_type: Filter by shot type classification
+        has_description: Filter by whether frame has a description
+    """
+    frames = list(project.frames)
+
+    if source_id:
+        frames = [f for f in frames if f.source_id == source_id]
+    if clip_id:
+        frames = [f for f in frames if f.clip_id == clip_id]
+    if shot_type:
+        frames = [f for f in frames if f.shot_type == shot_type]
+    if has_description is not None:
+        if has_description:
+            frames = [f for f in frames if f.description]
+        else:
+            frames = [f for f in frames if not f.description]
+
+    results = []
+    for frame in frames:
+        results.append({
+            "id": frame.id,
+            "display_name": frame.display_name(),
+            "source_id": frame.source_id,
+            "clip_id": frame.clip_id,
+            "frame_number": frame.frame_number,
+            "analyzed": frame.analyzed,
+            "shot_type": frame.shot_type,
+            "has_description": bool(frame.description),
+            "tags": frame.tags,
+        })
+
+    return {
+        "success": True,
+        "frames": results,
+        "count": len(results),
+        "total_in_project": len(project.frames),
+    }
+
+
+@tools.register(
+    description="Select frames in the Frames tab browser by their IDs.",
+    requires_project=True,
+    modifies_gui_state=True
+)
+def select_frames(project, frame_ids: list[str], gui_state=None) -> dict:
+    """Select frames in the Frames tab browser.
+
+    Args:
+        frame_ids: List of frame IDs to select
+    """
+    if gui_state is None:
+        return {"success": False, "error": "GUI state not available"}
+
+    valid_ids = [fid for fid in frame_ids if fid in project.frames_by_id]
+    invalid_ids = [fid for fid in frame_ids if fid not in project.frames_by_id]
+
+    if invalid_ids:
+        logger.warning(f"Invalid frame IDs for selection: {invalid_ids}")
+
+    gui_state.selected_frame_ids = valid_ids
+
+    return {
+        "success": True,
+        "selected": valid_ids,
+        "invalid_ids": invalid_ids,
+        "selection_count": len(valid_ids),
+    }
+
+
+@tools.register(
+    description="Analyze frames with specified operations (describe, classify shot type, "
+                "detect colors, detect objects). If no operations specified, runs all.",
+    requires_project=True,
+    modifies_gui_state=True,
+    modifies_project_state=True
+)
+def analyze_frames(
+    project, main_window,
+    frame_ids: list[str],
+    operations: Optional[list[str]] = None,
+) -> dict:
+    """Analyze frames with specified operations.
+
+    Args:
+        frame_ids: List of frame IDs to analyze
+        operations: List of operations to run. Valid: "describe", "classify",
+                    "colors", "objects". If None, runs all operations.
+    """
+    if not frame_ids:
+        return {"success": False, "error": "No frame IDs provided"}
+
+    valid_ops = {"describe", "classify", "colors", "objects"}
+    if operations:
+        invalid_ops = [op for op in operations if op not in valid_ops]
+        if invalid_ops:
+            return {
+                "success": False,
+                "error": f"Invalid operations: {invalid_ops}. Valid: {sorted(valid_ops)}"
+            }
+    else:
+        operations = list(valid_ops)
+
+    # Validate frame IDs
+    valid_ids = [fid for fid in frame_ids if fid in project.frames_by_id]
+    if not valid_ids:
+        return {"success": False, "error": "No valid frame IDs provided"}
+
+    return {
+        "success": True,
+        "_wait_for_worker": "analyze_frames",
+        "_frame_ids": valid_ids,
+        "_operations": operations,
+        "message": f"Starting analysis of {len(valid_ids)} frames "
+                   f"(operations: {', '.join(operations)})"
+    }
+
+
+@tools.register(
+    description="Add frames to the timeline sequence with a configurable hold duration.",
+    requires_project=True,
+    modifies_gui_state=True,
+    modifies_project_state=True
+)
+def add_frames_to_sequence(
+    project,
+    frame_ids: list[str],
+    hold_frames: int = 1,
+) -> dict:
+    """Add frames to the timeline sequence.
+
+    Args:
+        frame_ids: List of frame IDs to add
+        hold_frames: Number of timeline frames each frame occupies (default 1)
+    """
+    if not frame_ids:
+        return {"success": False, "error": "No frame IDs provided"}
+
+    if hold_frames < 1:
+        return {"success": False, "error": "hold_frames must be at least 1"}
+
+    # Validate frame IDs
+    valid_ids = [fid for fid in frame_ids if fid in project.frames_by_id]
+    invalid_ids = [fid for fid in frame_ids if fid not in project.frames_by_id]
+
+    if not valid_ids:
+        return {"success": False, "error": "No valid frame IDs provided"}
+
+    project.add_frames_to_sequence(valid_ids, hold_frames=hold_frames)
+
+    seq_length = len(project.sequence.get_all_clips()) if project.sequence else 0
+
+    result = {
+        "success": True,
+        "added_count": len(valid_ids),
+        "hold_frames": hold_frames,
+        "sequence_length": seq_length,
+        "message": f"Added {len(valid_ids)} frames to sequence "
+                   f"(hold={hold_frames} frames each)"
+    }
+    if invalid_ids:
+        result["invalid_ids"] = invalid_ids
+    return result
+
+
+@tools.register(
+    description="Navigate to the Frames tab.",
+    requires_project=False,
+    modifies_gui_state=True
+)
+def navigate_to_frames_tab(gui_state=None) -> dict:
+    """Navigate to the Frames tab."""
+    if gui_state is None:
+        return {"success": False, "error": "GUI state not available"}
+
+    gui_state.active_tab = "frames"
+
+    return {
+        "success": True,
+        "active_tab": "frames",
+        "message": "Switched to Frames tab"
+    }
+
+
+@tools.register(
+    description="Delete frames from the project by their IDs.",
+    requires_project=True,
+    modifies_gui_state=True,
+    modifies_project_state=True
+)
+def delete_frames(project, frame_ids: list[str]) -> dict:
+    """Delete frames from the project.
+
+    Args:
+        frame_ids: List of frame IDs to delete
+    """
+    if not frame_ids:
+        return {"success": False, "error": "No frame IDs provided"}
+
+    removed = project.remove_frames(frame_ids)
+
+    return {
+        "success": len(removed) > 0,
+        "removed_count": len(removed),
+        "removed_ids": [f.id for f in removed],
+        "not_found": [fid for fid in frame_ids if fid not in {f.id for f in removed}],
+        "remaining_frames": len(project.frames),
+    }

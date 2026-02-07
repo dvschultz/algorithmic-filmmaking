@@ -94,7 +94,7 @@ def clips(
 
     # Load project
     try:
-        sources, clips_list, sequence, metadata, ui_state = load_project(
+        sources, clips_list, sequence, metadata, ui_state, _ = load_project(
             filepath=project_file,
             missing_source_callback=lambda path, sid: None,
         )
@@ -237,7 +237,7 @@ def dataset(
 
     # Load project
     try:
-        sources, clips_list, sequence, metadata, ui_state = load_project(
+        sources, clips_list, sequence, metadata, ui_state, _ = load_project(
             filepath=project_file,
             missing_source_callback=lambda path, sid: None,
         )
@@ -330,7 +330,7 @@ def edl(
 
     # Load project
     try:
-        sources, clips_list, sequence, metadata, ui_state = load_project(
+        sources, clips_list, sequence, metadata, ui_state, _ = load_project(
             filepath=project_file,
             missing_source_callback=lambda path, sid: None,
         )
@@ -433,7 +433,7 @@ def video(
 
     # Load project
     try:
-        sources, clips_list, sequence, metadata, ui_state = load_project(
+        sources, clips_list, sequence, metadata, ui_state, _ = load_project(
             filepath=project_file,
             missing_source_callback=lambda path, sid: None,
         )

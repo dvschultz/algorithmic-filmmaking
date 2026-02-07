@@ -15,10 +15,12 @@ logger = logging.getLogger(__name__)
 
 
 class TextExtractionWorker(CancellableWorker):
-    """Extract text from multiple clips in background.
+    """Extract text from multiple clips or frames in background.
 
-    Processes clips sequentially, running OCR on keyframes of each clip
-    and emitting progress signals for UI updates.
+    Processes items sequentially, running OCR on keyframes of each clip
+    (or directly on frame images) and emitting progress signals for UI updates.
+
+    Supports both Clip and Frame inputs via AnalysisTarget.
 
     Signals:
         progress: Emitted with (current, total, clip_id) during processing
@@ -40,6 +42,7 @@ class TextExtractionWorker(CancellableWorker):
         vlm_model: Optional[str] = None,
         vlm_only: bool = False,
         use_text_detection: bool = True,
+        analysis_targets: Optional[list] = None,
         parent=None,
     ):
         """Initialize the text extraction worker.
@@ -52,6 +55,7 @@ class TextExtractionWorker(CancellableWorker):
             vlm_model: VLM model to use (default: from settings)
             vlm_only: If True, skip Tesseract and only use VLM
             use_text_detection: Whether to use EAST pre-filter (default: True)
+            analysis_targets: Optional list of AnalysisTarget objects (alternative to clips)
             parent: Optional parent QObject
         """
         super().__init__(parent)
@@ -62,16 +66,24 @@ class TextExtractionWorker(CancellableWorker):
         self.vlm_model = vlm_model
         self.vlm_only = vlm_only
         self.use_text_detection = use_text_detection
+        self._analysis_targets = analysis_targets
 
     def run(self):
-        """Execute text extraction on all clips.
+        """Execute text extraction on all clips or analysis targets.
 
         This runs in a background thread. Results are communicated
         via signals to the main thread.
         """
-        from core.analysis.ocr import extract_text_from_clip
-
         self._log_start()
+
+        if self._analysis_targets:
+            self._run_targets()
+        else:
+            self._run_clips()
+
+    def _run_clips(self):
+        """Process clips (original code path)."""
+        from core.analysis.ocr import extract_text_from_clip
 
         results = {}
         total = len(self.clips)
@@ -108,10 +120,66 @@ class TextExtractionWorker(CancellableWorker):
             except Exception as e:
                 self._log_error(str(e), clip.id)
                 self.error.emit(f"Error extracting text from clip {clip.id}: {e}")
-                # Continue with next clip rather than failing entirely
                 results[clip.id] = []
 
         if not self.is_cancelled():
             logger.info(f"Text extraction complete: {len(results)} clips processed")
+            self.finished.emit(results)
+            self._log_complete()
+
+    def _run_targets(self):
+        """Process AnalysisTarget objects (frame path)."""
+        from core.analysis.ocr import extract_text_from_frame
+        from models.clip import ExtractedText
+
+        results = {}
+        total = len(self._analysis_targets)
+
+        logger.info(f"Starting text extraction for {total} targets")
+
+        for i, target in enumerate(self._analysis_targets):
+            if self.is_cancelled():
+                self._log_cancelled()
+                break
+
+            image_path = target.image_path
+            if not image_path or not image_path.exists():
+                logger.warning(f"Image not found for target {target.id}")
+                continue
+
+            self.progress.emit(i + 1, total, target.id)
+
+            try:
+                text, confidence, source_method = extract_text_from_frame(
+                    frame_path=image_path,
+                    use_vlm_fallback=self.use_vlm_fallback,
+                    vlm_model=self.vlm_model,
+                    vlm_only=self.vlm_only,
+                    skip_detection=not self.use_text_detection,
+                )
+                extracted = []
+                if text and text.strip():
+                    extracted.append(
+                        ExtractedText(
+                            frame_number=0,
+                            text=text,
+                            confidence=confidence,
+                            source=source_method,
+                        )
+                    )
+                results[target.id] = extracted
+                self.clip_completed.emit(target.id, extracted)
+
+                logger.debug(
+                    f"Extracted {len(extracted)} text segments from target {target.id}"
+                )
+
+            except Exception as e:
+                self._log_error(str(e), target.id)
+                self.error.emit(f"Error extracting text from target {target.id}: {e}")
+                results[target.id] = []
+
+        if not self.is_cancelled():
+            logger.info(f"Text extraction complete: {len(results)} targets processed")
             self.finished.emit(results)
             self._log_complete()

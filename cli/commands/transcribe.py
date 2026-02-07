@@ -116,7 +116,7 @@ def transcribe(
 
     # Load project
     try:
-        sources, clips, sequence, metadata, ui_state = load_project(
+        sources, clips, sequence, metadata, ui_state, _ = load_project(
             filepath=project_file,
             missing_source_callback=lambda path, sid: None,
         )

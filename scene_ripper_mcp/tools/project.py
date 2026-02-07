@@ -36,7 +36,7 @@ async def get_project_info(
     try:
         from core.project import load_project
 
-        sources, clips, sequence, metadata, ui_state = load_project(path)
+        sources, clips, sequence, metadata, ui_state, _ = load_project(path)
 
         # Compute analysis statistics
         has_colors = sum(1 for c in clips if c.dominant_colors)
@@ -301,7 +301,7 @@ async def import_video(
             await ctx.report_progress(0.1, "Loading project...")
 
         # Load existing project
-        sources, clips, sequence, metadata, ui_state = load_project(proj_path)
+        sources, clips, sequence, metadata, ui_state, _ = load_project(proj_path)
 
         if ctx:
             await ctx.report_progress(0.2, "Analyzing video...")
@@ -386,7 +386,7 @@ async def list_sources(
     try:
         from core.project import load_project
 
-        sources, clips, _, _, _ = load_project(path)
+        sources, clips, _, _, _, _ = load_project(path)
 
         source_list = []
         for source in sources:
@@ -442,7 +442,7 @@ async def remove_source(
     try:
         from core.project import load_project, save_project
 
-        sources, clips, sequence, metadata, ui_state = load_project(path)
+        sources, clips, sequence, metadata, ui_state, _ = load_project(path)
 
         # Find and remove source
         source_to_remove = None

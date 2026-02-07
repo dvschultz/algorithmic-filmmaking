@@ -1,10 +1,17 @@
 """EDL (Edit Decision List) export for NLE workflows."""
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional, TYPE_CHECKING
 
 from models.clip import Source
 from models.sequence import Sequence
+
+if TYPE_CHECKING:
+    from models.frame import Frame
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -43,6 +50,7 @@ def export_edl(
     sequence: Sequence,
     sources: dict[str, Source],
     config: EDLExportConfig,
+    frames: Optional[dict[str, "Frame"]] = None,
 ) -> bool:
     """Export sequence as CMX 3600 EDL file.
 
@@ -50,6 +58,7 @@ def export_edl(
         sequence: The sequence to export
         sources: Dict mapping source_id to Source
         config: Export configuration
+        frames: Optional dict of frame_id -> Frame for frame-based entries
 
     Returns:
         True if export succeeded, False otherwise
@@ -71,19 +80,43 @@ def export_edl(
     record_frame = 0  # Running record position
 
     for i, seq_clip in enumerate(seq_clips):
-        # Get source for this clip
-        source = sources.get(seq_clip.source_id)
-        if not source:
-            continue
+        fps = sequence.fps
 
-        fps = source.fps
+        if seq_clip.is_frame_entry:
+            # Frame-based entry
+            if not frames:
+                logger.warning(
+                    "Frame entry %s skipped: no frames dict provided",
+                    seq_clip.id,
+                )
+                continue
+            frame = frames.get(seq_clip.frame_id)
+            if not frame:
+                logger.warning(
+                    "Frame entry %s skipped: frame_id %s not found",
+                    seq_clip.id,
+                    seq_clip.frame_id,
+                )
+                continue
 
-        # Source timecodes (in/out points within source video)
-        src_in = frames_to_timecode(seq_clip.in_point, fps)
-        src_out = frames_to_timecode(seq_clip.out_point, fps)
+            duration_frames = seq_clip.hold_frames
+            # Source timecodes: still image, so 00:00:00:00 to duration
+            src_in = frames_to_timecode(0, fps)
+            src_out = frames_to_timecode(duration_frames, fps)
+            clip_name = _sanitize_edl_string(frame.display_name())
+        else:
+            # Clip-based entry
+            source = sources.get(seq_clip.source_id)
+            if not source:
+                continue
+            fps = source.fps
+
+            duration_frames = seq_clip.out_point - seq_clip.in_point
+            src_in = frames_to_timecode(seq_clip.in_point, fps)
+            src_out = frames_to_timecode(seq_clip.out_point, fps)
+            clip_name = _sanitize_edl_string(source.filename)
 
         # Record timecodes (position on timeline)
-        duration_frames = seq_clip.out_point - seq_clip.in_point
         rec_in = frames_to_timecode(record_frame, sequence.fps)
         rec_out = frames_to_timecode(record_frame + duration_frames, sequence.fps)
         record_frame += duration_frames
@@ -100,8 +133,8 @@ def export_edl(
         )
         lines.append(event_line)
 
-        # Source filename comment
-        lines.append(f"* FROM CLIP NAME: {_sanitize_edl_string(source.filename)}")
+        # Source/frame filename comment
+        lines.append(f"* FROM CLIP NAME: {clip_name}")
         lines.append("")
 
     # Write to file

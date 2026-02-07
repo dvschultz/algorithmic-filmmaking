@@ -42,6 +42,8 @@ class CinematographyWorker(CancellableWorker):
     the UI responsive. All signal emissions happen on the QThread,
     not from pool worker threads.
 
+    Supports both Clip and Frame inputs via AnalysisTarget.
+
     Signals:
         progress: Emitted with (current, total, clip_id) during processing
         clip_completed: Emitted with (clip_id, CinematographyAnalysis) when done
@@ -61,6 +63,7 @@ class CinematographyWorker(CancellableWorker):
         model: Optional[str] = None,
         parallelism: int = 2,
         skip_existing: bool = True,
+        analysis_targets: Optional[list] = None,
         parent=None,
     ):
         """Initialize the cinematography analysis worker.
@@ -72,6 +75,7 @@ class CinematographyWorker(CancellableWorker):
             model: VLM model to use (default: from settings)
             parallelism: Number of concurrent VLM requests (1-5, default: 2)
             skip_existing: Skip clips that already have cinematography data
+            analysis_targets: Optional list of AnalysisTarget objects (alternative to clips)
             parent: Optional parent QObject
         """
         super().__init__(parent)
@@ -80,7 +84,12 @@ class CinematographyWorker(CancellableWorker):
         self._parallelism = min(max(1, parallelism), 5)
 
         # Build immutable task list upfront - no mutable state in thread pool
-        self._tasks = self._build_tasks(clips, sources_by_id, skip_existing)
+        if analysis_targets:
+            self._tasks = self._build_tasks_from_targets(
+                analysis_targets, skip_existing
+            )
+        else:
+            self._tasks = self._build_tasks(clips, sources_by_id, skip_existing)
 
     def _build_tasks(
         self, clips: list, sources_by_id: dict, skip_existing: bool
@@ -117,6 +126,41 @@ class CinematographyWorker(CancellableWorker):
                     start_frame=clip.start_frame,
                     end_frame=clip.end_frame,
                     fps=source.fps,
+                )
+            )
+
+        return tasks
+
+    def _build_tasks_from_targets(
+        self, targets: list, skip_existing: bool
+    ) -> list[ClipAnalysisTask]:
+        """Build immutable task list from AnalysisTarget objects."""
+        tasks = []
+
+        for target in targets:
+            if skip_existing and target.cinematography is not None:
+                continue
+
+            image_path = target.image_path
+            if not image_path or not image_path.exists():
+                logger.warning(
+                    f"Skipping target {target.id}: image not found"
+                )
+                continue
+
+            # For frame targets, use "frame" mode since there's no video
+            source_path = None
+            if target.video_path and target.video_path.exists():
+                source_path = target.video_path
+
+            tasks.append(
+                ClipAnalysisTask(
+                    clip_id=target.id,
+                    thumbnail_path=image_path,
+                    source_path=source_path,
+                    start_frame=target.start_frame or 0,
+                    end_frame=target.end_frame or 0,
+                    fps=target.fps or 30.0,
                 )
             )
 

@@ -49,7 +49,7 @@ async def export_clips(
         if ctx:
             await ctx.report_progress(0.1, "Loading project...")
 
-        sources, clips, _, _, _ = load_project(proj_path)
+        sources, clips, _, _, _, _ = load_project(proj_path)
 
         # Build source lookup
         sources_by_id = {s.id: s for s in sources}
@@ -157,7 +157,7 @@ async def export_sequence(
         if ctx:
             await ctx.report_progress(0.1, "Loading project...")
 
-        sources, clips, sequence, _, _ = load_project(proj_path)
+        sources, clips, sequence, _, _, _ = load_project(proj_path)
 
         if not sequence:
             return json.dumps({"success": False, "error": "No sequence in project"})
@@ -246,7 +246,7 @@ async def export_edl(
         if ctx:
             await ctx.report_progress(0.1, "Loading project...")
 
-        sources, clips, sequence, _, _ = load_project(proj_path)
+        sources, clips, sequence, _, _, _ = load_project(proj_path)
 
         if not sequence:
             return json.dumps({"success": False, "error": "No sequence in project"})
@@ -325,7 +325,7 @@ async def export_dataset(
         if ctx:
             await ctx.report_progress(0.1, "Loading project...")
 
-        sources, clips, _, _, _ = load_project(proj_path)
+        sources, clips, _, _, _, _ = load_project(proj_path)
 
         if not sources:
             return json.dumps({"success": False, "error": "No sources in project"})
@@ -405,7 +405,7 @@ async def export_full_dataset(
         if ctx:
             await ctx.report_progress(0.1, "Loading project...")
 
-        sources, clips, sequence, metadata, ui_state = load_project(proj_path)
+        sources, clips, sequence, metadata, ui_state, _ = load_project(proj_path)
 
         # Build comprehensive export
         export_data = {

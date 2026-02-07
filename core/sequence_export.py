@@ -1,13 +1,19 @@
 """Export timeline sequences to video files."""
 
+import logging
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, TYPE_CHECKING
 from dataclasses import dataclass
 
 from models.sequence import Sequence, SequenceClip
 from models.clip import Source
+
+if TYPE_CHECKING:
+    from models.frame import Frame
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -43,6 +49,7 @@ class SequenceExporter:
         clips: dict[str, tuple],  # clip_id -> (Clip, Source)
         config: ExportConfig,
         progress_callback: Optional[Callable[[float, str], None]] = None,
+        frames: Optional[dict[str, "Frame"]] = None,
     ) -> bool:
         """
         Export a sequence to a video file.
@@ -53,6 +60,7 @@ class SequenceExporter:
             clips: Dict of clip_id -> (Clip, Source)
             config: Export configuration
             progress_callback: Optional callback (progress 0-1, message)
+            frames: Optional dict of frame_id -> Frame for frame-based entries
 
         Returns:
             True if export succeeded
@@ -73,21 +81,46 @@ class SequenceExporter:
                 if progress_callback:
                     progress_callback(i / total * 0.8, f"Processing clip {i+1}/{total}")
 
-                clip_data = clips.get(seq_clip.source_clip_id)
-                if not clip_data:
-                    continue
-
-                orig_clip, source = clip_data
                 segment_path = temp_path / f"segment_{i:04d}.mp4"
 
-                success = self._export_segment(
-                    source_path=source.file_path,
-                    output_path=segment_path,
-                    start_frame=seq_clip.in_point,
-                    end_frame=seq_clip.out_point,
-                    fps=config.fps,
-                    config=config,
-                )
+                if seq_clip.is_frame_entry:
+                    # Frame-based entry: generate video from still image
+                    if not frames:
+                        logger.warning(
+                            "Frame entry %s skipped: no frames dict provided",
+                            seq_clip.id,
+                        )
+                        continue
+                    frame = frames.get(seq_clip.frame_id)
+                    if not frame:
+                        logger.warning(
+                            "Frame entry %s skipped: frame_id %s not found",
+                            seq_clip.id,
+                            seq_clip.frame_id,
+                        )
+                        continue
+                    success = self._export_frame_segment(
+                        frame_path=frame.file_path,
+                        output_path=segment_path,
+                        hold_seconds=seq_clip.hold_frames / config.fps,
+                        fps=config.fps,
+                        config=config,
+                    )
+                else:
+                    # Clip-based entry: extract from source video
+                    clip_data = clips.get(seq_clip.source_clip_id)
+                    if not clip_data:
+                        continue
+
+                    orig_clip, source = clip_data
+                    success = self._export_segment(
+                        source_path=source.file_path,
+                        output_path=segment_path,
+                        start_frame=seq_clip.in_point,
+                        end_frame=seq_clip.out_point,
+                        fps=config.fps,
+                        config=config,
+                    )
 
                 if success:
                     segment_paths.append(segment_path)
@@ -145,6 +178,56 @@ class SequenceExporter:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         return result.returncode == 0
 
+    def _export_frame_segment(
+        self,
+        frame_path: Path,
+        output_path: Path,
+        hold_seconds: float,
+        fps: float,
+        config: ExportConfig,
+    ) -> bool:
+        """Export a still image as a video segment with silent audio.
+
+        Creates a video from a single image, held for the specified duration,
+        with a silent audio track for concat compatibility.
+        """
+        vf_parts = []
+        if config.width and config.height:
+            vf_parts.append(
+                f"scale={config.width}:{config.height}"
+                ":force_original_aspect_ratio=decrease"
+                f",pad={config.width}:{config.height}"
+                ":(ow-iw)/2:(oh-ih)/2"
+            )
+
+        cmd = [
+            self.ffmpeg_path,
+            "-y",
+            "-loop", "1",
+            "-i", str(frame_path),
+            "-f", "lavfi",
+            "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+            "-t", str(hold_seconds),
+            "-r", str(fps),
+        ]
+
+        if vf_parts:
+            cmd.extend(["-vf", ",".join(vf_parts)])
+
+        cmd.extend([
+            "-c:v", config.video_codec,
+            "-preset", config.preset,
+            "-crf", str(config.crf),
+            "-pix_fmt", "yuv420p",
+            "-c:a", config.audio_codec,
+            "-b:a", config.audio_bitrate,
+            "-shortest",
+            str(output_path),
+        ])
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        return result.returncode == 0
+
     def _concat_segments(
         self,
         segment_paths: list[Path],
@@ -187,6 +270,7 @@ def export_sequence(
     clips: dict[str, tuple],
     output_path: Path,
     progress_callback: Optional[Callable[[float, str], None]] = None,
+    frames: Optional[dict[str, "Frame"]] = None,
 ) -> bool:
     """
     Convenience function to export a sequence with default settings.
@@ -197,6 +281,7 @@ def export_sequence(
         clips: Dict of clip_id -> (Clip, Source)
         output_path: Where to save the output video
         progress_callback: Optional callback (progress 0-1, message)
+        frames: Optional dict of frame_id -> Frame for frame-based entries
 
     Returns:
         True if export succeeded
@@ -213,4 +298,5 @@ def export_sequence(
         clips=clips,
         config=config,
         progress_callback=progress_callback,
+        frames=frames,
     )

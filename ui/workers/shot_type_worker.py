@@ -36,6 +36,8 @@ class ShotTypeWorker(CancellableWorker):
     - CPU: CLIP zero-shot classification from thumbnails (free, local)
     - Cloud: VideoMAE model on Replicate for video-based classification (paid)
 
+    Supports both Clip and Frame inputs via AnalysisTarget.
+
     Uses ThreadPoolExecutor for parallel processing. Default parallelism is 1
     because the CLIP model singleton is not thread-safe for inference.
 
@@ -56,11 +58,17 @@ class ShotTypeWorker(CancellableWorker):
         sources_by_id: dict,
         parallelism: int = 1,
         skip_existing: bool = True,
+        analysis_targets: Optional[list] = None,
         parent=None,
     ):
         super().__init__(parent)
         self._parallelism = min(max(1, parallelism), 4)
-        self._tasks = self._build_tasks(clips, sources_by_id, skip_existing)
+        if analysis_targets:
+            self._tasks = self._build_tasks_from_targets(
+                analysis_targets, skip_existing
+            )
+        else:
+            self._tasks = self._build_tasks(clips, sources_by_id, skip_existing)
 
     def _build_tasks(
         self, clips: list, sources_by_id: dict, skip_existing: bool
@@ -86,6 +94,32 @@ class ShotTypeWorker(CancellableWorker):
                     start_frame=clip.start_frame,
                     end_frame=clip.end_frame,
                     fps=fps,
+                )
+            )
+        return tasks
+
+    def _build_tasks_from_targets(
+        self, targets: list, skip_existing: bool
+    ) -> list[ShotTypeTask]:
+        """Build immutable task list from AnalysisTarget objects."""
+        tasks = []
+        for target in targets:
+            if skip_existing and target.shot_type is not None:
+                continue
+            image_path = target.image_path
+            if not image_path or not image_path.exists():
+                logger.warning(
+                    f"Skipping target {target.id}: image not found"
+                )
+                continue
+            tasks.append(
+                ShotTypeTask(
+                    clip_id=target.id,
+                    thumbnail_path=image_path,
+                    source_path=target.video_path,
+                    start_frame=target.start_frame or 0,
+                    end_frame=target.end_frame or 0,
+                    fps=target.fps,
                 )
             )
         return tasks

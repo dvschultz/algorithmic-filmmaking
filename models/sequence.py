@@ -7,7 +7,11 @@ import uuid
 
 @dataclass
 class SequenceClip:
-    """A clip placed on the timeline."""
+    """A clip or frame placed on the timeline.
+
+    For clip-based entries: source_clip_id and source_id are set, frame_id is None.
+    For frame-based entries: frame_id is set, source_clip_id may be empty.
+    """
 
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     source_clip_id: str = ""  # Reference to original Clip
@@ -16,10 +20,19 @@ class SequenceClip:
     start_frame: int = 0  # Position on timeline (in frames)
     in_point: int = 0  # Trim start (frames into source clip)
     out_point: int = 0  # Trim end (frames into source clip)
+    frame_id: Optional[str] = None  # Reference to Frame (if frame-based)
+    hold_frames: int = 1  # Number of timeline frames to hold (for frame entries)
+
+    @property
+    def is_frame_entry(self) -> bool:
+        """Whether this is a frame-based entry (vs. clip-based)."""
+        return self.frame_id is not None
 
     @property
     def duration_frames(self) -> int:
-        """Duration of this clip on the timeline."""
+        """Duration of this entry on the timeline."""
+        if self.is_frame_entry:
+            return self.hold_frames
         return self.out_point - self.in_point
 
     def start_time(self, fps: float) -> float:
@@ -36,7 +49,7 @@ class SequenceClip:
 
     def to_dict(self) -> dict:
         """Serialize to dictionary for JSON export."""
-        return {
+        data = {
             "id": self.id,
             "source_clip_id": self.source_clip_id,
             "source_id": self.source_id,
@@ -45,6 +58,11 @@ class SequenceClip:
             "in_point": self.in_point,
             "out_point": self.out_point,
         }
+        if self.frame_id is not None:
+            data["frame_id"] = self.frame_id
+        if self.hold_frames != 1:
+            data["hold_frames"] = self.hold_frames
+        return data
 
     @classmethod
     def from_dict(cls, data: dict) -> "SequenceClip":
@@ -57,6 +75,8 @@ class SequenceClip:
             start_frame=data.get("start_frame", 0),
             in_point=data.get("in_point", 0),
             out_point=data.get("out_point", 0),
+            frame_id=data.get("frame_id"),
+            hold_frames=data.get("hold_frames", 1),
         )
 
 

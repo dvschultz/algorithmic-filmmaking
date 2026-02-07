@@ -159,3 +159,35 @@ class ThumbnailGenerator:
         if self.cache_dir.exists():
             shutil.rmtree(self.cache_dir)
             self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+
+def generate_image_thumbnail(
+    image_path: Path,
+    output_path: Path,
+    max_size: tuple[int, int] = (220, 160),
+) -> Path:
+    """Generate a JPEG thumbnail from an image file.
+
+    Supports PNG, JPG, TIFF, BMP, and WebP input formats.  The thumbnail
+    maintains the original aspect ratio and fits within *max_size*.
+
+    Args:
+        image_path: Source image file.
+        output_path: Destination for the JPEG thumbnail.
+        max_size: ``(width, height)`` bounding box.
+
+    Returns:
+        *output_path* after writing.
+    """
+    from PIL import Image
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with Image.open(image_path) as img:
+        img.thumbnail(max_size, Image.LANCZOS)
+        # Convert to RGB in case source has alpha (PNG) or palette mode
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        img.save(output_path, format="JPEG", quality=85)
+
+    return output_path

@@ -2,8 +2,9 @@
 
 import subprocess
 import shutil
+import threading
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 
 class FFmpegProcessor:
@@ -191,3 +192,171 @@ def extract_frame(
     )
 
     return result.returncode == 0 and output_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# Batch frame extraction
+# ---------------------------------------------------------------------------
+
+_DEFAULT_PNG_SIZE_ESTIMATE = 500 * 1024  # ~500 KB per 1080p PNG frame
+
+
+def estimate_extraction_size(
+    video_path: Path,
+    fps: float,
+    mode: str,
+    interval: int,
+    start_frame: int = 0,
+    end_frame: Optional[int] = None,
+) -> tuple[int, int]:
+    """Estimate disk usage and frame count for a batch extraction.
+
+    Args:
+        video_path: Source video file (used only for duration lookup when
+            *end_frame* is ``None``).
+        fps: Video frame rate.
+        mode: Extraction mode – ``"all"``, ``"interval"``, or ``"smart"``.
+        interval: Every Nth frame (only meaningful for ``"interval"`` mode).
+        start_frame: First frame to extract (0-indexed).
+        end_frame: Last frame (exclusive).  ``None`` means until end of video.
+
+    Returns:
+        ``(estimated_bytes, frame_count)`` tuple.
+    """
+    if end_frame is None:
+        # Derive total frames from video duration
+        ffprobe_path = shutil.which("ffprobe")
+        if ffprobe_path is None:
+            raise RuntimeError("FFprobe not found")
+        import json
+
+        cmd = [
+            ffprobe_path,
+            "-v", "quiet",
+            "-print_format", "json",
+            "-show_format",
+            str(video_path),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            raise RuntimeError(f"FFprobe failed: {result.stderr}")
+        data = json.loads(result.stdout)
+        duration = float(data.get("format", {}).get("duration", 0))
+        end_frame = int(duration * fps)
+
+    total_frames_in_range = max(0, end_frame - start_frame)
+
+    if mode == "interval":
+        frame_count = max(0, (total_frames_in_range + interval - 1) // interval)
+    elif mode == "smart":
+        # Heuristic: assume ~1 scene change per 3 seconds of footage
+        duration_secs = total_frames_in_range / fps if fps > 0 else 0
+        frame_count = max(1, int(duration_secs / 3))
+    else:  # "all"
+        frame_count = total_frames_in_range
+
+    estimated_bytes = frame_count * _DEFAULT_PNG_SIZE_ESTIMATE
+    return estimated_bytes, frame_count
+
+
+def extract_frames_batch(
+    video_path: Path,
+    output_dir: Path,
+    fps: float,
+    mode: str = "all",
+    interval: int = 1,
+    start_frame: int = 0,
+    end_frame: Optional[int] = None,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+    cancel_event: Optional[threading.Event] = None,
+) -> list[Path]:
+    """Extract frames from a video in batch.
+
+    Args:
+        video_path: Source video file.
+        output_dir: Directory to write extracted PNG frames into.
+        fps: Video frame rate.
+        mode: ``"all"`` extracts every frame, ``"interval"`` every *interval*-th
+            frame, ``"smart"`` extracts frames at scene changes.
+        interval: Frame interval for ``"interval"`` mode.
+        start_frame: First frame (0-indexed, inclusive).
+        end_frame: Last frame (exclusive).  ``None`` means until end of video.
+        progress_callback: ``callback(current, total)`` invoked after extraction.
+        cancel_event: When set, the extraction is aborted early.
+
+    Returns:
+        Sorted list of ``Path`` objects for extracted frames.
+    """
+    ffmpeg_path = shutil.which("ffmpeg")
+    if ffmpeg_path is None:
+        raise RuntimeError("FFmpeg not found")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Early cancellation check
+    if cancel_event is not None and cancel_event.is_set():
+        return []
+
+    # Compute estimated total for progress reporting
+    _, estimated_total = estimate_extraction_size(
+        video_path, fps, mode, interval, start_frame, end_frame,
+    )
+
+    # Build the FFmpeg command ------------------------------------------------
+    cmd: list[str] = [ffmpeg_path, "-y"]
+
+    # Time-range flags (applied before -i for fast seeking)
+    if start_frame > 0:
+        cmd.extend(["-ss", str(start_frame / fps)])
+    cmd.extend(["-i", str(video_path)])
+    if end_frame is not None:
+        # Duration relative to the seek point
+        duration = (end_frame - start_frame) / fps
+        cmd.extend(["-t", str(duration)])
+
+    # Mode-specific filters
+    if mode == "interval":
+        cmd.extend([
+            "-vf", f"select=not(mod(n\\,{interval}))",
+            "-vsync", "vfr",
+        ])
+    elif mode == "smart":
+        cmd.extend([
+            "-vf", "select='gt(scene\\,0.3)'",
+            "-vsync", "vfr",
+        ])
+    # "all" mode – no filter needed
+
+    output_pattern = str(output_dir / "frame_%06d.png")
+    cmd.append(output_pattern)
+
+    # Run FFmpeg --------------------------------------------------------------
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    # Poll for cancellation while FFmpeg is running
+    while True:
+        if cancel_event is not None and cancel_event.is_set():
+            process.terminate()
+            process.wait(timeout=10)
+            return []
+        try:
+            process.wait(timeout=0.5)
+            break  # Process finished
+        except subprocess.TimeoutExpired:
+            continue
+
+    if process.returncode != 0:
+        stderr = process.stderr.read().decode("utf-8", errors="replace") if process.stderr else ""
+        raise RuntimeError(f"FFmpeg frame extraction failed (rc={process.returncode}): {stderr}")
+
+    # Collect results ---------------------------------------------------------
+    extracted = sorted(output_dir.glob("frame_*.png"))
+
+    if progress_callback is not None:
+        progress_callback(len(extracted), estimated_total)
+
+    return extracted

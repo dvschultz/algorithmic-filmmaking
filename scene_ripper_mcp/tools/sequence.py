@@ -32,7 +32,7 @@ async def get_sequence(
     try:
         from core.project import load_project
 
-        sources, clips, sequence, metadata, ui_state = load_project(path)
+        sources, clips, sequence, metadata, ui_state, _ = load_project(path)
 
         if not sequence:
             return json.dumps(
@@ -127,7 +127,7 @@ async def add_to_sequence(
         from core.project import load_project, save_project
         from models.sequence import Sequence, SequenceClip, Track
 
-        sources, clips, sequence, metadata, ui_state = load_project(path)
+        sources, clips, sequence, metadata, ui_state, _ = load_project(path)
 
         # Build lookups
         sources_by_id = {s.id: s for s in sources}
@@ -242,7 +242,7 @@ async def remove_from_sequence(
     try:
         from core.project import load_project, save_project
 
-        sources, clips, sequence, metadata, ui_state = load_project(path)
+        sources, clips, sequence, metadata, ui_state, _ = load_project(path)
 
         if not sequence:
             return json.dumps({"success": False, "error": "No sequence in project"})
@@ -308,7 +308,7 @@ async def reorder_sequence(
     try:
         from core.project import load_project, save_project
 
-        sources, clips, sequence, metadata, ui_state = load_project(path)
+        sources, clips, sequence, metadata, ui_state, _ = load_project(path)
 
         if not sequence:
             return json.dumps({"success": False, "error": "No sequence in project"})
@@ -392,7 +392,7 @@ async def clear_sequence(
     try:
         from core.project import load_project, save_project
 
-        sources, clips, sequence, metadata, ui_state = load_project(path)
+        sources, clips, sequence, metadata, ui_state, _ = load_project(path)
 
         if not sequence:
             return json.dumps(
@@ -459,7 +459,7 @@ async def shuffle_sequence(
         import random
         from core.project import load_project, save_project
 
-        sources, clips, sequence, metadata, ui_state = load_project(path)
+        sources, clips, sequence, metadata, ui_state, _ = load_project(path)
 
         if not sequence:
             return json.dumps({"success": False, "error": "No sequence in project"})
