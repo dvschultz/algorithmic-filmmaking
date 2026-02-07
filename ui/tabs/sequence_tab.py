@@ -22,6 +22,7 @@ from ui.timeline import TimelineWidget
 from ui.widgets import SortingCardGrid, TimelinePreview
 from ui.dialogs import ExquisiteCorpusDialog, StorytellerDialog, MissingDescriptionsDialog
 from ui.theme import theme, Spacing
+from ui.workers.sequence_worker import SequenceWorker
 from core.remix import generate_sequence
 
 logger = logging.getLogger(__name__)
@@ -165,6 +166,7 @@ class SequenceTab(BaseTab):
     stop_requested = Signal()
     export_requested = Signal()
     clip_added = Signal(object, object)  # Clip, Source
+    clips_data_changed = Signal(list)  # Emitted when auto-compute mutates clip metadata
 
     # Intention-first workflow signal: emitted when card is clicked with no clips
     # Parameters: algorithm (str), direction (str or None)
@@ -189,6 +191,7 @@ class SequenceTab(BaseTab):
 
         # Guard flags
         self._apply_in_progress = False
+        self._sequence_worker: Optional[SequenceWorker] = None
 
         super().__init__(parent)
 
@@ -394,10 +397,13 @@ class SequenceTab(BaseTab):
         self._apply_algorithm(algorithm, clips)
 
     def _apply_algorithm(self, algorithm: str, clips: list, direction: str = None):
-        """Generate sequence and transition to timeline state.
+        """Generate sequence in a background worker and transition to timeline.
+
+        Heavy auto-compute operations (brightness, volume, CLIP embeddings)
+        run off the main thread so the UI stays responsive.
 
         Args:
-            algorithm: Algorithm name (Color, Duration, Shuffle, Sequential)
+            algorithm: Algorithm name
             clips: List of (Clip, Source) tuples
             direction: Sort direction (e.g., "short_first", "long_first" for duration)
         """
@@ -406,18 +412,36 @@ class SequenceTab(BaseTab):
             return
         self._apply_in_progress = True
 
+        algo_lower = algorithm.lower()
+
+        # Cancel any previous worker
+        if self._sequence_worker is not None:
+            self._sequence_worker.cancel()
+            self._sequence_worker.wait(2000)
+            self._sequence_worker = None
+
+        self.status_message.emit(f"Generating {algo_lower} sequence...")
+
+        worker = SequenceWorker(
+            algorithm=algo_lower,
+            clips=clips,
+            direction=direction,
+            parent=self,
+        )
+        # Store algorithm for the completion slot
+        worker._pending_algorithm = algorithm
+        worker.sequence_ready.connect(self._on_sequence_ready)
+        worker.error.connect(self._on_sequence_error)
+        self._sequence_worker = worker
+        worker.start()
+
+    def _on_sequence_ready(self, sorted_clips: list):
+        """Handle completed sequence generation (runs on main thread)."""
+        worker = self._sequence_worker
+        algorithm = getattr(worker, "_pending_algorithm", "") if worker else ""
+        algo_lower = algorithm.lower()
+
         try:
-            # Normalize algorithm name
-            algo_lower = algorithm.lower()
-
-            # Generate sorted clips
-            sorted_clips = generate_sequence(
-                algorithm=algo_lower,
-                clips=clips,
-                clip_count=len(clips),
-                direction=direction,
-            )
-
             # Clear and populate timeline
             self.timeline.clear_timeline()
 
@@ -452,12 +476,23 @@ class SequenceTab(BaseTab):
 
             logger.info(f"Applied {len(sorted_clips)} clips with {algorithm} algorithm")
 
+            # Notify that clip metadata may have been mutated by auto-compute
+            self.clips_data_changed.emit([clip for clip, _ in sorted_clips])
+
         except Exception as e:
-            logger.error(f"Error applying algorithm: {e}")
+            logger.error(f"Error populating timeline: {e}")
             QMessageBox.critical(self, "Error", f"Failed to generate sequence: {e}")
 
         finally:
             self._apply_in_progress = False
+            self._sequence_worker = None
+
+    def _on_sequence_error(self, error_msg: str):
+        """Handle sequence generation failure."""
+        logger.error(f"Sequence worker error: {error_msg}")
+        QMessageBox.critical(self, "Error", f"Failed to generate sequence: {error_msg}")
+        self._apply_in_progress = False
+        self._sequence_worker = None
 
     def _show_exquisite_corpus_dialog(self, clips: list):
         """Show the Exquisite Corpus dialog for text extraction and poem generation.
@@ -1105,6 +1140,9 @@ class SequenceTab(BaseTab):
             # Ensure timeline state
             self._set_state(self.STATE_TIMELINE)
 
+            # Notify that clip metadata may have been mutated by auto-compute
+            self.clips_data_changed.emit([clip for clip, _ in sorted_clips])
+
             return {
                 "success": True,
                 "algorithm": algorithm,
@@ -1211,6 +1249,9 @@ class SequenceTab(BaseTab):
             self._update_card_availability()
 
             logger.info(f"Applied {len(sorted_clips)} clips from intention workflow with {algorithm}")
+
+            # Notify that clip metadata may have been mutated by auto-compute
+            self.clips_data_changed.emit([clip for clip, _ in sorted_clips])
 
             return {
                 "success": True,

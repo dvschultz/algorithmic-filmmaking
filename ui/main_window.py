@@ -1173,6 +1173,8 @@ class MainWindow(QMainWindow):
         self.sequence_tab.timeline.sequence_changed.connect(self._on_sequence_ids_changed)
         # Mark project dirty when sequence changes
         self.sequence_tab.timeline.sequence_changed.connect(self._mark_dirty)
+        # Persist auto-computed clip metadata (brightness, volume, embeddings)
+        self.sequence_tab.clips_data_changed.connect(lambda clips: self.project.update_clips(clips))
 
         # Frames tab signals
         self.frames_tab.extract_frames_requested.connect(self._on_extract_frames_requested)

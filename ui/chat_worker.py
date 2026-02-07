@@ -721,7 +721,7 @@ When creating plans, follow these tool dependency rules:
 2. If the user wants to search multiple topics, create a plan that interleaves
    search and download steps for each topic.
 
-3. NO REMIX/GENERATE STEPS: Do NOT include steps for "generating remixes". These features are not implemented. If the user asks for remix functionality, explain that it's not available and suggest arranging clips in the Sequence tab instead.
+3. SEQUENCE GENERATION: Use the generate_remix tool to create sequences with any of the 13 sorting algorithms. Use list_sorting_algorithms first to check which algorithms are available based on clip analysis state.
 """
 
         # For Ollama, include tool schemas in the prompt since we don't pass them via API

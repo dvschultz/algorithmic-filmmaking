@@ -3720,27 +3720,18 @@ def list_sorting_algorithms(project) -> dict:
     clips = project.clips
     has_colors = any(clip.dominant_colors for clip in clips) if clips else False
 
+    has_brightness = any(clip.average_brightness is not None for clip in clips) if clips else False
+    has_volume = any(clip.rms_volume is not None for clip in clips) if clips else False
+    has_shot_type = any(clip.shot_type for clip in clips) if clips else False
+    has_embeddings = any(clip.embedding is not None for clip in clips) if clips else False
+    has_boundary_emb = any(
+        clip.first_frame_embedding is not None and clip.last_frame_embedding is not None
+        for clip in clips
+    ) if clips else False
+    has_text = any(clip.extracted_texts for clip in clips) if clips else False
+    has_descriptions = any(clip.description for clip in clips) if clips else False
+
     algorithms = [
-        {
-            "key": "color",
-            "name": "Chromatic Flow",
-            "description": "Arrange clips along a color gradient",
-            "available": has_colors,
-            "reason": None if has_colors else "Run color analysis on clips first",
-            "parameters": [
-                {"name": "direction", "type": "string", "options": ["rainbow", "warm_to_cool", "cool_to_warm"], "default": "rainbow"}
-            ]
-        },
-        {
-            "key": "duration",
-            "name": "Tempo Shift",
-            "description": "Order clips from shortest to longest (or reverse)",
-            "available": True,
-            "reason": None,
-            "parameters": [
-                {"name": "direction", "type": "string", "options": ["short_first", "long_first"], "default": "short_first"}
-            ]
-        },
         {
             "key": "shuffle",
             "name": "Dice Roll",
@@ -3759,6 +3750,108 @@ def list_sorting_algorithms(project) -> dict:
             "reason": None,
             "parameters": []
         },
+        {
+            "key": "duration",
+            "name": "Tempo Shift",
+            "description": "Order clips from shortest to longest (or reverse)",
+            "available": True,
+            "reason": None,
+            "parameters": [
+                {"name": "direction", "type": "string", "options": ["short_first", "long_first"], "default": "short_first"}
+            ]
+        },
+        {
+            "key": "color",
+            "name": "Chromatic Flow",
+            "description": "Arrange clips along a color gradient",
+            "available": has_colors,
+            "reason": None if has_colors else "Run color analysis on clips first",
+            "parameters": [
+                {"name": "direction", "type": "string", "options": ["rainbow", "warm_to_cool", "cool_to_warm"], "default": "rainbow"}
+            ]
+        },
+        {
+            "key": "color_cycle",
+            "name": "Color Cycle",
+            "description": "Curate clips with strong color identity and cycle through the spectrum",
+            "available": has_colors,
+            "reason": None if has_colors else "Run color analysis on clips first",
+            "parameters": [
+                {"name": "direction", "type": "string", "options": ["rainbow", "warm_to_cool", "cool_to_warm"], "default": "rainbow"}
+            ]
+        },
+        {
+            "key": "brightness",
+            "name": "Into the Dark",
+            "description": "Arrange clips from light to shadow, or shadow to light (auto-computes if needed)",
+            "available": True,
+            "reason": None,
+            "parameters": [
+                {"name": "direction", "type": "string", "options": ["light_to_dark", "dark_to_light"], "default": "light_to_dark"}
+            ]
+        },
+        {
+            "key": "volume",
+            "name": "Crescendo",
+            "description": "Build from silence to thunder, or thunder to silence (auto-computes if needed)",
+            "available": True,
+            "reason": None,
+            "parameters": [
+                {"name": "direction", "type": "string", "options": ["quiet_to_loud", "loud_to_quiet"], "default": "quiet_to_loud"}
+            ]
+        },
+        {
+            "key": "shot_type",
+            "name": "Focal Ladder",
+            "description": "Arrange clips by camera shot scale",
+            "available": has_shot_type,
+            "reason": None if has_shot_type else "Run shot type classification on clips first",
+            "parameters": [
+                {"name": "direction", "type": "string", "options": ["wide_to_close", "close_to_wide"], "default": "wide_to_close"}
+            ]
+        },
+        {
+            "key": "proximity",
+            "name": "Up Close and Personal",
+            "description": "Glide from distant vistas to intimate close-ups",
+            "available": has_shot_type,
+            "reason": None if has_shot_type else "Run shot type classification on clips first",
+            "parameters": [
+                {"name": "direction", "type": "string", "options": ["far_to_near", "near_to_far"], "default": "far_to_near"}
+            ]
+        },
+        {
+            "key": "similarity_chain",
+            "name": "Human Centipede",
+            "description": "Chain clips together by visual similarity (auto-computes embeddings if needed)",
+            "available": True,
+            "reason": None,
+            "parameters": []
+        },
+        {
+            "key": "match_cut",
+            "name": "Match Cut",
+            "description": "Find hidden connections between clips using boundary frame similarity (auto-computes if needed)",
+            "available": True,
+            "reason": None,
+            "parameters": []
+        },
+        {
+            "key": "exquisite_corpus",
+            "name": "Exquisite Corpus",
+            "description": "Generate a poem from on-screen text",
+            "available": has_text,
+            "reason": None if has_text else "Run OCR/text extraction on clips first",
+            "parameters": []
+        },
+        {
+            "key": "storyteller",
+            "name": "Storyteller",
+            "description": "Create a narrative from clip descriptions",
+            "available": has_descriptions,
+            "reason": None if has_descriptions else "Run clip description analysis first",
+            "parameters": []
+        },
     ]
 
     return {
@@ -3768,14 +3861,14 @@ def list_sorting_algorithms(project) -> dict:
     }
 
 
-# TODO: Re-enable when Generate tab is built
-# @tools.register(
-#     description="Generate a sequence using a sorting algorithm and apply it to the timeline. "
-#                 "Available algorithms: color, duration, shuffle, sequential. "
-#                 "Returns the generated sequence with clip details.",
-#     requires_project=True,
-#     modifies_gui_state=True
-# )
+@tools.register(
+    description="Generate a sequence using a sorting algorithm and apply it to the timeline. "
+                "Available algorithms: color, color_cycle, duration, brightness, volume, "
+                "shuffle, sequential, shot_type, proximity, similarity_chain, match_cut, "
+                "exquisite_corpus, storyteller. Use list_sorting_algorithms to check availability.",
+    requires_project=True,
+    modifies_gui_state=True
+)
 def generate_remix(
     project,
     main_window,
@@ -3787,16 +3880,21 @@ def generate_remix(
     """Generate a sequence using the specified algorithm and apply to timeline.
 
     Args:
-        algorithm: One of "color", "duration", "shuffle", "sequential"
+        algorithm: One of the 13 sorting algorithms (e.g. "color", "brightness",
+                   "similarity_chain", "match_cut", etc.)
         clip_count: Number of clips to include (1-100)
-        direction: For color: "rainbow", "warm_to_cool", "cool_to_warm"
-                   For duration: "short_first", "long_first"
+        direction: Algorithm-specific direction (e.g. "rainbow", "short_first",
+                   "light_to_dark", "quiet_to_loud", "wide_to_close")
         seed: For shuffle: random seed for reproducibility (0 = random)
 
     Returns:
         Dict with success status, applied clips, and algorithm used
     """
-    valid_algorithms = ["color", "duration", "shuffle", "sequential"]
+    valid_algorithms = [
+        "color", "color_cycle", "duration", "brightness", "volume",
+        "shuffle", "sequential", "shot_type", "proximity",
+        "similarity_chain", "match_cut", "exquisite_corpus", "storyteller",
+    ]
     if algorithm not in valid_algorithms:
         return {
             "success": False,

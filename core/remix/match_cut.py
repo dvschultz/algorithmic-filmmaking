@@ -104,14 +104,6 @@ def match_cut_chain(
     return result
 
 
-def _chain_cost(chain: list[int], cost_matrix: np.ndarray) -> float:
-    """Compute total transition cost of a chain."""
-    total = 0.0
-    for i in range(len(chain) - 1):
-        total += cost_matrix[chain[i]][chain[i + 1]]
-    return total
-
-
 def _two_opt_refine(
     chain: list[int],
     cost_matrix: np.ndarray,
@@ -119,31 +111,63 @@ def _two_opt_refine(
 ) -> list[int]:
     """Apply 2-opt local search to improve chain quality.
 
-    Tries reversing sub-sequences to find lower-cost orderings.
+    Uses O(1) delta evaluation per candidate swap via prefix sums over
+    forward and reverse edge costs, giving O(N^2) per iteration instead
+    of the naive O(N^3).
 
     Args:
         chain: Initial chain (list of indices)
-        cost_matrix: NxN transition cost matrix
+        cost_matrix: NxN asymmetric transition cost matrix
         max_iterations: Maximum number of improvement iterations
 
     Returns:
         Improved chain (possibly the same if no improvement found)
     """
-    best_cost = _chain_cost(chain, cost_matrix)
+    n = len(chain)
     improved = True
     iterations = 0
 
     while improved and iterations < max_iterations:
         improved = False
-        for i in range(1, len(chain) - 1):
-            for j in range(i + 1, len(chain)):
-                # Try reversing the segment between i and j
-                new_chain = chain[:i] + chain[i:j + 1][::-1] + chain[j + 1:]
-                new_cost = _chain_cost(new_chain, cost_matrix)
 
-                if new_cost < best_cost - 1e-6:
-                    chain = new_chain
-                    best_cost = new_cost
+        # Precompute edge costs and prefix sums for O(1) delta checks.
+        # fwd_edge[k] = cost of chain[k] → chain[k+1]
+        # rev_edge[k] = cost of chain[k+1] → chain[k] (used when segment is reversed)
+        fwd_edge = np.array(
+            [cost_matrix[chain[k], chain[k + 1]] for k in range(n - 1)],
+            dtype=np.float64,
+        )
+        rev_edge = np.array(
+            [cost_matrix[chain[k + 1], chain[k]] for k in range(n - 1)],
+            dtype=np.float64,
+        )
+        # prefix_fwd[k] = sum of fwd_edge[0..k-1], prefix_fwd[0] = 0
+        prefix_fwd = np.empty(n, dtype=np.float64)
+        prefix_fwd[0] = 0.0
+        np.cumsum(fwd_edge, out=prefix_fwd[1:])
+        prefix_rev = np.empty(n, dtype=np.float64)
+        prefix_rev[0] = 0.0
+        np.cumsum(rev_edge, out=prefix_rev[1:])
+
+        for i in range(1, n - 1):
+            for j in range(i + 1, n):
+                # Delta from reversing segment chain[i..j]:
+                # 1. Boundary edge before segment changes
+                delta = (
+                    cost_matrix[chain[i - 1], chain[j]]
+                    - cost_matrix[chain[i - 1], chain[i]]
+                )
+                # 2. Boundary edge after segment changes (if not at end)
+                if j < n - 1:
+                    delta += (
+                        cost_matrix[chain[i], chain[j + 1]]
+                        - cost_matrix[chain[j], chain[j + 1]]
+                    )
+                # 3. Internal edges reverse direction
+                delta += (prefix_rev[j] - prefix_rev[i]) - (prefix_fwd[j] - prefix_fwd[i])
+
+                if delta < -1e-6:
+                    chain[i:j + 1] = chain[i:j + 1][::-1]
                     improved = True
                     break
             if improved:

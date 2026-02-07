@@ -468,7 +468,7 @@ class TestMatchCut:
 
     def test_two_opt_improves_or_maintains_cost(self):
         """2-opt refinement should never increase total chain cost."""
-        from core.remix.match_cut import match_cut_chain, _chain_cost
+        from core.remix.match_cut import match_cut_chain
         source = _make_source()
         import numpy as np
 
