@@ -1,5 +1,6 @@
 """Shared UI widgets."""
 
+from .cost_estimate_panel import CostEstimatePanel
 from .editable_text_area import EditableTextArea
 from .empty_state import EmptyStateWidget
 from .range_slider import RangeSlider, DurationRangeSlider
@@ -8,6 +9,7 @@ from .sorting_card_grid import SortingCardGrid
 from .timeline_preview import TimelinePreview
 
 __all__ = [
+    "CostEstimatePanel",
     "DurationRangeSlider",
     "EditableTextArea",
     "EmptyStateWidget",
