@@ -79,20 +79,9 @@ def similarity_chain(
                 break
 
     # Greedy nearest-neighbor chain
-    visited = {start_idx}
-    chain = [start_idx]
+    from core.remix._traversal import greedy_nearest_neighbor
 
-    for _ in range(n - 1):
-        current = chain[-1]
-        distances = dist_matrix[current].copy()
-
-        # Set visited to infinity
-        for v in visited:
-            distances[v] = float("inf")
-
-        next_idx = int(np.argmin(distances))
-        chain.append(next_idx)
-        visited.add(next_idx)
+    chain = greedy_nearest_neighbor(dist_matrix, start_idx)
 
     # Build result
     result = [(with_emb[idx][1], with_emb[idx][2]) for idx in chain]

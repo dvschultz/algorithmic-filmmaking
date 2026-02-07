@@ -1,9 +1,15 @@
 """Data models for video sources and clips."""
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 import uuid
+
+logger = logging.getLogger(__name__)
+
+# Expected CLIP ViT-B/32 embedding dimension
+EMBEDDING_DIM = 512
 
 if TYPE_CHECKING:
     from core.transcription import TranscriptSegment
@@ -157,6 +163,27 @@ class Source:
             thumbnail_path=None,  # Regenerate on load
             color_profile=data.get("color_profile"),
         )
+
+
+def _validate_optional_float(value, field_name: str) -> Optional[float]:
+    """Validate that a deserialized value is a float or None."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    logger.warning(f"Invalid type for {field_name}: {type(value).__name__}, discarding")
+    return None
+
+
+def _validate_embedding(value, field_name: str) -> Optional[list[float]]:
+    """Validate that a deserialized embedding has the expected dimension."""
+    if value is None:
+        return None
+    if not isinstance(value, list) or len(value) != EMBEDDING_DIM:
+        dim = len(value) if isinstance(value, list) else type(value).__name__
+        logger.warning(f"Invalid {field_name}: expected {EMBEDDING_DIM}-dim list, got {dim}, discarding")
+        return None
+    return value
 
 
 @dataclass
@@ -377,10 +404,10 @@ class Clip:
             extracted_texts=extracted_texts,
             # Rich cinematography analysis
             cinematography=cinematography,
-            # Sequencer algorithm cache fields
-            average_brightness=data.get("average_brightness"),
-            rms_volume=data.get("rms_volume"),
-            embedding=data.get("embedding"),
-            first_frame_embedding=data.get("first_frame_embedding"),
-            last_frame_embedding=data.get("last_frame_embedding"),
+            # Sequencer algorithm cache fields (validated)
+            average_brightness=_validate_optional_float(data.get("average_brightness"), "average_brightness"),
+            rms_volume=_validate_optional_float(data.get("rms_volume"), "rms_volume"),
+            embedding=_validate_embedding(data.get("embedding"), "embedding"),
+            first_frame_embedding=_validate_embedding(data.get("first_frame_embedding"), "first_frame_embedding"),
+            last_frame_embedding=_validate_embedding(data.get("last_frame_embedding"), "last_frame_embedding"),
         )

@@ -78,20 +78,9 @@ def match_cut_chain(
                 break
 
     # Greedy nearest-neighbor chain
-    visited = {start_idx}
-    chain = [start_idx]
+    from core.remix._traversal import greedy_nearest_neighbor
 
-    for _ in range(n - 1):
-        current = chain[-1]
-        costs = cost_matrix[current].copy()
-
-        # Set visited to infinity
-        for v in visited:
-            costs[v] = float("inf")
-
-        next_idx = int(np.argmin(costs))
-        chain.append(next_idx)
-        visited.add(next_idx)
+    chain = greedy_nearest_neighbor(cost_matrix, start_idx)
 
     # 2-opt refinement: try swapping pairs to reduce total chain cost
     if refine_iterations > 0 and n > 3:

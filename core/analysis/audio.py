@@ -346,6 +346,8 @@ def extract_clip_volume(
     source_path: Path,
     start_seconds: float,
     duration_seconds: float,
+    *,
+    _has_audio: Optional[bool] = None,
 ) -> Optional[float]:
     """Extract mean RMS volume level for a clip segment using FFmpeg volumedetect.
 
@@ -353,12 +355,15 @@ def extract_clip_volume(
         source_path: Path to the source video file
         start_seconds: Start time of the clip in seconds
         duration_seconds: Duration of the clip in seconds
+        _has_audio: Pre-computed has_audio_track result to skip redundant ffprobe
 
     Returns:
         Mean volume in dB (typically -60 to 0, higher = louder),
         or None if the source has no audio track.
     """
-    if not has_audio_track(source_path):
+    if _has_audio is None:
+        _has_audio = has_audio_track(source_path)
+    if not _has_audio:
         return None
 
     cmd = [

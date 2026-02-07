@@ -472,6 +472,7 @@ class TestMatchCut:
         source = _make_source()
         import numpy as np
 
+        np.random.seed(42)
         clips = []
         for i in range(10):
             first_emb = np.random.randn(512).astype(np.float32)
@@ -490,6 +491,20 @@ class TestMatchCut:
         # Both should use all clips
         assert len(result_greedy) == 10
         assert len(result_refined) == 10
+
+        # Compute transition costs: sum of cosine distance(last_frame[i], first_frame[j])
+        def chain_cost(result):
+            total = 0.0
+            for k in range(len(result) - 1):
+                last_emb = np.array(result[k][0].last_frame_embedding)
+                first_emb = np.array(result[k + 1][0].first_frame_embedding)
+                sim = np.dot(last_emb, first_emb)
+                total += 1.0 - np.clip(sim, -1.0, 1.0)
+            return total
+
+        greedy_cost = chain_cost(result_greedy)
+        refined_cost = chain_cost(result_refined)
+        assert refined_cost <= greedy_cost + 1e-6
 
     def test_clips_without_boundary_embeddings_appended(self):
         from core.remix.match_cut import match_cut_chain
@@ -588,3 +603,58 @@ class TestGenerateSequenceIntegration:
 
         result = generate_sequence("match_cut", clips, 3)
         assert len(result) == 3
+
+
+# -- Deserialization Validation ------------------------------------------------
+
+class TestClipDeserializationValidation:
+    """Test that Clip.from_dict() validates new cache fields."""
+
+    def test_valid_embedding_roundtrips(self):
+        from models.clip import Clip
+        emb = [0.1] * 512
+        clip = Clip(embedding=emb, first_frame_embedding=emb, last_frame_embedding=emb)
+        data = clip.to_dict()
+        restored = Clip.from_dict(data)
+        assert restored.embedding == emb
+        assert restored.first_frame_embedding == emb
+        assert restored.last_frame_embedding == emb
+
+    def test_wrong_dimension_embedding_discarded(self):
+        from models.clip import Clip
+        data = {"embedding": [0.1] * 256}  # Wrong dimension
+        clip = Clip.from_dict(data)
+        assert clip.embedding is None
+
+    def test_non_list_embedding_discarded(self):
+        from models.clip import Clip
+        data = {"embedding": "not_a_list"}
+        clip = Clip.from_dict(data)
+        assert clip.embedding is None
+
+    def test_valid_float_fields_roundtrip(self):
+        from models.clip import Clip
+        clip = Clip(average_brightness=0.75, rms_volume=-20.5)
+        data = clip.to_dict()
+        restored = Clip.from_dict(data)
+        assert restored.average_brightness == 0.75
+        assert restored.rms_volume == -20.5
+
+    def test_non_numeric_brightness_discarded(self):
+        from models.clip import Clip
+        data = {"average_brightness": "bright"}
+        clip = Clip.from_dict(data)
+        assert clip.average_brightness is None
+
+    def test_non_numeric_volume_discarded(self):
+        from models.clip import Clip
+        data = {"rms_volume": [1, 2, 3]}
+        clip = Clip.from_dict(data)
+        assert clip.rms_volume is None
+
+    def test_int_brightness_coerced_to_float(self):
+        from models.clip import Clip
+        data = {"average_brightness": 1}
+        clip = Clip.from_dict(data)
+        assert clip.average_brightness == 1.0
+        assert isinstance(clip.average_brightness, float)

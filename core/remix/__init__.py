@@ -359,10 +359,19 @@ def _auto_compute_brightness(clips: List[Tuple[Any, Any]]) -> None:
 
 def _auto_compute_volume(clips: List[Tuple[Any, Any]]) -> None:
     """Compute volume for clips that don't have it cached."""
-    from core.analysis.audio import extract_clip_volume
+    from core.analysis.audio import extract_clip_volume, has_audio_track
+
+    # Cache has_audio_track per source to avoid repeated ffprobe calls
+    audio_cache: dict[str, bool] = {}
 
     for clip, source in clips:
         if clip.rms_volume is None:
+            # Check audio track cache before spawning ffmpeg
+            if source.id not in audio_cache:
+                audio_cache[source.id] = has_audio_track(source.file_path)
+            if not audio_cache[source.id]:
+                continue
+
             try:
                 start_seconds = clip.start_frame / source.fps
                 duration_seconds = clip.duration_seconds(source.fps)
@@ -370,8 +379,9 @@ def _auto_compute_volume(clips: List[Tuple[Any, Any]]) -> None:
                     source_path=source.file_path,
                     start_seconds=start_seconds,
                     duration_seconds=duration_seconds,
+                    _has_audio=True,
                 )
-                clip.rms_volume = volume  # None if no audio track
+                clip.rms_volume = volume
             except Exception as e:
                 logger.warning(f"Failed to compute volume for clip {clip.id}: {e}")
 
