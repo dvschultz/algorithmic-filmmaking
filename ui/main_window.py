@@ -613,6 +613,7 @@ class MainWindow(QMainWindow):
         self._project_adapter.clips_updated.connect(self._on_clips_updated)
         self._project_adapter.clips_added.connect(self._on_clips_added)
         self._project_adapter.source_added.connect(self._on_source_added)
+        self._project_adapter.sequence_changed.connect(lambda _: self._refresh_timeline_from_project())
 
         # UI state (not part of Project - these are GUI-specific selections)
         self.current_source: Optional[Source] = None  # Currently active/selected source
@@ -1754,8 +1755,9 @@ class MainWindow(QMainWindow):
             elif active_tab == "analyze":
                 self.analyze_tab.clip_browser.set_selection(selected_ids)
 
-        elif tool_name == "add_to_sequence":
-            # Refresh the timeline to show the newly added clips
+        elif tool_name in ("add_to_sequence", "remove_from_sequence",
+                            "clear_sequence", "reorder_sequence"):
+            # Refresh the timeline to reflect sequence changes
             self._refresh_timeline_from_project()
 
         elif tool_name == "show_clip_details":
@@ -2630,6 +2632,7 @@ class MainWindow(QMainWindow):
             return
 
         logger.info(f"Starting analysis pipeline: {valid_ops} on {len(clips)} clips")
+        self._gui_state.set_processing("analysis", f"{', '.join(valid_ops)} on {len(clips)} clips")
 
         # Store state
         self._analysis_clips = clips
@@ -3004,6 +3007,7 @@ class MainWindow(QMainWindow):
         clip_count = len(clips)
 
         logger.info(f"Analysis pipeline complete: {completed} on {clip_count} clips")
+        self._gui_state.clear_processing("analysis")
 
         self.analyze_tab.set_analyzing(False)
         self.progress_bar.setVisible(False)
@@ -3504,6 +3508,7 @@ class MainWindow(QMainWindow):
         # Clean up thread safely after it finishes to prevent "QThread: Destroyed while running" crash
         self.download_worker.finished.connect(self.download_worker.deleteLater)
         self.download_worker.finished.connect(lambda: setattr(self, 'download_worker', None))
+        self._gui_state.set_processing("download", url[:60])
         self.download_worker.start()
 
     def _on_download_progress(self, progress: float, message: str):
@@ -3513,6 +3518,7 @@ class MainWindow(QMainWindow):
 
     def _on_download_finished(self, result):
         """Handle download completion."""
+        self._gui_state.clear_processing("download")
         self.progress_bar.setVisible(False)
         self.collect_tab.set_downloading(False)
 
@@ -3526,6 +3532,7 @@ class MainWindow(QMainWindow):
 
     def _on_download_error(self, error: str):
         """Handle download error."""
+        self._gui_state.clear_processing("download")
         self.progress_bar.setVisible(False)
         self.collect_tab.set_downloading(False)
         QMessageBox.critical(self, "Download Error", error)
@@ -3783,6 +3790,7 @@ class MainWindow(QMainWindow):
         self.detection_worker.finished.connect(self.detection_worker.deleteLater)
         self.detection_worker.finished.connect(lambda: setattr(self, 'detection_worker', None))
         logger.info("Starting DetectionWorker...")
+        self._gui_state.set_processing("scene_detection", f"running on {self.current_source.filename}")
         self.detection_worker.start()
         logger.info("DetectionWorker started")
 
@@ -3796,6 +3804,7 @@ class MainWindow(QMainWindow):
     def _on_detection_finished(self, source: Source, clips: list[Clip]):
         """Handle detection completion."""
         logger.info("=== DETECTION FINISHED ===")
+        self._gui_state.clear_processing("scene_detection")
 
         # Guard against duplicate calls
         if self._detection_finished_handled:
@@ -3859,6 +3868,7 @@ class MainWindow(QMainWindow):
     def _on_detection_error(self, error: str):
         """Handle detection error."""
         logger.error(f"=== DETECTION ERROR: {error} ===")
+        self._gui_state.clear_processing("scene_detection")
         self.progress_bar.setVisible(False)
 
         # If agent was waiting for detection, send error result

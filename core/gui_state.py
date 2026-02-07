@@ -76,6 +76,9 @@ class GUIState:
     # Active filters state
     active_filters: dict = field(default_factory=dict)
 
+    # Background processing status - tracks active worker operations
+    processing_operations: dict = field(default_factory=dict)
+
     # Pending action state - tracks actions agent must complete after user responds
     pending_action: PendingActionType = None
 
@@ -149,6 +152,11 @@ class GUIState:
                 active = [f"{k}={v}" for k, v in self.active_filters.items() if v is not None]
                 if active:
                     lines.append(f"ACTIVE FILTERS: {', '.join(active)}")
+
+            # Background processing status
+            if self.processing_operations:
+                ops = [f"{k}: {v}" for k, v in self.processing_operations.items()]
+                lines.append(f"PROCESSING: {', '.join(ops)}")
 
             # Pending action (high priority - show first if exists)
             if self.pending_action:
@@ -246,6 +254,25 @@ class GUIState:
             if isinstance(self.pending_action, NameProjectThenPlanAction):
                 self.pending_action.user_response = user_response
 
+    def set_processing(self, operation: str, status: str):
+        """Mark a background operation as active.
+
+        Args:
+            operation: Operation name (e.g., "scene_detection", "transcription")
+            status: Status description (e.g., "running on video.mp4")
+        """
+        with self._lock:
+            self.processing_operations[operation] = status
+
+    def clear_processing(self, operation: str):
+        """Mark a background operation as complete.
+
+        Args:
+            operation: Operation name to clear
+        """
+        with self._lock:
+            self.processing_operations.pop(operation, None)
+
     def update_active_filters(self, filters: dict):
         """Update the active filters state.
 
@@ -297,6 +324,9 @@ class GUIState:
 
             # Active filters
             self.active_filters = {}
+
+            # Processing status
+            self.processing_operations = {}
 
             # Pending action
             self.pending_action = None

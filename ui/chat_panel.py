@@ -183,7 +183,7 @@ class ChatPanel(QWidget):
         input_layout = QHBoxLayout()
 
         self.input_field = QTextEdit()
-        self.input_field.setPlaceholderText("Describe what you want to create...")
+        self.input_field.setPlaceholderText("Try 'detect scenes', 'analyze colors', 'build a sequence'...")
         self.input_field.setMaximumHeight(80)
         self.input_field.setStyleSheet(f"""
             QTextEdit {{

@@ -893,20 +893,73 @@ def filter_clips(
 
 
 @tools.register(
-    description="List all clips in the project with their metadata. "
+    description="List clips in the project with their metadata. "
+                "Supports filtering by source, shot type, and analysis status. "
                 "Returns clip details including duration, shot type, colors, transcript, etc.",
     requires_project=True,
     modifies_gui_state=True  # Needs main_window to check detection status
 )
-def list_clips(main_window, project) -> dict:
-    """List all clips with metadata.
+def list_clips(
+    main_window,
+    project,
+    source_id: Optional[str] = None,
+    shot_type: Optional[str] = None,
+    has_description: Optional[bool] = None,
+    has_transcript: Optional[bool] = None,
+    has_colors: Optional[bool] = None,
+    sort_by: Optional[str] = None,
+    limit: Optional[int] = None,
+) -> dict:
+    """List clips with metadata, with optional filtering and sorting.
+
+    Args:
+        source_id: Filter by source ID
+        shot_type: Filter by shot type (e.g. "close-up", "wide shot")
+        has_description: Filter to clips with (True) or without (False) descriptions
+        has_transcript: Filter to clips with (True) or without (False) transcripts
+        has_colors: Filter to clips with (True) or without (False) color analysis
+        sort_by: Sort by "duration", "start_frame", or "shot_type"
+        limit: Maximum number of clips to return
 
     Returns:
         Dict with clips list, count, and detection status if relevant
     """
     results = []
 
-    for clip in project.clips:
+    clips = project.clips
+
+    # Apply filters
+    if source_id is not None:
+        clips = [c for c in clips if c.source_id == source_id]
+    if shot_type is not None:
+        clips = [c for c in clips if c.shot_type == shot_type]
+    if has_description is True:
+        clips = [c for c in clips if c.description is not None]
+    elif has_description is False:
+        clips = [c for c in clips if c.description is None]
+    if has_transcript is True:
+        clips = [c for c in clips if c.transcript is not None]
+    elif has_transcript is False:
+        clips = [c for c in clips if c.transcript is None]
+    if has_colors is True:
+        clips = [c for c in clips if c.dominant_colors is not None]
+    elif has_colors is False:
+        clips = [c for c in clips if c.dominant_colors is None]
+
+    # Apply sorting
+    if sort_by == "duration":
+        clips = sorted(clips, key=lambda c: c.end_frame - c.start_frame, reverse=True)
+    elif sort_by == "start_frame":
+        clips = sorted(clips, key=lambda c: (c.source_id, c.start_frame))
+    elif sort_by == "shot_type":
+        clips = sorted(clips, key=lambda c: c.shot_type or "")
+
+    # Apply limit
+    total_matching = len(clips)
+    if limit is not None and limit > 0:
+        clips = clips[:limit]
+
+    for clip in clips:
         source = project.sources_by_id.get(clip.source_id)
         fps = source.fps if source else 30.0
         duration = (clip.end_frame - clip.start_frame) / fps
@@ -961,11 +1014,14 @@ def list_clips(main_window, project) -> dict:
                 "unanalyzed_sources": unanalyzed_count
             }
 
-    return {
+    result = {
         "success": True,
         "clips": results,
-        "count": len(results)
+        "count": len(results),
     }
+    if limit is not None and total_matching > len(results):
+        result["total_matching"] = total_matching
+    return result
 
 
 @tools.register(
@@ -5174,4 +5230,58 @@ def delete_frames(project, frame_ids: list[str]) -> dict:
         "removed_ids": [f.id for f in removed],
         "not_found": [fid for fid in frame_ids if fid not in {f.id for f in removed}],
         "remaining_frames": len(project.frames),
+    }
+
+
+@tools.register(
+    description="Delete clips from the project by their IDs. Clips in the active sequence are rejected unless force=True.",
+    requires_project=True,
+    modifies_gui_state=True,
+    modifies_project_state=True
+)
+def delete_clips(project, clip_ids: list[str], force: bool = False) -> dict:
+    """Delete clips from the project.
+
+    Args:
+        clip_ids: List of clip IDs to delete
+        force: If True, also remove clips from the sequence before deleting
+    """
+    if not clip_ids:
+        return {"success": False, "error": "No clip IDs provided"}
+
+    # Check if any clips are in the active sequence
+    sequence_clip_ids = set()
+    if project.sequence and project.sequence.tracks:
+        for track in project.sequence.tracks:
+            for sc in track.clips:
+                if sc.source_clip_id:
+                    sequence_clip_ids.add(sc.source_clip_id)
+
+    in_sequence = [cid for cid in clip_ids if cid in sequence_clip_ids]
+    if in_sequence and not force:
+        return {
+            "success": False,
+            "error": f"{len(in_sequence)} clip(s) are in the active sequence. "
+                     f"Use force=True to remove them from the sequence and delete, "
+                     f"or use remove_from_sequence first.",
+            "clips_in_sequence": in_sequence,
+        }
+
+    # If force, remove from sequence first
+    if in_sequence and force:
+        for track in project.sequence.tracks:
+            track.clips = [
+                sc for sc in track.clips
+                if sc.source_clip_id not in set(clip_ids)
+            ]
+
+    removed = project.remove_clips(clip_ids)
+
+    return {
+        "success": len(removed) > 0,
+        "removed_count": len(removed),
+        "removed_ids": [c.id for c in removed],
+        "not_found": [cid for cid in clip_ids if cid not in {c.id for c in removed}],
+        "removed_from_sequence": len(in_sequence) if force else 0,
+        "remaining_clips": len(project.clips),
     }

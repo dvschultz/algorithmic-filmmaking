@@ -612,6 +612,24 @@ class Project:
         self._dirty = True
         self._notify_observers("clips_updated", clips)
 
+    def remove_clips(self, clip_ids: list[str]) -> list[Clip]:
+        """Remove clips by ID.
+
+        Args:
+            clip_ids: IDs of clips to remove
+
+        Returns:
+            List of removed Clip objects
+        """
+        ids_to_remove = set(clip_ids)
+        removed = [c for c in self._clips if c.id in ids_to_remove]
+        self._clips = [c for c in self._clips if c.id not in ids_to_remove]
+        if removed:
+            self._invalidate_caches()
+            self._dirty = True
+            self._notify_observers("clips_removed", removed)
+        return removed
+
     def replace_source_clips(self, source_id: str, new_clips: list[Clip]) -> None:
         """Replace all clips for a source (e.g., after re-detection).
 

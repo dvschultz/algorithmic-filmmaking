@@ -755,11 +755,32 @@ Available tools:
             # Add project context
             sources_info = []
             for s in self.project.sources:
-                sources_info.append(f"  - {s.file_path.name} ({s.duration_seconds:.1f}s, {len(self.project.clips_by_source.get(s.id, []))} clips)")
+                clip_count = len(self.project.clips_by_source.get(s.id, []))
+                status = "analyzed" if s.analyzed else "not analyzed"
+                sources_info.append(f"  - {s.file_path.name} ({s.duration_seconds:.1f}s, {clip_count} clips, {status})")
 
             seq_length = 0
             if self.project.sequence and self.project.sequence.tracks:
                 seq_length = len(self.project.sequence.tracks[0].clips)
+
+            # Compute analysis metadata counts
+            total_clips = len(self.project.clips)
+            analysis_counts = {}
+            if total_clips > 0:
+                for field_name in ("shot_type", "dominant_colors", "description",
+                                   "transcript", "detected_objects", "person_count",
+                                   "extracted_texts", "cinematography"):
+                    count = sum(
+                        1 for c in self.project.clips
+                        if getattr(c, field_name, None) is not None
+                    )
+                    if count > 0:
+                        analysis_counts[field_name] = count
+
+            analysis_lines = ""
+            if analysis_counts:
+                parts = [f"{k}: {v}/{total_clips}" for k, v in analysis_counts.items()]
+                analysis_lines = f"\n- Analysis Coverage: {', '.join(parts)}"
 
             prompt += f"""
 
@@ -768,8 +789,8 @@ CURRENT PROJECT STATE:
 - Path: {self.project.path or 'Unsaved'}
 - Sources ({len(self.project.sources)} video(s)):
 {chr(10).join(sources_info) if sources_info else "  (none)"}
-- Total Clips: {len(self.project.clips)}
-- Sequence Length: {seq_length} clips
+- Total Clips: {total_clips}
+- Sequence Length: {seq_length} clips{analysis_lines}
 
 You can reference existing clips by their IDs and build on this project.
 """
