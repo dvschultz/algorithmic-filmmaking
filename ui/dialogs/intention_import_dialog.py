@@ -255,7 +255,7 @@ class IntentionImportDialog(QDialog):
         if self._algorithm.lower() not in ("duration", "color"):
             self._direction_container.hide()
 
-        # Shot type selector (for Shot Type algorithm only)
+        # Shot type filter (available for all algorithms)
         self._shot_type_container = QWidget()
         shot_type_layout = QHBoxLayout(self._shot_type_container)
         shot_type_layout.setContentsMargins(0, 0, 0, 8)
@@ -280,9 +280,7 @@ class IntentionImportDialog(QDialog):
 
         layout.addWidget(self._shot_type_container)
 
-        # Hide if not shot_type algorithm
-        if self._algorithm.lower() != "shot_type":
-            self._shot_type_container.hide()
+        # Shot type filter is available for all algorithms (cross-cutting filter)
 
         # Poem length selector (for Exquisite Corpus algorithm only)
         # Use a simple horizontal layout directly instead of a container widget
@@ -632,9 +630,7 @@ class IntentionImportDialog(QDialog):
         return None
 
     def _get_shot_type(self) -> str | None:
-        """Get the selected shot type filter (for shot_type algorithm)."""
-        if self._algorithm.lower() != "shot_type":
-            return None
+        """Get the selected shot type filter."""
         text = self.shot_type_dropdown.currentText()
         if text == "All":
             return None

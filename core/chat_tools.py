@@ -1127,6 +1127,48 @@ def sort_sequence(project, sort_by: str, reverse: bool = False) -> dict:
 
 
 @tools.register(
+    description=(
+        "Filter the sequence tab to show only clips of a specific shot type. "
+        "Valid shot types: 'wide shot', 'full shot', 'medium shot', 'close-up', 'extreme close-up'. "
+        "Use shot_type=None to show all clips (remove filter)."
+    ),
+    requires_project=True,
+    modifies_gui_state=True,
+)
+def set_sequence_shot_filter(
+    project,
+    gui_state,
+    main_window,
+    shot_type: Optional[str] = None,
+) -> dict:
+    """Set the shot type filter for the sequence tab."""
+    from core.analysis.shots import SHOT_TYPES
+
+    if shot_type and shot_type not in SHOT_TYPES:
+        return {
+            "success": False,
+            "error": f"Invalid shot type '{shot_type}'. Valid types: {SHOT_TYPES}",
+        }
+
+    sequence_tab = main_window.sequence_tab
+    filtered_count = sequence_tab.apply_shot_type_filter(shot_type)
+
+    gui_state.sequence_shot_filter = shot_type
+
+    return {
+        "success": True,
+        "result": {
+            "shot_type": shot_type or "all",
+            "clip_count": filtered_count,
+            "message": (
+                f"Showing {filtered_count} clips"
+                + (f" of type '{shot_type}'" if shot_type else " (all types)")
+            ),
+        },
+    }
+
+
+@tools.register(
     description="Get the current state of the timeline sequence including all clips, their positions, and durations.",
     requires_project=True,
     modifies_gui_state=False

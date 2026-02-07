@@ -68,6 +68,7 @@ class GUIState:
 
     # Sequence state
     sequence_ids: list[str] = field(default_factory=list)
+    sequence_shot_filter: Optional[str] = None
 
     # Plan state
     current_plan: Optional["Plan"] = None

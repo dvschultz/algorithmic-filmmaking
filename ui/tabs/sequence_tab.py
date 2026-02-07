@@ -919,6 +919,40 @@ class SequenceTab(BaseTab):
                 # If in cards state or exquisite_corpus/shot_type, simulate card click
                 self._on_card_clicked(algorithm)
 
+    def apply_shot_type_filter(self, shot_type: str | None) -> int:
+        """Filter the current sequence/clips by shot type.
+
+        Args:
+            shot_type: Shot type to filter by (e.g. 'close-up'), or None for all.
+
+        Returns:
+            Number of clips remaining after filtering.
+        """
+        if self._current_state == self.STATE_TIMELINE:
+            # Filter timeline clips
+            seq = self.timeline.sequence
+            if not seq or not seq.tracks:
+                return 0
+            all_seq_clips = seq.get_all_clips()
+            if not shot_type:
+                return len(all_seq_clips)
+            # Count clips matching the filter (timeline clips reference source clips)
+            matching = 0
+            for sc in all_seq_clips:
+                for clip, source in self._available_clips:
+                    if clip.id == sc.source_clip_id and clip.shot_type == shot_type:
+                        matching += 1
+                        break
+            return matching
+        else:
+            # In cards state, filter available clips display
+            if not shot_type:
+                return len(self._available_clips)
+            return sum(
+                1 for clip, source in self._available_clips
+                if clip.shot_type == shot_type
+            )
+
     def generate_and_apply(
         self,
         algorithm: str,
