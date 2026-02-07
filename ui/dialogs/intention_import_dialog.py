@@ -31,6 +31,7 @@ from PySide6.QtGui import QFont, QDragEnterEvent, QDropEvent
 from ui.theme import theme, TypeScale, Spacing, Radii
 from ui.widgets.cost_estimate_panel import CostEstimatePanel
 from core.cost_estimates import estimate_intention_cost
+from core.settings import get_llm_api_key, get_replicate_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -683,6 +684,7 @@ class IntentionImportDialog(QDialog):
         clip_count = len(self._local_paths) + len(self._urls)
         if clip_count == 0:
             self._cost_panel.set_estimates([])
+            self._cost_panel.set_warning(None)
             return
 
         tier_overrides = self._cost_panel.get_tier_overrides()
@@ -690,6 +692,27 @@ class IntentionImportDialog(QDialog):
             self._algorithm, clip_count, tier_overrides=tier_overrides,
         )
         self._cost_panel.set_estimates(estimates)
+
+        # Check for missing API keys when cloud tier is selected
+        cloud_ops = [e for e in estimates if e.tier == "cloud"]
+        if cloud_ops:
+            missing = []
+            if any(e.operation in ("describe", "extract_text", "cinematography") for e in cloud_ops):
+                if not get_llm_api_key():
+                    missing.append("LLM")
+            if any(e.operation == "shots" for e in cloud_ops):
+                if not get_replicate_api_key():
+                    missing.append("Replicate")
+            if missing:
+                keys = " and ".join(missing)
+                self._cost_panel.set_warning(
+                    f"Cloud tier selected but no {keys} API key configured. "
+                    f"Set keys in Settings or switch to Local tier."
+                )
+            else:
+                self._cost_panel.set_warning(None)
+        else:
+            self._cost_panel.set_warning(None)
 
     def _on_cost_tier_changed(self, operation: str, tier: str):
         """Handle tier dropdown change in cost panel."""

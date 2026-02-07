@@ -111,6 +111,12 @@ class CostEstimatePanel(QWidget):
 
         frame_layout.addWidget(self._detail_widget)
 
+        # Warning label (hidden by default)
+        self._warning_label = QLabel()
+        self._warning_label.setWordWrap(True)
+        self._warning_label.setVisible(False)
+        frame_layout.addWidget(self._warning_label)
+
         layout.addWidget(self._frame)
         self._apply_theme()
         self.setVisible(False)
@@ -155,6 +161,30 @@ class CostEstimatePanel(QWidget):
             tier = "cloud" if combo.currentIndex() == 1 else "local"
             overrides[op_key] = tier
         return overrides
+
+    def set_warning(self, text: str | None):
+        """Show or hide a warning message below the estimates.
+
+        Args:
+            text: Warning message to show, or None to hide.
+        """
+        if text:
+            t = theme()
+            self._warning_label.setText(text)
+            self._warning_label.setStyleSheet(
+                f"font-size: {TypeScale.SM}px; color: {t.accent_orange}; "
+                f"border: none; padding-top: {Spacing.XS}px;"
+            )
+            self._warning_label.setVisible(True)
+        else:
+            self._warning_label.setVisible(False)
+
+    def has_cloud_tier(self) -> bool:
+        """Return True if any operation is set to cloud tier."""
+        return any(
+            combo.currentIndex() == 1
+            for combo in self._tier_combos.values()
+        )
 
     def set_collapsed(self, collapsed: bool):
         """Collapse or expand the detail area."""

@@ -25,6 +25,7 @@ from ui.theme import theme, Spacing, TypeScale
 from ui.workers.sequence_worker import SequenceWorker
 from core.remix import generate_sequence
 from core.cost_estimates import estimate_sequence_cost
+from core.settings import get_llm_api_key, get_replicate_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -278,10 +279,11 @@ class SequenceTab(BaseTab):
         self._confirm_algo_label.setText(f"{config['icon']}  {config['label']}")
         self._confirm_clips_label.setText(f"{len(clips)} clips selected")
         self._confirm_cost_panel.set_estimates(estimates)
+        self._update_cloud_api_warning(estimates)
         self._set_state(self.STATE_CONFIRM)
 
-    def _on_confirm_tier_changed(self, operation: str, tier: str):
-        """Recalculate estimates when user changes a tier dropdown in confirm view."""
+    def _refresh_confirm_estimates(self):
+        """Recalculate cost estimates for the confirm view using current state."""
         if not self._pending_algorithm or not self._pending_clips:
             return
         overrides = self._confirm_cost_panel.get_tier_overrides()
@@ -290,6 +292,48 @@ class SequenceTab(BaseTab):
             self._pending_algorithm, clip_objects, tier_overrides=overrides
         )
         self._confirm_cost_panel.set_estimates(estimates)
+
+        # If all analysis is now satisfied, update the clips label
+        if not estimates:
+            self._confirm_clips_label.setText(
+                f"{len(self._pending_clips)} clips selected — all analysis complete"
+            )
+
+        # Check for missing API keys when cloud tier is selected
+        self._update_cloud_api_warning(estimates)
+
+    def _update_cloud_api_warning(self, estimates: list):
+        """Show a warning if cloud tier is selected but API key is missing."""
+        if not estimates:
+            self._confirm_cost_panel.set_warning(None)
+            return
+
+        cloud_ops = [e for e in estimates if e.tier == "cloud"]
+        if not cloud_ops:
+            self._confirm_cost_panel.set_warning(None)
+            return
+
+        missing = []
+        needs_llm = any(e.operation in ("describe", "extract_text", "cinematography") for e in cloud_ops)
+        needs_replicate = any(e.operation == "shots" for e in cloud_ops)
+
+        if needs_llm and not get_llm_api_key():
+            missing.append("LLM")
+        if needs_replicate and not get_replicate_api_key():
+            missing.append("Replicate")
+
+        if missing:
+            keys = " and ".join(missing)
+            self._confirm_cost_panel.set_warning(
+                f"Cloud tier selected but no {keys} API key configured. "
+                f"Set keys in Settings or switch to Local tier."
+            )
+        else:
+            self._confirm_cost_panel.set_warning(None)
+
+    def _on_confirm_tier_changed(self, operation: str, tier: str):
+        """Recalculate estimates when user changes a tier dropdown in confirm view."""
+        self._refresh_confirm_estimates()
 
     def _on_confirm_generate(self):
         """Handle Generate button click in confirm view."""
@@ -332,6 +376,10 @@ class SequenceTab(BaseTab):
         else:
             self._sources.update({source.id: source for clip, source in clips_with_sources if source})
         logger.debug(f"Set available clips in Sequence tab: {len(self._available_clips)}")
+
+        # Refresh cost estimates if the confirm view is active
+        if self.view_stack.currentIndex() == self.STATE_CONFIRM:
+            self._refresh_confirm_estimates()
 
     # --- Signal handlers ---
 
@@ -1239,6 +1287,12 @@ class SequenceTab(BaseTab):
         # Update card availability when tab is activated
         if self._clips:
             self._update_card_availability()
+
+        # If we're in the confirm view, refresh estimates (clips may have been
+        # analyzed on another tab) but stay in confirm state
+        if self.view_stack.currentIndex() == self.STATE_CONFIRM and self._pending_algorithm:
+            self._refresh_confirm_estimates()
+            return
 
         # Determine correct state based on timeline content
         if self._has_clips_on_timeline():
