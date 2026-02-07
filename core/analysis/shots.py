@@ -80,7 +80,7 @@ _CLIP_MODEL_NAME = "openai/clip-vit-base-patch32"
 _CLIP_MODEL_REVISION = "e6a30b603a447e251fdaca1c3056b2a16cdfebeb"
 
 
-def _load_clip_model():
+def load_clip_model():
     """Lazy load CLIP model and processor (thread-safe)."""
     global _clip_model, _clip_processor
 
@@ -127,7 +127,7 @@ def classify_shot_type(
     try:
         import torch
 
-        model, processor = _load_clip_model()
+        model, processor = load_clip_model()
 
         # Load and prepare image
         image = Image.open(image_path).convert("RGB")

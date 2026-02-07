@@ -6,76 +6,7 @@ from PySide6.QtGui import QFont
 
 from ui.theme import theme, Spacing, TypeScale
 from ui.widgets.sorting_card import SortingCard
-
-
-# Algorithm definitions: key -> (icon, title, description)
-ALGORITHMS = {
-    "color": (
-        "🎨",
-        "Chromatic Flow",
-        "Arrange clips along a color gradient"
-    ),
-    "color_cycle": (
-        "🌈",
-        "Color Cycle",
-        "Curate clips with strong color identity and cycle through the spectrum"
-    ),
-    "duration": (
-        "⏱️",
-        "Tempo Shift",
-        "Order clips from shortest to longest (or reverse)"
-    ),
-    "brightness": (
-        "🌗",
-        "Into the Dark",
-        "Arrange clips from light to shadow, or shadow to light"
-    ),
-    "volume": (
-        "🔊",
-        "Crescendo",
-        "Build from silence to thunder, or thunder to silence"
-    ),
-    "shuffle": (
-        "🎲",
-        "Dice Roll",
-        "Randomly shuffle clips into a new order"
-    ),
-    "sequential": (
-        "📋",
-        "Time Capsule",
-        "Keep clips in their original order"
-    ),
-    "shot_type": (
-        "🎬",
-        "Focal Ladder",
-        "Arrange clips by camera shot scale"
-    ),
-    "proximity": (
-        "🔭",
-        "Up Close and Personal",
-        "Glide from distant vistas to intimate close-ups"
-    ),
-    "similarity_chain": (
-        "🔗",
-        "Human Centipede",
-        "Chain clips together by visual similarity — each cut flows into the next"
-    ),
-    "match_cut": (
-        "✂️",
-        "Match Cut",
-        "Find hidden connections between clips — where one ending meets another's beginning"
-    ),
-    "exquisite_corpus": (
-        "📝",
-        "Exquisite Corpus",
-        "Generate a poem from on-screen text"
-    ),
-    "storyteller": (
-        "📖",
-        "Storyteller",
-        "Create a narrative from clip descriptions"
-    ),
-}
+from ui.algorithm_config import ALGORITHM_CONFIG
 
 
 class SortingCardGrid(QWidget):
@@ -153,7 +84,8 @@ class SortingCardGrid(QWidget):
         ]
 
         for key, row, col in positions:
-            icon, title, description = ALGORITHMS[key]
+            cfg = ALGORITHM_CONFIG[key]
+            icon, title, description = cfg["icon"], cfg["label"], cfg["description"]
             card = SortingCard(key, icon, title, description)
             card.clicked.connect(self._on_card_clicked)
             grid_layout.addWidget(card, row, col, Qt.AlignCenter)

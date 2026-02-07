@@ -98,7 +98,7 @@ def generate_sequence(
 
     Args:
         algorithm: Algorithm name ("shuffle", "sequential", "color", "shot_type",
-                   "duration", "duration_long", "duration_short")
+                   "duration", "brightness", "volume", etc.)
         clips: List of (Clip, Source) tuples to sequence
         clip_count: Maximum number of clips to include
         direction: For color: "rainbow", "warm_to_cool", "cool_to_warm"
@@ -163,16 +163,6 @@ def generate_sequence(
 
             return sorted(clips_to_use, key=get_coolness)
 
-        else:
-            # Default to rainbow
-            def get_hue(item: Tuple[Any, Any]) -> float:
-                clip, _ = item
-                if clip.dominant_colors:
-                    return get_primary_hue(clip.dominant_colors)
-                return 0.0
-
-            return sorted(clips_to_use, key=get_hue)
-
     elif algorithm == "shot_type":
         # Sort by shot type (wide -> medium -> close-up -> extreme close-up)
         def get_shot_order(item: Tuple[Any, Any]) -> int:
@@ -197,22 +187,6 @@ def generate_sequence(
                 clip, source = item
                 return clip.duration_seconds(source.fps)
             return sorted(clips_to_use, key=get_duration)
-
-    elif algorithm == "duration_long":
-        # Legacy: Sort by duration (longest first)
-        def get_duration(item: Tuple[Any, Any]) -> float:
-            clip, source = item
-            return -clip.duration_seconds(source.fps)  # Negative for descending
-
-        return sorted(clips_to_use, key=get_duration)
-
-    elif algorithm == "duration_short":
-        # Legacy: Sort by duration (shortest first)
-        def get_duration(item: Tuple[Any, Any]) -> float:
-            clip, source = item
-            return clip.duration_seconds(source.fps)
-
-        return sorted(clips_to_use, key=get_duration)
 
     elif algorithm == "brightness":
         # Sort by average brightness (luminance)

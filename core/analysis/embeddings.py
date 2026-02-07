@@ -20,8 +20,8 @@ logger = logging.getLogger(__name__)
 
 def _get_clip_model():
     """Get the shared CLIP model and processor from shots module."""
-    from core.analysis.shots import _load_clip_model
-    return _load_clip_model()
+    from core.analysis.shots import load_clip_model
+    return load_clip_model()
 
 
 def _image_to_embedding(image: Image.Image) -> list[float]:
@@ -44,26 +44,6 @@ def _image_to_embedding(image: Image.Image) -> list[float]:
         image_features = image_features / image_features.norm(dim=-1, keepdim=True)
 
     return image_features[0].cpu().numpy().tolist()
-
-
-def extract_clip_embedding(thumbnail_path: Path) -> list[float]:
-    """Extract CLIP embedding from a clip's thumbnail image.
-
-    Args:
-        thumbnail_path: Path to the thumbnail image
-
-    Returns:
-        Normalized CLIP ViT-B/32 embedding vector (512 dimensions)
-
-    Raises:
-        FileNotFoundError: If thumbnail doesn't exist
-        RuntimeError: If embedding extraction fails
-    """
-    if not thumbnail_path.exists():
-        raise FileNotFoundError(f"Thumbnail not found: {thumbnail_path}")
-
-    image = Image.open(thumbnail_path).convert("RGB")
-    return _image_to_embedding(image)
 
 
 def extract_clip_embeddings_batch(
@@ -145,8 +125,11 @@ def extract_boundary_embeddings(
         each a normalized CLIP embedding vector (512 dimensions)
 
     Raises:
+        ValueError: If fps is not positive
         RuntimeError: If frame extraction or embedding fails
     """
+    if fps <= 0:
+        raise ValueError(f"fps must be positive, got {fps}")
     start_time = start_frame / fps
     # Last frame: one frame before end
     last_frame_time = max(start_time, (end_frame - 1) / fps)

@@ -27,107 +27,7 @@ from core.remix import generate_sequence
 
 logger = logging.getLogger(__name__)
 
-# Configuration for each sorting algorithm
-# allow_duplicates: Whether the same clip can appear multiple times in the sequence
-ALGORITHM_CONFIG = {
-    "color": {
-        "label": "Chromatic Flow",
-        "description": "Arrange clips along a color gradient",
-        "allow_duplicates": False,
-    },
-    "color_cycle": {
-        "label": "Color Cycle",
-        "description": "Curate clips with strong color identity and cycle through the spectrum",
-        "allow_duplicates": False,
-    },
-    "duration": {
-        "label": "Tempo Shift",
-        "description": "Order clips from shortest to longest (or reverse)",
-        "allow_duplicates": False,
-    },
-    "brightness": {
-        "label": "Into the Dark",
-        "description": "Arrange clips from light to shadow, or shadow to light",
-        "allow_duplicates": False,
-    },
-    "volume": {
-        "label": "Crescendo",
-        "description": "Build from silence to thunder, or thunder to silence",
-        "allow_duplicates": False,
-    },
-    "shuffle": {
-        "label": "Dice Roll",
-        "description": "Randomly shuffle clips into a new order",
-        "allow_duplicates": False,
-    },
-    "sequential": {
-        "label": "Time Capsule",
-        "description": "Keep clips in their original order",
-        "allow_duplicates": False,
-    },
-    "shot_type": {
-        "label": "Focal Ladder",
-        "description": "Arrange clips by camera shot scale",
-        "allow_duplicates": False,
-    },
-    "proximity": {
-        "label": "Up Close and Personal",
-        "description": "Glide from distant vistas to intimate close-ups",
-        "allow_duplicates": False,
-    },
-    "similarity_chain": {
-        "label": "Human Centipede",
-        "description": "Chain clips together by visual similarity",
-        "allow_duplicates": False,
-    },
-    "match_cut": {
-        "label": "Match Cut",
-        "description": "Find hidden connections between clips at cut points",
-        "allow_duplicates": False,
-    },
-    "exquisite_corpus": {
-        "label": "Exquisite Corpus",
-        "description": "Generate a poem from on-screen text",
-        "allow_duplicates": True,  # Poems may use the same clip multiple times
-    },
-    "storyteller": {
-        "label": "Storyteller",
-        "description": "Create a narrative from clip descriptions",
-        "allow_duplicates": False,
-    },
-}
-
-
-def get_algorithm_config(algorithm: str) -> dict:
-    """Get configuration for an algorithm.
-
-    Args:
-        algorithm: Algorithm name (lowercase)
-
-    Returns:
-        Configuration dict with 'label', 'description', 'allow_duplicates'
-    """
-    return ALGORITHM_CONFIG.get(algorithm.lower(), {
-        "label": algorithm.replace("_", " ").title(),
-        "description": "",
-        "allow_duplicates": False,
-    })
-
-
-def get_algorithm_label(algorithm: str) -> str:
-    """Get the display label for an algorithm.
-
-    Args:
-        algorithm: Algorithm key (lowercase with underscores, e.g., 'shot_type')
-
-    Returns:
-        Display label (e.g., 'Focal Ladder')
-    """
-    config = ALGORITHM_CONFIG.get(algorithm.lower())
-    if config:
-        return config["label"]
-    return algorithm.replace("_", " ").title()
-
+from ui.algorithm_config import ALGORITHM_CONFIG, get_algorithm_config, get_algorithm_label
 
 # Reverse lookup: display label -> algorithm key
 _LABEL_TO_KEY = {cfg["label"]: key for key, cfg in ALGORITHM_CONFIG.items()}
@@ -712,36 +612,26 @@ class SequenceTab(BaseTab):
             logger.error(f"Error applying Storyteller sequence: {e}")
             QMessageBox.critical(self, "Error", f"Failed to apply sequence: {e}")
 
+    # Direction options per algorithm: list of (display_label, internal_key).
+    # First entry is the default. Algorithms not listed have no direction.
+    _DIRECTION_OPTIONS: dict[str, list[tuple[str, str]]] = {
+        "duration": [("Shortest First", "short_first"), ("Longest First", "long_first")],
+        "color": [("Rainbow", "rainbow"), ("Warm to Cool", "warm_to_cool"), ("Cool to Warm", "cool_to_warm")],
+        "brightness": [("Bright to Dark", "bright_to_dark"), ("Dark to Bright", "dark_to_bright")],
+        "volume": [("Quiet to Loud", "quiet_to_loud"), ("Loud to Quiet", "loud_to_quiet")],
+        "proximity": [("Far to Close", "far_to_close"), ("Close to Far", "close_to_far")],
+        "color_cycle": [("Spectrum", "spectrum"), ("Complementary", "complementary")],
+    }
+
     def _update_direction_dropdown(self, algorithm: str):
         """Update direction dropdown options based on selected algorithm."""
-        algo_lower = algorithm.lower()
+        options = self._DIRECTION_OPTIONS.get(algorithm.lower())
 
-        # Block signals while updating
         self.direction_dropdown.blockSignals(True)
         self.direction_dropdown.clear()
 
-        if algo_lower == "duration":
-            self.direction_dropdown.addItems(["Shortest First", "Longest First"])
-            self.direction_label.show()
-            self.direction_dropdown.show()
-        elif algo_lower == "color":
-            self.direction_dropdown.addItems(["Rainbow", "Warm to Cool", "Cool to Warm"])
-            self.direction_label.show()
-            self.direction_dropdown.show()
-        elif algo_lower == "brightness":
-            self.direction_dropdown.addItems(["Bright to Dark", "Dark to Bright"])
-            self.direction_label.show()
-            self.direction_dropdown.show()
-        elif algo_lower == "volume":
-            self.direction_dropdown.addItems(["Quiet to Loud", "Loud to Quiet"])
-            self.direction_label.show()
-            self.direction_dropdown.show()
-        elif algo_lower == "proximity":
-            self.direction_dropdown.addItems(["Far to Close", "Close to Far"])
-            self.direction_label.show()
-            self.direction_dropdown.show()
-        elif algo_lower == "color_cycle":
-            self.direction_dropdown.addItems(["Spectrum", "Complementary"])
+        if options:
+            self.direction_dropdown.addItems([label for label, _ in options])
             self.direction_label.show()
             self.direction_dropdown.show()
         else:
@@ -753,35 +643,15 @@ class SequenceTab(BaseTab):
     def _get_current_direction(self) -> str | None:
         """Get the current direction based on dropdown selection."""
         algo_key = get_algorithm_key(self.algorithm_dropdown.currentText())
-        direction_text = self.direction_dropdown.currentText()
+        options = self._DIRECTION_OPTIONS.get(algo_key)
+        if not options:
+            return None
 
-        if algo_key == "duration":
-            if direction_text == "Longest First":
-                return "long_first"
-            return "short_first"
-        elif algo_key == "color":
-            if direction_text == "Warm to Cool":
-                return "warm_to_cool"
-            elif direction_text == "Cool to Warm":
-                return "cool_to_warm"
-            return "rainbow"
-        elif algo_key == "brightness":
-            if direction_text == "Dark to Bright":
-                return "dark_to_bright"
-            return "bright_to_dark"
-        elif algo_key == "volume":
-            if direction_text == "Loud to Quiet":
-                return "loud_to_quiet"
-            return "quiet_to_loud"
-        elif algo_key == "proximity":
-            if direction_text == "Close to Far":
-                return "close_to_far"
-            return "far_to_close"
-        elif algo_key == "color_cycle":
-            if direction_text == "Complementary":
-                return "complementary"
-            return "spectrum"
-        return None
+        direction_text = self.direction_dropdown.currentText()
+        for label, key in options:
+            if label == direction_text:
+                return key
+        return options[0][1]  # Default to first option
 
     @Slot(str)
     def _on_direction_changed(self, direction_text: str):
@@ -951,21 +821,7 @@ class SequenceTab(BaseTab):
 
     def _reset_card_availability(self):
         """Reset all cards to enabled state (for fresh project/intention flow)."""
-        availability = {
-            "color": True,
-            "color_cycle": True,
-            "duration": True,
-            "brightness": True,
-            "volume": True,
-            "shuffle": True,
-            "sequential": True,
-            "shot_type": True,
-            "proximity": True,
-            "similarity_chain": True,
-            "match_cut": True,
-            "exquisite_corpus": True,
-            "storyteller": True,
-        }
+        availability = {key: True for key in ALGORITHM_CONFIG}
         self.card_grid.set_algorithm_availability(availability)
 
     def add_clip_to_timeline(self, clip, source):
