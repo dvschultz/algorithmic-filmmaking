@@ -1420,14 +1420,29 @@ class ClipBrowser(QWidget):
         """
         return sum(1 for thumb in self.thumbnails if self._matches_filter(thumb))
 
+    def toggle_disabled(self, clip_ids: list[str]):
+        """Toggle the disabled state of clips by ID."""
+        for clip_id in clip_ids:
+            thumb = self._thumbnail_by_id.get(clip_id)
+            if thumb:
+                thumb.disabled = not thumb.disabled
+                thumb._update_style()
+
     def keyPressEvent(self, event):
-        """Handle keyboard shortcuts for clip details.
+        """Handle keyboard shortcuts.
 
         Args:
             event: The key event
         """
+        # Delete/Backspace to toggle disable on selected clips
+        if event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
+            selected = self.get_selected_clips()
+            if selected:
+                self.toggle_disabled([c.id for c in selected])
+                event.accept()
+                return
         # Enter or 'i' to show details of selected clip
-        if event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_I):
+        elif event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_I):
             selected = self.get_selected_clips()
             if selected and len(selected) == 1:
                 clip = selected[0]
