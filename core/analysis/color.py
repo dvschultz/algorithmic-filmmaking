@@ -350,6 +350,107 @@ def classify_color_palette(colors: list[tuple[int, int, int]]) -> str:
             return "cool"
 
 
+def get_average_brightness(
+    source_path: Path,
+    start_frame: int,
+    end_frame: int,
+    fps: float,
+    num_samples: int = 5,
+) -> float:
+    """Compute average brightness of a clip by sampling multiple frames.
+
+    Samples evenly-spaced frames from the clip, converts each to grayscale,
+    and returns the mean luminance normalized to 0.0-1.0.
+
+    Args:
+        source_path: Path to the source video file
+        start_frame: Clip start frame
+        end_frame: Clip end frame
+        fps: Video frame rate
+        num_samples: Number of frames to sample (3-5 recommended)
+
+    Returns:
+        Average brightness value from 0.0 (black) to 1.0 (white).
+        Returns 0.5 if the source video cannot be read.
+    """
+    duration_frames = end_frame - start_frame
+    if duration_frames <= 0:
+        return 0.5
+
+    # Calculate evenly-spaced sample positions within the clip
+    if num_samples >= duration_frames:
+        sample_positions = list(range(start_frame, end_frame))
+    else:
+        step = duration_frames / (num_samples + 1)
+        sample_positions = [
+            int(start_frame + step * (i + 1)) for i in range(num_samples)
+        ]
+
+    cap = cv2.VideoCapture(str(source_path))
+    try:
+        if not cap.isOpened():
+            logger.warning(f"Cannot open video for brightness: {source_path}")
+            return 0.5
+
+        luminance_values: list[float] = []
+        for pos in sample_positions:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, pos)
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                continue
+
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            mean_val = float(gray.mean())
+            luminance_values.append(mean_val / 255.0)
+
+        if not luminance_values:
+            return 0.5
+
+        return float(np.mean(luminance_values))
+    finally:
+        cap.release()
+
+
+def compute_color_purity(
+    dominant_colors: list[tuple[int, int, int]],
+) -> float:
+    """Compute color purity score for a clip's dominant colors.
+
+    Measures how strongly a single color dominates the palette.
+    High purity means one clear color; low purity means muddy/mixed.
+
+    Args:
+        dominant_colors: List of RGB tuples sorted by frequency
+
+    Returns:
+        Purity score from 0.0 (muddy/mixed) to 1.0 (single strong color)
+    """
+    if not dominant_colors:
+        return 0.0
+
+    hsv_colors = [rgb_to_hsv(c) for c in dominant_colors]
+
+    # Mean saturation across dominant colors
+    mean_saturation = np.mean([hsv[1] for hsv in hsv_colors])
+
+    # Hue variance (standard deviation of hue values)
+    hue_values = [hsv[0] for hsv in hsv_colors]
+    if len(hue_values) > 1:
+        # Handle hue wraparound (e.g., 350° and 10° are close)
+        hue_rad = [h * np.pi / 180.0 for h in hue_values]
+        mean_sin = np.mean([np.sin(r) for r in hue_rad])
+        mean_cos = np.mean([np.cos(r) for r in hue_rad])
+        # Circular standard deviation
+        r_len = np.sqrt(mean_sin**2 + mean_cos**2)
+        color_variance = np.sqrt(-2.0 * np.log(max(r_len, 1e-10))) * (180.0 / np.pi)
+    else:
+        color_variance = 0.0
+
+    # Purity: high saturation + low hue variance = pure color
+    purity = float(mean_saturation * (1.0 - min(color_variance / 60.0, 1.0)))
+    return max(0.0, min(1.0, purity))
+
+
 def get_palette_display_name(palette: str) -> str:
     """
     Get the display name for a color palette.

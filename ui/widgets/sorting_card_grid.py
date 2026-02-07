@@ -15,10 +15,25 @@ ALGORITHMS = {
         "Chromatic Flow",
         "Arrange clips along a color gradient"
     ),
+    "color_cycle": (
+        "🌈",
+        "Color Cycle",
+        "Curate clips with strong color identity and cycle through the spectrum"
+    ),
     "duration": (
         "⏱️",
         "Tempo Shift",
         "Order clips from shortest to longest (or reverse)"
+    ),
+    "brightness": (
+        "🌗",
+        "Into the Dark",
+        "Arrange clips from light to shadow, or shadow to light"
+    ),
+    "volume": (
+        "🔊",
+        "Crescendo",
+        "Build from silence to thunder, or thunder to silence"
     ),
     "shuffle": (
         "🎲",
@@ -34,6 +49,21 @@ ALGORITHMS = {
         "🎬",
         "Focal Ladder",
         "Arrange clips by camera shot scale"
+    ),
+    "proximity": (
+        "🔭",
+        "Up Close and Personal",
+        "Glide from distant vistas to intimate close-ups"
+    ),
+    "similarity_chain": (
+        "🔗",
+        "Human Centipede",
+        "Chain clips together by visual similarity — each cut flows into the next"
+    ),
+    "match_cut": (
+        "✂️",
+        "Match Cut",
+        "Find hidden connections between clips — where one ending meets another's beginning"
     ),
     "exquisite_corpus": (
         "📝",
@@ -101,17 +131,25 @@ class SortingCardGrid(QWidget):
         grid_layout.setSpacing(Spacing.XL)
         grid_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Create cards in grid layout (7 algorithms)
-        # Row 1: basic sorting (color, duration, shuffle, sequential)
-        # Row 2: analysis-based (shot_type, exquisite_corpus, storyteller)
+        # Create cards in grid layout (13 algorithms, 4 columns)
+        # Row 0: basic sorting
+        # Row 1: color/brightness/volume
+        # Row 2: shot analysis + similarity
+        # Row 3: text/narrative
         positions = [
-            ("color", 0, 0),
-            ("duration", 0, 1),
-            ("shuffle", 0, 2),
-            ("sequential", 0, 3),
-            ("shot_type", 1, 0),
-            ("exquisite_corpus", 1, 1),
-            ("storyteller", 1, 2),
+            ("shuffle", 0, 0),
+            ("sequential", 0, 1),
+            ("duration", 0, 2),
+            ("color", 0, 3),
+            ("color_cycle", 1, 0),
+            ("brightness", 1, 1),
+            ("volume", 1, 2),
+            ("shot_type", 1, 3),
+            ("proximity", 2, 0),
+            ("similarity_chain", 2, 1),
+            ("match_cut", 2, 2),
+            ("exquisite_corpus", 2, 3),
+            ("storyteller", 3, 0),
         ]
 
         for key, row, col in positions:

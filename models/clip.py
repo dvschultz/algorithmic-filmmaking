@@ -186,6 +186,12 @@ class Clip:
     extracted_texts: Optional[list[ExtractedText]] = None  # Text extracted from frames
     # Rich cinematography analysis
     cinematography: Optional["CinematographyAnalysis"] = None  # Film language metadata
+    # Sequencer algorithm cache fields
+    average_brightness: Optional[float] = None  # Mean luminance 0.0-1.0
+    rms_volume: Optional[float] = None  # Mean volume in dB (typically -60 to 0)
+    embedding: Optional[list[float]] = None  # CLIP ViT-B/32 embedding (512 dims)
+    first_frame_embedding: Optional[list[float]] = None  # CLIP embedding of first frame
+    last_frame_embedding: Optional[list[float]] = None  # CLIP embedding of last frame
 
     @property
     def duration_frames(self) -> int:
@@ -299,6 +305,17 @@ class Clip:
         # Rich cinematography analysis
         if self.cinematography:
             data["cinematography"] = self.cinematography.to_dict()
+        # Sequencer algorithm cache fields
+        if self.average_brightness is not None:
+            data["average_brightness"] = self.average_brightness
+        if self.rms_volume is not None:
+            data["rms_volume"] = self.rms_volume
+        if self.embedding is not None:
+            data["embedding"] = self.embedding
+        if self.first_frame_embedding is not None:
+            data["first_frame_embedding"] = self.first_frame_embedding
+        if self.last_frame_embedding is not None:
+            data["last_frame_embedding"] = self.last_frame_embedding
         return data
 
     @classmethod
@@ -360,4 +377,10 @@ class Clip:
             extracted_texts=extracted_texts,
             # Rich cinematography analysis
             cinematography=cinematography,
+            # Sequencer algorithm cache fields
+            average_brightness=data.get("average_brightness"),
+            rms_volume=data.get("rms_volume"),
+            embedding=data.get("embedding"),
+            first_frame_embedding=data.get("first_frame_embedding"),
+            last_frame_embedding=data.get("last_frame_embedding"),
         )
