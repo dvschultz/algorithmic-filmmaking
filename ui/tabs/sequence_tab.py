@@ -19,11 +19,13 @@ from PySide6.QtCore import Signal, Qt, Slot
 from .base_tab import BaseTab
 from ui.video_player import VideoPlayer
 from ui.timeline import TimelineWidget
-from ui.widgets import SortingCardGrid, TimelinePreview
+from ui.widgets import SortingCardGrid, TimelinePreview, CostEstimatePanel
 from ui.dialogs import ExquisiteCorpusDialog, StorytellerDialog, MissingDescriptionsDialog
-from ui.theme import theme, Spacing
+from ui.theme import theme, Spacing, TypeScale
 from ui.workers.sequence_worker import SequenceWorker
 from core.remix import generate_sequence
+from core.cost_estimates import estimate_sequence_cost
+from core.settings import get_llm_api_key, get_replicate_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -76,9 +78,10 @@ class SequenceTab(BaseTab):
     # Parameters: list of clip IDs that need descriptions
     description_analysis_requested = Signal(list)
 
-    # State constants (2 states instead of 3)
+    # State constants
     STATE_CARDS = 0      # Show card grid only
     STATE_TIMELINE = 1   # Show header + timeline + preview
+    STATE_CONFIRM = 2    # Show cost estimate + generate button
 
     def __init__(self, parent=None):
         self._current_source = None
@@ -92,6 +95,10 @@ class SequenceTab(BaseTab):
         # Guard flags
         self._apply_in_progress = False
         self._sequence_worker: Optional[SequenceWorker] = None
+
+        # Confirm state: pending algorithm and clips for generation
+        self._pending_algorithm: Optional[str] = None
+        self._pending_clips: list = []
 
         super().__init__(parent)
 
@@ -111,6 +118,10 @@ class SequenceTab(BaseTab):
         # STATE_TIMELINE (index 1): Header + content
         self.timeline_view = self._create_timeline_view()
         self.state_stack.addWidget(self.timeline_view)
+
+        # STATE_CONFIRM (index 2): Cost estimate + generate/back buttons
+        self.confirm_view = self._create_confirm_view()
+        self.state_stack.addWidget(self.confirm_view)
 
         layout.addWidget(self.state_stack)
 
@@ -206,6 +217,146 @@ class SequenceTab(BaseTab):
 
         return header
 
+    def _create_confirm_view(self) -> QWidget:
+        """Create the confirmation view with cost estimate panel and generate button."""
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(40, 40, 40, 40)
+        layout.setSpacing(Spacing.LG)
+
+        # Algorithm title
+        self._confirm_algo_label = QLabel()
+        self._confirm_algo_label.setStyleSheet(
+            f"font-size: {TypeScale.XL}px; font-weight: bold;"
+        )
+        layout.addWidget(self._confirm_algo_label)
+
+        # Clip count summary
+        self._confirm_clips_label = QLabel()
+        self._confirm_clips_label.setStyleSheet(f"font-size: {TypeScale.BASE}px;")
+        layout.addWidget(self._confirm_clips_label)
+
+        # Cost estimate panel
+        self._confirm_cost_panel = CostEstimatePanel()
+        self._confirm_cost_panel.tier_changed.connect(self._on_confirm_tier_changed)
+        layout.addWidget(self._confirm_cost_panel)
+
+        layout.addStretch()
+
+        # Button row
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+
+        self._confirm_back_btn = QPushButton("Back")
+        self._confirm_back_btn.clicked.connect(lambda: self._set_state(self.STATE_CARDS))
+        btn_layout.addWidget(self._confirm_back_btn)
+
+        self._confirm_generate_btn = QPushButton("Generate Sequence")
+        self._confirm_generate_btn.setStyleSheet(f"""
+            QPushButton {{
+                padding: {Spacing.SM}px {Spacing.XL}px;
+                font-size: {TypeScale.MD}px;
+                font-weight: bold;
+            }}
+        """)
+        self._confirm_generate_btn.clicked.connect(self._on_confirm_generate)
+        btn_layout.addWidget(self._confirm_generate_btn)
+
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+
+        return container
+
+    def _show_confirm_view(self, algorithm: str, clips: list, estimates: list):
+        """Show the confirmation view with cost estimates.
+
+        Args:
+            algorithm: Algorithm key
+            clips: List of (Clip, Source) tuples
+            estimates: List of OperationEstimate from cost engine
+        """
+        config = get_algorithm_config(algorithm)
+        self._confirm_algo_label.setText(f"{config['icon']}  {config['label']}")
+        self._confirm_clips_label.setText(f"{len(clips)} clips selected")
+        self._confirm_cost_panel.set_estimates(estimates)
+        self._update_cloud_api_warning(estimates)
+        self._set_state(self.STATE_CONFIRM)
+
+    def _refresh_confirm_estimates(self):
+        """Recalculate cost estimates for the confirm view using current state."""
+        if not self._pending_algorithm or not self._pending_clips:
+            return
+        overrides = self._confirm_cost_panel.get_tier_overrides()
+        clip_objects = [clip for clip, source in self._pending_clips]
+        estimates = estimate_sequence_cost(
+            self._pending_algorithm, clip_objects, tier_overrides=overrides
+        )
+        self._confirm_cost_panel.set_estimates(estimates)
+
+        # If all analysis is now satisfied, update the clips label
+        if not estimates:
+            self._confirm_clips_label.setText(
+                f"{len(self._pending_clips)} clips selected — all analysis complete"
+            )
+
+        # Check for missing API keys when cloud tier is selected
+        self._update_cloud_api_warning(estimates)
+
+    def _update_cloud_api_warning(self, estimates: list):
+        """Show a warning if cloud tier is selected but API key is missing."""
+        if not estimates:
+            self._confirm_cost_panel.set_warning(None)
+            return
+
+        cloud_ops = [e for e in estimates if e.tier == "cloud"]
+        if not cloud_ops:
+            self._confirm_cost_panel.set_warning(None)
+            return
+
+        missing = []
+        needs_llm = any(e.operation in ("describe", "extract_text", "cinematography") for e in cloud_ops)
+        needs_replicate = any(e.operation == "shots" for e in cloud_ops)
+
+        if needs_llm and not get_llm_api_key():
+            missing.append("LLM")
+        if needs_replicate and not get_replicate_api_key():
+            missing.append("Replicate")
+
+        if missing:
+            keys = " and ".join(missing)
+            self._confirm_cost_panel.set_warning(
+                f"Cloud tier selected but no {keys} API key configured. "
+                f"Set keys in Settings or switch to Local tier."
+            )
+        else:
+            self._confirm_cost_panel.set_warning(None)
+
+    def _on_confirm_tier_changed(self, operation: str, tier: str):
+        """Recalculate estimates when user changes a tier dropdown in confirm view."""
+        self._refresh_confirm_estimates()
+
+    def _on_confirm_generate(self):
+        """Handle Generate button click in confirm view."""
+        if not self._pending_algorithm or not self._pending_clips:
+            return
+
+        algorithm = self._pending_algorithm
+        clips = self._pending_clips
+
+        # Clear pending state
+        self._pending_algorithm = None
+        self._pending_clips = []
+
+        # Dialog-based algorithms still use their dialogs for the actual generation
+        if algorithm == "exquisite_corpus":
+            self._show_exquisite_corpus_dialog(clips)
+            return
+        if algorithm == "storyteller":
+            self._show_storyteller_dialog(clips)
+            return
+
+        self._apply_algorithm(algorithm, clips)
+
     def set_gui_state(self, gui_state):
         """Set the GUI state reference (called by MainWindow)."""
         self._gui_state = gui_state
@@ -225,6 +376,10 @@ class SequenceTab(BaseTab):
         else:
             self._sources.update({source.id: source for clip, source in clips_with_sources if source})
         logger.debug(f"Set available clips in Sequence tab: {len(self._available_clips)}")
+
+        # Refresh cost estimates if the confirm view is active
+        if self.view_stack.currentIndex() == self.STATE_CONFIRM:
+            self._refresh_confirm_estimates()
 
     # --- Signal handlers ---
 
@@ -283,18 +438,25 @@ class SequenceTab(BaseTab):
             )
             return
 
-        # Special handling for Exquisite Corpus - show dialog workflow
-        if algorithm == "exquisite_corpus":
-            self._show_exquisite_corpus_dialog(clips)
-            return
+        # Compute cost estimates for this algorithm
+        clip_objects = [clip for clip, source in clips]
+        estimates = estimate_sequence_cost(algorithm, clip_objects)
 
-        # Special handling for Storyteller - show dialog workflow
-        if algorithm == "storyteller":
-            self._show_storyteller_dialog(clips)
-            return
-
-        # Generate and apply
-        self._apply_algorithm(algorithm, clips)
+        if estimates:
+            # Show gatekeeper with cost panel
+            self._pending_algorithm = algorithm
+            self._pending_clips = clips
+            self._show_confirm_view(algorithm, clips, estimates)
+        else:
+            # No analysis needed — skip directly to generation
+            # Special handling for dialog-based algorithms
+            if algorithm == "exquisite_corpus":
+                self._show_exquisite_corpus_dialog(clips)
+                return
+            if algorithm == "storyteller":
+                self._show_storyteller_dialog(clips)
+                return
+            self._apply_algorithm(algorithm, clips)
 
     def _apply_algorithm(self, algorithm: str, clips: list, direction: str = None):
         """Generate sequence in a background worker and transition to timeline.
@@ -741,7 +903,8 @@ class SequenceTab(BaseTab):
         """Unified state setter - ALWAYS use this, never set index directly."""
         self._current_state = state
         self.state_stack.setCurrentIndex(state)
-        logger.debug(f"Sequence tab state changed to: {'CARDS' if state == self.STATE_CARDS else 'TIMELINE'}")
+        state_names = {self.STATE_CARDS: "CARDS", self.STATE_TIMELINE: "TIMELINE", self.STATE_CONFIRM: "CONFIRM"}
+        logger.debug(f"Sequence tab state changed to: {state_names.get(state, state)}")
 
     # --- Public methods for MainWindow to call ---
 
@@ -1124,6 +1287,12 @@ class SequenceTab(BaseTab):
         # Update card availability when tab is activated
         if self._clips:
             self._update_card_availability()
+
+        # If we're in the confirm view, refresh estimates (clips may have been
+        # analyzed on another tab) but stay in confirm state
+        if self.view_stack.currentIndex() == self.STATE_CONFIRM and self._pending_algorithm:
+            self._refresh_confirm_estimates()
+            return
 
         # Determine correct state based on timeline content
         if self._has_clips_on_timeline():
