@@ -9,8 +9,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ui.algorithm_config import ALGORITHM_CONFIG
-
 
 @dataclass
 class OperationEstimate:
@@ -97,6 +95,12 @@ _DEFAULT_PARALLELISM: dict[str, int] = {
 }
 
 
+def _get_algorithm_config() -> dict:
+    """Late import to avoid circular dependency with ui.algorithm_config."""
+    from ui.algorithm_config import ALGORITHM_CONFIG
+    return ALGORITHM_CONFIG
+
+
 def _resolve_tier(operation: str, tier_overrides: dict[str, str] | None,
                   settings=None) -> str:
     """Determine which tier to use for an operation.
@@ -161,7 +165,8 @@ def estimate_sequence_cost(
         List of OperationEstimate, one per required operation.
         Empty list if no analysis needed or all clips are ready.
     """
-    config = ALGORITHM_CONFIG.get(algorithm.lower())
+    algo_config = _get_algorithm_config()
+    config = algo_config.get(algorithm.lower())
     if not config:
         return []
 
@@ -226,7 +231,8 @@ def estimate_intention_cost(
     Returns:
         List of OperationEstimate, one per required operation.
     """
-    config = ALGORITHM_CONFIG.get(algorithm.lower())
+    algo_config = _get_algorithm_config()
+    config = algo_config.get(algorithm.lower())
     if not config:
         return []
 
