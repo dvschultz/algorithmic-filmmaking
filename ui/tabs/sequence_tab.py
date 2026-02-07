@@ -34,9 +34,24 @@ ALGORITHM_CONFIG = {
         "description": "Arrange clips along a color gradient",
         "allow_duplicates": False,
     },
+    "color_cycle": {
+        "label": "Color Cycle",
+        "description": "Curate clips with strong color identity and cycle through the spectrum",
+        "allow_duplicates": False,
+    },
     "duration": {
         "label": "Tempo Shift",
         "description": "Order clips from shortest to longest (or reverse)",
+        "allow_duplicates": False,
+    },
+    "brightness": {
+        "label": "Into the Dark",
+        "description": "Arrange clips from light to shadow, or shadow to light",
+        "allow_duplicates": False,
+    },
+    "volume": {
+        "label": "Crescendo",
+        "description": "Build from silence to thunder, or thunder to silence",
         "allow_duplicates": False,
     },
     "shuffle": {
@@ -52,6 +67,21 @@ ALGORITHM_CONFIG = {
     "shot_type": {
         "label": "Focal Ladder",
         "description": "Arrange clips by camera shot scale",
+        "allow_duplicates": False,
+    },
+    "proximity": {
+        "label": "Up Close and Personal",
+        "description": "Glide from distant vistas to intimate close-ups",
+        "allow_duplicates": False,
+    },
+    "similarity_chain": {
+        "label": "Human Centipede",
+        "description": "Chain clips together by visual similarity",
+        "allow_duplicates": False,
+    },
+    "match_cut": {
+        "label": "Match Cut",
+        "description": "Find hidden connections between clips at cut points",
         "allow_duplicates": False,
     },
     "exquisite_corpus": {
@@ -240,7 +270,11 @@ class SequenceTab(BaseTab):
 
         self.algorithm_dropdown = QComboBox()
         # Populate with labels from non-dialog algorithms (exclude exquisite_corpus, storyteller)
-        _dropdown_keys = ["color", "duration", "shuffle", "sequential", "shot_type"]
+        _dropdown_keys = [
+            "shuffle", "sequential", "duration", "color", "color_cycle",
+            "brightness", "volume", "shot_type", "proximity",
+            "similarity_chain", "match_cut",
+        ]
         self.algorithm_dropdown.addItems([get_algorithm_label(k) for k in _dropdown_keys])
         self.algorithm_dropdown.setMinimumWidth(140)
         self.algorithm_dropdown.currentTextChanged.connect(self._on_algorithm_changed)
@@ -659,6 +693,22 @@ class SequenceTab(BaseTab):
             self.direction_dropdown.addItems(["Rainbow", "Warm to Cool", "Cool to Warm"])
             self.direction_label.show()
             self.direction_dropdown.show()
+        elif algo_lower == "brightness":
+            self.direction_dropdown.addItems(["Bright to Dark", "Dark to Bright"])
+            self.direction_label.show()
+            self.direction_dropdown.show()
+        elif algo_lower == "volume":
+            self.direction_dropdown.addItems(["Quiet to Loud", "Loud to Quiet"])
+            self.direction_label.show()
+            self.direction_dropdown.show()
+        elif algo_lower == "proximity":
+            self.direction_dropdown.addItems(["Far to Close", "Close to Far"])
+            self.direction_label.show()
+            self.direction_dropdown.show()
+        elif algo_lower == "color_cycle":
+            self.direction_dropdown.addItems(["Spectrum", "Complementary"])
+            self.direction_label.show()
+            self.direction_dropdown.show()
         else:
             self.direction_label.hide()
             self.direction_dropdown.hide()
@@ -680,6 +730,22 @@ class SequenceTab(BaseTab):
             elif direction_text == "Cool to Warm":
                 return "cool_to_warm"
             return "rainbow"
+        elif algo_key == "brightness":
+            if direction_text == "Dark to Bright":
+                return "dark_to_bright"
+            return "bright_to_dark"
+        elif algo_key == "volume":
+            if direction_text == "Loud to Quiet":
+                return "loud_to_quiet"
+            return "quiet_to_loud"
+        elif algo_key == "proximity":
+            if direction_text == "Close to Far":
+                return "close_to_far"
+            return "far_to_close"
+        elif algo_key == "color_cycle":
+            if direction_text == "Complementary":
+                return "complementary"
+            return "spectrum"
         return None
 
     @Slot(str)
@@ -824,19 +890,26 @@ class SequenceTab(BaseTab):
         # Check if any clips have dominant colors
         has_colors = any(clip.dominant_colors for clip in self._clips)
 
-        # Check if any clips have shot types
-        has_shot_types = any(clip.shot_type for clip in self._clips)
-
-        # Check if any clips have extracted text (for Exquisite Corpus)
-        has_text = any(clip.extracted_texts for clip in self._clips)
+        # Check if any clips have shot types or cinematography
+        has_shot_types = any(
+            clip.shot_type or clip.cinematography
+            for clip in self._clips
+        )
 
         availability = {
             "color": (has_colors, "Run color analysis first" if not has_colors else ""),
+            "color_cycle": (has_colors, "Run color analysis first" if not has_colors else ""),
             "duration": True,
+            "brightness": True,  # Auto-computed on demand
+            "volume": True,  # Auto-computed on demand
             "shuffle": True,
             "sequential": True,
             "shot_type": (has_shot_types, "Run shot type analysis first" if not has_shot_types else ""),
+            "proximity": (has_shot_types, "Run shot type or cinematography analysis first" if not has_shot_types else ""),
+            "similarity_chain": True,  # Auto-computed on demand
+            "match_cut": True,  # Auto-computed on demand
             "exquisite_corpus": True,  # Always available - dialog handles text extraction
+            "storyteller": True,
         }
 
         self.card_grid.set_algorithm_availability(availability)
@@ -845,11 +918,18 @@ class SequenceTab(BaseTab):
         """Reset all cards to enabled state (for fresh project/intention flow)."""
         availability = {
             "color": True,
+            "color_cycle": True,
             "duration": True,
+            "brightness": True,
+            "volume": True,
             "shuffle": True,
             "sequential": True,
             "shot_type": True,
+            "proximity": True,
+            "similarity_chain": True,
+            "match_cut": True,
             "exquisite_corpus": True,
+            "storyteller": True,
         }
         self.card_grid.set_algorithm_availability(availability)
 
@@ -910,13 +990,14 @@ class SequenceTab(BaseTab):
 
     def set_sorting_algorithm(self, algorithm: str):
         """Set the sorting algorithm (for agent tools)."""
-        valid_algorithms = ["color", "duration", "shuffle", "sequential", "shot_type", "exquisite_corpus"]
+        valid_algorithms = list(ALGORITHM_CONFIG.keys())
         if algorithm.lower() in valid_algorithms:
-            # If in timeline state, use the dropdown to regenerate (except exquisite_corpus)
-            if self._current_state == self.STATE_TIMELINE and algorithm.lower() not in ("exquisite_corpus", "shot_type"):
+            # If in timeline state, use the dropdown to regenerate (except dialog-based)
+            dialog_algorithms = ("exquisite_corpus", "storyteller")
+            if self._current_state == self.STATE_TIMELINE and algorithm.lower() not in dialog_algorithms:
                 self.algorithm_dropdown.setCurrentText(get_algorithm_label(algorithm))
             else:
-                # If in cards state or exquisite_corpus/shot_type, simulate card click
+                # If in cards state or dialog algorithm, simulate card click
                 self._on_card_clicked(algorithm)
 
     def apply_shot_type_filter(self, shot_type: str | None) -> int:

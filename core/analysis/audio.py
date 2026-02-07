@@ -342,6 +342,64 @@ def analyze_audio_from_video(
         return analyze_audio(audio_path, sample_rate=sample_rate, include_onsets=include_onsets)
 
 
+def extract_clip_volume(
+    source_path: Path,
+    start_seconds: float,
+    duration_seconds: float,
+) -> Optional[float]:
+    """Extract mean RMS volume level for a clip segment using FFmpeg volumedetect.
+
+    Args:
+        source_path: Path to the source video file
+        start_seconds: Start time of the clip in seconds
+        duration_seconds: Duration of the clip in seconds
+
+    Returns:
+        Mean volume in dB (typically -60 to 0, higher = louder),
+        or None if the source has no audio track.
+    """
+    if not has_audio_track(source_path):
+        return None
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-ss", str(start_seconds),
+        "-t", str(duration_seconds),
+        "-i", str(source_path),
+        "-vn",
+        "-af", "volumedetect",
+        "-f", "null",
+        "-",
+    ]
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        # Parse mean_volume from stderr
+        for line in result.stderr.splitlines():
+            if "mean_volume:" in line:
+                # Format: "mean_volume: -23.4 dB"
+                parts = line.split("mean_volume:")
+                if len(parts) >= 2:
+                    vol_str = parts[1].strip().replace("dB", "").strip()
+                    return float(vol_str)
+
+        logger.warning(f"No volume data found for {source_path} at {start_seconds}s")
+        return None
+
+    except subprocess.TimeoutExpired:
+        logger.warning(f"Volume extraction timed out for {source_path}")
+        return None
+    except (ValueError, IndexError) as e:
+        logger.warning(f"Failed to parse volume data: {e}")
+        return None
+
+
 def analyze_music_file(
     music_path: Path,
     include_onsets: bool = True,
