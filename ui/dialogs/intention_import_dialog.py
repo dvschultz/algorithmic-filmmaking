@@ -29,6 +29,8 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QDragEnterEvent, QDropEvent
 
 from ui.theme import theme, TypeScale, Spacing, Radii
+from ui.widgets.cost_estimate_panel import CostEstimatePanel
+from core.cost_estimates import estimate_intention_cost
 
 logger = logging.getLogger(__name__)
 
@@ -382,6 +384,11 @@ class IntentionImportDialog(QDialog):
             self.storyteller_duration_dropdown = QComboBox()
             self.storyteller_duration_dropdown.setCurrentIndex(0)
 
+        # Cost estimate panel (hidden until files are added)
+        self._cost_panel = CostEstimatePanel()
+        self._cost_panel.tier_changed.connect(self._on_cost_tier_changed)
+        layout.addWidget(self._cost_panel)
+
         # Drop zone
         self.drop_zone = DropZone()
         self.drop_zone.files_dropped.connect(self._on_files_dropped)
@@ -613,6 +620,9 @@ class IntentionImportDialog(QDialog):
         has_items = bool(self._local_paths or self._urls)
         self.start_btn.setEnabled(has_items)
 
+        # Update cost estimates based on pending count
+        self._refresh_cost_estimates()
+
     def _get_direction(self) -> str | None:
         """Get the selected direction based on algorithm and dropdown."""
         if self._algorithm.lower() == "duration":
@@ -667,6 +677,27 @@ class IntentionImportDialog(QDialog):
             return None
         text = self.storyteller_theme_input.toPlainText().strip()
         return text if text else None
+
+    def _refresh_cost_estimates(self):
+        """Recalculate and display cost estimates based on pending import count."""
+        clip_count = len(self._local_paths) + len(self._urls)
+        if clip_count == 0:
+            self._cost_panel.set_estimates([])
+            return
+
+        tier_overrides = self._cost_panel.get_tier_overrides()
+        estimates = estimate_intention_cost(
+            self._algorithm, clip_count, tier_overrides=tier_overrides,
+        )
+        self._cost_panel.set_estimates(estimates)
+
+    def _on_cost_tier_changed(self, operation: str, tier: str):
+        """Handle tier dropdown change in cost panel."""
+        self._refresh_cost_estimates()
+
+    def get_tier_overrides(self) -> dict[str, str]:
+        """Return current tier selections from the cost panel."""
+        return self._cost_panel.get_tier_overrides()
 
     def _on_start(self):
         """Handle Start Import click."""
