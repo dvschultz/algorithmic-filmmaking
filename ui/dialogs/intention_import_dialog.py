@@ -41,8 +41,8 @@ logger = logging.getLogger(__name__)
 
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v"}
 
-# Heuristic: average clips per minute of video at default detection threshold (~3.0)
-_CLIPS_PER_MINUTE = 2.0
+# Heuristic: ~5 seconds per clip at default detection threshold (~3.0)
+_CLIPS_PER_MINUTE = 12.0
 
 # Default assumed duration for URLs (can't probe before download)
 _DEFAULT_URL_DURATION_SECONDS = 300.0  # 5 minutes
