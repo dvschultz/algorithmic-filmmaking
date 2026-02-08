@@ -5,7 +5,10 @@ It allows importing videos via drag-drop or URLs, then shows progress
 as the workflow processes the videos.
 """
 
+import json
 import logging
+import shutil
+import subprocess
 from pathlib import Path
 from enum import Enum, auto
 
@@ -25,7 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
     QComboBox,
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QThread
 from PySide6.QtGui import QFont, QDragEnterEvent, QDropEvent
 
 from ui.theme import theme, TypeScale, Spacing, Radii
@@ -37,6 +40,49 @@ logger = logging.getLogger(__name__)
 
 
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v"}
+
+# Heuristic: average clips per minute of video at default detection threshold (~3.0)
+_CLIPS_PER_MINUTE = 2.0
+
+# Default assumed duration for URLs (can't probe before download)
+_DEFAULT_URL_DURATION_SECONDS = 300.0  # 5 minutes
+
+
+def _probe_duration(path: Path) -> float | None:
+    """Get video duration in seconds via ffprobe. Returns None on failure."""
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return None
+    try:
+        result = subprocess.run(
+            [ffprobe, "-v", "quiet", "-print_format", "json",
+             "-show_format", str(path)],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode != 0:
+            return None
+        data = json.loads(result.stdout)
+        return float(data.get("format", {}).get("duration", 0)) or None
+    except Exception:
+        return None
+
+
+class DurationProbeWorker(QThread):
+    """Probe video durations in a background thread."""
+
+    finished = Signal(dict)  # {path_str: duration_seconds}
+
+    def __init__(self, paths: list[Path], parent=None):
+        super().__init__(parent)
+        self._paths = list(paths)
+
+    def run(self):
+        results = {}
+        for path in self._paths:
+            dur = _probe_duration(path)
+            if dur is not None:
+                results[str(path)] = dur
+        self.finished.emit(results)
 
 
 class WorkflowStep(Enum):
@@ -184,6 +230,8 @@ class IntentionImportDialog(QDialog):
         self._urls: list[str] = []
         self._current_step: WorkflowStep | None = None
         self._step_progress: dict[WorkflowStep, tuple[bool, float]] = {}  # step -> (complete, progress)
+        self._durations: dict[str, float] = {}  # path_str -> seconds
+        self._probe_worker: DurationProbeWorker | None = None
 
         self.setWindowTitle(f"Create {algorithm.capitalize()} Sequence")
         self.setMinimumSize(500, 450)
@@ -587,6 +635,7 @@ class IntentionImportDialog(QDialog):
             if path not in self._local_paths:
                 self._local_paths.append(path)
         self._update_pending_list()
+        self._probe_local_durations()
 
     def _update_pending_list(self):
         """Update the pending imports list."""
@@ -679,19 +728,58 @@ class IntentionImportDialog(QDialog):
         text = self.storyteller_theme_input.toPlainText().strip()
         return text if text else None
 
+    def _estimate_clip_count(self) -> int:
+        """Estimate total clip count from probed durations and URL defaults."""
+        total_seconds = 0.0
+
+        for path in self._local_paths:
+            dur = self._durations.get(str(path))
+            if dur is not None:
+                total_seconds += dur
+            else:
+                # Duration not yet probed — use a conservative default
+                total_seconds += _DEFAULT_URL_DURATION_SECONDS
+
+        # URLs can't be probed; use default duration per URL
+        total_seconds += len(self._urls) * _DEFAULT_URL_DURATION_SECONDS
+
+        total_minutes = total_seconds / 60.0
+        return max(1, round(total_minutes * _CLIPS_PER_MINUTE))
+
+    def _probe_local_durations(self):
+        """Kick off a background probe for any local paths missing durations."""
+        unprobed = [p for p in self._local_paths if str(p) not in self._durations]
+        if not unprobed:
+            return
+
+        # Cancel any existing probe
+        if self._probe_worker is not None and self._probe_worker.isRunning():
+            self._probe_worker.finished.disconnect(self._on_durations_probed)
+            self._probe_worker = None
+
+        self._probe_worker = DurationProbeWorker(unprobed, parent=self)
+        self._probe_worker.finished.connect(self._on_durations_probed)
+        self._probe_worker.start()
+
+    def _on_durations_probed(self, results: dict):
+        """Handle probe results and refresh estimate."""
+        self._durations.update(results)
+        self._probe_worker = None
+        self._refresh_cost_estimates()
+
     def _refresh_cost_estimates(self):
-        """Recalculate and display cost estimates based on pending import count."""
-        clip_count = len(self._local_paths) + len(self._urls)
-        if clip_count == 0:
+        """Recalculate and display cost estimates based on estimated clip count."""
+        if not self._local_paths and not self._urls:
             self._cost_panel.set_estimates([])
             self._cost_panel.set_warning(None)
             return
 
+        clip_count = self._estimate_clip_count()
         tier_overrides = self._cost_panel.get_tier_overrides()
         estimates = estimate_intention_cost(
             self._algorithm, clip_count, tier_overrides=tier_overrides,
         )
-        self._cost_panel.set_estimates(estimates)
+        self._cost_panel.set_estimates(estimates, estimated=True)
 
         # Check for missing API keys when cloud tier is selected
         cloud_ops = [e for e in estimates if e.tier == "cloud"]

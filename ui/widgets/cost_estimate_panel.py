@@ -57,6 +57,7 @@ class CostEstimatePanel(QWidget):
         self._estimates: list[OperationEstimate] = []
         self._tier_combos: dict[str, QComboBox] = {}
         self._collapsed = False
+        self._estimated = False  # True when clip counts are heuristic-based
         self._setup_ui()
 
     def _setup_ui(self):
@@ -118,6 +119,7 @@ class CostEstimatePanel(QWidget):
         frame_layout.addWidget(self._warning_label)
 
         layout.addWidget(self._frame)
+        self._frame.setMinimumHeight(140)
         self._apply_theme()
         self.setVisible(False)
 
@@ -147,9 +149,15 @@ class CostEstimatePanel(QWidget):
             f"font-size: {TypeScale.SM}px; color: {t.accent_blue}; border: none;"
         )
 
-    def set_estimates(self, estimates: list[OperationEstimate]):
-        """Update the panel with new estimates."""
+    def set_estimates(self, estimates: list[OperationEstimate], estimated: bool = False):
+        """Update the panel with new estimates.
+
+        Args:
+            estimates: List of per-operation estimates.
+            estimated: If True, clip counts are heuristic-based (shows '~' prefix).
+        """
         self._estimates = estimates
+        self._estimated = estimated
         self._rebuild_grid()
         self._update_summary()
         self.setVisible(bool(estimates))
@@ -225,7 +233,8 @@ class CostEstimatePanel(QWidget):
             self._grid.addWidget(name_label, row_idx, 0)
 
             # Clips needing / total
-            clips_label = QLabel(f"{est.clips_needing}/{est.clips_total}")
+            prefix = "~" if self._estimated else ""
+            clips_label = QLabel(f"{prefix}{est.clips_needing}/{prefix}{est.clips_total}")
             clips_label.setStyleSheet(row_style)
             self._grid.addWidget(clips_label, row_idx, 1)
 
@@ -263,7 +272,8 @@ class CostEstimatePanel(QWidget):
         total_cost = sum(e.cost_dollars for e in self._estimates)
         total_time = sum(e.time_seconds for e in self._estimates)
 
-        parts = [f"{total_needing} clips need analysis"]
+        prefix = "~" if self._estimated else ""
+        parts = [f"{prefix}{total_needing} clips need analysis"]
         parts.append(_format_cost(total_cost))
         parts.append(_format_time(total_time))
         self._summary_label.setText("  |  ".join(parts))
