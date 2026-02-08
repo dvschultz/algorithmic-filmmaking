@@ -102,7 +102,7 @@ class DropZone(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAcceptDrops(True)
-        self.setMinimumHeight(120)
+        self.setMinimumHeight(100)
         self._setup_ui()
         self._apply_theme()
 
@@ -234,7 +234,7 @@ class IntentionImportDialog(QDialog):
         self._probe_worker: DurationProbeWorker | None = None
 
         self.setWindowTitle(f"Create {algorithm.capitalize()} Sequence")
-        self.setMinimumSize(500, 450)
+        self.setMinimumSize(750, 620)
         self.setModal(True)
 
         self._setup_ui()
@@ -264,12 +264,17 @@ class IntentionImportDialog(QDialog):
         self.view_stack.setCurrentIndex(self.VIEW_IMPORT)
 
     def _create_import_view(self) -> QWidget:
-        """Create the import view with drag-drop, URL input, and pending list."""
+        """Create the import view with two-column layout.
+
+        Left column: drop zone, URL input, pending list, cost estimate.
+        Right column: algorithm-specific settings.
+        """
         widget = QWidget()
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(Spacing.MD)
 
-        # Header
+        # Header (spans both columns)
         header = QLabel(f"Import videos for {self._algorithm.capitalize()} sequence")
         header_font = QFont()
         header_font.setPointSize(14)
@@ -278,46 +283,58 @@ class IntentionImportDialog(QDialog):
         layout.addWidget(header)
         self._import_header = header
 
-        # Direction selector (for Duration and Color algorithms)
-        self._direction_container = QWidget()
-        direction_layout = QHBoxLayout(self._direction_container)
-        direction_layout.setContentsMargins(0, 0, 0, 8)
+        # Two-column content area
+        columns_layout = QHBoxLayout()
+        columns_layout.setSpacing(Spacing.LG)
 
-        direction_label = QLabel("Sort order:")
-        direction_label.setStyleSheet(f"color: {theme().text_secondary};")
-        direction_layout.addWidget(direction_label)
-        self._direction_label = direction_label
+        # --- Left column: imports ---
+        left_column = QVBoxLayout()
+        left_column.setSpacing(Spacing.SM)
 
-        self.direction_dropdown = QComboBox()
-        self.direction_dropdown.setMinimumWidth(160)
+        # Drop zone
+        self.drop_zone = DropZone()
+        self.drop_zone.files_dropped.connect(self._on_files_dropped)
+        left_column.addWidget(self.drop_zone)
 
-        # Populate based on algorithm
-        if self._algorithm.lower() == "duration":
-            self.direction_dropdown.addItems(["Shortest First", "Longest First"])
-        elif self._algorithm.lower() == "color":
-            self.direction_dropdown.addItems(["Rainbow", "Warm to Cool", "Cool to Warm"])
+        # URL section
+        url_label = QLabel("Or enter YouTube/Vimeo URLs (one per line):")
+        left_column.addWidget(url_label)
+        self._url_label = url_label
 
-        direction_layout.addWidget(self.direction_dropdown)
-        direction_layout.addStretch()
+        self.url_input = QTextEdit()
+        self.url_input.setPlaceholderText("https://youtube.com/watch?v=...\nhttps://vimeo.com/...")
+        self.url_input.setMaximumHeight(70)
+        self.url_input.textChanged.connect(self._update_pending_list)
+        left_column.addWidget(self.url_input)
 
-        layout.addWidget(self._direction_container)
+        # Pending imports list
+        pending_label = QLabel("Pending imports:")
+        left_column.addWidget(pending_label)
+        self._pending_label = pending_label
 
-        # Hide if not applicable
-        if self._algorithm.lower() not in ("duration", "color"):
-            self._direction_container.hide()
+        self.pending_list = QListWidget()
+        self.pending_list.setMaximumHeight(80)
+        left_column.addWidget(self.pending_list)
+
+        # Cost estimate panel (at bottom of left column)
+        self._cost_panel = CostEstimatePanel()
+        self._cost_panel.tier_changed.connect(self._on_cost_tier_changed)
+        left_column.addWidget(self._cost_panel)
+
+        left_column.addStretch()
+        columns_layout.addLayout(left_column, stretch=3)
+
+        # --- Right column: settings ---
+        right_column = QVBoxLayout()
+        right_column.setSpacing(Spacing.SM)
 
         # Shot type filter (available for all algorithms)
-        self._shot_type_container = QWidget()
-        shot_type_layout = QHBoxLayout(self._shot_type_container)
-        shot_type_layout.setContentsMargins(0, 0, 0, 8)
-
         shot_type_label = QLabel("Filter by shot type:")
         shot_type_label.setStyleSheet(f"color: {theme().text_secondary};")
-        shot_type_layout.addWidget(shot_type_label)
+        right_column.addWidget(shot_type_label)
         self._shot_type_label = shot_type_label
 
         self.shot_type_dropdown = QComboBox()
-        self.shot_type_dropdown.setMinimumWidth(160)
         self.shot_type_dropdown.addItems([
             "All",
             "Wide Shot",
@@ -326,93 +343,77 @@ class IntentionImportDialog(QDialog):
             "Close-up",
             "Extreme Close-up",
         ])
-        shot_type_layout.addWidget(self.shot_type_dropdown)
-        shot_type_layout.addStretch()
+        right_column.addWidget(self.shot_type_dropdown)
 
-        layout.addWidget(self._shot_type_container)
+        # Direction selector (for Duration and Color algorithms)
+        self._direction_label = QLabel("Sort order:")
+        self._direction_label.setStyleSheet(f"color: {theme().text_secondary};")
+        right_column.addWidget(self._direction_label)
 
-        # Shot type filter is available for all algorithms (cross-cutting filter)
+        self.direction_dropdown = QComboBox()
+        if self._algorithm.lower() == "duration":
+            self.direction_dropdown.addItems(["Shortest First", "Longest First"])
+        elif self._algorithm.lower() == "color":
+            self.direction_dropdown.addItems(["Rainbow", "Warm to Cool", "Cool to Warm"])
+        right_column.addWidget(self.direction_dropdown)
+
+        # Hide direction if not applicable
+        if self._algorithm.lower() not in ("duration", "color"):
+            self._direction_label.hide()
+            self.direction_dropdown.hide()
 
         # Poem length selector (for Exquisite Corpus algorithm only)
-        # Use a simple horizontal layout directly instead of a container widget
-        # to avoid background color issues in dark mode
         if self._algorithm.lower() == "exquisite_corpus":
-            poem_length_layout = QHBoxLayout()
-            poem_length_layout.setContentsMargins(0, 0, 0, 8)
-
             poem_length_label = QLabel("Poem length:")
-            poem_length_layout.addWidget(poem_length_label)
+            poem_length_label.setStyleSheet(f"color: {theme().text_secondary};")
+            right_column.addWidget(poem_length_label)
             self._poem_length_label = poem_length_label
 
             self.poem_length_dropdown = QComboBox()
-            self.poem_length_dropdown.setMinimumWidth(160)
             self.poem_length_dropdown.addItems([
                 "Short (up to 11 lines)",
                 "Medium (12-25 lines)",
                 "Long (26+ lines)",
             ])
             self.poem_length_dropdown.setCurrentIndex(1)  # Default to Medium
-            poem_length_layout.addWidget(self.poem_length_dropdown)
-            poem_length_layout.addStretch()
-
-            layout.addLayout(poem_length_layout)
+            right_column.addWidget(self.poem_length_dropdown)
         else:
-            # Create dummy dropdown so _get_poem_length doesn't fail
             self.poem_length_dropdown = QComboBox()
             self.poem_length_dropdown.setCurrentIndex(1)
 
         # Storyteller configuration (for storyteller algorithm only)
         if self._algorithm.lower() == "storyteller":
-            # Theme input (optional)
-            theme_layout = QHBoxLayout()
-            theme_layout.setContentsMargins(0, 0, 0, 8)
-
             theme_label = QLabel("Theme (optional):")
             theme_label.setStyleSheet(f"color: {theme().text_secondary};")
-            theme_layout.addWidget(theme_label)
+            right_column.addWidget(theme_label)
             self._storyteller_theme_label = theme_label
 
             self.storyteller_theme_input = QTextEdit()
             self.storyteller_theme_input.setPlaceholderText("e.g., urban isolation, joy, transformation...")
             self.storyteller_theme_input.setMaximumHeight(50)
-            theme_layout.addWidget(self.storyteller_theme_input)
-
-            layout.addLayout(theme_layout)
-
-            # Structure dropdown
-            structure_layout = QHBoxLayout()
-            structure_layout.setContentsMargins(0, 0, 0, 8)
+            right_column.addWidget(self.storyteller_theme_input)
 
             structure_label = QLabel("Narrative structure:")
             structure_label.setStyleSheet(f"color: {theme().text_secondary};")
-            structure_layout.addWidget(structure_label)
+            right_column.addWidget(structure_label)
             self._storyteller_structure_label = structure_label
 
             self.storyteller_structure_dropdown = QComboBox()
-            self.storyteller_structure_dropdown.setMinimumWidth(200)
             self.storyteller_structure_dropdown.addItems([
                 "Auto (LLM chooses)",
                 "Three-Act (setup, conflict, resolution)",
                 "Chronological (time-based)",
                 "Thematic (grouped by theme)",
             ])
-            self.storyteller_structure_dropdown.setCurrentIndex(0)  # Default to Auto
-            structure_layout.addWidget(self.storyteller_structure_dropdown)
-            structure_layout.addStretch()
-
-            layout.addLayout(structure_layout)
-
-            # Duration dropdown
-            duration_layout = QHBoxLayout()
-            duration_layout.setContentsMargins(0, 0, 0, 8)
+            self.storyteller_structure_dropdown.setCurrentIndex(0)
+            right_column.addWidget(self.storyteller_structure_dropdown)
 
             duration_label = QLabel("Target duration:")
             duration_label.setStyleSheet(f"color: {theme().text_secondary};")
-            duration_layout.addWidget(duration_label)
+            right_column.addWidget(duration_label)
             self._storyteller_duration_label = duration_label
 
             self.storyteller_duration_dropdown = QComboBox()
-            self.storyteller_duration_dropdown.setMinimumWidth(160)
             self.storyteller_duration_dropdown.addItems([
                 "Use all clips",
                 "~10 minutes",
@@ -420,50 +421,21 @@ class IntentionImportDialog(QDialog):
                 "~1 hour",
                 "~90 minutes",
             ])
-            self.storyteller_duration_dropdown.setCurrentIndex(0)  # Default to all
-            duration_layout.addWidget(self.storyteller_duration_dropdown)
-            duration_layout.addStretch()
-
-            layout.addLayout(duration_layout)
+            self.storyteller_duration_dropdown.setCurrentIndex(0)
+            right_column.addWidget(self.storyteller_duration_dropdown)
         else:
-            # Create dummy widgets so getters don't fail
             self.storyteller_theme_input = QTextEdit()
             self.storyteller_structure_dropdown = QComboBox()
             self.storyteller_structure_dropdown.setCurrentIndex(0)
             self.storyteller_duration_dropdown = QComboBox()
             self.storyteller_duration_dropdown.setCurrentIndex(0)
 
-        # Cost estimate panel (hidden until files are added)
-        self._cost_panel = CostEstimatePanel()
-        self._cost_panel.tier_changed.connect(self._on_cost_tier_changed)
-        layout.addWidget(self._cost_panel)
+        right_column.addStretch()
+        columns_layout.addLayout(right_column, stretch=2)
 
-        # Drop zone
-        self.drop_zone = DropZone()
-        self.drop_zone.files_dropped.connect(self._on_files_dropped)
-        layout.addWidget(self.drop_zone)
+        layout.addLayout(columns_layout)
 
-        # URL section
-        url_label = QLabel("Or enter YouTube/Vimeo URLs (one per line):")
-        layout.addWidget(url_label)
-        self._url_label = url_label
-
-        self.url_input = QTextEdit()
-        self.url_input.setPlaceholderText("https://youtube.com/watch?v=...\nhttps://vimeo.com/...")
-        self.url_input.setMaximumHeight(80)
-        self.url_input.textChanged.connect(self._update_pending_list)
-        layout.addWidget(self.url_input)
-
-        # Pending imports list
-        pending_label = QLabel("Pending imports:")
-        layout.addWidget(pending_label)
-        self._pending_label = pending_label
-
-        self.pending_list = QListWidget()
-        self.pending_list.setMaximumHeight(120)
-        layout.addWidget(self.pending_list)
-
-        # Buttons
+        # Buttons (span both columns)
         button_layout = QHBoxLayout()
         button_layout.addStretch()
 
