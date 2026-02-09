@@ -1,10 +1,11 @@
-"""On-screen text extraction using Tesseract OCR with VLM fallback.
+"""On-screen text extraction using PaddleOCR with VLM fallback.
 
 This module provides text extraction from video frames using a hybrid approach:
-1. Tesseract OCR (local, fast, free) for clear printed text
+1. PaddleOCR PP-OCRv5 (local, fast, free) for text detection + recognition
 2. VLM fallback (GPT-4o, Claude, Gemini) for stylized or hard-to-read text
 
-Tesseract is optional - if not installed, falls back to VLM-only mode.
+PaddleOCR handles both text detection and recognition in one pass,
+replacing the previous EAST + Tesseract pipeline.
 """
 
 import logging
@@ -15,38 +16,68 @@ from typing import Optional, Callable
 
 logger = logging.getLogger(__name__)
 
-# Thread-safe Tesseract availability check
-_tesseract_available: Optional[bool] = None
-_tesseract_lock = threading.Lock()
+# Thread-safe PaddleOCR availability check
+_paddleocr_available: Optional[bool] = None
+_paddleocr_lock = threading.Lock()
+
+# Lazy-loaded PaddleOCR instance (heavy init, reuse across calls)
+_ocr_engine = None
+_ocr_engine_lock = threading.Lock()
 
 
-def _check_tesseract() -> bool:
-    """Check if Tesseract is installed and available.
+def _check_paddleocr() -> bool:
+    """Check if PaddleOCR is installed and available.
 
     Returns:
-        True if Tesseract is available, False otherwise.
+        True if PaddleOCR is available, False otherwise.
     """
-    global _tesseract_available
-    if _tesseract_available is not None:
-        return _tesseract_available
+    global _paddleocr_available
+    if _paddleocr_available is not None:
+        return _paddleocr_available
 
-    with _tesseract_lock:
-        if _tesseract_available is None:
+    with _paddleocr_lock:
+        if _paddleocr_available is None:
             try:
-                import pytesseract
-                pytesseract.get_tesseract_version()
-                _tesseract_available = True
-                logger.info("Tesseract OCR available")
-            except Exception as e:
-                _tesseract_available = False
-                logger.info(f"Tesseract OCR not available: {e}")
+                from paddleocr import PaddleOCR  # noqa: F401
+                _paddleocr_available = True
+                logger.info("PaddleOCR available")
+            except ImportError:
+                _paddleocr_available = False
+                logger.info("PaddleOCR not available")
 
-    return _tesseract_available
+    return _paddleocr_available
 
 
+def _get_ocr_engine():
+    """Get or create PaddleOCR engine (thread-safe singleton)."""
+    global _ocr_engine
+
+    if _ocr_engine is not None:
+        return _ocr_engine
+
+    with _ocr_engine_lock:
+        if _ocr_engine is None:
+            from paddleocr import PaddleOCR
+            logger.info("Initializing PaddleOCR engine...")
+            _ocr_engine = PaddleOCR(
+                use_angle_cls=True,
+                lang="en",
+                show_log=False,
+            )
+            logger.info("PaddleOCR engine ready")
+
+    return _ocr_engine
+
+
+def is_paddleocr_available() -> bool:
+    """Public function to check PaddleOCR availability."""
+    return _check_paddleocr()
+
+
+# Legacy alias
 def is_tesseract_available() -> bool:
-    """Public function to check Tesseract availability."""
-    return _check_tesseract()
+    """Check if local OCR is available. Now backed by PaddleOCR."""
+    return _check_paddleocr()
 
 
 def extract_text_from_frame(
@@ -59,39 +90,24 @@ def extract_text_from_frame(
 ) -> tuple[str, float, str]:
     """Extract text from a single video frame.
 
-    Uses Tesseract OCR first (if available), then falls back to VLM
-    if Tesseract fails or returns low-confidence results.
+    Uses PaddleOCR first (if available), then falls back to VLM
+    if PaddleOCR fails or returns low-confidence results.
 
     Args:
         frame_path: Path to the frame image file
-        use_vlm_fallback: Whether to use VLM if Tesseract fails or has low confidence
+        use_vlm_fallback: Whether to use VLM if PaddleOCR fails or has low confidence
         vlm_model: VLM model to use for fallback (default: from settings)
-        vlm_only: If True, skip Tesseract and only use VLM
-        confidence_threshold: Minimum confidence to accept Tesseract result (0.0-1.0)
-        skip_detection: If True, bypass EAST pre-filter (default: False)
+        vlm_only: If True, skip PaddleOCR and only use VLM
+        confidence_threshold: Minimum confidence to accept PaddleOCR result (0.0-1.0)
+        skip_detection: Ignored (PaddleOCR handles detection internally)
 
     Returns:
         Tuple of (text, confidence, source) where:
         - text: The extracted text content
         - confidence: Confidence score from 0.0 to 1.0
-        - source: "tesseract", "vlm", "skipped", or "none"
+        - source: "paddleocr", "vlm", or "none"
     """
-    # Pre-filter with EAST detection if enabled
-    if not skip_detection:
-        try:
-            from core.settings import load_settings
-            settings = load_settings()
-            if settings.text_detection_enabled:
-                from core.analysis.text_detection import has_text_regions
-                if not has_text_regions(
-                    frame_path,
-                    confidence_threshold=settings.text_detection_confidence,
-                ):
-                    logger.debug(f"No text detected in {frame_path.name}, skipping OCR")
-                    return ("", 0.0, "skipped")
-        except Exception as e:
-            logger.warning(f"Text detection pre-filter failed, proceeding with OCR: {e}")
-    # VLM-only mode: skip Tesseract entirely
+    # VLM-only mode: skip PaddleOCR entirely
     if vlm_only:
         if not use_vlm_fallback:
             logger.warning(
@@ -110,37 +126,35 @@ def extract_text_from_frame(
 
     text = ""
     confidence = 0.0
-    source = "tesseract"
+    source = "paddleocr"
 
-    # Try Tesseract first
-    if _check_tesseract():
+    # Try PaddleOCR first
+    if _check_paddleocr():
         try:
-            import pytesseract
-            from PIL import Image
+            ocr = _get_ocr_engine()
+            result = ocr.ocr(str(frame_path), cls=True)
 
-            image = Image.open(frame_path)
-            # Get detailed data including confidence
-            data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT)
+            if result and result[0]:
+                words = []
+                confidences = []
+                for line in result[0]:
+                    # Each line: [bbox, (text, confidence)]
+                    line_text = line[1][0]
+                    line_conf = line[1][1]
+                    if line_text.strip():
+                        words.append(line_text.strip())
+                        confidences.append(line_conf)
 
-            # Filter by confidence and extract text
-            words = []
-            confidences = []
-            for i, word in enumerate(data['text']):
-                conf = int(data['conf'][i])
-                if conf > 0 and word.strip():
-                    words.append(word)
-                    confidences.append(conf / 100.0)
-
-            if words:
-                text = " ".join(words)
-                confidence = sum(confidences) / len(confidences)
-                source = "tesseract"
-                logger.debug(f"Tesseract extracted: '{text[:50]}...' (confidence: {confidence:.2f})")
+                if words:
+                    text = " ".join(words)
+                    confidence = sum(confidences) / len(confidences)
+                    source = "paddleocr"
+                    logger.debug(f"PaddleOCR extracted: '{text[:50]}...' (confidence: {confidence:.2f})")
 
         except Exception as e:
-            logger.warning(f"Tesseract extraction failed: {e}")
+            logger.warning(f"PaddleOCR extraction failed: {e}")
 
-    # VLM fallback if Tesseract unavailable or low confidence
+    # VLM fallback if PaddleOCR unavailable or low confidence
     if use_vlm_fallback and (not text or confidence < confidence_threshold):
         try:
             vlm_text, vlm_conf = _vlm_text_extraction(frame_path, vlm_model)
@@ -256,9 +270,9 @@ def extract_text_from_clip(
         num_keyframes: Number of frames to sample (default 3: start, middle, end)
         use_vlm_fallback: Whether to use VLM for low-confidence results
         vlm_model: VLM model to use (default: from settings)
-        vlm_only: If True, skip Tesseract and only use VLM
+        vlm_only: If True, skip PaddleOCR and only use VLM
         progress_callback: Optional callback(current, total) for progress updates
-        use_text_detection: Whether to use EAST pre-filter (default: True)
+        use_text_detection: Ignored (PaddleOCR handles detection internally)
 
     Returns:
         List of ExtractedText objects from models/clip.py
@@ -316,7 +330,7 @@ def extract_text_from_clip(
                 use_vlm_fallback=use_vlm_fallback,
                 vlm_model=vlm_model,
                 vlm_only=vlm_only,
-                skip_detection=not use_text_detection,
+                skip_detection=True,  # PaddleOCR handles detection internally
             )
 
             if text:

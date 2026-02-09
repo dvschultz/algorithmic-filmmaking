@@ -1,15 +1,15 @@
 """Vision-Language Model (VLM) integration for video frame description.
 
 Supports multiple tiers:
-- CPU: Moondream 2B (via transformers) - optimized for standard hardware
+- Local: Qwen3-VL 4B (via mlx-vlm) - high quality on Apple Silicon
 - Cloud: GPT-4o, Claude, Gemini (via LiteLLM) - high quality, requires API key
-- GPU: (Future) LLaVA/Qwen - high quality local inference
 
 Gemini models support video input natively, providing richer temporal understanding.
 """
 
 import base64
 import logging
+import platform
 import shutil
 import subprocess
 import tempfile
@@ -29,6 +29,15 @@ logger = logging.getLogger(__name__)
 _model_lock = threading.Lock()
 
 # Global model cache to avoid reloading heavy weights
+_LOCAL_MODEL = None
+_LOCAL_PROCESSOR = None
+
+# Local VLM model
+_LOCAL_VLM_NAME = "mlx-community/Qwen3-VL-4B-4bit"
+_LOCAL_VLM_FALLBACK = "vikhyatk/moondream2"  # Fallback for non-Apple-Silicon
+MOONDREAM_REVISION = "2025-06-21"
+
+# Backward-compatible aliases
 _CPU_MODEL = None
 _CPU_TOKENIZER = None
 
@@ -37,11 +46,6 @@ def encode_image_base64(image_path: Path) -> str:
     """Encode image to base64 string."""
     with open(image_path, "rb") as f:
         return base64.b64encode(f.read()).decode("utf-8")
-
-
-# Default Moondream revision - updated to fix GenerationMixin compatibility
-# with transformers v4.50+. See: https://huggingface.co/vikhyatk/moondream2/discussions/39
-MOONDREAM_REVISION = "2025-06-21"
 
 
 def _get_ffmpeg_path() -> str:
@@ -54,10 +58,21 @@ def _get_ffmpeg_path() -> str:
     return path
 
 
+def is_mlx_vlm_available() -> bool:
+    """Check if mlx-vlm is available (Apple Silicon only)."""
+    if platform.system() != "Darwin" or platform.machine() != "arm64":
+        return False
+    try:
+        import mlx_vlm  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
 def is_video_capable_model(model: str) -> bool:
     """Check if model supports video input.
 
-    Currently only Gemini models support native video understanding.
+    Gemini models and Qwen3-VL support native video understanding.
 
     Args:
         model: Model name/identifier
@@ -65,7 +80,8 @@ def is_video_capable_model(model: str) -> bool:
     Returns:
         True if the model supports video input
     """
-    return "gemini" in model.lower()
+    model_lower = model.lower()
+    return "gemini" in model_lower or "qwen" in model_lower
 
 
 def extract_clip_segment(
@@ -210,83 +226,125 @@ def describe_video_cloud(
         raise RuntimeError(f"Video description failed ({original_model}): {e}") from e
 
 
-def _load_cpu_model(model_id: str):
-    """Load CPU-optimized model (Moondream).
+def _load_local_model():
+    """Load local VLM model (thread-safe).
 
-    Thread-safe lazy loading with singleton pattern.
+    Uses Qwen3-VL via mlx-vlm on Apple Silicon, falls back to Moondream otherwise.
     """
-    global _CPU_MODEL, _CPU_TOKENIZER
+    global _LOCAL_MODEL, _LOCAL_PROCESSOR
 
-    # Fast path: model already loaded
-    if _CPU_MODEL is not None:
-        return _CPU_MODEL, _CPU_TOKENIZER
+    if _LOCAL_MODEL is not None:
+        return _LOCAL_MODEL, _LOCAL_PROCESSOR
 
-    # Thread-safe loading
     with _model_lock:
-        # Double-check after acquiring lock
-        if _CPU_MODEL is not None:
-            return _CPU_MODEL, _CPU_TOKENIZER
+        if _LOCAL_MODEL is not None:
+            return _LOCAL_MODEL, _LOCAL_PROCESSOR
 
-        try:
-            import torch
-            from transformers import AutoModelForCausalLM, AutoTokenizer
+        if is_mlx_vlm_available():
+            _load_qwen3_vlm()
+        else:
+            _load_moondream_fallback()
 
-            logger.info(f"Loading CPU vision model: {model_id} (revision: {MOONDREAM_REVISION})...")
-
-            # Determine best available device
-            if torch.cuda.is_available():
-                device = "cuda"
-            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                device = "mps"
-            else:
-                device = "cpu"
-
-            logger.info(f"Using device: {device}")
-
-            # Load tokenizer and model
-            # trust_remote_code=True is required for Moondream
-            tokenizer = AutoTokenizer.from_pretrained(
-                model_id,
-                revision=MOONDREAM_REVISION,
-                trust_remote_code=True
-            )
-            model = AutoModelForCausalLM.from_pretrained(
-                model_id,
-                trust_remote_code=True,
-                revision=MOONDREAM_REVISION,
-                torch_dtype=torch.float32 if device == "cpu" else torch.float16,
-            )
-
-            # Move model to device (ensures all components on same device)
-            model = model.to(device)
-
-            _CPU_MODEL = model
-            _CPU_TOKENIZER = tokenizer
-            return model, tokenizer
-
-        except ImportError:
-            logger.error("transformers, einops, or torchvision not installed. Cannot use CPU vision tier.")
-            raise RuntimeError(
-                "Missing dependencies for CPU vision. "
-                "Please install: pip install transformers einops torchvision"
-            )
-        except Exception as e:
-            logger.error(f"Failed to load CPU model: {e}")
-            raise
+    return _LOCAL_MODEL, _LOCAL_PROCESSOR
 
 
-def describe_frame_cpu(image_path: Path, prompt: str = "Describe this image.") -> str:
-    """Generate description using local CPU model (Moondream)."""
-    model_id = load_settings().description_model_cpu
-    model, tokenizer = _load_cpu_model(model_id)
-    
+def _load_qwen3_vlm():
+    """Load Qwen3-VL via mlx-vlm."""
+    global _LOCAL_MODEL, _LOCAL_PROCESSOR
+
+    from mlx_vlm import load
+
+    settings = load_settings()
+    model_id = settings.description_model_local
+
+    logger.info(f"Loading local VLM via mlx-vlm: {model_id}")
+    _LOCAL_MODEL, _LOCAL_PROCESSOR = load(model_id)
+    logger.info(f"Local VLM loaded: {model_id}")
+
+
+def _load_moondream_fallback():
+    """Load Moondream as fallback for non-Apple-Silicon."""
+    global _LOCAL_MODEL, _LOCAL_PROCESSOR, _CPU_MODEL, _CPU_TOKENIZER
+
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    settings = load_settings()
+    model_id = settings.description_model_local
+
+    # If the setting points to a Qwen mlx model but we can't use mlx, use fallback
+    if "mlx" in model_id.lower() or "qwen" in model_id.lower():
+        model_id = _LOCAL_VLM_FALLBACK
+        logger.warning(f"mlx-vlm not available, falling back to {model_id}")
+
+    logger.info(f"Loading CPU vision model: {model_id} (revision: {MOONDREAM_REVISION})...")
+
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        device = "mps"
+    else:
+        device = "cpu"
+
+    logger.info(f"Using device: {device}")
+
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_id,
+        revision=MOONDREAM_REVISION,
+        trust_remote_code=True
+    )
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id,
+        trust_remote_code=True,
+        revision=MOONDREAM_REVISION,
+        torch_dtype=torch.float32 if device == "cpu" else torch.float16,
+    )
+    model = model.to(device)
+
+    _LOCAL_MODEL = model
+    _LOCAL_PROCESSOR = tokenizer
+    # Backward-compatible aliases
+    _CPU_MODEL = model
+    _CPU_TOKENIZER = tokenizer
+    logger.info(f"CPU vision model loaded: {model_id}")
+
+
+def describe_frame_local(image_path: Path, prompt: str = "Describe this image.") -> str:
+    """Generate description using local VLM (Qwen3-VL or Moondream fallback)."""
+    model, processor = _load_local_model()
+
+    if is_mlx_vlm_available():
+        return _describe_with_mlx_vlm(model, processor, str(image_path), prompt)
+    else:
+        return _describe_with_moondream(model, processor, image_path, prompt)
+
+
+def _describe_with_mlx_vlm(model, processor, image_path: str, prompt: str) -> str:
+    """Generate description using mlx-vlm."""
+    from mlx_vlm import generate
+
+    try:
+        return generate(model, processor, image_path, prompt, max_tokens=256)
+    except Exception as e:
+        logger.error(f"mlx-vlm inference failed: {e}")
+        raise RuntimeError(f"Local VLM inference failed: {e}") from e
+
+
+def _describe_with_moondream(model, tokenizer, image_path: Path, prompt: str) -> str:
+    """Generate description using Moondream (fallback)."""
     try:
         image = Image.open(image_path)
         enc_image = model.encode_image(image)
         return model.answer_question(enc_image, prompt, tokenizer)
     except Exception as e:
-        logger.error(f"CPU inference failed: {e}")
+        logger.error(f"Moondream inference failed: {e}")
         raise RuntimeError(f"CPU inference failed: {e}") from e
+
+
+# Backward-compatible alias
+def describe_frame_cpu(image_path: Path, prompt: str = "Describe this image.") -> str:
+    """Generate description using local model. Alias for describe_frame_local."""
+    return describe_frame_local(image_path, prompt)
 
 
 def describe_frame_cloud(image_path: Path, prompt: str = "Describe this image.") -> str:
@@ -313,7 +371,6 @@ def describe_frame_cloud(image_path: Path, prompt: str = "Describe this image.")
     logger.info(f"Normalized model name: {model}")
 
     # Ensure API keys are available
-    # LiteLLM usually handles environment variables, but we can helper set them if needed
     api_key = None
     if "gpt" in model.lower() or "openai" in model.lower():
         api_key = get_openai_api_key()
@@ -387,7 +444,7 @@ def describe_frame(
 
     Args:
         image_path: Path to the image file (fallback thumbnail)
-        tier: 'cpu', 'gpu', or 'cloud'. If None, uses settings default.
+        tier: 'local', 'cloud' (also accepts legacy 'cpu'/'gpu'). If None, uses settings default.
         prompt: Instruction for the model
         source_path: Path to source video file (for video extraction)
         start_frame: Starting frame number of clip
@@ -404,11 +461,15 @@ def describe_frame(
     settings = load_settings()
     tier = tier or settings.description_model_tier
 
+    # Normalize legacy tier names
+    if tier in ("cpu", "gpu"):
+        tier = "local"
+
     logger.info(f"Describing frame {image_path.name} using {tier} tier")
 
-    if tier == "cpu":
-        desc = describe_frame_cpu(image_path, prompt)
-        return desc, settings.description_model_cpu
+    if tier == "local":
+        desc = describe_frame_local(image_path, prompt)
+        return desc, settings.description_model_local
 
     elif tier == "cloud":
         model = settings.description_model_cloud
@@ -425,7 +486,7 @@ def describe_frame(
         ):
             try:
                 # Extract and describe video clip
-                logger.info(f"Using video mode for Gemini (frames {start_frame}-{end_frame})")
+                logger.info(f"Using video mode for cloud VLM (frames {start_frame}-{end_frame})")
                 temp_video = extract_clip_segment(
                     source_path, start_frame, end_frame, fps
                 )
@@ -445,26 +506,22 @@ def describe_frame(
         desc = describe_frame_cloud(image_path, prompt)
         return desc, settings.description_model_cloud
 
-    elif tier == "gpu":
-        # Placeholder for Phase 5
-        logger.warning("GPU tier not implemented yet, falling back to CPU")
-        desc = describe_frame_cpu(image_path, prompt)
-        return desc, settings.description_model_cpu
-
     else:
         raise ValueError(f"Unknown tier: {tier}")
 
 
 def is_model_loaded() -> bool:
-    """Check if a CPU model is currently loaded."""
-    return _CPU_MODEL is not None
+    """Check if a local model is currently loaded."""
+    return _LOCAL_MODEL is not None
 
 
 def unload_model():
-    """Unload the CPU model to free memory."""
-    global _CPU_MODEL, _CPU_TOKENIZER
+    """Unload the local model to free memory."""
+    global _LOCAL_MODEL, _LOCAL_PROCESSOR, _CPU_MODEL, _CPU_TOKENIZER
 
     with _model_lock:
+        _LOCAL_MODEL = None
+        _LOCAL_PROCESSOR = None
         _CPU_MODEL = None
         _CPU_TOKENIZER = None
         logger.info("VLM model unloaded")

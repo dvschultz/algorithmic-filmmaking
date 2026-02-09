@@ -361,8 +361,8 @@ def _auto_compute_volume(clips: List[Tuple[Any, Any]]) -> None:
 
 
 def _auto_compute_embeddings(clips: List[Tuple[Any, Any]]) -> None:
-    """Compute CLIP embeddings for clips that don't have them."""
-    from core.analysis.embeddings import extract_clip_embeddings_batch
+    """Compute DINOv2 embeddings for clips that don't have them."""
+    from core.analysis.embeddings import extract_clip_embeddings_batch, _EMBEDDING_MODEL_TAG
 
     needs_embedding = [
         (clip, source) for clip, source in clips
@@ -376,13 +376,14 @@ def _auto_compute_embeddings(clips: List[Tuple[Any, Any]]) -> None:
         embeddings = extract_clip_embeddings_batch(thumbnail_paths)
         for (clip, _), emb in zip(needs_embedding, embeddings):
             clip.embedding = emb
+            clip.embedding_model = _EMBEDDING_MODEL_TAG
     except Exception as e:
         logger.warning(f"Failed to compute embeddings: {e}")
 
 
 def _auto_compute_boundary_embeddings(clips: List[Tuple[Any, Any]]) -> None:
-    """Compute first/last frame CLIP embeddings for clips that don't have them."""
-    from core.analysis.embeddings import extract_boundary_embeddings
+    """Compute first/last frame DINOv2 embeddings for clips that don't have them."""
+    from core.analysis.embeddings import extract_boundary_embeddings, _EMBEDDING_MODEL_TAG
 
     for clip, source in clips:
         if clip.first_frame_embedding is None or clip.last_frame_embedding is None:
@@ -395,6 +396,7 @@ def _auto_compute_boundary_embeddings(clips: List[Tuple[Any, Any]]) -> None:
                 )
                 clip.first_frame_embedding = first_emb
                 clip.last_frame_embedding = last_emb
+                clip.embedding_model = _EMBEDDING_MODEL_TAG
             except Exception as e:
                 logger.warning(
                     f"Failed to compute boundary embeddings for clip {clip.id}: {e}"

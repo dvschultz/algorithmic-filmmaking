@@ -414,11 +414,10 @@ class ExquisiteCorpusDialog(QDialog):
         vlm_only = (method == "vlm")
         use_vlm = (method in ("vlm", "hybrid"))
         vlm_model = settings.text_extraction_vlm_model if use_vlm else None
-        use_text_detection = settings.text_detection_enabled
 
         logger.info(
             f"Starting text extraction for {len(self.clips)} clips "
-            f"(method={method}, vlm_only={vlm_only}, text_detection={use_text_detection})"
+            f"(method={method}, vlm_only={vlm_only})"
         )
 
         self.worker = TextExtractionWorker(
@@ -428,7 +427,6 @@ class ExquisiteCorpusDialog(QDialog):
             use_vlm_fallback=use_vlm,
             vlm_model=vlm_model,
             vlm_only=vlm_only,
-            use_text_detection=use_text_detection,
             parent=self,
         )
         self.worker.progress.connect(self._on_extraction_progress, Qt.UniqueConnection)

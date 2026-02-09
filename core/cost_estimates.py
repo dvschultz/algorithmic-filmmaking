@@ -28,7 +28,7 @@ TIME_PER_CLIP: dict[str, dict[str, float]] = {
     "colors": {"local": 0.3},
     "shots": {"local": 1.0, "cloud": 1.5},
     "extract_text": {"local": 0.5, "cloud": 0.8},
-    "describe": {"local": 3.0, "cloud": 0.8},
+    "describe": {"local": 1.5, "cloud": 0.8},  # Qwen3-VL on Apple Silicon; Moondream ~3.0s
     "brightness": {"local": 0.1},
     "volume": {"local": 0.2},
     "embeddings": {"local": 0.8},

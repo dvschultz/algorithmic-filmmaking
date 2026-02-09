@@ -263,6 +263,7 @@ class SettingsDialog(QDialog):
             gemini_model=settings.gemini_model,
             openrouter_model=settings.openrouter_model,
             description_model_tier=settings.description_model_tier,
+            description_model_local=settings.description_model_local,
             description_model_cpu=settings.description_model_cpu,
             description_model_gpu=settings.description_model_gpu,
             description_model_cloud=settings.description_model_cloud,
@@ -270,8 +271,6 @@ class SettingsDialog(QDialog):
             description_input_mode=settings.description_input_mode,
             text_extraction_method=settings.text_extraction_method,
             text_extraction_vlm_model=settings.text_extraction_vlm_model,
-            text_detection_enabled=settings.text_detection_enabled,
-            text_detection_confidence=settings.text_detection_confidence,
             exquisite_corpus_model=settings.exquisite_corpus_model,
             exquisite_corpus_temperature=settings.exquisite_corpus_temperature,
             shot_classifier_tier=settings.shot_classifier_tier,
@@ -480,7 +479,7 @@ class SettingsDialog(QDialog):
         tier_layout.addWidget(QLabel("Processing Tier:"))
         self.vision_tier_combo = QComboBox()
         self.vision_tier_combo.addItems([
-            "CPU (Local) - Free, runs on device (Moondream)",
+            "Local - Free, runs on device (Qwen3-VL)",
             "Cloud API - Higher quality, costs money (GPT-4o/Claude)",
         ])
         self.vision_tier_combo.setToolTip(
@@ -561,13 +560,13 @@ class SettingsDialog(QDialog):
         method_layout.addWidget(method_label)
         self.text_method_combo = QComboBox()
         self.text_method_combo.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
-        self.text_method_combo.addItem("Local OCR (Tesseract)", "tesseract")
+        self.text_method_combo.addItem("Local OCR (PaddleOCR)", "paddleocr")
         self.text_method_combo.addItem("Cloud VLM", "vlm")
         self.text_method_combo.addItem("Hybrid (Recommended)", "hybrid")
         self.text_method_combo.setToolTip(
-            "Tesseract: Fast, free local OCR.\n"
+            "PaddleOCR: Fast, free local OCR with built-in text detection.\n"
             "VLM: Cloud AI for stylized/difficult text (requires API key).\n"
-            "Hybrid: Tesseract first, VLM fallback for low confidence."
+            "Hybrid: PaddleOCR first, VLM fallback for low confidence."
         )
         method_layout.addWidget(self.text_method_combo)
         method_layout.addStretch()
@@ -585,15 +584,6 @@ class SettingsDialog(QDialog):
         vlm_layout.addWidget(self.text_vlm_combo)
         vlm_layout.addStretch()
         text_layout.addLayout(vlm_layout)
-
-        # Text detection pre-filter checkbox
-        self.text_detection_checkbox = QCheckBox("Pre-filter frames without text (faster)")
-        self.text_detection_checkbox.setToolTip(
-            "Use EAST neural network to detect text presence before OCR.\n"
-            "Significantly faster on videos with few text frames.\n"
-            "Downloads a ~50MB model on first use."
-        )
-        text_layout.addWidget(self.text_detection_checkbox)
 
         # Connect method change to enable/disable VLM combo
         self.text_method_combo.currentIndexChanged.connect(self._on_text_method_changed)
@@ -1307,15 +1297,15 @@ class SettingsDialog(QDialog):
         )
 
         # Vision Description
-        # Normalize "gpu" to "cloud" since GPU tier isn't in UI (not fully implemented)
+        # Normalize legacy tier names
         tier = self.settings.description_model_tier
-        if tier == "gpu":
-            tier = "cloud"
-            self.settings.description_model_tier = "cloud"  # Also fix the setting
-        tier_idx = 0 if tier == "cpu" else 1
+        if tier in ("cpu", "gpu"):
+            tier = "local"
+            self.settings.description_model_tier = "local"
+        tier_idx = 0 if tier == "local" else 1
         self.vision_tier_combo.setCurrentIndex(tier_idx)
 
-        self._set_combo_text(self.vision_cpu_combo, self.settings.description_model_cpu)
+        self._set_combo_text(self.vision_cpu_combo, self.settings.description_model_local)
         self._set_combo_text(self.vision_cloud_combo, self.settings.description_model_cloud)
         self.vision_frames_spin.setValue(self.settings.description_temporal_frames)
         # Set input mode combo
@@ -1326,14 +1316,13 @@ class SettingsDialog(QDialog):
         self._on_vision_tier_changed(tier_idx)
 
         # Text Extraction
-        method_map = {"tesseract": 0, "vlm": 1, "hybrid": 2}
+        method_map = {"paddleocr": 0, "tesseract": 0, "vlm": 1, "hybrid": 2}
         self.text_method_combo.setCurrentIndex(
             method_map.get(self.settings.text_extraction_method, 2)
         )
         idx = self.text_vlm_combo.findText(self.settings.text_extraction_vlm_model)
         if idx >= 0:
             self.text_vlm_combo.setCurrentIndex(idx)
-        self.text_detection_checkbox.setChecked(self.settings.text_detection_enabled)
         self._on_text_method_changed(self.text_method_combo.currentIndex())
 
         # Exquisite Corpus
@@ -1465,8 +1454,8 @@ class SettingsDialog(QDialog):
         self.settings.transcription_language = lang_values[self.transcription_lang_combo.currentIndex()]
 
         # Vision Description
-        self.settings.description_model_tier = "cpu" if self.vision_tier_combo.currentIndex() == 0 else "cloud"
-        self.settings.description_model_cpu = self.vision_cpu_combo.currentText()
+        self.settings.description_model_tier = "local" if self.vision_tier_combo.currentIndex() == 0 else "cloud"
+        self.settings.description_model_local = self.vision_cpu_combo.currentText()
         self.settings.description_model_cloud = self.vision_cloud_combo.currentText()
         self.settings.description_temporal_frames = self.vision_frames_spin.value()
         self.settings.description_input_mode = self.input_mode_combo.currentData()
@@ -1474,7 +1463,6 @@ class SettingsDialog(QDialog):
         # Text Extraction
         self.settings.text_extraction_method = self.text_method_combo.currentData()
         self.settings.text_extraction_vlm_model = self.text_vlm_combo.currentText()
-        self.settings.text_detection_enabled = self.text_detection_checkbox.isChecked()
 
         # Exquisite Corpus
         self.settings.exquisite_corpus_model = self.corpus_model_combo.currentText()
@@ -1645,7 +1633,7 @@ class SettingsDialog(QDialog):
             or self.settings.transcription_model != self.original_settings.transcription_model
             or self.settings.transcription_language != self.original_settings.transcription_language
             or self.settings.description_model_tier != self.original_settings.description_model_tier
-            or self.settings.description_model_cpu != self.original_settings.description_model_cpu
+            or self.settings.description_model_local != self.original_settings.description_model_local
             or self.settings.description_model_cloud != self.original_settings.description_model_cloud
             or self.settings.description_temporal_frames != self.original_settings.description_temporal_frames
             or self.settings.description_input_mode != self.original_settings.description_input_mode
@@ -1662,7 +1650,6 @@ class SettingsDialog(QDialog):
             or self.settings.openrouter_model != self.original_settings.openrouter_model
             or self.settings.text_extraction_method != self.original_settings.text_extraction_method
             or self.settings.text_extraction_vlm_model != self.original_settings.text_extraction_vlm_model
-            or self.settings.text_detection_enabled != self.original_settings.text_detection_enabled
             or self.settings.exquisite_corpus_model != self.original_settings.exquisite_corpus_model
             or self.settings.exquisite_corpus_temperature != self.original_settings.exquisite_corpus_temperature
             or self.settings.shot_classifier_tier != self.original_settings.shot_classifier_tier

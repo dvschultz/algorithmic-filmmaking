@@ -398,18 +398,19 @@ class Settings:
     openrouter_model: str = "anthropic/claude-sonnet-4"
 
     # Vision Description Settings
-    description_model_tier: str = "cpu"  # cpu, gpu, cloud
-    description_model_cpu: str = "vikhyatk/moondream2"
-    description_model_gpu: str = "llava-hf/llava-onevision-qwen2-7b-ov-hf"
+    description_model_tier: str = "local"  # local, cloud (legacy: cpu, gpu)
+    description_model_local: str = "mlx-community/Qwen3-VL-4B-4bit"
+    description_model_cpu: str = "vikhyatk/moondream2"  # Legacy — kept for backward compat
+    description_model_gpu: str = "llava-hf/llava-onevision-qwen2-7b-ov-hf"  # Legacy
     description_model_cloud: str = "gemini-3-flash-preview"
     description_temporal_frames: int = 4
     description_input_mode: str = "frame"  # "frame" = single frame, "video" = video clip (Gemini only)
 
     # Text Extraction (OCR) Settings
-    text_extraction_method: str = "hybrid"  # tesseract, vlm, hybrid
+    text_extraction_method: str = "hybrid"  # paddleocr, vlm, hybrid
     text_extraction_vlm_model: str = "gemini-3-flash-preview"
-    text_detection_enabled: bool = True  # Pre-filter frames without text using EAST
-    text_detection_confidence: float = 0.5  # EAST detection confidence threshold
+    text_detection_enabled: bool = True  # Deprecated: PaddleOCR handles detection internally
+    text_detection_confidence: float = 0.5  # Deprecated: PaddleOCR has its own thresholds
 
     # Exquisite Corpus (Poetry Generation) Settings
     exquisite_corpus_model: str = "gemini-3-flash-preview"  # Model for poem generation
@@ -661,7 +662,12 @@ def _load_from_json(config_path: Path, settings: Settings) -> Settings:
     # Description section
     if description := data.get("description"):
         if val := description.get("model_tier"):
+            # Migrate legacy tier names
+            if val in ("cpu", "gpu"):
+                val = "local"
             settings.description_model_tier = val
+        if val := description.get("model_local"):
+            settings.description_model_local = val
         if val := description.get("model_cpu"):
             settings.description_model_cpu = val
         if val := description.get("model_gpu"):
@@ -679,6 +685,9 @@ def _load_from_json(config_path: Path, settings: Settings) -> Settings:
     # Text Extraction section
     if text_extraction := data.get("text_extraction"):
         if val := text_extraction.get("method"):
+            # Migrate legacy method name
+            if val == "tesseract":
+                val = "paddleocr"
             settings.text_extraction_method = val
         if val := text_extraction.get("vlm_model"):
             settings.text_extraction_vlm_model = val
@@ -784,6 +793,7 @@ def _settings_to_json(settings: Settings) -> dict:
         },
         "description": {
             "model_tier": settings.description_model_tier,
+            "model_local": settings.description_model_local,
             "model_cpu": settings.description_model_cpu,
             "model_gpu": settings.description_model_gpu,
             "model_cloud": settings.description_model_cloud,

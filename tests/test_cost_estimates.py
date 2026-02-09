@@ -36,7 +36,7 @@ class MockSettings:
 
     description_model_tier: str = "cpu"
     shot_classifier_tier: str = "cpu"
-    text_extraction_method: str = "tesseract"
+    text_extraction_method: str = "paddleocr"
     color_analysis_parallelism: int = 4
     description_parallelism: int = 3
     transcription_parallelism: int = 2
