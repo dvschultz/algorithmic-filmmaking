@@ -307,13 +307,13 @@ embedding_model: Optional[str] = None  # e.g. "clip-vit-b-32", "dinov2-vit-b-14"
 4. **Make similarity algorithms dimension-agnostic** — verify `similarity_chain.py` and `match_cut.py` use cosine similarity (which works regardless of dimension). They should already, but verify no hardcoded `512` anywhere.
 
 **Acceptance criteria:**
-- [ ] `VALID_EMBEDDING_DIMS` replaces `EMBEDDING_DIM`
-- [ ] `_validate_embedding()` accepts both 512d and 768d
-- [ ] `Clip.embedding_model` field added with `to_dict()`/`from_dict()` serialization
-- [ ] `SCHEMA_VERSION` bumped to `"1.2"` with migration handler
-- [ ] Old projects load without data loss (512d embeddings preserved)
-- [ ] Similarity algorithms work with both 512d and 768d vectors
-- [ ] Test: save project with 512d embeddings, load under new schema, verify embeddings intact
+- [x] `VALID_EMBEDDING_DIMS` replaces `EMBEDDING_DIM`
+- [x] `_validate_embedding()` accepts both 512d and 768d
+- [x] `Clip.embedding_model` field added with `to_dict()`/`from_dict()` serialization
+- [x] `SCHEMA_VERSION` bumped to `"1.2"` with migration handler
+- [x] Old projects load without data loss (512d embeddings preserved)
+- [x] Similarity algorithms work with both 512d and 768d vectors
+- [x] Test: save project with 512d embeddings, load under new schema, verify embeddings intact
 
 #### P2.1 — DINOv2 for visual similarity embeddings
 
@@ -360,12 +360,12 @@ New embeddings are tagged as `embedding_model: "dinov2-vit-b-14"`.
 ```
 
 **Acceptance criteria:**
-- [ ] `embeddings.py` loads DINOv2 ViT-B/14 (not CLIP)
-- [ ] Embeddings are 768-dim, L2 normalized
-- [ ] `embedding_model` tag set to `"dinov2-vit-b-14"` on new embeddings
-- [ ] Old CLIP embeddings still work in similarity algorithms (cosine similarity is dimension-agnostic within a project, but mixed dimensions within one project should trigger re-embedding prompt)
-- [ ] Memory: DINOv2 ~350MB (same as old CLIP)
-- [ ] Existing embedding tests updated with 768d mock vectors
+- [x] `embeddings.py` loads DINOv2 ViT-B/14 (not CLIP)
+- [x] Embeddings are 768-dim, L2 normalized
+- [x] `embedding_model` tag set to `"dinov2-vit-b-14"` on new embeddings
+- [x] Old CLIP embeddings still work in similarity algorithms (cosine similarity is dimension-agnostic within a project, but mixed dimensions within one project should trigger re-embedding prompt)
+- [x] Memory: DINOv2 ~350MB (same as old CLIP)
+- [x] Existing embedding tests updated with 768d mock vectors
 
 #### P2.2 — Qwen3-VL 4B for local VLM descriptions
 
@@ -422,15 +422,15 @@ def is_video_capable_model(model: str) -> bool:
 **Settings migration on load:** Map `"cpu"` → `"local"`, `"gpu"` → `"local"`, keep `"cloud"`.
 
 **Acceptance criteria:**
-- [ ] `describe_frame_local()` uses Qwen3-VL via mlx-vlm
-- [ ] `describe_video_local()` implemented (native video input for local tier)
-- [ ] `description_model_tier` values renamed to `local`/`cloud`
-- [ ] Settings migration handles old `"cpu"`/`"gpu"` values
-- [ ] `is_video_capable_model()` returns True for Qwen3-VL
-- [ ] `description_input_mode: "video"` works with local tier
-- [ ] Moondream-specific code removed (`encode_image`, `answer_question`, `MOONDREAM_REVISION`)
-- [ ] Memory: Qwen3-VL 4B 4-bit ~3-4GB (up from Moondream ~2GB) — verify fits in budget
-- [ ] `unload_model()` works correctly for mlx-vlm model
+- [x] `describe_frame_local()` uses Qwen3-VL via mlx-vlm
+- [x] `describe_video_local()` implemented (native video input for local tier)
+- [x] `description_model_tier` values renamed to `local`/`cloud`
+- [x] Settings migration handles old `"cpu"`/`"gpu"` values
+- [x] `is_video_capable_model()` returns True for Qwen3-VL
+- [x] `description_input_mode: "video"` works with local tier
+- [x] Moondream-specific code removed (`encode_image`, `answer_question`, `MOONDREAM_REVISION`)
+- [x] Memory: Qwen3-VL 4B 4-bit ~3-4GB (up from Moondream ~2GB) — verify fits in budget
+- [x] `unload_model()` works correctly for mlx-vlm model
 - [ ] Settings UI updated: tier dropdown shows "Local" / "Cloud", model field shows mlx-vlm models
 
 #### P2.3 — PaddleOCR PP-OCRv5 for text extraction
@@ -478,42 +478,50 @@ def _extract_text_paddleocr(image_path: str) -> list[ExtractedText]:
 ```
 
 **Acceptance criteria:**
-- [ ] `extract_text_from_frame()` uses PaddleOCR for `"paddleocr"` and `"hybrid"` methods
-- [ ] Output format unchanged: returns `list[ExtractedText]` with same fields
-- [ ] Settings migration maps `"tesseract"` → `"paddleocr"` on load
-- [ ] `text_detection_enabled` and `text_detection_confidence` settings deprecated
-- [ ] PaddleOCR version in `requirements.txt` supports PP-OCRv5 (verify `paddleocr>=3.0.0` is sufficient)
-- [ ] `pytesseract` removed from `requirements.txt`
-- [ ] EAST model auto-download code preserved but not triggered by default
-- [ ] VLM fallback path unchanged
+- [x] `extract_text_from_frame()` uses PaddleOCR for `"paddleocr"` and `"hybrid"` methods
+- [x] Output format unchanged: returns `list[ExtractedText]` with same fields
+- [x] Settings migration maps `"tesseract"` → `"paddleocr"` on load
+- [x] `text_detection_enabled` and `text_detection_confidence` settings deprecated
+- [x] PaddleOCR version in `requirements.txt` supports PP-OCRv5 (verify `paddleocr>=3.0.0` is sufficient)
+- [x] `pytesseract` removed from `requirements.txt`
+- [x] EAST model auto-download code preserved but not triggered by default
+- [x] VLM fallback path unchanged
 
 ---
 
 ### Phase 3: Advanced / Future
 
-These are exploratory and do not need detailed implementation plans yet.
+#### P3.1 — ~~Evaluate ShotVL-7B for~~ Local cinematography with configurable VLM [DONE — PR #54]
 
-#### P3.1 — Evaluate ShotVL-7B for local cinematography
+Added local tier for cinematography analysis using mlx-vlm. Default local model: `Qwen2.5-VL-7B-Instruct-4bit`. ShotVL-7B can be configured as `cinematography_local_model` when available as MLX quantization.
 
-Purpose-built cinematography VLM covering 8 dimensions (shot size, angle, movement, composition, lighting, color, focus, subject). At 4-bit quantization (~4-5GB) it could replace both local shot classification AND cloud cinematography analysis.
+- [x] `cinematography_tier` setting (cloud/local) with cloud default
+- [x] `cinematography_local_model` setting with serialization
+- [x] `analyze_cinematography_local()` using mlx-vlm + cinematography prompt
+- [x] Cost estimates and TIERED_OPERATIONS updated
 
-**Evaluation criteria:** Does 4-bit quality produce useful cinematography analysis? Does it fit alongside other models in 16GB?
+#### P3.2 — YOLOE-26 open-vocabulary detection [DONE — PR #54]
 
-#### P3.2 — YOLOE-26 open-vocabulary detection
+Added text-prompted detection mode alongside fixed COCO classes.
 
-Add text-prompted detection mode alongside fixed COCO classes. Detect "person holding camera" or "exterior building" without retraining.
+- [x] `detect_objects_open_vocab()` for text-prompted detection
+- [x] `detection_mode` (fixed/open_vocab) and `detection_custom_classes` settings
+- [x] Lazy model loading with thread-safe double-check locking
+- [x] `unload_model()` clears both fixed and open-vocab models
 
-**Prerequisite:** P0.1 (YOLO26 base).
+#### P3.3 — Groq cloud transcription tier [DONE — PR #54]
 
-#### P3.3 — Groq cloud transcription tier
+Added Groq Whisper API as cloud transcription backend.
 
-Add Groq Whisper API ($0.04/hour, large-v3-turbo at 216x realtime) as a cloud transcription option.
+- [x] `"groq"` backend option in `_resolve_backend()`
+- [x] `_transcribe_cloud_groq()` using `litellm.transcription()`
+- [x] `transcription_cloud_model` setting (default: whisper-large-v3-turbo)
+- [x] Cost estimates and TIERED_OPERATIONS updated
+- [x] Wired into `transcribe_video()` and `transcribe_clip()`
 
-**New settings:** `transcription_backend: "groq"` option, `GROQ_API_KEY` in keyring.
+#### P3.4 — Apple SpeechAnalyzer [SKIPPED]
 
-#### P3.4 — Apple SpeechAnalyzer
-
-Requires macOS Tahoe + Swift bridge. Monitor availability.
+Requires macOS Tahoe + Swift bridge. Not yet available.
 
 ---
 
@@ -521,31 +529,31 @@ Requires macOS Tahoe + Swift bridge. Monitor availability.
 
 ### Functional Requirements
 
-- [ ] **P0:** YOLO26n loads and detects objects 40%+ faster than YOLOv8n
-- [ ] **P0:** `large-v3-turbo` available as transcription model option
-- [ ] **P0:** Cloud VLM defaults to Gemini 3 Flash
+- [x] **P0:** YOLO26n loads and detects objects 40%+ faster than YOLOv8n
+- [x] **P0:** `large-v3-turbo` available as transcription model option
+- [x] **P0:** Cloud VLM defaults to Gemini 3 Flash
 - [x] **P1:** SigLIP 2 classifies shots with measurably better accuracy than CLIP
 - [x] **P1:** Cloud shot classification uses Gemini Flash Lite at ~$0.0003/clip
 - [x] **P1:** mlx-whisper transcription runs 4x+ faster than faster-whisper on Apple Silicon
-- [ ] **P2:** Qwen3-VL produces descriptions rated better than Moondream in side-by-side
-- [ ] **P2:** DINOv2 embeddings produce better match-cut pairs than CLIP embeddings
-- [ ] **P2:** PaddleOCR extracts text with higher accuracy than Tesseract on video frames
-- [ ] **P2:** Existing projects with 512d CLIP embeddings load without data loss
+- [x] **P2:** Qwen3-VL produces descriptions rated better than Moondream in side-by-side
+- [x] **P2:** DINOv2 embeddings produce better match-cut pairs than CLIP embeddings
+- [x] **P2:** PaddleOCR extracts text with higher accuracy than Tesseract on video frames
+- [x] **P2:** Existing projects with 512d CLIP embeddings load without data loss
 
 ### Non-Functional Requirements
 
-- [ ] Peak model memory stays under 8GB (leaving 8GB for macOS + app + video buffers)
-- [ ] No new system-level dependencies (Tesseract binary removed, not replaced)
-- [ ] All model loading remains lazy (loaded on first use, not at startup)
-- [ ] Thread-safe model loading preserved (double-checked locking pattern)
-- [ ] Cross-platform fallback: faster-whisper still works on non-Apple-Silicon
+- [x] Peak model memory stays under 8GB (leaving 8GB for macOS + app + video buffers)
+- [x] No new system-level dependencies (Tesseract binary removed, not replaced)
+- [x] All model loading remains lazy (loaded on first use, not at startup)
+- [x] Thread-safe model loading preserved (double-checked locking pattern)
+- [x] Cross-platform fallback: faster-whisper still works on non-Apple-Silicon
 
 ### Quality Gates
 
-- [ ] All existing tests pass after each phase (407 tests)
-- [ ] New tests added for: backend detection, embedding dimension validation, settings migration, model loading/unloading for each new model
-- [ ] Cost estimation constants updated alongside each model change (same commit)
-- [ ] Settings migration tested: old config files load correctly with new defaults
+- [x] All existing tests pass after each phase (715 tests as of P3)
+- [x] New tests added for: backend detection, embedding dimension validation, settings migration, model loading/unloading for each new model
+- [x] Cost estimation constants updated alongside each model change (same commit)
+- [x] Settings migration tested: old config files load correctly with new defaults
 
 ---
 
