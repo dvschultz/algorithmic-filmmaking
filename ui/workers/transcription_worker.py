@@ -1,7 +1,8 @@
 """Background worker for clip transcription.
 
-Runs faster-whisper transcription on multiple clips in a background thread,
-using ThreadPoolExecutor for parallelism.
+Runs Whisper transcription on multiple clips in a background thread,
+using ThreadPoolExecutor for parallelism. Supports faster-whisper and
+mlx-whisper backends.
 """
 
 import logging
@@ -53,11 +54,13 @@ class TranscriptionWorker(CancellableWorker):
         language: str = "en",
         parallelism: int = 2,
         skip_existing: bool = True,
+        backend: str = "auto",
         parent=None,
     ):
         super().__init__(parent)
         self._model_name = model_name
         self._language = language
+        self._backend = backend
         self._parallelism = min(max(1, parallelism), 4)
         self._tasks = self._build_tasks(clips, source, skip_existing)
 
@@ -105,6 +108,7 @@ class TranscriptionWorker(CancellableWorker):
                 task.end_time,
                 self._model_name,
                 self._language,
+                backend=self._backend,
             )
             return task.clip_id, segments, None, False
         except (FasterWhisperNotInstalledError, ModelDownloadError) as e:

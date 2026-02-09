@@ -165,13 +165,13 @@ def _load_embedding_model():
 **Dependency:** SigLIP 2 is in `transformers` — verify minimum version. May need `transformers>=4.48`.
 
 **Acceptance criteria:**
-- [ ] `shots.py` loads SigLIP 2 ViT-L for classification
-- [ ] `embeddings.py` has its own CLIP model loading (decoupled from shots)
-- [ ] Zero-shot classification prompts adapted for SigLIP 2 API (uses `AutoModel` not `CLIPModel`)
+- [x] `shots.py` loads SigLIP 2 ViT-L for classification
+- [x] `embeddings.py` has its own CLIP model loading (decoupled from shots)
+- [x] Zero-shot classification prompts adapted for SigLIP 2 API (uses `AutoModel` not `CLIPModel`)
 - [ ] Shot classification accuracy tested against a sample set
 - [ ] Memory: SigLIP ~1.7GB (up from CLIP ~350MB) — verify fits in budget
-- [ ] `unload_model()` and `is_model_loaded()` updated for new model
-- [ ] All existing shot classification tests pass with updated mocks
+- [x] `unload_model()` and `is_model_loaded()` updated for new model
+- [x] All existing shot classification tests pass with updated mocks
 
 #### P1.2 — Gemini Flash Lite for cloud shot classification
 
@@ -203,12 +203,12 @@ def classify_shot_cloud(image_path: str, ...) -> str:
 ```
 
 **Acceptance criteria:**
-- [ ] `classify_shot_cloud()` implemented using LiteLLM + Gemini
-- [ ] Returns same `SHOT_TYPES` values as local classification
-- [ ] Settings field added for cloud model selection
-- [ ] `COST_PER_CLIP["shots"]["cloud"]` updated to `0.00026`
-- [ ] Graceful fallback: if no Gemini API key, falls back to local (existing behavior)
-- [ ] Replicate path preserved as legacy option (not default)
+- [x] `classify_shot_cloud()` implemented using LiteLLM + Gemini
+- [x] Returns same `SHOT_TYPES` values as local classification
+- [x] Settings field added for cloud model selection
+- [x] `COST_PER_CLIP["shots"]["cloud"]` updated to `0.00026`
+- [x] Graceful fallback: if no Gemini API key, falls back to local (existing behavior)
+- [x] Replicate path preserved as legacy option (not default)
 
 #### P1.3 — mlx-whisper transcription backend
 
@@ -261,13 +261,13 @@ def transcribe_video(...):
 ```
 
 **Acceptance criteria:**
-- [ ] `_is_mlx_available()` correctly detects mlx-whisper
-- [ ] `transcription_backend: "auto"` selects mlx on Apple Silicon, ctranslate2 elsewhere
-- [ ] Both backends produce identical `TranscriptSegment` output format
-- [ ] `WHISPER_MODELS` dict works with both backends
+- [x] `_is_mlx_available()` correctly detects mlx-whisper
+- [x] `transcription_backend: "auto"` selects mlx on Apple Silicon, faster-whisper elsewhere
+- [x] Both backends produce identical `TranscriptSegment` output format
+- [x] `WHISPER_MODELS` dict works with both backends
 - [ ] Settings UI shows backend selection
-- [ ] `TIME_PER_CLIP["transcribe"]["local"]` updated
-- [ ] Existing transcription tests pass with both backends mocked
+- [x] `TIME_PER_CLIP["transcribe"]["local"]` updated
+- [x] Existing transcription tests pass with both backends mocked
 
 ---
 
@@ -524,9 +524,9 @@ Requires macOS Tahoe + Swift bridge. Monitor availability.
 - [ ] **P0:** YOLO26n loads and detects objects 40%+ faster than YOLOv8n
 - [ ] **P0:** `large-v3-turbo` available as transcription model option
 - [ ] **P0:** Cloud VLM defaults to Gemini 3 Flash
-- [ ] **P1:** SigLIP 2 classifies shots with measurably better accuracy than CLIP
-- [ ] **P1:** Cloud shot classification uses Gemini Flash Lite at ~$0.0003/clip
-- [ ] **P1:** mlx-whisper transcription runs 4x+ faster than faster-whisper on Apple Silicon
+- [x] **P1:** SigLIP 2 classifies shots with measurably better accuracy than CLIP
+- [x] **P1:** Cloud shot classification uses Gemini Flash Lite at ~$0.0003/clip
+- [x] **P1:** mlx-whisper transcription runs 4x+ faster than faster-whisper on Apple Silicon
 - [ ] **P2:** Qwen3-VL produces descriptions rated better than Moondream in side-by-side
 - [ ] **P2:** DINOv2 embeddings produce better match-cut pairs than CLIP embeddings
 - [ ] **P2:** PaddleOCR extracts text with higher accuracy than Tesseract on video frames

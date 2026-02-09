@@ -1,8 +1,8 @@
-"""Shot type classification using CLIP zero-shot or VideoMAE cloud inference.
+"""Shot type classification using SigLIP 2 zero-shot or cloud inference.
 
 Supports two tiers:
-- CPU (default): CLIP-based zero-shot classification on thumbnails (free, local)
-- Cloud: VideoMAE model on Replicate for video-based classification (paid, more accurate)
+- Local (default): SigLIP 2-based zero-shot classification on thumbnails (free, local)
+- Cloud: Gemini Flash Lite or Replicate VideoMAE (paid, more accurate)
 """
 
 import logging
@@ -24,40 +24,39 @@ SHOT_TYPES = [
     "extreme close-up", # ECS - Extreme Close-up (face detail)
 ]
 
-# Detailed prompts for better CLIP zero-shot classification
-# Multiple prompts per category improve accuracy through ensemble
-# Note: Prompts optimized for human subjects (most common in film)
-# For non-human subjects, accuracy may vary
+# Detailed prompts for SigLIP 2 zero-shot classification
+# SigLIP uses sigmoid per-label (not softmax), so prompts should be
+# self-contained descriptions that work independently
 SHOT_TYPE_PROMPTS = {
     "wide shot": [
-        "an establishing shot showing a vast landscape or cityscape",
-        "a long shot where people appear very small in the environment",
-        "a wide angle shot of a large space with tiny distant figures",
-        "a panoramic view showing the entire location",
+        "This is a photo of an establishing shot showing a vast landscape or cityscape.",
+        "This is a photo of a long shot where people appear very small in the environment.",
+        "This is a photo of a wide angle shot of a large space with tiny distant figures.",
+        "This is a photo of a panoramic view showing the entire location.",
     ],
     "full shot": [
-        "a shot showing one person's entire body from head to feet",
-        "a single person standing with their full body visible in frame",
-        "a full length portrait of someone from head to toe",
-        "a shot framing one standing figure completely",
+        "This is a photo of a shot showing one person's entire body from head to feet.",
+        "This is a photo of a single person standing with their full body visible in frame.",
+        "This is a photo of a full length portrait of someone from head to toe.",
+        "This is a photo of a shot framing one standing figure completely.",
     ],
     "medium shot": [
-        "a medium shot showing a person from the waist up to their head",
-        "two or three people shown from the waist up in conversation",
-        "a shot of people sitting at a table showing their upper bodies",
-        "a cowboy shot showing someone from mid-thigh to head",
+        "This is a photo of a medium shot showing a person from the waist up to their head.",
+        "This is a photo of two or three people shown from the waist up in conversation.",
+        "This is a photo of a shot of people sitting at a table showing their upper bodies.",
+        "This is a photo of a cowboy shot showing someone from mid-thigh to head.",
     ],
     "close-up": [
-        "a close-up of a person's face filling most of the frame",
-        "a head and shoulders shot focusing on facial expression",
-        "a tight shot of someone's face showing emotion",
-        "a portrait shot from the neck up",
+        "This is a photo of a close-up of a person's face filling most of the frame.",
+        "This is a photo of a head and shoulders shot focusing on facial expression.",
+        "This is a photo of a tight shot of someone's face showing emotion.",
+        "This is a photo of a portrait shot from the neck up.",
     ],
     "extreme close-up": [
-        "an extreme close-up showing only eyes filling the screen",
-        "a shot of just lips or mouth in extreme detail",
-        "a macro shot of a single facial feature like an eye",
-        "an intense close-up where only part of a face is visible",
+        "This is a photo of an extreme close-up showing only eyes filling the screen.",
+        "This is a photo of a shot of just lips or mouth in extreme detail.",
+        "This is a photo of a macro shot of a single facial feature like an eye.",
+        "This is a photo of an intense close-up where only part of a face is visible.",
     ],
 }
 
@@ -71,40 +70,49 @@ SHOT_TYPE_DISPLAY = {
 }
 
 # Lazy load models to avoid slow import
-_clip_model = None
-_clip_processor = None
-_clip_model_lock = threading.Lock()
+_model = None
+_processor = None
+_model_lock = threading.Lock()
 
-# Pin model revision for supply chain security
-_CLIP_MODEL_NAME = "openai/clip-vit-base-patch32"
-_CLIP_MODEL_REVISION = "e6a30b603a447e251fdaca1c3056b2a16cdfebeb"
+# SigLIP 2 model for zero-shot shot type classification
+_SIGLIP_MODEL_NAME = "google/siglip2-base-patch16-224"
 
 
-def load_clip_model():
-    """Lazy load CLIP model and processor (thread-safe)."""
-    global _clip_model, _clip_processor
+def load_classification_model():
+    """Lazy load SigLIP 2 model and processor (thread-safe)."""
+    global _model, _processor
 
-    # Fast path: already loaded
-    if _clip_model is not None:
-        return _clip_model, _clip_processor
+    if _model is not None:
+        return _model, _processor
 
-    with _clip_model_lock:
-        # Double-check after acquiring lock
-        if _clip_model is None:
-            logger.info("Loading CLIP model...")
-            from transformers import CLIPProcessor, CLIPModel
+    with _model_lock:
+        if _model is None:
+            logger.info("Loading SigLIP 2 model for shot classification...")
+            from transformers import AutoProcessor, AutoModel
 
-            # Use base CLIP model - good balance of speed and accuracy
-            # Pin revision for reproducibility and supply chain security
-            _clip_processor = CLIPProcessor.from_pretrained(
-                _CLIP_MODEL_NAME, revision=_CLIP_MODEL_REVISION
-            )
-            _clip_model = CLIPModel.from_pretrained(
-                _CLIP_MODEL_NAME, revision=_CLIP_MODEL_REVISION
-            )
-            logger.info("CLIP model loaded")
+            _processor = AutoProcessor.from_pretrained(_SIGLIP_MODEL_NAME)
+            _model = AutoModel.from_pretrained(_SIGLIP_MODEL_NAME)
+            logger.info("SigLIP 2 model loaded")
 
-    return _clip_model, _clip_processor
+    return _model, _processor
+
+
+def is_model_loaded() -> bool:
+    """Check if the classification model is currently loaded."""
+    return _model is not None
+
+
+def unload_model():
+    """Unload the classification model to free memory."""
+    global _model, _processor
+    with _model_lock:
+        _model = None
+        _processor = None
+    logger.info("SigLIP 2 classification model unloaded")
+
+
+# Keep backward-compatible alias for any code that imports load_clip_model
+load_clip_model = load_classification_model
 
 
 def classify_shot_type(
@@ -113,7 +121,10 @@ def classify_shot_type(
     use_ensemble: bool = True,
 ) -> tuple[str, float]:
     """
-    Classify the shot type of an image using CLIP zero-shot classification.
+    Classify the shot type of an image using SigLIP 2 zero-shot classification.
+
+    SigLIP 2 uses sigmoid scoring (independent per-label probability) rather
+    than softmax. Scores are averaged across ensemble prompts per category.
 
     Args:
         image_path: Path to the image file (thumbnail)
@@ -127,32 +138,32 @@ def classify_shot_type(
     try:
         import torch
 
-        model, processor = load_clip_model()
+        model, processor = load_classification_model()
 
-        # Load and prepare image
         image = Image.open(image_path).convert("RGB")
 
         if use_ensemble and SHOT_TYPE_PROMPTS:
-            # Ensemble approach: average scores across multiple prompts per category
+            # Ensemble approach: average sigmoid scores across multiple prompts per category
             all_prompts = []
             prompt_to_category = []
             for shot_type in SHOT_TYPES:
-                prompts = SHOT_TYPE_PROMPTS.get(shot_type, [f"a {shot_type} of a scene"])
+                prompts = SHOT_TYPE_PROMPTS.get(shot_type, [f"This is a photo of {shot_type}."])
                 all_prompts.extend(prompts)
                 prompt_to_category.extend([shot_type] * len(prompts))
 
-            # Process all prompts at once
             inputs = processor(
                 text=all_prompts,
                 images=image,
                 return_tensors="pt",
-                padding=True,
+                padding="max_length",
+                max_length=64,
             )
 
             with torch.no_grad():
                 outputs = model(**inputs)
                 logits_per_image = outputs.logits_per_image
-                probs = logits_per_image.softmax(dim=1)[0]
+                # SigLIP uses sigmoid, not softmax
+                probs = torch.sigmoid(logits_per_image)[0]
 
             # Average probabilities per category
             category_scores = {st: [] for st in SHOT_TYPES}
@@ -161,24 +172,24 @@ def classify_shot_type(
 
             avg_scores = {st: sum(scores) / len(scores) for st, scores in category_scores.items()}
 
-            # Find best category
             best_type = max(avg_scores, key=avg_scores.get)
             confidence = avg_scores[best_type]
         else:
             # Simple approach: one prompt per category
-            text_prompts = [f"a {shot_type} of a scene" for shot_type in SHOT_TYPES]
+            text_prompts = [f"This is a photo of {shot_type}." for shot_type in SHOT_TYPES]
 
             inputs = processor(
                 text=text_prompts,
                 images=image,
                 return_tensors="pt",
-                padding=True,
+                padding="max_length",
+                max_length=64,
             )
 
             with torch.no_grad():
                 outputs = model(**inputs)
                 logits_per_image = outputs.logits_per_image
-                probs = logits_per_image.softmax(dim=1)
+                probs = torch.sigmoid(logits_per_image)
 
             best_idx = probs.argmax().item()
             confidence = probs[0, best_idx].item()
@@ -210,19 +221,20 @@ def classify_shot_type_tiered(
     threshold: float = 0.0,
     use_ensemble: bool = True,
 ) -> tuple[str, float]:
-    """Classify shot type using the configured tier (CPU or Cloud).
+    """Classify shot type using the configured tier (local or cloud).
 
-    Routes to either local CLIP classification or Replicate VideoMAE based on
-    the shot_classifier_tier setting.
+    Routes to either local SigLIP 2 classification or cloud classification
+    (Gemini Flash Lite or Replicate VideoMAE) based on the
+    shot_classifier_tier setting.
 
     Args:
-        image_path: Path to the thumbnail image (used for CPU tier)
-        source_path: Path to source video (required for cloud tier)
-        start_frame: Clip start frame (required for cloud tier)
-        end_frame: Clip end frame (required for cloud tier)
-        fps: Video frame rate (required for cloud tier)
+        image_path: Path to the thumbnail image (used for local tier)
+        source_path: Path to source video (used for cloud Replicate tier)
+        start_frame: Clip start frame (used for cloud Replicate tier)
+        end_frame: Clip end frame (used for cloud Replicate tier)
+        fps: Video frame rate (used for cloud Replicate tier)
         threshold: Minimum confidence threshold
-        use_ensemble: Whether to use ensemble prompts for CLIP (CPU tier only)
+        use_ensemble: Whether to use ensemble prompts (local tier only)
 
     Returns:
         Tuple of (shot_type, confidence)
@@ -233,43 +245,25 @@ def classify_shot_type_tiered(
     tier = settings.shot_classifier_tier
 
     if tier == "cloud":
-        # Cloud tier requires video info
-        if not all([source_path, start_frame is not None, end_frame is not None, fps]):
-            logger.warning(
-                "Cloud tier requires source_path, start_frame, end_frame, fps. "
-                "Falling back to CPU tier."
-            )
-            return classify_shot_type(image_path, threshold, use_ensemble)
-
         try:
-            from core.analysis.shots_cloud import (
-                classify_shot_replicate,
-                get_simplified_type,
-            )
+            from core.analysis.shots_cloud import classify_shot_cloud
 
-            shot_type, confidence, _ = classify_shot_replicate(
-                source_path=source_path,
-                start_frame=start_frame,
-                end_frame=end_frame,
-                fps=fps,
+            shot_type, confidence = classify_shot_cloud(
+                image_path=image_path,
+                model=getattr(settings, "shot_classifier_cloud_model", None),
             )
-
-            # Convert VideoMAE label (LS, FS, MS, CS, ECS) to simplified label
-            simplified = get_simplified_type(shot_type)
 
             if confidence < threshold:
                 return ("unknown", confidence)
 
-            return (simplified, confidence)
+            return (shot_type, confidence)
 
         except ValueError as e:
-            # API key not configured
-            logger.warning(f"Cloud classification unavailable: {e}. Falling back to CPU.")
+            logger.warning(f"Cloud classification unavailable: {e}. Falling back to local.")
             return classify_shot_type(image_path, threshold, use_ensemble)
         except RuntimeError as e:
-            # Classification failed
-            logger.error(f"Cloud classification failed: {e}. Falling back to CPU.")
+            logger.error(f"Cloud classification failed: {e}. Falling back to local.")
             return classify_shot_type(image_path, threshold, use_ensemble)
 
-    # CPU tier (default): use local CLIP
+    # Local tier (default): use SigLIP 2
     return classify_shot_type(image_path, threshold, use_ensemble)
