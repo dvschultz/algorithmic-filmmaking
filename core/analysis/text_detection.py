@@ -1,5 +1,10 @@
 """Fast text detection using OpenCV EAST model.
 
+.. deprecated::
+    PaddleOCR PP-OCRv5 now handles text detection internally.
+    This module is kept for backward compatibility but is no longer
+    used by the default OCR pipeline. Use ``core.analysis.ocr`` instead.
+
 Pre-screens video frames for text presence before running expensive OCR/VLM.
 Uses the EAST (Efficient and Accurate Scene Text) neural network which runs
 in ~50-100ms on CPU, significantly faster than VLM calls.

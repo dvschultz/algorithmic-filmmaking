@@ -23,20 +23,20 @@ class TestDescriptionAnalysis(unittest.TestCase):
         shutil.rmtree(self.test_dir)
 
     @patch("core.analysis.description.load_settings")
-    @patch("core.analysis.description.describe_frame_cpu")
-    def test_describe_frame_cpu(self, mock_cpu, mock_settings):
-        """Test routing to CPU tier."""
+    @patch("core.analysis.description.describe_frame_local")
+    def test_describe_frame_local(self, mock_local, mock_settings):
+        """Test routing to local tier."""
         mock_settings.return_value = Settings(
-            description_model_tier="cpu",
-            description_model_cpu="moondream-test"
+            description_model_tier="local",
+            description_model_local="qwen3-vl-test"
         )
-        mock_cpu.return_value = "A cat sitting on a mat."
+        mock_local.return_value = "A cat sitting on a mat."
 
         desc, model = describe_frame(self.image_path)
 
         self.assertEqual(desc, "A cat sitting on a mat.")
-        self.assertEqual(model, "moondream-test")
-        mock_cpu.assert_called_once()
+        self.assertEqual(model, "qwen3-vl-test")
+        mock_local.assert_called_once()
 
     @patch("core.analysis.description.load_settings")
     @patch("core.analysis.description.describe_frame_cloud")
@@ -55,43 +55,44 @@ class TestDescriptionAnalysis(unittest.TestCase):
         mock_cloud.assert_called_once()
 
     @patch("core.analysis.description.load_settings")
-    @patch("core.analysis.description.describe_frame_cpu")
-    def test_describe_frame_explicit_tier(self, mock_cpu, mock_settings):
+    @patch("core.analysis.description.describe_frame_local")
+    def test_describe_frame_explicit_tier(self, mock_local, mock_settings):
         """Test explicit tier override."""
         mock_settings.return_value = Settings(
             description_model_tier="cloud",  # Default is cloud
-            description_model_cpu="moondream-test"
+            description_model_local="qwen3-vl-test"
         )
-        mock_cpu.return_value = "A car on the road."
+        mock_local.return_value = "A car on the road."
 
-        # Request CPU explicitly
-        desc, model = describe_frame(self.image_path, tier="cpu")
+        # Request local explicitly
+        desc, model = describe_frame(self.image_path, tier="local")
 
         self.assertEqual(desc, "A car on the road.")
-        self.assertEqual(model, "moondream-test")
-        mock_cpu.assert_called_once()
+        self.assertEqual(model, "qwen3-vl-test")
+        mock_local.assert_called_once()
 
-    @patch("core.analysis.description._load_cpu_model")
+    @patch("core.analysis.description.is_mlx_vlm_available", return_value=False)
+    @patch("core.analysis.description._load_local_model")
     @patch("PIL.Image.open")
     @patch("core.analysis.description.load_settings")
-    def test_cpu_inference_logic(self, mock_settings, mock_image_open, mock_load_model):
-        """Test CPU inference logic (mocking transformers)."""
+    def test_local_inference_logic(self, mock_settings, mock_image_open, mock_load_model, _mock_mlx):
+        """Test local inference logic (mocking Moondream fallback)."""
         # Setup mocks
         mock_model = MagicMock()
         mock_tokenizer = MagicMock()
         mock_load_model.return_value = (mock_model, mock_tokenizer)
-        
+
         mock_image = MagicMock()
         mock_image_open.return_value = mock_image
-        
+
         mock_model.encode_image.return_value = "encoded_image"
         mock_model.answer_question.return_value = "Generated description"
-        
-        mock_settings.return_value = Settings(description_model_cpu="moondream-test")
 
-        # Call internal function directly or via public API
-        from core.analysis.description import describe_frame_cpu
-        desc = describe_frame_cpu(self.image_path, "Test prompt")
+        mock_settings.return_value = Settings(description_model_local="moondream-test")
+
+        # Call internal function directly
+        from core.analysis.description import describe_frame_local
+        desc = describe_frame_local(self.image_path, "Test prompt")
 
         self.assertEqual(desc, "Generated description")
         mock_model.encode_image.assert_called_with(mock_image)
@@ -298,6 +299,7 @@ class TestModelManagement(unittest.TestCase):
     def test_is_model_loaded_initially_false(self):
         """Test is_model_loaded returns False when no model loaded."""
         import core.analysis.description as desc_module
+        desc_module._LOCAL_MODEL = None
         desc_module._CPU_MODEL = None
 
         from core.analysis.description import is_model_loaded
@@ -306,12 +308,16 @@ class TestModelManagement(unittest.TestCase):
     def test_unload_model_clears_state(self):
         """Test unload_model clears model state."""
         import core.analysis.description as desc_module
+        desc_module._LOCAL_MODEL = "dummy_model"
+        desc_module._LOCAL_PROCESSOR = "dummy_processor"
         desc_module._CPU_MODEL = "dummy_model"
         desc_module._CPU_TOKENIZER = "dummy_tokenizer"
 
         from core.analysis.description import unload_model
         unload_model()
 
+        self.assertIsNone(desc_module._LOCAL_MODEL)
+        self.assertIsNone(desc_module._LOCAL_PROCESSOR)
         self.assertIsNone(desc_module._CPU_MODEL)
         self.assertIsNone(desc_module._CPU_TOKENIZER)
 

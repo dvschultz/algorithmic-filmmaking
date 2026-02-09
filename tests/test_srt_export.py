@@ -109,7 +109,7 @@ class TestExportSrt:
                     frame_number=0,
                     text=text,
                     confidence=0.9,
-                    source="tesseract",
+                    source="paddleocr",
                 )
                 for text in ocr_texts
             ]

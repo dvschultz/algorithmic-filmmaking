@@ -53,8 +53,8 @@ class TextExtractionWorker(CancellableWorker):
             num_keyframes: Number of frames to sample per clip (1-5)
             use_vlm_fallback: Whether to use VLM for low-confidence results
             vlm_model: VLM model to use (default: from settings)
-            vlm_only: If True, skip Tesseract and only use VLM
-            use_text_detection: Whether to use EAST pre-filter (default: True)
+            vlm_only: If True, skip PaddleOCR and only use VLM
+            use_text_detection: Deprecated (PaddleOCR handles detection internally)
             analysis_targets: Optional list of AnalysisTarget objects (alternative to clips)
             parent: Optional parent QObject
         """

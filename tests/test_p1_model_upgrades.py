@@ -15,15 +15,15 @@ from core.settings import Settings
 # --- P1.1a: Embeddings decoupled from shots ---
 
 class TestEmbeddingsDecoupled:
-    """Verify embeddings.py has its own CLIP model, separate from shots.py."""
+    """Verify embeddings.py has its own model, separate from shots.py."""
 
-    def test_embeddings_has_own_clip_model_name(self):
-        from core.analysis.embeddings import _CLIP_MODEL_NAME
-        assert _CLIP_MODEL_NAME == "openai/clip-vit-base-patch32"
+    def test_embeddings_has_dinov2_model_name(self):
+        from core.analysis.embeddings import _DINOV2_MODEL_NAME
+        assert _DINOV2_MODEL_NAME == "facebook/dinov2-base"
 
-    def test_embeddings_has_own_revision_pin(self):
-        from core.analysis.embeddings import _CLIP_MODEL_REVISION
-        assert _CLIP_MODEL_REVISION == "e6a30b603a447e251fdaca1c3056b2a16cdfebeb"
+    def test_embeddings_produces_768_dim(self):
+        from core.analysis.embeddings import _EMBEDDING_DIM
+        assert _EMBEDDING_DIM == 768
 
     def test_embeddings_does_not_import_from_shots(self):
         """embeddings.py must not import model loading from shots.py."""

@@ -1,6 +1,6 @@
-"""CLIP embedding extraction for visual similarity algorithms.
+"""DINOv2 embedding extraction for visual similarity algorithms.
 
-Owns its own CLIP model instance (decoupled from shots module which uses
+Owns its own DINOv2 model instance (decoupled from shots module which uses
 SigLIP 2 for classification). Provides functions for:
 - Single thumbnail embedding extraction
 - Batch thumbnail embedding extraction
@@ -18,79 +18,80 @@ from PIL import Image
 
 logger = logging.getLogger(__name__)
 
-# Own CLIP model instance (separate from classification model in shots.py)
-_clip_model = None
-_clip_processor = None
-_clip_model_lock = threading.Lock()
+# Own DINOv2 model instance (separate from classification model in shots.py)
+_model = None
+_processor = None
+_model_lock = threading.Lock()
 
-# Pin model revision for supply chain security
-_CLIP_MODEL_NAME = "openai/clip-vit-base-patch32"
-_CLIP_MODEL_REVISION = "e6a30b603a447e251fdaca1c3056b2a16cdfebeb"
+# DINOv2 ViT-B/14 — self-supervised vision transformer (768-dim embeddings)
+_DINOV2_MODEL_NAME = "facebook/dinov2-base"
+_EMBEDDING_DIM = 768
+_EMBEDDING_MODEL_TAG = "dinov2-vit-b-14"  # Tag stored on Clip.embedding_model
 
 
-def _get_clip_model():
-    """Lazy load CLIP model and processor (thread-safe)."""
-    global _clip_model, _clip_processor
+def _get_model():
+    """Lazy load DINOv2 model and processor (thread-safe)."""
+    global _model, _processor
 
-    if _clip_model is not None:
-        return _clip_model, _clip_processor
+    if _model is not None:
+        return _model, _processor
 
-    with _clip_model_lock:
-        if _clip_model is None:
-            logger.info("Loading CLIP model for embeddings...")
-            from transformers import CLIPProcessor, CLIPModel
+    with _model_lock:
+        if _model is None:
+            logger.info("Loading DINOv2 model for embeddings...")
+            from transformers import AutoImageProcessor, AutoModel
 
-            _clip_processor = CLIPProcessor.from_pretrained(
-                _CLIP_MODEL_NAME, revision=_CLIP_MODEL_REVISION
-            )
-            _clip_model = CLIPModel.from_pretrained(
-                _CLIP_MODEL_NAME, revision=_CLIP_MODEL_REVISION
-            )
-            logger.info("CLIP embedding model loaded")
+            _processor = AutoImageProcessor.from_pretrained(_DINOV2_MODEL_NAME)
+            _model = AutoModel.from_pretrained(_DINOV2_MODEL_NAME)
+            logger.info("DINOv2 embedding model loaded")
 
-    return _clip_model, _clip_processor
+    return _model, _processor
 
 
 def is_model_loaded() -> bool:
     """Check if the embedding model is currently loaded."""
-    return _clip_model is not None
+    return _model is not None
 
 
 def unload_model():
     """Unload the embedding model to free memory."""
-    global _clip_model, _clip_processor
-    with _clip_model_lock:
-        _clip_model = None
-        _clip_processor = None
-    logger.info("CLIP embedding model unloaded")
+    global _model, _processor
+    with _model_lock:
+        _model = None
+        _processor = None
+    logger.info("DINOv2 embedding model unloaded")
 
 
 def _image_to_embedding(image: Image.Image) -> list[float]:
-    """Compute CLIP embedding for a PIL Image.
+    """Compute DINOv2 embedding for a PIL Image.
+
+    Uses the CLS token from the last hidden state as the image representation.
 
     Args:
         image: PIL Image in RGB mode
 
     Returns:
-        Normalized embedding vector as list of floats (512 dimensions)
+        Normalized embedding vector as list of floats (768 dimensions)
     """
     import torch
 
-    model, processor = _get_clip_model()
+    model, processor = _get_model()
     inputs = processor(images=image, return_tensors="pt")
 
     with torch.no_grad():
-        image_features = model.get_image_features(**inputs)
+        outputs = model(**inputs)
+        # CLS token is the first token in the last hidden state
+        cls_embedding = outputs.last_hidden_state[:, 0, :]
         # L2 normalize for cosine similarity
-        image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+        cls_embedding = cls_embedding / cls_embedding.norm(dim=-1, keepdim=True)
 
-    return image_features[0].cpu().numpy().tolist()
+    return cls_embedding[0].cpu().numpy().tolist()
 
 
 def extract_clip_embeddings_batch(
     thumbnail_paths: list[Path],
 ) -> list[list[float]]:
-    """Extract CLIP embeddings for multiple thumbnails efficiently.
+    """Extract DINOv2 embeddings for multiple thumbnails efficiently.
 
     Processes images in batches to leverage GPU parallelism (if available)
     or reduce per-image overhead on CPU.
@@ -104,7 +105,7 @@ def extract_clip_embeddings_batch(
     """
     import torch
 
-    model, processor = _get_clip_model()
+    model, processor = _get_model()
 
     # Load all images
     images = []
@@ -120,7 +121,7 @@ def extract_clip_embeddings_batch(
 
     if not images:
         # Return zero vectors for all
-        return [[0.0] * 512 for _ in thumbnail_paths]
+        return [[0.0] * _EMBEDDING_DIM for _ in thumbnail_paths]
 
     # Process in batches of 32
     batch_size = 32
@@ -130,17 +131,18 @@ def extract_clip_embeddings_batch(
         batch_images = images[batch_start:batch_start + batch_size]
         batch_indices = valid_indices[batch_start:batch_start + batch_size]
 
-        inputs = processor(images=batch_images, return_tensors="pt", padding=True)
+        inputs = processor(images=batch_images, return_tensors="pt")
 
         with torch.no_grad():
-            image_features = model.get_image_features(**inputs)
-            image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+            outputs = model(**inputs)
+            cls_embeddings = outputs.last_hidden_state[:, 0, :]
+            cls_embeddings = cls_embeddings / cls_embeddings.norm(dim=-1, keepdim=True)
 
         for j, idx in enumerate(batch_indices):
-            all_embeddings[idx] = image_features[j].cpu().numpy().tolist()
+            all_embeddings[idx] = cls_embeddings[j].cpu().numpy().tolist()
 
     # Build result, filling missing with zero vectors
-    zero_vec = [0.0] * 512
+    zero_vec = [0.0] * _EMBEDDING_DIM
     return [all_embeddings.get(i, zero_vec) for i in range(len(thumbnail_paths))]
 
 
@@ -150,10 +152,10 @@ def extract_boundary_embeddings(
     end_frame: int,
     fps: float,
 ) -> tuple[list[float], list[float]]:
-    """Extract CLIP embeddings of the first and last frames of a clip.
+    """Extract DINOv2 embeddings of the first and last frames of a clip.
 
     Uses FFmpeg to extract the actual frames from the source video,
-    then computes CLIP embeddings for each.
+    then computes DINOv2 embeddings for each.
 
     Args:
         source_path: Path to the source video file
@@ -163,7 +165,7 @@ def extract_boundary_embeddings(
 
     Returns:
         Tuple of (first_frame_embedding, last_frame_embedding),
-        each a normalized CLIP embedding vector (512 dimensions)
+        each a normalized embedding vector (768 dimensions)
 
     Raises:
         ValueError: If fps is not positive

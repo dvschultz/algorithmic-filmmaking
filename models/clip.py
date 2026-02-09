@@ -8,8 +8,8 @@ import uuid
 
 logger = logging.getLogger(__name__)
 
-# Expected CLIP ViT-B/32 embedding dimension
-EMBEDDING_DIM = 512
+# Valid embedding dimensions (CLIP ViT-B/32 = 512, DINOv2 ViT-B/14 = 768)
+VALID_EMBEDDING_DIMS = {512, 768}
 
 if TYPE_CHECKING:
     from core.transcription import TranscriptSegment
@@ -24,7 +24,7 @@ class ExtractedText:
         frame_number: Frame number where text was extracted
         text: The extracted text content
         confidence: Confidence score from 0.0 to 1.0
-        source: Extraction method ("tesseract" or "vlm")
+        source: Extraction method ("paddleocr", "tesseract", or "vlm")
         bounding_boxes: Optional list of text bounding boxes with format
             [{"x": int, "y": int, "w": int, "h": int, "text": str}, ...]
     """
@@ -32,7 +32,7 @@ class ExtractedText:
     frame_number: int
     text: str
     confidence: float
-    source: str  # "tesseract" or "vlm"
+    source: str  # "paddleocr", "tesseract" (legacy), or "vlm"
     bounding_boxes: Optional[list[dict]] = None
 
     def to_dict(self) -> dict:
@@ -176,12 +176,12 @@ def _validate_optional_float(value, field_name: str) -> Optional[float]:
 
 
 def _validate_embedding(value, field_name: str) -> Optional[list[float]]:
-    """Validate that a deserialized embedding has the expected dimension."""
+    """Validate that a deserialized embedding has a supported dimension."""
     if value is None:
         return None
-    if not isinstance(value, list) or len(value) != EMBEDDING_DIM:
+    if not isinstance(value, list) or len(value) not in VALID_EMBEDDING_DIMS:
         dim = len(value) if isinstance(value, list) else type(value).__name__
-        logger.warning(f"Invalid {field_name}: expected {EMBEDDING_DIM}-dim list, got {dim}, discarding")
+        logger.warning(f"Invalid {field_name}: expected dim in {VALID_EMBEDDING_DIMS}, got {dim}, discarding")
         return None
     return value
 
@@ -216,9 +216,10 @@ class Clip:
     # Sequencer algorithm cache fields
     average_brightness: Optional[float] = None  # Mean luminance 0.0-1.0
     rms_volume: Optional[float] = None  # Mean volume in dB (typically -60 to 0)
-    embedding: Optional[list[float]] = None  # CLIP ViT-B/32 embedding (512 dims)
-    first_frame_embedding: Optional[list[float]] = None  # CLIP embedding of first frame
-    last_frame_embedding: Optional[list[float]] = None  # CLIP embedding of last frame
+    embedding: Optional[list[float]] = None  # Visual embedding (512 or 768 dims)
+    first_frame_embedding: Optional[list[float]] = None  # First frame embedding
+    last_frame_embedding: Optional[list[float]] = None  # Last frame embedding
+    embedding_model: Optional[str] = None  # Model that generated embeddings (e.g., "clip-vit-b-32", "dinov2-vit-b-14")
 
     @property
     def duration_frames(self) -> int:
@@ -343,6 +344,8 @@ class Clip:
             data["first_frame_embedding"] = self.first_frame_embedding
         if self.last_frame_embedding is not None:
             data["last_frame_embedding"] = self.last_frame_embedding
+        if self.embedding_model is not None:
+            data["embedding_model"] = self.embedding_model
         return data
 
     @classmethod
@@ -410,4 +413,5 @@ class Clip:
             embedding=_validate_embedding(data.get("embedding"), "embedding"),
             first_frame_embedding=_validate_embedding(data.get("first_frame_embedding"), "first_frame_embedding"),
             last_frame_embedding=_validate_embedding(data.get("last_frame_embedding"), "last_frame_embedding"),
+            embedding_model=data.get("embedding_model"),
         )

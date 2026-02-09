@@ -13,6 +13,7 @@ torch>=2.0
 Pillow>=10.0
 faster-whisper>=1.0.0
 lightning-whisper-mlx>=0.4.0  # MLX Whisper for Apple Silicon (optional, auto-detected)
+mlx-vlm>=0.1.0               # MLX VLM for Apple Silicon local descriptions (optional, auto-detected)
 google-api-python-client>=2.100.0
 keyring>=24.0
 
@@ -27,8 +28,7 @@ torchvision>=0.15.0  # MobileNet (compatible with torch>=2.0)
 einops>=0.7.0
 
 # OCR / Text Extraction
-pytesseract>=0.3.10  # Tesseract OCR wrapper (requires tesseract binary)
-paddleocr>=3.0.0     # PaddleOCR for karaoke/text scene detection (requires paddlepaddle)
+paddleocr>=3.0.0     # PaddleOCR PP-OCRv5 for text extraction (replaces Tesseract)
 rapidfuzz>=3.0.0     # Fast fuzzy string matching for text comparison
 
 # Audio Analysis
