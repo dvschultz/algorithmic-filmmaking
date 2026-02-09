@@ -2886,6 +2886,7 @@ class MainWindow(QMainWindow):
             self.settings.transcription_model,
             self.settings.transcription_language,
             parallelism=self.settings.transcription_parallelism,
+            backend=self.settings.transcription_backend,
         )
         self.transcription_worker.progress.connect(self._on_transcription_progress)
         self.transcription_worker.transcript_ready.connect(self._on_transcript_ready)
@@ -3364,6 +3365,7 @@ class MainWindow(QMainWindow):
                 self.settings.transcription_model,
                 self.settings.transcription_language,
                 parallelism=self.settings.transcription_parallelism,
+                backend=self.settings.transcription_backend,
             )
             self.transcription_worker.progress.connect(self._on_transcription_progress)
             self.transcription_worker.transcript_ready.connect(self._on_transcript_ready)
@@ -5355,6 +5357,7 @@ class MainWindow(QMainWindow):
             self.settings.transcription_model,
             self.settings.transcription_language,
             parallelism=self.settings.transcription_parallelism,
+            backend=self.settings.transcription_backend,
         )
         self.transcription_worker.progress.connect(self._on_transcription_progress)
         self.transcription_worker.transcript_ready.connect(self._on_transcript_ready)

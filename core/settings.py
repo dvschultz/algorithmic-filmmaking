@@ -374,6 +374,7 @@ class Settings:
     # Transcription settings
     transcription_model: str = "small.en"  # tiny.en, small.en, medium.en, large-v3
     transcription_language: str = "en"  # en, auto, or specific language code
+    transcription_backend: str = "auto"  # auto, faster-whisper, mlx-whisper
 
     # Appearance
     theme_preference: str = "system"  # system, light, dark
@@ -415,8 +416,9 @@ class Settings:
     exquisite_corpus_temperature: float = 0.8  # Creativity level (0.0-1.0)
 
     # Shot Classification Settings
-    shot_classifier_tier: str = "cpu"  # cpu, cloud (cloud uses Replicate VideoMAE)
-    shot_classifier_replicate_model: str = "dvschultz/shot-type-classifier"  # VideoMAE model
+    shot_classifier_tier: str = "cpu"  # cpu, cloud
+    shot_classifier_cloud_model: str = "gemini-2.5-flash-lite"  # Cloud VLM model for shot classification
+    shot_classifier_replicate_model: str = "dvschultz/shot-type-classifier"  # Legacy VideoMAE model
 
     # Analysis Picker - remembered selection
     analysis_selected_operations: list = field(
@@ -610,6 +612,8 @@ def _load_from_json(config_path: Path, settings: Settings) -> Settings:
             settings.transcription_model = val
         if val := transcription.get("language"):
             settings.transcription_language = val
+        if val := transcription.get("backend"):
+            settings.transcription_backend = val
 
     # Export section
     if export := data.get("export"):
@@ -694,6 +698,8 @@ def _load_from_json(config_path: Path, settings: Settings) -> Settings:
     if shot_classifier := data.get("shot_classifier"):
         if val := shot_classifier.get("tier"):
             settings.shot_classifier_tier = val
+        if val := shot_classifier.get("cloud_model"):
+            settings.shot_classifier_cloud_model = val
         if val := shot_classifier.get("replicate_model"):
             settings.shot_classifier_replicate_model = val
 
@@ -748,6 +754,7 @@ def _settings_to_json(settings: Settings) -> dict:
         "transcription": {
             "model": settings.transcription_model,
             "language": settings.transcription_language,
+            "backend": settings.transcription_backend,
         },
         "export": {
             "quality": settings.export_quality,
@@ -795,6 +802,7 @@ def _settings_to_json(settings: Settings) -> dict:
         },
         "shot_classifier": {
             "tier": settings.shot_classifier_tier,
+            "cloud_model": settings.shot_classifier_cloud_model,
             "replicate_model": settings.shot_classifier_replicate_model,
             # Note: API key is NOT stored here - it goes to keyring
         },

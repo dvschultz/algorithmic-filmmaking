@@ -1,7 +1,7 @@
 """CLIP embedding extraction for visual similarity algorithms.
 
-Reuses the CLIP model from core/analysis/shots.py (single model instance).
-Provides functions for:
+Owns its own CLIP model instance (decoupled from shots module which uses
+SigLIP 2 for classification). Provides functions for:
 - Single thumbnail embedding extraction
 - Batch thumbnail embedding extraction
 - Boundary frame (first/last) embedding extraction from video
@@ -10,6 +10,7 @@ Provides functions for:
 import logging
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -17,11 +18,51 @@ from PIL import Image
 
 logger = logging.getLogger(__name__)
 
+# Own CLIP model instance (separate from classification model in shots.py)
+_clip_model = None
+_clip_processor = None
+_clip_model_lock = threading.Lock()
+
+# Pin model revision for supply chain security
+_CLIP_MODEL_NAME = "openai/clip-vit-base-patch32"
+_CLIP_MODEL_REVISION = "e6a30b603a447e251fdaca1c3056b2a16cdfebeb"
+
 
 def _get_clip_model():
-    """Get the shared CLIP model and processor from shots module."""
-    from core.analysis.shots import load_clip_model
-    return load_clip_model()
+    """Lazy load CLIP model and processor (thread-safe)."""
+    global _clip_model, _clip_processor
+
+    if _clip_model is not None:
+        return _clip_model, _clip_processor
+
+    with _clip_model_lock:
+        if _clip_model is None:
+            logger.info("Loading CLIP model for embeddings...")
+            from transformers import CLIPProcessor, CLIPModel
+
+            _clip_processor = CLIPProcessor.from_pretrained(
+                _CLIP_MODEL_NAME, revision=_CLIP_MODEL_REVISION
+            )
+            _clip_model = CLIPModel.from_pretrained(
+                _CLIP_MODEL_NAME, revision=_CLIP_MODEL_REVISION
+            )
+            logger.info("CLIP embedding model loaded")
+
+    return _clip_model, _clip_processor
+
+
+def is_model_loaded() -> bool:
+    """Check if the embedding model is currently loaded."""
+    return _clip_model is not None
+
+
+def unload_model():
+    """Unload the embedding model to free memory."""
+    global _clip_model, _clip_processor
+    with _clip_model_lock:
+        _clip_model = None
+        _clip_processor = None
+    logger.info("CLIP embedding model unloaded")
 
 
 def _image_to_embedding(image: Image.Image) -> list[float]:

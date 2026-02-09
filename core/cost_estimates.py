@@ -33,13 +33,13 @@ TIME_PER_CLIP: dict[str, dict[str, float]] = {
     "volume": {"local": 0.2},
     "embeddings": {"local": 0.8},
     "boundary_embeddings": {"local": 1.5},
-    "transcribe": {"local": 2.0},
+    "transcribe": {"local": 0.4},  # mlx-whisper on Apple Silicon; faster-whisper ~2.0s
     "cinematography": {"cloud": 1.0},
 }
 
 # Per-clip dollar costs (cloud tiers only)
 COST_PER_CLIP: dict[str, dict[str, float]] = {
-    "shots": {"cloud": 0.005},
+    "shots": {"cloud": 0.00026},
     "extract_text": {"cloud": 0.001},
     "describe": {"cloud": 0.001},
     "cinematography": {"cloud": 0.002},

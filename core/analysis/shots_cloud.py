@@ -1,7 +1,7 @@
-"""Cloud-based shot type classification using Replicate.
+"""Cloud-based shot type classification using Gemini Flash Lite or Replicate.
 
-Uses VideoMAE model fine-tuned for cinematographic shot types.
-Provides significantly better accuracy than CLIP-based classification.
+Default: Gemini Flash Lite via LiteLLM (19x cheaper than Replicate VideoMAE).
+Legacy: Replicate VideoMAE kept for backward compatibility.
 
 Shot types:
 - LS: Long Shot (wide, establishing)
@@ -11,12 +11,17 @@ Shot types:
 - ECS: Extreme Close-up Shot (face detail only)
 """
 
+import base64
+import json
 import logging
 import tempfile
 from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# Default cloud model for shot classification
+_DEFAULT_CLOUD_MODEL = "gemini-2.5-flash-lite"
 
 # Shot type display names
 SHOT_TYPE_DISPLAY = {
@@ -68,6 +73,128 @@ def set_replicate_api_key(api_key: str) -> bool:
     except Exception as e:
         logger.error(f"Failed to store Replicate API key: {e}")
         return False
+
+
+def classify_shot_cloud(
+    image_path: Path,
+    model: Optional[str] = None,
+) -> tuple[str, float]:
+    """Classify shot type using a cloud VLM (Gemini Flash Lite by default).
+
+    Sends the thumbnail to a cloud VLM with a structured prompt requesting
+    one of the standard SHOT_TYPES. Much cheaper than Replicate VideoMAE
+    (~$0.00026/clip vs $0.005/clip).
+
+    Args:
+        image_path: Path to the thumbnail image
+        model: LiteLLM model string (default: gemini-2.5-flash-lite)
+
+    Returns:
+        Tuple of (shot_type, confidence)
+
+    Raises:
+        ValueError: If no API key is configured for the model's provider
+        RuntimeError: If classification fails
+    """
+    import litellm
+
+    from core.analysis.shots import SHOT_TYPES
+    from core.settings import get_gemini_api_key, load_settings
+
+    model = model or _DEFAULT_CLOUD_MODEL
+
+    # Get API key based on model provider
+    api_key = None
+    if "gemini" in model.lower():
+        api_key = get_gemini_api_key()
+        if not api_key:
+            raise ValueError(
+                "Gemini API key not configured. "
+                "Set GEMINI_API_KEY environment variable or configure in Settings."
+            )
+        if not model.startswith("gemini/"):
+            model = f"gemini/{model}"
+
+    # Encode image as base64
+    image_data = base64.b64encode(image_path.read_bytes()).decode("utf-8")
+
+    # Determine mime type
+    suffix = image_path.suffix.lower()
+    mime_type = {"jpg": "image/jpeg", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                 ".png": "image/png", ".webp": "image/webp"}.get(suffix, "image/jpeg")
+
+    shot_types_str = ", ".join(f'"{st}"' for st in SHOT_TYPES)
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{mime_type};base64,{image_data}",
+                    },
+                },
+                {
+                    "type": "text",
+                    "text": (
+                        f"Classify this film frame into exactly one shot type. "
+                        f"Valid types: {shot_types_str}.\n\n"
+                        f"Return ONLY a JSON object: "
+                        f'{{\"shot_type\": \"<type>\", \"confidence\": <0.0-1.0>}}'
+                    ),
+                },
+            ],
+        }
+    ]
+
+    try:
+        response = litellm.completion(
+            model=model,
+            messages=messages,
+            api_key=api_key,
+            temperature=0.0,
+            max_tokens=100,
+        )
+
+        text = response.choices[0].message.content.strip()
+
+        # Parse JSON response
+        # Strip markdown code blocks if present
+        if text.startswith("```"):
+            lines = text.split("\n")
+            text = "\n".join(line for line in lines if not line.startswith("```")).strip()
+
+        start_idx = text.find("{")
+        end_idx = text.rfind("}")
+        if start_idx != -1 and end_idx != -1:
+            text = text[start_idx:end_idx + 1]
+
+        result = json.loads(text)
+        shot_type = result.get("shot_type", "unknown")
+        confidence = float(result.get("confidence", 0.5))
+
+        # Validate shot type
+        if shot_type not in SHOT_TYPES:
+            # Try fuzzy matching
+            shot_type_lower = shot_type.lower().strip()
+            for st in SHOT_TYPES:
+                if st in shot_type_lower or shot_type_lower in st:
+                    shot_type = st
+                    break
+            else:
+                logger.warning(f"Cloud returned unknown shot type: {shot_type}")
+                shot_type = "unknown"
+
+        logger.debug(f"Cloud shot classification: {shot_type} ({confidence:.2f})")
+        return (shot_type, confidence)
+
+    except json.JSONDecodeError:
+        logger.error(f"Cloud shot classification returned non-JSON: {text}")
+        raise RuntimeError("Cloud shot classification returned invalid response")
+    except Exception as e:
+        logger.error(f"Cloud shot classification failed: {e}")
+        raise RuntimeError(f"Cloud shot classification failed: {e}") from e
 
 
 def classify_shot_replicate(
