@@ -33,8 +33,8 @@ TIME_PER_CLIP: dict[str, dict[str, float]] = {
     "volume": {"local": 0.2},
     "embeddings": {"local": 0.8},
     "boundary_embeddings": {"local": 1.5},
-    "transcribe": {"local": 0.4},  # mlx-whisper on Apple Silicon; faster-whisper ~2.0s
-    "cinematography": {"cloud": 1.0},
+    "transcribe": {"local": 0.4, "cloud": 0.3},  # local: mlx-whisper; cloud: Groq API
+    "cinematography": {"local": 3.0, "cloud": 1.0},  # local: mlx-vlm 7B; cloud: Gemini
 }
 
 # Per-clip dollar costs (cloud tiers only)
@@ -43,6 +43,7 @@ COST_PER_CLIP: dict[str, dict[str, float]] = {
     "extract_text": {"cloud": 0.001},
     "describe": {"cloud": 0.001},
     "cinematography": {"cloud": 0.002},
+    "transcribe": {"cloud": 0.00002},  # Groq whisper-large-v3-turbo: ~$0.04/hr
 }
 
 # Operations that support local/cloud tier switching
@@ -50,6 +51,8 @@ TIERED_OPERATIONS: dict[str, dict[str, str]] = {
     "shots": {"local": "Local (Free)", "cloud": "Cloud (Paid)"},
     "extract_text": {"local": "Local (Free)", "cloud": "Cloud (Paid)"},
     "describe": {"local": "Local (Free)", "cloud": "Cloud (Paid)"},
+    "transcribe": {"local": "Local (Free)", "cloud": "Cloud (Groq)"},
+    "cinematography": {"local": "Local (Free)", "cloud": "Cloud (Paid)"},
 }
 
 # Display labels for operations
@@ -121,6 +124,12 @@ def _resolve_tier(operation: str, tier_overrides: dict[str, str] | None,
         if operation == "extract_text" and hasattr(settings, "text_extraction_method"):
             method = settings.text_extraction_method
             return "cloud" if method == "vlm" else "local"
+        if operation == "transcribe" and hasattr(settings, "transcription_backend"):
+            backend = settings.transcription_backend
+            return "cloud" if backend == "groq" else "local"
+        if operation == "cinematography" and hasattr(settings, "cinematography_tier"):
+            tier = settings.cinematography_tier
+            return "cloud" if tier == "cloud" else "local"
 
     # Default: prefer local if available
     time_info = TIME_PER_CLIP.get(operation, {})

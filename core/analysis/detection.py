@@ -1,4 +1,9 @@
-"""Object detection using YOLO26."""
+"""Object detection using YOLO26 and YOLOE-26 (open-vocabulary).
+
+Supports two detection modes:
+- Fixed (default): YOLO26n with 80 COCO classes — fast, zero overhead
+- Open-vocabulary: YOLOE-26s with user-defined text-prompted classes
+"""
 
 import logging
 import os
@@ -28,9 +33,16 @@ COCO_CLASSES = [
 # Person class index in COCO
 PERSON_CLASS_ID = 0
 
-# Lazy load model
+# YOLOE-26 model for open-vocabulary detection
+_YOLOE_MODEL_NAME = "yoloe-26s.pt"
+
+# Lazy load models
 _model = None
 _model_lock = threading.Lock()
+
+_ov_model = None
+_ov_model_classes: Optional[list[str]] = None
+_ov_model_lock = threading.Lock()
 
 
 def _get_model_cache_dir() -> Path:
@@ -80,6 +92,98 @@ def _load_yolo(model_size: str = "n"):
             logger.info(f"YOLO26{model_size} model loaded")
 
     return _model
+
+
+def _load_yoloe(custom_classes: list[str]):
+    """Lazy load YOLOE-26 open-vocabulary model (thread-safe).
+
+    Args:
+        custom_classes: List of class names for text-prompted detection.
+    """
+    global _ov_model, _ov_model_classes
+
+    # Fast path: already loaded with matching classes
+    if _ov_model is not None and _ov_model_classes == custom_classes:
+        return _ov_model
+
+    with _ov_model_lock:
+        if _ov_model is None or _ov_model_classes != custom_classes:
+            logger.info(f"Loading YOLOE-26s with {len(custom_classes)} custom classes...")
+
+            cache_dir = _get_model_cache_dir()
+            os.environ.setdefault("YOLO_CONFIG_DIR", str(cache_dir))
+
+            from ultralytics import YOLO
+
+            _ov_model = YOLO(_YOLOE_MODEL_NAME)
+            _ov_model.set_classes(custom_classes)
+            _ov_model_classes = list(custom_classes)
+
+            logger.info(f"YOLOE-26s loaded with classes: {custom_classes}")
+
+    return _ov_model
+
+
+def detect_objects_open_vocab(
+    image_path: Path,
+    custom_classes: list[str],
+    confidence_threshold: float = 0.3,
+) -> list[dict]:
+    """Detect objects using open-vocabulary text-prompted detection.
+
+    Uses YOLOE-26 to detect user-specified object classes that are not
+    limited to the fixed 80 COCO categories.
+
+    Args:
+        image_path: Path to image file
+        custom_classes: List of class names to detect (e.g., ["camera", "microphone"])
+        confidence_threshold: Minimum detection confidence (0.0-1.0).
+            Lower default than fixed detection since open-vocab is less precise.
+
+    Returns:
+        List of detections, each with:
+        - label: Class name from custom_classes
+        - confidence: Detection confidence (0.0-1.0)
+        - bbox: Bounding box as [x1, y1, x2, y2] in pixels
+    """
+    if not custom_classes:
+        logger.warning("No custom classes provided for open-vocab detection")
+        return []
+
+    model = _load_yoloe(custom_classes)
+
+    try:
+        results = model(
+            str(image_path),
+            verbose=False,
+            conf=confidence_threshold,
+        )
+
+        detections = []
+        for result in results:
+            boxes = result.boxes
+            for box in boxes:
+                cls_id = int(box.cls[0])
+                conf = float(box.conf[0])
+                bbox = box.xyxy[0].tolist()
+
+                label = custom_classes[cls_id] if cls_id < len(custom_classes) else f"class_{cls_id}"
+
+                detections.append({
+                    "label": label,
+                    "confidence": round(conf, 3),
+                    "bbox": [int(x) for x in bbox],
+                })
+
+        logger.debug(
+            f"Open-vocab detected {len(detections)} objects in {image_path.name} "
+            f"(classes: {custom_classes})"
+        )
+        return detections
+
+    except Exception as e:
+        logger.error(f"Open-vocab detection failed for {image_path}: {e}")
+        return []
 
 
 def detect_objects(
@@ -227,9 +331,14 @@ def is_model_loaded() -> bool:
 
 
 def unload_model():
-    """Unload the YOLO model to free memory."""
-    global _model
+    """Unload all YOLO models to free memory."""
+    global _model, _ov_model, _ov_model_classes
 
     with _model_lock:
         _model = None
-        logger.info("YOLO model unloaded")
+
+    with _ov_model_lock:
+        _ov_model = None
+        _ov_model_classes = None
+
+    logger.info("YOLO models unloaded")
