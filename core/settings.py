@@ -374,7 +374,8 @@ class Settings:
     # Transcription settings
     transcription_model: str = "small.en"  # tiny.en, small.en, medium.en, large-v3
     transcription_language: str = "en"  # en, auto, or specific language code
-    transcription_backend: str = "auto"  # auto, faster-whisper, mlx-whisper
+    transcription_backend: str = "auto"  # auto, faster-whisper, mlx-whisper, groq
+    transcription_cloud_model: str = "whisper-large-v3-turbo"  # Groq cloud model
 
     # Appearance
     theme_preference: str = "system"  # system, light, dark
@@ -416,6 +417,12 @@ class Settings:
     exquisite_corpus_model: str = "gemini-3-flash-preview"  # Model for poem generation
     exquisite_corpus_temperature: float = 0.8  # Creativity level (0.0-1.0)
 
+    # Object Detection Settings
+    detection_mode: str = "fixed"  # fixed (80 COCO classes), open_vocab (custom text-prompted)
+    detection_custom_classes: list = field(
+        default_factory=list
+    )  # User-defined classes for open-vocab mode (e.g., ["camera", "microphone"])
+
     # Shot Classification Settings
     shot_classifier_tier: str = "cpu"  # cpu, cloud
     shot_classifier_cloud_model: str = "gemini-2.5-flash-lite"  # Cloud VLM model for shot classification
@@ -434,7 +441,9 @@ class Settings:
 
     # Rich Cinematography Analysis Settings
     cinematography_input_mode: str = "frame"  # "frame" = single keyframe, "video" = video clip (Gemini only)
-    cinematography_model: str = "gemini-3-flash-preview"  # VLM model for rich analysis
+    cinematography_model: str = "gemini-3-flash-preview"  # VLM model for rich analysis (cloud tier)
+    cinematography_tier: str = "cloud"  # "cloud" (Gemini/OpenAI), "local" (mlx-vlm)
+    cinematography_local_model: str = "mlx-community/Qwen2.5-VL-7B-Instruct-4bit"  # Local VLM for cinematography
     cinematography_batch_parallelism: int = 2  # Number of concurrent VLM requests (1-5)
 
     def get_quality_preset(self) -> dict:
@@ -605,6 +614,10 @@ def _load_from_json(config_path: Path, settings: Settings) -> Settings:
             settings.default_sensitivity = float(detection["default_sensitivity"])
         if "min_scene_length_seconds" in detection:
             settings.min_scene_length_seconds = float(detection["min_scene_length_seconds"])
+        if val := detection.get("mode"):
+            settings.detection_mode = val
+        if val := detection.get("custom_classes"):
+            settings.detection_custom_classes = list(val)
 
     # Transcription section
     # Note: auto_transcribe is deprecated and ignored
@@ -615,6 +628,8 @@ def _load_from_json(config_path: Path, settings: Settings) -> Settings:
             settings.transcription_language = val
         if val := transcription.get("backend"):
             settings.transcription_backend = val
+        if val := transcription.get("cloud_model"):
+            settings.transcription_cloud_model = val
 
     # Export section
     if export := data.get("export"):
@@ -733,6 +748,10 @@ def _load_from_json(config_path: Path, settings: Settings) -> Settings:
             settings.cinematography_input_mode = val
         if val := cinematography.get("model"):
             settings.cinematography_model = val
+        if val := cinematography.get("tier"):
+            settings.cinematography_tier = val
+        if val := cinematography.get("local_model"):
+            settings.cinematography_local_model = val
         if "batch_parallelism" in cinematography:
             settings.cinematography_batch_parallelism = int(cinematography["batch_parallelism"])
 
@@ -759,11 +778,14 @@ def _settings_to_json(settings: Settings) -> dict:
         "detection": {
             "default_sensitivity": settings.default_sensitivity,
             "min_scene_length_seconds": settings.min_scene_length_seconds,
+            "mode": settings.detection_mode,
+            "custom_classes": settings.detection_custom_classes,
         },
         "transcription": {
             "model": settings.transcription_model,
             "language": settings.transcription_language,
             "backend": settings.transcription_backend,
+            "cloud_model": settings.transcription_cloud_model,
         },
         "export": {
             "quality": settings.export_quality,
@@ -826,6 +848,8 @@ def _settings_to_json(settings: Settings) -> dict:
         "cinematography": {
             "input_mode": settings.cinematography_input_mode,
             "model": settings.cinematography_model,
+            "tier": settings.cinematography_tier,
+            "local_model": settings.cinematography_local_model,
             "batch_parallelism": settings.cinematography_batch_parallelism,
         },
     }

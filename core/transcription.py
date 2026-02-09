@@ -1,13 +1,15 @@
-"""Speech transcription using faster-whisper or lightning-whisper-mlx.
+"""Speech transcription using faster-whisper, lightning-whisper-mlx, or Groq cloud.
 
-Supports two backends:
+Supports three backends:
 - faster-whisper (default): CPU/CUDA, cross-platform, int8 quantisation
 - mlx-whisper: Apple Silicon GPU via MLX (4-10x faster on M-series Macs)
+- groq: Cloud transcription via Groq API (fast, low-cost, no local compute)
 
 Backend selection:
 - "auto" (default): prefers mlx-whisper on Apple Silicon, falls back to faster-whisper
 - "faster-whisper": force CPU/CUDA backend
 - "mlx-whisper": force MLX backend (Apple Silicon only)
+- "groq": force cloud transcription via Groq API
 """
 
 import logging
@@ -106,11 +108,13 @@ def _resolve_backend(backend: str = "auto") -> str:
     """Resolve 'auto' backend to a concrete choice.
 
     Args:
-        backend: "auto", "faster-whisper", or "mlx-whisper"
+        backend: "auto", "faster-whisper", "mlx-whisper", or "groq"
 
     Returns:
-        "faster-whisper" or "mlx-whisper"
+        "faster-whisper", "mlx-whisper", or "groq"
     """
+    if backend == "groq":
+        return "groq"
     if backend == "mlx-whisper":
         if not is_mlx_whisper_available():
             logger.warning("mlx-whisper requested but not available; falling back to faster-whisper")
@@ -245,15 +249,18 @@ def transcribe_video(
 
     Args:
         video_path: Path to video file
-        model_name: Whisper model to use
+        model_name: Whisper model to use (ignored for groq backend)
         language: Language code (e.g., "en", "es", "auto")
-        backend: "auto", "faster-whisper", or "mlx-whisper"
+        backend: "auto", "faster-whisper", "mlx-whisper", or "groq"
         progress_callback: Optional callback(progress, message)
 
     Returns:
         List of TranscriptSegment objects
     """
     resolved = _resolve_backend(backend)
+
+    if resolved == "groq":
+        return _transcribe_cloud_groq(video_path, language, progress_callback)
 
     if resolved == "mlx-whisper":
         return _transcribe_video_mlx(video_path, model_name, language, progress_callback)
@@ -368,9 +375,9 @@ def transcribe_clip(
         source_path: Path to source video
         start_time: Start time in seconds
         end_time: End time in seconds
-        model_name: Whisper model to use
+        model_name: Whisper model to use (ignored for groq backend)
         language: Language code
-        backend: "auto", "faster-whisper", or "mlx-whisper"
+        backend: "auto", "faster-whisper", "mlx-whisper", or "groq"
 
     Returns:
         List of TranscriptSegment objects with times relative to clip start
@@ -403,6 +410,9 @@ def transcribe_clip(
         if tmp_path.stat().st_size == 0:
             logger.warning(f"No audio extracted from {source_path} ({start_time}-{end_time})")
             return []
+
+        if resolved == "groq":
+            return _transcribe_cloud_groq(tmp_path, language)
 
         if resolved == "mlx-whisper":
             mlx_model = get_mlx_model(model_name)
@@ -459,6 +469,143 @@ def _parse_mlx_result(result: dict) -> list[TranscriptSegment]:
             )
         )
     return segments_out
+
+
+# Groq cloud transcription models
+GROQ_MODELS = {
+    "whisper-large-v3-turbo": {"speed": "fastest", "cost": "$0.04/hr"},
+    "distil-whisper-large-v3-en": {"speed": "fast", "cost": "$0.02/hr"},
+    "whisper-large-v3": {"speed": "standard", "cost": "$0.111/hr"},
+}
+
+_DEFAULT_GROQ_MODEL = "whisper-large-v3-turbo"
+
+
+def _transcribe_cloud_groq(
+    audio_path: Path,
+    language: str = "en",
+    progress_callback: Optional[Callable[[float, str], None]] = None,
+) -> list[TranscriptSegment]:
+    """Transcribe using Groq cloud API via LiteLLM.
+
+    Requires GROQ_API_KEY environment variable.
+
+    Args:
+        audio_path: Path to audio/video file
+        language: Language code
+        progress_callback: Optional callback(progress, message)
+
+    Returns:
+        List of TranscriptSegment objects
+    """
+    import os
+
+    api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        logger.error("GROQ_API_KEY not set; cannot use Groq transcription")
+        raise TranscriptionError(
+            "GROQ_API_KEY environment variable not set. "
+            "Get a key at https://console.groq.com"
+        )
+
+    if progress_callback:
+        progress_callback(0.1, "Preparing audio for Groq cloud transcription...")
+
+    # Extract audio to temp file if input is video
+    suffix = audio_path.suffix.lower()
+    needs_extraction = suffix not in (".wav", ".mp3", ".flac", ".m4a", ".ogg", ".webm")
+
+    if needs_extraction:
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+        try:
+            subprocess.run(
+                [
+                    "ffmpeg", "-y",
+                    "-i", str(audio_path),
+                    "-vn",
+                    "-acodec", "pcm_s16le",
+                    "-ar", "16000",
+                    "-ac", "1",
+                    str(tmp_path),
+                ],
+                capture_output=True,
+                check=True,
+            )
+            audio_file_path = tmp_path
+        except subprocess.CalledProcessError as e:
+            tmp_path.unlink(missing_ok=True)
+            logger.error(f"FFmpeg audio extraction failed: {e.stderr.decode() if e.stderr else e}")
+            return []
+    else:
+        audio_file_path = audio_path
+        tmp_path = None
+
+    try:
+        if progress_callback:
+            progress_callback(0.3, "Sending to Groq cloud...")
+
+        # Load cloud model from settings
+        try:
+            from core.settings import load_settings
+            settings = load_settings()
+            groq_model = getattr(settings, "transcription_cloud_model", _DEFAULT_GROQ_MODEL)
+        except Exception:
+            groq_model = _DEFAULT_GROQ_MODEL
+
+        import litellm
+
+        with open(audio_file_path, "rb") as f:
+            response = litellm.transcription(
+                model=f"groq/{groq_model}",
+                file=f,
+                language=language if language != "auto" else None,
+                response_format="verbose_json",
+                timestamp_granularities=["segment"],
+            )
+
+        if progress_callback:
+            progress_callback(0.8, "Processing Groq response...")
+
+        segments = []
+        # LiteLLM returns a TranscriptionResponse with segments
+        resp_segments = getattr(response, "segments", None) or []
+        for seg in resp_segments:
+            segments.append(
+                TranscriptSegment(
+                    start_time=seg.get("start", 0.0) if isinstance(seg, dict) else getattr(seg, "start", 0.0),
+                    end_time=seg.get("end", 0.0) if isinstance(seg, dict) else getattr(seg, "end", 0.0),
+                    text=(seg.get("text", "") if isinstance(seg, dict) else getattr(seg, "text", "")).strip(),
+                    confidence=0.0,
+                )
+            )
+
+        # Fallback: if no segments but we got text, return as single segment
+        if not segments:
+            text = getattr(response, "text", "")
+            if text:
+                segments.append(
+                    TranscriptSegment(
+                        start_time=0.0,
+                        end_time=0.0,
+                        text=text.strip(),
+                        confidence=0.0,
+                    )
+                )
+
+        if progress_callback:
+            progress_callback(1.0, f"Groq transcribed {len(segments)} segments")
+
+        logger.info(f"Groq cloud transcription: {len(segments)} segments from {audio_path.name}")
+        return segments
+
+    except Exception as e:
+        logger.error(f"Groq cloud transcription failed: {e}")
+        raise TranscriptionError(f"Groq transcription failed: {e}") from e
+
+    finally:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
 
 
 def get_transcript_text(segments: list[TranscriptSegment]) -> str:

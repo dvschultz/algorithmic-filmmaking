@@ -10,8 +10,11 @@ Provides comprehensive film language analysis of video clips including:
 - Lighting style and direction
 - Derived emotional properties
 
-Primary implementation uses Gemini with video support for movement detection,
-with frame-only fallback mode for faster/cheaper analysis.
+Supports two tiers:
+- Cloud (default): Gemini with video support for movement detection,
+  with frame-only fallback mode for faster/cheaper analysis.
+- Local: mlx-vlm (e.g. Qwen2.5-VL-7B) for frame-only analysis
+  on Apple Silicon — free, no API key needed.
 """
 
 import json
@@ -725,6 +728,81 @@ def analyze_cinematography_video(
             logger.debug(f"Cleaned up temp video: {temp_video}")
 
 
+def analyze_cinematography_local(
+    image_path: Path,
+) -> CinematographyAnalysis:
+    """Analyze cinematography using a local VLM (mlx-vlm).
+
+    Uses the local description model (e.g. Qwen2.5-VL-7B or Qwen3-VL-4B)
+    with the cinematography prompt. Frame-only mode — cannot detect movement.
+
+    Args:
+        image_path: Path to the image/thumbnail file
+
+    Returns:
+        CinematographyAnalysis with all fields populated
+
+    Raises:
+        RuntimeError: If local VLM is not available or analysis fails
+    """
+    from core.analysis.description import describe_frame_local, is_mlx_vlm_available
+
+    if not is_mlx_vlm_available():
+        raise RuntimeError(
+            "Local VLM (mlx-vlm) not available. "
+            "Install mlx-vlm or switch to cloud tier."
+        )
+
+    settings = load_settings()
+    local_model = settings.cinematography_local_model
+
+    logger.info(f"Analyzing cinematography (local mode) with {local_model}")
+
+    prompt = CINEMATOGRAPHY_PROMPT_FRAME + "\n\nRespond with ONLY a JSON object, no other text."
+
+    try:
+        response_text = describe_frame_local(image_path, prompt)
+
+        # Parse and validate response
+        raw_data = _parse_json_response(response_text)
+        normalized = _validate_and_normalize(raw_data)
+
+        analysis = CinematographyAnalysis(
+            shot_size=normalized["shot_size"],
+            shot_size_confidence=normalized["shot_size_confidence"],
+            camera_angle=normalized["camera_angle"],
+            angle_effect=normalized["angle_effect"],
+            camera_movement="n/a",  # Local frame mode cannot detect movement
+            movement_direction=None,
+            dutch_tilt=normalized["dutch_tilt"],
+            camera_position=normalized["camera_position"],
+            subject_position=normalized["subject_position"],
+            headroom=normalized["headroom"],
+            lead_room=normalized["lead_room"],
+            balance=normalized["balance"],
+            subject_count=normalized["subject_count"],
+            subject_type=normalized["subject_type"],
+            focus_type=normalized["focus_type"],
+            background_type=normalized["background_type"],
+            estimated_lens_type=normalized["estimated_lens_type"],
+            lighting_style=normalized["lighting_style"],
+            lighting_direction=normalized["lighting_direction"],
+            light_quality=normalized["light_quality"],
+            color_temperature=normalized["color_temperature"],
+            emotional_intensity=normalized["emotional_intensity"],
+            suggested_pacing=normalized["suggested_pacing"],
+            analysis_model=local_model,
+            analysis_mode="frame",
+        )
+
+        logger.info(f"Local cinematography analysis complete: {analysis.shot_size}, {analysis.camera_angle}")
+        return analysis
+
+    except Exception as e:
+        logger.error(f"Local cinematography analysis failed: {e}")
+        raise RuntimeError(f"Local cinematography analysis failed: {e}") from e
+
+
 def analyze_cinematography(
     thumbnail_path: Path,
     source_path: Optional[Path] = None,
@@ -756,10 +834,15 @@ def analyze_cinematography(
         RuntimeError: If analysis fails
     """
     settings = load_settings()
+    tier = settings.cinematography_tier
     mode = mode or settings.cinematography_input_mode
     model = model or settings.cinematography_model
 
-    # Check if video mode is possible
+    # Local tier: use mlx-vlm for frame-only analysis
+    if tier == "local":
+        return analyze_cinematography_local(thumbnail_path)
+
+    # Cloud tier: check if video mode is possible
     can_use_video = (
         mode == "video"
         and source_path is not None
@@ -782,5 +865,5 @@ def analyze_cinematography(
             logger.warning(f"Video mode failed, falling back to frame mode: {e}")
             # Fall through to frame mode
 
-    # Use frame mode
+    # Use frame mode (cloud)
     return analyze_cinematography_frame(thumbnail_path, model=model)
