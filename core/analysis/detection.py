@@ -1,4 +1,4 @@
-"""Object detection using YOLOv8."""
+"""Object detection using YOLO26."""
 
 import logging
 import os
@@ -8,7 +8,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# COCO class names (80 classes used by YOLOv8)
+# COCO class names (80 classes used by YOLO)
 COCO_CLASSES = [
     "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train",
     "truck", "boat", "traffic light", "fire hydrant", "stop sign",
@@ -50,7 +50,7 @@ def _get_model_cache_dir() -> Path:
 
 def _load_yolo(model_size: str = "n"):
     """
-    Lazy load YOLOv8 model (thread-safe).
+    Lazy load YOLO26 model (thread-safe).
 
     Args:
         model_size: Model size variant - 'n' (nano), 's' (small), 'm' (medium), 'l' (large), 'x' (extra-large)
@@ -65,7 +65,7 @@ def _load_yolo(model_size: str = "n"):
     with _model_lock:
         # Double-check after acquiring lock
         if _model is None:
-            logger.info(f"Loading YOLOv8{model_size} model...")
+            logger.info(f"Loading YOLO26{model_size} model...")
 
             # Set ultralytics cache directory
             cache_dir = _get_model_cache_dir()
@@ -73,11 +73,11 @@ def _load_yolo(model_size: str = "n"):
 
             from ultralytics import YOLO
 
-            # YOLOv8 will download the model to cache on first use (~6MB for nano)
-            model_name = f"yolov8{model_size}.pt"
+            # YOLO26 will download the model to cache on first use (~6MB for nano)
+            model_name = f"yolo26{model_size}.pt"
             _model = YOLO(model_name)
 
-            logger.info(f"YOLOv8{model_size} model loaded")
+            logger.info(f"YOLO26{model_size} model loaded")
 
     return _model
 

@@ -102,7 +102,7 @@ def generate_narrative(
     from core.settings import load_settings, get_llm_api_key
 
     settings = load_settings()
-    model = model or settings.exquisite_corpus_model or "gemini-2.5-flash"
+    model = model or settings.exquisite_corpus_model or "gemini-3-flash-preview"
     temperature = settings.exquisite_corpus_temperature
 
     logger.info(

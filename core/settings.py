@@ -400,18 +400,18 @@ class Settings:
     description_model_tier: str = "cpu"  # cpu, gpu, cloud
     description_model_cpu: str = "vikhyatk/moondream2"
     description_model_gpu: str = "llava-hf/llava-onevision-qwen2-7b-ov-hf"
-    description_model_cloud: str = "gemini-2.5-flash"
+    description_model_cloud: str = "gemini-3-flash-preview"
     description_temporal_frames: int = 4
     description_input_mode: str = "frame"  # "frame" = single frame, "video" = video clip (Gemini only)
 
     # Text Extraction (OCR) Settings
     text_extraction_method: str = "hybrid"  # tesseract, vlm, hybrid
-    text_extraction_vlm_model: str = "gemini-2.5-flash"
+    text_extraction_vlm_model: str = "gemini-3-flash-preview"
     text_detection_enabled: bool = True  # Pre-filter frames without text using EAST
     text_detection_confidence: float = 0.5  # EAST detection confidence threshold
 
     # Exquisite Corpus (Poetry Generation) Settings
-    exquisite_corpus_model: str = "gemini-2.5-flash"  # Model for poem generation
+    exquisite_corpus_model: str = "gemini-3-flash-preview"  # Model for poem generation
     exquisite_corpus_temperature: float = 0.8  # Creativity level (0.0-1.0)
 
     # Shot Classification Settings
@@ -431,7 +431,7 @@ class Settings:
 
     # Rich Cinematography Analysis Settings
     cinematography_input_mode: str = "frame"  # "frame" = single keyframe, "video" = video clip (Gemini only)
-    cinematography_model: str = "gemini-2.5-flash"  # VLM model for rich analysis
+    cinematography_model: str = "gemini-3-flash-preview"  # VLM model for rich analysis
     cinematography_batch_parallelism: int = 2  # Number of concurrent VLM requests (1-5)
 
     def get_quality_preset(self) -> dict:
