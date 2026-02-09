@@ -21,7 +21,7 @@ tenacity>=8.2.0
 httpx>=0.25.0
 
 # Content Analysis
-ultralytics>=8.0.0  # YOLOv8
+ultralytics>=8.4.0  # YOLO26 (NMS-free, 43% faster CPU inference)
 torchvision>=0.15.0  # MobileNet (compatible with torch>=2.0)
 einops>=0.7.0
 

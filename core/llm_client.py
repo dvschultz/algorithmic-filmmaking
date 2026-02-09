@@ -52,9 +52,9 @@ PROVIDER_MODELS = {
         ("claude-haiku-4-5-20251001", "Claude Haiku 4.5"),
     ],
     "gemini": [
-        ("gemini-2.5-flash", "Gemini 2.5 Flash (Recommended)"),
+        ("gemini-3-flash-preview", "Gemini 3 Flash (Recommended)"),
+        ("gemini-2.5-flash", "Gemini 2.5 Flash"),
         ("gemini-2.5-pro", "Gemini 2.5 Pro"),
-        ("gemini-2.0-flash", "Gemini 2.0 Flash"),
     ],
     "openrouter": [
         ("anthropic/claude-sonnet-4-5", "Claude Sonnet 4.5 (Recommended)"),
