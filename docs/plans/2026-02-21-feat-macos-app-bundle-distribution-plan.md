@@ -172,10 +172,10 @@ When running frozen on macOS, use `~/Library/Application Support/Scene Ripper/` 
 
 **2.2 Python package installer**
 
-- [ ] `ensure_python() -> Path` — downloads official Python 3.11 macOS arm64 framework if not present
-- [ ] `install_package(specifier: str, progress_callback) -> bool` — runs `<managed_python> -m pip install --target <packages_dir> <specifier>`
-- [ ] `is_package_available(module_name: str) -> bool` — attempts import from packages dir
-- [ ] Create `package_manifest.json` embedded in the app:
+- [x] `ensure_python() -> Path` — downloads python-build-standalone 3.11 macOS arm64 if not present
+- [x] `install_package(specifier: str, progress_callback) -> bool` — runs `<managed_python> -m pip install --target <packages_dir> <specifier>`
+- [x] `is_package_available(module_name: str) -> bool` — attempts import from packages dir
+- [x] Create `package_manifest.json` embedded in the app:
   ```json
   {
     "python_version": "3.11.11",
@@ -195,7 +195,7 @@ When running frozen on macOS, use `~/Library/Application Support/Scene Ripper/` 
     }
   }
   ```
-- [ ] ABI compatibility check: store `compat_version` marker (Python version + app version). If mismatch after app update, prompt user to re-download packages.
+- [x] ABI compatibility check: store `compat_version` marker (Python version + app version). If mismatch after app update, prompt user to re-download packages.
 
 **2.3 Feature availability registry**
 
@@ -214,8 +214,8 @@ When running frozen on macOS, use `~/Library/Application Support/Scene Ripper/` 
       "audio_analysis": {"packages": ["librosa"]},
   }
   ```
-- [ ] `check_feature(name: str) -> tuple[bool, list[str]]` — returns (available, missing_deps)
-- [ ] `install_for_feature(name: str, progress_callback)` — installs all deps for a feature
+- [x] `check_feature(name: str) -> tuple[bool, list[str]]` — returns (available, missing_deps)
+- [x] `install_for_feature(name: str, progress_callback)` — installs all deps for a feature
 
 #### Phase 3: UI Integration
 

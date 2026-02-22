@@ -149,3 +149,70 @@ def get_all_feature_status() -> dict[str, tuple[bool, list[str]]]:
         Dict of feature_name -> (available, missing_deps).
     """
     return {name: check_feature(name) for name in FEATURE_DEPS}
+
+
+def install_for_feature(
+    name: str,
+    progress_callback: Optional[callable] = None,
+) -> bool:
+    """Install all missing dependencies for a feature.
+
+    Ensures binaries are downloaded and Python packages are installed.
+    Automatically downloads standalone Python if packages are needed.
+
+    Args:
+        name: Feature name from FEATURE_DEPS keys.
+        progress_callback: Optional (progress_0_to_1, message) callback.
+
+    Returns:
+        True if all dependencies were successfully installed.
+
+    Raises:
+        ValueError: If feature name is unknown.
+    """
+    from core.dependency_manager import (
+        ensure_ffmpeg,
+        ensure_ffprobe,
+        ensure_yt_dlp,
+        get_pip_specifier,
+        install_package,
+    )
+
+    deps = FEATURE_DEPS.get(name)
+    if deps is None:
+        raise ValueError(f"Unknown feature: {name}")
+
+    available, missing = check_feature(name)
+    if available:
+        logger.info(f"Feature '{name}' already has all dependencies")
+        return True
+
+    success = True
+
+    # Install missing binaries
+    binary_installers = {
+        "ffmpeg": ensure_ffmpeg,
+        "ffprobe": ensure_ffprobe,
+        "yt-dlp": ensure_yt_dlp,
+    }
+
+    for dep in missing:
+        if dep.startswith("binary:"):
+            binary_name = dep.split(":", 1)[1]
+            installer = binary_installers.get(binary_name)
+            if installer:
+                try:
+                    installer(progress_callback)
+                except RuntimeError as e:
+                    logger.error(f"Failed to install {binary_name}: {e}")
+                    success = False
+
+    # Install missing packages
+    for dep in missing:
+        if dep.startswith("package:"):
+            package_name = dep.split(":", 1)[1]
+            specifier = get_pip_specifier(package_name)
+            if not install_package(specifier, progress_callback):
+                success = False
+
+    return success

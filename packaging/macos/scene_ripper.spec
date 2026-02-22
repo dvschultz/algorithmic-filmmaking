@@ -19,7 +19,9 @@ a = Analysis(
     ["../../main.py"],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[
+        ("../../core/package_manifest.json", "core"),
+    ],
     hiddenimports=[
         # PySide6 modules actually used by the app
         "PySide6.QtWidgets",
