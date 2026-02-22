@@ -723,6 +723,10 @@ class MainWindow(QMainWindow):
         self._auto_save_timer.setSingleShot(True)
         self._auto_save_timer.timeout.connect(self._do_auto_save)
 
+        # Launch update checker in background (frozen mode only)
+        self._update_check_worker = None
+        self._start_update_check()
+
         logger.info(f"=== MAINWINDOW INIT COMPLETE (instance #{self._instance_id}) ===")
 
     # --- Property delegates to Project for backward compatibility ---
@@ -882,6 +886,11 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
 
+        # Dependency banner (shown when FFmpeg is missing in frozen mode)
+        self._dependency_banner = None
+        self._update_banner = None
+        self._setup_dependency_banners(layout)
+
         # Tab widget for workflow pages
         self.tab_widget = QTabWidget()
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
@@ -928,6 +937,97 @@ class MainWindow(QMainWindow):
         self.queue_label.setStyleSheet(f"color: {theme().text_secondary}; padding-right: {Spacing.MD}px;")
         self.queue_label.setVisible(False)
         self.status_bar.addPermanentWidget(self.queue_label)
+
+    def _setup_dependency_banners(self, layout):
+        """Show banners for missing dependencies when running as a frozen .app."""
+        from core.paths import is_frozen
+        from core.binary_resolver import find_binary
+
+        if not is_frozen():
+            return
+
+        # Check if FFmpeg is missing
+        if find_binary("ffmpeg") is None:
+            from ui.widgets.dependency_widgets import DependencyBanner
+            self._dependency_banner = DependencyBanner(
+                message="Scene Ripper needs FFmpeg to process videos.",
+                button_text="Download FFmpeg (~150 MB)",
+                dep_name="ffmpeg",
+            )
+            self._dependency_banner.download_requested.connect(self._on_ffmpeg_download_requested)
+            layout.addWidget(self._dependency_banner)
+
+    def _on_ffmpeg_download_requested(self, dep_name: str):
+        """Handle FFmpeg download request from the dependency banner."""
+        from core.dependency_manager import ensure_ffmpeg, ensure_ffprobe
+        from ui.widgets.dependency_widgets import DependencyDownloadDialog
+
+        def install_both(progress_callback):
+            ensure_ffmpeg(progress_callback)
+            ensure_ffprobe(progress_callback)
+
+        dialog = DependencyDownloadDialog(
+            title="Download FFmpeg",
+            message="Downloading FFmpeg and FFprobe (~150 MB total).\nThis is required for video processing.",
+            install_func=install_both,
+            parent=self,
+        )
+        dialog.download_completed.connect(self._on_ffmpeg_downloaded)
+        dialog.exec()
+
+    def _on_ffmpeg_downloaded(self):
+        """Called when FFmpeg download completes successfully."""
+        # Dismiss the banner
+        if self._dependency_banner:
+            self._dependency_banner.setVisible(False)
+        # Notify status bar
+        self.status_bar.showMessage("FFmpeg installed successfully!", 5000)
+        logger.info("FFmpeg downloaded — features enabled")
+
+    def _show_update_banner(self, version: str, release_url: str):
+        """Show an update-available banner at the top of the window."""
+        from ui.widgets.dependency_widgets import UpdateBanner
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+
+        if self._update_banner:
+            self._update_banner.setVisible(False)
+            self._update_banner.deleteLater()
+
+        self._update_banner = UpdateBanner(version, release_url)
+        self._update_banner.download_clicked.connect(
+            lambda url: QDesktopServices.openUrl(QUrl(url))
+        )
+
+        # Insert at position 0 in the central layout (above dependency banner and tabs)
+        central_layout = self.centralWidget().layout()
+        central_layout.insertWidget(0, self._update_banner)
+
+    def _start_update_check(self):
+        """Launch a background update check (frozen mode only, throttled)."""
+        from core.paths import is_frozen
+        if not is_frozen():
+            return
+        if not self.settings.check_for_updates:
+            return
+
+        import os
+        current_version = os.environ.get("APP_VERSION", "0.2.0")
+
+        from core.update_checker import UpdateCheckWorker
+        self._update_check_worker = UpdateCheckWorker(current_version, self.settings)
+        self._update_check_worker.update_available.connect(self._show_update_banner)
+        self._update_check_worker.finished.connect(self._on_update_check_done)
+        self._update_check_worker.start()
+
+    def _on_update_check_done(self):
+        """Save settings after update check (records last_update_check timestamp)."""
+        from core.settings import save_settings
+        try:
+            save_settings(self.settings)
+        except Exception:
+            pass  # Non-critical
+        self._update_check_worker = None
 
     def _on_tab_changed(self, index: int):
         """Handle tab switching."""

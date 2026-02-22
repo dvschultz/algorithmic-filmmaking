@@ -1,37 +1,48 @@
 """FFmpeg wrapper for video processing operations."""
 
+import logging
 import subprocess
 import threading
 from pathlib import Path
 from typing import Callable, Optional
 
 from core.binary_resolver import find_binary
+from core.paths import is_frozen
+
+logger = logging.getLogger(__name__)
 
 
 class FFmpegProcessor:
     """Handles FFmpeg operations for video processing."""
 
     def __init__(self):
-        self.ffmpeg_path = self._find_ffmpeg()
-        self.ffprobe_path = self._find_ffprobe()
+        self.ffmpeg_path = find_binary("ffmpeg")
+        self.ffprobe_path = find_binary("ffprobe")
+        self.ffmpeg_available = self.ffmpeg_path is not None
+        self.ffprobe_available = self.ffprobe_path is not None
 
-    def _find_ffmpeg(self) -> str:
-        """Find FFmpeg executable."""
-        path = find_binary("ffmpeg")
-        if path is None:
-            raise RuntimeError(
-                "FFmpeg not found. Please install FFmpeg and ensure it's in your PATH."
-            )
-        return path
+        if not self.ffmpeg_available:
+            if is_frozen():
+                logger.warning("FFmpeg not found — features requiring FFmpeg will be disabled")
+            else:
+                raise RuntimeError(
+                    "FFmpeg not found. Please install FFmpeg and ensure it's in your PATH."
+                )
 
-    def _find_ffprobe(self) -> str:
-        """Find FFprobe executable."""
-        path = find_binary("ffprobe")
-        if path is None:
-            raise RuntimeError(
-                "FFprobe not found. Please install FFmpeg and ensure it's in your PATH."
-            )
-        return path
+        if not self.ffprobe_available:
+            if is_frozen():
+                logger.warning("FFprobe not found — features requiring FFprobe will be disabled")
+            else:
+                raise RuntimeError(
+                    "FFprobe not found. Please install FFmpeg and ensure it's in your PATH."
+                )
+
+    def refresh_binaries(self) -> None:
+        """Re-check for FFmpeg/FFprobe after a download completes."""
+        self.ffmpeg_path = find_binary("ffmpeg")
+        self.ffprobe_path = find_binary("ffprobe")
+        self.ffmpeg_available = self.ffmpeg_path is not None
+        self.ffprobe_available = self.ffprobe_path is not None
 
     def extract_clip(
         self,

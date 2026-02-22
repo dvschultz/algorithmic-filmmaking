@@ -223,39 +223,39 @@ When running frozen on macOS, use `~/Library/Application Support/Scene Ripper/` 
 
 When FFmpeg is missing on first launch, the app should still open normally but show a setup prompt.
 
-- [ ] Intercept `RuntimeError("FFmpeg not found")` in `FFmpegProcessor.__init__()` and `ThumbnailGenerator.__init__()` — when frozen, don't raise; instead set a `ffmpeg_available = False` flag
-- [ ] Show a non-modal "Setup Required" banner at the top of the main window:
+- [x] Intercept `RuntimeError("FFmpeg not found")` in `FFmpegProcessor.__init__()` and `ThumbnailGenerator.__init__()` — when frozen, don't raise; instead set a `ffmpeg_available = False` flag
+- [x] Show a non-modal "Setup Required" banner at the top of the main window:
   > "Scene Ripper needs FFmpeg to process videos. [Download FFmpeg] (~150 MB)"
 - [ ] Gray out features requiring FFmpeg with tooltip: "FFmpeg required — click to download"
-- [ ] Download progress shown in a modal dialog with cancel button
-- [ ] On success, dismiss the banner and enable features without restart
+- [x] Download progress shown in a modal dialog with cancel button
+- [x] On success, dismiss the banner and enable features without restart
 
 **3.2 On-demand download prompts**
 
 When a user triggers a feature requiring an uninstalled package:
 
-- [ ] Show dialog: "This feature requires [package_name] (~[size]MB). Download now?"
-- [ ] Download/install progress with cancel support
+- [x] Show dialog: "This feature requires [package_name] (~[size]MB). Download now?"
+- [x] Download/install progress with cancel support
 - [ ] On completion, retry the original action automatically
-- [ ] Handle download failure: "Download failed. [Retry] [Cancel]" — clean up partial files
+- [x] Handle download failure: "Download failed. [Retry] [Cancel]" — clean up partial files
 
 **3.3 Settings page — dependency management**
 
-- [ ] Add a "Dependencies" section in the Settings dialog showing:
+- [x] Add a "Dependencies" section in the Settings dialog showing:
   - FFmpeg: installed/missing + version + [Update] button
   - yt-dlp: installed/missing + version + [Update] button
   - Each ML feature group: installed/missing + size + [Install]/[Remove] button
   - Total disk usage of on-demand downloads
   - [Reset All Dependencies] button to wipe packages/ and bin/
-- [ ] Show managed Python status: installed/missing + version
+- [x] Show managed Python status: installed/missing + version
 
 **3.4 Version update checker**
 
-- [ ] On app launch (background thread), query GitHub Releases API: `GET /repos/{owner}/{repo}/releases/latest`
-- [ ] Throttle: check at most once per 24 hours (store last check timestamp in settings)
-- [ ] If newer version found, show dismissible banner: "Scene Ripper [version] is available. [Download]"
-- [ ] "Download" opens the GitHub Release page in the browser
-- [ ] Add "Check for updates" toggle in Settings (opt-out, default on)
+- [x] On app launch (background thread), query GitHub Releases API: `GET /repos/{owner}/{repo}/releases/latest`
+- [x] Throttle: check at most once per 24 hours (store last check timestamp in settings)
+- [x] If newer version found, show dismissible banner: "Scene Ripper [version] is available. [Download]"
+- [x] "Download" opens the GitHub Release page in the browser
+- [x] Add "Check for updates" toggle in Settings (opt-out, default on)
 
 #### Phase 4: PyInstaller Build Configuration
 

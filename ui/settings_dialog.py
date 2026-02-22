@@ -302,6 +302,7 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(self._create_export_tab(), "Export")
         self.tabs.addTab(self._create_api_keys_tab(), "API Keys")
         self.tabs.addTab(self._create_appearance_tab(), "Appearance")
+        self.tabs.addTab(self._create_dependencies_tab(), "Dependencies")
         layout.addWidget(self.tabs)
 
         # Button row
@@ -1122,8 +1123,250 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(theme_group)
 
+        # Updates group
+        updates_group = QGroupBox("Updates")
+        updates_layout = QVBoxLayout(updates_group)
+
+        self.check_updates_checkbox = QCheckBox("Check for updates on launch")
+        self.check_updates_checkbox.setToolTip(
+            "When enabled, Scene Ripper checks GitHub Releases for new versions "
+            "at most once per 24 hours."
+        )
+        self.check_updates_checkbox.setChecked(self.settings.check_for_updates)
+        updates_layout.addWidget(self.check_updates_checkbox)
+
+        layout.addWidget(updates_group)
+
         layout.addStretch()
         return tab
+
+    def _create_dependencies_tab(self) -> QWidget:
+        """Create the Dependencies management tab."""
+        from core.paths import is_frozen
+        from core.binary_resolver import find_binary
+        from core.dependency_manager import (
+            get_python_version,
+            is_binary_available,
+        )
+        from core.feature_registry import FEATURE_DEPS, check_feature, get_feature_size_estimate
+
+        tab = QWidget()
+        tab_layout = QVBoxLayout(tab)
+
+        # Wrap in scroll area for long content
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll_content = QWidget()
+        layout = QVBoxLayout(scroll_content)
+
+        # --- Binaries group ---
+        bin_group = QGroupBox("Binary Tools")
+        bin_layout = QVBoxLayout(bin_group)
+
+        # FFmpeg row
+        ffmpeg_row = QHBoxLayout()
+        ffmpeg_label = QLabel("FFmpeg:")
+        ffmpeg_label.setFixedWidth(UISizes.FORM_LABEL_WIDTH)
+        ffmpeg_row.addWidget(ffmpeg_label)
+        ffmpeg_path = find_binary("ffmpeg")
+        if ffmpeg_path:
+            self._ffmpeg_status = QLabel(f"Installed ({ffmpeg_path})")
+            self._ffmpeg_status.setStyleSheet(f"color: {theme().accent_green};")
+        else:
+            self._ffmpeg_status = QLabel("Not installed")
+            self._ffmpeg_status.setStyleSheet(f"color: {theme().accent_red};")
+        ffmpeg_row.addWidget(self._ffmpeg_status, stretch=1)
+
+        if is_frozen():
+            ffmpeg_btn = QPushButton("Download" if not ffmpeg_path else "Re-download")
+            ffmpeg_btn.clicked.connect(lambda: self._download_binary("ffmpeg"))
+            ffmpeg_row.addWidget(ffmpeg_btn)
+        bin_layout.addLayout(ffmpeg_row)
+
+        # yt-dlp row
+        ytdlp_row = QHBoxLayout()
+        ytdlp_label = QLabel("yt-dlp:")
+        ytdlp_label.setFixedWidth(UISizes.FORM_LABEL_WIDTH)
+        ytdlp_row.addWidget(ytdlp_label)
+        ytdlp_path = find_binary("yt-dlp")
+        if ytdlp_path:
+            self._ytdlp_status = QLabel(f"Installed ({ytdlp_path})")
+            self._ytdlp_status.setStyleSheet(f"color: {theme().accent_green};")
+        else:
+            self._ytdlp_status = QLabel("Not installed")
+            self._ytdlp_status.setStyleSheet(f"color: {theme().accent_red};")
+        ytdlp_row.addWidget(self._ytdlp_status, stretch=1)
+
+        if is_frozen():
+            ytdlp_btn = QPushButton("Download" if not ytdlp_path else "Update")
+            ytdlp_btn.clicked.connect(lambda: self._download_binary("yt-dlp"))
+            ytdlp_row.addWidget(ytdlp_btn)
+        bin_layout.addLayout(ytdlp_row)
+
+        layout.addWidget(bin_group)
+
+        # --- Managed Python group ---
+        python_group = QGroupBox("Managed Python (for ML packages)")
+        python_layout = QVBoxLayout(python_group)
+
+        python_row = QHBoxLayout()
+        python_label = QLabel("Python:")
+        python_label.setFixedWidth(UISizes.FORM_LABEL_WIDTH)
+        python_row.addWidget(python_label)
+        python_ver = get_python_version()
+        if python_ver:
+            self._python_status = QLabel(f"Installed (Python {python_ver})")
+            self._python_status.setStyleSheet(f"color: {theme().accent_green};")
+        else:
+            self._python_status = QLabel("Not installed (will download when needed)")
+            self._python_status.setStyleSheet(f"color: {theme().text_secondary};")
+        python_row.addWidget(self._python_status, stretch=1)
+        python_layout.addLayout(python_row)
+
+        layout.addWidget(python_group)
+
+        # --- ML Features group ---
+        features_group = QGroupBox("ML Features (on-demand)")
+        features_layout = QVBoxLayout(features_group)
+
+        # Human-readable feature names
+        feature_labels = {
+            "transcribe": "Transcription (faster-whisper)",
+            "transcribe_mlx": "Transcription MLX (Apple Silicon)",
+            "describe_local": "Local Descriptions (MLX-VLM)",
+            "shot_classify": "Shot Classification (CLIP)",
+            "object_detect": "Object Detection (YOLO)",
+            "ocr": "OCR / Text Extraction",
+            "audio_analysis": "Audio Analysis (librosa)",
+        }
+
+        self._feature_rows = {}
+        for feat_name, label_text in feature_labels.items():
+            row = QHBoxLayout()
+            label = QLabel(f"{label_text}:")
+            label.setFixedWidth(220)
+            row.addWidget(label)
+
+            available, missing = check_feature(feat_name)
+            if available:
+                status = QLabel("Ready")
+                status.setStyleSheet(f"color: {theme().accent_green};")
+            else:
+                size = get_feature_size_estimate(feat_name)
+                status = QLabel(f"Not installed (~{size} MB)")
+                status.setStyleSheet(f"color: {theme().text_secondary};")
+
+            row.addWidget(status, stretch=1)
+
+            if is_frozen() and not available:
+                install_btn = QPushButton("Install")
+                install_btn.clicked.connect(
+                    lambda checked=False, fn=feat_name: self._install_feature(fn)
+                )
+                row.addWidget(install_btn)
+
+            self._feature_rows[feat_name] = status
+            features_layout.addLayout(row)
+
+        layout.addWidget(features_group)
+
+        # --- Disk usage + Reset ---
+        if is_frozen():
+            manage_group = QGroupBox("Storage")
+            manage_layout = QVBoxLayout(manage_group)
+
+            disk_row = QHBoxLayout()
+            disk_label = QLabel("On-demand downloads:")
+            disk_label.setFixedWidth(UISizes.FORM_LABEL_WIDTH)
+            disk_row.addWidget(disk_label)
+
+            self._disk_usage_label = QLabel(self._calc_disk_usage())
+            disk_row.addWidget(self._disk_usage_label, stretch=1)
+
+            reset_btn = QPushButton("Reset All Dependencies")
+            reset_btn.setToolTip("Remove all downloaded binaries and packages")
+            reset_btn.clicked.connect(self._reset_all_deps)
+            disk_row.addWidget(reset_btn)
+
+            manage_layout.addLayout(disk_row)
+            layout.addWidget(manage_group)
+
+        layout.addStretch()
+        scroll.setWidget(scroll_content)
+        tab_layout.addWidget(scroll)
+        return tab
+
+    def _calc_disk_usage(self) -> str:
+        """Calculate total disk usage of managed dependencies."""
+        from core.paths import get_app_support_dir
+        total = 0
+        app_dir = get_app_support_dir()
+        if app_dir.exists():
+            for f in app_dir.rglob("*"):
+                if f.is_file():
+                    total += f.stat().st_size
+        if total == 0:
+            return "None"
+        if total < 1024 * 1024:
+            return f"{total // 1024} KB"
+        if total < 1024 * 1024 * 1024:
+            return f"{total // (1024 * 1024)} MB"
+        return f"{total / (1024 * 1024 * 1024):.1f} GB"
+
+    def _download_binary(self, name: str):
+        """Download a binary tool via the dependency manager."""
+        from core.dependency_manager import ensure_ffmpeg, ensure_ffprobe, ensure_yt_dlp, update_yt_dlp
+        from ui.widgets.dependency_widgets import DependencyDownloadDialog
+
+        installers = {
+            "ffmpeg": lambda cb: (ensure_ffmpeg(cb), ensure_ffprobe(cb)),
+            "yt-dlp": update_yt_dlp,
+        }
+        installer = installers.get(name)
+        if not installer:
+            return
+
+        dialog = DependencyDownloadDialog(
+            title=f"Download {name}",
+            message=f"Downloading {name}...",
+            install_func=installer,
+            parent=self,
+        )
+        if dialog.exec() == QDialog.Accepted:
+            QMessageBox.information(self, "Success", f"{name} has been installed.")
+
+    def _install_feature(self, feature_name: str):
+        """Install dependencies for an ML feature."""
+        from ui.widgets.dependency_widgets import prompt_feature_download
+        if prompt_feature_download(feature_name, self):
+            QMessageBox.information(self, "Success", "Dependencies installed successfully.")
+
+    def _reset_all_deps(self):
+        """Remove all managed dependencies."""
+        import shutil
+        from core.paths import get_app_support_dir
+
+        reply = QMessageBox.warning(
+            self,
+            "Reset Dependencies",
+            "This will remove all downloaded binaries and packages.\n"
+            "You'll need to re-download them when features are used.\n\n"
+            "Continue?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        app_dir = get_app_support_dir()
+        for subdir in ["bin", "python", "packages"]:
+            target = app_dir / subdir
+            if target.exists():
+                shutil.rmtree(target)
+                target.mkdir(parents=True, exist_ok=True)
+
+        QMessageBox.information(self, "Reset Complete", "All dependencies have been removed.")
 
     def _on_vision_tier_changed(self, index: int):
         """Enable/disable model fields based on selected tier."""
@@ -1475,6 +1718,9 @@ class SettingsDialog(QDialog):
         # Appearance
         theme_values = ["system", "light", "dark"]
         self.settings.theme_preference = theme_values[self.theme_combo.currentIndex()]
+
+        # Updates
+        self.settings.check_for_updates = self.check_updates_checkbox.isChecked()
 
         # YouTube
         self.settings.youtube_api_key = self.youtube_api_key_edit.text()

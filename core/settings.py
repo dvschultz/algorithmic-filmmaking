@@ -395,6 +395,10 @@ class Settings:
     # Appearance
     theme_preference: str = "system"  # system, light, dark
 
+    # Update checker
+    check_for_updates: bool = True  # Check GitHub Releases on launch
+    last_update_check: int = 0  # Unix timestamp of last check
+
     # YouTube API
     youtube_api_key: str = ""
     youtube_results_count: int = 25  # 10-50
@@ -660,6 +664,13 @@ def _load_from_json(config_path: Path, settings: Settings) -> Settings:
         if val := appearance.get("theme_preference"):
             settings.theme_preference = val
 
+    # Updates section
+    if updates := data.get("updates"):
+        if "check_for_updates" in updates:
+            settings.check_for_updates = bool(updates["check_for_updates"])
+        if "last_update_check" in updates:
+            settings.last_update_check = int(updates["last_update_check"])
+
     # YouTube section (API key comes from keyring, not JSON)
     if youtube := data.get("youtube"):
         if "results_count" in youtube:
@@ -809,6 +820,10 @@ def _settings_to_json(settings: Settings) -> dict:
         },
         "appearance": {
             "theme_preference": settings.theme_preference,
+        },
+        "updates": {
+            "check_for_updates": settings.check_for_updates,
+            "last_update_check": settings.last_update_check,
         },
         "youtube": {
             "results_count": settings.youtube_results_count,
