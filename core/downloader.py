@@ -258,12 +258,6 @@ class VideoDownloader:
         # Run download with progress parsing
         # Use augmented environment to ensure Deno is findable for challenge solver
         env = get_subprocess_env()
-        logger.debug(f"Subprocess PATH includes /opt/homebrew/bin: {'/opt/homebrew/bin' in env.get('PATH', '')}")
-
-        # Verify Deno is actually findable
-        deno_check = subprocess.run(['which', 'deno'], capture_output=True, text=True, env=env)
-        logger.debug(f"Deno location: {deno_check.stdout.strip()} (found: {deno_check.returncode == 0})")
-        logger.debug(f"Full PATH being used: {env.get('PATH', 'NOT SET')[:300]}...")
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,

@@ -7,7 +7,7 @@ to download exactly what's needed.
 
 import logging
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 from core.binary_resolver import find_binary
 from core.dependency_manager import is_binary_available, is_package_available
@@ -153,7 +153,7 @@ def get_all_feature_status() -> dict[str, tuple[bool, list[str]]]:
 
 def install_for_feature(
     name: str,
-    progress_callback: Optional[callable] = None,
+    progress_callback: Optional[Callable] = None,
 ) -> bool:
     """Install all missing dependencies for a feature.
 

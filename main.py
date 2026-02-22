@@ -27,7 +27,9 @@ def _setup_frozen_environment():
     if packages_dir.exists():
         packages_str = str(packages_dir)
         if packages_str not in sys.path:
-            sys.path.insert(0, packages_str)
+            # Append (not insert) so bundled/stdlib packages take priority
+            # over on-demand packages, preventing module shadowing attacks
+            sys.path.append(packages_str)
 
     # Set up file logging for frozen app (users can't see console output)
     log_dir = get_log_dir()

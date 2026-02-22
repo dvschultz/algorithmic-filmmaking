@@ -1281,8 +1281,11 @@ class SettingsDialog(QDialog):
             disk_label.setFixedWidth(UISizes.FORM_LABEL_WIDTH)
             disk_row.addWidget(disk_label)
 
-            self._disk_usage_label = QLabel(self._calc_disk_usage())
+            self._disk_usage_label = QLabel("Calculating...")
             disk_row.addWidget(self._disk_usage_label, stretch=1)
+            # Defer disk usage calculation to avoid blocking dialog construction
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(0, lambda: self._disk_usage_label.setText(self._calc_disk_usage()))
 
             reset_btn = QPushButton("Reset All Dependencies")
             reset_btn.setToolTip("Remove all downloaded binaries and packages")
@@ -1305,7 +1308,10 @@ class SettingsDialog(QDialog):
         if app_dir.exists():
             for f in app_dir.rglob("*"):
                 if f.is_file():
-                    total += f.stat().st_size
+                    try:
+                        total += f.stat().st_size
+                    except OSError:
+                        pass
         if total == 0:
             return "None"
         if total < 1024 * 1024:

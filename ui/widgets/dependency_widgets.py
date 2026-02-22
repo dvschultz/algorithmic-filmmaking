@@ -137,13 +137,20 @@ class _DownloadWorker(QThread):
         super().__init__()
         self._install_func = install_func
         self._progress_adapter = progress_callback_adapter
+        self._cancelled = False
+
+    def cancel(self):
+        """Request cooperative cancellation."""
+        self._cancelled = True
 
     def run(self):
         try:
             self._install_func(self._progress_adapter)
-            self.finished_ok.emit()
+            if not self._cancelled:
+                self.finished_ok.emit()
         except Exception as e:
-            self.failed.emit(str(e))
+            if not self._cancelled:
+                self.failed.emit(str(e))
 
 
 class DependencyDownloadDialog(QDialog):
@@ -242,8 +249,8 @@ class DependencyDownloadDialog(QDialog):
 
     def reject(self):
         if self._worker and self._worker.isRunning():
-            self._worker.terminate()
-            self._worker.wait(3000)
+            self._worker.cancel()
+            self._worker.wait(5000)
             self._worker = None
         super().reject()
 

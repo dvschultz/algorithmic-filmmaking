@@ -980,6 +980,14 @@ class MainWindow(QMainWindow):
         # Dismiss the banner
         if self._dependency_banner:
             self._dependency_banner.setVisible(False)
+
+        # Refresh already-instantiated components so they pick up the new binaries
+        if hasattr(self, 'ffmpeg') and self.ffmpeg is not None:
+            self.ffmpeg.refresh_binaries()
+        if hasattr(self, 'thumbnail_generator') and self.thumbnail_generator is not None:
+            self.thumbnail_generator.ffmpeg_path = __import__('core.binary_resolver', fromlist=['find_binary']).find_binary("ffmpeg")
+            self.thumbnail_generator.ffmpeg_available = self.thumbnail_generator.ffmpeg_path is not None
+
         # Notify status bar
         self.status_bar.showMessage("FFmpeg installed successfully!", 5000)
         logger.info("FFmpeg downloaded — features enabled")

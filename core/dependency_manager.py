@@ -9,6 +9,7 @@ Downloads and manages external dependencies that are not bundled in the .app:
 All managed files are stored in ~/Library/Application Support/Scene Ripper/.
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -44,10 +45,33 @@ _MIN_FFPROBE_SIZE = 5 * 1024 * 1024   # 5 MB
 _MIN_YTDLP_SIZE = 1 * 1024 * 1024     # 1 MB
 _MIN_PYTHON_SIZE = 30 * 1024 * 1024   # 30 MB (extracted)
 
+# SHA-256 checksums for download integrity verification.
+# Update these when changing download URLs or versions.
+# Set to None to skip verification (e.g., for yt-dlp /latest which changes).
+_CHECKSUMS: dict[str, str | None] = {
+    _FFMPEG_URL: None,    # TODO: pin after verifying first download
+    _FFPROBE_URL: None,   # TODO: pin after verifying first download
+    _YTDLP_URL: None,     # /latest URL changes with each release
+    _PYTHON_URL: None,    # TODO: pin after verifying first download
+}
+
 # ABI compatibility marker filename
 _COMPAT_MARKER = "compat_version.json"
 
 ProgressCallback = Optional[Callable[[float, str], None]]
+
+
+def _verify_sha256(file_path: Path, expected_hash: str) -> bool:
+    """Verify SHA-256 checksum of a downloaded file."""
+    sha256 = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            sha256.update(chunk)
+    actual = sha256.hexdigest()
+    if actual != expected_hash:
+        logger.error(f"Checksum mismatch for {file_path.name}: expected {expected_hash}, got {actual}")
+        return False
+    return True
 
 
 def _download_file(
@@ -56,7 +80,7 @@ def _download_file(
     progress_callback: ProgressCallback = None,
     label: str = "",
 ) -> Path:
-    """Download a file from a URL with progress reporting.
+    """Download a file from a URL with progress reporting and optional hash verification.
 
     Args:
         url: URL to download from.
@@ -68,7 +92,7 @@ def _download_file(
         Path to the downloaded file.
 
     Raises:
-        RuntimeError: If download fails or file is too small.
+        RuntimeError: If download fails, file is too small, or checksum mismatches.
     """
     dest.parent.mkdir(parents=True, exist_ok=True)
 
@@ -102,6 +126,13 @@ def _download_file(
 
         # Move temp file to final location
         os.replace(tmp, dest)
+
+        # Verify checksum if one is configured for this URL
+        expected_hash = _CHECKSUMS.get(url)
+        if expected_hash is not None:
+            if not _verify_sha256(dest, expected_hash):
+                dest.unlink(missing_ok=True)
+                raise RuntimeError(f"Checksum verification failed for {label}")
 
         if progress_callback:
             progress_callback(1.0, f"{label} downloaded")
@@ -294,6 +325,7 @@ def ensure_python(progress_callback: ProgressCallback = None) -> Path:
         import tarfile
 
         python_dir.mkdir(parents=True, exist_ok=True)
+        resolved_dest = python_dir.resolve()
         with tarfile.open(tarball, "r:gz") as tf:
             # Strip the top-level "python/" prefix during extraction
             for member in tf.getmembers():
@@ -303,6 +335,20 @@ def ensure_python(progress_callback: ProgressCallback = None) -> Path:
                     member.name = parts[1]
                 else:
                     continue  # Skip the top-level directory itself
+
+                # Path traversal protection: ensure extraction stays within dest
+                target_path = (resolved_dest / member.name).resolve()
+                if not target_path.is_relative_to(resolved_dest):
+                    logger.warning(f"Skipping suspicious tar member: {member.name}")
+                    continue
+
+                # Block symlinks pointing outside dest
+                if member.issym() or member.islnk():
+                    link_target = (resolved_dest / member.linkname).resolve()
+                    if not link_target.is_relative_to(resolved_dest):
+                        logger.warning(f"Skipping symlink escape: {member.name} -> {member.linkname}")
+                        continue
+
                 tf.extract(member, python_dir)
 
     # Validate
@@ -460,17 +506,17 @@ def install_package(
 def is_package_available(module_name: str) -> bool:
     """Check if a Python package is importable (from managed packages or bundled).
 
+    Uses importlib.util.find_spec() instead of __import__() to avoid
+    actually loading heavy modules (torch, transformers) just to check availability.
+
     Args:
         module_name: Top-level module name (e.g., "torch", "ultralytics").
 
     Returns:
         True if the module can be imported.
     """
-    try:
-        __import__(module_name)
-        return True
-    except ImportError:
-        return False
+    import importlib.util
+    return importlib.util.find_spec(module_name) is not None
 
 
 # ---------------------------------------------------------------------------
