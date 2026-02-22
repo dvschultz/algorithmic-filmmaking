@@ -98,20 +98,20 @@ class TestDescriptionAnalysis(unittest.TestCase):
         mock_model.encode_image.assert_called_with(mock_image)
         mock_model.answer_question.assert_called_with("encoded_image", "Test prompt", mock_tokenizer)
 
-    @patch("core.analysis.description.litellm")
+    @patch("litellm.completion")
     @patch("core.analysis.description.encode_image_base64")
     @patch("core.analysis.description.load_settings")
     @patch("core.settings.get_openai_api_key")
-    def test_cloud_inference_logic(self, mock_get_key, mock_settings, mock_encode, mock_litellm):
+    def test_cloud_inference_logic(self, mock_get_key, mock_settings, mock_encode, mock_completion):
         """Test Cloud inference logic (mocking litellm)."""
         # Setup mocks
         mock_encode.return_value = "base64_data"
         mock_get_key.return_value = "sk-test-key"
-        
+
         mock_response = MagicMock()
         mock_response.choices = [MagicMock(message=MagicMock(content="Cloud description"))]
-        mock_litellm.completion.return_value = mock_response
-        
+        mock_completion.return_value = mock_response
+
         mock_settings.return_value = Settings(description_model_cloud="gpt-4o")
 
         # Call internal function
@@ -119,8 +119,8 @@ class TestDescriptionAnalysis(unittest.TestCase):
         desc = describe_frame_cloud(self.image_path, "Test prompt")
 
         self.assertEqual(desc, "Cloud description")
-        mock_litellm.completion.assert_called_once()
-        call_kwargs = mock_litellm.completion.call_args[1]
+        mock_completion.assert_called_once()
+        call_kwargs = mock_completion.call_args[1]
         self.assertEqual(call_kwargs["model"], "gpt-4o")
         self.assertEqual(call_kwargs["api_key"], "sk-test-key")
         self.assertEqual(len(call_kwargs["messages"]), 1)

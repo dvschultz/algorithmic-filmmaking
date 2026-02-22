@@ -1,18 +1,29 @@
 """Thumbnail generation using FFmpeg."""
 
+import logging
 import subprocess
 import shutil
 from pathlib import Path
 from typing import Optional
+
+from core.binary_resolver import find_binary
+from core.paths import is_frozen
+
+logger = logging.getLogger(__name__)
 
 
 class ThumbnailGenerator:
     """Generates thumbnails from video files."""
 
     def __init__(self, cache_dir: Optional[Path] = None):
-        self.ffmpeg_path = shutil.which("ffmpeg")
-        if self.ffmpeg_path is None:
-            raise RuntimeError("FFmpeg not found")
+        self.ffmpeg_path = find_binary("ffmpeg")
+        self.ffmpeg_available = self.ffmpeg_path is not None
+
+        if not self.ffmpeg_available:
+            if is_frozen():
+                logger.warning("FFmpeg not found — thumbnail generation disabled")
+            else:
+                raise RuntimeError("FFmpeg not found")
 
         # Default cache directory
         default_cache = Path.home() / ".cache" / "scene-ripper" / "thumbnails"

@@ -10,7 +10,6 @@ Gemini models support video input natively, providing richer temporal understand
 import base64
 import logging
 import platform
-import shutil
 import subprocess
 import tempfile
 import threading
@@ -19,8 +18,8 @@ from pathlib import Path
 from typing import Optional, Literal
 
 from PIL import Image
-import litellm
 
+from core.binary_resolver import find_binary
 from core.settings import load_settings
 
 logger = logging.getLogger(__name__)
@@ -50,7 +49,7 @@ def encode_image_base64(image_path: Path) -> str:
 
 def _get_ffmpeg_path() -> str:
     """Find FFmpeg executable."""
-    path = shutil.which("ffmpeg")
+    path = find_binary("ffmpeg")
     if path is None:
         raise RuntimeError(
             "FFmpeg not found. Please install FFmpeg and ensure it's in your PATH."
@@ -201,6 +200,8 @@ def describe_video_cloud(
     ]
 
     try:
+        import litellm
+
         logger.info(f"Calling LiteLLM with video, model={model}")
         response = litellm.completion(
             model=model,
@@ -401,6 +402,8 @@ def describe_frame_cloud(image_path: Path, prompt: str = "Describe this image.")
     ]
 
     try:
+        import litellm
+
         logger.info(f"Calling LiteLLM with model={model}")
         response = litellm.completion(
             model=model,
@@ -535,7 +538,7 @@ def clear_model_cache(model_id: str = "vikhyatk/moondream2") -> bool:
     Returns:
         True if cache was cleared, False if cache dir not found.
     """
-    import shutil
+    import shutil  # needed for shutil.rmtree
     from huggingface_hub import HfFolder
 
     try:

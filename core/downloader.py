@@ -3,7 +3,6 @@
 import logging
 import os
 import subprocess
-import shutil
 import re
 import json
 import time
@@ -12,37 +11,9 @@ from typing import Callable, Optional
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
+from core.binary_resolver import find_binary, get_subprocess_env
+
 logger = logging.getLogger(__name__)
-
-
-def _get_subprocess_env() -> dict:
-    """Get environment for subprocess with paths to find Deno and other tools.
-
-    macOS GUI apps don't inherit shell environment, so we need to explicitly
-    add common tool paths (Homebrew, etc.) to ensure yt-dlp can find Deno
-    for the JavaScript challenge solver.
-    """
-    env = os.environ.copy()
-    path = env.get("PATH", "")
-
-    # Common paths that might be missing in GUI apps
-    additional_paths = [
-        "/opt/homebrew/bin",  # Homebrew on Apple Silicon
-        "/opt/homebrew/sbin",
-        "/usr/local/bin",  # Homebrew on Intel Mac
-        "/usr/local/sbin",
-        str(Path.home() / ".local" / "bin"),  # User local bin
-        str(Path.home() / ".deno" / "bin"),  # Deno default install location
-    ]
-
-    # Add any paths not already present
-    path_parts = path.split(os.pathsep)
-    for p in additional_paths:
-        if p not in path_parts:
-            path_parts.insert(0, p)
-
-    env["PATH"] = os.pathsep.join(path_parts)
-    return env
 
 
 @dataclass
@@ -84,7 +55,7 @@ class VideoDownloader:
 
     def _find_ytdlp(self) -> str:
         """Find yt-dlp executable."""
-        path = shutil.which("yt-dlp")
+        path = find_binary("yt-dlp")
         if path is None:
             raise RuntimeError(
                 "yt-dlp not found. Install with: pip install yt-dlp"
@@ -162,7 +133,7 @@ class VideoDownloader:
 
         try:
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=30, env=_get_subprocess_env()
+                cmd, capture_output=True, text=True, timeout=30, env=get_subprocess_env()
             )
         except subprocess.TimeoutExpired:
             raise RuntimeError("Timed out getting video info (30 seconds)")
@@ -286,13 +257,7 @@ class VideoDownloader:
 
         # Run download with progress parsing
         # Use augmented environment to ensure Deno is findable for challenge solver
-        env = _get_subprocess_env()
-        logger.debug(f"Subprocess PATH includes /opt/homebrew/bin: {'/opt/homebrew/bin' in env.get('PATH', '')}")
-
-        # Verify Deno is actually findable
-        deno_check = subprocess.run(['which', 'deno'], capture_output=True, text=True, env=env)
-        logger.debug(f"Deno location: {deno_check.stdout.strip()} (found: {deno_check.returncode == 0})")
-        logger.debug(f"Full PATH being used: {env.get('PATH', 'NOT SET')[:300]}...")
+        env = get_subprocess_env()
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,

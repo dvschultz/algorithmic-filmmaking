@@ -23,8 +23,6 @@ import re
 from pathlib import Path
 from typing import Optional
 
-import litellm
-
 from core.settings import load_settings, get_gemini_api_key
 from core.analysis.description import extract_clip_segment, encode_image_base64, encode_video_base64
 from models.cinematography import CinematographyAnalysis
@@ -539,6 +537,8 @@ def analyze_cinematography_frame(
     ]
 
     try:
+        import litellm
+
         response = litellm.completion(
             model=llm_model,
             messages=messages,
@@ -669,6 +669,8 @@ def analyze_cinematography_video(
                 ],
             }
         ]
+
+        import litellm
 
         response = litellm.completion(
             model=llm_model,

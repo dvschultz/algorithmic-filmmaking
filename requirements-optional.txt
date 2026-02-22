@@ -1,0 +1,28 @@
+# Scene Ripper - Optional dependencies (downloaded on demand)
+# These are NOT bundled in the .app and are installed when features are first used.
+
+# Video download
+yt-dlp>=2024.1
+
+# ML / Deep Learning (local inference)
+torch>=2.0
+transformers>=4.36
+torchvision>=0.15.0
+einops>=0.7.0
+
+# Apple Silicon acceleration (mlx stack)
+mlx-vlm>=0.1.0
+lightning-whisper-mlx>=0.4.0
+
+# Transcription
+faster-whisper>=1.0.0
+
+# Object detection
+ultralytics>=8.4.0
+
+# OCR / Text Extraction
+paddleocr>=3.0.0
+rapidfuzz>=3.0.0
+
+# Audio Analysis
+librosa>=0.10.0

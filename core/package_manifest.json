@@ -1,0 +1,60 @@
+{
+  "python_version": "3.11.11",
+  "python_build_tag": "20250317",
+  "packages": {
+    "torch": {
+      "pip_specifier": "torch>=2.0",
+      "size_mb": 350,
+      "features": ["shot_classify", "object_detect"]
+    },
+    "transformers": {
+      "pip_specifier": "transformers>=4.36",
+      "size_mb": 100,
+      "depends_on": ["torch"],
+      "features": ["shot_classify"]
+    },
+    "torchvision": {
+      "pip_specifier": "torchvision>=0.15.0",
+      "size_mb": 50,
+      "depends_on": ["torch"],
+      "features": ["shot_classify"]
+    },
+    "einops": {
+      "pip_specifier": "einops>=0.7.0",
+      "size_mb": 1,
+      "depends_on": ["torch"],
+      "features": ["shot_classify"]
+    },
+    "ultralytics": {
+      "pip_specifier": "ultralytics>=8.4.0",
+      "size_mb": 80,
+      "depends_on": ["torch"],
+      "features": ["object_detect"]
+    },
+    "faster_whisper": {
+      "pip_specifier": "faster-whisper>=1.0.0",
+      "size_mb": 150,
+      "features": ["transcribe"]
+    },
+    "lightning_whisper_mlx": {
+      "pip_specifier": "lightning-whisper-mlx>=0.4.0",
+      "size_mb": 100,
+      "features": ["transcribe_mlx"]
+    },
+    "mlx_vlm": {
+      "pip_specifier": "mlx-vlm>=0.1.0",
+      "size_mb": 200,
+      "features": ["describe_local"]
+    },
+    "paddleocr": {
+      "pip_specifier": "paddleocr>=3.0.0",
+      "size_mb": 300,
+      "features": ["ocr"]
+    },
+    "librosa": {
+      "pip_specifier": "librosa>=0.10.0",
+      "size_mb": 80,
+      "features": ["audio_analysis"]
+    }
+  }
+}
