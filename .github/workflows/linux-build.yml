@@ -53,12 +53,16 @@ jobs:
         run: ffmpeg -version
 
       - name: Run import test
+        env:
+          QT_QPA_PLATFORM: offscreen
         run: |
           python -c "from ui.main_window import MainWindow; print('MainWindow import: OK')"
           python -c "from core.scene_detect import SceneDetector; print('SceneDetector import: OK')"
           python -c "from core.settings import Settings; s = Settings(); print(f'Settings import: OK, download_dir={s.download_dir}')"
 
       - name: Run unit tests
+        env:
+          QT_QPA_PLATFORM: offscreen
         run: |
           if [ -d "tests" ]; then
             python -m pytest tests/ -v
