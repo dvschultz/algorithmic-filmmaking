@@ -1,10 +1,11 @@
 """FFmpeg wrapper for video processing operations."""
 
 import subprocess
-import shutil
 import threading
 from pathlib import Path
 from typing import Callable, Optional
+
+from core.binary_resolver import find_binary
 
 
 class FFmpegProcessor:
@@ -16,7 +17,7 @@ class FFmpegProcessor:
 
     def _find_ffmpeg(self) -> str:
         """Find FFmpeg executable."""
-        path = shutil.which("ffmpeg")
+        path = find_binary("ffmpeg")
         if path is None:
             raise RuntimeError(
                 "FFmpeg not found. Please install FFmpeg and ensure it's in your PATH."
@@ -25,7 +26,7 @@ class FFmpegProcessor:
 
     def _find_ffprobe(self) -> str:
         """Find FFprobe executable."""
-        path = shutil.which("ffprobe")
+        path = find_binary("ffprobe")
         if path is None:
             raise RuntimeError(
                 "FFprobe not found. Please install FFmpeg and ensure it's in your PATH."
@@ -165,7 +166,7 @@ def extract_frame(
     Returns:
         True if extraction was successful, False otherwise
     """
-    ffmpeg_path = shutil.which("ffmpeg")
+    ffmpeg_path = find_binary("ffmpeg")
     if ffmpeg_path is None:
         raise RuntimeError("FFmpeg not found")
 
@@ -225,7 +226,7 @@ def estimate_extraction_size(
     """
     if end_frame is None:
         # Derive total frames from video duration
-        ffprobe_path = shutil.which("ffprobe")
+        ffprobe_path = find_binary("ffprobe")
         if ffprobe_path is None:
             raise RuntimeError("FFprobe not found")
         import json
@@ -287,7 +288,7 @@ def extract_frames_batch(
     Returns:
         Sorted list of ``Path`` objects for extracted frames.
     """
-    ffmpeg_path = shutil.which("ffmpeg")
+    ffmpeg_path = find_binary("ffmpeg")
     if ffmpeg_path is None:
         raise RuntimeError("FFmpeg not found")
 

@@ -33,3 +33,6 @@ rapidfuzz>=3.0.0     # Fast fuzzy string matching for text comparison
 
 # Audio Analysis
 librosa>=0.10.0  # Beat detection, tempo analysis, onset detection
+
+# Development
+watchdog>=3.0.0  # File watching for auto-restart (watchmedo)

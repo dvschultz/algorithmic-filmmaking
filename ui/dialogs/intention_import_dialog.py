@@ -7,7 +7,6 @@ as the workflow processes the videos.
 
 import json
 import logging
-import shutil
 import subprocess
 from pathlib import Path
 from enum import Enum, auto
@@ -50,7 +49,8 @@ _DEFAULT_URL_DURATION_SECONDS = 300.0  # 5 minutes
 
 def _probe_duration(path: Path) -> float | None:
     """Get video duration in seconds via ffprobe. Returns None on failure."""
-    ffprobe = shutil.which("ffprobe")
+    from core.binary_resolver import find_binary
+    ffprobe = find_binary("ffprobe")
     if not ffprobe:
         return None
     try:

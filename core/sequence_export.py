@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 from models.sequence import Sequence, SequenceClip
 from models.clip import Source
+from core.binary_resolver import find_binary
 
 if TYPE_CHECKING:
     from models.frame import Frame
@@ -36,9 +37,7 @@ class SequenceExporter:
     """Exports timeline sequences to video files using FFmpeg."""
 
     def __init__(self, ffmpeg_path: str = None):
-        import shutil
-
-        self.ffmpeg_path = ffmpeg_path or shutil.which("ffmpeg")
+        self.ffmpeg_path = ffmpeg_path or find_binary("ffmpeg")
         if not self.ffmpeg_path:
             raise RuntimeError("FFmpeg not found")
 

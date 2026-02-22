@@ -12,10 +12,13 @@ Priority order: Environment variables > JSON config > Defaults
 import json
 import logging
 import os
+import shutil
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Set
+
+from core.paths import is_frozen, get_app_support_dir
 
 logger = logging.getLogger(__name__)
 
@@ -298,7 +301,13 @@ def _get_default_export_dir() -> Path:
 
 
 def _get_config_dir() -> Path:
-    """Get platform-appropriate config directory (XDG-compliant)."""
+    """Get platform-appropriate config directory.
+
+    When running as a frozen macOS app, uses ~/Library/Application Support/Scene Ripper/.
+    Otherwise uses XDG-compliant paths (~/.config/scene-ripper/).
+    """
+    if is_frozen() and sys.platform == "darwin":
+        return get_app_support_dir()
     if os.name == "nt":  # Windows
         base = Path(os.environ.get("APPDATA", Path.home()))
         return base / "scene-ripper"
@@ -315,7 +324,13 @@ def _get_config_path() -> Path:
 
 
 def _get_cache_dir() -> Path:
-    """Get platform-appropriate cache directory."""
+    """Get platform-appropriate cache directory.
+
+    When running as a frozen macOS app, uses ~/Library/Caches/com.scene-ripper.app/.
+    Otherwise uses XDG-compliant paths (~/.cache/scene-ripper/).
+    """
+    if is_frozen() and sys.platform == "darwin":
+        return Path.home() / "Library" / "Caches" / "com.scene-ripper.app"
     if os.name == "nt":  # Windows
         base = Path(os.environ.get("LOCALAPPDATA", Path.home()))
         return base / "scene-ripper" / "cache"
@@ -865,6 +880,9 @@ def load_settings() -> Settings:
     """
     settings = Settings()
 
+    # 0. One-time migration from XDG to macOS-native paths (frozen app only)
+    migrate_from_xdg_config()
+
     # 1. Load from JSON file if it exists
     config_path = _get_config_path()
     if config_path.exists():
@@ -925,6 +943,37 @@ def save_settings(settings: Settings) -> bool:
 
     except (OSError, IOError) as e:
         logger.error(f"Failed to save settings: {e}")
+        return False
+
+
+def migrate_from_xdg_config() -> bool:
+    """Migrate settings from XDG path to macOS Application Support (one-time).
+
+    When running as a frozen macOS app, config moves from
+    ~/.config/scene-ripper/config.json to ~/Library/Application Support/Scene Ripper/config.json.
+    This function copies the old config to the new location if the new one doesn't exist yet.
+
+    Returns:
+        True if migration was performed, False otherwise.
+    """
+    if not (is_frozen() and sys.platform == "darwin"):
+        return False
+
+    new_config = _get_config_path()
+    if new_config.exists():
+        return False  # Already migrated or created fresh
+
+    old_config = Path.home() / ".config" / "scene-ripper" / "config.json"
+    if not old_config.exists():
+        return False  # Nothing to migrate
+
+    try:
+        new_config.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(old_config, new_config)
+        logger.info(f"Migrated config from {old_config} to {new_config}")
+        return True
+    except (OSError, IOError) as e:
+        logger.warning(f"Config migration failed: {e}")
         return False
 
 

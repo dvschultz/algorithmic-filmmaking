@@ -1,0 +1,214 @@
+name: macOS Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number for the .app bundle'
+        required: false
+        default: '0.2.0'
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  build-macos:
+    name: Build macOS .app
+    runs-on: macos-14  # Apple Silicon (arm64)
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            # Extract version from tag (v0.2.0 -> 0.2.0)
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="${{ github.event.inputs.version || '0.2.0' }}"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Building version: ${VERSION}"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-core.txt
+          pip install pyinstaller
+
+      - name: Run PyInstaller
+        env:
+          APP_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          pyinstaller packaging/macos/scene_ripper.spec \
+            --distpath dist \
+            --workpath build \
+            --noconfirm
+
+      - name: Verify .app bundle
+        run: |
+          APP_PATH="dist/Scene Ripper.app"
+          if [ ! -d "$APP_PATH" ]; then
+            echo "ERROR: .app bundle not found"
+            exit 1
+          fi
+          echo ".app bundle size:"
+          du -sh "$APP_PATH"
+          echo ""
+          echo "Contents:"
+          ls -la "$APP_PATH/Contents/"
+
+      # ---------------------------------------------------------------
+      # Code signing (only when secrets are configured)
+      # ---------------------------------------------------------------
+      - name: Import signing certificate
+        if: env.MACOS_CERTIFICATE != ''
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          # Decode certificate
+          echo "$MACOS_CERTIFICATE" | base64 --decode > certificate.p12
+
+          # Create temporary keychain
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+
+          # Import certificate
+          security import certificate.p12 \
+            -k build.keychain \
+            -P "$MACOS_CERTIFICATE_PWD" \
+            -T /usr/bin/codesign
+
+          # Allow codesign to access keychain
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" build.keychain
+
+          # Clean up
+          rm certificate.p12
+
+      - name: Code sign .app
+        if: env.CODESIGN_IDENTITY != ''
+        env:
+          CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
+        run: |
+          codesign --force --deep --options runtime \
+            --entitlements packaging/macos/entitlements.plist \
+            --sign "$CODESIGN_IDENTITY" \
+            "dist/Scene Ripper.app"
+
+          echo "Verifying signature..."
+          codesign --verify --deep --strict --verbose=2 "dist/Scene Ripper.app"
+
+      # ---------------------------------------------------------------
+      # Create DMG
+      # ---------------------------------------------------------------
+      - name: Install create-dmg
+        run: brew install create-dmg
+
+      - name: Create DMG
+        env:
+          APP_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          DMG_NAME="Scene-Ripper-${APP_VERSION}-arm64.dmg"
+          create-dmg \
+            --volname "Scene Ripper" \
+            --volicon "assets/icon.icns" \
+            --background "assets/dmg-background.png" \
+            --window-pos 200 120 \
+            --window-size 660 400 \
+            --icon-size 80 \
+            --icon "Scene Ripper.app" 180 200 \
+            --app-drop-link 480 200 \
+            --no-internet-enable \
+            "dist/${DMG_NAME}" \
+            "dist/Scene Ripper.app" \
+          || true  # create-dmg returns non-zero even on success sometimes
+
+          if [ ! -f "dist/${DMG_NAME}" ]; then
+            echo "ERROR: DMG not created"
+            exit 1
+          fi
+
+          echo "DMG created:"
+          ls -lh "dist/${DMG_NAME}"
+
+      # ---------------------------------------------------------------
+      # Notarize (only when Apple credentials are configured)
+      # ---------------------------------------------------------------
+      - name: Notarize DMG
+        if: env.APPLE_ID != ''
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APP_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          DMG_NAME="Scene-Ripper-${APP_VERSION}-arm64.dmg"
+
+          # Store credentials
+          xcrun notarytool store-credentials "AC_PASSWORD" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD"
+
+          # Submit for notarization and wait
+          xcrun notarytool submit "dist/${DMG_NAME}" \
+            --keychain-profile "AC_PASSWORD" \
+            --wait
+
+          # Staple the ticket
+          xcrun stapler staple "dist/${DMG_NAME}"
+
+          echo "Notarization complete"
+
+      # ---------------------------------------------------------------
+      # Upload artifacts
+      # ---------------------------------------------------------------
+      - name: Upload .app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Scene-Ripper-macOS-app
+          path: dist/Scene Ripper.app
+          if-no-files-found: error
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Scene-Ripper-macOS-DMG
+          path: dist/Scene-Ripper-*.dmg
+          if-no-files-found: warn
+
+      # ---------------------------------------------------------------
+      # Upload to GitHub Release (only on tag push)
+      # ---------------------------------------------------------------
+      - name: Upload to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          DMG_NAME="Scene-Ripper-${APP_VERSION}-arm64.dmg"
+          gh release upload "${GITHUB_REF_NAME}" "dist/${DMG_NAME}" \
+            --clobber
+
+      # ---------------------------------------------------------------
+      # Cleanup
+      # ---------------------------------------------------------------
+      - name: Cleanup keychain
+        if: always()
+        run: |
+          security delete-keychain build.keychain 2>/dev/null || true

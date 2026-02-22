@@ -5,12 +5,14 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
+from core.binary_resolver import find_binary
+
 
 class ThumbnailGenerator:
     """Generates thumbnails from video files."""
 
     def __init__(self, cache_dir: Optional[Path] = None):
-        self.ffmpeg_path = shutil.which("ffmpeg")
+        self.ffmpeg_path = find_binary("ffmpeg")
         if self.ffmpeg_path is None:
             raise RuntimeError("FFmpeg not found")
 
