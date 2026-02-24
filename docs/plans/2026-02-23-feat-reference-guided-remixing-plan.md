@@ -1,7 +1,7 @@
 ---
 title: "feat: Reference-Guided Remixing"
 type: feat
-status: active
+status: completed
 date: 2026-02-23
 origin: docs/brainstorms/2026-02-23-buzzy-analysis-and-artistic-alternative.md
 ---
