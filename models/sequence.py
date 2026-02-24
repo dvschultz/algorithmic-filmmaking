@@ -138,6 +138,11 @@ class Sequence:
     fps: float = 30.0
     tracks: list[Track] = field(default_factory=list)
     algorithm: Optional[str] = None  # e.g., "storyteller", "color", "shot_type"
+    # Reference-guided remixing fields
+    reference_source_id: Optional[str] = None  # Source used as structural guide
+    dimension_weights: Optional[dict[str, float]] = None  # Dimension -> weight (0.0-1.0)
+    allow_repeats: bool = False  # Allow same clip matched to multiple positions
+    match_reference_timing: bool = False  # Use reference clip durations
 
     def __post_init__(self):
         """Ensure at least one track exists."""
@@ -190,6 +195,14 @@ class Sequence:
         }
         if self.algorithm:
             data["algorithm"] = self.algorithm
+        if self.reference_source_id:
+            data["reference_source_id"] = self.reference_source_id
+        if self.dimension_weights:
+            data["dimension_weights"] = self.dimension_weights
+        if self.allow_repeats:
+            data["allow_repeats"] = self.allow_repeats
+        if self.match_reference_timing:
+            data["match_reference_timing"] = self.match_reference_timing
         return data
 
     @classmethod
@@ -205,6 +218,10 @@ class Sequence:
             fps=data.get("fps", 30.0),
             tracks=tracks if tracks else [],  # Empty list to skip __post_init__ default
             algorithm=data.get("algorithm"),
+            reference_source_id=data.get("reference_source_id"),
+            dimension_weights=data.get("dimension_weights"),
+            allow_repeats=data.get("allow_repeats", False),
+            match_reference_timing=data.get("match_reference_timing", False),
         )
         # If no tracks were loaded, ensure at least one exists
         if not seq.tracks:
