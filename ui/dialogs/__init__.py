@@ -5,6 +5,7 @@ from .intention_import_dialog import IntentionImportDialog
 from .exquisite_corpus_dialog import ExquisiteCorpusDialog
 from .glossary_dialog import GlossaryDialog
 from .storyteller_dialog import StorytellerDialog, MissingDescriptionsDialog
+from .reference_guide_dialog import ReferenceGuideDialog
 
 __all__ = [
     "AnalysisPickerDialog",
@@ -13,4 +14,5 @@ __all__ = [
     "GlossaryDialog",
     "StorytellerDialog",
     "MissingDescriptionsDialog",
+    "ReferenceGuideDialog",
 ]
