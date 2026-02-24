@@ -378,7 +378,7 @@ class SequenceTab(BaseTab):
         logger.debug(f"Set available clips in Sequence tab: {len(self._available_clips)}")
 
         # Refresh cost estimates if the confirm view is active
-        if self.view_stack.currentIndex() == self.STATE_CONFIRM:
+        if self.state_stack.currentIndex() == self.STATE_CONFIRM:
             self._refresh_confirm_estimates()
 
     # --- Signal handlers ---
@@ -1290,7 +1290,7 @@ class SequenceTab(BaseTab):
 
         # If we're in the confirm view, refresh estimates (clips may have been
         # analyzed on another tab) but stay in confirm state
-        if self.view_stack.currentIndex() == self.STATE_CONFIRM and self._pending_algorithm:
+        if self.state_stack.currentIndex() == self.STATE_CONFIRM and self._pending_algorithm:
             self._refresh_confirm_estimates()
             return
 

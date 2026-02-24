@@ -84,7 +84,14 @@ python main.py
 
 ## Quick Start
 
-**Run:**
+**Using Make (recommended for development):**
+```bash
+make run        # Launch the GUI
+make watch      # Auto-restart on code changes (requires watchdog)
+make test       # Run tests
+```
+
+**Or run directly:**
 ```bash
 python main.py
 ```
