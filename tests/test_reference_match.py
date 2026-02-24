@@ -317,14 +317,12 @@ class TestSequenceModelExtensions:
             reference_source_id="src-ref",
             dimension_weights={"brightness": 0.8, "color": 0.5},
             allow_repeats=True,
-            match_reference_timing=False,
         )
         data = seq.to_dict()
         assert data["algorithm"] == "reference_guided"
         assert data["reference_source_id"] == "src-ref"
         assert data["dimension_weights"] == {"brightness": 0.8, "color": 0.5}
         assert data["allow_repeats"] is True
-        assert "match_reference_timing" not in data  # False is default, not written
 
     def test_from_dict_round_trip(self):
         seq = Sequence(
@@ -332,7 +330,6 @@ class TestSequenceModelExtensions:
             reference_source_id="src-ref",
             dimension_weights={"brightness": 0.8},
             allow_repeats=True,
-            match_reference_timing=True,
         )
         data = seq.to_dict()
         restored = Sequence.from_dict(data)
@@ -341,7 +338,6 @@ class TestSequenceModelExtensions:
         assert restored.reference_source_id == "src-ref"
         assert restored.dimension_weights == {"brightness": 0.8}
         assert restored.allow_repeats is True
-        assert restored.match_reference_timing is True
 
     def test_from_dict_backward_compatible(self):
         """Old project files without reference fields should load fine."""
@@ -357,7 +353,6 @@ class TestSequenceModelExtensions:
         assert seq.reference_source_id is None
         assert seq.dimension_weights is None
         assert seq.allow_repeats is False
-        assert seq.match_reference_timing is False
 
 
 # --- Active Dimensions Detection ---

@@ -721,7 +721,7 @@ When creating plans, follow these tool dependency rules:
 2. If the user wants to search multiple topics, create a plan that interleaves
    search and download steps for each topic.
 
-3. SEQUENCE GENERATION: Use the generate_remix tool to create sequences with any of the 13 sorting algorithms. Use list_sorting_algorithms first to check which algorithms are available based on clip analysis state.
+3. SEQUENCE GENERATION: Use the generate_remix tool to create sequences with any of the 13 sorting algorithms. Use list_sorting_algorithms first to check which algorithms are available based on clip analysis state. For matching clips to a reference video's structure, use the generate_reference_guided tool instead.
 """
 
         # For Ollama, include tool schemas in the prompt since we don't pass them via API
