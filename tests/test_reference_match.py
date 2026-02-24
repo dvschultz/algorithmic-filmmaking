@@ -382,3 +382,39 @@ class TestGetActiveDimensions:
         clips = [_make_clip(average_brightness=0.5)]
         dims = get_active_dimensions_for_clips(clips)
         assert "brightness" in dims
+
+
+# --- Cost Estimation Override ---
+
+class TestCostEstimationOverride:
+    def test_override_required_bypasses_config(self):
+        """override_required should use explicit ops, not algorithm config."""
+        from core.cost_estimates import estimate_sequence_cost
+
+        # reference_guided has required_analysis=[] in config
+        # Without override, should return nothing
+        clip = _make_clip(average_brightness=None)
+        result = estimate_sequence_cost("reference_guided", [clip])
+        assert result == []
+
+        # With override, should detect clips needing brightness analysis
+        result = estimate_sequence_cost(
+            "reference_guided",
+            [clip],
+            override_required=["brightness"],
+        )
+        assert len(result) == 1
+        assert result[0].operation == "brightness"
+        assert result[0].clips_needing == 1
+
+    def test_override_required_skips_already_analyzed(self):
+        """Clips with existing data should not count as needing analysis."""
+        from core.cost_estimates import estimate_sequence_cost
+
+        clip = _make_clip(average_brightness=0.5)
+        result = estimate_sequence_cost(
+            "reference_guided",
+            [clip],
+            override_required=["brightness"],
+        )
+        assert result == []  # Already has brightness

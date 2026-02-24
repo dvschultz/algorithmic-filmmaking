@@ -26,6 +26,9 @@ from PySide6.QtCore import Qt, Signal, QThread
 from PySide6.QtGui import QFont
 
 from ui.theme import theme, UISizes
+from ui.widgets.cost_estimate_panel import CostEstimatePanel
+from core.cost_estimates import estimate_sequence_cost
+from core.remix.reference_match import DIMENSION_ANALYSIS_REQUIREMENTS
 
 logger = logging.getLogger(__name__)
 
@@ -250,6 +253,12 @@ class ReferenceGuideDialog(QDialog):
         layout.addWidget(self.counts_label)
         self._counts_label = self.counts_label
 
+        # Cost estimation panel
+        self.cost_panel = CostEstimatePanel()
+        self.cost_panel.set_collapsed(True)
+        self.cost_panel.tier_changed.connect(lambda *_: self._refresh_cost_estimates())
+        layout.addWidget(self.cost_panel)
+
         # Separator
         separator = QFrame()
         separator.setFrameShape(QFrame.HLine)
@@ -317,8 +326,9 @@ class ReferenceGuideDialog(QDialog):
         value_label.setFixedWidth(35)
         value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
-        # Wire checkbox to enable/disable slider
+        # Wire checkbox to enable/disable slider and refresh costs
         checkbox.toggled.connect(lambda checked, s=slider: s.setEnabled(checked))
+        checkbox.toggled.connect(lambda *_: self._refresh_cost_estimates())
         slider.valueChanged.connect(lambda val, lbl=value_label: lbl.setText(f"{val}%"))
 
         row.addWidget(checkbox)
@@ -349,6 +359,40 @@ class ReferenceGuideDialog(QDialog):
 
         # Disable generate if no clips on either side
         self.generate_btn.setEnabled(ref_count > 0 and user_count > 0)
+
+        self._refresh_cost_estimates()
+
+    def _refresh_cost_estimates(self):
+        """Recompute cost estimates for active dimensions on both clip pools."""
+        ref_source_id = self.source_combo.currentData()
+        if not ref_source_id:
+            self.cost_panel.set_estimates([])
+            return
+
+        # Collect required analysis operations from active dimensions
+        required_ops: list[str] = []
+        for dim_key, widgets in self._dimension_widgets.items():
+            if widgets["checkbox"].isChecked():
+                ops = DIMENSION_ANALYSIS_REQUIREMENTS.get(dim_key, [])
+                for op in ops:
+                    if op not in required_ops:
+                        required_ops.append(op)
+
+        if not required_ops:
+            self.cost_panel.set_estimates([])
+            return
+
+        # Union of both clip pools (both need analysis)
+        all_clip_objects = [clip for clip, _ in self.all_clips]
+
+        tier_overrides = self.cost_panel.get_tier_overrides()
+        estimates = estimate_sequence_cost(
+            algorithm="reference_guided",
+            clips=all_clip_objects,
+            tier_overrides=tier_overrides,
+            override_required=required_ops,
+        )
+        self.cost_panel.set_estimates(estimates)
 
     def _get_weights(self) -> dict[str, float]:
         """Get current dimension weights from UI."""
