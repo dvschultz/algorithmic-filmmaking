@@ -161,6 +161,7 @@ def estimate_sequence_cost(
     clips: list,
     tier_overrides: dict[str, str] | None = None,
     settings=None,
+    override_required: list[str] | None = None,
 ) -> list[OperationEstimate]:
     """Calculate cost estimates for a sequence algorithm.
 
@@ -169,17 +170,23 @@ def estimate_sequence_cost(
         clips: List of Clip objects (or any objects with the metadata fields)
         tier_overrides: Per-operation tier overrides {"describe": "cloud"}
         settings: Settings object for tier defaults and parallelism
+        override_required: Explicit list of required operations, bypassing
+            the algorithm config lookup. Used by reference_guided where
+            requirements depend on user-selected dimensions.
 
     Returns:
         List of OperationEstimate, one per required operation.
         Empty list if no analysis needed or all clips are ready.
     """
-    algo_config = _get_algorithm_config()
-    config = algo_config.get(algorithm.lower())
-    if not config:
-        return []
+    if override_required is not None:
+        required = override_required
+    else:
+        algo_config = _get_algorithm_config()
+        config = algo_config.get(algorithm.lower())
+        if not config:
+            return []
 
-    required = config.get("required_analysis", [])
+        required = config.get("required_analysis", [])
     if not required:
         return []
 

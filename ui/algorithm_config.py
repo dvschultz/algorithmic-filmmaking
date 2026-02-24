@@ -96,6 +96,14 @@ ALGORITHM_CONFIG = {
         "allow_duplicates": False,
         "required_analysis": ["describe"],
     },
+    "reference_guided": {
+        "icon": "\U0001f3af",
+        "label": "Reference Guide",
+        "description": "Match your clips to a reference video's structure",
+        "allow_duplicates": True,
+        "required_analysis": [],  # Dynamic — depends on selected dimensions
+        "is_dialog": True,
+    },
 }
 
 

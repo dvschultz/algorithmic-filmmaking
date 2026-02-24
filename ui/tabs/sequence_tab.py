@@ -20,7 +20,7 @@ from .base_tab import BaseTab
 from ui.video_player import VideoPlayer
 from ui.timeline import TimelineWidget
 from ui.widgets import SortingCardGrid, TimelinePreview, CostEstimatePanel
-from ui.dialogs import ExquisiteCorpusDialog, StorytellerDialog, MissingDescriptionsDialog
+from ui.dialogs import ExquisiteCorpusDialog, StorytellerDialog, MissingDescriptionsDialog, ReferenceGuideDialog
 from ui.theme import theme, Spacing, TypeScale
 from ui.workers.sequence_worker import SequenceWorker
 from core.remix import generate_sequence
@@ -456,6 +456,9 @@ class SequenceTab(BaseTab):
             if algorithm == "storyteller":
                 self._show_storyteller_dialog(clips)
                 return
+            if algorithm == "reference_guided":
+                self._show_reference_guide_dialog(clips)
+                return
             self._apply_algorithm(algorithm, clips)
 
     def _apply_algorithm(self, algorithm: str, clips: list, direction: str = None):
@@ -772,6 +775,80 @@ class SequenceTab(BaseTab):
 
         except Exception as e:
             logger.error(f"Error applying Storyteller sequence: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to apply sequence: {e}")
+
+    def _show_reference_guide_dialog(self, clips: list):
+        """Show the Reference Guide dialog for reference-guided remixing.
+
+        Args:
+            clips: List of (Clip, Source) tuples to process
+        """
+        sources_by_id = {source.id: source for clip, source in clips}
+
+        dialog = ReferenceGuideDialog(
+            clips=clips,
+            sources_by_id=sources_by_id,
+            project=None,
+            parent=self,
+        )
+
+        dialog.sequence_ready.connect(self._apply_reference_guide_sequence)
+        dialog.exec()
+
+    @Slot(list)
+    def _apply_reference_guide_sequence(self, sequence_clips: list):
+        """Apply the sequence from Reference Guide dialog.
+
+        Args:
+            sequence_clips: List of (Clip, Source) tuples in matched order
+        """
+        if not sequence_clips:
+            logger.warning("No clips in Reference Guide sequence")
+            return
+
+        try:
+            self.timeline.clear_timeline()
+
+            first_clip, first_source = sequence_clips[0]
+            self.timeline.set_fps(first_source.fps)
+            self.video_player.load_video(first_source.file_path)
+
+            current_frame = 0
+            for clip, source in sequence_clips:
+                self.timeline.add_clip(clip, source, track_index=0, start_frame=current_frame)
+                current_frame += clip.duration_frames
+                self.clip_added.emit(clip, source)
+
+            self.timeline_preview.set_clips(sequence_clips, self._sources)
+            self.timeline._on_zoom_fit()
+
+            self.algorithm_dropdown.blockSignals(True)
+            label = "Reference Guide"
+            if self.algorithm_dropdown.findText(label) == -1:
+                self.algorithm_dropdown.addItem(label)
+            self.algorithm_dropdown.setCurrentText(label)
+            self.algorithm_dropdown.blockSignals(False)
+
+            self._current_algorithm = "reference_guided"
+
+            # Persist algorithm and reference metadata on the sequence
+            sequence = self.timeline.get_sequence()
+            sequence.algorithm = "reference_guided"
+
+            # Store dialog config if available (for save/load round-trip)
+            dialog = self.sender()
+            if dialog and hasattr(dialog, '_last_ref_source_id'):
+                sequence.reference_source_id = dialog._last_ref_source_id
+                sequence.dimension_weights = dialog._last_weights
+                sequence.allow_repeats = dialog._last_allow_repeats
+                sequence.match_reference_timing = dialog._last_match_timing
+
+            self._set_state(self.STATE_TIMELINE)
+
+            logger.info(f"Applied {len(sequence_clips)} clips from Reference Guide")
+
+        except Exception as e:
+            logger.error(f"Error applying Reference Guide sequence: {e}")
             QMessageBox.critical(self, "Error", f"Failed to apply sequence: {e}")
 
     # Direction options per algorithm: list of (display_label, internal_key).
@@ -1178,6 +1255,117 @@ class SequenceTab(BaseTab):
 
         except Exception as e:
             logger.error(f"Error in generate_and_apply: {e}")
+            return {"success": False, "error": str(e)}
+
+    def generate_reference_guided(
+        self,
+        reference_source_id: str,
+        weights: dict[str, float],
+        allow_repeats: bool = False,
+        match_reference_timing: bool = False,
+    ) -> dict:
+        """Generate and apply a reference-guided sequence (for agent tools).
+
+        Args:
+            reference_source_id: Source ID to use as reference
+            weights: Dimension weights (e.g. {"brightness": 0.8, "color": 0.5})
+            allow_repeats: Allow same clip in multiple positions
+            match_reference_timing: Trim clips to reference durations
+
+        Returns:
+            Dict with success status and matched clip info
+        """
+        from core.remix.reference_match import reference_guided_match
+
+        if not self._available_clips:
+            return {"success": False, "error": "No clips available for sequencing"}
+
+        # Split into reference and user pools
+        reference_clips = [
+            (clip, source) for clip, source in self._available_clips
+            if clip.source_id == reference_source_id
+        ]
+        user_clips = [
+            (clip, source) for clip, source in self._available_clips
+            if clip.source_id != reference_source_id
+        ]
+
+        if not reference_clips:
+            return {
+                "success": False,
+                "error": f"No clips found for reference source '{reference_source_id}'"
+            }
+        if not user_clips:
+            return {
+                "success": False,
+                "error": "No user clips available (all clips belong to reference source)"
+            }
+
+        try:
+            matched = reference_guided_match(
+                reference_clips=reference_clips,
+                user_clips=user_clips,
+                weights=weights,
+                allow_repeats=allow_repeats,
+                match_reference_timing=match_reference_timing,
+            )
+
+            if not matched:
+                return {
+                    "success": False,
+                    "error": "No clips could be matched. Try different weights or enable allow_repeats."
+                }
+
+            # Apply to timeline
+            self.timeline.clear_timeline()
+
+            first_clip, first_source = matched[0]
+            self.timeline.set_fps(first_source.fps)
+
+            current_frame = 0
+            for clip, source in matched:
+                self.timeline.add_clip(clip, source, track_index=0, start_frame=current_frame)
+                current_frame += clip.duration_frames
+
+            self.timeline_preview.set_clips(matched, self._sources)
+            self.timeline._on_zoom_fit()
+
+            self.algorithm_dropdown.blockSignals(True)
+            label = "Reference Guide"
+            if self.algorithm_dropdown.findText(label) == -1:
+                self.algorithm_dropdown.addItem(label)
+            self.algorithm_dropdown.setCurrentText(label)
+            self.algorithm_dropdown.blockSignals(False)
+            self._current_algorithm = "reference_guided"
+
+            # Persist metadata on sequence
+            sequence = self.timeline.get_sequence()
+            sequence.algorithm = "reference_guided"
+            sequence.reference_source_id = reference_source_id
+            sequence.dimension_weights = weights
+            sequence.allow_repeats = allow_repeats
+            sequence.match_reference_timing = match_reference_timing
+
+            self._set_state(self.STATE_TIMELINE)
+
+            return {
+                "success": True,
+                "algorithm": "reference_guided",
+                "reference_source_id": reference_source_id,
+                "clip_count": len(matched),
+                "unmatched": len(reference_clips) - len(matched),
+                "clips": [
+                    {
+                        "id": clip.id,
+                        "source_id": source.id,
+                        "duration": clip.duration_seconds(source.fps),
+                    }
+                    for clip, source in matched
+                ],
+            }
+
+        except Exception as e:
+            logger.error(f"Error in generate_reference_guided: {e}")
             return {"success": False, "error": str(e)}
 
     def clear_sequence(self) -> dict:

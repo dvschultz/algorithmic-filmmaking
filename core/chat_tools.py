@@ -3943,6 +3943,72 @@ def generate_remix(
 
 
 @tools.register(
+    description="Generate a reference-guided sequence that matches your clips to a reference "
+                "video's structure across weighted dimensions (color, brightness, shot_scale, "
+                "audio, embedding, movement, duration). Use list_sources to find source IDs.",
+    requires_project=True,
+    modifies_gui_state=True
+)
+def generate_reference_guided(
+    project,
+    main_window,
+    reference_source_id: str,
+    weights: Optional[dict] = None,
+    allow_repeats: bool = False,
+    match_reference_timing: bool = False,
+) -> dict:
+    """Generate a sequence by matching user clips to a reference video's structure.
+
+    Args:
+        reference_source_id: Source ID of the reference video (use list_sources to find IDs)
+        weights: Dimension weights as {"dimension": 0.0-1.0}. Available dimensions:
+            color, brightness, shot_scale, audio, embedding, movement, duration.
+            Defaults to {"embedding": 1.0, "brightness": 0.4, "duration": 0.6}
+        allow_repeats: Allow same clip to match multiple reference positions
+        match_reference_timing: Trim matched clips to reference clip durations
+
+    Returns:
+        Dict with success status, matched clips, and unmatched count
+    """
+    if weights is None:
+        weights = {"embedding": 1.0, "brightness": 0.4, "duration": 0.6}
+
+    # Validate source exists
+    if reference_source_id not in project.sources_by_id:
+        return {
+            "success": False,
+            "error": f"Source '{reference_source_id}' not found. Use list_sources to find valid IDs."
+        }
+
+    # Validate weights
+    valid_dims = {"color", "brightness", "shot_scale", "audio", "embedding", "movement", "duration"}
+    invalid = set(weights.keys()) - valid_dims
+    if invalid:
+        return {
+            "success": False,
+            "error": f"Invalid dimensions: {invalid}. Valid: {sorted(valid_dims)}"
+        }
+
+    if not any(v > 0 for v in weights.values()):
+        return {
+            "success": False,
+            "error": "At least one dimension must have weight > 0"
+        }
+
+    if main_window is None or not hasattr(main_window, 'sequence_tab'):
+        return {"success": False, "error": "Main window not available"}
+
+    result = main_window.sequence_tab.generate_reference_guided(
+        reference_source_id=reference_source_id,
+        weights=weights,
+        allow_repeats=allow_repeats,
+        match_reference_timing=match_reference_timing,
+    )
+
+    return result
+
+
+@tools.register(
     description="Get the current state of the sequence tab including selected algorithm, "
                 "parameters, preview clips, and timeline clips.",
     requires_project=True,
