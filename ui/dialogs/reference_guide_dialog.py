@@ -5,7 +5,6 @@ and generate a matched sequence from their clip library.
 """
 
 import logging
-from typing import Any, Optional
 
 from PySide6.QtWidgets import (
     QDialog,
@@ -22,10 +21,11 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QFrame,
 )
-from PySide6.QtCore import Qt, Signal, QThread
+from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QFont
 
 from ui.theme import theme, UISizes
+from ui.workers.base import CancellableWorker
 from ui.widgets.cost_estimate_panel import CostEstimatePanel
 from core.cost_estimates import estimate_sequence_cost
 from core.remix.reference_match import DIMENSION_ANALYSIS_REQUIREMENTS
@@ -80,12 +80,11 @@ DIMENSION_INFO = {
 }
 
 
-class ReferenceMatchWorker(QThread):
+class ReferenceMatchWorker(CancellableWorker):
     """Background worker for reference-guided matching."""
 
     progress = Signal(str)
     match_ready = Signal(list)  # List of (Clip, Source) tuples
-    error = Signal(str)
 
     def __init__(
         self,
@@ -93,7 +92,6 @@ class ReferenceMatchWorker(QThread):
         user_clips,
         weights,
         allow_repeats,
-        match_reference_timing,
         parent=None,
     ):
         super().__init__(parent)
@@ -101,10 +99,9 @@ class ReferenceMatchWorker(QThread):
         self.user_clips = user_clips
         self.weights = weights
         self.allow_repeats = allow_repeats
-        self.match_reference_timing = match_reference_timing
-        self._cancelled = False
 
     def run(self):
+        self._log_start()
         try:
             from core.remix.reference_match import reference_guided_match
 
@@ -115,19 +112,17 @@ class ReferenceMatchWorker(QThread):
                 user_clips=self.user_clips,
                 weights=self.weights,
                 allow_repeats=self.allow_repeats,
-                match_reference_timing=self.match_reference_timing,
             )
 
-            if not self._cancelled:
+            if not self.is_cancelled():
                 self.match_ready.emit(matched)
 
         except Exception as e:
-            if not self._cancelled:
-                logger.error(f"Reference matching error: {e}")
+            if not self.is_cancelled():
+                self._log_error(str(e))
                 self.error.emit(str(e))
 
-    def cancel(self):
-        self._cancelled = True
+        self._log_complete()
 
 
 class ReferenceGuideDialog(QDialog):
@@ -137,13 +132,12 @@ class ReferenceGuideDialog(QDialog):
         sequence_ready: Emitted with list of (Clip, Source) tuples when complete
     """
 
-    sequence_ready = Signal(list)
+    sequence_ready = Signal(list, dict)  # (matched_clips, metadata_dict)
 
     def __init__(
         self,
         clips: list,
         sources_by_id: dict,
-        project: Any,
         parent=None,
     ):
         """Initialize the dialog.
@@ -151,14 +145,18 @@ class ReferenceGuideDialog(QDialog):
         Args:
             clips: List of (Clip, Source) tuples — all available clips
             sources_by_id: Dict mapping source_id to Source objects
-            project: Project object (for source listing)
             parent: Parent widget
         """
         super().__init__(parent)
         self.all_clips = clips
         self.sources_by_id = sources_by_id
-        self.project = project
         self.worker = None
+
+        # Debounce timer for cost estimation refresh
+        self._cost_refresh_timer = QTimer(self)
+        self._cost_refresh_timer.setSingleShot(True)
+        self._cost_refresh_timer.setInterval(80)
+        self._cost_refresh_timer.timeout.connect(self._refresh_cost_estimates)
 
         # Determine which dimensions have data
         from core.remix.reference_match import get_active_dimensions_for_clips
@@ -240,12 +238,6 @@ class ReferenceGuideDialog(QDialog):
         )
         options_layout.addWidget(self.allow_repeats_check)
 
-        self.match_timing_check = QCheckBox("Match Reference Timing")
-        self.match_timing_check.setToolTip(
-            "Trim matched clips to match reference clip durations"
-        )
-        options_layout.addWidget(self.match_timing_check)
-
         layout.addLayout(options_layout)
 
         # Clip counts
@@ -256,7 +248,7 @@ class ReferenceGuideDialog(QDialog):
         # Cost estimation panel
         self.cost_panel = CostEstimatePanel()
         self.cost_panel.set_collapsed(True)
-        self.cost_panel.tier_changed.connect(lambda *_: self._refresh_cost_estimates())
+        self.cost_panel.tier_changed.connect(lambda *_: self._cost_refresh_timer.start())
         layout.addWidget(self.cost_panel)
 
         # Separator
@@ -328,7 +320,7 @@ class ReferenceGuideDialog(QDialog):
 
         # Wire checkbox to enable/disable slider and refresh costs
         checkbox.toggled.connect(lambda checked, s=slider: s.setEnabled(checked))
-        checkbox.toggled.connect(lambda *_: self._refresh_cost_estimates())
+        checkbox.toggled.connect(lambda *_: self._cost_refresh_timer.start())
         slider.valueChanged.connect(lambda val, lbl=value_label: lbl.setText(f"{val}%"))
 
         row.addWidget(checkbox)
@@ -449,7 +441,6 @@ class ReferenceGuideDialog(QDialog):
             user_clips=user_clips,
             weights=weights,
             allow_repeats=self.allow_repeats_check.isChecked(),
-            match_reference_timing=self.match_timing_check.isChecked(),
             parent=self,
         )
         self.worker.progress.connect(self._on_progress)
@@ -484,13 +475,13 @@ class ReferenceGuideDialog(QDialog):
             msg += f" ({unmatched} reference positions unmatched)"
         logger.info(msg)
 
-        # Store config on the result for sequence metadata
-        self._last_weights = self._get_weights()
-        self._last_ref_source_id = ref_source_id
-        self._last_allow_repeats = self.allow_repeats_check.isChecked()
-        self._last_match_timing = self.match_timing_check.isChecked()
+        metadata = {
+            "reference_source_id": ref_source_id,
+            "dimension_weights": self._get_weights(),
+            "allow_repeats": self.allow_repeats_check.isChecked(),
+        }
 
-        self.sequence_ready.emit(matched_clips)
+        self.sequence_ready.emit(matched_clips, metadata)
         self.accept()
 
     def _on_match_error(self, error_msg: str):

@@ -582,22 +582,31 @@ class SequenceTab(BaseTab):
 
         dialog.exec()
 
-    @Slot(list)
-    def _apply_exquisite_corpus_sequence(self, sequence_clips: list):
-        """Apply the sequence from Exquisite Corpus dialog.
+    def _apply_dialog_sequence(
+        self,
+        sequence_clips: list,
+        algorithm_key: str,
+        display_label: str,
+        sequence_metadata: Optional[dict] = None,
+    ):
+        """Apply a sequence from any dialog-based algorithm.
+
+        Shared implementation for Exquisite Corpus, Storyteller, and Reference Guide.
 
         Args:
-            sequence_clips: List of (Clip, Source) tuples in poem order
+            sequence_clips: List of (Clip, Source) tuples in order
+            algorithm_key: Internal algorithm key (e.g. "exquisite_corpus")
+            display_label: Display name for dropdown (e.g. "Exquisite Corpus")
+            sequence_metadata: Optional dict of extra fields to set on the Sequence
+                (e.g. reference_source_id, dimension_weights for reference_guided)
         """
         if not sequence_clips:
-            logger.warning("No clips in Exquisite Corpus sequence")
+            logger.warning(f"No clips in {display_label} sequence")
             return
 
         try:
-            # Clear and populate timeline
             self.timeline.clear_timeline()
 
-            # Set FPS from first source
             first_clip, first_source = sequence_clips[0]
             self.timeline.set_fps(first_source.fps)
             self.video_player.load_video(first_source.file_path)
@@ -608,34 +617,37 @@ class SequenceTab(BaseTab):
                 current_frame += clip.duration_frames
                 self.clip_added.emit(clip, source)
 
-            # Update preview
             self.timeline_preview.set_clips(sequence_clips, self._sources)
-
-            # Zoom to fit
             self.timeline._on_zoom_fit()
 
-            # Update dropdown - Exquisite Corpus isn't in dropdown, so set to empty/custom
             self.algorithm_dropdown.blockSignals(True)
-            # Add Exquisite Corpus to dropdown if not present
-            if self.algorithm_dropdown.findText("Exquisite Corpus") == -1:
-                self.algorithm_dropdown.addItem("Exquisite Corpus")
-            self.algorithm_dropdown.setCurrentText("Exquisite Corpus")
+            if self.algorithm_dropdown.findText(display_label) == -1:
+                self.algorithm_dropdown.addItem(display_label)
+            self.algorithm_dropdown.setCurrentText(display_label)
             self.algorithm_dropdown.blockSignals(False)
 
-            self._current_algorithm = "exquisite_corpus"
+            self._current_algorithm = algorithm_key
 
-            # Persist algorithm on the sequence for SRT export
             sequence = self.timeline.get_sequence()
-            sequence.algorithm = "exquisite_corpus"
+            sequence.algorithm = algorithm_key
 
-            # Transition to timeline state
+            if sequence_metadata:
+                for key, value in sequence_metadata.items():
+                    if hasattr(sequence, key):
+                        setattr(sequence, key, value)
+
             self._set_state(self.STATE_TIMELINE)
 
-            logger.info(f"Applied {len(sequence_clips)} clips from Exquisite Corpus")
+            logger.info(f"Applied {len(sequence_clips)} clips from {display_label}")
 
         except Exception as e:
-            logger.error(f"Error applying Exquisite Corpus sequence: {e}")
+            logger.error(f"Error applying {display_label} sequence: {e}")
             QMessageBox.critical(self, "Error", f"Failed to apply sequence: {e}")
+
+    @Slot(list)
+    def _apply_exquisite_corpus_sequence(self, sequence_clips: list):
+        """Apply the sequence from Exquisite Corpus dialog."""
+        self._apply_dialog_sequence(sequence_clips, "exquisite_corpus", "Exquisite Corpus")
 
     def _show_storyteller_dialog(self, clips: list):
         """Show the Storyteller dialog for narrative sequence generation.
@@ -725,57 +737,8 @@ class SequenceTab(BaseTab):
 
     @Slot(list)
     def _apply_storyteller_sequence(self, sequence_clips: list):
-        """Apply the sequence from Storyteller dialog.
-
-        Args:
-            sequence_clips: List of (Clip, Source) tuples in narrative order
-        """
-        if not sequence_clips:
-            logger.warning("No clips in Storyteller sequence")
-            return
-
-        try:
-            # Clear and populate timeline
-            self.timeline.clear_timeline()
-
-            # Set FPS from first source
-            first_clip, first_source = sequence_clips[0]
-            self.timeline.set_fps(first_source.fps)
-            self.video_player.load_video(first_source.file_path)
-
-            current_frame = 0
-            for clip, source in sequence_clips:
-                self.timeline.add_clip(clip, source, track_index=0, start_frame=current_frame)
-                current_frame += clip.duration_frames
-                self.clip_added.emit(clip, source)
-
-            # Update preview
-            self.timeline_preview.set_clips(sequence_clips, self._sources)
-
-            # Zoom to fit
-            self.timeline._on_zoom_fit()
-
-            # Update dropdown
-            self.algorithm_dropdown.blockSignals(True)
-            if self.algorithm_dropdown.findText("Storyteller") == -1:
-                self.algorithm_dropdown.addItem("Storyteller")
-            self.algorithm_dropdown.setCurrentText("Storyteller")
-            self.algorithm_dropdown.blockSignals(False)
-
-            self._current_algorithm = "storyteller"
-
-            # Persist algorithm on the sequence for SRT export
-            sequence = self.timeline.get_sequence()
-            sequence.algorithm = "storyteller"
-
-            # Transition to timeline state
-            self._set_state(self.STATE_TIMELINE)
-
-            logger.info(f"Applied {len(sequence_clips)} clips from Storyteller")
-
-        except Exception as e:
-            logger.error(f"Error applying Storyteller sequence: {e}")
-            QMessageBox.critical(self, "Error", f"Failed to apply sequence: {e}")
+        """Apply the sequence from Storyteller dialog."""
+        self._apply_dialog_sequence(sequence_clips, "storyteller", "Storyteller")
 
     def _show_reference_guide_dialog(self, clips: list):
         """Show the Reference Guide dialog for reference-guided remixing.
@@ -788,68 +751,19 @@ class SequenceTab(BaseTab):
         dialog = ReferenceGuideDialog(
             clips=clips,
             sources_by_id=sources_by_id,
-            project=None,
             parent=self,
         )
 
         dialog.sequence_ready.connect(self._apply_reference_guide_sequence)
         dialog.exec()
 
-    @Slot(list)
-    def _apply_reference_guide_sequence(self, sequence_clips: list):
-        """Apply the sequence from Reference Guide dialog.
-
-        Args:
-            sequence_clips: List of (Clip, Source) tuples in matched order
-        """
-        if not sequence_clips:
-            logger.warning("No clips in Reference Guide sequence")
-            return
-
-        try:
-            self.timeline.clear_timeline()
-
-            first_clip, first_source = sequence_clips[0]
-            self.timeline.set_fps(first_source.fps)
-            self.video_player.load_video(first_source.file_path)
-
-            current_frame = 0
-            for clip, source in sequence_clips:
-                self.timeline.add_clip(clip, source, track_index=0, start_frame=current_frame)
-                current_frame += clip.duration_frames
-                self.clip_added.emit(clip, source)
-
-            self.timeline_preview.set_clips(sequence_clips, self._sources)
-            self.timeline._on_zoom_fit()
-
-            self.algorithm_dropdown.blockSignals(True)
-            label = "Reference Guide"
-            if self.algorithm_dropdown.findText(label) == -1:
-                self.algorithm_dropdown.addItem(label)
-            self.algorithm_dropdown.setCurrentText(label)
-            self.algorithm_dropdown.blockSignals(False)
-
-            self._current_algorithm = "reference_guided"
-
-            # Persist algorithm and reference metadata on the sequence
-            sequence = self.timeline.get_sequence()
-            sequence.algorithm = "reference_guided"
-
-            # Store dialog config if available (for save/load round-trip)
-            dialog = self.sender()
-            if dialog and hasattr(dialog, '_last_ref_source_id'):
-                sequence.reference_source_id = dialog._last_ref_source_id
-                sequence.dimension_weights = dialog._last_weights
-                sequence.allow_repeats = dialog._last_allow_repeats
-                sequence.match_reference_timing = dialog._last_match_timing
-
-            self._set_state(self.STATE_TIMELINE)
-
-            logger.info(f"Applied {len(sequence_clips)} clips from Reference Guide")
-
-        except Exception as e:
-            logger.error(f"Error applying Reference Guide sequence: {e}")
-            QMessageBox.critical(self, "Error", f"Failed to apply sequence: {e}")
+    @Slot(list, dict)
+    def _apply_reference_guide_sequence(self, sequence_clips: list, metadata: dict = None):
+        """Apply the sequence from Reference Guide dialog."""
+        self._apply_dialog_sequence(
+            sequence_clips, "reference_guided", "Reference Guide",
+            sequence_metadata=metadata,
+        )
 
     # Direction options per algorithm: list of (display_label, internal_key).
     # First entry is the default. Algorithms not listed have no direction.
@@ -1124,7 +1038,7 @@ class SequenceTab(BaseTab):
         valid_algorithms = list(ALGORITHM_CONFIG.keys())
         if algorithm.lower() in valid_algorithms:
             # If in timeline state, use the dropdown to regenerate (except dialog-based)
-            dialog_algorithms = ("exquisite_corpus", "storyteller")
+            dialog_algorithms = ("exquisite_corpus", "storyteller", "reference_guided")
             if self._current_state == self.STATE_TIMELINE and algorithm.lower() not in dialog_algorithms:
                 self.algorithm_dropdown.setCurrentText(get_algorithm_label(algorithm))
             else:
@@ -1262,7 +1176,6 @@ class SequenceTab(BaseTab):
         reference_source_id: str,
         weights: dict[str, float],
         allow_repeats: bool = False,
-        match_reference_timing: bool = False,
     ) -> dict:
         """Generate and apply a reference-guided sequence (for agent tools).
 
@@ -1270,7 +1183,6 @@ class SequenceTab(BaseTab):
             reference_source_id: Source ID to use as reference
             weights: Dimension weights (e.g. {"brightness": 0.8, "color": 0.5})
             allow_repeats: Allow same clip in multiple positions
-            match_reference_timing: Trim clips to reference durations
 
         Returns:
             Dict with success status and matched clip info
@@ -1307,7 +1219,6 @@ class SequenceTab(BaseTab):
                 user_clips=user_clips,
                 weights=weights,
                 allow_repeats=allow_repeats,
-                match_reference_timing=match_reference_timing,
             )
 
             if not matched:
@@ -1321,11 +1232,13 @@ class SequenceTab(BaseTab):
 
             first_clip, first_source = matched[0]
             self.timeline.set_fps(first_source.fps)
+            self.video_player.load_video(first_source.file_path)
 
             current_frame = 0
             for clip, source in matched:
                 self.timeline.add_clip(clip, source, track_index=0, start_frame=current_frame)
                 current_frame += clip.duration_frames
+                self.clip_added.emit(clip, source)
 
             self.timeline_preview.set_clips(matched, self._sources)
             self.timeline._on_zoom_fit()
@@ -1344,7 +1257,6 @@ class SequenceTab(BaseTab):
             sequence.reference_source_id = reference_source_id
             sequence.dimension_weights = weights
             sequence.allow_repeats = allow_repeats
-            sequence.match_reference_timing = match_reference_timing
 
             self._set_state(self.STATE_TIMELINE)
 

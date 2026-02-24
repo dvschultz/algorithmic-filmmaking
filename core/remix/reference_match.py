@@ -6,9 +6,12 @@ on artist-selected dimensions and weights.
 """
 
 import logging
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from models.clip import Clip, Source
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +56,7 @@ _SHOT_TYPE_PROXIMITY = {
 }
 
 
-def _get_proximity_score(clip: Any) -> float:
+def _get_proximity_score(clip: "Clip") -> float:
     """Get numeric proximity score for a clip's shot scale.
 
     Prefers 10-class cinematography.shot_size, falls back to 5-class shot_type.
@@ -66,10 +69,10 @@ def _get_proximity_score(clip: Any) -> float:
 
 
 def extract_feature_vector(
-    clip: Any,
-    source: Any,
+    clip: "Clip",
+    source: "Source",
     active_dimensions: list[str],
-) -> dict[str, Any]:
+) -> dict:
     """Extract feature values for active dimensions from a clip.
 
     Returns a dict mapping dimension key to its raw value. Values are NOT
@@ -82,7 +85,7 @@ def extract_feature_vector(
     """
     from core.analysis.color import get_primary_hue
 
-    vector: dict[str, Any] = {}
+    vector: dict = {}
 
     if "color" in active_dimensions and clip.dominant_colors:
         vector["color"] = get_primary_hue(clip.dominant_colors) / 360.0
@@ -113,7 +116,7 @@ def extract_feature_vector(
 
 
 def compute_normalizers(
-    all_vectors: list[dict[str, Any]],
+    all_vectors: list[dict],
     active_dimensions: list[str],
 ) -> dict[str, tuple[float, float]]:
     """Compute min-max normalizers for scalar dimensions.
@@ -162,11 +165,47 @@ def _cosine_distance(a: list[float], b: list[float]) -> float:
     return (1.0 - similarity) / 2.0
 
 
+def _batch_cosine_distances(
+    ref_embeddings: list[list[float]],
+    user_embeddings: list[list[float]],
+) -> Optional[np.ndarray]:
+    """Pre-compute R×U cosine distance matrix for embedding vectors.
+
+    Returns an (R, U) ndarray of distances in [0, 1], or None if either list
+    is empty. Vectors with zero norm get distance 1.0.
+    """
+    if not ref_embeddings or not user_embeddings:
+        return None
+
+    R = np.array(ref_embeddings, dtype=np.float32)  # (R, D)
+    U = np.array(user_embeddings, dtype=np.float32)  # (U, D)
+
+    r_norms = np.linalg.norm(R, axis=1, keepdims=True)  # (R, 1)
+    u_norms = np.linalg.norm(U, axis=1, keepdims=True)  # (U, 1)
+
+    # Avoid division by zero: replace zero norms with 1 (result overridden below)
+    r_safe = np.where(r_norms == 0, 1.0, r_norms)
+    u_safe = np.where(u_norms == 0, 1.0, u_norms)
+
+    similarity = (R / r_safe) @ (U / u_safe).T  # (R, U)
+    np.clip(similarity, -1.0, 1.0, out=similarity)
+    distances = (1.0 - similarity) / 2.0
+
+    # Set distance to 1.0 where either vector had zero norm
+    zero_ref = (r_norms.squeeze(1) == 0)  # (R,)
+    zero_user = (u_norms.squeeze(1) == 0)  # (U,)
+    distances[zero_ref, :] = 1.0
+    distances[:, zero_user] = 1.0
+
+    return distances
+
+
 def weighted_distance(
-    ref_vector: dict[str, Any],
-    user_vector: dict[str, Any],
+    ref_vector: dict,
+    user_vector: dict,
     weights: dict[str, float],
     normalizers: dict[str, tuple[float, float]],
+    embedding_dist: Optional[float] = None,
 ) -> float:
     """Compute weighted multi-dimensional distance between two feature vectors.
 
@@ -175,6 +214,8 @@ def weighted_distance(
         user_vector: Feature vector for user clip
         weights: Dimension -> weight (0.0 to 1.0)
         normalizers: Min-max bounds for scalar dimensions
+        embedding_dist: Pre-computed cosine distance for embedding dimension.
+            If provided, skips per-pair array allocation.
 
     Returns:
         Weighted average distance (0 = perfect match, higher = worse)
@@ -187,7 +228,7 @@ def weighted_distance(
             continue
 
         if dim in _EMBEDDING_DIMENSIONS:
-            dist = _cosine_distance(ref_vector[dim], user_vector[dim])
+            dist = embedding_dist if embedding_dist is not None else _cosine_distance(ref_vector[dim], user_vector[dim])
         elif dim in _CATEGORICAL_DIMENSIONS:
             dist = 0.0 if ref_vector[dim] == user_vector[dim] else 1.0
         else:
@@ -208,12 +249,11 @@ def weighted_distance(
 
 
 def reference_guided_match(
-    reference_clips: list[tuple[Any, Any]],
-    user_clips: list[tuple[Any, Any]],
+    reference_clips: list[tuple["Clip", "Source"]],
+    user_clips: list[tuple["Clip", "Source"]],
     weights: dict[str, float],
     allow_repeats: bool = False,
-    match_reference_timing: bool = False,
-) -> list[tuple[Any, Any]]:
+) -> list[tuple["Clip", "Source"]]:
     """Match user clips to reference clip positions via weighted distance.
 
     Greedy sequential matching: for each reference clip (in order), find the
@@ -226,8 +266,6 @@ def reference_guided_match(
         weights: Dimension key -> weight (0.0 to 1.0). Only dimensions with
             weight > 0 participate in matching.
         allow_repeats: If True, same user clip can match multiple positions.
-        match_reference_timing: If True, matched clips adopt reference duration
-            (trimmed to in/out points matching reference clip length).
 
     Returns:
         List of (Clip, Source) tuples in reference order. May be shorter than
@@ -257,9 +295,18 @@ def reference_guided_match(
     all_vectors = ref_vectors + user_vectors
     normalizers = compute_normalizers(all_vectors, active_dimensions)
 
+    # Pre-compute embedding distance matrix (R×U) to avoid per-pair allocation
+    embedding_dists = None
+    if "embedding" in active_weights:
+        ref_embs = [v.get("embedding") for v in ref_vectors]
+        user_embs = [v.get("embedding") for v in user_vectors]
+        # Only batch where both sides have embeddings
+        if all(e is not None for e in ref_embs) and all(e is not None for e in user_embs):
+            embedding_dists = _batch_cosine_distances(ref_embs, user_embs)
+
     # Greedy matching
     used_indices: set[int] = set()
-    result: list[tuple[Any, Any]] = []
+    result: list[tuple["Clip", "Source"]] = []
 
     for ref_idx, ref_vec in enumerate(ref_vectors):
         best_distance = float("inf")
@@ -269,7 +316,11 @@ def reference_guided_match(
             if not allow_repeats and user_idx in used_indices:
                 continue
 
-            dist = weighted_distance(ref_vec, user_vec, active_weights, normalizers)
+            dist = weighted_distance(
+                ref_vec, user_vec, active_weights, normalizers,
+                embedding_dist=float(embedding_dists[ref_idx, user_idx])
+                if embedding_dists is not None else None,
+            )
             if dist < best_distance:
                 best_distance = dist
                 best_user_idx = user_idx
@@ -296,7 +347,7 @@ def reference_guided_match(
 
 
 def get_active_dimensions_for_clips(
-    clips: list[Any],
+    clips: list["Clip"],
 ) -> list[str]:
     """Determine which dimensions have data available across a set of clips.
 

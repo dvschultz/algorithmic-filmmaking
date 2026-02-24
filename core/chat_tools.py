@@ -3858,6 +3858,11 @@ def list_sorting_algorithms(project) -> dict:
         "algorithms": algorithms,
         "clip_count": len(clips),
         "has_color_analysis": has_colors,
+        "reference_guided_available": True,
+        "reference_guided_note": (
+            "For matching clips to a reference video's structure, use the "
+            "generate_reference_guided tool instead of generate_remix."
+        ),
     }
 
 
@@ -3943,9 +3948,41 @@ def generate_remix(
 
 
 @tools.register(
+    description="Check which matching dimensions have analysis data for the current clips. "
+                "Call this before generate_reference_guided to discover which dimension weights "
+                "are valid (e.g. color requires color analysis, embedding requires embeddings).",
+    requires_project=True,
+    modifies_gui_state=False
+)
+def get_available_dimensions(project, main_window) -> dict:
+    """Check which reference-guided matching dimensions have data.
+
+    Returns:
+        Dict with available dimension keys and their descriptions
+    """
+    if main_window is None or not hasattr(main_window, 'sequence_tab'):
+        return {"success": False, "error": "Main window not available"}
+
+    clips = main_window.sequence_tab._available_clips
+    if not clips:
+        return {"success": False, "error": "No clips available for sequencing"}
+
+    from core.remix.reference_match import get_active_dimensions_for_clips
+    clip_objects = [clip for clip, _ in clips]
+    available = get_active_dimensions_for_clips(clip_objects)
+
+    return {
+        "success": True,
+        "available_dimensions": sorted(available),
+        "clip_count": len(clip_objects),
+    }
+
+
+@tools.register(
     description="Generate a reference-guided sequence that matches your clips to a reference "
                 "video's structure across weighted dimensions (color, brightness, shot_scale, "
-                "audio, embedding, movement, duration). Use list_sources to find source IDs.",
+                "audio, embedding, movement, duration). Use get_available_dimensions first to "
+                "check which dimensions have data. Use list_sources to find source IDs.",
     requires_project=True,
     modifies_gui_state=True
 )
@@ -3955,7 +3992,6 @@ def generate_reference_guided(
     reference_source_id: str,
     weights: Optional[dict] = None,
     allow_repeats: bool = False,
-    match_reference_timing: bool = False,
 ) -> dict:
     """Generate a sequence by matching user clips to a reference video's structure.
 
@@ -3965,7 +4001,6 @@ def generate_reference_guided(
             color, brightness, shot_scale, audio, embedding, movement, duration.
             Defaults to {"embedding": 1.0, "brightness": 0.4, "duration": 0.6}
         allow_repeats: Allow same clip to match multiple reference positions
-        match_reference_timing: Trim matched clips to reference clip durations
 
     Returns:
         Dict with success status, matched clips, and unmatched count
@@ -3989,6 +4024,18 @@ def generate_reference_guided(
             "error": f"Invalid dimensions: {invalid}. Valid: {sorted(valid_dims)}"
         }
 
+    for dim, val in weights.items():
+        if not isinstance(val, (int, float)):
+            return {
+                "success": False,
+                "error": f"Weight for '{dim}' must be a number, got {type(val).__name__}"
+            }
+        if not (0.0 <= val <= 1.0):
+            return {
+                "success": False,
+                "error": f"Weight for '{dim}' must be between 0.0 and 1.0, got {val}"
+            }
+
     if not any(v > 0 for v in weights.values()):
         return {
             "success": False,
@@ -4002,7 +4049,6 @@ def generate_reference_guided(
         reference_source_id=reference_source_id,
         weights=weights,
         allow_repeats=allow_repeats,
-        match_reference_timing=match_reference_timing,
     )
 
     return result
