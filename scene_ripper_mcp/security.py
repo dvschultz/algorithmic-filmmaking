@@ -11,7 +11,7 @@ SAFE_ROOTS = [
     Path(tempfile.gettempdir()).resolve(),
 ]
 
-# On macOS, also allow /var/folders (temp), /Volumes (external drives), /private/tmp
+# Platform-specific safe roots
 import sys
 
 if sys.platform == "darwin":
@@ -22,6 +22,14 @@ if sys.platform == "darwin":
             Path("/private/tmp"),
         ]
     )
+elif sys.platform == "win32":
+    # Allow all existing drive roots (users store videos on D:\, E:\, etc.)
+    import string
+
+    for letter in string.ascii_uppercase:
+        drive = Path(f"{letter}:\\")
+        if drive.exists():
+            SAFE_ROOTS.append(drive)
 
 
 def _is_path_under(path: Path, root: Path) -> bool:

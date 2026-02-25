@@ -1,8 +1,10 @@
 """Thumbnail generation using FFmpeg."""
 
 import logging
+import os
 import subprocess
 import shutil
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -25,8 +27,12 @@ class ThumbnailGenerator:
             else:
                 raise RuntimeError("FFmpeg not found")
 
-        # Default cache directory
-        default_cache = Path.home() / ".cache" / "scene-ripper" / "thumbnails"
+        # Default cache directory (platform-aware)
+        if sys.platform == "win32":
+            base = Path(os.environ.get("LOCALAPPDATA", str(Path.home())))
+            default_cache = base / "scene-ripper" / "cache" / "thumbnails"
+        else:
+            default_cache = Path.home() / ".cache" / "scene-ripper" / "thumbnails"
         if cache_dir is None:
             cache_dir = default_cache
 

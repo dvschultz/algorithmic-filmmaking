@@ -83,7 +83,7 @@ def _validate_path(path_str: str, must_exist: bool = False, allow_relative: bool
             Path(tempfile.gettempdir()).resolve(),
         ]
 
-        # On macOS, also allow /var/folders (temp), /Volumes (external drives), /private/tmp
+        # Platform-specific safe roots
         import sys
         if sys.platform == "darwin":
             safe_roots.extend([
@@ -91,6 +91,13 @@ def _validate_path(path_str: str, must_exist: bool = False, allow_relative: bool
                 Path("/Volumes"),
                 Path("/private/tmp"),
             ])
+        elif sys.platform == "win32":
+            # Allow all existing drive roots (users store videos on D:\, E:\, etc.)
+            import string
+            for letter in string.ascii_uppercase:
+                drive = Path(f"{letter}:\\")
+                if drive.exists():
+                    safe_roots.append(drive)
 
         is_safe = any(
             _is_path_under(resolved, safe_root)
