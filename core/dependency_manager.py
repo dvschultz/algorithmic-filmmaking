@@ -1,12 +1,15 @@
 """On-demand dependency manager for binary tools and Python packages.
 
-Downloads and manages external dependencies that are not bundled in the .app:
-- FFmpeg / FFprobe (static arm64 builds)
+Downloads and manages external dependencies that are not bundled in the app:
+- FFmpeg / FFprobe (platform-specific static builds)
 - yt-dlp (standalone binary)
 - Python 3.11 standalone (for pip install --target)
 - Python packages via pip install --target (using standalone Python)
 
-All managed files are stored in ~/Library/Application Support/Scene Ripper/.
+Managed files are stored in the platform-appropriate app support directory:
+- macOS: ~/Library/Application Support/Scene Ripper/
+- Windows: %LOCALAPPDATA%/Scene Ripper/
+- Linux: ~/.local/share/scene-ripper/
 """
 
 import hashlib
@@ -16,6 +19,7 @@ import os
 import platform
 import stat
 import subprocess
+import sys
 import tempfile
 import urllib.request
 from pathlib import Path
@@ -25,10 +29,58 @@ from core.paths import get_managed_bin_dir, get_managed_packages_dir, get_manage
 
 logger = logging.getLogger(__name__)
 
-# Download URLs for static arm64 macOS binaries
-_FFMPEG_URL = "https://www.osxexperts.net/ffmpeg7arm.zip"
-_FFPROBE_URL = "https://www.osxexperts.net/ffprobe7arm.zip"
-_YTDLP_URL = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos"
+# ---------------------------------------------------------------------------
+# Platform-specific download URLs
+# ---------------------------------------------------------------------------
+
+# macOS ARM64 binaries
+_FFMPEG_URL_MACOS = "https://www.osxexperts.net/ffmpeg7arm.zip"
+_FFPROBE_URL_MACOS = "https://www.osxexperts.net/ffprobe7arm.zip"
+_YTDLP_URL_MACOS = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos"
+
+# Windows x64 binaries
+_FFMPEG_URL_WINDOWS = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+_YTDLP_URL_WINDOWS = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
+
+
+def _get_ffmpeg_url() -> str:
+    """Get platform-appropriate FFmpeg download URL."""
+    if sys.platform == "win32":
+        return _FFMPEG_URL_WINDOWS
+    if sys.platform == "darwin" and platform.machine() == "arm64":
+        return _FFMPEG_URL_MACOS
+    raise RuntimeError(
+        f"Automatic FFmpeg download not available for {sys.platform}/{platform.machine()}"
+    )
+
+
+def _get_ffprobe_url() -> str:
+    """Get platform-appropriate FFprobe download URL."""
+    if sys.platform == "win32":
+        # BtbN Windows builds include both ffmpeg and ffprobe in the same zip
+        return _FFMPEG_URL_WINDOWS
+    if sys.platform == "darwin" and platform.machine() == "arm64":
+        return _FFPROBE_URL_MACOS
+    raise RuntimeError(
+        f"Automatic FFprobe download not available for {sys.platform}/{platform.machine()}"
+    )
+
+
+def _get_ytdlp_url() -> str:
+    """Get platform-appropriate yt-dlp download URL."""
+    if sys.platform == "win32":
+        return _YTDLP_URL_WINDOWS
+    if sys.platform == "darwin":
+        return _YTDLP_URL_MACOS
+    raise RuntimeError(
+        f"Automatic yt-dlp download not available for {sys.platform}"
+    )
+
+
+def _get_binary_ext() -> str:
+    """Get the platform-appropriate binary file extension."""
+    return ".exe" if sys.platform == "win32" else ""
+
 
 # Standalone Python 3.11 (python-build-standalone from Astral/indygreg)
 # Self-contained tarball — no .pkg extraction or sudo needed
@@ -49,9 +101,11 @@ _MIN_PYTHON_SIZE = 30 * 1024 * 1024   # 30 MB (extracted)
 # Update these when changing download URLs or versions.
 # Set to None to skip verification (e.g., for yt-dlp /latest which changes).
 _CHECKSUMS: dict[str, str | None] = {
-    _FFMPEG_URL: None,    # TODO: pin after verifying first download
-    _FFPROBE_URL: None,   # TODO: pin after verifying first download
-    _YTDLP_URL: None,     # /latest URL changes with each release
+    _FFMPEG_URL_MACOS: None,    # TODO: pin after verifying first download
+    _FFPROBE_URL_MACOS: None,   # TODO: pin after verifying first download
+    _YTDLP_URL_MACOS: None,     # /latest URL changes with each release
+    _FFMPEG_URL_WINDOWS: None,  # /latest URL changes
+    _YTDLP_URL_WINDOWS: None,   # /latest URL changes
     _PYTHON_URL: None,    # TODO: pin after verifying first download
 }
 
@@ -176,8 +230,9 @@ def _extract_zip_binary(zip_path: Path, binary_name: str, dest_dir: Path) -> Pat
         if extracted != final:
             os.replace(extracted, final)
 
-    # Make executable
-    final.chmod(final.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    # Make executable (no-op on Windows)
+    if sys.platform != "win32":
+        final.chmod(final.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
     return final
 
@@ -192,19 +247,19 @@ def ensure_ffmpeg(progress_callback: ProgressCallback = None) -> Path:
         RuntimeError: If download or extraction fails.
     """
     bin_dir = get_managed_bin_dir()
-    ffmpeg_path = bin_dir / "ffmpeg"
+    ext = _get_binary_ext()
+    ffmpeg_path = bin_dir / f"ffmpeg{ext}"
 
-    if ffmpeg_path.is_file() and os.access(ffmpeg_path, os.X_OK):
+    if ffmpeg_path.is_file():
         return ffmpeg_path
 
-    if platform.machine() != "arm64":
-        raise RuntimeError("Automatic FFmpeg download only supports Apple Silicon (arm64)")
+    url = _get_ffmpeg_url()
 
     # Download and extract
     with tempfile.TemporaryDirectory() as tmp:
         zip_path = Path(tmp) / "ffmpeg.zip"
-        _download_file(_FFMPEG_URL, zip_path, progress_callback, "FFmpeg")
-        _extract_zip_binary(zip_path, "ffmpeg", bin_dir)
+        _download_file(url, zip_path, progress_callback, "FFmpeg")
+        _extract_zip_binary(zip_path, f"ffmpeg{ext}", bin_dir)
 
     # Validate
     if not ffmpeg_path.is_file() or ffmpeg_path.stat().st_size < _MIN_FFMPEG_SIZE:
@@ -225,18 +280,18 @@ def ensure_ffprobe(progress_callback: ProgressCallback = None) -> Path:
         RuntimeError: If download or extraction fails.
     """
     bin_dir = get_managed_bin_dir()
-    ffprobe_path = bin_dir / "ffprobe"
+    ext = _get_binary_ext()
+    ffprobe_path = bin_dir / f"ffprobe{ext}"
 
-    if ffprobe_path.is_file() and os.access(ffprobe_path, os.X_OK):
+    if ffprobe_path.is_file():
         return ffprobe_path
 
-    if platform.machine() != "arm64":
-        raise RuntimeError("Automatic FFprobe download only supports Apple Silicon (arm64)")
+    url = _get_ffprobe_url()
 
     with tempfile.TemporaryDirectory() as tmp:
         zip_path = Path(tmp) / "ffprobe.zip"
-        _download_file(_FFPROBE_URL, zip_path, progress_callback, "FFprobe")
-        _extract_zip_binary(zip_path, "ffprobe", bin_dir)
+        _download_file(url, zip_path, progress_callback, "FFprobe")
+        _extract_zip_binary(zip_path, f"ffprobe{ext}", bin_dir)
 
     if not ffprobe_path.is_file() or ffprobe_path.stat().st_size < _MIN_FFPROBE_SIZE:
         ffprobe_path.unlink(missing_ok=True)
@@ -256,15 +311,18 @@ def ensure_yt_dlp(progress_callback: ProgressCallback = None) -> Path:
         RuntimeError: If download fails.
     """
     bin_dir = get_managed_bin_dir()
-    ytdlp_path = bin_dir / "yt-dlp"
+    ext = _get_binary_ext()
+    ytdlp_path = bin_dir / f"yt-dlp{ext}"
 
-    if ytdlp_path.is_file() and os.access(ytdlp_path, os.X_OK):
+    if ytdlp_path.is_file():
         return ytdlp_path
 
-    _download_file(_YTDLP_URL, ytdlp_path, progress_callback, "yt-dlp")
+    url = _get_ytdlp_url()
+    _download_file(url, ytdlp_path, progress_callback, "yt-dlp")
 
-    # Make executable
-    ytdlp_path.chmod(ytdlp_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    # Make executable (no-op on Windows)
+    if sys.platform != "win32":
+        ytdlp_path.chmod(ytdlp_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
     if ytdlp_path.stat().st_size < _MIN_YTDLP_SIZE:
         ytdlp_path.unlink(missing_ok=True)
@@ -281,7 +339,8 @@ def update_yt_dlp(progress_callback: ProgressCallback = None) -> Path:
         Path to the updated yt-dlp binary.
     """
     bin_dir = get_managed_bin_dir()
-    ytdlp_path = bin_dir / "yt-dlp"
+    ext = _get_binary_ext()
+    ytdlp_path = bin_dir / f"yt-dlp{ext}"
 
     # Remove existing to force re-download
     ytdlp_path.unlink(missing_ok=True)
@@ -295,20 +354,33 @@ def ensure_python(progress_callback: ProgressCallback = None) -> Path:
     This Python is used exclusively for `pip install --target` to install
     on-demand packages — it is NOT the app's runtime Python.
 
+    On frozen Windows builds, Python is bundled by PyInstaller, so this
+    function is not needed and returns the current interpreter.
+
     Returns:
         Path to the python3 binary.
 
     Raises:
         RuntimeError: If download or extraction fails.
     """
-    python_dir = get_managed_python_dir()
-    python_bin = python_dir / "bin" / "python3"
+    # On frozen Windows builds, Python is bundled — no managed Python needed
+    if getattr(sys, "frozen", False) and sys.platform == "win32":
+        return Path(sys.executable)
 
-    if python_bin.is_file() and os.access(python_bin, os.X_OK):
+    python_dir = get_managed_python_dir()
+    if sys.platform == "win32":
+        python_bin = python_dir / "python.exe"
+    else:
+        python_bin = python_dir / "bin" / "python3"
+
+    if python_bin.is_file() and (sys.platform == "win32" or os.access(python_bin, os.X_OK)):
         return python_bin
 
-    if platform.machine() != "arm64":
+    if sys.platform == "darwin" and platform.machine() != "arm64":
         raise RuntimeError("Automatic Python download only supports Apple Silicon (arm64)")
+
+    if sys.platform == "win32":
+        raise RuntimeError("Automatic Python download not yet supported on Windows")
 
     if progress_callback:
         progress_callback(0.0, "Downloading Python 3.11...")
@@ -377,7 +449,10 @@ def ensure_python(progress_callback: ProgressCallback = None) -> Path:
 
 def get_python_version() -> Optional[str]:
     """Get the version of the managed standalone Python, or None if not installed."""
-    python_bin = get_managed_python_dir() / "bin" / "python3"
+    if sys.platform == "win32":
+        python_bin = get_managed_python_dir() / "python.exe"
+    else:
+        python_bin = get_managed_python_dir() / "bin" / "python3"
     if not python_bin.is_file():
         return None
     try:
@@ -441,10 +516,11 @@ def is_binary_available(name: str) -> bool:
         name: Binary name (ffmpeg, ffprobe, yt-dlp).
 
     Returns:
-        True if the binary exists and is executable.
+        True if the binary exists in the managed bin directory.
     """
-    path = get_managed_bin_dir() / name
-    return path.is_file() and os.access(path, os.X_OK)
+    ext = _get_binary_ext()
+    path = get_managed_bin_dir() / f"{name}{ext}"
+    return path.is_file()
 
 
 def install_package(
