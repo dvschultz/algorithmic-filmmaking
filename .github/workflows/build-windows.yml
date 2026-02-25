@@ -1,0 +1,68 @@
+name: Windows Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number for the installer'
+        required: false
+        default: '0.2.0'
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  build-windows:
+    name: Build Windows Installer
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Determine version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="${{ github.event.inputs.version || '0.2.0' }}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Install dependencies
+        run: pip install -r requirements-core.txt pyinstaller
+
+      - name: Build with PyInstaller
+        env:
+          APP_VERSION: ${{ steps.version.outputs.version }}
+        run: pyinstaller packaging/windows/scene_ripper.spec --distpath dist --workpath build --noconfirm
+
+      - name: Build Inno Setup installer
+        uses: jrsoftware/iscc-action@v1
+        with:
+          script: packaging/windows/scene_ripper.iss
+        env:
+          APP_VERSION: ${{ steps.version.outputs.version }}
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SceneRipper-Windows-Installer
+          path: packaging/windows/Output/*.exe
+
+      - name: Upload to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: packaging/windows/Output/*.exe
