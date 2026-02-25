@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
+from core.binary_resolver import find_binary, get_subprocess_kwargs
+
 logger = logging.getLogger(__name__)
 
 # Lazy load to avoid startup delay
@@ -328,9 +330,10 @@ def _transcribe_video_mlx(
         tmp_path = Path(tmp.name)
 
     try:
+        _ffmpeg = find_binary("ffmpeg") or "ffmpeg"
         subprocess.run(
             [
-                "ffmpeg", "-y",
+                _ffmpeg, "-y",
                 "-i", str(video_path),
                 "-vn",
                 "-acodec", "pcm_s16le",
@@ -340,6 +343,7 @@ def _transcribe_video_mlx(
             ],
             capture_output=True,
             check=True,
+            **get_subprocess_kwargs(),
         )
 
         if progress_callback:
@@ -390,9 +394,10 @@ def transcribe_clip(
 
     try:
         # Extract audio segment with FFmpeg
+        _ffmpeg = find_binary("ffmpeg") or "ffmpeg"
         subprocess.run(
             [
-                "ffmpeg", "-y",
+                _ffmpeg, "-y",
                 "-ss", str(start_time),
                 "-to", str(end_time),
                 "-i", str(source_path),
@@ -404,6 +409,7 @@ def transcribe_clip(
             ],
             capture_output=True,
             check=True,
+            **get_subprocess_kwargs(),
         )
 
         # Check if audio was actually extracted (file size > 0)
@@ -519,9 +525,10 @@ def _transcribe_cloud_groq(
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             tmp_path = Path(tmp.name)
         try:
+            _ffmpeg = find_binary("ffmpeg") or "ffmpeg"
             subprocess.run(
                 [
-                    "ffmpeg", "-y",
+                    _ffmpeg, "-y",
                     "-i", str(audio_path),
                     "-vn",
                     "-acodec", "pcm_s16le",
@@ -531,6 +538,7 @@ def _transcribe_cloud_groq(
                 ],
                 capture_output=True,
                 check=True,
+                **get_subprocess_kwargs(),
             )
             audio_file_path = tmp_path
         except subprocess.CalledProcessError as e:

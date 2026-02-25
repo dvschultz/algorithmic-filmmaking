@@ -9,6 +9,7 @@ Replaces scattered shutil.which() calls with a single lookup chain:
 import logging
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
@@ -30,6 +31,14 @@ _USER_SEARCH_PATHS = [
     str(Path.home() / ".deno" / "bin"),
 ]
 
+# Windows-specific search paths for common install locations
+if sys.platform == "win32":
+    _EXTRA_SEARCH_PATHS.extend([
+        r"C:\Program Files\FFmpeg\bin",
+        r"C:\ffmpeg\bin",
+        str(Path.home() / "scoop" / "shims"),
+    ])
+
 
 def find_binary(name: str) -> Optional[str]:
     """Find an external binary by name.
@@ -45,27 +54,43 @@ def find_binary(name: str) -> Optional[str]:
     Returns:
         Absolute path to the binary, or None if not found.
     """
+    # On Windows, check both the bare name and with .exe suffix
+    suffixes = [".exe", ""] if sys.platform == "win32" else [""]
+
     # 1. Check managed bin directory
     managed_dir = get_managed_bin_dir()
-    managed_path = managed_dir / name
-    if managed_path.is_file() and os.access(managed_path, os.X_OK):
-        logger.debug(f"Found {name} in managed bin dir: {managed_path}")
-        return str(managed_path)
+    for suffix in suffixes:
+        managed_path = managed_dir / (name + suffix)
+        if managed_path.is_file():
+            logger.debug(f"Found {name} in managed bin dir: {managed_path}")
+            return str(managed_path)
 
     # 2. Check extra search paths (especially important for macOS GUI apps)
     for search_dir in _EXTRA_SEARCH_PATHS + _USER_SEARCH_PATHS:
-        candidate = os.path.join(search_dir, name)
-        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-            logger.debug(f"Found {name} in extra path: {candidate}")
-            return candidate
+        for suffix in suffixes:
+            candidate = os.path.join(search_dir, name + suffix)
+            if os.path.isfile(candidate):
+                logger.debug(f"Found {name} in extra path: {candidate}")
+                return candidate
 
-    # 3. Standard PATH lookup
+    # 3. Standard PATH lookup (shutil.which handles .exe on Windows natively)
     result = shutil.which(name)
     if result:
         logger.debug(f"Found {name} via PATH: {result}")
     else:
         logger.debug(f"{name} not found in any search location")
     return result
+
+
+def get_subprocess_kwargs() -> dict:
+    """Return platform-appropriate kwargs for subprocess calls.
+
+    On Windows, adds CREATE_NO_WINDOW flag to prevent console windows
+    from flashing behind the GUI during subprocess operations.
+    """
+    if sys.platform == "win32":
+        return {"creationflags": subprocess.CREATE_NO_WINDOW}
+    return {}
 
 
 def get_subprocess_env() -> dict:

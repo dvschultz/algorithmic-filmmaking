@@ -6,7 +6,7 @@ import threading
 from pathlib import Path
 from typing import Callable, Optional
 
-from core.binary_resolver import find_binary
+from core.binary_resolver import find_binary, get_subprocess_kwargs
 from core.paths import is_frozen
 
 logger = logging.getLogger(__name__)
@@ -107,6 +107,7 @@ class FFmpegProcessor:
             capture_output=True,
             text=True,
             timeout=300,  # 5 minute timeout for clip extraction
+            **get_subprocess_kwargs(),
         )
 
         return result.returncode == 0
@@ -126,7 +127,8 @@ class FFmpegProcessor:
             str(video_path),
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30,
+                                **get_subprocess_kwargs())
         if result.returncode != 0:
             raise RuntimeError(f"FFprobe failed: {result.stderr}")
 
@@ -201,6 +203,7 @@ def extract_frame(
         capture_output=True,
         text=True,
         timeout=30,
+        **get_subprocess_kwargs(),
     )
 
     return result.returncode == 0 and output_path.exists()
@@ -249,7 +252,8 @@ def estimate_extraction_size(
             "-show_format",
             str(video_path),
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30,
+                                **get_subprocess_kwargs())
         if result.returncode != 0:
             raise RuntimeError(f"FFprobe failed: {result.stderr}")
         data = json.loads(result.stdout)
@@ -347,6 +351,7 @@ def extract_frames_batch(
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        **get_subprocess_kwargs(),
     )
 
     # Poll for cancellation while FFmpeg is running

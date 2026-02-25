@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 from models.sequence import Sequence, SequenceClip
 from models.clip import Source
-from core.binary_resolver import find_binary
+from core.binary_resolver import find_binary, get_subprocess_kwargs
 
 if TYPE_CHECKING:
     from models.frame import Frame
@@ -174,7 +174,8 @@ class SequenceExporter:
 
         cmd.append(str(output_path))
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300,
+                                **get_subprocess_kwargs())
         return result.returncode == 0
 
     def _export_frame_segment(
@@ -224,7 +225,8 @@ class SequenceExporter:
             str(output_path),
         ])
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300,
+                                **get_subprocess_kwargs())
         return result.returncode == 0
 
     def _concat_segments(
@@ -257,7 +259,8 @@ class SequenceExporter:
                 str(output_path),
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600,
+                                    **get_subprocess_kwargs())
             return result.returncode == 0
         finally:
             Path(concat_file).unlink(missing_ok=True)

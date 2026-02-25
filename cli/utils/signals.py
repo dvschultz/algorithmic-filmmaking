@@ -193,7 +193,8 @@ def setup_signal_handlers(checkpoint: Optional[ProgressCheckpoint] = None) -> No
     _active_checkpoint = checkpoint
 
     signal.signal(signal.SIGINT, _signal_handler)
-    signal.signal(signal.SIGTERM, _signal_handler)
+    if sys.platform != "win32":
+        signal.signal(signal.SIGTERM, _signal_handler)
 
 
 def restore_default_handlers() -> None:
@@ -202,7 +203,8 @@ def restore_default_handlers() -> None:
     _active_checkpoint = None
 
     signal.signal(signal.SIGINT, signal.SIG_DFL)
-    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    if sys.platform != "win32":
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
 
 
 def interruptible_loop(

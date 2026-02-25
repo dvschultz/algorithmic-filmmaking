@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
-from core.binary_resolver import find_binary
+from core.binary_resolver import find_binary, get_subprocess_kwargs
 from core.paths import is_frozen
 
 logger = logging.getLogger(__name__)
@@ -88,6 +88,7 @@ class ThumbnailGenerator:
             capture_output=True,
             text=True,
             timeout=60,  # 60 second timeout for thumbnail generation
+            **get_subprocess_kwargs(),
         )
 
         if result.returncode != 0:

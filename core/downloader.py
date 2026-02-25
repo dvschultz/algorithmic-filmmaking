@@ -11,7 +11,7 @@ from typing import Callable, Optional
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
-from core.binary_resolver import find_binary, get_subprocess_env
+from core.binary_resolver import find_binary, get_subprocess_env, get_subprocess_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +133,8 @@ class VideoDownloader:
 
         try:
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=30, env=get_subprocess_env()
+                cmd, capture_output=True, text=True, timeout=30,
+                env=get_subprocess_env(), **get_subprocess_kwargs()
             )
         except subprocess.TimeoutExpired:
             raise RuntimeError("Timed out getting video info (30 seconds)")
@@ -264,6 +265,7 @@ class VideoDownloader:
             stderr=subprocess.STDOUT,
             text=True,
             env=env,
+            **get_subprocess_kwargs(),
         )
 
         output_file = None
