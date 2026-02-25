@@ -49,11 +49,9 @@ jobs:
         run: pyinstaller packaging/windows/scene_ripper.spec --distpath dist --workpath build --noconfirm
 
       - name: Build Inno Setup installer
-        uses: jrsoftware/iscc-action@v1
-        with:
-          script: packaging/windows/scene_ripper.iss
         env:
           APP_VERSION: ${{ steps.version.outputs.version }}
+        run: iscc packaging/windows/scene_ripper.iss
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
