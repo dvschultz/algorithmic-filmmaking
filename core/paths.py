@@ -31,10 +31,15 @@ def get_app_support_dir() -> Path:
     """Return the Application Support directory for Scene Ripper.
 
     On macOS: ~/Library/Application Support/Scene Ripper/
+    On Windows: %LOCALAPPDATA%/Scene Ripper/
     On Linux: ~/.local/share/scene-ripper/
     """
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Application Support" / "Scene Ripper"
+    if sys.platform == "win32":
+        return Path(os.environ.get(
+            "LOCALAPPDATA", str(Path.home() / "AppData" / "Local")
+        )) / "Scene Ripper"
     return Path.home() / ".local" / "share" / "scene-ripper"
 
 
@@ -65,7 +70,7 @@ def get_log_dir() -> Path:
     """Return the directory for application log files.
 
     On macOS: ~/Library/Logs/Scene Ripper/
-    On Linux: ~/.local/share/scene-ripper/logs/
+    On Windows/Linux: <app_support>/logs/
     """
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Logs" / "Scene Ripper"

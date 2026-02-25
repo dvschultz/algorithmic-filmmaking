@@ -2,6 +2,7 @@
 
 import json
 import os
+import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -132,6 +133,7 @@ class TestSettingsHelpers:
 class TestConfigPaths:
     """Tests for config path functions."""
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="PosixPath not available on Windows")
     def test_get_config_dir_xdg(self):
         """Test XDG config directory on Unix."""
         with patch.dict(os.environ, {"XDG_CONFIG_HOME": "/custom/config"}, clear=False):
@@ -139,6 +141,7 @@ class TestConfigPaths:
                 config_dir = _get_config_dir()
                 assert config_dir == Path("/custom/config/scene-ripper")
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="PosixPath not available on Windows")
     def test_get_config_dir_default_unix(self):
         """Test default config directory on Unix."""
         with patch.dict(os.environ, {}, clear=True):
@@ -149,7 +152,11 @@ class TestConfigPaths:
 
     def test_get_config_path_default(self):
         """Test default config file path."""
-        with patch.dict(os.environ, {}, clear=True):
+        # Preserve HOME-related vars so Path.home() works on all platforms
+        home_vars = {k: v for k, v in os.environ.items()
+                     if k in ("HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH",
+                              "APPDATA", "LOCALAPPDATA", "SYSTEMROOT", "WINDIR")}
+        with patch.dict(os.environ, home_vars, clear=True):
             config_path = _get_config_path()
             assert config_path.name == "config.json"
             assert "scene-ripper" in str(config_path)
@@ -160,6 +167,7 @@ class TestConfigPaths:
             config_path = _get_config_path()
             assert config_path == Path("/custom/path/settings.json")
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="PosixPath not available on Windows")
     def test_get_cache_dir_xdg(self):
         """Test XDG cache directory."""
         with patch.dict(os.environ, {"XDG_CACHE_HOME": "/custom/cache"}, clear=False):
@@ -244,7 +252,11 @@ class TestEnvironmentVariables:
 
     def test_is_from_environment_false(self):
         """Test is_from_environment returns False for non-overridden settings."""
-        with patch.dict(os.environ, {}, clear=True):
+        # Preserve HOME-related vars so Path.home() works on all platforms
+        home_vars = {k: v for k, v in os.environ.items()
+                     if k in ("HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH",
+                              "APPDATA", "LOCALAPPDATA", "SYSTEMROOT", "WINDIR")}
+        with patch.dict(os.environ, home_vars, clear=True):
             settings = Settings()
             _apply_env_overrides(settings)
             assert not is_from_environment("youtube_api_key")
@@ -468,7 +480,10 @@ class TestDownloadDirectoryValidation:
             assert error == ""
             assert new_dir.exists()
 
-    @pytest.mark.skipif(os.getuid() == 0, reason="Skip permission test when root")
+    @pytest.mark.skipif(
+        sys.platform == "win32" or (hasattr(os, "getuid") and os.getuid() == 0),
+        reason="Skip permission test on Windows or when root",
+    )
     def test_validate_download_dir_permission_denied(self):
         """Test validation fails for non-writable paths."""
         # /root is typically not writable by non-root users

@@ -1,10 +1,13 @@
 """Unit tests for content analysis modules (classification and detection)."""
 
+import importlib.util
 import tempfile
 from pathlib import Path
 from unittest.mock import Mock, MagicMock, patch
 
 import pytest
+
+_has_torch = importlib.util.find_spec("torch") is not None
 
 from models.clip import Source, Clip
 from core.project import Project
@@ -30,6 +33,7 @@ def _create_filter_test_project() -> Project:
 class TestClassificationModule:
     """Tests for core/analysis/classification.py."""
 
+    @pytest.mark.skipif(not _has_torch, reason="torch not installed")
     def test_classify_frame_returns_list_type(self):
         """Test classify_frame returns a list."""
         # Since the actual function has complex dependencies on torch/PIL,
@@ -42,6 +46,7 @@ class TestClassificationModule:
         # Should be empty since file doesn't exist
         assert result == []
 
+    @pytest.mark.skipif(not _has_torch, reason="torch not installed")
     def test_classify_frame_handles_invalid_path_gracefully(self):
         """Test classify_frame returns empty list for invalid paths."""
         from core.analysis.classification import classify_frame

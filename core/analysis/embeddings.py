@@ -13,6 +13,8 @@ import tempfile
 import threading
 from pathlib import Path
 
+from core.binary_resolver import find_binary, get_subprocess_kwargs
+
 import numpy as np
 from PIL import Image
 
@@ -203,8 +205,9 @@ def _extract_frame_image(source_path: Path, time_seconds: float) -> Image.Image:
         tmp_path = Path(tmp.name)
 
     try:
+        _ffmpeg = find_binary("ffmpeg") or "ffmpeg"
         cmd = [
-            "ffmpeg", "-y",
+            _ffmpeg, "-y",
             "-ss", str(time_seconds),
             "-i", str(source_path),
             "-frames:v", "1",
@@ -217,6 +220,7 @@ def _extract_frame_image(source_path: Path, time_seconds: float) -> Image.Image:
             capture_output=True,
             text=True,
             timeout=30,
+            **get_subprocess_kwargs(),
         )
 
         if result.returncode != 0 or not tmp_path.exists():

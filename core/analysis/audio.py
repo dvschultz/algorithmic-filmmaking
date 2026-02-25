@@ -12,11 +12,14 @@ music videos, montages, and rhythm-driven editing.
 import bisect
 import logging
 import subprocess
+import sys
 import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Generator, Optional
+
+from core.binary_resolver import find_binary, get_subprocess_kwargs
 
 import numpy as np
 
@@ -142,15 +145,17 @@ def has_audio_track(file_path: Path) -> bool:
     Returns:
         True if file has at least one audio stream
     """
+    _ffprobe = find_binary("ffprobe") or "ffprobe"
     cmd = [
-        "ffprobe", "-v", "error",
+        _ffprobe, "-v", "error",
         "-select_streams", "a",
         "-show_entries", "stream=codec_type",
         "-of", "csv=p=0",
         str(file_path)
     ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30,
+                                **get_subprocess_kwargs())
         # Check return code - ffprobe returns non-zero for errors
         if result.returncode != 0:
             logger.warning(f"ffprobe returned non-zero: {result.stderr.strip()}")
@@ -216,8 +221,9 @@ def extract_audio(
         temp_dir = tempfile.mkdtemp(prefix="audio_")
         output_path = Path(temp_dir) / "audio.wav"
 
+    _ffmpeg = find_binary("ffmpeg") or "ffmpeg"
     cmd = [
-        "ffmpeg", "-y",
+        _ffmpeg, "-y",
         "-i", str(video_path),
         "-vn",  # No video
         "-acodec", "pcm_s16le",  # PCM 16-bit
@@ -232,6 +238,7 @@ def extract_audio(
             capture_output=True,
             text=True,
             timeout=300,  # 5 minute timeout
+            **get_subprocess_kwargs(),
         )
         if result.returncode != 0:
             raise RuntimeError(f"FFmpeg audio extraction failed: {result.stderr}")
@@ -366,15 +373,17 @@ def extract_clip_volume(
     if not _has_audio:
         return None
 
+    _ffmpeg = find_binary("ffmpeg") or "ffmpeg"
+    null_target = "NUL" if sys.platform == "win32" else "-"
     cmd = [
-        "ffmpeg", "-y",
+        _ffmpeg, "-y",
         "-ss", str(start_seconds),
         "-t", str(duration_seconds),
         "-i", str(source_path),
         "-vn",
         "-af", "volumedetect",
         "-f", "null",
-        "-",
+        null_target,
     ]
 
     try:
@@ -383,6 +392,7 @@ def extract_clip_volume(
             capture_output=True,
             text=True,
             timeout=60,
+            **get_subprocess_kwargs(),
         )
 
         # Parse mean_volume from stderr

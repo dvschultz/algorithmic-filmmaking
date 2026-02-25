@@ -2,6 +2,7 @@
 
 import logging
 import os
+import sys
 import threading
 from pathlib import Path
 from typing import Optional
@@ -29,8 +30,13 @@ def _get_model_cache_dir() -> Path:
         cache_dir.mkdir(parents=True, exist_ok=True)
         return cache_dir
     except Exception:
-        # Fallback to default
-        default = Path.home() / ".cache" / "scene-ripper" / "models"
+        # Fallback to platform-appropriate default
+        if sys.platform == "win32":
+            import os as _os
+            base = Path(_os.environ.get("LOCALAPPDATA", str(Path.home())))
+            default = base / "scene-ripper" / "cache" / "models"
+        else:
+            default = Path.home() / ".cache" / "scene-ripper" / "models"
         default.mkdir(parents=True, exist_ok=True)
         return default
 

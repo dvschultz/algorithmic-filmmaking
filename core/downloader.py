@@ -11,7 +11,7 @@ from typing import Callable, Optional
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
-from core.binary_resolver import find_binary, get_subprocess_env
+from core.binary_resolver import find_binary, get_subprocess_env, get_subprocess_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,8 @@ class VideoDownloader:
         self.ytdlp_path = self._find_ytdlp()
 
         if download_dir is None:
-            download_dir = Path.home() / "Movies" / "Scene Ripper Downloads"
+            from core.settings import get_default_download_dir
+            download_dir = get_default_download_dir()
         self.download_dir = download_dir
         self.download_dir.mkdir(parents=True, exist_ok=True)
 
@@ -133,7 +134,8 @@ class VideoDownloader:
 
         try:
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=30, env=get_subprocess_env()
+                cmd, capture_output=True, text=True, timeout=30,
+                env=get_subprocess_env(), **get_subprocess_kwargs()
             )
         except subprocess.TimeoutExpired:
             raise RuntimeError("Timed out getting video info (30 seconds)")
@@ -264,6 +266,7 @@ class VideoDownloader:
             stderr=subprocess.STDOUT,
             text=True,
             env=env,
+            **get_subprocess_kwargs(),
         )
 
         output_file = None
@@ -365,18 +368,27 @@ class VideoDownloader:
             # Check for specific known issues
             recent_text = " ".join(recent_lines)
 
+            # Platform-specific Deno install hint
+            import sys as _sys
+            if _sys.platform == "win32":
+                deno_hint = "Install Deno: winget install DenoLand.Deno"
+            elif _sys.platform == "darwin":
+                deno_hint = "Install Deno: brew install deno"
+            else:
+                deno_hint = "Install Deno: curl -fsSL https://deno.land/install.sh | sh"
+
             # JavaScript runtime missing (yt-dlp 2025+ requirement)
             if "No supported JavaScript runtime" in recent_text:
                 error_msg = (
                     "yt-dlp requires a JavaScript runtime for YouTube downloads. "
-                    "Install Deno with: brew install deno (macOS) or see "
+                    f"{deno_hint} — or see "
                     "https://github.com/yt-dlp/yt-dlp/wiki/EJS"
                 )
             # 403 with JS runtime issue
             elif "HTTP Error 403: Forbidden" in recent_text and "JavaScript runtime" in recent_text:
                 error_msg = (
                     "YouTube download blocked (403). This is usually caused by missing "
-                    "JavaScript runtime. Install Deno with: brew install deno"
+                    f"JavaScript runtime. {deno_hint}"
                 )
             # SABR streaming 403 errors (GitHub issue #12482)
             elif "HTTP Error 403: Forbidden" in recent_text and "SABR" in recent_text:

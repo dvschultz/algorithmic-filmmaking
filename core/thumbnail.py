@@ -1,12 +1,14 @@
 """Thumbnail generation using FFmpeg."""
 
 import logging
+import os
 import subprocess
 import shutil
+import sys
 from pathlib import Path
 from typing import Optional
 
-from core.binary_resolver import find_binary
+from core.binary_resolver import find_binary, get_subprocess_kwargs
 from core.paths import is_frozen
 
 logger = logging.getLogger(__name__)
@@ -25,8 +27,12 @@ class ThumbnailGenerator:
             else:
                 raise RuntimeError("FFmpeg not found")
 
-        # Default cache directory
-        default_cache = Path.home() / ".cache" / "scene-ripper" / "thumbnails"
+        # Default cache directory (platform-aware)
+        if sys.platform == "win32":
+            base = Path(os.environ.get("LOCALAPPDATA", str(Path.home())))
+            default_cache = base / "scene-ripper" / "cache" / "thumbnails"
+        else:
+            default_cache = Path.home() / ".cache" / "scene-ripper" / "thumbnails"
         if cache_dir is None:
             cache_dir = default_cache
 
@@ -88,6 +94,7 @@ class ThumbnailGenerator:
             capture_output=True,
             text=True,
             timeout=60,  # 60 second timeout for thumbnail generation
+            **get_subprocess_kwargs(),
         )
 
         if result.returncode != 0:
