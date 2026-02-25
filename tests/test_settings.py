@@ -2,6 +2,7 @@
 
 import json
 import os
+import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -468,7 +469,10 @@ class TestDownloadDirectoryValidation:
             assert error == ""
             assert new_dir.exists()
 
-    @pytest.mark.skipif(os.getuid() == 0, reason="Skip permission test when root")
+    @pytest.mark.skipif(
+        sys.platform == "win32" or (hasattr(os, "getuid") and os.getuid() == 0),
+        reason="Skip permission test on Windows or when root",
+    )
     def test_validate_download_dir_permission_denied(self):
         """Test validation fails for non-writable paths."""
         # /root is typically not writable by non-root users

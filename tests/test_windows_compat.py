@@ -21,35 +21,24 @@ class TestGetAppSupportDirWindows:
 
     def test_uses_localappdata(self, tmp_path):
         """On Windows, should use LOCALAPPDATA."""
-        with patch("core.paths.sys") as mock_sys, \
-             patch.dict(os.environ, {"LOCALAPPDATA": str(tmp_path)}):
-            mock_sys.platform = "win32"
-            from core.paths import get_app_support_dir
-            # Re-import to pick up mocked platform
-            import importlib
-            import core.paths
-            importlib.reload(core.paths)
-            try:
-                result = core.paths.get_app_support_dir()
-                assert "Scene Ripper" in str(result)
-            finally:
-                importlib.reload(core.paths)
+        import core.paths
 
-    def test_fallback_when_no_localappdata(self, tmp_path):
+        with patch.object(sys, "platform", "win32"), \
+             patch.dict(os.environ, {"LOCALAPPDATA": str(tmp_path)}):
+            result = core.paths.get_app_support_dir()
+            assert "Scene Ripper" in str(result)
+            assert str(tmp_path) in str(result)
+
+    def test_fallback_when_no_localappdata(self):
         """Should fall back to ~/AppData/Local when LOCALAPPDATA unset."""
-        with patch("core.paths.sys") as mock_sys, \
-             patch.dict(os.environ, {}, clear=False):
-            mock_sys.platform = "win32"
-            # Remove LOCALAPPDATA if present
-            os.environ.pop("LOCALAPPDATA", None)
-            import importlib
-            import core.paths
-            importlib.reload(core.paths)
-            try:
-                result = core.paths.get_app_support_dir()
-                assert "Scene Ripper" in str(result)
-            finally:
-                importlib.reload(core.paths)
+        import core.paths
+
+        env = os.environ.copy()
+        env.pop("LOCALAPPDATA", None)
+        with patch.object(sys, "platform", "win32"), \
+             patch.dict(os.environ, env, clear=True):
+            result = core.paths.get_app_support_dir()
+            assert "Scene Ripper" in str(result)
 
 
 # ---------------------------------------------------------------------------
