@@ -1,9 +1,14 @@
 """Shared test fixtures and helpers for all tests."""
 
+import sys
 from pathlib import Path
 from typing import Optional
 
 import pytest
+
+# Platform markers (use as @pytest.mark.windows_only / @pytest.mark.unix_only)
+windows_only = pytest.mark.skipif(sys.platform != "win32", reason="Windows only")
+unix_only = pytest.mark.skipif(sys.platform == "win32", reason="Unix only")
 
 from core.project import Project
 from core.transcription import TranscriptSegment

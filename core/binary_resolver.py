@@ -89,7 +89,9 @@ def get_subprocess_kwargs() -> dict:
     from flashing behind the GUI during subprocess operations.
     """
     if sys.platform == "win32":
-        return {"creationflags": subprocess.CREATE_NO_WINDOW}
+        # CREATE_NO_WINDOW = 0x08000000 — only defined on Windows
+        create_no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        return {"creationflags": create_no_window}
     return {}
 
 
