@@ -2,6 +2,7 @@
 
 import json
 import os
+import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
@@ -123,6 +124,7 @@ class TestCLIConfig:
                     assert saved_data["detection"]["default_sensitivity"] == 8.0
                     # youtube_api_key is stored in keyring, not JSON
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="PosixPath not available on Windows")
     def test_get_config_dir_xdg(self):
         """Test XDG config directory on Linux/macOS."""
         with patch.dict(os.environ, {"XDG_CONFIG_HOME": "/custom/config"}, clear=False):
@@ -130,6 +132,7 @@ class TestCLIConfig:
                 config_dir = get_config_dir()
                 assert config_dir == Path("/custom/config/scene-ripper")
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="PosixPath not available on Windows")
     def test_get_cache_dir_xdg(self):
         """Test XDG cache directory."""
         with patch.dict(os.environ, {"XDG_CACHE_HOME": "/custom/cache"}, clear=False):
@@ -145,19 +148,19 @@ class TestOutputFormatting:
         """Test Path serialization."""
         value = Path("/home/user/video.mp4")
         result = _serialize_value(value)
-        assert result == "/home/user/video.mp4"
+        assert result == str(value)
 
     def test_serialize_value_dict(self):
         """Test dict serialization with nested values."""
         value = {"path": Path("/test"), "count": 5}
         result = _serialize_value(value)
-        assert result == {"path": "/test", "count": 5}
+        assert result == {"path": str(Path("/test")), "count": 5}
 
     def test_serialize_value_list(self):
         """Test list serialization."""
         value = [Path("/a"), Path("/b")]
         result = _serialize_value(value)
-        assert result == ["/a", "/b"]
+        assert result == [str(Path("/a")), str(Path("/b"))]
 
 
 class TestCLIMain:
@@ -204,15 +207,15 @@ class TestDetectCommand:
 
     def test_detect_invalid_sensitivity(self, runner):
         """Test detect with invalid sensitivity value."""
-        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
-            try:
-                result = runner.invoke(cli, [
-                    "detect", f.name, "--sensitivity", "15.0"
-                ])
-                assert result.exit_code == ExitCode.VALIDATION_ERROR
-                assert "1.0 and 10.0" in result.output
-            finally:
-                os.unlink(f.name)
+        # Use TemporaryDirectory to avoid Windows file locking issues
+        with tempfile.TemporaryDirectory() as tmpdir:
+            video_path = Path(tmpdir) / "test.mp4"
+            video_path.touch()
+            result = runner.invoke(cli, [
+                "detect", str(video_path), "--sensitivity", "15.0"
+            ])
+            assert result.exit_code == ExitCode.VALIDATION_ERROR
+            assert "1.0 and 10.0" in result.output
 
     def test_detect_output_exists_no_force(self, runner):
         """Test detect refuses to overwrite without --force."""
@@ -397,8 +400,11 @@ class TestYouTubeCommands:
 
     def test_search_no_api_key(self, runner):
         """Test search fails gracefully without API key."""
-        # Clear any API key from environment, config file, AND keyring
-        with patch.dict(os.environ, {}, clear=True):
+        # Preserve HOME-related vars so Path.home() works on all platforms
+        home_vars = {k: v for k, v in os.environ.items()
+                     if k in ("HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH",
+                              "APPDATA", "LOCALAPPDATA", "SYSTEMROOT", "WINDIR")}
+        with patch.dict(os.environ, home_vars, clear=True):
             with patch("core.settings._get_config_path") as mock_path:
                 mock_path.return_value = Path("/nonexistent/config.json")
                 with patch("core.settings._get_api_key_from_keyring", return_value=""):
@@ -432,8 +438,9 @@ class TestIntegration:
 
     def test_json_output_flag(self, runner):
         """Test that --json flag works for all commands."""
-        # Test with project info on a valid project
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        # Use TemporaryDirectory to avoid Windows file locking issues
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_file = Path(tmpdir) / "test.json"
             project_data = {
                 "version": "1.0",
                 "id": "test",
@@ -444,17 +451,13 @@ class TestIntegration:
                 "clips": [],
                 "sequence": None,
             }
-            json.dump(project_data, f)
-            f.flush()
+            project_file.write_text(json.dumps(project_data))
 
-            try:
-                result = runner.invoke(cli, ["--json", "project", "info", f.name])
-                assert result.exit_code == 0
-                # Verify it's valid JSON
-                parsed = json.loads(result.output)
-                assert isinstance(parsed, dict)
-            finally:
-                os.unlink(f.name)
+            result = runner.invoke(cli, ["--json", "project", "info", str(project_file)])
+            assert result.exit_code == 0
+            # Verify it's valid JSON
+            parsed = json.loads(result.output)
+            assert isinstance(parsed, dict)
 
     def test_command_registration(self, runner):
         """Test all expected commands are registered."""
