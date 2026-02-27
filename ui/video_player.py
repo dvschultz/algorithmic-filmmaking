@@ -12,13 +12,14 @@ from PySide6.QtWidgets import (
     QPushButton,
     QLabel,
     QStyle,
+    QComboBox,
 )
 from ui.widgets.styled_slider import StyledSlider
 from PySide6.QtCore import Qt, Slot, Signal, QObject
 
 import mpv
 
-from ui.theme import theme, TypeScale, Spacing
+from ui.theme import theme, TypeScale, Spacing, UISizes
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +152,24 @@ class VideoPlayer(QWidget):
         self.stop_btn.clicked.connect(self._stop)
         controls.addWidget(self.stop_btn)
 
+        # Frame step backward button
+        self.frame_back_btn = QPushButton()
+        self.frame_back_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaSkipBackward))
+        self.frame_back_btn.setFixedSize(32, 32)
+        self.frame_back_btn.setAccessibleName("Frame back")
+        self.frame_back_btn.setToolTip("Step one frame backward")
+        self.frame_back_btn.clicked.connect(self._on_frame_back)
+        controls.addWidget(self.frame_back_btn)
+
+        # Frame step forward button
+        self.frame_fwd_btn = QPushButton()
+        self.frame_fwd_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaSkipForward))
+        self.frame_fwd_btn.setFixedSize(32, 32)
+        self.frame_fwd_btn.setAccessibleName("Frame forward")
+        self.frame_fwd_btn.setToolTip("Step one frame forward")
+        self.frame_fwd_btn.clicked.connect(self._on_frame_forward)
+        controls.addWidget(self.frame_fwd_btn)
+
         # Position slider
         self.position_slider = StyledSlider(Qt.Horizontal)
         self.position_slider.setRange(0, 0)
@@ -162,6 +181,19 @@ class VideoPlayer(QWidget):
         self.time_label = QLabel("00:00 / 00:00")
         self.time_label.setStyleSheet("font-family: monospace;")
         controls.addWidget(self.time_label)
+
+        # Speed selector
+        self.speed_combo = QComboBox()
+        self.speed_combo.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
+        self.speed_combo.setFixedWidth(70)
+        self.speed_combo.setAccessibleName("Playback speed")
+        self.speed_combo.setToolTip("Playback speed")
+        self._speed_values = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 4.0]
+        for speed in self._speed_values:
+            self.speed_combo.addItem(f"{speed}x")
+        self.speed_combo.setCurrentIndex(3)  # Default: 1.0x
+        self.speed_combo.currentIndexChanged.connect(self._on_speed_changed)
+        controls.addWidget(self.speed_combo)
 
         layout.addLayout(controls)
 
@@ -383,6 +415,17 @@ class VideoPlayer(QWidget):
         self._mpv.ab_loop_a = 'no'
         self._mpv.ab_loop_b = 'no'
 
+    def set_speed_control_enabled(self, enabled: bool):
+        """Enable or disable the speed control widget.
+
+        Disable during automated sequence playback to avoid timeline sync issues.
+        """
+        self.speed_combo.setEnabled(enabled)
+        if not enabled:
+            # Reset to 1x during automated playback
+            self.speed_combo.setCurrentIndex(3)  # 1.0x
+            self.playback_speed = 1.0
+
     # --- Internal handlers ---
 
     def _toggle_playback(self):
@@ -397,6 +440,20 @@ class VideoPlayer(QWidget):
     def _stop(self):
         """Stop button handler."""
         self.stop()
+
+    def _on_frame_back(self):
+        """Frame step backward button handler."""
+        self.frame_step_backward()
+
+    def _on_frame_forward(self):
+        """Frame step forward button handler."""
+        self.frame_step_forward()
+
+    @Slot(int)
+    def _on_speed_changed(self, index: int):
+        """Handle speed combo box change."""
+        if 0 <= index < len(self._speed_values):
+            self.playback_speed = self._speed_values[index]
 
     def _set_position(self, position: int):
         """Set playback position from slider.

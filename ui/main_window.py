@@ -4192,6 +4192,8 @@ class MainWindow(QMainWindow):
 
         # Mute sidebar player to prevent audio overlap
         self.clip_details_sidebar.video_player.mute = True
+        # Disable speed control during automated sequence playback
+        self.sequence_tab.video_player.set_speed_control_enabled(False)
 
         # Start playback from current position
         self._play_clip_at_frame(start_frame)
@@ -4338,8 +4340,9 @@ class MainWindow(QMainWindow):
         self._playback_timer.stop()
         self.sequence_tab.video_player.pause()
         self.sequence_tab.timeline.set_playing(False)
-        # Restore sidebar audio
+        # Restore sidebar audio and speed control
         self.clip_details_sidebar.video_player.mute = False
+        self.sequence_tab.video_player.set_speed_control_enabled(True)
 
     def _on_stop_requested(self):
         """Handle stop request from timeline."""
@@ -4352,8 +4355,9 @@ class MainWindow(QMainWindow):
         self._current_playback_clip = None
         self.sequence_tab.video_player.stop()
         self.sequence_tab.timeline.set_playing(False)
-        # Restore sidebar audio
+        # Restore sidebar audio and speed control
         self.clip_details_sidebar.video_player.mute = False
+        self.sequence_tab.video_player.set_speed_control_enabled(True)
 
     def _on_export_click(self):
         """Export selected clips."""
