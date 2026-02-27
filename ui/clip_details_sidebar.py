@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
 from PySide6.QtCore import Qt, Signal, Slot
-from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtWidgets import (
     QDockWidget,
     QFrame,
@@ -244,8 +243,8 @@ class ClipDetailsSidebar(QDockWidget):
         """Connect signals."""
         theme().changed.connect(self._refresh_theme)
         self.visibilityChanged.connect(self._on_visibility_changed)
-        # Connect to media status to seek after video loads
-        self.video_player.player.mediaStatusChanged.connect(self._on_media_status_changed)
+        # Connect to media_loaded to set clip range after video loads
+        self.video_player.media_loaded.connect(self._on_media_loaded)
 
     def _apply_section_header_style(self, label: QLabel):
         """Apply section header styling."""
@@ -306,17 +305,15 @@ class ClipDetailsSidebar(QDockWidget):
         if not visible:
             self.sidebar_closed.emit()
             # Stop video playback when hidden
-            if hasattr(self.video_player, 'player'):
-                self.video_player.player.pause()
+            self.video_player.pause()
 
-    @Slot(QMediaPlayer.MediaStatus)
-    def _on_media_status_changed(self, status: QMediaPlayer.MediaStatus):
-        """Handle media status changes to set clip range after video loads."""
-        if status == QMediaPlayer.MediaStatus.LoadedMedia:
-            if self._pending_clip_range is not None:
-                start_time, end_time = self._pending_clip_range
-                self.video_player.set_clip_range(start_time, end_time)
-                self._pending_clip_range = None
+    @Slot()
+    def _on_media_loaded(self):
+        """Handle media loaded — set clip range after video loads."""
+        if self._pending_clip_range is not None:
+            start_time, end_time = self._pending_clip_range
+            self.video_player.set_clip_range(start_time, end_time)
+            self._pending_clip_range = None
 
     def _emit_clip_edit(self):
         """Emit clip_edited signal with guard protection."""
@@ -554,8 +551,7 @@ class ClipDetailsSidebar(QDockWidget):
         self._set_editing_enabled(False)
 
         # Stop video
-        if hasattr(self.video_player, 'player'):
-            self.video_player.player.stop()
+        self.video_player.stop()
 
         self.show()
         self._loading = False
@@ -691,8 +687,7 @@ class ClipDetailsSidebar(QDockWidget):
         self._block_editable_signals(False)
         self._set_editing_enabled(False)
 
-        if hasattr(self.video_player, 'player'):
-            self.video_player.player.stop()
+        self.video_player.stop()
 
     def refresh_if_showing(self, clip_id: str):
         """Refresh the sidebar if currently showing the given clip.

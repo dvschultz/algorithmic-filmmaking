@@ -24,6 +24,9 @@ class VideoPlayer(QWidget):
 
     # Signals
     position_updated = Signal(int)  # position in milliseconds
+    duration_changed = Signal(int)  # duration in milliseconds
+    media_loaded = Signal()  # fires when file is ready to play
+    playback_state_changed = Signal(bool)  # True=playing, False=paused/stopped
 
     def __init__(self):
         super().__init__()
@@ -100,6 +103,7 @@ class VideoPlayer(QWidget):
         self.player.positionChanged.connect(self._on_position_changed)
         self.player.durationChanged.connect(self._on_duration_changed)
         self.player.playbackStateChanged.connect(self._on_state_changed)
+        self.player.mediaStatusChanged.connect(self._on_media_status_changed)
 
     def load_video(self, path: Path):
         """Load a video file."""
@@ -144,6 +148,44 @@ class VideoPlayer(QWidget):
         """Play a specific range of the video (legacy method)."""
         self.set_clip_range(start_seconds, end_seconds)
         self.player.play()
+
+    def play(self):
+        """Start or resume playback."""
+        self.player.play()
+
+    def pause(self):
+        """Pause playback."""
+        self.player.pause()
+
+    def stop(self):
+        """Stop playback and return to start."""
+        self.player.stop()
+        if self._clip_start_ms is not None:
+            self.player.setPosition(self._clip_start_ms)
+
+    def shutdown(self):
+        """Clean up player resources. No-op for QMediaPlayer (will be used by MPV)."""
+        pass
+
+    @property
+    def is_playing(self) -> bool:
+        """Whether the player is currently playing."""
+        return self.player.playbackState() == QMediaPlayer.PlayingState
+
+    @property
+    def duration_ms(self) -> int:
+        """Total duration in milliseconds."""
+        return self.player.duration()
+
+    @property
+    def playback_speed(self) -> float:
+        """Current playback speed multiplier."""
+        return self.player.playbackRate()
+
+    @playback_speed.setter
+    def playback_speed(self, speed: float):
+        """Set playback speed multiplier."""
+        self.player.setPlaybackRate(speed)
 
     def _toggle_playback(self):
         """Toggle play/pause."""
@@ -224,6 +266,7 @@ class VideoPlayer(QWidget):
         # Only update slider range if not in clip mode
         if self._clip_start_ms is None:
             self.position_slider.setRange(0, duration)
+        self.duration_changed.emit(duration)
 
     @Slot(QMediaPlayer.PlaybackState)
     def _on_state_changed(self, state: QMediaPlayer.PlaybackState):
@@ -232,6 +275,13 @@ class VideoPlayer(QWidget):
             self.play_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
         else:
             self.play_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+        self.playback_state_changed.emit(state == QMediaPlayer.PlayingState)
+
+    @Slot(QMediaPlayer.MediaStatus)
+    def _on_media_status_changed(self, status: QMediaPlayer.MediaStatus):
+        """Handle media status change — emit media_loaded when ready."""
+        if status == QMediaPlayer.MediaStatus.LoadedMedia:
+            self.media_loaded.emit()
 
     def _format_time(self, ms: int) -> str:
         """Format milliseconds as MM:SS."""

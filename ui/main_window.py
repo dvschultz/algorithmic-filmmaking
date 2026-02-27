@@ -1303,7 +1303,7 @@ class MainWindow(QMainWindow):
 
         # Sequence tab video player signals for playback sync
         self.sequence_tab.video_player.position_updated.connect(self._on_video_position_updated)
-        self.sequence_tab.video_player.player.playbackStateChanged.connect(self._on_video_state_changed)
+        self.sequence_tab.video_player.playback_state_changed.connect(self._on_video_state_changed)
 
     def _setup_chat_panel(self):
         """Initialize the chat panel dock widget."""
@@ -4210,7 +4210,7 @@ class MainWindow(QMainWindow):
         if not seq_clip:
             # No clip at this position (gap) - show black and advance via timer
             self._current_playback_clip = None
-            self.sequence_tab.video_player.player.stop()  # Shows black
+            self.sequence_tab.video_player.stop()  # Shows black
             self._playback_timer.start()
             return
 
@@ -4272,8 +4272,6 @@ class MainWindow(QMainWindow):
 
     def _on_video_position_updated(self, position_ms: int):
         """Sync timeline playhead to video position during playback."""
-        from PySide6.QtMultimedia import QMediaPlayer
-
         # Case 1: Timeline-driven playback (existing behavior)
         if self._is_playing and self._current_playback_clip:
             seq_clip = self._current_playback_clip
@@ -4299,7 +4297,7 @@ class MainWindow(QMainWindow):
 
         # Case 2: Direct video playback (when user clicks play on VideoPlayer)
         # Only sync if video is actually playing
-        if self.sequence_tab.video_player.player.playbackState() != QMediaPlayer.PlayingState:
+        if not self.sequence_tab.video_player.is_playing:
             return
 
         # Only sync when in timeline state (not cards state)
@@ -4311,17 +4309,19 @@ class MainWindow(QMainWindow):
         video_seconds = position_ms / 1000.0
         self.sequence_tab.timeline.set_playhead_time(video_seconds)
 
-    def _on_video_state_changed(self, state):
-        """Handle video player state changes."""
-        from PySide6.QtMultimedia import QMediaPlayer
+    def _on_video_state_changed(self, playing: bool):
+        """Handle video player state changes.
 
-        logger.debug(f"Video state changed: {state}, is_playing: {self._is_playing}")
+        Args:
+            playing: True if playing, False if paused/stopped
+        """
+        logger.debug(f"Video state changed: playing={playing}, is_playing: {self._is_playing}")
 
         if not self._is_playing:
             return
 
-        if state == QMediaPlayer.StoppedState:
-            # Clip ended naturally - check if we should continue to next
+        if not playing:
+            # Clip ended naturally (stopped/paused) - check if we should continue to next
             if self._current_playback_clip:
                 next_frame = self._current_playback_clip.end_frame()
                 self.sequence_tab.timeline.set_playhead_time(
@@ -4333,7 +4333,7 @@ class MainWindow(QMainWindow):
         """Pause playback."""
         self._is_playing = False
         self._playback_timer.stop()
-        self.sequence_tab.video_player.player.pause()
+        self.sequence_tab.video_player.pause()
         self.sequence_tab.timeline.set_playing(False)
 
     def _on_stop_requested(self):
@@ -4345,7 +4345,7 @@ class MainWindow(QMainWindow):
         self._is_playing = False
         self._playback_timer.stop()
         self._current_playback_clip = None
-        self.sequence_tab.video_player.player.stop()
+        self.sequence_tab.video_player.stop()
         self.sequence_tab.timeline.set_playing(False)
 
     def _on_export_click(self):

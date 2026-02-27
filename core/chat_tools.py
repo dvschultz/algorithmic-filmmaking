@@ -1765,7 +1765,7 @@ def play_preview(main_window) -> dict:
     if player is None:
         return {"success": False, "error": "Video player not available"}
 
-    player.player.play()
+    player.play()
 
     return {
         "success": True,
@@ -1792,7 +1792,7 @@ def pause_preview(main_window) -> dict:
     if player is None:
         return {"success": False, "error": "Video player not available"}
 
-    player.player.pause()
+    player.pause()
 
     return {
         "success": True,
@@ -1826,7 +1826,7 @@ def seek_to_time(main_window, seconds: float) -> dict:
         return {"success": False, "error": "Position cannot be negative"}
 
     # Check upper bound - get duration from player
-    duration_ms = player.player.duration()
+    duration_ms = player.duration_ms
     if duration_ms > 0:
         duration_s = duration_ms / 1000.0
         if seconds > duration_s:
