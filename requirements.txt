@@ -3,6 +3,7 @@
 
 click>=8.0
 PySide6>=6.6
+python-mpv>=1.0.8
 scenedetect[opencv]>=0.6.4
 opencv-python>=4.8
 numpy>=1.24
