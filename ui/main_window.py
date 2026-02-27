@@ -4190,6 +4190,9 @@ class MainWindow(QMainWindow):
         self._is_playing = True
         self.sequence_tab.timeline.set_playing(True)
 
+        # Mute sidebar player to prevent audio overlap
+        self.clip_details_sidebar.video_player.mute = True
+
         # Start playback from current position
         self._play_clip_at_frame(start_frame)
 
@@ -4335,6 +4338,8 @@ class MainWindow(QMainWindow):
         self._playback_timer.stop()
         self.sequence_tab.video_player.pause()
         self.sequence_tab.timeline.set_playing(False)
+        # Restore sidebar audio
+        self.clip_details_sidebar.video_player.mute = False
 
     def _on_stop_requested(self):
         """Handle stop request from timeline."""
@@ -4347,6 +4352,8 @@ class MainWindow(QMainWindow):
         self._current_playback_clip = None
         self.sequence_tab.video_player.stop()
         self.sequence_tab.timeline.set_playing(False)
+        # Restore sidebar audio
+        self.clip_details_sidebar.video_player.mute = False
 
     def _on_export_click(self):
         """Export selected clips."""
@@ -7576,6 +7583,11 @@ class MainWindow(QMainWindow):
         if self._playback_timer.isActive():
             logger.info("Stopping playback timer")
             self._playback_timer.stop()
+
+        # Shutdown MPV players (must happen from main thread before exit)
+        logger.info("Shutting down video players")
+        self.sequence_tab.video_player.shutdown()
+        self.clip_details_sidebar.video_player.shutdown()
 
         workers = [
             ("detection", self.detection_worker),

@@ -334,6 +334,22 @@ class VideoPlayer(QWidget):
         except Exception:
             pass
 
+    @property
+    def mute(self) -> bool:
+        """Whether audio is muted."""
+        try:
+            return self._mpv.mute
+        except Exception:
+            return False
+
+    @mute.setter
+    def mute(self, value: bool):
+        """Set mute state."""
+        try:
+            self._mpv.mute = value
+        except Exception:
+            pass
+
     # --- New feature methods ---
 
     def frame_step_forward(self):
