@@ -32,11 +32,8 @@ AppDir:
       - libegl1
       - libxcb-xinerama0
 
-      # GStreamer for Qt Multimedia
-      - gstreamer1.0-plugins-good
-      - gstreamer1.0-plugins-bad
-      - gstreamer1.0-libav
-      - gstreamer1.0-gl
+      # Video playback (MPV + FFmpeg, replaces GStreamer/Qt Multimedia)
+      - libmpv-dev
 
       # Qt platform plugins
       - libxkbcommon0
@@ -54,7 +51,6 @@ AppDir:
     env:
       PYTHONPATH: "${APPDIR}/usr/lib/python3/site-packages"
       QT_PLUGIN_PATH: "${APPDIR}/usr/lib/x86_64-linux-gnu/qt6/plugins"
-      GST_PLUGIN_PATH: "${APPDIR}/usr/lib/x86_64-linux-gnu/gstreamer-1.0"
 
   test:
     fedora-30:

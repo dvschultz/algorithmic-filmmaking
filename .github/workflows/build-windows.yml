@@ -40,6 +40,15 @@ jobs:
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
+      - name: Install system dependencies
+        shell: bash
+        run: |
+          # Download mpv pre-built DLL for Windows
+          curl -L -o mpv.7z "https://sourceforge.net/projects/mpv-player-windows/files/libmpv/mpv-dev-x86_64-latest.7z/download"
+          7z x mpv.7z -ompv_dll || true
+          # Place mpv-2.dll where python-mpv can find it
+          cp mpv_dll/mpv-2.dll .
+
       - name: Install dependencies
         run: pip install -r requirements-core.txt pyinstaller
 

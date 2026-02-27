@@ -41,6 +41,9 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Building version: ${VERSION}"
 
+      - name: Install system dependencies
+        run: brew install mpv
+
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
