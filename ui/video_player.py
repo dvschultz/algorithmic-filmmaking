@@ -108,6 +108,8 @@ class VideoPlayer(QWidget):
         # Internal state
         self._duration_s: float = 0.0
         self._shutting_down: bool = False
+        self._ab_a_seconds: Optional[float] = None
+        self._ab_b_seconds: Optional[float] = None
 
         self._setup_ui()
         self._setup_player()
@@ -196,6 +198,92 @@ class VideoPlayer(QWidget):
         controls.addWidget(self.speed_combo)
 
         layout.addLayout(controls)
+
+        # A/B Loop controls (optional — hidden by default, shown via show_ab_loop_controls)
+        self._ab_loop_row = QWidget()
+        ab_layout = QHBoxLayout(self._ab_loop_row)
+        ab_layout.setContentsMargins(8, 0, 8, 8)
+        ab_layout.setSpacing(4)
+
+        ab_label = QLabel("A/B Loop:")
+        ab_label.setStyleSheet(f"font-size: {TypeScale.SM}px; color: {theme().text_muted};")
+        ab_layout.addWidget(ab_label)
+
+        self.set_a_btn = QPushButton("Set A")
+        self.set_a_btn.setFixedHeight(24)
+        self.set_a_btn.setToolTip("Set loop start at current position")
+        self.set_a_btn.clicked.connect(self._on_set_a)
+        ab_layout.addWidget(self.set_a_btn)
+
+        self.set_b_btn = QPushButton("Set B")
+        self.set_b_btn.setFixedHeight(24)
+        self.set_b_btn.setToolTip("Set loop end at current position")
+        self.set_b_btn.clicked.connect(self._on_set_b)
+        ab_layout.addWidget(self.set_b_btn)
+
+        self.clear_ab_btn = QPushButton("Clear")
+        self.clear_ab_btn.setFixedHeight(24)
+        self.clear_ab_btn.setToolTip("Clear A/B loop markers")
+        self.clear_ab_btn.clicked.connect(self._on_clear_ab)
+        ab_layout.addWidget(self.clear_ab_btn)
+
+        self._ab_loop_label = QLabel("")
+        self._ab_loop_label.setStyleSheet(f"font-family: monospace; font-size: {TypeScale.SM}px;")
+        ab_layout.addWidget(self._ab_loop_label, 1)
+
+        ab_layout.addStretch()
+        self._ab_loop_row.setVisible(False)
+        layout.addWidget(self._ab_loop_row)
+
+        # Apply themed styling to all control buttons
+        self._apply_control_styles()
+
+    def _apply_control_styles(self):
+        """Apply themed styling to all control buttons."""
+        t = theme()
+        btn_style = f"""
+            QPushButton {{
+                background-color: {t.background_elevated};
+                border: 1px solid {t.border_secondary};
+                border-radius: 4px;
+                color: {t.text_primary};
+            }}
+            QPushButton:hover {{
+                background-color: {t.background_tertiary};
+                border-color: {t.border_focus};
+            }}
+            QPushButton:pressed {{
+                background-color: {t.accent_blue};
+            }}
+        """
+        for btn in (self.play_btn, self.stop_btn, self.frame_back_btn, self.frame_fwd_btn):
+            btn.setStyleSheet(btn_style)
+
+        ab_btn_style = f"""
+            QPushButton {{
+                background-color: {t.background_elevated};
+                border: 1px solid {t.border_secondary};
+                border-radius: 3px;
+                color: {t.text_secondary};
+                font-size: {TypeScale.SM}px;
+                padding: 2px 8px;
+            }}
+            QPushButton:hover {{
+                background-color: {t.background_tertiary};
+                border-color: {t.accent_blue};
+                color: {t.text_primary};
+            }}
+        """
+        for btn in (self.set_a_btn, self.set_b_btn, self.clear_ab_btn):
+            btn.setStyleSheet(ab_btn_style)
+
+    def show_ab_loop_controls(self, visible: bool = True):
+        """Show or hide the A/B loop controls row.
+
+        Enable this on VideoPlayer instances that should allow manual A/B looping
+        (e.g., sequence tab player, not sidebar).
+        """
+        self._ab_loop_row.setVisible(visible)
 
     def _setup_player(self):
         """Set up MPV player instance."""
@@ -454,6 +542,48 @@ class VideoPlayer(QWidget):
         """Handle speed combo box change."""
         if 0 <= index < len(self._speed_values):
             self.playback_speed = self._speed_values[index]
+
+    def _on_set_a(self):
+        """Set A/B loop start at current position."""
+        if self._clip_start_ms is not None:
+            return  # Clip range owns the ab-loop
+        try:
+            pos = self._mpv.time_pos
+            if pos is not None:
+                self._ab_a_seconds = pos
+                self._mpv.ab_loop_a = pos
+                self._update_ab_label()
+        except Exception:
+            pass
+
+    def _on_set_b(self):
+        """Set A/B loop end at current position."""
+        if self._clip_start_ms is not None:
+            return
+        try:
+            pos = self._mpv.time_pos
+            if pos is not None:
+                self._ab_b_seconds = pos
+                self._mpv.ab_loop_b = pos
+                self._update_ab_label()
+        except Exception:
+            pass
+
+    def _on_clear_ab(self):
+        """Clear A/B loop markers."""
+        self._ab_a_seconds = None
+        self._ab_b_seconds = None
+        self.clear_ab_loop()
+        self._update_ab_label()
+
+    def _update_ab_label(self):
+        """Update the A/B loop status label."""
+        parts = []
+        if self._ab_a_seconds is not None:
+            parts.append(f"A: {self._format_time(int(self._ab_a_seconds * 1000))}")
+        if self._ab_b_seconds is not None:
+            parts.append(f"B: {self._format_time(int(self._ab_b_seconds * 1000))}")
+        self._ab_loop_label.setText("  ".join(parts) if parts else "")
 
     def _set_position(self, position: int):
         """Set playback position from slider.
