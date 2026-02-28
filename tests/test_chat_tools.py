@@ -840,11 +840,13 @@ class TestPlanExecutionTools:
     """Tests for plan execution tools."""
 
     def _create_mock_main_window(self):
-        """Create a mock main window with GUI state."""
+        """Create a mock main window with GUI state and plan controller."""
         from core.gui_state import GUIState
+        from core.plan_controller import PlanController
 
         main_window = Mock()
         main_window._gui_state = GUIState()
+        main_window.plan_controller = PlanController(main_window._gui_state)
         return main_window
 
     def test_start_plan_execution_no_plan(self):
@@ -1130,12 +1132,14 @@ class TestPendingActionTracking:
     """Tests for pending action tracking in GUI state."""
 
     def _create_mock_main_window_with_project(self):
-        """Create mock main window with GUI state and project."""
+        """Create mock main window with GUI state, project, and plan controller."""
         from core.gui_state import GUIState
+        from core.plan_controller import PlanController
         from core.project import Project
 
         main_window = Mock()
         main_window._gui_state = GUIState()
+        main_window.plan_controller = PlanController(main_window._gui_state)
         main_window.project = Project.new(name="Untitled Project")
         return main_window
 

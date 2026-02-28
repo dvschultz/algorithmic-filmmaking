@@ -41,7 +41,11 @@ from core.plan_controller import PlanController
 logger = logging.getLogger(__name__)
 
 def _get_plan_controller(main_window) -> PlanController:
-    """Get or create a PlanController for the given main_window."""
+    """Get the cached PlanController from main_window."""
+    controller = getattr(main_window, 'plan_controller', None)
+    if controller is not None:
+        return controller
+    # Fallback: create if not cached (shouldn't happen in normal flow)
     gui_state = getattr(main_window, '_gui_state', None)
     if gui_state is None:
         raise ValueError("No GUI state available")
@@ -136,13 +140,7 @@ TOOL_TIMEOUTS = {
     "download_video": 1800,    # 30 minutes for long videos
     "download_videos": 7200,   # 2 hours for bulk downloads (10 videos × 10 min timeout + buffer)
     "search_youtube": 30,      # 30 seconds
-    "analyze_colors_live": 300,     # 5 minutes
-    "analyze_shots_live": 300,      # 5 minutes
-    "classify_content_live": 300,   # 5 minutes for classification
-    "detect_objects_live": 300,     # 5 minutes for object detection
-    "count_people_live": 300,       # 5 minutes for person detection
     "describe_content_live": 600,   # 10 minutes for descriptions
-    "transcribe_live": 1200,        # 20 minutes
     "transcribe_clips": 1200,       # 20 minutes
     "export_sequence": 600,    # 10 minutes
 }
@@ -966,7 +964,7 @@ def update_sequence_clip(
         return {"success": False, "error": "No fields provided to update"}
 
     # Notify observers
-    project._dirty = True
+    project.mark_dirty()
     project._notify_observers("sequence_changed", [clip_id])
 
     return {
@@ -3030,8 +3028,8 @@ def download_videos(
 #
 # Note: CLI-based analyze_colors, analyze_shots, transcribe, and export_clips
 # tools were removed because they required the scene_ripper CLI to be installed.
-# Use the *_live versions below instead (analyze_colors_live, analyze_shots_live,
-# transcribe_live) which work directly with the in-memory project.
+# Use start_clip_analysis or analyze_all_live instead, which work directly
+# with the in-memory project.
 # =============================================================================
 
 @tools.register(
@@ -3470,219 +3468,6 @@ def start_clip_analysis(
 
 
 @tools.register(
-    description="Extract dominant colors from clips with live GUI update. Updates clip metadata. "
-                "Prefer start_clip_analysis(operations=['colors']) instead.",
-    requires_project=True,
-    modifies_gui_state=True,
-    modifies_project_state=True
-)
-def analyze_colors_live(main_window, clip_ids: list[str]) -> dict:
-    """Extract dominant colors from clips with live GUI update.
-
-    Args:
-        clip_ids: List of clip IDs to analyze
-
-    Returns:
-        Dict with analysis results (after worker completes)
-    """
-    # Validate clips exist
-    valid_ids = [cid for cid in clip_ids if cid in main_window.project.clips_by_id]
-
-    if not valid_ids:
-        return {"success": False, "error": "No valid clips found"}
-
-    # Check if worker already running
-    if main_window.color_worker and main_window.color_worker.isRunning():
-        return {"success": False, "error": "Color analysis already in progress"}
-
-    # Return instruction for MainWindow to start the worker
-    return {"_wait_for_worker": "color_analysis", "clip_ids": valid_ids, "clip_count": len(valid_ids)}
-
-
-@tools.register(
-    description="Classify shot types (close-up, medium, wide, etc.) for clips with live GUI update. "
-                "Prefer start_clip_analysis(operations=['shots']) instead.",
-    requires_project=True,
-    modifies_gui_state=True,
-    modifies_project_state=True
-)
-def analyze_shots_live(main_window, clip_ids: list[str]) -> dict:
-    """Classify shot types for clips with live GUI update.
-
-    Args:
-        clip_ids: List of clip IDs to analyze
-
-    Returns:
-        Dict with analysis results (after worker completes)
-    """
-    # Validate clips exist
-    valid_ids = [cid for cid in clip_ids if cid in main_window.project.clips_by_id]
-
-    if not valid_ids:
-        return {"success": False, "error": "No valid clips found"}
-
-    # Check if worker already running
-    if main_window.shot_type_worker and main_window.shot_type_worker.isRunning():
-        return {"success": False, "error": "Shot type analysis already in progress"}
-
-    # Return instruction for MainWindow to start the worker
-    return {"_wait_for_worker": "shot_analysis", "clip_ids": valid_ids, "clip_count": len(valid_ids)}
-
-
-@tools.register(
-    description="Transcribe speech in clips using Whisper with live GUI update. "
-                "Prefer start_clip_analysis(operations=['transcription']) instead.",
-    requires_project=True,
-    modifies_gui_state=True,
-    modifies_project_state=True
-)
-def transcribe_live(main_window, clip_ids: list[str]) -> dict:
-    """Transcribe speech in clips with live GUI update.
-
-    Args:
-        clip_ids: List of clip IDs to transcribe
-
-    Returns:
-        Dict with transcription results (after worker completes)
-    """
-    # Check if faster-whisper is available
-    from core.transcription import is_faster_whisper_available
-    if not is_faster_whisper_available():
-        return {
-            "success": False,
-            "error": "Transcription unavailable - faster-whisper not installed"
-        }
-
-    # Validate clips exist
-    valid_ids = [cid for cid in clip_ids if cid in main_window.project.clips_by_id]
-
-    if not valid_ids:
-        return {"success": False, "error": "No valid clips found"}
-
-    # Check if worker already running
-    if main_window.transcription_worker and main_window.transcription_worker.isRunning():
-        return {"success": False, "error": "Transcription already in progress"}
-
-    # Return instruction for MainWindow to start the worker
-    return {"_wait_for_worker": "transcription", "clip_ids": valid_ids, "clip_count": len(valid_ids)}
-
-
-@tools.register(
-    description="Classify frame content using ImageNet labels. Identifies objects like 'dog', 'car', 'tree' in clips using MobileNet. Updates clip.object_labels. "
-                "Prefer start_clip_analysis(operations=['classification']) instead.",
-    requires_project=True,
-    modifies_gui_state=True,
-    modifies_project_state=True
-)
-def classify_content_live(main_window, clip_ids: list[str], top_k: int = 5) -> dict:
-    """Classify content in clips with live GUI update.
-
-    Uses MobileNetV3-Small to classify frames with ImageNet labels (1000 categories).
-    Results are stored in clip.object_labels.
-
-    Args:
-        clip_ids: List of clip IDs to classify
-        top_k: Number of top labels to return per clip (default: 5)
-
-    Returns:
-        Dict with classification results (after worker completes)
-    """
-    # Validate clips exist
-    valid_ids = [cid for cid in clip_ids if cid in main_window.project.clips_by_id]
-
-    if not valid_ids:
-        return {"success": False, "error": "No valid clips found"}
-
-    # Check if worker already running
-    if main_window.classification_worker and main_window.classification_worker.isRunning():
-        return {"success": False, "error": "Classification already in progress"}
-
-    # Return instruction for MainWindow to start the worker
-    return {
-        "_wait_for_worker": "classification",
-        "clip_ids": valid_ids,
-        "clip_count": len(valid_ids),
-        "top_k": top_k,
-    }
-
-
-@tools.register(
-    description="Detect and count objects in clips using YOLO. Returns object labels, counts, and bounding boxes. Updates clip.detected_objects and clip.person_count. "
-                "Prefer start_clip_analysis(operations=['objects']) instead.",
-    requires_project=True,
-    modifies_gui_state=True,
-    modifies_project_state=True
-)
-def detect_objects_live(main_window, clip_ids: list[str], confidence: float = 0.5) -> dict:
-    """Detect objects in clips with live GUI update.
-
-    Uses YOLOv8 to detect objects from COCO dataset (80 object classes).
-    Results are stored in clip.detected_objects and clip.person_count.
-
-    Args:
-        clip_ids: List of clip IDs to analyze
-        confidence: Detection confidence threshold (0.0-1.0, default: 0.5)
-
-    Returns:
-        Dict with detection results (after worker completes)
-    """
-    # Validate clips exist
-    valid_ids = [cid for cid in clip_ids if cid in main_window.project.clips_by_id]
-
-    if not valid_ids:
-        return {"success": False, "error": "No valid clips found"}
-
-    # Check if worker already running
-    if main_window.detection_worker_yolo and main_window.detection_worker_yolo.isRunning():
-        return {"success": False, "error": "Object detection already in progress"}
-
-    # Return instruction for MainWindow to start the worker
-    return {
-        "_wait_for_worker": "object_detection",
-        "clip_ids": valid_ids,
-        "clip_count": len(valid_ids),
-        "confidence": confidence,
-    }
-
-
-@tools.register(
-    description="Count people in clips using YOLO. Faster than full object detection when you only need person counts. Updates clip.person_count. "
-                "Prefer start_clip_analysis(operations=['people']) instead.",
-    requires_project=True,
-    modifies_gui_state=True,
-    modifies_project_state=True
-)
-def count_people_live(main_window, clip_ids: list[str]) -> dict:
-    """Count people in clips with live GUI update.
-
-    Uses YOLOv8 to count people in each clip. Faster than detect_objects_live
-    when you only need person counts.
-
-    Args:
-        clip_ids: List of clip IDs to analyze
-
-    Returns:
-        Dict with person count results (after worker completes)
-    """
-    # Validate clips exist
-    valid_ids = [cid for cid in clip_ids if cid in main_window.project.clips_by_id]
-
-    if not valid_ids:
-        return {"success": False, "error": "No valid clips found"}
-
-    # Check if worker already running
-    if main_window.detection_worker_yolo and main_window.detection_worker_yolo.isRunning():
-        return {"success": False, "error": "Object detection already in progress"}
-
-    # Return instruction for MainWindow to start the worker
-    return {
-        "_wait_for_worker": "person_detection",
-        "clip_ids": valid_ids,
-        "clip_count": len(valid_ids),
-    }
-
-
-@tools.register(
     description="Run analysis operations on clips with live GUI update. "
                 "Supports smart concurrency: local ops run in parallel, then sequential, then cloud. "
                 "Default operations: colors, shots, transcribe. "
@@ -3957,7 +3742,7 @@ def generate_remix(
         if not has_colors:
             return {
                 "success": False,
-                "error": "Color sorting requires color analysis. Run analyze_colors_live first."
+                "error": "Color sorting requires color analysis. Run start_clip_analysis(operations=['colors']) first."
             }
 
     # Check if we have clips
@@ -5532,4 +5317,164 @@ def delete_clips(project, clip_ids: list[str], force: bool = False) -> dict:
         "not_found": [cid for cid in clip_ids if cid not in {c.id for c in removed}],
         "removed_from_sequence": len(in_sequence) if force else 0,
         "remaining_clips": len(project.clips),
+    }
+
+
+# =============================================================================
+# Video Playback Tools - Control the video player
+# =============================================================================
+
+@tools.register(
+    description="Stop video playback and return to the clip start position.",
+    requires_project=False,
+    modifies_gui_state=True
+)
+def stop_playback(main_window) -> dict:
+    """Stop the video player.
+
+    Returns:
+        Dict with success status
+    """
+    player = getattr(main_window, 'sequence_tab', None)
+    if player:
+        player = getattr(player, 'video_player', None)
+    if not player:
+        return {"success": False, "error": "Video player not available"}
+
+    player.stop()
+    gui_state = getattr(main_window, '_gui_state', None)
+    if gui_state:
+        gui_state.clear_playback_state()
+    return {"success": True, "message": "Playback stopped"}
+
+
+@tools.register(
+    description="Step one frame forward in the video. Pauses playback if playing.",
+    requires_project=False,
+    modifies_gui_state=True
+)
+def frame_step_forward(main_window) -> dict:
+    """Advance the video by one frame.
+
+    Returns:
+        Dict with success status
+    """
+    player = getattr(main_window, 'sequence_tab', None)
+    if player:
+        player = getattr(player, 'video_player', None)
+    if not player:
+        return {"success": False, "error": "Video player not available"}
+
+    player.frame_step_forward()
+    return {"success": True, "message": "Stepped one frame forward"}
+
+
+@tools.register(
+    description="Step one frame backward in the video. Pauses playback if playing.",
+    requires_project=False,
+    modifies_gui_state=True
+)
+def frame_step_backward(main_window) -> dict:
+    """Step the video back by one frame.
+
+    Returns:
+        Dict with success status
+    """
+    player = getattr(main_window, 'sequence_tab', None)
+    if player:
+        player = getattr(player, 'video_player', None)
+    if not player:
+        return {"success": False, "error": "Video player not available"}
+
+    player.frame_step_backward()
+    return {"success": True, "message": "Stepped one frame backward"}
+
+
+@tools.register(
+    description="Set video playback speed. Valid speeds: 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 4.0",
+    requires_project=False,
+    modifies_gui_state=True
+)
+def set_playback_speed(main_window, speed: float) -> dict:
+    """Set the video playback speed.
+
+    Args:
+        speed: Playback speed multiplier (0.25 to 4.0)
+
+    Returns:
+        Dict with success status and new speed
+    """
+    from core.constants import PLAYBACK_SPEEDS
+
+    if speed not in PLAYBACK_SPEEDS:
+        return {
+            "success": False,
+            "error": f"Invalid speed {speed}. Valid speeds: {PLAYBACK_SPEEDS}",
+        }
+
+    player = getattr(main_window, 'sequence_tab', None)
+    if player:
+        player = getattr(player, 'video_player', None)
+    if not player:
+        return {"success": False, "error": "Video player not available"}
+
+    player.playback_speed = speed
+    # Also update the combo box to match
+    idx = PLAYBACK_SPEEDS.index(speed)
+    player.speed_combo.setCurrentIndex(idx)
+
+    gui_state = getattr(main_window, '_gui_state', None)
+    if gui_state:
+        gui_state.update_playback_state(speed=speed)
+
+    return {"success": True, "speed": speed, "message": f"Playback speed set to {speed}x"}
+
+
+@tools.register(
+    description="Set A/B loop markers on the video player for looping a section. "
+                "Both a_seconds and b_seconds are in seconds. "
+                "Call with a_seconds=0 and b_seconds=0 to clear the loop.",
+    requires_project=False,
+    modifies_gui_state=True
+)
+def set_ab_loop(main_window, a_seconds: float, b_seconds: float) -> dict:
+    """Set or clear A/B loop markers.
+
+    Args:
+        a_seconds: Loop start in seconds (0 to clear)
+        b_seconds: Loop end in seconds (0 to clear)
+
+    Returns:
+        Dict with success status
+    """
+    player = getattr(main_window, 'sequence_tab', None)
+    if player:
+        player = getattr(player, 'video_player', None)
+    if not player:
+        return {"success": False, "error": "Video player not available"}
+
+    if a_seconds == 0 and b_seconds == 0:
+        player.clear_ab_loop()
+        gui_state = getattr(main_window, '_gui_state', None)
+        if gui_state:
+            gui_state.update_playback_state(
+                ab_loop_start_ms=None, ab_loop_end_ms=None,
+            )
+        return {"success": True, "message": "A/B loop cleared"}
+
+    if b_seconds <= a_seconds:
+        return {"success": False, "error": "b_seconds must be greater than a_seconds"}
+
+    player.set_ab_loop(a_seconds, b_seconds)
+    gui_state = getattr(main_window, '_gui_state', None)
+    if gui_state:
+        gui_state.update_playback_state(
+            ab_loop_start_ms=int(a_seconds * 1000),
+            ab_loop_end_ms=int(b_seconds * 1000),
+        )
+    return {
+        "success": True,
+        "a_seconds": a_seconds,
+        "b_seconds": b_seconds,
+        "message": f"A/B loop set: {a_seconds:.1f}s - {b_seconds:.1f}s",
     }

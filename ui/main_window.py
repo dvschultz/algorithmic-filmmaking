@@ -81,6 +81,7 @@ from ui.workers.classification_worker import ClassificationWorker
 from ui.workers.object_detection_worker import ObjectDetectionWorker
 from ui.workers.description_worker import DescriptionWorker
 from core.gui_state import GUIState
+from core.plan_controller import PlanController
 from core.intention_workflow import IntentionWorkflowCoordinator, WorkflowState
 
 # Set up logging
@@ -693,6 +694,9 @@ class MainWindow(QMainWindow):
 
         # GUI state tracking for agent context awareness
         self._gui_state = GUIState()
+
+        # Cached PlanController for agent tool access
+        self.plan_controller = PlanController(self._gui_state)
 
         # Project path tracking (for backwards compatibility - delegates to project)
         # Note: self.project.path is the actual storage
@@ -1571,9 +1575,6 @@ class MainWindow(QMainWindow):
             """Check if a conflicting worker is running."""
             worker_map = {
                 "detect_scenes": "detection_worker",
-                "analyze_colors_live": "color_worker",
-                "analyze_shots_live": "shot_type_worker",
-                "transcribe_live": "transcription_worker",
                 "download_video": "download_worker",
             }
             attr = worker_map.get(tool_name)
@@ -1676,9 +1677,6 @@ class MainWindow(QMainWindow):
         # Map tool names to their worker attributes
         worker_map = {
             "detect_scenes_live": "detection_worker",
-            "analyze_colors_live": "color_worker",
-            "analyze_shots_live": "shot_type_worker",
-            "transcribe_live": "transcription_worker",
             "download_video": "download_worker",
         }
 
@@ -4291,7 +4289,10 @@ class MainWindow(QMainWindow):
         # Update GUI state for agent context
         if self._gui_state:
             clip_id = self._current_playback_clip.source_clip_id if self._current_playback_clip else None
-            self._gui_state.update_playback_state(position_ms=position_ms, clip_id=clip_id)
+            speed = self.sequence_tab.video_player.playback_speed
+            self._gui_state.update_playback_state(
+                position_ms=position_ms, clip_id=clip_id, speed=speed,
+            )
 
         # Case 1: Timeline-driven playback (existing behavior)
         if self._is_playing and self._current_playback_clip:
@@ -4341,8 +4342,6 @@ class MainWindow(QMainWindow):
         # Update GUI state for agent context
         if self._gui_state:
             self._gui_state.update_playback_state(is_playing=playing)
-            if not playing:
-                self._gui_state.clear_playback_state()
 
         if not self._is_playing:
             return

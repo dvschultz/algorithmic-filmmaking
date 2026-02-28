@@ -2,6 +2,7 @@
 
 import locale
 import logging
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -19,6 +20,7 @@ from PySide6.QtCore import Qt, Slot, Signal, QObject
 
 import mpv
 
+from core.constants import PLAYBACK_SPEEDS, DEFAULT_SPEED_INDEX
 from ui.theme import theme, TypeScale, Spacing, UISizes
 
 logger = logging.getLogger(__name__)
@@ -39,9 +41,13 @@ class MpvSignalBridge(QObject):
     media_loaded = Signal()
     eof_reached = Signal()
 
+    # Throttle position updates to max 5 Hz to avoid flooding the main thread
+    _POSITION_EMIT_INTERVAL = 0.2  # seconds
+
     def __init__(self, mpv_instance: mpv.MPV):
         super().__init__()
         self._mpv = mpv_instance
+        self._last_position_emit: float = 0.0
         # Store observer references to prevent GC
         self._observers: list = []
         self._register_observers()
@@ -50,6 +56,10 @@ class MpvSignalBridge(QObject):
         """Register MPV property observers."""
         def on_time_pos(_name, value):
             if value is not None:
+                now = time.monotonic()
+                if now - self._last_position_emit < self._POSITION_EMIT_INTERVAL:
+                    return
+                self._last_position_emit = now
                 self.position_changed.emit(value)
 
         def on_duration(_name, value):
@@ -190,10 +200,10 @@ class VideoPlayer(QWidget):
         self.speed_combo.setFixedWidth(70)
         self.speed_combo.setAccessibleName("Playback speed")
         self.speed_combo.setToolTip("Playback speed")
-        self._speed_values = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 4.0]
+        self._speed_values = PLAYBACK_SPEEDS
         for speed in self._speed_values:
             self.speed_combo.addItem(f"{speed}x")
-        self.speed_combo.setCurrentIndex(3)  # Default: 1.0x
+        self.speed_combo.setCurrentIndex(DEFAULT_SPEED_INDEX)
         self.speed_combo.currentIndexChanged.connect(self._on_speed_changed)
         controls.addWidget(self.speed_combo)
 
@@ -345,8 +355,11 @@ class VideoPlayer(QWidget):
             return
         try:
             self._mpv.seek(seconds, 'absolute', 'exact')
-        except Exception:
+        except mpv.ShutdownError:
             pass
+        except Exception:
+            if not self._shutting_down:
+                logger.warning("seek_to failed", exc_info=True)
 
     def set_clip_range(self, start_seconds: float, end_seconds: float):
         """Set playback range to a specific clip.
@@ -365,8 +378,11 @@ class VideoPlayer(QWidget):
         # Seek to clip start
         try:
             self._mpv.seek(start_seconds, 'absolute', 'exact')
-        except Exception:
+        except mpv.ShutdownError:
             pass
+        except Exception:
+            if not self._shutting_down:
+                logger.warning("set_clip_range seek failed", exc_info=True)
         self._update_time_label(self._clip_start_ms)
 
     def clear_clip_range(self):
@@ -404,13 +420,19 @@ class VideoPlayer(QWidget):
             start_s = self._clip_start_ms / 1000.0
             try:
                 self._mpv.seek(start_s, 'absolute', 'exact')
-            except Exception:
+            except mpv.ShutdownError:
                 pass
+            except Exception:
+                if not self._shutting_down:
+                    logger.warning("stop seek failed", exc_info=True)
         else:
             try:
                 self._mpv.seek(0, 'absolute')
-            except Exception:
+            except mpv.ShutdownError:
                 pass
+            except Exception:
+                if not self._shutting_down:
+                    logger.warning("stop seek failed", exc_info=True)
 
     def shutdown(self):
         """Clean up MPV resources. Must be called from main thread before app exit."""
@@ -511,7 +533,7 @@ class VideoPlayer(QWidget):
         self.speed_combo.setEnabled(enabled)
         if not enabled:
             # Reset to 1x during automated playback
-            self.speed_combo.setCurrentIndex(3)  # 1.0x
+            self.speed_combo.setCurrentIndex(DEFAULT_SPEED_INDEX)
             self.playback_speed = 1.0
 
     # --- Internal handlers ---
@@ -599,8 +621,11 @@ class VideoPlayer(QWidget):
             seconds = position / 1000.0
         try:
             self._mpv.seek(seconds, 'absolute', 'exact')
-        except Exception:
+        except mpv.ShutdownError:
             pass
+        except Exception:
+            if not self._shutting_down:
+                logger.warning("_set_position seek failed", exc_info=True)
 
     @Slot(float)
     def _on_position_changed(self, seconds: float):

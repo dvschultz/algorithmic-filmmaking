@@ -186,6 +186,8 @@ class PlanController:
             "message": f"Step {completed_step_number} complete. Now execute step {plan.current_step_index + 1}: {plan.current_step.description if plan.current_step else 'Unknown'}",
         }
 
+    _VALID_FAIL_ACTIONS = {"stop", "retry", "skip"}
+
     def fail(self, error: str, action: str = "stop") -> dict:
         """Handle a step failure.
 
@@ -196,6 +198,12 @@ class PlanController:
         Returns:
             Updated plan status
         """
+        if action not in self._VALID_FAIL_ACTIONS:
+            return {
+                "success": False,
+                "error": f"Invalid action '{action}'. Must be one of: {', '.join(sorted(self._VALID_FAIL_ACTIONS))}",
+            }
+
         plan = self.current_plan
         if plan is None:
             return {"success": False, "error": "No plan exists."}

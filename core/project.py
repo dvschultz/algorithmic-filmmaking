@@ -589,8 +589,13 @@ class Project:
         self._notify_observers("source_removed", source)
         return source
 
+    # Fields that can be updated via update_source()
+    _UPDATABLE_SOURCE_FIELDS = {"color_profile", "fps", "analyzed", "name"}
+
     def update_source(self, source_id: str, **kwargs) -> Optional[Source]:
         """Update a source's fields.
+
+        Only fields in _UPDATABLE_SOURCE_FIELDS can be modified.
 
         Args:
             source_id: ID of the source to update
@@ -598,14 +603,20 @@ class Project:
 
         Returns:
             Updated Source, or None if not found
+
+        Raises:
+            ValueError: If attempting to set a disallowed field
         """
+        invalid = set(kwargs) - self._UPDATABLE_SOURCE_FIELDS
+        if invalid:
+            raise ValueError(f"Cannot update protected fields: {invalid}")
+
         source = self.sources_by_id.get(source_id)
         if source is None:
             logger.warning(f"Source not found: {source_id}")
             return None
         for key, value in kwargs.items():
-            if hasattr(source, key):
-                setattr(source, key, value)
+            setattr(source, key, value)
         self._dirty = True
         self._notify_observers("source_updated", source)
         return source
@@ -695,8 +706,16 @@ class Project:
             self._notify_observers("frames_removed", removed)
         return removed
 
+    # Fields that can be updated via update_frame()
+    _UPDATABLE_FRAME_FIELDS = {
+        "shot_type", "dominant_colors", "description", "transcript",
+        "detected_objects", "person_count", "analyzed",
+    }
+
     def update_frame(self, frame_id: str, **kwargs) -> Optional[Frame]:
         """Update a frame's fields.
+
+        Only fields in _UPDATABLE_FRAME_FIELDS can be modified.
 
         Args:
             frame_id: ID of the frame to update
@@ -704,14 +723,20 @@ class Project:
 
         Returns:
             Updated Frame, or None if not found
+
+        Raises:
+            ValueError: If attempting to set a disallowed field
         """
+        invalid = set(kwargs) - self._UPDATABLE_FRAME_FIELDS
+        if invalid:
+            raise ValueError(f"Cannot update protected fields: {invalid}")
+
         frame = self.frames_by_id.get(frame_id)
         if frame is None:
             logger.warning(f"Frame not found: {frame_id}")
             return None
         for key, value in kwargs.items():
-            if hasattr(frame, key):
-                setattr(frame, key, value)
+            setattr(frame, key, value)
         self._dirty = True
         self._notify_observers("frames_updated", [frame])
         return frame

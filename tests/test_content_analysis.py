@@ -511,35 +511,6 @@ class TestClipDataModelExtension:
 class TestToolTimeouts:
     """Tests for content analysis tool timeout configuration."""
 
-    def test_classify_content_live_timeout_defined(self):
-        """Test classify_content_live has timeout defined."""
-        from core.chat_tools import TOOL_TIMEOUTS
-
-        assert "classify_content_live" in TOOL_TIMEOUTS
-        assert TOOL_TIMEOUTS["classify_content_live"] == 300
-
-    def test_detect_objects_live_timeout_defined(self):
-        """Test detect_objects_live has timeout defined."""
-        from core.chat_tools import TOOL_TIMEOUTS
-
-        assert "detect_objects_live" in TOOL_TIMEOUTS
-        assert TOOL_TIMEOUTS["detect_objects_live"] == 300
-
-    def test_count_people_live_timeout_defined(self):
-        """Test count_people_live has timeout defined."""
-        from core.chat_tools import TOOL_TIMEOUTS
-
-        assert "count_people_live" in TOOL_TIMEOUTS
-        assert TOOL_TIMEOUTS["count_people_live"] == 300
-
-    def test_get_tool_timeout_returns_configured_value(self):
-        """Test get_tool_timeout returns configured value."""
-        from core.chat_tools import get_tool_timeout
-
-        assert get_tool_timeout("classify_content_live") == 300
-        assert get_tool_timeout("detect_objects_live") == 300
-        assert get_tool_timeout("count_people_live") == 300
-
     def test_get_tool_timeout_returns_default_for_unknown(self):
         """Test get_tool_timeout returns default for unknown tools."""
         from core.chat_tools import get_tool_timeout, DEFAULT_TOOL_TIMEOUT
