@@ -1,5 +1,7 @@
 """Video player component using MPV (libmpv) via python-mpv."""
 
+from __future__ import annotations
+
 import locale
 import logging
 import threading
@@ -19,7 +21,10 @@ from PySide6.QtWidgets import (
 from ui.widgets.styled_slider import StyledSlider
 from PySide6.QtCore import Qt, Slot, Signal, QObject
 
-import mpv
+try:
+    import mpv
+except OSError:
+    mpv = None  # libmpv not available (e.g. Windows CI without DLL)
 
 from core.constants import PLAYBACK_SPEEDS, DEFAULT_SPEED_INDEX
 from ui.theme import theme, TypeScale, Spacing, UISizes
@@ -305,6 +310,10 @@ class VideoPlayer(QWidget):
 
     def _setup_player(self):
         """Set up MPV player instance."""
+        if mpv is None:
+            raise RuntimeError(
+                "libmpv is not available. Install mpv/libmpv for your platform."
+            )
         wid = str(int(self.video_widget.winId()))
         self._mpv = mpv.MPV(
             wid=wid,
