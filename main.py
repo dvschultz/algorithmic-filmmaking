@@ -6,6 +6,7 @@ A desktop application for video artists to automatically detect and extract
 scenes from video files for use in collage filmmaking.
 """
 
+import locale
 import logging
 import os
 import sys
@@ -55,9 +56,42 @@ logger = logging.getLogger(__name__)
 if is_frozen():
     _setup_frozen_environment()
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 from ui.main_window import MainWindow
 from ui.theme import theme
+
+# Fix LC_NUMERIC before any MPV usage — PySide6 may override this on import.
+# MPV requires 'C' locale for numeric parsing (decimal points vs commas).
+locale.setlocale(locale.LC_NUMERIC, 'C')
+
+
+def _check_mpv_available() -> bool:
+    """Check if libmpv is available. Returns True if OK, False if missing."""
+    try:
+        import mpv  # noqa: F401
+        return True
+    except (ImportError, OSError):
+        return False
+
+
+def _show_mpv_missing_dialog(app: QApplication):
+    """Show a user-friendly dialog when libmpv is missing."""
+    import platform
+    system = platform.system()
+    if system == "Darwin":
+        install_cmd = "brew install mpv"
+    elif system == "Windows":
+        install_cmd = "choco install mpv\n\nOr download from https://mpv.io/installation/"
+    else:
+        install_cmd = "sudo apt install libmpv-dev\n\nOr: sudo dnf install mpv-libs-devel"
+
+    msg = QMessageBox()
+    msg.setIcon(QMessageBox.Critical)
+    msg.setWindowTitle("Missing Dependency: libmpv")
+    msg.setText("Scene Ripper requires libmpv for video playback.")
+    msg.setInformativeText(f"Install it with:\n\n{install_cmd}")
+    msg.setStandardButtons(QMessageBox.Ok)
+    msg.exec()
 
 
 def main():
@@ -68,6 +102,12 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Scene Ripper")
     app.setOrganizationName("Algorithmic Filmmaking")
+
+    # Check for libmpv before creating the main window
+    if not _check_mpv_available():
+        logger.error("libmpv not found — showing install dialog")
+        _show_mpv_missing_dialog(app)
+        sys.exit(1)
 
     logger.info("Creating MainWindow...")
     window = MainWindow()

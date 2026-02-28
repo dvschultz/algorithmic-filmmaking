@@ -81,6 +81,7 @@ from ui.workers.classification_worker import ClassificationWorker
 from ui.workers.object_detection_worker import ObjectDetectionWorker
 from ui.workers.description_worker import DescriptionWorker
 from core.gui_state import GUIState
+from core.plan_controller import PlanController
 from core.intention_workflow import IntentionWorkflowCoordinator, WorkflowState
 
 # Set up logging
@@ -694,6 +695,9 @@ class MainWindow(QMainWindow):
         # GUI state tracking for agent context awareness
         self._gui_state = GUIState()
 
+        # Cached PlanController for agent tool access
+        self.plan_controller = PlanController(self._gui_state)
+
         # Project path tracking (for backwards compatibility - delegates to project)
         # Note: self.project.path is the actual storage
 
@@ -1303,7 +1307,7 @@ class MainWindow(QMainWindow):
 
         # Sequence tab video player signals for playback sync
         self.sequence_tab.video_player.position_updated.connect(self._on_video_position_updated)
-        self.sequence_tab.video_player.player.playbackStateChanged.connect(self._on_video_state_changed)
+        self.sequence_tab.video_player.playback_state_changed.connect(self._on_video_state_changed)
 
     def _setup_chat_panel(self):
         """Initialize the chat panel dock widget."""
@@ -1571,9 +1575,6 @@ class MainWindow(QMainWindow):
             """Check if a conflicting worker is running."""
             worker_map = {
                 "detect_scenes": "detection_worker",
-                "analyze_colors_live": "color_worker",
-                "analyze_shots_live": "shot_type_worker",
-                "transcribe_live": "transcription_worker",
                 "download_video": "download_worker",
             }
             attr = worker_map.get(tool_name)
@@ -1676,9 +1677,6 @@ class MainWindow(QMainWindow):
         # Map tool names to their worker attributes
         worker_map = {
             "detect_scenes_live": "detection_worker",
-            "analyze_colors_live": "color_worker",
-            "analyze_shots_live": "shot_type_worker",
-            "transcribe_live": "transcription_worker",
             "download_video": "download_worker",
         }
 
@@ -1866,9 +1864,20 @@ class MainWindow(QMainWindow):
                 self.analyze_tab.clip_browser.set_selection(selected_ids)
 
         elif tool_name in ("add_to_sequence", "remove_from_sequence",
-                            "clear_sequence", "reorder_sequence"):
+                            "clear_sequence", "reorder_sequence",
+                            "update_sequence_clip"):
             # Refresh the timeline to reflect sequence changes
             self._refresh_timeline_from_project()
+
+        elif tool_name == "send_to_analyze":
+            # Switch to Analyze tab after sending clips
+            self._switch_to_tab("analyze")
+
+        elif tool_name in ("apply_filters", "clear_filters", "set_clip_sort_order"):
+            # Force clip browser to repaint after filter/sort changes
+            browser = self.get_active_clip_browser()
+            if browser:
+                browser.update()
 
         elif tool_name == "show_clip_details":
             # Open the clip details sidebar for the specified clip
@@ -4190,6 +4199,11 @@ class MainWindow(QMainWindow):
         self._is_playing = True
         self.sequence_tab.timeline.set_playing(True)
 
+        # Mute sidebar player to prevent audio overlap
+        self.clip_details_sidebar.video_player.mute = True
+        # Disable speed control during automated sequence playback
+        self.sequence_tab.video_player.set_speed_control_enabled(False)
+
         # Start playback from current position
         self._play_clip_at_frame(start_frame)
 
@@ -4210,7 +4224,7 @@ class MainWindow(QMainWindow):
         if not seq_clip:
             # No clip at this position (gap) - show black and advance via timer
             self._current_playback_clip = None
-            self.sequence_tab.video_player.player.stop()  # Shows black
+            self.sequence_tab.video_player.stop()  # Shows black
             self._playback_timer.start()
             return
 
@@ -4272,7 +4286,13 @@ class MainWindow(QMainWindow):
 
     def _on_video_position_updated(self, position_ms: int):
         """Sync timeline playhead to video position during playback."""
-        from PySide6.QtMultimedia import QMediaPlayer
+        # Update GUI state for agent context
+        if self._gui_state:
+            clip_id = self._current_playback_clip.source_clip_id if self._current_playback_clip else None
+            speed = self.sequence_tab.video_player.playback_speed
+            self._gui_state.update_playback_state(
+                position_ms=position_ms, clip_id=clip_id, speed=speed,
+            )
 
         # Case 1: Timeline-driven playback (existing behavior)
         if self._is_playing and self._current_playback_clip:
@@ -4299,7 +4319,7 @@ class MainWindow(QMainWindow):
 
         # Case 2: Direct video playback (when user clicks play on VideoPlayer)
         # Only sync if video is actually playing
-        if self.sequence_tab.video_player.player.playbackState() != QMediaPlayer.PlayingState:
+        if not self.sequence_tab.video_player.is_playing:
             return
 
         # Only sync when in timeline state (not cards state)
@@ -4311,17 +4331,23 @@ class MainWindow(QMainWindow):
         video_seconds = position_ms / 1000.0
         self.sequence_tab.timeline.set_playhead_time(video_seconds)
 
-    def _on_video_state_changed(self, state):
-        """Handle video player state changes."""
-        from PySide6.QtMultimedia import QMediaPlayer
+    def _on_video_state_changed(self, playing: bool):
+        """Handle video player state changes.
 
-        logger.debug(f"Video state changed: {state}, is_playing: {self._is_playing}")
+        Args:
+            playing: True if playing, False if paused/stopped
+        """
+        logger.debug(f"Video state changed: playing={playing}, is_playing: {self._is_playing}")
+
+        # Update GUI state for agent context
+        if self._gui_state:
+            self._gui_state.update_playback_state(is_playing=playing)
 
         if not self._is_playing:
             return
 
-        if state == QMediaPlayer.StoppedState:
-            # Clip ended naturally - check if we should continue to next
+        if not playing:
+            # Clip ended naturally (stopped/paused) - check if we should continue to next
             if self._current_playback_clip:
                 next_frame = self._current_playback_clip.end_frame()
                 self.sequence_tab.timeline.set_playhead_time(
@@ -4333,8 +4359,11 @@ class MainWindow(QMainWindow):
         """Pause playback."""
         self._is_playing = False
         self._playback_timer.stop()
-        self.sequence_tab.video_player.player.pause()
+        self.sequence_tab.video_player.pause()
         self.sequence_tab.timeline.set_playing(False)
+        # Restore sidebar audio and speed control
+        self.clip_details_sidebar.video_player.mute = False
+        self.sequence_tab.video_player.set_speed_control_enabled(True)
 
     def _on_stop_requested(self):
         """Handle stop request from timeline."""
@@ -4345,8 +4374,11 @@ class MainWindow(QMainWindow):
         self._is_playing = False
         self._playback_timer.stop()
         self._current_playback_clip = None
-        self.sequence_tab.video_player.player.stop()
+        self.sequence_tab.video_player.stop()
         self.sequence_tab.timeline.set_playing(False)
+        # Restore sidebar audio and speed control
+        self.clip_details_sidebar.video_player.mute = False
+        self.sequence_tab.video_player.set_speed_control_enabled(True)
 
     def _on_export_click(self):
         """Export selected clips."""
@@ -5260,8 +5292,25 @@ class MainWindow(QMainWindow):
             return True
 
         elif wait_type == "detection":
-            # Detection worker is started by the tool itself via _start_detection
-            # Just return True since the worker is already running
+            # Detection was previously started eagerly in the tool; now handled here
+            source_id = tool_result.get("source_id")
+            mode = tool_result.get("mode", "adaptive")
+            config = tool_result.get("config", {})
+
+            # Find and select source
+            source = self.project.sources_by_id.get(source_id)
+            if not source:
+                return False
+            self._select_source(source)
+
+            # Mark agent waiting
+            self._pending_agent_detection = True
+
+            # Start detection
+            self._start_detection(mode, config)
+
+            # Switch to Cut tab
+            self._switch_to_tab("cut")
             return True
 
         elif wait_type == "classification":
@@ -5283,6 +5332,28 @@ class MainWindow(QMainWindow):
             tier = tool_result.get("tier")
             prompt = tool_result.get("prompt")
             return self.start_agent_description(clip_ids, tier, prompt)
+
+        elif wait_type == "analyze_all":
+            # analyze_all pipeline — previously started eagerly in tool, now handled here
+            clip_ids = tool_result.get("clip_ids", [])
+            operations = tool_result.get("operations", [])
+
+            # Resolve clips
+            clips = [self.project.clips_by_id.get(cid) for cid in clip_ids]
+            clips = [c for c in clips if c is not None]
+            if not clips:
+                return False
+
+            # Mark agent waiting
+            self._pending_agent_analyze_all = True
+
+            # Add clips to Analyze tab and switch
+            self.analyze_tab.add_clips(clip_ids)
+            self._switch_to_tab("analyze")
+
+            # Start the pipeline
+            self._run_analysis_pipeline(clips, operations)
+            return True
 
         else:
             logger.warning(f"Unknown worker type: {wait_type}")
@@ -7576,6 +7647,11 @@ class MainWindow(QMainWindow):
         if self._playback_timer.isActive():
             logger.info("Stopping playback timer")
             self._playback_timer.stop()
+
+        # Shutdown MPV players (must happen from main thread before exit)
+        logger.info("Shutting down video players")
+        self.sequence_tab.video_player.shutdown()
+        self.clip_details_sidebar.video_player.shutdown()
 
         workers = [
             ("detection", self.detection_worker),

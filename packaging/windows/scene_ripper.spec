@@ -27,8 +27,6 @@ a = Analysis(
         "PySide6.QtWidgets",
         "PySide6.QtCore",
         "PySide6.QtGui",
-        "PySide6.QtMultimedia",
-        "PySide6.QtMultimediaWidgets",
         "PySide6.QtNetwork",
         # Qt platform plugin
         "PySide6.QtSvg",
@@ -81,6 +79,9 @@ a = Analysis(
         "PySide6.QtOpenGL",
         "PySide6.QtOpenGLWidgets",
         "PySide6.QtDBus",
+        # No longer used (video playback via MPV, not Qt Multimedia)
+        "PySide6.QtMultimedia",
+        "PySide6.QtMultimediaWidgets",
         # macOS-only backends
         "keyring.backends.macOS",
         "lightning_whisper_mlx",

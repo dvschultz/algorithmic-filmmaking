@@ -144,6 +144,7 @@ class SequenceTab(BaseTab):
 
         # Video player
         self.video_player = VideoPlayer()
+        self.video_player.show_ab_loop_controls(True)
         splitter.addWidget(self.video_player)
 
         # Timeline preview strip (moved from parameter view)

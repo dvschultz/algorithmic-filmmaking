@@ -29,6 +29,7 @@ class ProjectSignalAdapter(QObject):
     # Signals emitted when project state changes
     source_added = Signal(object)       # Source
     source_removed = Signal(object)     # Source
+    source_updated = Signal(object)     # Source
     clips_added = Signal(list)          # list[Clip]
     clips_updated = Signal(list)        # list[Clip]
     sequence_changed = Signal(list)     # list[str] clip_ids
@@ -77,6 +78,8 @@ class ProjectSignalAdapter(QObject):
             self.source_added.emit(data)
         elif event == "source_removed":
             self.source_removed.emit(data)
+        elif event == "source_updated":
+            self.source_updated.emit(data)
         elif event == "clips_added":
             self.clips_added.emit(data)
         elif event == "clips_updated":

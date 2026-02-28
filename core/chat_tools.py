@@ -29,17 +29,27 @@ from core.youtube_api import (
 from core.downloader import VideoDownloader
 from core.settings import load_settings
 from core.analysis.shots import SHOT_TYPES
+from core.constants import (
+    VALID_ASPECT_RATIOS,
+    VALID_COLOR_PALETTES,
+    VALID_SHOT_TYPES,
+    VALID_SORT_ORDERS,
+)
 from core.gui_state import NameProjectThenPlanAction
+from core.plan_controller import PlanController
 
 logger = logging.getLogger(__name__)
 
-# Common error messages for plan execution tools
-_NO_PLAN_ERROR = (
-    "No plan exists. You must call the present_plan TOOL (not write text). "
-    "DO NOT describe steps in your message - that does not create a plan. "
-    "Instead, make a tool call: present_plan(steps=[\"Step 1\", \"Step 2\", ...], summary=\"...\"). "
-    "After the user confirms the plan widget, then call start_plan_execution."
-)
+def _get_plan_controller(main_window) -> PlanController:
+    """Get the cached PlanController from main_window."""
+    controller = getattr(main_window, 'plan_controller', None)
+    if controller is not None:
+        return controller
+    # Fallback: create if not cached (shouldn't happen in normal flow)
+    gui_state = getattr(main_window, '_gui_state', None)
+    if gui_state is None:
+        raise ValueError("No GUI state available")
+    return PlanController(gui_state)
 
 
 def _validate_path(path_str: str, must_exist: bool = False, allow_relative: bool = False) -> tuple[bool, str, Optional[Path]]:
@@ -130,13 +140,7 @@ TOOL_TIMEOUTS = {
     "download_video": 1800,    # 30 minutes for long videos
     "download_videos": 7200,   # 2 hours for bulk downloads (10 videos × 10 min timeout + buffer)
     "search_youtube": 30,      # 30 seconds
-    "analyze_colors_live": 300,     # 5 minutes
-    "analyze_shots_live": 300,      # 5 minutes
-    "classify_content_live": 300,   # 5 minutes for classification
-    "detect_objects_live": 300,     # 5 minutes for object detection
-    "count_people_live": 300,       # 5 minutes for person detection
     "describe_content_live": 600,   # 10 minutes for descriptions
-    "transcribe_live": 1200,        # 20 minutes
     "transcribe_clips": 1200,       # 20 minutes
     "export_sequence": 600,    # 10 minutes
 }
@@ -339,73 +343,9 @@ def present_plan(main_window, steps: list[str], summary: str) -> dict:
     Returns:
         Plan ID and instructions for the LLM to wait for confirmation
     """
-    from models.plan import Plan
-
-    if not steps:
-        return {
-            "success": False,
-            "error": "No steps provided for the plan"
-        }
-
-    if len(steps) > 20:
-        return {
-            "success": False,
-            "error": f"Plan has {len(steps)} steps, maximum is 20. Please break into smaller plans."
-        }
-
-    # Check if plan involves project work and project is unnamed
-    # Keywords that indicate the plan will modify/use a project
-    project_keywords = [
-        "download", "detect", "scene", "clip", "sequence", "export",
-        "analyze", "transcribe", "shuffle", "randomize", "import",
-        "add to", "render", "save"
-    ]
-    steps_text = " ".join(steps).lower()
-    involves_project = any(kw in steps_text for kw in project_keywords)
-
-    if involves_project and hasattr(main_window, 'project'):
-        project = main_window.project
-        if project and project.metadata.name == "Untitled Project":
-            # Store pending action in GUI state so agent is reminded after user responds
-            if hasattr(main_window, '_gui_state'):
-                main_window._gui_state.set_pending_action(
-                    NameProjectThenPlanAction(
-                        pending_steps=steps,
-                        pending_summary=summary
-                    )
-                )
-
-            return {
-                "success": True,
-                "action_required": "name_project",
-                "instruction": (
-                    "STOP. Do not call any tools. Ask the user directly: "
-                    "'What would you like to name this project?' "
-                    "Wait for their response. Then call set_project_name with "
-                    "the name they provide, and present_plan again with the same steps."
-                ),
-                "pending_plan": {
-                    "steps": steps,
-                    "summary": summary
-                }
-            }
-
-    # Create the plan
-    plan = Plan.from_steps(steps, summary)
-
-    # Store plan in GUI state for tracking
-    if hasattr(main_window, '_gui_state'):
-        main_window._gui_state.current_plan = plan
-
-    # Return marker that tells GUI handler to display the plan widget
-    return {
-        "_display_plan": True,
-        "plan_id": plan.id,
-        "summary": summary,
-        "steps": steps,
-        "step_count": len(steps),
-        "message": "Plan presented to user. Waiting for confirmation or edits."
-    }
+    controller = _get_plan_controller(main_window)
+    project = getattr(main_window, 'project', None)
+    return controller.present(steps, summary, project=project)
 
 
 @tools.register(
@@ -421,45 +361,8 @@ def start_plan_execution(main_window) -> dict:
     Returns:
         Current step info and instructions
     """
-    if not hasattr(main_window, '_gui_state') or not main_window._gui_state.current_plan:
-        return {
-            "success": False,
-            "error": _NO_PLAN_ERROR
-        }
-
-    plan = main_window._gui_state.current_plan
-
-    if plan.status == "executing":
-        # Already executing, return current step
-        return {
-            "success": True,
-            "already_executing": True,
-            "current_step_number": plan.current_step_index + 1,
-            "total_steps": len(plan.steps),
-            "current_step": plan.current_step.description if plan.current_step else None,
-            "message": "Plan already executing. Continue with current step."
-        }
-
-    if plan.status == "completed":
-        return {
-            "success": False,
-            "error": "Plan already completed. Create a new plan with present_plan."
-        }
-
-    # Start execution
-    plan.confirm()  # Mark as confirmed if still draft
-    plan.start_execution()
-
-    return {
-        "success": True,
-        "plan_id": plan.id,
-        "status": "executing",
-        "current_step_number": 1,
-        "total_steps": len(plan.steps),
-        "current_step": plan.current_step.description if plan.current_step else None,
-        "remaining_steps": [s.description for s in plan.steps[1:]],
-        "message": f"Plan started. Execute step 1: {plan.current_step.description if plan.current_step else 'Unknown'}"
-    }
+    controller = _get_plan_controller(main_window)
+    return controller.start()
 
 
 @tools.register(
@@ -476,49 +379,8 @@ def complete_plan_step(main_window, result_summary: Optional[str] = None) -> dic
     Returns:
         Next step info or completion status
     """
-    if not hasattr(main_window, '_gui_state') or not main_window._gui_state.current_plan:
-        return {
-            "success": False,
-            "error": _NO_PLAN_ERROR
-        }
-
-    plan = main_window._gui_state.current_plan
-
-    if plan.status != "executing":
-        return {
-            "success": False,
-            "error": f"Plan is not executing (status: {plan.status}). Call start_plan_execution first."
-        }
-
-    completed_step = plan.current_step.description if plan.current_step else "Unknown"
-    completed_step_number = plan.current_step_index + 1
-
-    # Advance to next step
-    plan.advance_step(result_summary)
-
-    if plan.status == "completed":
-        return {
-            "success": True,
-            "plan_completed": True,
-            "completed_step": completed_step,
-            "completed_step_number": completed_step_number,
-            "total_steps": len(plan.steps),
-            "message": f"Step {completed_step_number} complete. All {len(plan.steps)} steps finished! Plan completed successfully."
-        }
-
-    # More steps remain
-    return {
-        "success": True,
-        "plan_completed": False,
-        "completed_step": completed_step,
-        "completed_step_number": completed_step_number,
-        "current_step_number": plan.current_step_index + 1,
-        "total_steps": len(plan.steps),
-        "current_step": plan.current_step.description if plan.current_step else None,
-        "remaining_steps": [s.description for s in plan.steps[plan.current_step_index + 1:]],
-        "progress": plan.get_progress_summary(),
-        "message": f"Step {completed_step_number} complete. Now execute step {plan.current_step_index + 1}: {plan.current_step.description if plan.current_step else 'Unknown'}"
-    }
+    controller = _get_plan_controller(main_window)
+    return controller.advance(result_summary)
 
 
 @tools.register(
@@ -532,46 +394,8 @@ def get_plan_status(main_window) -> dict:
     Returns:
         Plan status, current step, and remaining steps
     """
-    if not hasattr(main_window, '_gui_state') or not main_window._gui_state.current_plan:
-        return {
-            "has_plan": False,
-            "message": "No active plan. Use present_plan to create one."
-        }
-
-    plan = main_window._gui_state.current_plan
-
-    steps_info = []
-    for i, step in enumerate(plan.steps):
-        steps_info.append({
-            "step_number": i + 1,
-            "description": step.description,
-            "status": step.status,
-            "result_summary": step.result_summary
-        })
-
-    result = {
-        "has_plan": True,
-        "plan_id": plan.id,
-        "summary": plan.summary,
-        "status": plan.status,
-        "total_steps": len(plan.steps),
-        "steps": steps_info,
-        "progress": plan.get_progress_summary()
-    }
-
-    if plan.status == "executing" and plan.current_step:
-        result["current_step_number"] = plan.current_step_index + 1
-        result["current_step"] = plan.current_step.description
-        result["remaining_steps"] = [s.description for s in plan.steps[plan.current_step_index + 1:]]
-        result["message"] = f"Executing step {plan.current_step_index + 1}/{len(plan.steps)}: {plan.current_step.description}"
-    elif plan.status == "completed":
-        result["message"] = "Plan completed successfully."
-    elif plan.status == "draft":
-        result["message"] = "Plan awaiting user confirmation. Call start_plan_execution after user confirms."
-    else:
-        result["message"] = f"Plan status: {plan.status}"
-
-    return result
+    controller = _get_plan_controller(main_window)
+    return controller.get_status()
 
 
 @tools.register(
@@ -589,64 +413,8 @@ def fail_plan_step(main_window, error: str, action: str = "stop") -> dict:
     Returns:
         Updated plan status
     """
-    if not hasattr(main_window, '_gui_state') or not main_window._gui_state.current_plan:
-        return {
-            "success": False,
-            "error": "No plan exists."
-        }
-
-    plan = main_window._gui_state.current_plan
-
-    if plan.status != "executing":
-        return {
-            "success": False,
-            "error": f"Plan is not executing (status: {plan.status})."
-        }
-
-    failed_step = plan.current_step.description if plan.current_step else "Unknown"
-    failed_step_number = plan.current_step_index + 1
-
-    if action == "retry":
-        plan.retry_current_step()
-        return {
-            "success": True,
-            "action": "retry",
-            "step_number": failed_step_number,
-            "current_step": failed_step,
-            "message": f"Retrying step {failed_step_number}: {failed_step}"
-        }
-    elif action == "skip":
-        # Mark as failed but advance anyway using Plan's encapsulated method
-        plan.skip_current_step(error)
-        if plan.status == "completed":
-            return {
-                "success": True,
-                "action": "skip",
-                "plan_completed": True,
-                "skipped_step": failed_step,
-                "message": f"Skipped failed step {failed_step_number}. Plan completed (with failures)."
-            }
-        else:
-            return {
-                "success": True,
-                "action": "skip",
-                "skipped_step": failed_step,
-                "current_step_number": plan.current_step_index + 1,
-                "current_step": plan.current_step.description if plan.current_step else None,
-                "message": f"Skipped failed step. Now on step {plan.current_step_index + 1}: {plan.current_step.description if plan.current_step else 'Unknown'}"
-            }
-    else:  # stop
-        plan.fail_current_step(error)
-        plan.stop_on_failure()
-        return {
-            "success": True,
-            "action": "stop",
-            "plan_status": "failed",
-            "failed_step_number": failed_step_number,
-            "failed_step": failed_step,
-            "error": error,
-            "message": f"Plan stopped at step {failed_step_number} due to error: {error}"
-        }
+    controller = _get_plan_controller(main_window)
+    return controller.fail(error, action)
 
 
 @tools.register(
@@ -1108,6 +876,106 @@ def reorder_sequence(project, clip_ids: list[str]) -> dict:
 
 
 @tools.register(
+    description="Update a sequence clip's trim points or position on the timeline. "
+                "Use this to trim clips (in_point/out_point), reposition them (start_frame), "
+                "change their track (track_index), or set hold duration for frame entries (hold_frames).",
+    requires_project=True,
+    modifies_gui_state=True,
+    modifies_project_state=True
+)
+def update_sequence_clip(
+    project,
+    clip_id: str,
+    in_point: Optional[int] = None,
+    out_point: Optional[int] = None,
+    start_frame: Optional[int] = None,
+    track_index: Optional[int] = None,
+    hold_frames: Optional[int] = None,
+) -> dict:
+    """Update a sequence clip's trim points or position.
+
+    Args:
+        clip_id: ID of the sequence clip to update
+        in_point: New trim start (frames into source clip)
+        out_point: New trim end (frames into source clip)
+        start_frame: New position on timeline (in frames)
+        track_index: Move to a different track
+        hold_frames: For frame entries, number of timeline frames to hold
+
+    Returns:
+        Dict with success status and updated clip info
+    """
+    if project.sequence is None:
+        return {"success": False, "error": "No sequence exists"}
+
+    # Find the clip across all tracks
+    target_clip = None
+    for track in project.sequence.tracks:
+        for seq_clip in track.clips:
+            if seq_clip.id == clip_id:
+                target_clip = seq_clip
+                break
+        if target_clip:
+            break
+
+    if target_clip is None:
+        return {
+            "success": False,
+            "error": f"Sequence clip '{clip_id}' not found. Use list_sequence_clips to see available clips."
+        }
+
+    # Validate and apply updates
+    updated_fields = {}
+
+    if in_point is not None:
+        if in_point < 0:
+            return {"success": False, "error": f"in_point must be >= 0, got {in_point}"}
+        target_clip.in_point = in_point
+        updated_fields["in_point"] = in_point
+
+    if out_point is not None:
+        if out_point <= (in_point if in_point is not None else target_clip.in_point):
+            return {"success": False, "error": "out_point must be greater than in_point"}
+        target_clip.out_point = out_point
+        updated_fields["out_point"] = out_point
+
+    if start_frame is not None:
+        if start_frame < 0:
+            return {"success": False, "error": f"start_frame must be >= 0, got {start_frame}"}
+        target_clip.start_frame = start_frame
+        updated_fields["start_frame"] = start_frame
+
+    if track_index is not None:
+        if track_index < 0 or track_index >= len(project.sequence.tracks):
+            return {
+                "success": False,
+                "error": f"track_index {track_index} out of range (0-{len(project.sequence.tracks) - 1})"
+            }
+        target_clip.track_index = track_index
+        updated_fields["track_index"] = track_index
+
+    if hold_frames is not None:
+        if hold_frames < 1:
+            return {"success": False, "error": f"hold_frames must be >= 1, got {hold_frames}"}
+        target_clip.hold_frames = hold_frames
+        updated_fields["hold_frames"] = hold_frames
+
+    if not updated_fields:
+        return {"success": False, "error": "No fields provided to update"}
+
+    # Notify observers
+    project.mark_dirty()
+    project._notify_observers("sequence_changed", [clip_id])
+
+    return {
+        "success": True,
+        "message": f"Updated sequence clip {clip_id[:8]}...",
+        "updated_fields": updated_fields,
+        "duration_frames": target_clip.duration_frames,
+    }
+
+
+@tools.register(
     description=(
         "Sort clips in the sequence by a specific criterion. "
         "Supported criteria: 'color' (sort by dominant color hue), "
@@ -1391,27 +1259,24 @@ def apply_filters(
         return {"success": False, "error": "Main window not available"}
 
     # Validate aspect_ratio if provided
-    valid_aspects = ["16:9", "4:3", "9:16"]
-    if aspect_ratio and aspect_ratio not in valid_aspects:
+    if aspect_ratio and aspect_ratio not in VALID_ASPECT_RATIOS:
         return {
             "success": False,
-            "error": f"Invalid aspect_ratio '{aspect_ratio}'. Valid options: {', '.join(valid_aspects)}"
+            "error": f"Invalid aspect_ratio '{aspect_ratio}'. Valid options: {', '.join(VALID_ASPECT_RATIOS)}"
         }
 
     # Validate shot_type if provided
-    valid_shots = ["All", "Wide Shot", "Medium Shot", "Close-up", "Extreme CU"]
-    if shot_type and shot_type not in valid_shots:
+    if shot_type and shot_type != "All" and shot_type not in VALID_SHOT_TYPES:
         return {
             "success": False,
-            "error": f"Invalid shot_type '{shot_type}'. Valid options: {', '.join(valid_shots[1:])}"
+            "error": f"Invalid shot_type '{shot_type}'. Valid options: {', '.join(VALID_SHOT_TYPES)}"
         }
 
     # Validate color_palette if provided
-    valid_palettes = ["All", "Warm", "Cool", "Neutral", "Vibrant"]
-    if color_palette and color_palette not in valid_palettes:
+    if color_palette and color_palette != "All" and color_palette not in VALID_COLOR_PALETTES:
         return {
             "success": False,
-            "error": f"Invalid color_palette '{color_palette}'. Valid options: {', '.join(valid_palettes[1:])}"
+            "error": f"Invalid color_palette '{color_palette}'. Valid options: {', '.join(VALID_COLOR_PALETTES)}"
         }
 
     # Get the active tab info
@@ -1485,11 +1350,10 @@ def set_clip_sort_order(
         return {"success": False, "error": "Main window not available"}
 
     # Validate sort option
-    valid_sorts = ["Timeline", "Color", "Duration"]
-    if sort_by not in valid_sorts:
+    if sort_by not in VALID_SORT_ORDERS:
         return {
             "success": False,
-            "error": f"Invalid sort_by '{sort_by}'. Valid options: {', '.join(valid_sorts)}"
+            "error": f"Invalid sort_by '{sort_by}'. Valid options: {', '.join(VALID_SORT_ORDERS)}"
         }
 
     # Get the active tab's clip browser via public API
@@ -1594,25 +1458,20 @@ def send_to_analyze(
     # Add clips to Analyze tab
     main_window.analyze_tab.add_clips(valid_ids)
 
-    # Switch to Analyze tab
-    main_window._switch_to_tab("analyze")
-
-    # Update GUI state
-    gui_state = getattr(main_window, '_gui_state', None)
-    if gui_state:
-        gui_state.active_tab = "analyze"
-
     # Optionally start analysis via the pipeline
     if auto_analyze:
         from core.analysis_operations import DEFAULT_SELECTED
-        clips = [project.clips_by_id[cid] for cid in valid_ids if cid in project.clips_by_id]
-        if clips:
-            main_window._pending_agent_analyze_all = True
-            main_window._run_analysis_pipeline(clips, list(DEFAULT_SELECTED))
+        return {
+            "_wait_for_worker": "analyze_all",
+            "clip_ids": valid_ids,
+            "clip_count": len(valid_ids),
+            "operations": list(DEFAULT_SELECTED),
+            "sent_count": len(valid_ids),
+        }
 
     return {
         "success": True,
-        "message": f"Sent {len(valid_ids)} clips to Analyze tab",
+        "message": f"Sent {len(valid_ids)} clips to Analyze tab. Use navigate_to_tab('analyze') to switch.",
         "sent_count": len(valid_ids),
         "clip_ids": valid_ids,
         "auto_analyze": auto_analyze,
@@ -1765,7 +1624,7 @@ def play_preview(main_window) -> dict:
     if player is None:
         return {"success": False, "error": "Video player not available"}
 
-    player.player.play()
+    player.play()
 
     return {
         "success": True,
@@ -1792,7 +1651,7 @@ def pause_preview(main_window) -> dict:
     if player is None:
         return {"success": False, "error": "Video player not available"}
 
-    player.player.pause()
+    player.pause()
 
     return {
         "success": True,
@@ -1826,7 +1685,7 @@ def seek_to_time(main_window, seconds: float) -> dict:
         return {"success": False, "error": "Position cannot be negative"}
 
     # Check upper bound - get duration from player
-    duration_ms = player.player.duration()
+    duration_ms = player.duration_ms
     if duration_ms > 0:
         duration_s = duration_ms / 1000.0
         if seconds > duration_s:
@@ -1899,6 +1758,79 @@ def remove_source(
         "message": f"Removed source '{source_name}' and {clips_to_remove} associated clips",
         "removed_source": source_name,
         "removed_clips_count": clips_to_remove,
+    }
+
+
+@tools.register(
+    description="Update metadata fields on a source video. "
+                "Supports updating: color_profile ('color', 'grayscale', 'sepia'), "
+                "fps (float), analyzed (bool).",
+    requires_project=True,
+    modifies_gui_state=False
+)
+def update_source(
+    project,
+    source_id: str,
+    color_profile: Optional[str] = None,
+    fps: Optional[float] = None,
+    analyzed: Optional[bool] = None,
+) -> dict:
+    """Update metadata fields on a source video.
+
+    Args:
+        source_id: ID of the source to update
+        color_profile: New color profile ('color', 'grayscale', 'sepia')
+        fps: Corrected frames per second
+        analyzed: Whether source has been analyzed
+
+    Returns:
+        Dict with success status and updated fields
+    """
+    if project is None:
+        return {"success": False, "error": "No project loaded"}
+
+    source = project.sources_by_id.get(source_id)
+    if source is None:
+        return {
+            "success": False,
+            "error": f"Source '{source_id}' not found. Use list_sources to see available sources."
+        }
+
+    # Validate color_profile
+    valid_profiles = ["color", "grayscale", "sepia"]
+    if color_profile is not None and color_profile not in valid_profiles:
+        return {
+            "success": False,
+            "error": f"Invalid color_profile '{color_profile}'. Valid options: {', '.join(valid_profiles)}"
+        }
+
+    # Validate fps
+    if fps is not None and (fps <= 0 or fps > 240):
+        return {
+            "success": False,
+            "error": f"Invalid fps {fps}. Must be between 0 and 240."
+        }
+
+    # Build kwargs for update
+    kwargs = {}
+    if color_profile is not None:
+        kwargs["color_profile"] = color_profile
+    if fps is not None:
+        kwargs["fps"] = fps
+    if analyzed is not None:
+        kwargs["analyzed"] = analyzed
+
+    if not kwargs:
+        return {"success": False, "error": "No fields provided to update"}
+
+    updated = project.update_source(source_id, **kwargs)
+    if updated is None:
+        return {"success": False, "error": "Failed to update source"}
+
+    return {
+        "success": True,
+        "message": f"Updated source {source_id[:8]}...",
+        "updated_fields": kwargs,
     }
 
 
@@ -3096,8 +3028,8 @@ def download_videos(
 #
 # Note: CLI-based analyze_colors, analyze_shots, transcribe, and export_clips
 # tools were removed because they required the scene_ripper CLI to be installed.
-# Use the *_live versions below instead (analyze_colors_live, analyze_shots_live,
-# transcribe_live) which work directly with the in-memory project.
+# Use start_clip_analysis or analyze_all_live instead, which work directly
+# with the in-memory project.
 # =============================================================================
 
 @tools.register(
@@ -3248,12 +3180,6 @@ def detect_scenes_live(
     if main_window.detection_worker and main_window.detection_worker.isRunning():
         return {"success": False, "error": "Scene detection already in progress"}
 
-    # Set current source and start detection
-    main_window._select_source(source)
-
-    # Mark that we're waiting for detection result via agent
-    main_window._pending_agent_detection = True
-
     # Build config dict based on mode
     if mode == "karaoke":
         config = {
@@ -3269,14 +3195,13 @@ def detect_scenes_live(
             "luma_only": luma_only,
         }
 
-    # Start detection (this returns immediately, worker runs in background)
-    main_window._start_detection(mode, config)
-
-    # Switch to Cut tab to show progress
-    main_window._switch_to_tab("cut")
-
-    # Return marker that tells GUI handler to wait for worker completion
-    return {"_wait_for_worker": "detection", "source_id": source_id, "mode": mode}
+    # Return marker — GUI layer handles source selection, detection start, and tab switch
+    return {
+        "_wait_for_worker": "detection",
+        "source_id": source_id,
+        "mode": mode,
+        "config": config,
+    }
 
 
 @tools.register(
@@ -3434,209 +3359,111 @@ def check_detection_status(main_window, project) -> dict:
 
 
 @tools.register(
-    description="Extract dominant colors from clips with live GUI update. Updates clip metadata.",
+    description="Run one or more analysis operations on clips. Preferred over individual tools. "
+                "Operations: 'colors' (dominant colors), 'shots' (shot type classification), "
+                "'transcription' (speech-to-text), 'classification' (ImageNet labels), "
+                "'description' (VLM description), 'objects' (YOLO object detection), "
+                "'people' (person count). "
+                "Example: start_clip_analysis(clip_ids=[...], operations=['colors', 'shots', 'transcription'])",
     requires_project=True,
     modifies_gui_state=True,
     modifies_project_state=True
 )
-def analyze_colors_live(main_window, clip_ids: list[str]) -> dict:
-    """Extract dominant colors from clips with live GUI update.
+def start_clip_analysis(
+    main_window,
+    clip_ids: list[str],
+    operations: list[str],
+) -> dict:
+    """Run one or more analysis operations on clips.
 
     Args:
         clip_ids: List of clip IDs to analyze
+        operations: List of operation names to run
 
     Returns:
-        Dict with analysis results (after worker completes)
+        Dict with _wait_for_worker marker for the first operation,
+        or combined marker for analyze_all pipeline
     """
-    # Validate clips exist
-    valid_ids = [cid for cid in clip_ids if cid in main_window.project.clips_by_id]
+    valid_operations = {
+        "colors", "shots", "transcription", "classification",
+        "description", "objects", "people",
+    }
 
-    if not valid_ids:
-        return {"success": False, "error": "No valid clips found"}
-
-    # Check if worker already running
-    if main_window.color_worker and main_window.color_worker.isRunning():
-        return {"success": False, "error": "Color analysis already in progress"}
-
-    # Return instruction for MainWindow to start the worker
-    return {"_wait_for_worker": "color_analysis", "clip_ids": valid_ids, "clip_count": len(valid_ids)}
-
-
-@tools.register(
-    description="Classify shot types (close-up, medium, wide, etc.) for clips with live GUI update.",
-    requires_project=True,
-    modifies_gui_state=True,
-    modifies_project_state=True
-)
-def analyze_shots_live(main_window, clip_ids: list[str]) -> dict:
-    """Classify shot types for clips with live GUI update.
-
-    Args:
-        clip_ids: List of clip IDs to analyze
-
-    Returns:
-        Dict with analysis results (after worker completes)
-    """
-    # Validate clips exist
-    valid_ids = [cid for cid in clip_ids if cid in main_window.project.clips_by_id]
-
-    if not valid_ids:
-        return {"success": False, "error": "No valid clips found"}
-
-    # Check if worker already running
-    if main_window.shot_type_worker and main_window.shot_type_worker.isRunning():
-        return {"success": False, "error": "Shot type analysis already in progress"}
-
-    # Return instruction for MainWindow to start the worker
-    return {"_wait_for_worker": "shot_analysis", "clip_ids": valid_ids, "clip_count": len(valid_ids)}
-
-
-@tools.register(
-    description="Transcribe speech in clips using Whisper with live GUI update.",
-    requires_project=True,
-    modifies_gui_state=True,
-    modifies_project_state=True
-)
-def transcribe_live(main_window, clip_ids: list[str]) -> dict:
-    """Transcribe speech in clips with live GUI update.
-
-    Args:
-        clip_ids: List of clip IDs to transcribe
-
-    Returns:
-        Dict with transcription results (after worker completes)
-    """
-    # Check if faster-whisper is available
-    from core.transcription import is_faster_whisper_available
-    if not is_faster_whisper_available():
+    # Validate operations
+    ops = [op for op in operations if op in valid_operations]
+    if not ops:
         return {
             "success": False,
-            "error": "Transcription unavailable - faster-whisper not installed"
+            "error": f"No valid operations. Valid: {', '.join(sorted(valid_operations))}"
         }
 
     # Validate clips exist
     valid_ids = [cid for cid in clip_ids if cid in main_window.project.clips_by_id]
-
     if not valid_ids:
         return {"success": False, "error": "No valid clips found"}
 
-    # Check if worker already running
-    if main_window.transcription_worker and main_window.transcription_worker.isRunning():
-        return {"success": False, "error": "Transcription already in progress"}
-
-    # Return instruction for MainWindow to start the worker
-    return {"_wait_for_worker": "transcription", "clip_ids": valid_ids, "clip_count": len(valid_ids)}
-
-
-@tools.register(
-    description="Classify frame content using ImageNet labels. Identifies objects like 'dog', 'car', 'tree' in clips using MobileNet. Updates clip.object_labels.",
-    requires_project=True,
-    modifies_gui_state=True,
-    modifies_project_state=True
-)
-def classify_content_live(main_window, clip_ids: list[str], top_k: int = 5) -> dict:
-    """Classify content in clips with live GUI update.
-
-    Uses MobileNetV3-Small to classify frames with ImageNet labels (1000 categories).
-    Results are stored in clip.object_labels.
-
-    Args:
-        clip_ids: List of clip IDs to classify
-        top_k: Number of top labels to return per clip (default: 5)
-
-    Returns:
-        Dict with classification results (after worker completes)
-    """
-    # Validate clips exist
-    valid_ids = [cid for cid in clip_ids if cid in main_window.project.clips_by_id]
-
-    if not valid_ids:
-        return {"success": False, "error": "No valid clips found"}
-
-    # Check if worker already running
-    if main_window.classification_worker and main_window.classification_worker.isRunning():
-        return {"success": False, "error": "Classification already in progress"}
-
-    # Return instruction for MainWindow to start the worker
-    return {
-        "_wait_for_worker": "classification",
-        "clip_ids": valid_ids,
-        "clip_count": len(valid_ids),
-        "top_k": top_k,
+    # Map operation names to worker types
+    op_to_worker = {
+        "colors": "color_analysis",
+        "shots": "shot_analysis",
+        "transcription": "transcription",
+        "classification": "classification",
+        "description": "description",
+        "objects": "object_detection",
+        "people": "person_detection",
     }
 
+    # Single operation: return specific worker marker
+    if len(ops) == 1:
+        op = ops[0]
+        worker_type = op_to_worker[op]
 
-@tools.register(
-    description="Detect and count objects in clips using YOLO. Returns object labels, counts, and bounding boxes. Updates clip.detected_objects and clip.person_count.",
-    requires_project=True,
-    modifies_gui_state=True,
-    modifies_project_state=True
-)
-def detect_objects_live(main_window, clip_ids: list[str], confidence: float = 0.5) -> dict:
-    """Detect objects in clips with live GUI update.
+        # Check specific worker availability
+        worker_checks = {
+            "colors": ("color_worker", "Color analysis"),
+            "shots": ("shot_type_worker", "Shot type analysis"),
+            "transcription": ("transcription_worker", "Transcription"),
+            "classification": ("classification_worker", "Classification"),
+            "description": ("description_worker", "Description generation"),
+            "objects": ("detection_worker_yolo", "Object detection"),
+            "people": ("detection_worker_yolo", "Person detection"),
+        }
+        worker_attr, worker_name = worker_checks[op]
+        worker = getattr(main_window, worker_attr, None)
+        if worker and worker.isRunning():
+            return {"success": False, "error": f"{worker_name} already in progress"}
 
-    Uses YOLOv8 to detect objects from COCO dataset (80 object classes).
-    Results are stored in clip.detected_objects and clip.person_count.
+        result = {
+            "_wait_for_worker": worker_type,
+            "clip_ids": valid_ids,
+            "clip_count": len(valid_ids),
+        }
+        # Add extra params for specific operations
+        if op == "classification":
+            result["top_k"] = 5
+        elif op == "objects":
+            result["confidence"] = 0.5
+        return result
 
-    Args:
-        clip_ids: List of clip IDs to analyze
-        confidence: Detection confidence threshold (0.0-1.0, default: 0.5)
-
-    Returns:
-        Dict with detection results (after worker completes)
-    """
-    # Validate clips exist
-    valid_ids = [cid for cid in clip_ids if cid in main_window.project.clips_by_id]
-
-    if not valid_ids:
-        return {"success": False, "error": "No valid clips found"}
-
-    # Check if worker already running
-    if main_window.detection_worker_yolo and main_window.detection_worker_yolo.isRunning():
-        return {"success": False, "error": "Object detection already in progress"}
-
-    # Return instruction for MainWindow to start the worker
-    return {
-        "_wait_for_worker": "object_detection",
-        "clip_ids": valid_ids,
-        "clip_count": len(valid_ids),
-        "confidence": confidence,
+    # Multiple operations: use analyze_all pipeline
+    # Map our operation names to analyze_all operation keys
+    pipeline_op_map = {
+        "colors": "colors",
+        "shots": "shots",
+        "transcription": "transcribe",
+        "classification": "classify",
+        "description": "describe",
+        "objects": "detect_objects",
+        "people": "detect_objects",  # people detection uses same YOLO pipeline
     }
+    pipeline_ops = list(dict.fromkeys(pipeline_op_map[op] for op in ops))
 
-
-@tools.register(
-    description="Count people in clips using YOLO. Faster than full object detection when you only need person counts. Updates clip.person_count.",
-    requires_project=True,
-    modifies_gui_state=True,
-    modifies_project_state=True
-)
-def count_people_live(main_window, clip_ids: list[str]) -> dict:
-    """Count people in clips with live GUI update.
-
-    Uses YOLOv8 to count people in each clip. Faster than detect_objects_live
-    when you only need person counts.
-
-    Args:
-        clip_ids: List of clip IDs to analyze
-
-    Returns:
-        Dict with person count results (after worker completes)
-    """
-    # Validate clips exist
-    valid_ids = [cid for cid in clip_ids if cid in main_window.project.clips_by_id]
-
-    if not valid_ids:
-        return {"success": False, "error": "No valid clips found"}
-
-    # Check if worker already running
-    if main_window.detection_worker_yolo and main_window.detection_worker_yolo.isRunning():
-        return {"success": False, "error": "Object detection already in progress"}
-
-    # Return instruction for MainWindow to start the worker
+    # Return marker — GUI layer handles tab switch, clip loading, and pipeline start
     return {
-        "_wait_for_worker": "person_detection",
+        "_wait_for_worker": "analyze_all",
         "clip_ids": valid_ids,
         "clip_count": len(valid_ids),
+        "operations": pipeline_ops,
     }
 
 
@@ -3682,29 +3509,18 @@ def analyze_all_live(
             "error": f"No valid operations. Valid keys: {', '.join(OPERATIONS_BY_KEY.keys())}"
         }
 
-    # Resolve clips
-    clips = []
-    for clip_id in clip_ids:
-        clip = main_window.project.clips_by_id.get(clip_id)
-        if clip:
-            clips.append(clip)
-
-    if not clips:
+    # Validate clip IDs exist
+    valid_ids = [cid for cid in clip_ids if cid in main_window.project.clips_by_id]
+    if not valid_ids:
         return {"success": False, "error": "No valid clips found"}
 
-    # Mark that agent is waiting for pipeline completion
-    main_window._pending_agent_analyze_all = True
-
-    # Add clips to Analyze tab
-    main_window.analyze_tab.add_clips(clip_ids)
-
-    # Switch to Analyze tab to show progress
-    main_window._switch_to_tab("analyze")
-
-    # Start the pipeline
-    main_window._run_analysis_pipeline(clips, valid_ops)
-
-    return {"_wait_for_worker": "analyze_all", "clip_count": len(clips), "operations": valid_ops}
+    # Return marker — GUI layer handles tab switch, clip loading, and pipeline start
+    return {
+        "_wait_for_worker": "analyze_all",
+        "clip_ids": valid_ids,
+        "clip_count": len(valid_ids),
+        "operations": valid_ops,
+    }
 
 
 # =============================================================================
@@ -3926,7 +3742,7 @@ def generate_remix(
         if not has_colors:
             return {
                 "success": False,
-                "error": "Color sorting requires color analysis. Run analyze_colors_live first."
+                "error": "Color sorting requires color analysis. Run start_clip_analysis(operations=['colors']) first."
             }
 
     # Check if we have clips
@@ -5501,4 +5317,164 @@ def delete_clips(project, clip_ids: list[str], force: bool = False) -> dict:
         "not_found": [cid for cid in clip_ids if cid not in {c.id for c in removed}],
         "removed_from_sequence": len(in_sequence) if force else 0,
         "remaining_clips": len(project.clips),
+    }
+
+
+# =============================================================================
+# Video Playback Tools - Control the video player
+# =============================================================================
+
+@tools.register(
+    description="Stop video playback and return to the clip start position.",
+    requires_project=False,
+    modifies_gui_state=True
+)
+def stop_playback(main_window) -> dict:
+    """Stop the video player.
+
+    Returns:
+        Dict with success status
+    """
+    player = getattr(main_window, 'sequence_tab', None)
+    if player:
+        player = getattr(player, 'video_player', None)
+    if not player:
+        return {"success": False, "error": "Video player not available"}
+
+    player.stop()
+    gui_state = getattr(main_window, '_gui_state', None)
+    if gui_state:
+        gui_state.clear_playback_state()
+    return {"success": True, "message": "Playback stopped"}
+
+
+@tools.register(
+    description="Step one frame forward in the video. Pauses playback if playing.",
+    requires_project=False,
+    modifies_gui_state=True
+)
+def frame_step_forward(main_window) -> dict:
+    """Advance the video by one frame.
+
+    Returns:
+        Dict with success status
+    """
+    player = getattr(main_window, 'sequence_tab', None)
+    if player:
+        player = getattr(player, 'video_player', None)
+    if not player:
+        return {"success": False, "error": "Video player not available"}
+
+    player.frame_step_forward()
+    return {"success": True, "message": "Stepped one frame forward"}
+
+
+@tools.register(
+    description="Step one frame backward in the video. Pauses playback if playing.",
+    requires_project=False,
+    modifies_gui_state=True
+)
+def frame_step_backward(main_window) -> dict:
+    """Step the video back by one frame.
+
+    Returns:
+        Dict with success status
+    """
+    player = getattr(main_window, 'sequence_tab', None)
+    if player:
+        player = getattr(player, 'video_player', None)
+    if not player:
+        return {"success": False, "error": "Video player not available"}
+
+    player.frame_step_backward()
+    return {"success": True, "message": "Stepped one frame backward"}
+
+
+@tools.register(
+    description="Set video playback speed. Valid speeds: 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 4.0",
+    requires_project=False,
+    modifies_gui_state=True
+)
+def set_playback_speed(main_window, speed: float) -> dict:
+    """Set the video playback speed.
+
+    Args:
+        speed: Playback speed multiplier (0.25 to 4.0)
+
+    Returns:
+        Dict with success status and new speed
+    """
+    from core.constants import PLAYBACK_SPEEDS
+
+    if speed not in PLAYBACK_SPEEDS:
+        return {
+            "success": False,
+            "error": f"Invalid speed {speed}. Valid speeds: {PLAYBACK_SPEEDS}",
+        }
+
+    player = getattr(main_window, 'sequence_tab', None)
+    if player:
+        player = getattr(player, 'video_player', None)
+    if not player:
+        return {"success": False, "error": "Video player not available"}
+
+    player.playback_speed = speed
+    # Also update the combo box to match
+    idx = PLAYBACK_SPEEDS.index(speed)
+    player.speed_combo.setCurrentIndex(idx)
+
+    gui_state = getattr(main_window, '_gui_state', None)
+    if gui_state:
+        gui_state.update_playback_state(speed=speed)
+
+    return {"success": True, "speed": speed, "message": f"Playback speed set to {speed}x"}
+
+
+@tools.register(
+    description="Set A/B loop markers on the video player for looping a section. "
+                "Both a_seconds and b_seconds are in seconds. "
+                "Call with a_seconds=0 and b_seconds=0 to clear the loop.",
+    requires_project=False,
+    modifies_gui_state=True
+)
+def set_ab_loop(main_window, a_seconds: float, b_seconds: float) -> dict:
+    """Set or clear A/B loop markers.
+
+    Args:
+        a_seconds: Loop start in seconds (0 to clear)
+        b_seconds: Loop end in seconds (0 to clear)
+
+    Returns:
+        Dict with success status
+    """
+    player = getattr(main_window, 'sequence_tab', None)
+    if player:
+        player = getattr(player, 'video_player', None)
+    if not player:
+        return {"success": False, "error": "Video player not available"}
+
+    if a_seconds == 0 and b_seconds == 0:
+        player.clear_ab_loop()
+        gui_state = getattr(main_window, '_gui_state', None)
+        if gui_state:
+            gui_state.update_playback_state(
+                ab_loop_start_ms=None, ab_loop_end_ms=None,
+            )
+        return {"success": True, "message": "A/B loop cleared"}
+
+    if b_seconds <= a_seconds:
+        return {"success": False, "error": "b_seconds must be greater than a_seconds"}
+
+    player.set_ab_loop(a_seconds, b_seconds)
+    gui_state = getattr(main_window, '_gui_state', None)
+    if gui_state:
+        gui_state.update_playback_state(
+            ab_loop_start_ms=int(a_seconds * 1000),
+            ab_loop_end_ms=int(b_seconds * 1000),
+        )
+    return {
+        "success": True,
+        "a_seconds": a_seconds,
+        "b_seconds": b_seconds,
+        "message": f"A/B loop set: {a_seconds:.1f}s - {b_seconds:.1f}s",
     }

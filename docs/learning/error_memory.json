@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-02-06T02:44:42.206352+00:00",
+  "patterns": [
+    {
+      "signature": "unknown-component|unknown-cause|linux-pyside6-distribution-packaging",
+      "title": "Linux Distribution Packaging for PySide6/Qt Applications",
+      "problem_type": "deployment",
+      "occurrences": 1,
+      "first_seen": "2026-02-06T02:44:42.169611+00:00",
+      "last_seen": "2026-02-06T02:44:42.169702+00:00",
+      "solution_refs": [
+        "docs/solutions/deployment/linux-pyside6-distribution-packaging.md"
+      ],
+      "symptom_examples": [],
+      "playbook_skill": null
+    },
+    {
+      "signature": "unknown-component|subprocess-popen-stdout-reading-loop-not-wrapped-i|orphaned-processes-and-file-descriptor-l",
+      "title": "Subprocess Resource Leak on Exception",
+      "problem_type": "reliability-issues",
+      "occurrences": 1,
+      "first_seen": "2026-02-06T02:44:42.169903+00:00",
+      "last_seen": "2026-02-06T02:44:42.169912+00:00",
+      "solution_refs": [
+        "docs/solutions/reliability-issues/subprocess-cleanup-on-exception.md"
+      ],
+      "symptom_examples": [],
+      "playbook_skill": null
+    },
+    {
+      "signature": "pyside6-graphics|missing-initialization|qgraphicsscene-missing-items-20260124",
+      "title": "qgraphicsscene missing items 20260124",
+      "problem_type": "runtime_error",
+      "occurrences": 1,
+      "first_seen": "2026-02-06T02:44:42.170216+00:00",
+      "last_seen": "2026-02-06T02:44:42.170222+00:00",
+      "solution_refs": [
+        "docs/solutions/runtime-errors/qgraphicsscene-missing-items-20260124.md"
+      ],
+      "symptom_examples": [],
+      "playbook_skill": null
+    },
+    {
+      "signature": "background-job|thread-violation|qthread-destroyed-duplicate-signal-deliv",
+      "title": "qthread destroyed duplicate signal delivery 20260124",
+      "problem_type": "runtime_error",
+      "occurrences": 1,
+      "first_seen": "2026-02-06T02:44:42.170499+00:00",
+      "last_seen": "2026-02-06T02:44:42.170505+00:00",
+      "solution_refs": [
+        "docs/solutions/runtime-errors/qthread-destroyed-duplicate-signal-delivery-20260124.md"
+      ],
+      "symptom_examples": [],
+      "playbook_skill": null
+    },
+    {
+      "signature": "subprocess-call|insufficient-input-validation|ffmpeg-path-escaping-20260124",
+      "title": "ffmpeg path escaping 20260124",
+      "problem_type": "security_issue",
+      "occurrences": 1,
+      "first_seen": "2026-02-06T02:44:42.170667+00:00",
+      "last_seen": "2026-02-06T02:44:42.170672+00:00",
+      "solution_refs": [
+        "docs/solutions/security-issues/ffmpeg-path-escaping-20260124.md"
+      ],
+      "symptom_examples": [],
+      "playbook_skill": null
+    },
+    {
+      "signature": "unknown-component|url-validation-only-checked-netloc-against-whiteli|urls-with-dangerous-schemes-file-javascr",
+      "title": "URL Scheme Validation Bypasses Domain Whitelist",
+      "problem_type": "security-issues",
+      "occurrences": 1,
+      "first_seen": "2026-02-06T02:44:42.170831+00:00",
+      "last_seen": "2026-02-06T02:44:42.170836+00:00",
+      "solution_refs": [
+        "docs/solutions/security-issues/url-scheme-validation-bypass.md"
+      ],
+      "symptom_examples": [],
+      "playbook_skill": null
+    },
+    {
+      "signature": "unknown-component|unknown-cause|pyside6-thumbnail-source-id-mismatch",
+      "title": "PySide6 Thumbnails Disappear Due to Source ID Mismatch Between Detection Worker and UI",
+      "problem_type": "ui-bugs",
+      "occurrences": 1,
+      "first_seen": "2026-02-06T02:44:42.171102+00:00",
+      "last_seen": "2026-02-06T02:44:42.171112+00:00",
+      "solution_refs": [
+        "docs/solutions/ui-bugs/pyside6-thumbnail-source-id-mismatch.md"
+      ],
+      "symptom_examples": [],
+      "playbook_skill": null
+    },
+    {
+      "signature": "pyside6-widget|duplicate-state-objects|timeline-widget-sequence-mismatch-202601",
+      "title": "timeline widget sequence mismatch 20260124",
+      "problem_type": "ui_bug",
+      "occurrences": 1,
+      "first_seen": "2026-02-06T02:44:42.171295+00:00",
+      "last_seen": "2026-02-06T02:44:42.171301+00:00",
+      "solution_refs": [
+        "docs/solutions/ui-bugs/timeline-widget-sequence-mismatch-20260124.md"
+      ],
+      "symptom_examples": [],
+      "playbook_skill": null
+    }
+  ]
+}

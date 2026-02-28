@@ -260,9 +260,78 @@ class ChatPanel(QWidget):
             return
 
         self.input_field.clear()
+
+        # Intercept slash commands before sending to LLM
+        if message.startswith("/"):
+            self._add_user_message(message)
+            if self._handle_slash_command(message):
+                return
+            # Slash command not handled - pass through to LLM
+            self._set_streaming_state(True)
+            self.message_sent.emit(message)
+            return
+
         self._add_user_message(message)
         self._set_streaming_state(True)
         self.message_sent.emit(message)
+
+    def _handle_slash_command(self, message: str) -> bool:
+        """Handle slash commands locally without sending to LLM.
+
+        Args:
+            message: The slash command message
+
+        Returns:
+            True if command was handled, False to pass through to LLM
+        """
+        command = message.split()[0].lower()
+
+        if command == "/help":
+            help_text = (
+                "**Agent Capabilities**\n\n"
+                "**Import & Sources**\n"
+                "- `search_youtube` - Search for videos on YouTube\n"
+                "- `download_video` - Download a video from URL\n"
+                "- `list_sources` - List all source videos in the project\n"
+                "- `remove_source` - Remove a source video\n"
+                "- `update_source` - Update source metadata\n\n"
+                "**Scene Detection**\n"
+                "- `detect_scenes_live` - Detect scenes in a single video\n"
+                "- `detect_all_unanalyzed` - Detect scenes in all new videos\n"
+                "- `check_detection_status` - Check detection progress\n\n"
+                "**Analysis**\n"
+                "- `start_clip_analysis` - Run analysis operations on clips\n"
+                "- `analyze_all_live` - Run full analysis pipeline\n"
+                "- Colors, shot types, transcription, description, classification, objects\n\n"
+                "**Sequence & Timeline**\n"
+                "- `add_to_sequence` - Add clips to the timeline\n"
+                "- `remove_from_sequence` - Remove clips from timeline\n"
+                "- `reorder_sequence` - Reorder timeline clips\n"
+                "- `update_sequence_clip` - Trim or reposition a clip\n"
+                "- `clear_sequence` - Clear the entire timeline\n\n"
+                "**Export**\n"
+                "- `export_sequence` - Export timeline as MP4 video\n"
+                "- `export_edl` - Export as EDL for external editors\n"
+                "- `export_clips` - Export individual clips\n\n"
+                "**Video Playback**\n"
+                "- `stop_playback` - Stop video and return to clip start\n"
+                "- `frame_step_forward` / `frame_step_backward` - Step one frame\n"
+                "- `set_playback_speed` - Change speed (0.25x to 4.0x)\n"
+                "- `set_ab_loop` - Loop a section of video\n\n"
+                "**Navigation & Filters**\n"
+                "- `navigate_to_tab` - Switch between tabs\n"
+                "- `apply_filters` - Filter clips by duration, shot type, etc.\n"
+                "- `set_clip_sort_order` - Sort clips by timeline, color, or duration\n\n"
+                "**Planning**\n"
+                "- Describe a complex workflow and the agent will create a step-by-step plan\n"
+                "- Plans can be confirmed, edited, or cancelled before execution\n\n"
+                "Type a natural language request to get started!"
+            )
+            self.add_assistant_message(help_text)
+            return True
+
+        # Unknown slash command - pass through to LLM
+        return False
 
     def _on_cancel_clicked(self):
         """Handle cancel button click."""
