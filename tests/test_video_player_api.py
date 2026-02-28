@@ -35,6 +35,16 @@ def player():
     if app is None:
         app = QApplication([])
 
+    import ui.video_player as vp_mod
+
+    # If mpv failed to import (e.g. Windows CI without libmpv DLL),
+    # create a mock mpv module so the patch target exists
+    if vp_mod.mpv is None:
+        mock_mpv_module = MagicMock()
+        mock_mpv_module.MPV = MagicMock(return_value=mock_instance)
+        mock_mpv_module.ShutdownError = type('ShutdownError', (Exception,), {})
+        vp_mod.mpv = mock_mpv_module
+
     # Patch mpv.MPV where video_player imports it so no real MPV is created
     with patch('ui.video_player.mpv.MPV', return_value=mock_instance):
         from ui.video_player import VideoPlayer
