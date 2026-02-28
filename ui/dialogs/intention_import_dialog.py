@@ -32,6 +32,7 @@ from PySide6.QtGui import QFont, QDragEnterEvent, QDropEvent
 
 from ui.theme import theme, TypeScale, Spacing, Radii
 from ui.widgets.cost_estimate_panel import CostEstimatePanel
+from ui.algorithm_config import get_algorithm_label
 from core.cost_estimates import estimate_intention_cost
 from core.settings import get_llm_api_key, get_replicate_api_key
 
@@ -233,7 +234,7 @@ class IntentionImportDialog(QDialog):
         self._durations: dict[str, float] = {}  # path_str -> seconds
         self._probe_worker: DurationProbeWorker | None = None
 
-        self.setWindowTitle(f"Create {algorithm.capitalize()} Sequence")
+        self.setWindowTitle(f"Create {get_algorithm_label(algorithm)} Sequence")
         self.setMinimumSize(750, 620)
         self.setModal(True)
 
@@ -275,7 +276,7 @@ class IntentionImportDialog(QDialog):
         layout.setSpacing(Spacing.MD)
 
         # Header (spans both columns)
-        header = QLabel(f"Import videos for {self._algorithm.capitalize()} sequence")
+        header = QLabel(f"Import videos for {get_algorithm_label(self._algorithm)} sequence")
         header_font = QFont()
         header_font.setPointSize(14)
         header_font.setBold(True)
