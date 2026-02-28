@@ -1,11 +1,13 @@
 """Export project as a self-contained bundle.
 
 Creates a folder containing the project file and all referenced assets
-(source videos and frame images), with paths rewritten for portability.
+(source videos, trimmed clips, and frame images), with paths rewritten
+for portability.
 """
 
 import json
 import logging
+import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,6 +18,15 @@ from core.project import save_project, Project
 logger = logging.getLogger(__name__)
 
 
+def _sanitize_filename(name: str) -> str:
+    """Sanitize a filename to prevent path traversal and invalid characters."""
+    sanitized = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name)
+    sanitized = sanitized.strip(". ")
+    if len(sanitized) > 100:
+        sanitized = sanitized[:100]
+    return sanitized or "video"
+
+
 @dataclass
 class ExportResult:
     """Summary of a completed bundle export."""
@@ -23,6 +34,8 @@ class ExportResult:
     dest_dir: Path = field(default_factory=Path)
     sources_copied: int = 0
     frames_copied: int = 0
+    clips_exported: int = 0
+    clips_skipped: int = 0
     sources_skipped: list[str] = field(default_factory=list)
     frames_skipped: list[str] = field(default_factory=list)
     total_bytes: int = 0
@@ -128,9 +141,11 @@ def export_project_bundle(
     # Create bundle directory structure
     sources_dir = dest_dir / "sources"
     frames_dir = dest_dir / "frames"
+    clips_dir = dest_dir / "clips"
     dest_dir.mkdir(parents=True)
     sources_dir.mkdir()
     frames_dir.mkdir()
+    clips_dir.mkdir()
 
     try:
         # Build filename maps for collision resolution
@@ -140,8 +155,8 @@ def export_project_bundle(
         source_name_map = _build_filename_map(source_paths, "sources")
         frame_name_map = _build_filename_map(frame_paths, "frames")
 
-        # Count total files to copy for progress
-        total_files = len(project.frames)
+        # Count total files to process for progress
+        total_files = len(project.frames) + len(project.clips)
         if include_videos:
             total_files += len(project.sources)
         current_file = 0
@@ -168,6 +183,18 @@ def export_project_bundle(
             current_file += 1
             if progress_callback:
                 progress_callback(current_file, total_files, frame.file_path.name)
+
+        # Export trimmed clips using FFmpeg
+        if project.clips:
+            result = _export_trimmed_clips(
+                project, clips_dir, result,
+                current_file, total_files,
+                progress_callback, cancel_check,
+            )
+            if cancel_check and cancel_check():
+                _cleanup_partial_bundle(dest_dir)
+                return result
+            current_file += len(project.clips)
 
         # Copy source video files (if requested)
         if include_videos:
@@ -239,6 +266,80 @@ def export_project_bundle(
     except Exception:
         # On error, leave partial bundle on disk (per spec) but re-raise
         raise
+
+    return result
+
+
+def _export_trimmed_clips(
+    project: Project,
+    clips_dir: Path,
+    result: ExportResult,
+    current_file: int,
+    total_files: int,
+    progress_callback: Optional[Callable[[int, int, str], None]],
+    cancel_check: Optional[Callable[[], bool]],
+) -> ExportResult:
+    """Extract each clip as a trimmed video file into clips/.
+
+    Uses FFmpeg to cut each clip from its source video. Clips are named
+    ``{source_stem}_scene_{NNN}.mp4`` following the existing export pattern.
+    """
+    from core.ffmpeg import FFmpegProcessor
+
+    processor = FFmpegProcessor()
+    sources_by_id = project.sources_by_id
+
+    # Group clips by source for sequential naming
+    clips_by_source: dict[str, list] = {}
+    for clip in project.clips:
+        clips_by_source.setdefault(clip.source_id, []).append(clip)
+
+    for source_id, source_clips in clips_by_source.items():
+        source = sources_by_id.get(source_id)
+        if source is None or not source.file_path.exists():
+            for clip in source_clips:
+                result.clips_skipped += 1
+                current_file += 1
+                if progress_callback:
+                    progress_callback(current_file, total_files, f"skip {clip.id[:8]}")
+            logger.warning(f"Source missing for {len(source_clips)} clip(s): {source_id}")
+            continue
+
+        source_stem = _sanitize_filename(source.file_path.stem)
+        fps = source.fps
+
+        for i, clip in enumerate(source_clips):
+            if cancel_check and cancel_check():
+                return result
+
+            output_name = f"{source_stem}_scene_{i + 1:03d}.mp4"
+            output_path = clips_dir / output_name
+
+            start = clip.start_time(fps)
+            duration = clip.duration_seconds(fps)
+
+            try:
+                success = processor.extract_clip(
+                    input_path=source.file_path,
+                    output_path=output_path,
+                    start_seconds=start,
+                    duration_seconds=duration,
+                    fps=fps,
+                )
+                if success:
+                    result.clips_exported += 1
+                    if output_path.exists():
+                        result.total_bytes += output_path.stat().st_size
+                else:
+                    result.clips_skipped += 1
+                    logger.warning(f"FFmpeg failed for clip {clip.id}")
+            except Exception as e:
+                result.clips_skipped += 1
+                logger.warning(f"Clip export error {clip.id}: {e}")
+
+            current_file += 1
+            if progress_callback:
+                progress_callback(current_file, total_files, output_name)
 
     return result
 

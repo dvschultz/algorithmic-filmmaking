@@ -7111,6 +7111,8 @@ class MainWindow(QMainWindow):
         parts = []
         if result.sources_copied:
             parts.append(f"{result.sources_copied} source(s)")
+        if result.clips_exported:
+            parts.append(f"{result.clips_exported} trimmed clip(s)")
         if result.frames_copied:
             parts.append(f"{result.frames_copied} frame(s)")
 
@@ -7120,6 +7122,8 @@ class MainWindow(QMainWindow):
         warnings = []
         if result.sources_skipped:
             warnings.append(f"{len(result.sources_skipped)} source(s) missing")
+        if result.clips_skipped:
+            warnings.append(f"{result.clips_skipped} clip(s) failed")
         if result.frames_skipped:
             warnings.append(f"{len(result.frames_skipped)} frame(s) missing")
 

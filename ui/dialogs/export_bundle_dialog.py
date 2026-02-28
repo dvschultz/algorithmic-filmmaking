@@ -123,6 +123,7 @@ class ExportBundleDialog(QDialog):
 
     def _update_summary(self):
         sources = self._project.sources
+        clips = self._project.clips
         frames = self._project.frames
         include_videos = self._include_videos_cb.isChecked()
 
@@ -154,6 +155,8 @@ class ExportBundleDialog(QDialog):
         if sources:
             size_str = format_size(video_size) if include_videos else "excluded"
             parts.append(f"{len(sources)} source(s) ({size_str})")
+        if clips:
+            parts.append(f"{len(clips)} trimmed clip(s)")
         if frames:
             parts.append(f"{len(frames)} frame(s) ({format_size(frame_size)})")
 
@@ -162,10 +165,12 @@ class ExportBundleDialog(QDialog):
 
         summary = ", ".join(parts)
 
-        # Estimated total
+        # Estimated total (clips size not known ahead of time — depends on FFmpeg)
         total = frame_size + (video_size if include_videos else 0)
         if total > 0:
             summary += f"\nEstimated bundle size: {format_size(total)}"
+            if clips:
+                summary += " + trimmed clips"
 
         # Warnings for missing files
         warnings = []

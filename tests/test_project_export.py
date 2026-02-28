@@ -3,7 +3,7 @@
 import json
 import tempfile
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch, MagicMock
 
 import pytest
 
@@ -159,7 +159,7 @@ class TestExportProjectBundle:
     """Tests for the main export function."""
 
     def test_creates_folder_structure(self, tmp_path):
-        """Bundle has sources/, frames/, and .sceneripper file."""
+        """Bundle has sources/, frames/, clips/, and .sceneripper file."""
         originals = tmp_path / "originals"
         originals.mkdir()
         source = _make_source(originals, "video.mp4")
@@ -172,6 +172,7 @@ class TestExportProjectBundle:
         assert dest.is_dir()
         assert (dest / "sources").is_dir()
         assert (dest / "frames").is_dir()
+        assert (dest / "clips").is_dir()
         assert (dest / "MyProject.sceneripper").is_file()
         assert result.sources_copied == 1
 
@@ -386,6 +387,79 @@ class TestExportProjectBundle:
         data = json.loads((dest / "Clips.sceneripper").read_text())
         assert len(data["clips"]) == 1
         assert data["clips"][0]["id"] == "clip-1"
+
+    @patch("core.ffmpeg.FFmpegProcessor")
+    def test_trimmed_clips_exported(self, mock_ffmpeg_cls, tmp_path):
+        """Clips are extracted as video files into clips/ directory."""
+        originals = tmp_path / "originals"
+        originals.mkdir()
+        source = _make_source(originals, "video.mp4")
+        clips = [
+            Clip(id="c1", source_id=source.id, start_frame=0, end_frame=90),
+            Clip(id="c2", source_id=source.id, start_frame=90, end_frame=180),
+        ]
+
+        # Mock FFmpeg to create the output files
+        def mock_extract(input_path, output_path, **kwargs):
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(b"\x00" * 100)
+            return True
+
+        mock_processor = MagicMock()
+        mock_processor.extract_clip.side_effect = mock_extract
+        mock_ffmpeg_cls.return_value = mock_processor
+
+        project = _make_project(sources=[source], clips=clips, name="Trim")
+        dest = tmp_path / "Trim-export"
+
+        result = export_project_bundle(project, dest)
+
+        assert result.clips_exported == 2
+        assert result.clips_skipped == 0
+        assert (dest / "clips" / "video_scene_001.mp4").exists()
+        assert (dest / "clips" / "video_scene_002.mp4").exists()
+        assert mock_processor.extract_clip.call_count == 2
+
+    @patch("core.ffmpeg.FFmpegProcessor")
+    def test_trimmed_clips_missing_source_skipped(self, mock_ffmpeg_cls, tmp_path):
+        """Clips whose source video is missing are skipped."""
+        source = Source(
+            id="src-gone",
+            file_path=tmp_path / "nonexistent.mp4",
+            duration_seconds=30.0,
+            fps=30.0,
+        )
+        clip = Clip(id="c1", source_id=source.id, start_frame=0, end_frame=90)
+
+        project = _make_project(sources=[source], clips=[clip], name="MissClip")
+        dest = tmp_path / "MissClip-export"
+
+        result = export_project_bundle(project, dest)
+
+        assert result.clips_exported == 0
+        assert result.clips_skipped == 1
+        # FFmpeg should not have been called
+        mock_ffmpeg_cls.return_value.extract_clip.assert_not_called()
+
+    @patch("core.ffmpeg.FFmpegProcessor")
+    def test_trimmed_clip_ffmpeg_failure_counted(self, mock_ffmpeg_cls, tmp_path):
+        """FFmpeg failure for a clip increments clips_skipped."""
+        originals = tmp_path / "originals"
+        originals.mkdir()
+        source = _make_source(originals, "video.mp4")
+        clip = Clip(id="c1", source_id=source.id, start_frame=0, end_frame=90)
+
+        mock_processor = MagicMock()
+        mock_processor.extract_clip.return_value = False
+        mock_ffmpeg_cls.return_value = mock_processor
+
+        project = _make_project(sources=[source], clips=[clip], name="Fail")
+        dest = tmp_path / "Fail-export"
+
+        result = export_project_bundle(project, dest)
+
+        assert result.clips_exported == 0
+        assert result.clips_skipped == 1
 
 
 class TestExportThenLoadRoundTrip:
