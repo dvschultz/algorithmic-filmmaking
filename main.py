@@ -56,6 +56,19 @@ logger = logging.getLogger(__name__)
 if is_frozen():
     _setup_frozen_environment()
 
+import platform
+if platform.system() == "Darwin":
+    # Homebrew on Apple Silicon / Intel puts libs in different locations.
+    # python-mpv needs libmpv.dylib on the loader path.
+    for lib_dir in ("/opt/homebrew/lib", "/usr/local/lib"):
+        if os.path.isdir(lib_dir):
+            existing = os.environ.get("DYLD_LIBRARY_PATH", "")
+            if lib_dir not in existing:
+                os.environ["DYLD_LIBRARY_PATH"] = (
+                    f"{lib_dir}:{existing}" if existing else lib_dir
+                )
+            break
+
 from PySide6.QtWidgets import QApplication, QMessageBox
 from ui.main_window import MainWindow
 from ui.theme import theme
