@@ -80,6 +80,7 @@ from ui.workers.transcription_worker import TranscriptionWorker
 from ui.workers.classification_worker import ClassificationWorker
 from ui.workers.object_detection_worker import ObjectDetectionWorker
 from ui.workers.description_worker import DescriptionWorker
+from ui.workers.export_worker import ExportBundleWorker
 from core.gui_state import GUIState
 from core.plan_controller import PlanController
 from core.intention_workflow import IntentionWorkflowCoordinator, WorkflowState
@@ -636,6 +637,7 @@ class MainWindow(QMainWindow):
         self.youtube_search_worker: Optional[YouTubeSearchWorker] = None
         self.ia_search_worker: Optional[InternetArchiveSearchWorker] = None
         self.bulk_download_worker: Optional[BulkDownloadWorker] = None
+        self.export_bundle_worker: Optional[ExportBundleWorker] = None
         self.youtube_client: Optional[YouTubeSearchClient] = None
 
         # Intention-first workflow coordinator and dialog
@@ -1145,6 +1147,12 @@ class MainWindow(QMainWindow):
         self.export_edl_action.triggered.connect(self._on_export_edl_click)
         file_menu.addAction(self.export_edl_action)
 
+        # Export Project Bundle action
+        self.export_bundle_action = QAction("Export Project &Bundle...", self)
+        self.export_bundle_action.setToolTip("Export project as self-contained bundle folder")
+        self.export_bundle_action.triggered.connect(self._on_export_bundle_click)
+        file_menu.addAction(self.export_bundle_action)
+
         file_menu.addSeparator()
 
         # Settings action (Preferences on macOS)
@@ -1206,6 +1214,7 @@ class MainWindow(QMainWindow):
             self.youtube_search_worker,
             self.ia_search_worker,
             self.bulk_download_worker,
+            self.export_bundle_worker,
         ]
         return any(w and w.isRunning() for w in workers)
 
@@ -7045,6 +7054,95 @@ class MainWindow(QMainWindow):
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(output_path.parent)))
         else:
             QMessageBox.warning(self, "Export EDL", "Failed to export EDL file")
+
+    def _on_export_bundle_click(self):
+        """Export the project as a self-contained bundle folder."""
+        import shutil
+        from ui.dialogs.export_bundle_dialog import ExportBundleDialog
+
+        dialog = ExportBundleDialog(self.project, parent=self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        dest_dir = dialog.dest_dir
+        include_videos = dialog.include_videos
+
+        if not dest_dir or str(dest_dir).strip() == "":
+            return
+
+        # Overwrite confirmation
+        if dest_dir.exists():
+            reply = QMessageBox.question(
+                self,
+                "Export Project Bundle",
+                f"Destination already exists:\n{dest_dir}\n\nOverwrite?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return
+            shutil.rmtree(dest_dir)
+
+        # Start background export
+        self.export_bundle_worker = ExportBundleWorker(
+            project=self.project,
+            dest_dir=dest_dir,
+            include_videos=include_videos,
+            parent=self,
+        )
+        self.export_bundle_worker.progress.connect(self._on_export_bundle_progress)
+        self.export_bundle_worker.export_completed.connect(self._on_export_bundle_finished)
+        self.export_bundle_worker.error.connect(self._on_export_bundle_error)
+
+        self.status_bar.showMessage("Exporting project bundle...")
+        self.export_bundle_worker.start()
+
+    def _on_export_bundle_progress(self, current: int, total: int, filename: str):
+        """Update status bar with export progress."""
+        if total > 0:
+            self.status_bar.showMessage(
+                f"Exporting bundle: {current}/{total} files — {filename}"
+            )
+
+    def _on_export_bundle_finished(self, result):
+        """Handle successful bundle export."""
+        self.export_bundle_worker = None
+
+        parts = []
+        if result.sources_copied:
+            parts.append(f"{result.sources_copied} source(s)")
+        if result.frames_copied:
+            parts.append(f"{result.frames_copied} frame(s)")
+
+        summary = ", ".join(parts) if parts else "project file only"
+
+        # Include warning about skipped files
+        warnings = []
+        if result.sources_skipped:
+            warnings.append(f"{len(result.sources_skipped)} source(s) missing")
+        if result.frames_skipped:
+            warnings.append(f"{len(result.frames_skipped)} frame(s) missing")
+
+        msg = f"Bundle exported: {summary}"
+        if warnings:
+            msg += f"\n\nSkipped: {', '.join(warnings)}"
+
+        self.status_bar.showMessage(f"Bundle exported to {result.dest_dir.name}", 5000)
+
+        QMessageBox.information(self, "Export Project Bundle", msg)
+
+        # Open containing folder
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(result.dest_dir.parent)))
+
+    def _on_export_bundle_error(self, error_msg: str):
+        """Handle bundle export error."""
+        self.export_bundle_worker = None
+        self.status_bar.showMessage("Bundle export failed", 5000)
+        QMessageBox.warning(
+            self,
+            "Export Project Bundle",
+            f"Export failed:\n{error_msg}",
+        )
 
     # ==================== Project Save/Load ====================
 
