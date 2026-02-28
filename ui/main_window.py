@@ -6261,52 +6261,69 @@ class MainWindow(QMainWindow):
                 logger.info(f"Adding {len(analyzed_clip_ids)} shot-analyzed clips to Analyze tab")
                 self.analyze_tab.add_clips(analyzed_clip_ids)
 
-        # Apply sequence to the sequence tab (skip for dialog-based algorithms - already handled by their dialogs)
-        if algorithm in ("exquisite_corpus", "storyteller"):
-            # Sequence was already applied by _on_exquisite_corpus_sequence_ready or _on_storyteller_sequence_ready
-            status_msg = "Exquisite Corpus" if algorithm == "exquisite_corpus" else "Storyteller"
-            self.status_bar.showMessage(f"{status_msg} sequence created")
-            self._mark_dirty()
-        else:
-            # Get shot type filter from pending state
-            shot_type = getattr(self, '_intention_pending_shot_type', None)
-
+        # Dialog-based algorithms: show their dialog instead of auto-building
+        from ui.algorithm_config import ALGORITHM_CONFIG
+        algo_cfg = ALGORITHM_CONFIG.get(algorithm, {})
+        if algo_cfg.get("is_dialog"):
+            # Build clips_with_sources for the dialog
             clips_with_sources = []
             for clip in all_clips:
                 source = self.sources_by_id.get(clip.source_id)
                 if source:
-                    # Apply shot type filter if specified
-                    if shot_type and clip.shot_type != shot_type:
-                        continue
                     clips_with_sources.append((clip, source))
 
-            # Handle empty state after filtering
-            if not clips_with_sources and shot_type:
-                QMessageBox.information(
-                    self,
-                    "No Matching Clips",
-                    f"No clips match the selected shot type '{shot_type}'.\n"
-                    "Try selecting 'All' or analyzing clips for shot type first."
-                )
-                return
+            if clips_with_sources:
+                # Set available clips so the sequence tab has them
+                self.sequence_tab.set_available_clips(clips_with_sources)
+                # Select all clip IDs so the dialog routing works
+                all_clip_ids = [c.id for c in all_clips]
+                if self._gui_state:
+                    self._gui_state.analyze_selected_ids = all_clip_ids
+                # Route to the dialog via the sequence tab's card click handler
+                self.sequence_tab._on_card_clicked(algorithm)
+            self._refresh_sequence_tab_clips()
+            return
 
-            result = self.sequence_tab.apply_intention_workflow_result(
-                algorithm=algorithm,
-                clips_with_sources=clips_with_sources,
-                direction=direction,
+        # Non-dialog algorithms: auto-build sequence
+        # Get shot type filter from pending state
+        shot_type = getattr(self, '_intention_pending_shot_type', None)
+
+        clips_with_sources = []
+        for clip in all_clips:
+            source = self.sources_by_id.get(clip.source_id)
+            if source:
+                # Apply shot type filter if specified
+                if shot_type and clip.shot_type != shot_type:
+                    continue
+                clips_with_sources.append((clip, source))
+
+        # Handle empty state after filtering
+        if not clips_with_sources and shot_type:
+            QMessageBox.information(
+                self,
+                "No Matching Clips",
+                f"No clips match the selected shot type '{shot_type}'.\n"
+                "Try selecting 'All' or analyzing clips for shot type first."
             )
+            return
 
-            if result.get("success"):
-                self.status_bar.showMessage(
-                    f"Created {algorithm} sequence with {result.get('clip_count', 0)} clips"
-                )
-                self._mark_dirty()
-            else:
-                QMessageBox.warning(
-                    self,
-                    "Sequence Error",
-                    f"Failed to create sequence: {result.get('error', 'Unknown error')}"
-                )
+        result = self.sequence_tab.apply_intention_workflow_result(
+            algorithm=algorithm,
+            clips_with_sources=clips_with_sources,
+            direction=direction,
+        )
+
+        if result.get("success"):
+            self.status_bar.showMessage(
+                f"Created {algorithm} sequence with {result.get('clip_count', 0)} clips"
+            )
+            self._mark_dirty()
+        else:
+            QMessageBox.warning(
+                self,
+                "Sequence Error",
+                f"Failed to create sequence: {result.get('error', 'Unknown error')}"
+            )
 
         # Refresh UI
         self._refresh_sequence_tab_clips()

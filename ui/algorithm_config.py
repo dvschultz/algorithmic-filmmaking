@@ -88,6 +88,7 @@ ALGORITHM_CONFIG = {
         "description": "Generate a poem from on-screen text",
         "allow_duplicates": True,
         "required_analysis": ["extract_text"],
+        "is_dialog": True,
     },
     "storyteller": {
         "icon": "\U0001f4d6",
@@ -95,6 +96,7 @@ ALGORITHM_CONFIG = {
         "description": "Create a narrative from clip descriptions",
         "allow_duplicates": False,
         "required_analysis": ["describe"],
+        "is_dialog": True,
     },
     "reference_guided": {
         "icon": "\U0001f3af",
@@ -102,6 +104,14 @@ ALGORITHM_CONFIG = {
         "description": "Match your clips to a reference video's structure",
         "allow_duplicates": True,
         "required_analysis": [],  # Dynamic — depends on selected dimensions
+        "is_dialog": True,
+    },
+    "signature_style": {
+        "icon": "\u270d\ufe0f",
+        "label": "Signature Style",
+        "description": "Interpret a drawing as an editing guide",
+        "allow_duplicates": True,
+        "required_analysis": ["colors"],
         "is_dialog": True,
     },
 }

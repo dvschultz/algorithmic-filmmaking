@@ -20,7 +20,7 @@ from .base_tab import BaseTab
 from ui.video_player import VideoPlayer
 from ui.timeline import TimelineWidget
 from ui.widgets import SortingCardGrid, TimelinePreview, CostEstimatePanel
-from ui.dialogs import ExquisiteCorpusDialog, StorytellerDialog, MissingDescriptionsDialog, ReferenceGuideDialog
+from ui.dialogs import ExquisiteCorpusDialog, StorytellerDialog, MissingDescriptionsDialog, ReferenceGuideDialog, SignatureStyleDialog
 from ui.theme import theme, Spacing, TypeScale
 from ui.workers.sequence_worker import SequenceWorker
 from core.remix import generate_sequence
@@ -355,6 +355,9 @@ class SequenceTab(BaseTab):
         if algorithm == "storyteller":
             self._show_storyteller_dialog(clips)
             return
+        if algorithm == "signature_style":
+            self._show_signature_style_dialog(clips)
+            return
 
         self._apply_algorithm(algorithm, clips)
 
@@ -439,6 +442,23 @@ class SequenceTab(BaseTab):
             )
             return
 
+        # Dialog-based algorithms handle their own analysis prereqs
+        # Route them directly to avoid the cost confirmation gate
+        cfg = ALGORITHM_CONFIG.get(algorithm, {})
+        if cfg.get("is_dialog"):
+            if algorithm == "exquisite_corpus":
+                self._show_exquisite_corpus_dialog(clips)
+                return
+            if algorithm == "storyteller":
+                self._show_storyteller_dialog(clips)
+                return
+            if algorithm == "reference_guided":
+                self._show_reference_guide_dialog(clips)
+                return
+            if algorithm == "signature_style":
+                self._show_signature_style_dialog(clips)
+                return
+
         # Compute cost estimates for this algorithm
         clip_objects = [clip for clip, source in clips]
         estimates = estimate_sequence_cost(algorithm, clip_objects)
@@ -449,17 +469,6 @@ class SequenceTab(BaseTab):
             self._pending_clips = clips
             self._show_confirm_view(algorithm, clips, estimates)
         else:
-            # No analysis needed — skip directly to generation
-            # Special handling for dialog-based algorithms
-            if algorithm == "exquisite_corpus":
-                self._show_exquisite_corpus_dialog(clips)
-                return
-            if algorithm == "storyteller":
-                self._show_storyteller_dialog(clips)
-                return
-            if algorithm == "reference_guided":
-                self._show_reference_guide_dialog(clips)
-                return
             self._apply_algorithm(algorithm, clips)
 
     def _apply_algorithm(self, algorithm: str, clips: list, direction: str = None):
@@ -766,6 +775,86 @@ class SequenceTab(BaseTab):
             sequence_metadata=metadata,
         )
 
+    def _show_signature_style_dialog(self, clips: list):
+        """Show the Signature Style dialog for drawing-based sequencing.
+
+        Args:
+            clips: List of (Clip, Source) tuples to process
+        """
+        clip_objects = [clip for clip, source in clips]
+        sources_by_id = {source.id: source for clip, source in clips}
+
+        dialog = SignatureStyleDialog(
+            clips=clip_objects,
+            sources_by_id=sources_by_id,
+            parent=self,
+        )
+
+        dialog.sequence_ready.connect(self._apply_signature_style_sequence)
+        dialog.exec()
+
+    @Slot(list)
+    def _apply_signature_style_sequence(self, sequence_data: list):
+        """Apply the sequence from Signature Style dialog.
+
+        The dialog emits (Clip, Source, in_point, out_point) tuples
+        to support clip trimming based on drawing segment durations.
+        """
+        if not sequence_data:
+            logger.warning("No clips in Signature Style sequence")
+            return
+
+        try:
+            from models.sequence import SequenceClip
+
+            self.timeline.clear_timeline()
+
+            first_clip, first_source, _, _ = sequence_data[0]
+            fps = first_source.fps
+            self.timeline.set_fps(fps)
+            self.video_player.load_video(first_source.file_path)
+
+            current_frame = 0
+            for clip, source, in_point, out_point in sequence_data:
+                self.timeline.scene.add_clip_to_track(
+                    track_index=0,
+                    source_clip_id=clip.id,
+                    source_id=source.id,
+                    start_frame=current_frame,
+                    in_point=clip.start_frame + in_point,
+                    out_point=clip.start_frame + out_point,
+                    thumbnail_path=str(clip.thumbnail_path) if clip.thumbnail_path else None,
+                )
+                duration_frames = out_point - in_point
+                current_frame += duration_frames
+                self.clip_added.emit(clip, source)
+
+            # Build (Clip, Source) list for timeline preview
+            preview_clips = [(clip, source) for clip, source, _, _ in sequence_data]
+            self.timeline_preview.set_clips(preview_clips, self._sources)
+            self.timeline._on_zoom_fit()
+
+            self.algorithm_dropdown.blockSignals(True)
+            display_label = "Signature Style"
+            if self.algorithm_dropdown.findText(display_label) == -1:
+                self.algorithm_dropdown.addItem(display_label)
+            self.algorithm_dropdown.setCurrentText(display_label)
+            self.algorithm_dropdown.blockSignals(False)
+
+            self._current_algorithm = "signature_style"
+
+            sequence = self.timeline.get_sequence()
+            sequence.algorithm = "signature_style"
+            sequence.allow_repeats = True
+
+            self._set_state(self.STATE_TIMELINE)
+
+            logger.info(f"Applied {len(sequence_data)} clips from Signature Style")
+
+        except Exception as e:
+            logger.error(f"Error applying Signature Style sequence: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to apply sequence: {e}")
+
     # Direction options per algorithm: list of (display_label, internal_key).
     # First entry is the default. Algorithms not listed have no direction.
     _DIRECTION_OPTIONS: dict[str, list[tuple[str, str]]] = {
@@ -970,6 +1059,8 @@ class SequenceTab(BaseTab):
             "match_cut": True,  # Auto-computed on demand
             "exquisite_corpus": True,  # Always available - dialog handles text extraction
             "storyteller": True,
+            "reference_guided": True,  # Dialog handles its own prereqs
+            "signature_style": True,  # Dialog handles its own prereqs
         }
 
         self.card_grid.set_algorithm_availability(availability)
