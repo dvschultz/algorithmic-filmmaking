@@ -637,7 +637,10 @@ Available tools let you perform these operations. Always explain what you're doi
 
 VIDEO PLAYBACK:
 You can control the video player directly:
-- stop_playback - Stop video and return to clip start
+- play_preview(clip_id) - Start playing a clip
+- pause_preview() - Pause playback
+- seek_to_time(seconds) - Seek to a specific position
+- stop_playback() - Stop video and return to clip start
 - frame_step_forward / frame_step_backward - Step one frame at a time
 - set_playback_speed(speed) - Change speed (0.25x to 4.0x)
 - set_ab_loop(a_seconds, b_seconds) - Loop a section (0,0 to clear)

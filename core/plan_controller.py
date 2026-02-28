@@ -88,7 +88,7 @@ class PlanController:
 
         # Create the plan
         plan = Plan.from_steps(steps, summary)
-        self._gui_state.current_plan = plan
+        self._gui_state.set_plan(plan)
 
         return {
             "_display_plan": True,

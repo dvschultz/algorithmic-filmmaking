@@ -49,12 +49,12 @@ class TestVideoPlayerPublicAPI:
 
     def test_load_video_calls_mpv_play(self, player):
         test_path = Path("/tmp/test_video.mp4")
-        player._shutting_down = False
+        player._shutdown_event.clear()
         player.load_video(test_path)
         player._mock.play.assert_called_once_with(str(test_path))
 
     def test_load_video_clears_clip_range(self, player):
-        player._shutting_down = False
+        player._shutdown_event.clear()
         player._clip_start_ms = 1000
         player._clip_end_ms = 5000
         player.load_video(Path("/tmp/test.mp4"))
@@ -62,40 +62,40 @@ class TestVideoPlayerPublicAPI:
         assert player._clip_end_ms is None
 
     def test_seek_to_calls_mpv_seek(self, player):
-        player._shutting_down = False
+        player._shutdown_event.clear()
         player.seek_to(10.5)
         player._mock.seek.assert_called_once_with(10.5, 'absolute', 'exact')
 
     def test_play_sets_pause_false(self, player):
-        player._shutting_down = False
+        player._shutdown_event.clear()
         player.play()
         assert player._mock.pause is False
 
     def test_pause_sets_pause_true(self, player):
-        player._shutting_down = False
+        player._shutdown_event.clear()
         player._mock.pause = False
         player.pause()
         assert player._mock.pause is True
 
     def test_stop_pauses_and_seeks_to_start(self, player):
-        player._shutting_down = False
+        player._shutdown_event.clear()
         player.stop()
         assert player._mock.pause is True
         player._mock.seek.assert_called_once_with(0, 'absolute')
 
     def test_stop_in_clip_mode_seeks_to_clip_start(self, player):
-        player._shutting_down = False
+        player._shutdown_event.clear()
         player._clip_start_ms = 5000
         player.stop()
         player._mock.seek.assert_called_once_with(5.0, 'absolute', 'exact')
 
     def test_is_playing_when_not_paused(self, player):
-        player._shutting_down = False
+        player._shutdown_event.clear()
         player._mock.pause = False
         assert player.is_playing is True
 
     def test_is_playing_when_paused(self, player):
-        player._shutting_down = False
+        player._shutdown_event.clear()
         player._mock.pause = True
         assert player.is_playing is False
 
@@ -104,37 +104,40 @@ class TestVideoPlayerPublicAPI:
         assert player.duration_ms == 120500
 
     def test_playback_speed_getter(self, player):
-        player._mock.speed = 2.0
+        # Speed is cached — set via the property to update cache
+        player._shutdown_event.clear()
+        player.playback_speed = 2.0
         assert player.playback_speed == 2.0
 
     def test_playback_speed_setter(self, player):
-        player._shutting_down = False
+        player._shutdown_event.clear()
         player.playback_speed = 0.5
         assert player._mock.speed == 0.5
+        assert player._cached_speed == 0.5
 
 
 class TestClipRange:
     """Test clip range (A/B loop) behavior."""
 
     def test_set_clip_range_sets_ab_loop(self, player):
-        player._shutting_down = False
+        player._shutdown_event.clear()
         player.set_clip_range(10.0, 20.0)
         assert player._mock.ab_loop_a == 10.0
         assert player._mock.ab_loop_b == 20.0
 
     def test_set_clip_range_updates_internal_state(self, player):
-        player._shutting_down = False
+        player._shutdown_event.clear()
         player.set_clip_range(10.0, 20.0)
         assert player._clip_start_ms == 10000
         assert player._clip_end_ms == 20000
 
     def test_set_clip_range_seeks_to_start(self, player):
-        player._shutting_down = False
+        player._shutdown_event.clear()
         player.set_clip_range(10.0, 20.0)
         player._mock.seek.assert_called_with(10.0, 'absolute', 'exact')
 
     def test_clear_clip_range_clears_ab_loop(self, player):
-        player._shutting_down = False
+        player._shutdown_event.clear()
         player.set_clip_range(10.0, 20.0)
         player.clear_clip_range()
         assert player._mock.ab_loop_a == 'no'
@@ -143,7 +146,7 @@ class TestClipRange:
         assert player._clip_end_ms is None
 
     def test_play_range_sets_range_and_plays(self, player):
-        player._shutting_down = False
+        player._shutdown_event.clear()
         player.play_range(5.0, 15.0)
         assert player._clip_start_ms == 5000
         assert player._clip_end_ms == 15000
@@ -154,14 +157,14 @@ class TestFrameStepping:
     """Test frame step methods."""
 
     def test_frame_step_forward_pauses_first(self, player):
-        player._shutting_down = False
+        player._shutdown_event.clear()
         player._mock.pause = False
         player.frame_step_forward()
         assert player._mock.pause is True
         player._mock.frame_step.assert_called_once()
 
     def test_frame_step_backward_pauses_first(self, player):
-        player._shutting_down = False
+        player._shutdown_event.clear()
         player._mock.pause = False
         player.frame_step_backward()
         assert player._mock.pause is True
@@ -176,7 +179,7 @@ class TestMuteProperty:
         assert player.mute is True
 
     def test_mute_setter(self, player):
-        player._shutting_down = False
+        player._shutdown_event.clear()
         player.mute = True
         assert player._mock.mute is True
 
@@ -185,13 +188,13 @@ class TestABLoop:
     """Test manual A/B loop (not clip range)."""
 
     def test_set_ab_loop_when_no_clip_range(self, player):
-        player._shutting_down = False
+        player._shutdown_event.clear()
         player.set_ab_loop(5.0, 25.0)
         assert player._mock.ab_loop_a == 5.0
         assert player._mock.ab_loop_b == 25.0
 
     def test_set_ab_loop_blocked_by_clip_range(self, player):
-        player._shutting_down = False
+        player._shutdown_event.clear()
         player._clip_start_ms = 1000
         # Set initial values
         player._mock.ab_loop_a = 99.0
@@ -202,14 +205,14 @@ class TestABLoop:
         assert player._mock.ab_loop_b == 99.0
 
     def test_clear_ab_loop_when_no_clip_range(self, player):
-        player._shutting_down = False
+        player._shutdown_event.clear()
         player.set_ab_loop(5.0, 25.0)
         player.clear_ab_loop()
         assert player._mock.ab_loop_a == 'no'
         assert player._mock.ab_loop_b == 'no'
 
     def test_clear_ab_loop_blocked_by_clip_range(self, player):
-        player._shutting_down = False
+        player._shutdown_event.clear()
         player._clip_start_ms = 1000
         player._mock.ab_loop_a = 10.0
         player.clear_ab_loop()
@@ -221,12 +224,12 @@ class TestShutdown:
     """Test shutdown behavior."""
 
     def test_shutdown_terminates_mpv(self, player):
-        player._shutting_down = False
+        player._shutdown_event.clear()
         player.shutdown()
         player._mock.terminate.assert_called_once()
 
     def test_shutdown_prevents_further_operations(self, player):
-        player._shutting_down = False
+        player._shutdown_event.clear()
         player.shutdown()
         # Reset mock to track new calls
         player._mock.reset_mock()
@@ -243,12 +246,12 @@ class TestShutdown:
         player._mock.frame_back_step.assert_not_called()
 
     def test_double_shutdown_is_safe(self, player):
-        player._shutting_down = False
+        player._shutdown_event.clear()
         player.shutdown()
         player.shutdown()  # Should not raise
 
     def test_is_playing_returns_false_after_shutdown(self, player):
-        player._shutting_down = False
+        player._shutdown_event.clear()
         player.shutdown()
         assert player.is_playing is False
 
@@ -257,13 +260,13 @@ class TestSpeedControl:
     """Test speed control widget."""
 
     def test_set_speed_control_disabled(self, player):
-        player._shutting_down = False
+        player._shutdown_event.clear()
         player.set_speed_control_enabled(False)
         assert not player.speed_combo.isEnabled()
         assert player._mock.speed == 1.0
 
     def test_set_speed_control_re_enabled(self, player):
-        player._shutting_down = False
+        player._shutdown_event.clear()
         player.set_speed_control_enabled(False)
         player.set_speed_control_enabled(True)
         assert player.speed_combo.isEnabled()

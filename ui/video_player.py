@@ -2,6 +2,7 @@
 
 import locale
 import logging
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -48,6 +49,7 @@ class MpvSignalBridge(QObject):
         super().__init__()
         self._mpv = mpv_instance
         self._last_position_emit: float = 0.0
+        self._throttle_lock = threading.Lock()
         # Store observer references to prevent GC
         self._observers: list = []
         self._register_observers()
@@ -56,10 +58,11 @@ class MpvSignalBridge(QObject):
         """Register MPV property observers."""
         def on_time_pos(_name, value):
             if value is not None:
-                now = time.monotonic()
-                if now - self._last_position_emit < self._POSITION_EMIT_INTERVAL:
-                    return
-                self._last_position_emit = now
+                with self._throttle_lock:
+                    now = time.monotonic()
+                    if now - self._last_position_emit < self._POSITION_EMIT_INTERVAL:
+                        return
+                    self._last_position_emit = now
                 self.position_changed.emit(value)
 
         def on_duration(_name, value):
@@ -104,25 +107,30 @@ class VideoPlayer(QWidget):
 
     def __init__(self):
         super().__init__()
-        # Assert locale — PySide6 can corrupt LC_NUMERIC
-        try:
-            locale.setlocale(locale.LC_NUMERIC, 'C')
-        except locale.Error:
-            logger.warning("Failed to set LC_NUMERIC to 'C'")
+        # Assert locale — PySide6 can corrupt LC_NUMERIC (only safe on main thread)
+        if threading.current_thread() is threading.main_thread():
+            try:
+                locale.setlocale(locale.LC_NUMERIC, 'C')
+            except locale.Error:
+                logger.warning("Failed to set LC_NUMERIC to 'C'")
 
         # Range playback (clip mode)
         self._clip_start_ms: Optional[int] = None
         self._clip_end_ms: Optional[int] = None
-        self._loop_playback: bool = True
 
         # Internal state
         self._duration_s: float = 0.0
-        self._shutting_down: bool = False
+        self._shutdown_event = threading.Event()
+        self._cached_speed: float = 1.0
         self._ab_a_seconds: Optional[float] = None
         self._ab_b_seconds: Optional[float] = None
 
         self._setup_ui()
         self._setup_player()
+
+    @property
+    def _shutting_down(self) -> bool:
+        return self._shutdown_event.is_set()
 
     def _setup_ui(self):
         """Set up the UI."""
@@ -161,7 +169,7 @@ class VideoPlayer(QWidget):
         self.stop_btn.setFixedSize(44, 32)
         self.stop_btn.setAccessibleName("Stop")
         self.stop_btn.setToolTip("Stop video")
-        self.stop_btn.clicked.connect(self._stop)
+        self.stop_btn.clicked.connect(self.stop)
         controls.addWidget(self.stop_btn)
 
         # Frame step backward button
@@ -170,7 +178,7 @@ class VideoPlayer(QWidget):
         self.frame_back_btn.setFixedSize(32, 32)
         self.frame_back_btn.setAccessibleName("Frame back")
         self.frame_back_btn.setToolTip("Step one frame backward")
-        self.frame_back_btn.clicked.connect(self._on_frame_back)
+        self.frame_back_btn.clicked.connect(self.frame_step_backward)
         controls.addWidget(self.frame_back_btn)
 
         # Frame step forward button
@@ -179,7 +187,7 @@ class VideoPlayer(QWidget):
         self.frame_fwd_btn.setFixedSize(32, 32)
         self.frame_fwd_btn.setAccessibleName("Frame forward")
         self.frame_fwd_btn.setToolTip("Step one frame forward")
-        self.frame_fwd_btn.clicked.connect(self._on_frame_forward)
+        self.frame_fwd_btn.clicked.connect(self.frame_step_forward)
         controls.addWidget(self.frame_fwd_btn)
 
         # Position slider
@@ -349,17 +357,20 @@ class VideoPlayer(QWidget):
         self._mpv.pause = True
         self._mpv.play(str(path))
 
-    def seek_to(self, seconds: float):
-        """Seek to a position in seconds."""
+    def _safe_mpv_command(self, fn, *args, **kwargs):
+        """Execute an MPV command with standard error handling."""
         if self._shutting_down:
             return
         try:
-            self._mpv.seek(seconds, 'absolute', 'exact')
+            fn(*args, **kwargs)
         except mpv.ShutdownError:
             pass
         except Exception:
-            if not self._shutting_down:
-                logger.warning("seek_to failed", exc_info=True)
+            logger.warning("MPV command failed", exc_info=True)
+
+    def seek_to(self, seconds: float):
+        """Seek to a position in seconds."""
+        self._safe_mpv_command(self._mpv.seek, seconds, 'absolute', 'exact')
 
     def set_clip_range(self, start_seconds: float, end_seconds: float):
         """Set playback range to a specific clip.
@@ -376,13 +387,7 @@ class VideoPlayer(QWidget):
         self._mpv.ab_loop_b = end_seconds
 
         # Seek to clip start
-        try:
-            self._mpv.seek(start_seconds, 'absolute', 'exact')
-        except mpv.ShutdownError:
-            pass
-        except Exception:
-            if not self._shutting_down:
-                logger.warning("set_clip_range seek failed", exc_info=True)
+        self._safe_mpv_command(self._mpv.seek, start_seconds, 'absolute', 'exact')
         self._update_time_label(self._clip_start_ms)
 
     def clear_clip_range(self):
@@ -418,27 +423,15 @@ class VideoPlayer(QWidget):
         self._mpv.pause = True
         if self._clip_start_ms is not None:
             start_s = self._clip_start_ms / 1000.0
-            try:
-                self._mpv.seek(start_s, 'absolute', 'exact')
-            except mpv.ShutdownError:
-                pass
-            except Exception:
-                if not self._shutting_down:
-                    logger.warning("stop seek failed", exc_info=True)
+            self._safe_mpv_command(self._mpv.seek, start_s, 'absolute', 'exact')
         else:
-            try:
-                self._mpv.seek(0, 'absolute')
-            except mpv.ShutdownError:
-                pass
-            except Exception:
-                if not self._shutting_down:
-                    logger.warning("stop seek failed", exc_info=True)
+            self._safe_mpv_command(self._mpv.seek, 0, 'absolute')
 
     def shutdown(self):
         """Clean up MPV resources. Must be called from main thread before app exit."""
         if self._shutting_down:
             return
-        self._shutting_down = True
+        self._shutdown_event.set()
         try:
             self._bridge.cleanup()
             self._mpv.terminate()
@@ -463,18 +456,17 @@ class VideoPlayer(QWidget):
     @property
     def playback_speed(self) -> float:
         """Current playback speed multiplier."""
-        try:
-            return self._mpv.speed
-        except Exception:
-            return 1.0
+        return self._cached_speed
 
     @playback_speed.setter
     def playback_speed(self, speed: float):
         """Set playback speed multiplier."""
         try:
             self._mpv.speed = speed
+            self._cached_speed = speed
         except Exception:
-            pass
+            if not self._shutting_down:
+                logger.debug("Failed to set playback speed", exc_info=True)
 
     @property
     def mute(self) -> bool:
@@ -490,7 +482,8 @@ class VideoPlayer(QWidget):
         try:
             self._mpv.mute = value
         except Exception:
-            pass
+            if not self._shutting_down:
+                logger.debug("Failed to set mute state", exc_info=True)
 
     # --- New feature methods ---
 
@@ -517,6 +510,9 @@ class VideoPlayer(QWidget):
             return  # Clip range owns the ab-loop properties
         self._mpv.ab_loop_a = a_seconds
         self._mpv.ab_loop_b = b_seconds
+        self._ab_a_seconds = a_seconds
+        self._ab_b_seconds = b_seconds
+        self._update_ab_label()
 
     def clear_ab_loop(self):
         """Clear manual A/B loop markers."""
@@ -524,6 +520,17 @@ class VideoPlayer(QWidget):
             return  # Clip range owns the ab-loop properties
         self._mpv.ab_loop_a = 'no'
         self._mpv.ab_loop_b = 'no'
+        self._ab_a_seconds = None
+        self._ab_b_seconds = None
+        self._update_ab_label()
+
+    def set_speed(self, speed: float):
+        """Set playback speed, updating both MPV engine and UI combo box."""
+        self.playback_speed = speed
+        for i in range(self.speed_combo.count()):
+            if abs(PLAYBACK_SPEEDS[i] - speed) < 0.001:
+                self.speed_combo.setCurrentIndex(i)
+                break
 
     def set_speed_control_enabled(self, enabled: bool):
         """Enable or disable the speed control widget.
@@ -547,18 +554,6 @@ class VideoPlayer(QWidget):
         else:
             self._mpv.pause = False
 
-    def _stop(self):
-        """Stop button handler."""
-        self.stop()
-
-    def _on_frame_back(self):
-        """Frame step backward button handler."""
-        self.frame_step_backward()
-
-    def _on_frame_forward(self):
-        """Frame step forward button handler."""
-        self.frame_step_forward()
-
     @Slot(int)
     def _on_speed_changed(self, index: int):
         """Handle speed combo box change."""
@@ -576,7 +571,8 @@ class VideoPlayer(QWidget):
                 self._mpv.ab_loop_a = pos
                 self._update_ab_label()
         except Exception:
-            pass
+            if not self._shutting_down:
+                logger.debug("Failed to set A loop point", exc_info=True)
 
     def _on_set_b(self):
         """Set A/B loop end at current position."""
@@ -589,7 +585,8 @@ class VideoPlayer(QWidget):
                 self._mpv.ab_loop_b = pos
                 self._update_ab_label()
         except Exception:
-            pass
+            if not self._shutting_down:
+                logger.debug("Failed to set B loop point", exc_info=True)
 
     def _on_clear_ab(self):
         """Clear A/B loop markers."""

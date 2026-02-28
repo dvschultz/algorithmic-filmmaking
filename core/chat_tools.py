@@ -43,13 +43,12 @@ logger = logging.getLogger(__name__)
 def _get_plan_controller(main_window) -> PlanController:
     """Get the cached PlanController from main_window."""
     controller = getattr(main_window, 'plan_controller', None)
-    if controller is not None:
-        return controller
-    # Fallback: create if not cached (shouldn't happen in normal flow)
-    gui_state = getattr(main_window, '_gui_state', None)
-    if gui_state is None:
-        raise ValueError("No GUI state available")
-    return PlanController(gui_state)
+    if controller is None:
+        raise AttributeError(
+            "main_window.plan_controller not found — "
+            "PlanController must be initialized during MainWindow setup"
+        )
+    return controller
 
 
 def _validate_path(path_str: str, must_exist: bool = False, allow_relative: bool = False) -> tuple[bool, str, Optional[Path]]:
@@ -1626,6 +1625,10 @@ def play_preview(main_window) -> dict:
 
     player.play()
 
+    gui_state = getattr(main_window, '_gui_state', None)
+    if gui_state:
+        gui_state.update_playback_state(is_playing=True)
+
     return {
         "success": True,
         "message": "Playback started",
@@ -1652,6 +1655,10 @@ def pause_preview(main_window) -> dict:
         return {"success": False, "error": "Video player not available"}
 
     player.pause()
+
+    gui_state = getattr(main_window, '_gui_state', None)
+    if gui_state:
+        gui_state.update_playback_state(is_playing=False)
 
     return {
         "success": True,
@@ -5335,9 +5342,7 @@ def stop_playback(main_window) -> dict:
     Returns:
         Dict with success status
     """
-    player = getattr(main_window, 'sequence_tab', None)
-    if player:
-        player = getattr(player, 'video_player', None)
+    player = main_window.get_video_player()
     if not player:
         return {"success": False, "error": "Video player not available"}
 
@@ -5359,13 +5364,14 @@ def frame_step_forward(main_window) -> dict:
     Returns:
         Dict with success status
     """
-    player = getattr(main_window, 'sequence_tab', None)
-    if player:
-        player = getattr(player, 'video_player', None)
+    player = main_window.get_video_player()
     if not player:
         return {"success": False, "error": "Video player not available"}
 
     player.frame_step_forward()
+    gui_state = getattr(main_window, '_gui_state', None)
+    if gui_state:
+        gui_state.update_playback_state(is_playing=False)
     return {"success": True, "message": "Stepped one frame forward"}
 
 
@@ -5380,13 +5386,14 @@ def frame_step_backward(main_window) -> dict:
     Returns:
         Dict with success status
     """
-    player = getattr(main_window, 'sequence_tab', None)
-    if player:
-        player = getattr(player, 'video_player', None)
+    player = main_window.get_video_player()
     if not player:
         return {"success": False, "error": "Video player not available"}
 
     player.frame_step_backward()
+    gui_state = getattr(main_window, '_gui_state', None)
+    if gui_state:
+        gui_state.update_playback_state(is_playing=False)
     return {"success": True, "message": "Stepped one frame backward"}
 
 
@@ -5412,16 +5419,11 @@ def set_playback_speed(main_window, speed: float) -> dict:
             "error": f"Invalid speed {speed}. Valid speeds: {PLAYBACK_SPEEDS}",
         }
 
-    player = getattr(main_window, 'sequence_tab', None)
-    if player:
-        player = getattr(player, 'video_player', None)
+    player = main_window.get_video_player()
     if not player:
         return {"success": False, "error": "Video player not available"}
 
-    player.playback_speed = speed
-    # Also update the combo box to match
-    idx = PLAYBACK_SPEEDS.index(speed)
-    player.speed_combo.setCurrentIndex(idx)
+    player.set_speed(speed)
 
     gui_state = getattr(main_window, '_gui_state', None)
     if gui_state:
@@ -5447,9 +5449,7 @@ def set_ab_loop(main_window, a_seconds: float, b_seconds: float) -> dict:
     Returns:
         Dict with success status
     """
-    player = getattr(main_window, 'sequence_tab', None)
-    if player:
-        player = getattr(player, 'video_player', None)
+    player = main_window.get_video_player()
     if not player:
         return {"success": False, "error": "Video player not available"}
 
@@ -5464,6 +5464,15 @@ def set_ab_loop(main_window, a_seconds: float, b_seconds: float) -> dict:
 
     if b_seconds <= a_seconds:
         return {"success": False, "error": "b_seconds must be greater than a_seconds"}
+
+    if a_seconds < 0:
+        return {"success": False, "error": "a_seconds cannot be negative"}
+
+    duration_ms = getattr(player, 'duration_ms', 0)
+    if duration_ms > 0:
+        duration_s = duration_ms / 1000.0
+        if b_seconds > duration_s:
+            return {"success": False, "error": f"b_seconds ({b_seconds:.2f}s) exceeds video duration ({duration_s:.2f}s)"}
 
     player.set_ab_loop(a_seconds, b_seconds)
     gui_state = getattr(main_window, '_gui_state', None)
