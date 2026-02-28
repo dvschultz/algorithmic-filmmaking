@@ -1866,9 +1866,20 @@ class MainWindow(QMainWindow):
                 self.analyze_tab.clip_browser.set_selection(selected_ids)
 
         elif tool_name in ("add_to_sequence", "remove_from_sequence",
-                            "clear_sequence", "reorder_sequence"):
+                            "clear_sequence", "reorder_sequence",
+                            "update_sequence_clip"):
             # Refresh the timeline to reflect sequence changes
             self._refresh_timeline_from_project()
+
+        elif tool_name == "send_to_analyze":
+            # Switch to Analyze tab after sending clips
+            self._switch_to_tab("analyze")
+
+        elif tool_name in ("apply_filters", "clear_filters", "set_clip_sort_order"):
+            # Force clip browser to repaint after filter/sort changes
+            browser = self.get_active_clip_browser()
+            if browser:
+                browser.update()
 
         elif tool_name == "show_clip_details":
             # Open the clip details sidebar for the specified clip
@@ -4277,6 +4288,11 @@ class MainWindow(QMainWindow):
 
     def _on_video_position_updated(self, position_ms: int):
         """Sync timeline playhead to video position during playback."""
+        # Update GUI state for agent context
+        if self._gui_state:
+            clip_id = self._current_playback_clip.source_clip_id if self._current_playback_clip else None
+            self._gui_state.update_playback_state(position_ms=position_ms, clip_id=clip_id)
+
         # Case 1: Timeline-driven playback (existing behavior)
         if self._is_playing and self._current_playback_clip:
             seq_clip = self._current_playback_clip
@@ -4321,6 +4337,12 @@ class MainWindow(QMainWindow):
             playing: True if playing, False if paused/stopped
         """
         logger.debug(f"Video state changed: playing={playing}, is_playing: {self._is_playing}")
+
+        # Update GUI state for agent context
+        if self._gui_state:
+            self._gui_state.update_playback_state(is_playing=playing)
+            if not playing:
+                self._gui_state.clear_playback_state()
 
         if not self._is_playing:
             return
@@ -5271,8 +5293,25 @@ class MainWindow(QMainWindow):
             return True
 
         elif wait_type == "detection":
-            # Detection worker is started by the tool itself via _start_detection
-            # Just return True since the worker is already running
+            # Detection was previously started eagerly in the tool; now handled here
+            source_id = tool_result.get("source_id")
+            mode = tool_result.get("mode", "adaptive")
+            config = tool_result.get("config", {})
+
+            # Find and select source
+            source = self.project.sources_by_id.get(source_id)
+            if not source:
+                return False
+            self._select_source(source)
+
+            # Mark agent waiting
+            self._pending_agent_detection = True
+
+            # Start detection
+            self._start_detection(mode, config)
+
+            # Switch to Cut tab
+            self._switch_to_tab("cut")
             return True
 
         elif wait_type == "classification":
@@ -5294,6 +5333,28 @@ class MainWindow(QMainWindow):
             tier = tool_result.get("tier")
             prompt = tool_result.get("prompt")
             return self.start_agent_description(clip_ids, tier, prompt)
+
+        elif wait_type == "analyze_all":
+            # analyze_all pipeline — previously started eagerly in tool, now handled here
+            clip_ids = tool_result.get("clip_ids", [])
+            operations = tool_result.get("operations", [])
+
+            # Resolve clips
+            clips = [self.project.clips_by_id.get(cid) for cid in clip_ids]
+            clips = [c for c in clips if c is not None]
+            if not clips:
+                return False
+
+            # Mark agent waiting
+            self._pending_agent_analyze_all = True
+
+            # Add clips to Analyze tab and switch
+            self.analyze_tab.add_clips(clip_ids)
+            self._switch_to_tab("analyze")
+
+            # Start the pipeline
+            self._run_analysis_pipeline(clips, operations)
+            return True
 
         else:
             logger.warning(f"Unknown worker type: {wait_type}")

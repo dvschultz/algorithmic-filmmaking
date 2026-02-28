@@ -76,6 +76,11 @@ class GUIState:
     # Active filters state
     active_filters: dict = field(default_factory=dict)
 
+    # Video playback state
+    playback_position_ms: int = 0
+    playback_is_playing: bool = False
+    playback_current_clip_id: Optional[str] = None
+
     # Background processing status - tracks active worker operations
     processing_operations: dict = field(default_factory=dict)
 
@@ -152,6 +157,14 @@ class GUIState:
                 active = [f"{k}={v}" for k, v in self.active_filters.items() if v is not None]
                 if active:
                     lines.append(f"ACTIVE FILTERS: {', '.join(active)}")
+
+            # Video playback state
+            if self.playback_is_playing or self.playback_current_clip_id:
+                state = "playing" if self.playback_is_playing else "paused"
+                pos_s = self.playback_position_ms / 1000.0
+                lines.append(f"VIDEO PLAYBACK: {state} at {pos_s:.1f}s")
+                if self.playback_current_clip_id:
+                    lines.append(f"  Playing clip: {self.playback_current_clip_id[:8]}...")
 
             # Background processing status
             if self.processing_operations:
@@ -254,6 +267,34 @@ class GUIState:
             if isinstance(self.pending_action, NameProjectThenPlanAction):
                 self.pending_action.user_response = user_response
 
+    def update_playback_state(
+        self,
+        position_ms: Optional[int] = None,
+        is_playing: Optional[bool] = None,
+        clip_id: Optional[str] = None,
+    ):
+        """Update video playback state.
+
+        Args:
+            position_ms: Current playback position in milliseconds
+            is_playing: Whether video is currently playing
+            clip_id: ID of the clip currently playing (or None)
+        """
+        with self._lock:
+            if position_ms is not None:
+                self.playback_position_ms = position_ms
+            if is_playing is not None:
+                self.playback_is_playing = is_playing
+            if clip_id is not None:
+                self.playback_current_clip_id = clip_id
+
+    def clear_playback_state(self):
+        """Clear playback state (e.g., when video stops)."""
+        with self._lock:
+            self.playback_position_ms = 0
+            self.playback_is_playing = False
+            self.playback_current_clip_id = None
+
     def set_processing(self, operation: str, status: str):
         """Mark a background operation as active.
 
@@ -324,6 +365,11 @@ class GUIState:
 
             # Active filters
             self.active_filters = {}
+
+            # Video playback
+            self.playback_position_ms = 0
+            self.playback_is_playing = False
+            self.playback_current_clip_id = None
 
             # Processing status
             self.processing_operations = {}

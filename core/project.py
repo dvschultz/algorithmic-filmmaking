@@ -589,6 +589,27 @@ class Project:
         self._notify_observers("source_removed", source)
         return source
 
+    def update_source(self, source_id: str, **kwargs) -> Optional[Source]:
+        """Update a source's fields.
+
+        Args:
+            source_id: ID of the source to update
+            **kwargs: Fields to update (e.g., color_profile="grayscale", fps=29.97)
+
+        Returns:
+            Updated Source, or None if not found
+        """
+        source = self.sources_by_id.get(source_id)
+        if source is None:
+            logger.warning(f"Source not found: {source_id}")
+            return None
+        for key, value in kwargs.items():
+            if hasattr(source, key):
+                setattr(source, key, value)
+        self._dirty = True
+        self._notify_observers("source_updated", source)
+        return source
+
     def add_clips(self, clips: list[Clip]) -> None:
         """Add detected clips to the project.
 
