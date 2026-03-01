@@ -363,8 +363,11 @@ class VideoPlayer(QWidget):
             return
         self._clip_start_ms = None
         self._clip_end_ms = None
-        self._mpv.pause = True
-        self._mpv.play(str(path))
+        try:
+            self._mpv.pause = True
+            self._mpv.play(str(path))
+        except mpv.ShutdownError:
+            pass
 
     def _safe_mpv_command(self, fn, *args, **kwargs):
         """Execute an MPV command with standard error handling."""
