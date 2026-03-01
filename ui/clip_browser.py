@@ -88,7 +88,6 @@ class ClipThumbnail(QFrame):
         self.clip = clip
         self.source = source
         self.selected = False
-        self.disabled = False
         self._drag_enabled = drag_enabled
         self._drag_start_pos = None
         self._show_glow = False
@@ -226,6 +225,11 @@ class ClipThumbnail(QFrame):
         mins = int(seconds // 60)
         secs = seconds % 60
         return f"{mins}:{secs:05.2f}"
+
+    @property
+    def disabled(self) -> bool:
+        """Whether this clip is disabled (reads from model)."""
+        return self.clip.disabled
 
     def set_selected(self, selected: bool):
         """Set selection state."""
@@ -928,6 +932,7 @@ class ClipBrowser(QWidget):
                 thumb.set_shot_type(clip.shot_type)
                 thumb.set_transcript(clip.transcript)
                 thumb.set_colors(clip.dominant_colors)
+                thumb._update_style()  # Refresh disabled visual state
 
     def _on_filter_changed(self, filter_option: str):
         """Handle shot type filter dropdown change."""
@@ -1421,12 +1426,19 @@ class ClipBrowser(QWidget):
         return sum(1 for thumb in self.thumbnails if self._matches_filter(thumb))
 
     def toggle_disabled(self, clip_ids: list[str]):
-        """Toggle the disabled state of clips by ID."""
-        for clip_id in clip_ids:
-            thumb = self._thumbnail_by_id.get(clip_id)
-            if thumb:
-                thumb.disabled = not thumb.disabled
-                thumb._update_style()
+        """Toggle the disabled state of clips by ID via undo stack."""
+        from ui.commands.toggle_clip_disabled import ToggleClipDisabledCommand
+        main_win = self.window()
+        if hasattr(main_win, 'undo_stack'):
+            cmd = ToggleClipDisabledCommand(main_win.project, clip_ids)
+            main_win.undo_stack.push(cmd)
+        else:
+            # Fallback when no undo stack (e.g. tests)
+            for clip_id in clip_ids:
+                thumb = self._thumbnail_by_id.get(clip_id)
+                if thumb:
+                    thumb.clip.disabled = not thumb.clip.disabled
+                    thumb._update_style()
 
     def keyPressEvent(self, event):
         """Handle keyboard shortcuts.

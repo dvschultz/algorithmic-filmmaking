@@ -220,6 +220,7 @@ class Clip:
     first_frame_embedding: Optional[list[float]] = None  # First frame embedding
     last_frame_embedding: Optional[list[float]] = None  # Last frame embedding
     embedding_model: Optional[str] = None  # Model that generated embeddings (e.g., "clip-vit-b-32", "dinov2-vit-b-14")
+    disabled: bool = False  # Excluded from sequence/export when True
 
     @property
     def duration_frames(self) -> int:
@@ -346,6 +347,8 @@ class Clip:
             data["last_frame_embedding"] = self.last_frame_embedding
         if self.embedding_model is not None:
             data["embedding_model"] = self.embedding_model
+        if self.disabled:
+            data["disabled"] = True
         return data
 
     @classmethod
@@ -414,4 +417,5 @@ class Clip:
             first_frame_embedding=_validate_embedding(data.get("first_frame_embedding"), "first_frame_embedding"),
             last_frame_embedding=_validate_embedding(data.get("last_frame_embedding"), "last_frame_embedding"),
             embedding_model=data.get("embedding_model"),
+            disabled=data.get("disabled", False),
         )

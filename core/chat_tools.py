@@ -452,8 +452,9 @@ def get_project_state(project) -> dict:
 )
 def add_to_sequence(project, clip_ids: list[str]) -> dict:
     """Add clips to the timeline sequence."""
-    # Validate clip IDs
-    valid_ids = [cid for cid in clip_ids if cid in project.clips_by_id]
+    # Validate clip IDs and exclude disabled clips
+    valid_ids = [cid for cid in clip_ids if cid in project.clips_by_id and not project.clips_by_id[cid].disabled]
+    disabled_ids = [cid for cid in clip_ids if cid in project.clips_by_id and project.clips_by_id[cid].disabled]
     invalid_ids = [cid for cid in clip_ids if cid not in project.clips_by_id]
 
     if invalid_ids:
@@ -463,17 +464,21 @@ def add_to_sequence(project, clip_ids: list[str]) -> dict:
         return {
             "success": False,
             "error": "No valid clip IDs provided",
-            "invalid_ids": invalid_ids
+            "invalid_ids": invalid_ids,
+            "disabled_ids": disabled_ids,
         }
 
     project.add_to_sequence(valid_ids)
 
-    return {
+    result = {
         "success": True,
         "added": valid_ids,
         "invalid_ids": invalid_ids,
-        "sequence_length": len(project.sequence.tracks[0].clips) if project.sequence else 0
+        "sequence_length": len(project.sequence.tracks[0].clips) if project.sequence else 0,
     }
+    if disabled_ids:
+        result["disabled_ids"] = disabled_ids
+    return result
 
 
 @tools.register(
@@ -700,7 +705,7 @@ def list_clips(
     """
     results = []
 
-    clips = project.clips
+    clips = [c for c in project.clips if not c.disabled]
 
     # Apply filters
     if source_id is not None:
@@ -2659,7 +2664,13 @@ def get_project_summary(project) -> dict:
     lines.append("")
 
     # Clips
-    lines.append(f"## Clips ({len(project.clips)} total)")
+    disabled_count = sum(1 for c in project.clips if c.disabled)
+    enabled_count = len(project.clips) - disabled_count
+    clip_header = f"## Clips ({len(project.clips)} total"
+    if disabled_count:
+        clip_header += f", {enabled_count} enabled, {disabled_count} disabled"
+    clip_header += ")"
+    lines.append(clip_header)
     if project.clips:
         # Count analysis status
         with_colors = sum(1 for c in project.clips if c.dominant_colors)

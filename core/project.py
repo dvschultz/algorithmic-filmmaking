@@ -662,6 +662,31 @@ class Project:
             self._notify_observers("clips_removed", removed)
         return removed
 
+    def toggle_clips_disabled(self, clip_ids: list[str]) -> list[Clip]:
+        """Toggle the disabled state of clips by ID.
+
+        Args:
+            clip_ids: IDs of clips to toggle
+
+        Returns:
+            List of toggled Clip objects
+        """
+        toggled = []
+        for clip_id in clip_ids:
+            clip = self.clips_by_id.get(clip_id)
+            if clip is not None:
+                clip.disabled = not clip.disabled
+                toggled.append(clip)
+        if toggled:
+            self._dirty = True
+            self._notify_observers("clips_updated", toggled)
+        return toggled
+
+    @property
+    def enabled_clips(self) -> list[Clip]:
+        """All clips that are not disabled."""
+        return [c for c in self._clips if not c.disabled]
+
     def replace_source_clips(self, source_id: str, new_clips: list[Clip]) -> None:
         """Replace all clips for a source (e.g., after re-detection).
 
@@ -801,6 +826,10 @@ class Project:
             clip = self.clips_by_id.get(clip_id)
             if clip is None:
                 logger.warning(f"Clip not found: {clip_id}")
+                continue
+
+            if clip.disabled:
+                logger.info(f"Skipping disabled clip: {clip_id}")
                 continue
 
             source = self.sources_by_id.get(clip.source_id)

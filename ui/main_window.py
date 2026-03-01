@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QDialog,
 )
 from PySide6.QtCore import Qt, Signal, QThread, QUrl, QTimer, Slot
-from PySide6.QtGui import QDesktopServices, QKeySequence, QAction, QDragEnterEvent, QDropEvent
+from PySide6.QtGui import QDesktopServices, QKeySequence, QAction, QDragEnterEvent, QDropEvent, QUndoStack
 
 from models.clip import Source, Clip
 from core.scene_detect import SceneDetector, DetectionConfig, KaraokeDetectionConfig
@@ -707,6 +707,8 @@ class MainWindow(QMainWindow):
         # Project path tracking (for backwards compatibility - delegates to project)
         # Note: self.project.path is the actual storage
 
+        self.undo_stack = QUndoStack(self)
+
         logger.info("Setting up UI...")
         self._setup_ui()
         logger.info("Connecting signals...")
@@ -804,9 +806,11 @@ class MainWindow(QMainWindow):
         if not self.clips:
             return
 
-        # Build (Clip, Source) tuples for all clips
+        # Build (Clip, Source) tuples for all enabled clips
         all_clips = []
         for clip in self.clips:
+            if clip.disabled:
+                continue
             source = self.sources_by_id.get(clip.source_id)
             if source:
                 all_clips.append((clip, source))
@@ -1177,6 +1181,16 @@ class MainWindow(QMainWindow):
 
         # Edit menu
         edit_menu = menu_bar.addMenu("&Edit")
+
+        undo_action = self.undo_stack.createUndoAction(self, "&Undo")
+        undo_action.setShortcut(QKeySequence.Undo)
+        edit_menu.addAction(undo_action)
+
+        redo_action = self.undo_stack.createRedoAction(self, "&Redo")
+        redo_action.setShortcut(QKeySequence("Ctrl+Shift+Z"))
+        edit_menu.addAction(redo_action)
+
+        edit_menu.addSeparator()
 
         select_all_action = QAction("Select &All", self)
         select_all_action.setShortcut(QKeySequence.SelectAll)  # Cmd+A
@@ -4415,10 +4429,11 @@ class MainWindow(QMainWindow):
         self._export_clips(selected)
 
     def _on_export_all_click(self):
-        """Export all clips."""
-        if not self.clips:
+        """Export all enabled clips."""
+        enabled = [c for c in self.clips if not c.disabled]
+        if not enabled:
             return
-        self._export_clips(self.clips)
+        self._export_clips(enabled)
 
     def _on_export_dataset_click(self):
         """Export clip metadata to JSON file."""
@@ -4458,7 +4473,8 @@ class MainWindow(QMainWindow):
             self.progress_bar.setValue(int(progress * 100))
             self.status_bar.showMessage(message)
 
-        success = export_dataset(self.current_source, self.clips, config, on_progress)
+        enabled_clips = [c for c in self.clips if not c.disabled]
+        success = export_dataset(self.current_source, enabled_clips, config, on_progress)
 
         self.progress_bar.setVisible(False)
 
