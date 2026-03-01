@@ -645,7 +645,6 @@ class MainWindow(QMainWindow):
         self.intention_import_dialog: Optional[IntentionImportDialog] = None
 
         # Guards to prevent duplicate signal handling
-        self._detection_handling_thumbnails = False  # True while _on_detection_finished manages thumbnails
         self._detection_finished_handled = False
         self._thumbnails_finished_handled = False
         self._color_analysis_finished_handled = False
@@ -656,6 +655,10 @@ class MainWindow(QMainWindow):
         self._transcription_finished_handled = False
         self._text_extraction_finished_handled = False
         self._cinematography_finished_handled = False
+
+        # Suppression flag: prevents _on_clips_added from starting its own ThumbnailWorker
+        # when _on_detection_finished is managing the full detection→thumbnail pipeline
+        self._suppress_clips_added_thumbnails = False
 
         # Generation IDs for workers - used to ignore stale signals from cancelled workers
         # Incremented each time a new worker starts; signals with old generation are ignored
@@ -1448,8 +1451,8 @@ class MainWindow(QMainWindow):
             self.cut_tab.set_source(clip_source)
 
         # Generate thumbnails - _on_thumbnail_ready will add clips to Cut tab
-        # Skip if detection finished handler is managing thumbnails (avoid double generation)
-        if self._detection_handling_thumbnails:
+        # Skip if _on_detection_finished is managing the full pipeline (avoid double generation)
+        if self._suppress_clips_added_thumbnails:
             logger.info("Detection handler managing thumbnails, skipping clips_added thumbnail generation")
             return
 
@@ -3972,13 +3975,15 @@ class MainWindow(QMainWindow):
 
         # Add new clips to the collection (don't replace existing clips from other sources)
         # This replaces any existing clips from this source (handles re-analysis case)
-        # Flag prevents _on_clips_added from also starting thumbnail generation
-        # (replace_source_clips fires clips_added synchronously)
-        self._detection_handling_thumbnails = True
+        # Flag prevents _on_clips_added from also starting thumbnail generation.
+        # This works because replace_source_clips fires clips_added synchronously
+        # (same-thread direct connection). If notification delivery ever becomes
+        # asynchronous, this flag would be cleared before the handler runs.
+        self._suppress_clips_added_thumbnails = True
         try:
             self.project.replace_source_clips(self.current_source.id, clips)
         finally:
-            self._detection_handling_thumbnails = False
+            self._suppress_clips_added_thumbnails = False
         self._update_window_title()
 
         # Remove old clips for this source from the Cut tab UI (handles re-analysis case)
