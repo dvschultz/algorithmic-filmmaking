@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 
 from ui.theme import theme, TypeScale, Spacing
+from core.analysis_availability import compute_disabled_operations
 from core.analysis_operations import (
     ANALYSIS_OPERATIONS,
     OPERATIONS_BY_KEY,
@@ -43,7 +44,14 @@ class AnalysisPickerDialog(QDialog):
         "cloud": CLOUD_OPS,
     }
 
-    def __init__(self, clip_count: int, scope_label: str, settings, parent=None):
+    def __init__(
+        self,
+        clip_count: int,
+        scope_label: str,
+        settings,
+        parent=None,
+        clips: list | None = None,
+    ):
         """Initialize the analysis picker dialog.
 
         Args:
@@ -51,12 +59,19 @@ class AnalysisPickerDialog(QDialog):
             scope_label: Description of clip scope (e.g. "All 42 clips")
             settings: Settings instance for persisting selection
             parent: Parent widget
+            clips: Optional clip list used to disable already-complete operations
         """
         super().__init__(parent)
         self._clip_count = clip_count
         self._scope_label = scope_label
         self._settings = settings
+        self._clips = clips
         self._checkboxes: dict[str, QCheckBox] = {}
+        self._disabled_ops = (
+            compute_disabled_operations(self._clips, [op.key for op in ANALYSIS_OPERATIONS])
+            if self._clips is not None
+            else set()
+        )
 
         self.setWindowTitle("Analyze Clips")
         self.setMinimumWidth(350)
@@ -104,7 +119,13 @@ class AnalysisPickerDialog(QDialog):
             for key in keys:
                 op = OPERATIONS_BY_KEY[key]
                 cb = QCheckBox(op.label)
-                cb.setToolTip(op.tooltip)
+                if key in self._disabled_ops:
+                    cb.setToolTip(
+                        f"{op.tooltip}\n\nAlready analyzed for all clips in this selection."
+                    )
+                    cb.setEnabled(False)
+                else:
+                    cb.setToolTip(op.tooltip)
                 self._checkboxes[key] = cb
                 layout.addWidget(cb)
 
@@ -146,7 +167,7 @@ class AnalysisPickerDialog(QDialog):
         """Load saved selection from settings."""
         saved = self._settings.analysis_selected_operations
         for key, cb in self._checkboxes.items():
-            cb.setChecked(key in saved)
+            cb.setChecked(key in saved and cb.isEnabled())
 
     def _save_selection(self):
         """Save current selection to settings."""
@@ -155,7 +176,8 @@ class AnalysisPickerDialog(QDialog):
     def _select_all(self):
         """Check all operation checkboxes."""
         for cb in self._checkboxes.values():
-            cb.setChecked(True)
+            if cb.isEnabled():
+                cb.setChecked(True)
 
     def _clear_all(self):
         """Uncheck all operation checkboxes."""

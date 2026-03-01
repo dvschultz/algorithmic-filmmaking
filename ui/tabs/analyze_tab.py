@@ -18,6 +18,7 @@ from ui.clip_browser import ClipBrowser
 from ui.widgets import EmptyStateWidget
 from ui.dialogs import GlossaryDialog
 from ui.theme import UISizes
+from core.analysis_availability import compute_disabled_operations
 from core.analysis_operations import ANALYSIS_OPERATIONS
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,8 @@ class AnalyzeTab(BaseTab):
         # Source lookup for video preview (set by MainWindow)
         self._sources_by_id: dict = {}
         self._clips_by_id: dict = {}
+        self._is_analyzing = False
+        self._disabled_quick_ops: set[str] = set()
         super().__init__(parent)
 
     def _setup_ui(self):
@@ -163,8 +166,45 @@ class AnalyzeTab(BaseTab):
     def _on_quick_run_click(self):
         """Handle quick run button click - immediate single operation."""
         op_key = self.quick_run_combo.currentData()
-        if op_key:
+        if op_key and op_key not in self._disabled_quick_ops:
             self.quick_run_requested.emit(op_key)
+
+    def _refresh_quick_run_availability(self):
+        """Enable/disable quick-run operations based on current clip metadata."""
+        clips = self.get_clips()
+        op_keys = [op.key for op in ANALYSIS_OPERATIONS]
+        self._disabled_quick_ops = compute_disabled_operations(clips, op_keys)
+
+        # Disable individual combo rows for operations that are already complete.
+        model = self.quick_run_combo.model()
+        for idx, op in enumerate(ANALYSIS_OPERATIONS):
+            item = model.item(idx)
+            if item is None:
+                continue
+            disabled = op.key in self._disabled_quick_ops
+            item.setEnabled(not disabled)
+            tooltip = op.tooltip
+            if disabled:
+                tooltip = f"{tooltip}\n\nAlready analyzed for all clips in this scope."
+            self.quick_run_combo.setItemData(idx, tooltip, Qt.ToolTipRole)
+
+        has_clips = len(self._clip_ids) > 0
+        enabled_indices = [
+            idx for idx, op in enumerate(ANALYSIS_OPERATIONS)
+            if op.key not in self._disabled_quick_ops
+        ]
+        has_enabled_ops = bool(enabled_indices)
+
+        # Ensure current selection is valid.
+        current_idx = self.quick_run_combo.currentIndex()
+        if has_enabled_ops:
+            current_item = model.item(current_idx) if current_idx >= 0 else None
+            if current_item is None or not current_item.isEnabled():
+                self.quick_run_combo.setCurrentIndex(enabled_indices[0])
+
+        controls_enabled = has_clips and has_enabled_ops and not self._is_analyzing
+        self.quick_run_combo.setEnabled(controls_enabled)
+        self.quick_run_btn.setEnabled(controls_enabled)
 
     def _on_analyze_click(self):
         """Handle analyze button click - open picker modal."""
@@ -218,11 +258,11 @@ class AnalyzeTab(BaseTab):
         """Update UI based on current clip count."""
         count = len(self._clip_ids)
         has_clips = count > 0
+        controls_enabled = has_clips and not self._is_analyzing
 
-        self.quick_run_combo.setEnabled(has_clips)
-        self.quick_run_btn.setEnabled(has_clips)
-        self.analyze_btn.setEnabled(has_clips)
-        self.clear_btn.setEnabled(has_clips)
+        self._refresh_quick_run_availability()
+        self.analyze_btn.setEnabled(controls_enabled)
+        self.clear_btn.setEnabled(controls_enabled)
 
         if has_clips:
             self.clip_count_label.setText(f"{count} clips")
@@ -365,11 +405,13 @@ class AnalyzeTab(BaseTab):
         """Update colors for a clip."""
         if clip_id in self._clip_ids:
             self.clip_browser.update_clip_colors(clip_id, colors)
+            self._refresh_quick_run_availability()
 
     def update_clip_shot_type(self, clip_id: str, shot_type: str):
         """Update shot type for a clip."""
         if clip_id in self._clip_ids:
             self.clip_browser.update_clip_shot_type(clip_id, shot_type)
+            self._refresh_quick_run_availability()
 
     def update_clip_thumbnail(self, clip_id: str, thumb_path):
         """Update thumbnail for a clip."""
@@ -380,11 +422,13 @@ class AnalyzeTab(BaseTab):
         """Update transcript for a clip."""
         if clip_id in self._clip_ids:
             self.clip_browser.update_clip_transcript(clip_id, segments)
+            self._refresh_quick_run_availability()
 
     def update_clip_extracted_text(self, clip_id: str, texts: list):
         """Update extracted text for a clip."""
         if clip_id in self._clip_ids:
             self.clip_browser.update_clip_extracted_text(clip_id, texts)
+            self._refresh_quick_run_availability()
 
     def update_clip_cinematography(self, clip_id: str, cinematography):
         """Update cinematography analysis for a clip.
@@ -395,6 +439,7 @@ class AnalyzeTab(BaseTab):
         """
         if clip_id in self._clip_ids:
             self.clip_browser.update_clip_cinematography(clip_id, cinematography)
+            self._refresh_quick_run_availability()
 
     def set_analyzing(self, is_analyzing: bool, operation: str = ""):
         """Update UI state during analysis operations.
@@ -403,16 +448,14 @@ class AnalyzeTab(BaseTab):
             is_analyzing: Whether an analysis operation is running
             operation: Which operation is running (operation key or "pipeline")
         """
-        has_clips = len(self._clip_ids) > 0
-        self.quick_run_combo.setEnabled(not is_analyzing and has_clips)
-        self.quick_run_btn.setEnabled(not is_analyzing and has_clips)
-        self.analyze_btn.setEnabled(not is_analyzing and has_clips)
-        self.clear_btn.setEnabled(not is_analyzing and has_clips)
+        self._is_analyzing = is_analyzing
 
         if is_analyzing:
             self.analyze_btn.setText("Analyzing...")
         else:
             self.analyze_btn.setText("Analyze...")
+
+        self._update_ui_state()
 
     def get_active_filters(self) -> dict:
         """Get the current filter state from the clip browser.

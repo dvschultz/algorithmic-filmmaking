@@ -2704,8 +2704,12 @@ class MainWindow(QMainWindow):
         if not clip_ids:
             return
 
+        clips = [self.project.clips_by_id[cid] for cid in clip_ids if cid in self.project.clips_by_id]
+        if not clips:
+            return
+
         dialog = AnalysisPickerDialog(
-            len(clip_ids), "selected clips", self.settings, self
+            len(clips), "selected clips", self.settings, self, clips=clips
         )
         if dialog.exec() == QDialog.Accepted:
             operations = dialog.selected_operations()
@@ -2716,11 +2720,7 @@ class MainWindow(QMainWindow):
             # Add clips to Analyze tab and switch
             self.analyze_tab.add_clips(clip_ids)
             self.tab_widget.setCurrentWidget(self.analyze_tab)
-            # Resolve clips and run pipeline
-            clips = [self.project.clips_by_id[cid] for cid in clip_ids
-                     if cid in self.project.clips_by_id]
-            if clips:
-                self._run_analysis_pipeline(clips, operations)
+            self._run_analysis_pipeline(clips, operations)
 
     # ------------------------------------------------------------------
     # Analysis Pipeline: Quick Run / Picker / Phase-Based Engine
@@ -2738,7 +2738,7 @@ class MainWindow(QMainWindow):
         if not clips:
             return
         dialog = AnalysisPickerDialog(
-            len(clips), f"clips in Analyze tab", self.settings, self
+            len(clips), "clips in Analyze tab", self.settings, self, clips=clips
         )
         if dialog.exec() == QDialog.Accepted:
             operations = dialog.selected_operations()
