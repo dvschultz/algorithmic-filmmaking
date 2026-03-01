@@ -645,6 +645,7 @@ class MainWindow(QMainWindow):
         self.intention_import_dialog: Optional[IntentionImportDialog] = None
 
         # Guards to prevent duplicate signal handling
+        self._detection_handling_thumbnails = False  # True while _on_detection_finished manages thumbnails
         self._detection_finished_handled = False
         self._thumbnails_finished_handled = False
         self._color_analysis_finished_handled = False
@@ -1447,6 +1448,11 @@ class MainWindow(QMainWindow):
             self.cut_tab.set_source(clip_source)
 
         # Generate thumbnails - _on_thumbnail_ready will add clips to Cut tab
+        # Skip if detection finished handler is managing thumbnails (avoid double generation)
+        if self._detection_handling_thumbnails:
+            logger.info("Detection handler managing thumbnails, skipping clips_added thumbnail generation")
+            return
+
         # Skip if intention workflow is running (it manages its own thumbnail generation)
         if hasattr(self, 'intention_workflow') and self.intention_workflow and self.intention_workflow.is_running:
             logger.info("Intention workflow running, skipping automatic thumbnail generation")
@@ -3966,7 +3972,13 @@ class MainWindow(QMainWindow):
 
         # Add new clips to the collection (don't replace existing clips from other sources)
         # This replaces any existing clips from this source (handles re-analysis case)
-        self.project.replace_source_clips(self.current_source.id, clips)
+        # Flag prevents _on_clips_added from also starting thumbnail generation
+        # (replace_source_clips fires clips_added synchronously)
+        self._detection_handling_thumbnails = True
+        try:
+            self.project.replace_source_clips(self.current_source.id, clips)
+        finally:
+            self._detection_handling_thumbnails = False
         self._update_window_title()
 
         # Remove old clips for this source from the Cut tab UI (handles re-analysis case)
