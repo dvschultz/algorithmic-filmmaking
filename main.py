@@ -112,6 +112,29 @@ def main():
     logger.info(f"sys.argv: {sys.argv}")
     logger.info(f"Frozen: {is_frozen()}")
 
+    # Enable GL context sharing so QOpenGLWidget gets a shared context on macOS.
+    # Without this, mpv's render API sees stale compositor data in the FBO.
+    from PySide6.QtCore import Qt
+    QApplication.setAttribute(Qt.AA_ShareOpenGLContexts, True)
+
+    # On macOS, set a global default GL format before QApplication construction.
+    # Qt initializes internal shared contexts at app startup; format mismatch can
+    # break sharing with QOpenGLWidget and cause mirrored/stale video frames.
+    if platform.system() == "Darwin":
+        from PySide6.QtGui import QSurfaceFormat
+
+        fmt = QSurfaceFormat()
+        fmt.setVersion(3, 2)
+        fmt.setProfile(QSurfaceFormat.CoreProfile)
+        fmt.setDepthBufferSize(24)
+        QSurfaceFormat.setDefaultFormat(fmt)
+        logger.info(
+            "Configured macOS default OpenGL format: %d.%d CoreProfile depth=%d",
+            fmt.majorVersion(),
+            fmt.minorVersion(),
+            fmt.depthBufferSize(),
+        )
+
     app = QApplication(sys.argv)
     app.setApplicationName("Scene Ripper")
     app.setOrganizationName("Algorithmic Filmmaking")

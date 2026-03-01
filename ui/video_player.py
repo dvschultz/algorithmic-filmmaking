@@ -1,7 +1,13 @@
-"""Video player component using MPV (libmpv) via python-mpv."""
+"""Video player component using MPV (libmpv) via python-mpv.
+
+Uses mpv's OpenGL render API with QOpenGLWidget for reliable cross-platform
+embedding. The --wid approach is unreliable on macOS where mpv falls back to
+creating a separate pop-out window.
+"""
 
 from __future__ import annotations
 
+import ctypes
 import locale
 import logging
 import threading
@@ -18,8 +24,10 @@ from PySide6.QtWidgets import (
     QStyle,
     QComboBox,
 )
+from PySide6.QtOpenGLWidgets import QOpenGLWidget
+from PySide6.QtGui import QOpenGLContext, QSurfaceFormat
+from PySide6.QtCore import Qt, Slot, Signal, QObject, QMetaObject
 from ui.widgets.styled_slider import StyledSlider
-from PySide6.QtCore import Qt, Slot, Signal, QObject
 
 try:
     import mpv
@@ -30,6 +38,111 @@ from core.constants import PLAYBACK_SPEEDS, DEFAULT_SPEED_INDEX
 from ui.theme import theme, TypeScale, Spacing, UISizes
 
 logger = logging.getLogger(__name__)
+
+
+class MpvGLWidget(QOpenGLWidget):
+    """OpenGL widget that renders mpv video output via the render API.
+
+    mpv renders each frame into Qt's OpenGL framebuffer, so the video appears
+    inline as a normal widget — no separate window.
+    """
+
+    _frame_ready = Signal()  # Internal signal: mpv thread -> main thread repaint
+
+    def __init__(self, parent=None):
+        super().__init__(parent=parent)
+        # Match app-level default format in main.py on macOS to maximize odds of
+        # successful Qt shared-context creation with QOpenGLWidget.
+        fmt = QSurfaceFormat()
+        fmt.setVersion(3, 2)
+        fmt.setProfile(QSurfaceFormat.CoreProfile)
+        self.setFormat(fmt)
+
+        self._mpv: Optional[mpv.MPV] = None
+        self._ctx = None  # MpvRenderContext
+        self._proc_addr_func = None  # prevent GC of ctypes callback
+
+    def set_mpv(self, mpv_instance: mpv.MPV):
+        """Assign the mpv instance. Must be called before the widget is shown."""
+        self._mpv = mpv_instance
+
+    def initializeGL(self):
+        """Create the mpv render context once the GL context is ready."""
+        if self._mpv is None or self._ctx is not None:
+            return
+
+        def _get_proc_address(_ctx, name):
+            gl_ctx = QOpenGLContext.currentContext()
+            if gl_ctx is None:
+                return 0
+            gl_fmt = gl_ctx.format()
+            profile_name = {
+                QSurfaceFormat.NoProfile: "NoProfile",
+                QSurfaceFormat.CoreProfile: "CoreProfile",
+                QSurfaceFormat.CompatibilityProfile: "CompatibilityProfile",
+            }.get(gl_fmt.profile(), str(gl_fmt.profile()))
+            major, minor = gl_fmt.majorVersion(), gl_fmt.minorVersion()
+            logger.debug(
+                "MpvGLWidget current GL context: profile=%s version=%d.%d depth=%d",
+                profile_name,
+                major,
+                minor,
+                gl_fmt.depthBufferSize(),
+            )
+            if gl_fmt.profile() != QSurfaceFormat.CoreProfile or (major, minor) < (3, 2):
+                logger.warning(
+                    "Potentially incompatible GL context for mpv rendering: "
+                    "profile=%s version=%d.%d (expected CoreProfile >= 3.2)",
+                    profile_name,
+                    major,
+                    minor,
+                )
+            # PySide6 getProcAddress accepts bytes, returns int
+            addr = gl_ctx.getProcAddress(name)
+            return addr or 0
+
+        self._proc_addr_func = mpv.MpvGlGetProcAddressFn(_get_proc_address)
+
+        self._ctx = mpv.MpvRenderContext(
+            self._mpv, 'opengl',
+            opengl_init_params={'get_proc_address': self._proc_addr_func},
+        )
+
+        # mpv calls update_cb from its render thread when a new frame is ready.
+        # We bridge to the main thread via a signal so update() is thread-safe.
+        self._frame_ready.connect(self.update, Qt.QueuedConnection)
+        self._ctx.update_cb = self._on_mpv_frame_ready
+
+    def _on_mpv_frame_ready(self):
+        """Called from mpv's render thread — emit signal to repaint on main thread."""
+        self._frame_ready.emit()
+
+    def paintGL(self):
+        """Render the current mpv frame into Qt's framebuffer.
+
+        Always renders — even when mpv has no new frame — to prevent Qt's FBO
+        from showing stale compositor data (appears as a 'screen mirror' on macOS).
+        """
+        if self._ctx is None:
+            return
+
+        fbo = self.defaultFramebufferObject()
+        ratio = self.devicePixelRatio()
+        w = int(self.width() * ratio)
+        h = int(self.height() * ratio)
+
+        self._ctx.render(
+            flip_y=True,
+            opengl_fbo={'fbo': fbo, 'w': w, 'h': h, 'internal_format': 0},
+        )
+        self._ctx.report_swap()
+
+    def cleanup(self):
+        """Free the render context. Must be called while GL context is current."""
+        if self._ctx is not None:
+            self._ctx.update_cb = None
+            self._ctx.free()
+            self._ctx = None
 
 
 class MpvSignalBridge(QObject):
@@ -129,9 +242,12 @@ class VideoPlayer(QWidget):
         self._cached_speed: float = 1.0
         self._ab_a_seconds: Optional[float] = None
         self._ab_b_seconds: Optional[float] = None
+        self._player_ready = False  # True once mpv is initialized
+        self._mpv = None
+        self._bridge = None
+        self._pending_load: Optional[Path] = None  # queued load_video before init
 
         self._setup_ui()
-        self._setup_player()
 
     @property
     def _shutting_down(self) -> bool:
@@ -147,12 +263,10 @@ class VideoPlayer(QWidget):
         header.setStyleSheet(f"font-weight: bold; font-size: {TypeScale.MD}px; padding: {Spacing.SM}px;")
         layout.addWidget(header)
 
-        # Video container — MPV renders into this widget via window ID
-        self.video_widget = QWidget()
+        # Video container — mpv renders via OpenGL render API into this widget
+        self.video_widget = MpvGLWidget()
         self.video_widget.setMinimumSize(400, 300)
         self.video_widget.setStyleSheet("background-color: #000000;")
-        self.video_widget.setAttribute(Qt.WA_DontCreateNativeAncestors)
-        self.video_widget.setAttribute(Qt.WA_NativeWindow)
         layout.addWidget(self.video_widget, 1)
 
         # Controls
@@ -308,16 +422,28 @@ class VideoPlayer(QWidget):
         """
         self._ab_loop_row.setVisible(visible)
 
+    def showEvent(self, event):
+        """Initialize mpv when the widget is first shown.
+
+        The OpenGL context must be ready before creating the render context,
+        so we defer until the widget is visible.
+        """
+        super().showEvent(event)
+        if not self._player_ready:
+            self._setup_player()
+
     def _setup_player(self):
-        """Set up MPV player instance."""
+        """Set up MPV player instance with OpenGL render API."""
+        if self._player_ready:
+            return
         if mpv is None:
             raise RuntimeError(
                 "libmpv is not available. Install mpv/libmpv for your platform."
             )
-        wid = str(int(self.video_widget.winId()))
+
+        # Create mpv with vo=libmpv — rendering is handled by MpvGLWidget
         self._mpv = mpv.MPV(
-            wid=wid,
-            vo='gpu',
+            vo='libmpv',
             keep_open='yes',
             idle='yes',
             hwdec='auto',
@@ -328,6 +454,13 @@ class VideoPlayer(QWidget):
             log_handler=self._mpv_log_handler,
         )
         self._mpv.pause = True  # Start paused
+
+        # Connect mpv to the GL widget for rendering
+        self.video_widget.set_mpv(self._mpv)
+        # Force GL initialization if the context is already ready
+        self.video_widget.makeCurrent()
+        self.video_widget.initializeGL()
+        self.video_widget.doneCurrent()
 
         # Signal bridge — MPV callbacks → Qt signals
         self._bridge = MpvSignalBridge(self._mpv)
@@ -342,6 +475,13 @@ class VideoPlayer(QWidget):
         def on_file_loaded(event):
             self._bridge.media_loaded.emit()
         self._file_loaded_cb = on_file_loaded  # prevent GC
+        self._player_ready = True
+
+        # Replay any load_video call that arrived before init completed
+        if self._pending_load is not None:
+            pending = self._pending_load
+            self._pending_load = None
+            self.load_video(pending)
 
     def _mpv_log_handler(self, loglevel: str, component: str, message: str):
         """Route MPV log messages to Python logger."""
@@ -358,9 +498,17 @@ class VideoPlayer(QWidget):
     # --- Public API (preserved from QMediaPlayer version) ---
 
     def load_video(self, path: Path):
-        """Load a video file."""
+        """Load a video file.
+
+        If mpv hasn't initialized yet (widget not shown), the path is queued
+        and loaded automatically once the player is ready.
+        """
         if self._shutting_down:
             return
+        if not self._player_ready:
+            self._pending_load = path
+            return
+        self._pending_load = None
         self._clip_start_ms = None
         self._clip_end_ms = None
         self._safe_mpv_command(setattr, self._mpv, 'pause', True)
@@ -379,6 +527,8 @@ class VideoPlayer(QWidget):
 
     def seek_to(self, seconds: float):
         """Seek to a position in seconds."""
+        if not self._player_ready:
+            return
         self._safe_mpv_command(self._mpv.seek, seconds, 'absolute', 'exact')
 
     def set_clip_range(self, start_seconds: float, end_seconds: float):
@@ -386,6 +536,8 @@ class VideoPlayer(QWidget):
 
         Uses MPV's ab-loop properties for frame-accurate looping.
         """
+        if not self._player_ready:
+            return
         self._clip_start_ms = int(start_seconds * 1000)
         self._clip_end_ms = int(end_seconds * 1000)
         clip_duration = self._clip_end_ms - self._clip_start_ms
@@ -401,6 +553,8 @@ class VideoPlayer(QWidget):
 
     def clear_clip_range(self):
         """Clear clip range, allowing full video playback."""
+        if not self._player_ready:
+            return
         self._clip_start_ms = None
         self._clip_end_ms = None
         self._mpv.ab_loop_a = 'no'
@@ -415,19 +569,19 @@ class VideoPlayer(QWidget):
 
     def play(self):
         """Start or resume playback."""
-        if self._shutting_down:
+        if self._shutting_down or not self._player_ready:
             return
         self._mpv.pause = False
 
     def pause(self):
         """Pause playback."""
-        if self._shutting_down:
+        if self._shutting_down or not self._player_ready:
             return
         self._mpv.pause = True
 
     def stop(self):
         """Stop playback and return to start."""
-        if self._shutting_down:
+        if self._shutting_down or not self._player_ready:
             return
         self._mpv.pause = True
         if self._clip_start_ms is not None:
@@ -441,8 +595,14 @@ class VideoPlayer(QWidget):
         if self._shutting_down:
             return
         self._shutdown_event.set()
+        if not self._player_ready:
+            return
         try:
             self._bridge.cleanup()
+            # Free render context before terminating mpv
+            self.video_widget.makeCurrent()
+            self.video_widget.cleanup()
+            self.video_widget.doneCurrent()
             self._mpv.terminate()
         except Exception:
             logger.debug("MPV shutdown exception (may be normal)", exc_info=True)
@@ -450,7 +610,7 @@ class VideoPlayer(QWidget):
     @property
     def is_playing(self) -> bool:
         """Whether the player is currently playing."""
-        if self._shutting_down:
+        if self._shutting_down or not self._player_ready:
             return False
         try:
             return not self._mpv.pause
@@ -470,9 +630,11 @@ class VideoPlayer(QWidget):
     @playback_speed.setter
     def playback_speed(self, speed: float):
         """Set playback speed multiplier."""
+        self._cached_speed = speed
+        if not self._player_ready:
+            return
         try:
             self._mpv.speed = speed
-            self._cached_speed = speed
         except Exception:
             if not self._shutting_down:
                 logger.debug("Failed to set playback speed", exc_info=True)
@@ -480,6 +642,8 @@ class VideoPlayer(QWidget):
     @property
     def mute(self) -> bool:
         """Whether audio is muted."""
+        if not self._player_ready:
+            return False
         try:
             return self._mpv.mute
         except Exception:
@@ -488,6 +652,8 @@ class VideoPlayer(QWidget):
     @mute.setter
     def mute(self, value: bool):
         """Set mute state."""
+        if not self._player_ready:
+            return
         try:
             self._mpv.mute = value
         except Exception:
@@ -498,14 +664,14 @@ class VideoPlayer(QWidget):
 
     def frame_step_forward(self):
         """Advance one frame forward."""
-        if self._shutting_down:
+        if self._shutting_down or not self._player_ready:
             return
         self._mpv.pause = True
         self._mpv.frame_step()
 
     def frame_step_backward(self):
         """Step one frame backward."""
-        if self._shutting_down:
+        if self._shutting_down or not self._player_ready:
             return
         self._mpv.pause = True
         self._mpv.frame_back_step()
@@ -515,8 +681,8 @@ class VideoPlayer(QWidget):
 
         Only use when clip range is NOT active.
         """
-        if self._clip_start_ms is not None:
-            return  # Clip range owns the ab-loop properties
+        if not self._player_ready or self._clip_start_ms is not None:
+            return
         self._mpv.ab_loop_a = a_seconds
         self._mpv.ab_loop_b = b_seconds
         self._ab_a_seconds = a_seconds
@@ -525,8 +691,8 @@ class VideoPlayer(QWidget):
 
     def clear_ab_loop(self):
         """Clear manual A/B loop markers."""
-        if self._clip_start_ms is not None:
-            return  # Clip range owns the ab-loop properties
+        if not self._player_ready or self._clip_start_ms is not None:
+            return
         self._mpv.ab_loop_a = 'no'
         self._mpv.ab_loop_b = 'no'
         self._ab_a_seconds = None
@@ -556,7 +722,7 @@ class VideoPlayer(QWidget):
 
     def _toggle_playback(self):
         """Toggle play/pause."""
-        if self._shutting_down:
+        if self._shutting_down or not self._player_ready:
             return
         if not self._mpv.pause:
             self._mpv.pause = True
@@ -618,7 +784,7 @@ class VideoPlayer(QWidget):
 
         In clip mode, slider position is relative to clip start.
         """
-        if self._shutting_down:
+        if self._shutting_down or not self._player_ready:
             return
         if self._clip_start_ms is not None:
             absolute_ms = self._clip_start_ms + position

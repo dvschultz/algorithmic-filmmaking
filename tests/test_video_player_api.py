@@ -26,7 +26,12 @@ def _make_mock_mpv_instance():
 
 @pytest.fixture
 def player():
-    """Create a VideoPlayer with a mock MPV backend."""
+    """Create a VideoPlayer with a mock MPV backend.
+
+    Bypasses OpenGL render context creation since tests run without a real
+    GPU context. Directly injects the mock mpv instance and marks the player
+    as ready.
+    """
     mock_instance = _make_mock_mpv_instance()
 
     # Need QApplication for widget creation
@@ -45,13 +50,25 @@ def player():
         mock_mpv_module.ShutdownError = type('ShutdownError', (Exception,), {})
         vp_mod.mpv = mock_mpv_module
 
-    # Patch mpv.MPV where video_player imports it so no real MPV is created
-    with patch('ui.video_player.mpv.MPV', return_value=mock_instance):
-        from ui.video_player import VideoPlayer
-        p = VideoPlayer()
+    from ui.video_player import VideoPlayer
+    p = VideoPlayer()
+
+    # Inject mock mpv directly (bypassing _setup_player which needs GL context)
+    p._mpv = mock_instance
+    p._bridge = MagicMock()
+    p._player_ready = True
+
+    # Wire up bridge signals to player handlers
+    p._bridge.position_changed.connect(p._on_position_changed)
+    p._bridge.duration_changed.connect(p._on_duration_changed)
+    p._bridge.pause_changed.connect(p._on_pause_changed)
+    p._bridge.media_loaded.connect(p._on_file_loaded)
+    p._bridge.eof_reached.connect(p._on_eof)
+
     p._mock = mock_instance
     yield p
-    p.shutdown()
+    # Skip shutdown's GL cleanup in tests
+    p._shutdown_event.set()
 
 
 class TestVideoPlayerPublicAPI:
@@ -235,11 +252,18 @@ class TestShutdown:
 
     def test_shutdown_terminates_mpv(self, player):
         player._shutdown_event.clear()
+        # Mock the GL widget cleanup to avoid real GL calls
+        player.video_widget.makeCurrent = MagicMock()
+        player.video_widget.cleanup = MagicMock()
+        player.video_widget.doneCurrent = MagicMock()
         player.shutdown()
         player._mock.terminate.assert_called_once()
 
     def test_shutdown_prevents_further_operations(self, player):
         player._shutdown_event.clear()
+        player.video_widget.makeCurrent = MagicMock()
+        player.video_widget.cleanup = MagicMock()
+        player.video_widget.doneCurrent = MagicMock()
         player.shutdown()
         # Reset mock to track new calls
         player._mock.reset_mock()
@@ -257,11 +281,17 @@ class TestShutdown:
 
     def test_double_shutdown_is_safe(self, player):
         player._shutdown_event.clear()
+        player.video_widget.makeCurrent = MagicMock()
+        player.video_widget.cleanup = MagicMock()
+        player.video_widget.doneCurrent = MagicMock()
         player.shutdown()
         player.shutdown()  # Should not raise
 
     def test_is_playing_returns_false_after_shutdown(self, player):
         player._shutdown_event.clear()
+        player.video_widget.makeCurrent = MagicMock()
+        player.video_widget.cleanup = MagicMock()
+        player.video_widget.doneCurrent = MagicMock()
         player.shutdown()
         assert player.is_playing is False
 
