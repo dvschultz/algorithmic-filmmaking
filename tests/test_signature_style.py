@@ -15,6 +15,7 @@ import pytest
 
 from core.remix.drawing_segment import DrawingSegment
 from core.remix.signature_style import (
+    _compute_pacing_from_changes,
     _hue_distance,
     _merge_samples,
     _colors_similar,
@@ -248,7 +249,7 @@ class TestParametricSampling:
 
     @qt_required
     def test_horizontal_red_line(self):
-        """Horizontal red line at mid-height -> ~0.5 pacing, red color."""
+        """Horizontal red line at mid-height -> ~0.0 pacing (flat = no change)."""
         img = QImage(200, 100, QImage.Format_ARGB32_Premultiplied)
         img.fill(QColor(Qt.white))
         painter = QPainter(img)
@@ -260,21 +261,20 @@ class TestParametricSampling:
 
         assert len(segments) > 0
 
-        # All segments should be roughly red and ~0.5 pacing
         for seg in segments:
             assert seg.target_color is not None, "Red line should produce color segments"
             assert seg.is_bw is False
             # Red channel should dominate
             r, g, b = seg.target_color
             assert r > g and r > b, f"Expected red-dominant color, got ({r},{g},{b})"
-            # Pacing at middle height: approximately 0.5
-            assert 0.3 <= seg.target_pacing <= 0.7, (
-                f"Expected ~0.5 pacing for mid-height line, got {seg.target_pacing}"
+            # Flat horizontal line → zero derivative → pacing ~0.0
+            assert seg.target_pacing == pytest.approx(0.0, abs=0.05), (
+                f"Expected ~0.0 pacing for flat line, got {seg.target_pacing}"
             )
 
     @qt_required
     def test_diagonal_line(self):
-        """Diagonal line from top-left to bottom-right -> varying pacing."""
+        """Diagonal line (constant slope) -> uniform pacing across all segments."""
         img = QImage(200, 100, QImage.Format_ARGB32_Premultiplied)
         img.fill(QColor(Qt.white))
         painter = QPainter(img)
@@ -290,30 +290,30 @@ class TestParametricSampling:
         for seg in segments:
             assert seg.is_bw is True
 
-        # If there are multiple segments, first should have higher pacing
-        # (top of image = high pacing) and last should have lower pacing
-        if len(segments) >= 2:
-            assert segments[0].target_pacing > segments[-1].target_pacing, (
-                f"First segment pacing ({segments[0].target_pacing}) should be higher "
-                f"than last ({segments[-1].target_pacing}) for top-left to bottom-right diagonal"
+        # Constant slope → constant derivative → all segments get similar pacing
+        pacings = [seg.target_pacing for seg in segments]
+        avg = sum(pacings) / len(pacings)
+        for p in pacings:
+            assert abs(p - avg) < 0.2, (
+                f"Diagonal line should produce uniform pacing, got {pacings}"
             )
 
     @qt_required
     def test_blank_white_canvas(self):
-        """Blank white canvas -> all segments default to 0.5 pacing, B&W."""
+        """Blank white canvas -> all segments default to 0.0 pacing (no change), B&W."""
         img = QImage(200, 100, QImage.Format_ARGB32_Premultiplied)
         img.fill(QColor(Qt.white))
 
         segments = sample_drawing_parametric(img, total_duration_seconds=10.0, sample_count=4)
 
-        # Blank canvas still produces segments (with default 0.5 pacing)
-        # but they may all merge into one since they're identical
+        # Blank canvas still produces segments but with zero pacing
+        # (all columns default to 0.5 Y → no change → pacing 0.0)
         assert len(segments) >= 1
 
         for seg in segments:
             assert seg.is_bw is True
             assert seg.target_color is None
-            assert seg.target_pacing == pytest.approx(0.5, abs=0.01)
+            assert seg.target_pacing == pytest.approx(0.0, abs=0.01)
 
     @qt_required
     def test_black_drawing(self):
@@ -396,6 +396,104 @@ class TestParametricSampling:
         img = QImage(0, 0, QImage.Format_ARGB32_Premultiplied)
         segments = sample_drawing_parametric(img, total_duration_seconds=10.0)
         assert segments == []
+
+    @qt_required
+    def test_zigzag_high_pacing(self):
+        """Sharp zigzag drawing -> high derivatives -> pacing near 1.0."""
+        img = QImage(200, 100, QImage.Format_ARGB32_Premultiplied)
+        img.fill(QColor(Qt.white))
+        painter = QPainter(img)
+        painter.setPen(QPen(QColor(0, 0, 0), 3))
+        # Draw a sharp zigzag: top-bottom-top-bottom across the canvas
+        points = []
+        for i in range(20):
+            x = int(i * 10)
+            y = 10 if i % 2 == 0 else 90
+            points.append(QPoint(x, y))
+        for i in range(len(points) - 1):
+            painter.drawLine(points[i], points[i + 1])
+        painter.end()
+
+        segments = sample_drawing_parametric(img, total_duration_seconds=10.0, sample_count=16)
+
+        assert len(segments) > 0
+        # All segments should have high pacing due to sharp zigzag
+        for seg in segments:
+            assert seg.target_pacing > 0.5, (
+                f"Zigzag should produce high pacing, got {seg.target_pacing}"
+            )
+
+    @qt_required
+    def test_spike_vs_flat(self):
+        """Flat left half + spike right half -> left pacing < right pacing."""
+        img = QImage(200, 100, QImage.Format_ARGB32_Premultiplied)
+        img.fill(QColor(Qt.white))
+        painter = QPainter(img)
+        painter.setPen(QPen(QColor(0, 0, 0), 3))
+        # Left half: flat horizontal line at y=50
+        painter.drawLine(QPoint(0, 50), QPoint(99, 50))
+        # Right half: sharp spike — down to 90, up to 10, down to 90
+        painter.drawLine(QPoint(100, 50), QPoint(130, 90))
+        painter.drawLine(QPoint(130, 90), QPoint(150, 10))
+        painter.drawLine(QPoint(150, 10), QPoint(170, 90))
+        painter.drawLine(QPoint(170, 90), QPoint(199, 50))
+        painter.end()
+
+        segments = sample_drawing_parametric(img, total_duration_seconds=10.0, sample_count=8)
+
+        assert len(segments) >= 2
+
+        # First half (x < 100) vs second half (x >= 100)
+        left_pacings = [s.target_pacing for s in segments if s.x_end <= 100]
+        right_pacings = [s.target_pacing for s in segments if s.x_start >= 100]
+
+        assert left_pacings, "Should have left-half segments"
+        assert right_pacings, "Should have right-half segments"
+
+        avg_left = sum(left_pacings) / len(left_pacings)
+        avg_right = sum(right_pacings) / len(right_pacings)
+        assert avg_left < avg_right, (
+            f"Flat half pacing ({avg_left:.3f}) should be lower than "
+            f"spiky half pacing ({avg_right:.3f})"
+        )
+
+
+# ──────────────────────────────────────────────────────────────
+# 2.5 Derivative pacing (_compute_pacing_from_changes)
+# ──────────────────────────────────────────────────────────────
+
+
+class TestComputePacingFromChanges:
+    """Unit tests for the derivative-based pacing function."""
+
+    def test_empty_input(self):
+        assert _compute_pacing_from_changes([]) == []
+
+    def test_single_value(self):
+        assert _compute_pacing_from_changes([0.5]) == [0.0]
+
+    def test_flat_values(self):
+        """All same Y → no change → all zeros."""
+        result = _compute_pacing_from_changes([0.3, 0.3, 0.3, 0.3])
+        assert all(v == pytest.approx(0.0) for v in result)
+
+    def test_all_none(self):
+        """All None → default 0.5 → no change → all zeros."""
+        result = _compute_pacing_from_changes([None, None, None])
+        assert all(v == pytest.approx(0.0) for v in result)
+
+    def test_max_spike_normalized_to_one(self):
+        """The biggest change in the sequence should normalize to 1.0."""
+        result = _compute_pacing_from_changes([0.0, 1.0, 0.0])
+        assert max(result) == pytest.approx(1.0)
+
+    def test_constant_slope_uniform(self):
+        """Linearly increasing Y → constant derivative → uniform pacing."""
+        result = _compute_pacing_from_changes([0.0, 0.25, 0.5, 0.75, 1.0])
+        # All values should be similar (constant slope)
+        avg = sum(result) / len(result)
+        for v in result:
+            assert abs(v - avg) < 0.3, f"Expected uniform pacing, got {result}"
 
 
 # ──────────────────────────────────────────────────────────────

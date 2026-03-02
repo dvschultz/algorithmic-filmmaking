@@ -68,9 +68,9 @@ def sample_drawing_parametric(
 ) -> list[DrawingSegment]:
     """Sample a drawing image left-to-right to produce DrawingSegments.
 
-    For each sample column:
-    - Y-axis: highest non-background pixel maps to pacing (top=fast, bottom=slow)
-    - Color: average color in the region; low saturation → B&W
+    Pacing is derived from the derivative (rate of change) of the drawn
+    line's Y position — spiky/jagged marks produce fast cuts, smooth/flat
+    marks produce slow pacing.  Color is read directly from the ink.
 
     Args:
         image: QImage of the drawing canvas (white background)
@@ -92,20 +92,31 @@ def sample_drawing_parametric(
         return []
 
     step = width / sample_count
-    raw_samples: list[dict] = []
+
+    # First pass: collect raw Y positions and color data per column
+    y_positions: list[Optional[float]] = []
+    color_data: list[tuple[Optional[tuple[int, int, int]], bool]] = []
 
     for i in range(sample_count):
         x_center = int(i * step + step / 2)
+        y_norm, color, is_bw = _sample_column(image, x_center, height)
+        y_positions.append(y_norm)
+        color_data.append((color, is_bw))
+
+    # Second pass: derive pacing from Y-position changes
+    pacing_values = _compute_pacing_from_changes(y_positions)
+
+    # Build raw samples by zipping pacing with color data
+    raw_samples: list[dict] = []
+    for i in range(sample_count):
         x_start = int(i * step)
         x_end = int((i + 1) * step)
-
-        # Sample a column: find highest non-white pixel, average color
-        pacing, color, is_bw = _sample_column(image, x_center, height)
+        color, is_bw = color_data[i]
 
         raw_samples.append({
             "x_start": x_start,
             "x_end": min(x_end, width),
-            "pacing": pacing,
+            "pacing": pacing_values[i],
             "color": color,
             "is_bw": is_bw,
         })
@@ -124,8 +135,12 @@ def _sample_column(
     x: int,
     height: int,
     sample_radius: int = 3,
-) -> tuple[float, Optional[tuple[int, int, int]], bool]:
+) -> tuple[Optional[float], Optional[tuple[int, int, int]], bool]:
     """Sample a single column of the drawing.
+
+    Returns the raw normalized Y position of the highest non-white pixel
+    (0.0 = top, 1.0 = bottom) plus color information.  Pacing is derived
+    in a separate pass by ``_compute_pacing_from_changes``.
 
     Args:
         image: QImage to sample
@@ -134,7 +149,7 @@ def _sample_column(
         sample_radius: Radius for color averaging
 
     Returns:
-        (pacing, color_rgb_or_None, is_bw)
+        (y_normalized_or_None, color_rgb_or_None, is_bw)
     """
     # Find highest non-white pixel (scan top to bottom)
     highest_y = None
@@ -146,11 +161,11 @@ def _sample_column(
             break
 
     if highest_y is None:
-        # Blank column — default to mid pacing, no color
-        return 0.5, None, True
+        # Blank column — no ink
+        return None, None, True
 
-    # Pacing: top = 1.0 (fast), bottom = 0.0 (slow)
-    pacing = 1.0 - (highest_y / max(height - 1, 1))
+    # Normalized Y: 0.0 (top) to 1.0 (bottom)
+    y_normalized = highest_y / max(height - 1, 1)
 
     # Color: average in a small region around the highest pixel
     r_sum, g_sum, b_sum, count = 0, 0, 0, 0
@@ -167,7 +182,7 @@ def _sample_column(
                     count += 1
 
     if count == 0:
-        return pacing, None, True
+        return y_normalized, None, True
 
     avg_r = r_sum // count
     avg_g = g_sum // count
@@ -180,7 +195,58 @@ def _sample_column(
 
     color = None if is_bw else (avg_r, avg_g, avg_b)
 
-    return pacing, color, is_bw
+    return y_normalized, color, is_bw
+
+
+def _compute_pacing_from_changes(
+    y_values: list[Optional[float]],
+) -> list[float]:
+    """Derive pacing from the rate of change of Y positions.
+
+    Spiky/jagged drawings (high derivatives) → high pacing (fast cuts).
+    Smooth/flat drawings (low derivatives) → low pacing (slow holds).
+
+    Steps:
+    1. Replace None (blank columns) with 0.5 (mid-height default).
+    2. Compute per-column absolute Y change.
+    3. Smooth with a 3-column moving average.
+    4. Normalize by max observed change (self-normalizing).
+
+    Returns:
+        List of pacing values in [0.0, 1.0], one per input column.
+    """
+    if not y_values:
+        return []
+
+    # Step 1: fill blanks with mid-height
+    filled = [y if y is not None else 0.5 for y in y_values]
+
+    n = len(filled)
+    if n == 1:
+        return [0.0]
+
+    # Step 2: absolute per-column change
+    changes = [0.0] * n
+    for i in range(1, n):
+        changes[i] = abs(filled[i] - filled[i - 1])
+    # Edge column copies from its neighbor
+    changes[0] = changes[1] if n > 1 else 0.0
+
+    # Step 3: smooth with 3-column moving average
+    smoothed = [0.0] * n
+    for i in range(n):
+        lo = max(0, i - 1)
+        hi = min(n - 1, i + 1)
+        window = changes[lo : hi + 1]
+        smoothed[i] = sum(window) / len(window)
+
+    # Step 4: normalize by max change
+    max_change = max(smoothed)
+    if max_change < 1e-9:
+        # Flat or blank drawing — uniform slow pacing
+        return [0.0] * n
+
+    return [v / max_change for v in smoothed]
 
 
 def _merge_samples(raw_samples: list[dict]) -> list[dict]:

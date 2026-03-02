@@ -329,7 +329,7 @@ class SignatureStyleDialog(QDialog):
         # ── Y-axis hint ──
         canvas_container = QHBoxLayout()
 
-        y_label = QLabel("Fast cuts\n\u2191\n\n\n\u2193\nSlow holds")
+        y_label = QLabel("Spiky = fast\nSmooth = slow")
         y_label.setAlignment(Qt.AlignCenter)
         y_label.setFixedWidth(60)
         canvas_container.addWidget(y_label)
