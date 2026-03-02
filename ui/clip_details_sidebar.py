@@ -91,6 +91,7 @@ class ClipDetailsSidebar(QDockWidget):
 
         # Video preview section - square aspect for both horizontal and vertical video
         self.video_player = VideoPlayer()
+        self.video_player.set_loop(False)
         # Make video area square (works well for both landscape and portrait video)
         self.video_player.video_widget.setMinimumSize(350, 350)
         self.video_player.video_widget.setMaximumSize(500, 500)

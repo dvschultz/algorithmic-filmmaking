@@ -235,6 +235,7 @@ class VideoPlayer(QWidget):
         # Range playback (clip mode)
         self._clip_start_ms: Optional[int] = None
         self._clip_end_ms: Optional[int] = None
+        self._loop_clip = True  # Whether clip-range playback loops
 
         # Internal state
         self._duration_s: float = 0.0
@@ -414,6 +415,14 @@ class VideoPlayer(QWidget):
         for btn in (self.set_a_btn, self.set_b_btn, self.clear_ab_btn):
             btn.setStyleSheet(ab_btn_style)
 
+    def set_loop(self, loop: bool):
+        """Set whether clip-range playback should loop.
+
+        When False, playback pauses at the end of the clip range instead
+        of looping back to the start.  Default is True.
+        """
+        self._loop_clip = loop
+
     def show_ab_loop_controls(self, visible: bool = True):
         """Show or hide the A/B loop controls row.
 
@@ -534,7 +543,9 @@ class VideoPlayer(QWidget):
     def set_clip_range(self, start_seconds: float, end_seconds: float):
         """Set playback range to a specific clip.
 
-        Uses MPV's ab-loop properties for frame-accurate looping.
+        Uses MPV's ab-loop properties for frame-accurate looping when
+        ``_loop_clip`` is True.  When looping is disabled, the ab-loop
+        is not set and playback pauses at the clip end via ``_on_eof``.
         """
         if not self._player_ready:
             return
@@ -543,9 +554,13 @@ class VideoPlayer(QWidget):
         clip_duration = self._clip_end_ms - self._clip_start_ms
         self.position_slider.setRange(0, clip_duration)
 
-        # Set MPV A/B loop for frame-accurate boundaries
-        self._mpv.ab_loop_a = start_seconds
-        self._mpv.ab_loop_b = end_seconds
+        if self._loop_clip:
+            # Set MPV A/B loop for frame-accurate boundaries
+            self._mpv.ab_loop_a = start_seconds
+            self._mpv.ab_loop_b = end_seconds
+        else:
+            self._mpv.ab_loop_a = 'no'
+            self._mpv.ab_loop_b = 'no'
 
         # Seek to clip start
         self._safe_mpv_command(self._mpv.seek, start_seconds, 'absolute', 'exact')
@@ -845,9 +860,9 @@ class VideoPlayer(QWidget):
     @Slot()
     def _on_eof(self):
         """Handle end-of-file reached."""
-        # In clip mode, ab-loop handles looping automatically.
-        # In full video mode, just pause at the end.
-        if self._clip_start_ms is None:
+        # In clip mode with looping, ab-loop handles restart automatically.
+        # Otherwise pause at the end.
+        if self._clip_start_ms is None or not self._loop_clip:
             self._mpv.pause = True
 
     def _update_time_label(self, absolute_position_ms: int):
