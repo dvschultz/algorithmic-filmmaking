@@ -74,13 +74,24 @@ class ProjectMetadata:
         )
 
 
-def _copy_prerendered_clips(sequence: Sequence, base_path: Path) -> None:
-    """Copy pre-rendered clip files into the project's transformed_clips/ folder.
+def _prepare_prerendered_clips(
+    sequence: Sequence, base_path: Path
+) -> dict[str, str]:
+    """Copy/link pre-rendered clip files into the project's transformed_clips/ folder.
 
-    Updates each SequenceClip.prerendered_path in-place to point to the
-    copied file so that to_dict() serializes the project-local path.
+    Returns a mapping of original absolute paths to project-local absolute paths.
+    Does **not** mutate any SequenceClip objects — the caller applies the mapping
+    only during serialization so in-memory state is never changed by save.
+
+    Hard links are preferred (near-instant, no extra disk space).  Falls back to
+    shutil.copy2 when a hard link fails (e.g. cross-device).
+
+    If a destination filename already exists with different content, a numeric
+    suffix is appended to avoid silent overwrites (e.g. ``name_2.mp4``).
     """
     dest_dir = base_path / "transformed_clips"
+    mapping: dict[str, str] = {}  # original_path -> project_local_path
+
     for clip in sequence.get_all_clips():
         if not clip.prerendered_path:
             continue
@@ -88,12 +99,54 @@ def _copy_prerendered_clips(sequence: Sequence, base_path: Path) -> None:
         if not src.exists():
             continue
         dest = dest_dir / src.name
+
         # Already inside the project folder — nothing to copy
         if dest == src.resolve():
+            mapping[clip.prerendered_path] = str(dest)
             continue
+
+        # Handle filename collisions: if dest exists with different content,
+        # pick a unique name by appending a numeric suffix.
+        dest = _unique_dest(src, dest)
+
         dest_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dest)
-        clip.prerendered_path = str(dest)
+
+        # Skip if dest already has the right content (previous save / hard link)
+        if not dest.exists():
+            try:
+                os.link(src, dest)
+            except OSError:
+                shutil.copy2(src, dest)
+
+        mapping[clip.prerendered_path] = str(dest)
+
+    return mapping
+
+
+def _unique_dest(src: Path, dest: Path) -> Path:
+    """Return *dest* if it doesn't exist or has the same content as *src*.
+
+    Otherwise append ``_2``, ``_3``, ... before the extension until a
+    non-colliding name is found.
+    """
+    if not dest.exists():
+        return dest
+
+    # Same size is a strong-enough proxy — these are FFmpeg outputs keyed by
+    # clip_id + transform flags so true collisions with identical size are
+    # virtually impossible.
+    if dest.stat().st_size == src.stat().st_size:
+        return dest
+
+    stem = dest.stem
+    suffix = dest.suffix
+    parent = dest.parent
+    counter = 2
+    while True:
+        candidate = parent / f"{stem}_{counter}{suffix}"
+        if not candidate.exists() or candidate.stat().st_size == src.stat().st_size:
+            return candidate
+        counter += 1
 
 
 def save_project(
@@ -151,19 +204,33 @@ def save_project(
 
     project_data["clips"] = [clip.to_dict() for clip in clips]
 
-    # Copy pre-rendered clips into project folder
+    # Copy/link pre-rendered clips into project folder
     if progress_callback:
         progress_callback(0.5, "Copying pre-rendered clips...")
 
+    prerender_map: dict[str, str] = {}
     if sequence:
-        _copy_prerendered_clips(sequence, base_path)
+        prerender_map = _prepare_prerendered_clips(sequence, base_path)
 
-    # Serialize sequence
+    # Serialize sequence — temporarily swap prerendered paths to project-local
+    # copies so that to_dict() writes the correct relative paths, then restore
+    # the originals so in-memory state is never permanently changed by save.
     if progress_callback:
         progress_callback(0.6, "Serializing sequence...")
 
     if sequence:
-        project_data["sequence"] = sequence.to_dict(base_path=base_path)
+        originals: list[tuple["SequenceClip", Optional[str]]] = []  # noqa: F821
+        if prerender_map:
+            for clip in sequence.get_all_clips():
+                if clip.prerendered_path in prerender_map:
+                    originals.append((clip, clip.prerendered_path))
+                    clip.prerendered_path = prerender_map[clip.prerendered_path]
+        try:
+            project_data["sequence"] = sequence.to_dict(base_path=base_path)
+        finally:
+            # Restore original in-memory paths
+            for clip, original_path in originals:
+                clip.prerendered_path = original_path
     else:
         project_data["sequence"] = None
 

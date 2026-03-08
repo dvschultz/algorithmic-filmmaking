@@ -130,7 +130,6 @@ class SequenceExporter:
                         success = self._export_prerendered_segment(
                             prerendered_path=Path(prerendered),
                             output_path=segment_path,
-                            fps=config.fps,
                             config=config,
                             bar_color=bar_color,
                         )
@@ -234,7 +233,6 @@ class SequenceExporter:
         self,
         prerendered_path: Path,
         output_path: Path,
-        fps: float,
         config: ExportConfig,
         bar_color: Optional[tuple[int, int, int]] = None,
     ) -> bool:
@@ -253,19 +251,21 @@ class SequenceExporter:
             self.ffmpeg_path,
             "-y",
             "-i", str(prerendered_path),
-            "-c:v", config.video_codec,
-            "-preset", config.preset,
-            "-crf", str(config.crf),
         ]
 
         if vf_parts:
-            cmd.extend(["-vf", ",".join(vf_parts)])
+            cmd.extend([
+                "-c:v", config.video_codec,
+                "-preset", config.preset,
+                "-crf", str(config.crf),
+                "-vf", ",".join(vf_parts),
+                "-c:a", config.audio_codec,
+                "-b:a", config.audio_bitrate,
+            ])
+        else:
+            cmd.extend(["-c:v", "copy", "-c:a", "copy"])
 
-        cmd.extend([
-            "-c:a", config.audio_codec,
-            "-b:a", config.audio_bitrate,
-            str(output_path),
-        ])
+        cmd.append(str(output_path))
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300,
                                 **get_subprocess_kwargs())

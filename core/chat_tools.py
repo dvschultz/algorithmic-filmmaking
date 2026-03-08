@@ -887,9 +887,10 @@ def reorder_sequence(project, clip_ids: list[str]) -> dict:
 
 
 @tools.register(
-    description="Update a sequence clip's trim points or position on the timeline. "
+    description="Update a sequence clip's trim points, position, or transform flags on the timeline. "
                 "Use this to trim clips (in_point/out_point), reposition them (start_frame), "
-                "change their track (track_index), or set hold duration for frame entries (hold_frames).",
+                "change their track (track_index), set hold duration for frame entries (hold_frames), "
+                "or toggle transforms (hflip, vflip, reverse).",
     requires_project=True,
     modifies_gui_state=True,
     modifies_project_state=True
@@ -902,8 +903,11 @@ def update_sequence_clip(
     start_frame: Optional[int] = None,
     track_index: Optional[int] = None,
     hold_frames: Optional[int] = None,
+    hflip: Optional[bool] = None,
+    vflip: Optional[bool] = None,
+    reverse: Optional[bool] = None,
 ) -> dict:
-    """Update a sequence clip's trim points or position.
+    """Update a sequence clip's trim points, position, or transform flags.
 
     Args:
         clip_id: ID of the sequence clip to update
@@ -912,6 +916,16 @@ def update_sequence_clip(
         start_frame: New position on timeline (in frames)
         track_index: Move to a different track
         hold_frames: For frame entries, number of timeline frames to hold
+        hflip: Horizontal flip transform
+        vflip: Vertical flip transform
+        reverse: Reverse playback transform
+
+    Note:
+        Setting hflip/vflip/reverse only updates the boolean flags on the
+        SequenceClip. The pre-rendered clip (prerendered_path) is NOT
+        regenerated here — that requires a background worker. After changing
+        transform flags, the prerendered_path is cleared so the render
+        pipeline knows it must be regenerated before export.
 
     Returns:
         Dict with success status and updated clip info
@@ -970,6 +984,28 @@ def update_sequence_clip(
             return {"success": False, "error": f"hold_frames must be >= 1, got {hold_frames}"}
         target_clip.hold_frames = hold_frames
         updated_fields["hold_frames"] = hold_frames
+
+    if hflip is not None:
+        if not isinstance(hflip, bool):
+            return {"success": False, "error": f"hflip must be a boolean, got {type(hflip).__name__}"}
+        target_clip.hflip = hflip
+        # Invalidate pre-rendered clip since transforms changed
+        target_clip.prerendered_path = None
+        updated_fields["hflip"] = hflip
+
+    if vflip is not None:
+        if not isinstance(vflip, bool):
+            return {"success": False, "error": f"vflip must be a boolean, got {type(vflip).__name__}"}
+        target_clip.vflip = vflip
+        target_clip.prerendered_path = None
+        updated_fields["vflip"] = vflip
+
+    if reverse is not None:
+        if not isinstance(reverse, bool):
+            return {"success": False, "error": f"reverse must be a boolean, got {type(reverse).__name__}"}
+        target_clip.reverse = reverse
+        target_clip.prerendered_path = None
+        updated_fields["reverse"] = reverse
 
     if not updated_fields:
         return {"success": False, "error": "No fields provided to update"}
@@ -1147,6 +1183,10 @@ def get_sequence_state(project) -> dict:
                 "duration_seconds": round(seq_clip.duration_seconds(fps), 2),
                 "in_point": seq_clip.in_point,
                 "out_point": seq_clip.out_point,
+                "hflip": seq_clip.hflip,
+                "vflip": seq_clip.vflip,
+                "reverse": seq_clip.reverse,
+                "prerendered_path": seq_clip.prerendered_path,
             }
 
             # Include source clip metadata for sorting/filtering

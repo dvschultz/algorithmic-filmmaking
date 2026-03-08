@@ -301,7 +301,6 @@ class TestExportPrerenderedPath:
             exporter._export_prerendered_segment(
                 prerendered_path=Path("/cache/clip.mp4"),
                 output_path=Path("/tmp/segment.mp4"),
-                fps=30.0,
                 config=config,
                 bar_color=None,
             )
@@ -323,7 +322,7 @@ class TestPrerenderedProjectPersistence:
 
     def test_save_copies_prerendered_to_project_folder(self, tmp_path):
         """Pre-rendered files from cache are copied into transformed_clips/."""
-        from core.project import _copy_prerendered_clips
+        from core.project import _prepare_prerendered_clips
 
         # Simulate a cache directory with a pre-rendered clip
         cache_dir = tmp_path / "cache"
@@ -343,14 +342,16 @@ class TestPrerenderedProjectPersistence:
             )
         )
 
-        _copy_prerendered_clips(seq, project_dir)
+        mapping = _prepare_prerendered_clips(seq, project_dir)
 
-        # File should be copied
+        # File should be copied/linked
         dest = project_dir / "transformed_clips" / "c1_1_0_0.mp4"
         assert dest.exists()
         assert dest.read_text() == "fake video"
-        # In-memory path should be updated to the project-local copy
-        assert seq.tracks[0].clips[0].prerendered_path == str(dest)
+        # Mapping should contain the original -> project-local entry
+        assert mapping[str(cached_file)] == str(dest)
+        # In-memory path must NOT be mutated (Issue 091)
+        assert seq.tracks[0].clips[0].prerendered_path == str(cached_file)
 
     def test_to_dict_stores_relative_path(self, tmp_path):
         """to_dict with base_path makes prerendered_path relative."""
@@ -437,7 +438,7 @@ class TestPrerenderedProjectPersistence:
         clip_file = tc_dir / "c1_1_0_0.mp4"
         clip_file.write_text("original content")
 
-        from core.project import _copy_prerendered_clips
+        from core.project import _prepare_prerendered_clips
 
         seq = Sequence(algorithm="shuffle")
         seq.tracks[0].clips.append(
@@ -448,6 +449,73 @@ class TestPrerenderedProjectPersistence:
             )
         )
 
-        _copy_prerendered_clips(seq, project_dir)
+        mapping = _prepare_prerendered_clips(seq, project_dir)
         # Content unchanged (not overwritten)
         assert clip_file.read_text() == "original content"
+        # Mapping still returned for the already-in-project file
+        assert str(clip_file) in mapping or str(clip_file.resolve()) in mapping
+
+    def test_filename_collision_uses_numeric_suffix(self, tmp_path):
+        """When dest exists with different content, a numeric suffix is added."""
+        from core.project import _prepare_prerendered_clips
+
+        # Create a cache file
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        cached_file = cache_dir / "c1_1_0_0.mp4"
+        cached_file.write_text("new content")
+
+        # Create a project dir with existing file of DIFFERENT content
+        project_dir = tmp_path / "project"
+        tc_dir = project_dir / "transformed_clips"
+        tc_dir.mkdir(parents=True)
+        existing = tc_dir / "c1_1_0_0.mp4"
+        existing.write_text("old different content")
+
+        seq = Sequence(algorithm="shuffle")
+        seq.tracks[0].clips.append(
+            SequenceClip(
+                id="c1", in_point=0, out_point=90,
+                hflip=True,
+                prerendered_path=str(cached_file),
+            )
+        )
+
+        mapping = _prepare_prerendered_clips(seq, project_dir)
+
+        # Original file should be untouched
+        assert existing.read_text() == "old different content"
+        # New file should be at a suffixed path
+        dest_path = Path(mapping[str(cached_file)])
+        assert dest_path.name == "c1_1_0_0_2.mp4"
+        assert dest_path.exists()
+
+    def test_hard_link_fallback_to_copy(self, tmp_path):
+        """When os.link fails (e.g. cross-device), falls back to shutil.copy2."""
+        from core.project import _prepare_prerendered_clips
+        from unittest.mock import patch as mock_patch
+
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        cached_file = cache_dir / "c1_1_0_0.mp4"
+        cached_file.write_text("fake video")
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+
+        seq = Sequence(algorithm="shuffle")
+        seq.tracks[0].clips.append(
+            SequenceClip(
+                id="c1", in_point=0, out_point=90,
+                hflip=True,
+                prerendered_path=str(cached_file),
+            )
+        )
+
+        with mock_patch("core.project.os.link", side_effect=OSError("cross-device")):
+            mapping = _prepare_prerendered_clips(seq, project_dir)
+
+        dest = project_dir / "transformed_clips" / "c1_1_0_0.mp4"
+        assert dest.exists()
+        assert dest.read_text() == "fake video"
+        assert mapping[str(cached_file)] == str(dest)

@@ -511,7 +511,7 @@ class VideoPlayer(QWidget):
                 if end_data is not None and end_data.reason == 4:  # ERROR
                     logger.warning("MPV end-file with error — media failed to load")
                     QMetaObject.invokeMethod(self, "_on_load_failed", Qt.QueuedConnection)
-            except (ValueError, AttributeError):
+            except Exception:
                 pass  # Struct access can fail during shutdown
         self._end_file_cb = on_end_file  # prevent GC
 

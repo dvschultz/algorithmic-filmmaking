@@ -5,9 +5,11 @@ and export just work without runtime filter juggling.
 """
 
 import logging
+import os
 import subprocess
+import concurrent.futures
 from pathlib import Path
-from threading import Event
+from threading import Event, Lock
 from typing import Callable, Optional
 
 from core.binary_resolver import find_binary, get_subprocess_kwargs
@@ -17,6 +19,13 @@ logger = logging.getLogger(__name__)
 # Maximum clip duration (seconds) for the reverse filter.
 # reverse buffers the entire clip in RAM (~900 MB for 5s of 1080p30).
 _REVERSE_MAX_DURATION = 15.0
+
+
+def get_transform_cache_dir() -> Path:
+    """Get the directory for cached pre-rendered clips."""
+    from core.settings import load_settings
+    settings = load_settings()
+    return settings.thumbnail_cache_dir.parent / "transformed_clips"
 
 
 def prerender_clip(
@@ -54,8 +63,8 @@ def prerender_clip(
     r = "1" if reverse else "0"
     output_path = output_dir / f"{clip_id}_{h}_{v}_{r}.mp4"
 
-    # Idempotent: skip if file already exists
-    if output_path.exists():
+    # Idempotent: skip if file already exists and is non-empty
+    if output_path.exists() and output_path.stat().st_size > 0:
         return output_path
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -134,6 +143,36 @@ def prerender_clip(
         return None
 
 
+def _process_single_clip(
+    clip,
+    source,
+    transforms: dict,
+    output_dir: Path,
+) -> Optional[Path]:
+    """Process a single clip for use in the thread pool.
+
+    Returns the pre-rendered path or None if no transforms needed.
+    """
+    hflip = transforms.get("hflip", False)
+    vflip = transforms.get("vflip", False)
+    reverse = transforms.get("reverse", False)
+
+    if not (hflip or vflip or reverse):
+        return None
+
+    return prerender_clip(
+        source_path=source.file_path,
+        start_frame=clip.start_frame,
+        end_frame=clip.end_frame,
+        fps=source.fps,
+        hflip=hflip,
+        vflip=vflip,
+        reverse=reverse,
+        output_dir=output_dir,
+        clip_id=clip.id,
+    )
+
+
 def prerender_batch(
     clips_with_transforms: list,
     output_dir: Path,
@@ -141,6 +180,8 @@ def prerender_batch(
     cancel_event: Optional[Event] = None,
 ) -> list:
     """Pre-render a batch of clips with transforms.
+
+    Runs up to 4 FFmpeg processes concurrently via a ThreadPoolExecutor.
 
     Args:
         clips_with_transforms: List of (Clip, Source, transforms_dict) where
@@ -153,38 +194,68 @@ def prerender_batch(
         List of (Clip, Source, Optional[Path]) — the path is the pre-rendered
         file or None if no transforms were applied.
     """
-    results = []
     total = len(clips_with_transforms)
+    if total == 0:
+        return []
 
-    for i, (clip, source, transforms) in enumerate(clips_with_transforms):
-        if cancel_event and cancel_event.is_set():
-            break
+    # Report initial progress
+    if progress_cb:
+        progress_cb(0, total)
 
+    # Pre-check cancellation before submitting any work
+    if cancel_event and cancel_event.is_set():
+        return []
+
+    results: list = [None] * total
+    max_workers = min(4, os.cpu_count() or 2)
+    completed_count = 0
+    counter_lock = Lock()
+
+    def _on_done(idx: int, future: concurrent.futures.Future) -> None:
+        """Callback invoked when a future completes; updates progress."""
+        nonlocal completed_count
+        with counter_lock:
+            completed_count += 1
+            current = completed_count
         if progress_cb:
-            progress_cb(i, total)
+            progress_cb(current, total)
 
-        hflip = transforms.get("hflip", False)
-        vflip = transforms.get("vflip", False)
-        reverse = transforms.get("reverse", False)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures: dict[concurrent.futures.Future, int] = {}
 
-        if not (hflip or vflip or reverse):
-            results.append((clip, source, None))
-            continue
+        for i, (clip, source, transforms) in enumerate(clips_with_transforms):
+            if cancel_event and cancel_event.is_set():
+                break
 
-        prerendered = prerender_clip(
-            source_path=source.file_path,
-            start_frame=clip.start_frame,
-            end_frame=clip.end_frame,
-            fps=source.fps,
-            hflip=hflip,
-            vflip=vflip,
-            reverse=reverse,
-            output_dir=output_dir,
-            clip_id=clip.id,
-        )
-        results.append((clip, source, prerendered))
+            future = executor.submit(
+                _process_single_clip, clip, source, transforms, output_dir,
+            )
+            future.add_done_callback(lambda f, idx=i: _on_done(idx, f))
+            futures[future] = i
 
+        # Collect results as they complete, checking for cancellation
+        for future in concurrent.futures.as_completed(futures):
+            if cancel_event and cancel_event.is_set():
+                # Cancel remaining pending futures
+                for f in futures:
+                    f.cancel()
+                break
+
+            idx = futures[future]
+            clip, source, transforms = clips_with_transforms[idx]
+            try:
+                prerendered = future.result()
+            except Exception:
+                logger.error(
+                    "Unexpected error pre-rendering clip %s",
+                    clip.id, exc_info=True,
+                )
+                prerendered = None
+            results[idx] = (clip, source, prerendered)
+
+    # Report final progress
     if progress_cb:
         progress_cb(total, total)
 
-    return results
+    # Filter out None slots left by cancellation
+    return [r for r in results if r is not None]

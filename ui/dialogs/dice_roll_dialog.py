@@ -22,19 +22,12 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, Slot
 
 from core.remix import generate_sequence, assign_random_transforms
-from core.remix.prerender import prerender_batch
-from core.settings import load_settings
+from core.remix.prerender import prerender_batch, get_transform_cache_dir
 from models.sequence import SequenceClip
 from ui.theme import theme, Spacing, TypeScale
 from ui.workers.base import CancellableWorker
 
 logger = logging.getLogger(__name__)
-
-
-def _get_transform_cache_dir() -> Path:
-    """Get the directory for cached pre-rendered clips."""
-    settings = load_settings()
-    return settings.thumbnail_cache_dir.parent / "transformed_clips"
 
 
 class DiceRollWorker(CancellableWorker):
@@ -108,7 +101,7 @@ class DiceRollWorker(CancellableWorker):
                 for (clip, source), sc in zip(sorted_clips, temp_seq_clips)
             ]
 
-            output_dir = _get_transform_cache_dir()
+            output_dir = get_transform_cache_dir()
             rendered = prerender_batch(
                 clips_with_transforms=clips_with_transforms,
                 output_dir=output_dir,
@@ -323,6 +316,8 @@ class DiceRollDialog(QDialog):
     def _on_error(self, error_msg: str):
         logger.error("Dice Roll error: %s", error_msg)
         self._stack.setCurrentIndex(0)
+        from PySide6.QtWidgets import QMessageBox
+        QMessageBox.critical(self, "Hatchet Job Error", f"Pre-rendering failed:\n{error_msg}")
 
     @Slot()
     def _on_cancel(self):

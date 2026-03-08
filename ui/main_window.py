@@ -108,6 +108,26 @@ def _timeline_frame_to_source_seconds(seq_clip, timeline_frame: int, source_fps:
     return source_frame / source_fps
 
 
+def _resolve_playback_source(seq_clip, source, timeline_frame: int):
+    """Resolve the file and timing info for playing a sequence clip.
+
+    Returns (file_to_load, clip_start_seconds, clip_end_seconds, source_seconds).
+    """
+    prerendered = getattr(seq_clip, "prerendered_path", None)
+    if prerendered and Path(prerendered).exists():
+        file_to_load = Path(prerendered)
+        clip_start_seconds = 0.0
+        clip_end_seconds = (seq_clip.out_point - seq_clip.in_point) / source.fps
+        frame_in_clip = max(0, timeline_frame - seq_clip.start_frame)
+        source_seconds = frame_in_clip / source.fps
+    else:
+        file_to_load = source.file_path
+        source_seconds = _timeline_frame_to_source_seconds(seq_clip, timeline_frame, source.fps)
+        clip_start_seconds = seq_clip.in_point / source.fps
+        clip_end_seconds = seq_clip.out_point / source.fps
+    return file_to_load, clip_start_seconds, clip_end_seconds, source_seconds
+
+
 def _source_ms_to_timeline_seconds(
     seq_clip,
     position_ms: int,
@@ -4333,19 +4353,9 @@ class MainWindow(QMainWindow):
         sequence = self.sequence_tab.timeline.get_sequence()
         timeline_frame = int(time_seconds * sequence.fps)
 
-        # Use pre-rendered clip if available
-        prerendered = getattr(seq_clip, "prerendered_path", None)
-        if prerendered and Path(prerendered).exists():
-            file_to_load = Path(prerendered)
-            clip_start_seconds = 0
-            clip_end_seconds = (seq_clip.out_point - seq_clip.in_point) / source.fps
-            frame_in_clip = timeline_frame - seq_clip.start_frame
-            source_seconds = frame_in_clip / source.fps
-        else:
-            file_to_load = source.file_path
-            source_seconds = _timeline_frame_to_source_seconds(seq_clip, timeline_frame, source.fps)
-            clip_start_seconds = seq_clip.in_point / source.fps
-            clip_end_seconds = seq_clip.out_point / source.fps
+        file_to_load, clip_start_seconds, clip_end_seconds, source_seconds = (
+            _resolve_playback_source(seq_clip, source, timeline_frame)
+        )
 
         # Determine the source ID for tracking loaded sources
         preview_source_key = str(file_to_load)
@@ -4541,26 +4551,9 @@ class MainWindow(QMainWindow):
         self._preview_sync_clip = seq_clip
         self._update_sequence_chromatic_bar(seq_clip)
 
-        # Use pre-rendered clip if available
-        prerendered = getattr(seq_clip, "prerendered_path", None)
-        if prerendered and Path(prerendered).exists():
-            file_to_load = Path(prerendered)
-            clip_start_seconds = 0
-            clip_end_seconds = (seq_clip.out_point - seq_clip.in_point) / source.fps
-            frame_in_clip = frame - seq_clip.start_frame
-            source_seconds = frame_in_clip / source.fps
-        else:
-            file_to_load = source.file_path
-            # Calculate source position
-            # frame_in_clip = where we are relative to clip start on timeline
-            frame_in_clip = frame - seq_clip.start_frame
-            # source_frame = in_point + offset into clip
-            source_frame = seq_clip.in_point + frame_in_clip
-            source_seconds = source_frame / source.fps
-
-            # Calculate end of this clip in source time
-            clip_start_seconds = seq_clip.in_point / source.fps
-            clip_end_seconds = seq_clip.out_point / source.fps
+        file_to_load, clip_start_seconds, clip_end_seconds, source_seconds = (
+            _resolve_playback_source(seq_clip, source, frame)
+        )
 
         preview_source_key = str(file_to_load)
         end_seconds = clip_end_seconds

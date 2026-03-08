@@ -1561,11 +1561,23 @@ class SequenceTab(BaseTab):
                             "reverse": seq_clip.reverse,
                         }))
 
-                    from ui.dialogs.dice_roll_dialog import _get_transform_cache_dir
-                    output_dir = _get_transform_cache_dir()
+                    from core.remix.prerender import get_transform_cache_dir
+                    output_dir = get_transform_cache_dir()
+
+                    # Keep the UI responsive during pre-rendering.
+                    # This runs on the main thread (via gui_tool_requested),
+                    # but prerender_batch uses a ThreadPoolExecutor internally.
+                    # Process Qt events on progress updates so the UI doesn't freeze.
+                    from PySide6.QtWidgets import QApplication
+                    def _progress_keep_alive(current, total):
+                        app = QApplication.instance()
+                        if app:
+                            app.processEvents()
+
                     rendered = prerender_batch(
                         clips_with_transforms=clips_with_transforms,
                         output_dir=output_dir,
+                        progress_cb=_progress_keep_alive,
                     )
 
                     # Set prerendered_path on sequence clips
