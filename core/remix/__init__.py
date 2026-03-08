@@ -19,6 +19,7 @@ from core.remix.audio_sync import (
 __all__ = [
     "constrained_shuffle",
     "generate_sequence",
+    "assign_random_transforms",
     # Audio sync
     "AlignmentSuggestion",
     "suggest_beat_aligned_cuts",
@@ -113,20 +114,16 @@ def generate_sequence(
     clips_to_use = clips[:clip_count]
 
     if algorithm == "shuffle":
-        # Set random seed if provided and non-zero
-        if seed and seed > 0:
-            random.seed(seed)
+        # Use local Random instance for deterministic shuffling
+        rng = random.Random(seed) if seed and seed > 0 else random.Random()
 
         # Constrained shuffle - no same source back-to-back
         result = constrained_shuffle(
             items=clips_to_use,
             get_category=lambda x: x[1].id,  # x is (Clip, Source), category by source
             max_consecutive=1,
+            rng=rng,
         )
-
-        # Reset random state
-        if seed and seed > 0:
-            random.seed()
 
         return result
 
@@ -325,6 +322,28 @@ def generate_sequence(
     else:
         # Sequential - use original order
         return clips_to_use
+
+
+def assign_random_transforms(
+    sequence_clips: list,
+    transform_options: dict[str, bool],
+    seed: Optional[int] = None,
+) -> None:
+    """Assign random transforms to SequenceClip objects in-place.
+
+    Each enabled transform has a 50% chance of being applied per clip.
+
+    Args:
+        sequence_clips: List of SequenceClip objects to modify
+        transform_options: Dict of transform flags, e.g. {"hflip": True, "vflip": False, "reverse": True}
+        seed: Optional random seed for deterministic assignment
+    """
+    rng = random.Random(seed) if seed is not None else random.Random()
+
+    for seq_clip in sequence_clips:
+        seq_clip.hflip = bool(transform_options.get("hflip")) and rng.random() < 0.5
+        seq_clip.vflip = bool(transform_options.get("vflip")) and rng.random() < 0.5
+        seq_clip.reverse = bool(transform_options.get("reverse")) and rng.random() < 0.5
 
 
 def _auto_compute_brightness(clips: List[Tuple[Any, Any]]) -> None:

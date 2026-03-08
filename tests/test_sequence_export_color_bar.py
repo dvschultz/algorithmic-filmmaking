@@ -45,7 +45,7 @@ def test_export_resolves_clip_color_and_falls_back_to_black(monkeypatch, tmp_pat
     exporter = SequenceExporter(ffmpeg_path="ffmpeg")
     bar_colors = []
 
-    def fake_export_segment(*, source_path, output_path, start_frame, end_frame, fps, config, bar_color=None):
+    def fake_export_segment(*, source_path, output_path, start_frame, end_frame, fps, config, bar_color=None, seq_clip=None):
         bar_colors.append(bar_color)
         return True
 

@@ -217,6 +217,16 @@ class SequenceTab(BaseTab):
         self.chromatic_bar_checkbox.toggled.connect(self._on_chromatic_bar_toggled)
         layout.addWidget(self.chromatic_bar_checkbox)
 
+        # Transform checkboxes (shown for algorithms with transform_options)
+        self.transform_checkboxes: dict[str, QCheckBox] = {}
+        for key, label_text in [("hflip", "Random H-Flip"), ("vflip", "Random V-Flip"), ("reverse", "Random Reverse")]:
+            cb = QCheckBox(label_text)
+            cb.setToolTip(f"Randomly apply {label_text.lower()} to ~50% of clips at export time")
+            cb.toggled.connect(self._on_transform_option_changed)
+            cb.hide()
+            layout.addWidget(cb)
+            self.transform_checkboxes[key] = cb
+
         # Initially hide direction controls
         self.direction_label.hide()
         self.direction_dropdown.hide()
@@ -548,7 +558,7 @@ class SequenceTab(BaseTab):
         text = self._confirm_no_color_dropdown.currentText()
         return self._NO_COLOR_HANDLING_MAP.get(text, "append_end")
 
-    def _apply_algorithm(self, algorithm: str, clips: list, direction: str = None, no_color_handling: str = None):
+    def _apply_algorithm(self, algorithm: str, clips: list, direction: str = None, no_color_handling: str = None, transform_options: dict = None):
         """Generate sequence in a background worker and transition to timeline.
 
         Heavy auto-compute operations (brightness, volume, CLIP embeddings)
@@ -559,6 +569,7 @@ class SequenceTab(BaseTab):
             clips: List of (Clip, Source) tuples
             direction: Sort direction (e.g., "short_first", "long_first" for duration)
             no_color_handling: For color algorithm — "append_end", "exclude", or "sort_inline"
+            transform_options: Dict of transform flags, e.g. {"hflip": True}
         """
         if self._apply_in_progress:
             logger.warning("Apply already in progress, ignoring")
@@ -580,6 +591,7 @@ class SequenceTab(BaseTab):
             clips=clips,
             direction=direction,
             no_color_handling=no_color_handling,
+            transform_options=transform_options,
             parent=self,
         )
         # Store algorithm for the completion slot
@@ -628,7 +640,14 @@ class SequenceTab(BaseTab):
             sequence.algorithm = algo_lower
             self._apply_chromatic_bar_to_sequence(algo_lower)
             self._update_chromatic_bar_controls(algo_lower)
+            self._update_transform_checkboxes(algo_lower)
             self._emit_chromatic_bar_setting_changed()
+
+            # Apply random transforms if enabled
+            transform_options = getattr(worker, "transform_options", None) if worker else None
+            if transform_options and sequence.tracks and sequence.tracks[0].clips:
+                from core.remix import assign_random_transforms
+                assign_random_transforms(sequence.tracks[0].clips, transform_options)
 
             # Transition to timeline state
             self._set_state(self.STATE_TIMELINE)
@@ -726,6 +745,7 @@ class SequenceTab(BaseTab):
             sequence.algorithm = algorithm_key
             self._apply_chromatic_bar_to_sequence(algorithm_key)
             self._update_chromatic_bar_controls(algorithm_key)
+            self._update_transform_checkboxes(algorithm_key)
             self._emit_chromatic_bar_setting_changed()
 
             if sequence_metadata:
@@ -935,6 +955,7 @@ class SequenceTab(BaseTab):
             sequence.allow_repeats = True
             self._apply_chromatic_bar_to_sequence("signature_style")
             self._update_chromatic_bar_controls("signature_style")
+            self._update_transform_checkboxes("signature_style")
             self._emit_chromatic_bar_setting_changed()
 
             self._set_state(self.STATE_TIMELINE)
@@ -969,6 +990,12 @@ class SequenceTab(BaseTab):
         self._apply_dialog_sequence(
             sequence_clips, "rose_hobart", "Rose Hobart",
         )
+
+    # Transform options per algorithm: list of transform keys.
+    # Algorithms not listed have no transform options.
+    _TRANSFORM_OPTIONS: dict[str, list[str]] = {
+        "shuffle": ["hflip", "vflip", "reverse"],
+    }
 
     # Direction options per algorithm: list of (display_label, internal_key).
     # First entry is the default. Algorithms not listed have no direction.
@@ -1027,6 +1054,47 @@ class SequenceTab(BaseTab):
                 return key
         return options[0][1]  # Default to first option
 
+    def _update_transform_checkboxes(self, algorithm: str | None):
+        """Show/hide transform checkboxes based on the active algorithm."""
+        allowed = self._TRANSFORM_OPTIONS.get(algorithm.lower() if algorithm else "", [])
+        for key, cb in self.transform_checkboxes.items():
+            cb.setVisible(key in allowed and self._current_state == self.STATE_TIMELINE)
+
+    def _get_current_transform_options(self) -> dict[str, bool] | None:
+        """Get currently checked transform options, or None if none are visible."""
+        algo_key = get_algorithm_key(self.algorithm_dropdown.currentText())
+        allowed = self._TRANSFORM_OPTIONS.get(algo_key, [])
+        if not allowed:
+            return None
+        opts = {}
+        for key in allowed:
+            cb = self.transform_checkboxes.get(key)
+            if cb:
+                opts[key] = cb.isChecked()
+        return opts if any(opts.values()) else None
+
+    @Slot(bool)
+    def _on_transform_option_changed(self, _checked: bool):
+        """Handle transform checkbox toggle — re-roll transforms only, keep clip order."""
+        if self._current_state != self.STATE_TIMELINE:
+            return
+
+        transform_options = self._get_current_transform_options()
+        sequence = self.timeline.get_sequence()
+        if not sequence.tracks or not sequence.tracks[0].clips:
+            return
+
+        from core.remix import assign_random_transforms
+        seq_clips = sequence.tracks[0].clips
+        if transform_options:
+            assign_random_transforms(seq_clips, transform_options)
+        else:
+            # All unchecked — clear transforms
+            for sc in seq_clips:
+                sc.hflip = False
+                sc.vflip = False
+                sc.reverse = False
+
     @Slot(str)
     def _on_direction_changed(self, direction_text: str):
         """Handle direction dropdown change - regenerate with new direction."""
@@ -1045,8 +1113,9 @@ class SequenceTab(BaseTab):
 
         algo_key = get_algorithm_key(label)
 
-        # Update direction dropdown for this algorithm
+        # Update direction dropdown and transform checkboxes for this algorithm
         self._update_direction_dropdown(algo_key)
+        self._update_transform_checkboxes(algo_key)
         self._update_chromatic_bar_controls(algo_key)
         self._emit_chromatic_bar_setting_changed()
 
@@ -1081,7 +1150,8 @@ class SequenceTab(BaseTab):
 
         if clips:
             direction = self._get_current_direction()
-            self._apply_algorithm(algorithm, clips, direction=direction)
+            transform_options = self._get_current_transform_options()
+            self._apply_algorithm(algorithm, clips, direction=direction, transform_options=transform_options)
 
     @Slot()
     def _on_clear_clicked(self):
@@ -1091,6 +1161,7 @@ class SequenceTab(BaseTab):
         self._current_algorithm = None
         self.set_chromatic_color_bar_enabled(False, emit_signal=False)
         self._update_chromatic_bar_controls(None)
+        self._update_transform_checkboxes(None)
         self._emit_chromatic_bar_setting_changed()
         self._set_state(self.STATE_CARDS)
 
@@ -1103,6 +1174,7 @@ class SequenceTab(BaseTab):
         self._current_algorithm = None
         self.set_chromatic_color_bar_enabled(False, emit_signal=False)
         self._update_chromatic_bar_controls(None)
+        self._update_transform_checkboxes(None)
         self._emit_chromatic_bar_setting_changed()
         self.timeline.clear_timeline()
         self.timeline_preview.clear()
@@ -1177,6 +1249,7 @@ class SequenceTab(BaseTab):
             emit_signal=False,
         )
         self._update_chromatic_bar_controls(active_algorithm)
+        self._update_transform_checkboxes(active_algorithm)
         self._emit_chromatic_bar_setting_changed()
 
     def _on_playhead_changed(self, time_seconds: float):
@@ -1239,11 +1312,13 @@ class SequenceTab(BaseTab):
             else:
                 self._set_state(self.STATE_CARDS)
             self._update_chromatic_bar_controls(self._current_algorithm)
+            self._update_transform_checkboxes(self._current_algorithm)
             self._emit_chromatic_bar_setting_changed()
         else:
             self._available_clips = []
             self._set_state(self.STATE_CARDS)
             self._update_chromatic_bar_controls(None)
+            self._update_transform_checkboxes(None)
             self._emit_chromatic_bar_setting_changed()
 
     def _has_clips_on_timeline(self) -> bool:
@@ -1298,6 +1373,7 @@ class SequenceTab(BaseTab):
         # Ensure we're in timeline state
         self._set_state(self.STATE_TIMELINE)
         self._update_chromatic_bar_controls(self._current_algorithm)
+        self._update_transform_checkboxes(self._current_algorithm)
         self._emit_chromatic_bar_setting_changed()
 
     def get_sequence(self):
@@ -1395,6 +1471,7 @@ class SequenceTab(BaseTab):
         direction: str = None,
         seed: int = None,
         no_color_handling: str = None,
+        transform_options: dict = None,
     ) -> dict:
         """Generate and apply a sequence (for agent tools).
 
@@ -1404,6 +1481,7 @@ class SequenceTab(BaseTab):
             direction: Sort direction (passed to generate_sequence)
             seed: Random seed (passed to generate_sequence)
             no_color_handling: For color algorithm — "append_end", "exclude", or "sort_inline"
+            transform_options: Dict of transform flags, e.g. {"hflip": True}
 
         Returns:
             Dict with success status and applied clip info
@@ -1459,7 +1537,15 @@ class SequenceTab(BaseTab):
             self._current_algorithm = algorithm.lower()
             self._apply_chromatic_bar_to_sequence(self._current_algorithm)
             self._update_chromatic_bar_controls(self._current_algorithm)
+            self._update_transform_checkboxes(self._current_algorithm)
             self._emit_chromatic_bar_setting_changed()
+
+            # Apply random transforms if requested
+            if transform_options:
+                from core.remix import assign_random_transforms
+                sequence = self.timeline.get_sequence()
+                if sequence.tracks and sequence.tracks[0].clips:
+                    assign_random_transforms(sequence.tracks[0].clips, transform_options, seed=seed)
 
             self.timeline._on_zoom_fit()
 
@@ -1575,6 +1661,7 @@ class SequenceTab(BaseTab):
             sequence.allow_repeats = allow_repeats
             self._apply_chromatic_bar_to_sequence("reference_guided")
             self._update_chromatic_bar_controls("reference_guided")
+            self._update_transform_checkboxes("reference_guided")
             self._emit_chromatic_bar_setting_changed()
 
             self._set_state(self.STATE_TIMELINE)
@@ -1681,6 +1768,7 @@ class SequenceTab(BaseTab):
             self._current_algorithm = algorithm.lower()
             self._apply_chromatic_bar_to_sequence(self._current_algorithm)
             self._update_chromatic_bar_controls(self._current_algorithm)
+            self._update_transform_checkboxes(self._current_algorithm)
             self._emit_chromatic_bar_setting_changed()
 
             # Transition to timeline state
@@ -1722,6 +1810,7 @@ class SequenceTab(BaseTab):
         else:
             self._set_state(self.STATE_CARDS)
         self._update_chromatic_bar_controls(self._current_algorithm)
+        self._update_transform_checkboxes(self._current_algorithm)
         self._emit_chromatic_bar_setting_changed()
 
     def on_tab_deactivated(self):

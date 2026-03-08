@@ -22,6 +22,9 @@ class SequenceClip:
     out_point: int = 0  # Trim end (frames into source clip)
     frame_id: Optional[str] = None  # Reference to Frame (if frame-based)
     hold_frames: int = 1  # Number of timeline frames to hold (for frame entries)
+    hflip: bool = False  # Random horizontal flip (export-only)
+    vflip: bool = False  # Random vertical flip (export-only)
+    reverse: bool = False  # Random reverse playback (export-only)
 
     @property
     def is_frame_entry(self) -> bool:
@@ -62,6 +65,12 @@ class SequenceClip:
             data["frame_id"] = self.frame_id
         if self.hold_frames != 1:
             data["hold_frames"] = self.hold_frames
+        if self.hflip:
+            data["hflip"] = True
+        if self.vflip:
+            data["vflip"] = True
+        if self.reverse:
+            data["reverse"] = True
         return data
 
     @classmethod
@@ -77,6 +86,9 @@ class SequenceClip:
             out_point=data.get("out_point", 0),
             frame_id=data.get("frame_id"),
             hold_frames=data.get("hold_frames", 1),
+            hflip=data.get("hflip", False),
+            vflip=data.get("vflip", False),
+            reverse=data.get("reverse", False),
         )
 
 

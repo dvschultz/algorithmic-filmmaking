@@ -3578,7 +3578,10 @@ def list_sorting_algorithms(project) -> dict:
             "available": True,
             "reason": None,
             "parameters": [
-                {"name": "seed", "type": "integer", "description": "Random seed for reproducibility (0 = random)", "default": 0}
+                {"name": "seed", "type": "integer", "description": "Random seed for reproducibility (0 = random)", "default": 0},
+                {"name": "random_hflip", "type": "boolean", "description": "Randomly flip ~50% of clips horizontally at export", "default": False},
+                {"name": "random_vflip", "type": "boolean", "description": "Randomly flip ~50% of clips vertically at export", "default": False},
+                {"name": "random_reverse", "type": "boolean", "description": "Randomly reverse ~50% of clips at export", "default": False},
             ]
         },
         {
@@ -3725,6 +3728,9 @@ def generate_remix(
     direction: Optional[str] = None,
     seed: Optional[int] = None,
     no_color_handling: Optional[str] = None,
+    random_hflip: bool = False,
+    random_vflip: bool = False,
+    random_reverse: bool = False,
 ) -> dict:
     """Generate a sequence using the specified algorithm and apply to timeline.
 
@@ -3737,6 +3743,9 @@ def generate_remix(
         seed: For shuffle: random seed for reproducibility (0 = random)
         no_color_handling: For color algorithm — how to handle clips without color data.
                    "append_end" (default), "exclude", or "sort_inline"
+        random_hflip: For shuffle: randomly flip ~50% of clips horizontally at export
+        random_vflip: For shuffle: randomly flip ~50% of clips vertically at export
+        random_reverse: For shuffle: randomly reverse ~50% of clips at export
 
     Returns:
         Dict with success status, applied clips, and algorithm used
@@ -3782,6 +3791,15 @@ def generate_remix(
             "error": "Main window not available"
         }
 
+    # Build transform options if any are enabled
+    transform_options = None
+    if random_hflip or random_vflip or random_reverse:
+        transform_options = {
+            "hflip": random_hflip,
+            "vflip": random_vflip,
+            "reverse": random_reverse,
+        }
+
     # Use sequence tab's generate_and_apply method
     result = main_window.sequence_tab.generate_and_apply(
         algorithm=algorithm,
@@ -3789,6 +3807,7 @@ def generate_remix(
         direction=direction,
         seed=seed,
         no_color_handling=no_color_handling,
+        transform_options=transform_options,
     )
 
     return result

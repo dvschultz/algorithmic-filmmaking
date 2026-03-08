@@ -36,6 +36,7 @@ class SequenceWorker(CancellableWorker):
         clips: List[Tuple[Any, Any]],
         direction: Optional[str] = None,
         no_color_handling: Optional[str] = None,
+        transform_options: Optional[dict] = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -43,6 +44,7 @@ class SequenceWorker(CancellableWorker):
         self._clips = clips
         self._direction = direction
         self._no_color_handling = no_color_handling
+        self.transform_options = transform_options
 
     def run(self):
         self._log_start()

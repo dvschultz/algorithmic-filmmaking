@@ -131,6 +131,7 @@ class SequenceExporter:
                         fps=config.fps,
                         config=config,
                         bar_color=bar_color,
+                        seq_clip=seq_clip,
                     )
 
                 if success:
@@ -154,6 +155,10 @@ class SequenceExporter:
 
             return success
 
+    # Maximum clip duration (seconds) for the reverse filter.
+    # reverse buffers the entire clip in RAM (~900 MB for 5s of 1080p30).
+    _REVERSE_MAX_DURATION = 15.0
+
     def _export_segment(
         self,
         source_path: Path,
@@ -163,12 +168,27 @@ class SequenceExporter:
         fps: float,
         config: ExportConfig,
         bar_color: Optional[tuple[int, int, int]] = None,
+        seq_clip: Optional[SequenceClip] = None,
     ) -> bool:
         """Export a single segment from a source video."""
         start_seconds = start_frame / fps
         duration_seconds = (end_frame - start_frame) / fps
 
-        vf = self._build_video_filter(config=config, bar_color=bar_color)
+        # Check reverse safety limit
+        apply_reverse = False
+        if seq_clip and seq_clip.reverse:
+            if duration_seconds <= self._REVERSE_MAX_DURATION:
+                apply_reverse = True
+            else:
+                logger.warning(
+                    "Skipping reverse for clip %s (%.1fs > %.0fs limit)",
+                    seq_clip.id, duration_seconds, self._REVERSE_MAX_DURATION,
+                )
+
+        vf = self._build_video_filter(
+            config=config, bar_color=bar_color, seq_clip=seq_clip,
+            apply_reverse=apply_reverse,
+        )
 
         cmd = [
             self.ffmpeg_path,
@@ -179,14 +199,20 @@ class SequenceExporter:
             "-c:v", config.video_codec,
             "-preset", config.preset,
             "-crf", str(config.crf),
-            "-c:a", config.audio_codec,
-            "-b:a", config.audio_bitrate,
         ]
 
         if vf:
             cmd.extend(["-vf", vf])
 
-        cmd.append(str(output_path))
+        # Audio: apply areverse if reversing video
+        if apply_reverse:
+            cmd.extend(["-af", "areverse"])
+
+        cmd.extend([
+            "-c:a", config.audio_codec,
+            "-b:a", config.audio_bitrate,
+            str(output_path),
+        ])
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300,
                                 **get_subprocess_kwargs())
@@ -281,11 +307,22 @@ class SequenceExporter:
         self,
         config: ExportConfig,
         bar_color: Optional[tuple[int, int, int]],
+        seq_clip: Optional[SequenceClip] = None,
+        apply_reverse: bool = False,
     ) -> Optional[str]:
-        """Build ffmpeg video filter chain for scaling and optional chromatic bar."""
+        """Build ffmpeg video filter chain.
+
+        Filter order: scale -> hflip -> vflip -> reverse -> chromatic_bar
+        """
         vf_parts = []
         if config.width and config.height:
             vf_parts.append(f"scale={config.width}:{config.height}")
+        if seq_clip and seq_clip.hflip:
+            vf_parts.append("hflip")
+        if seq_clip and seq_clip.vflip:
+            vf_parts.append("vflip")
+        if apply_reverse:
+            vf_parts.append("reverse")
         chromatic_filter = self._chromatic_bar_filter(config=config, bar_color=bar_color)
         if chromatic_filter:
             vf_parts.append(chromatic_filter)

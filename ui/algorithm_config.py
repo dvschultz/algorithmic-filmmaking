@@ -39,6 +39,7 @@ ALGORITHM_CONFIG = {
         "description": "Randomly shuffle clips into a new order",
         "allow_duplicates": False,
         "required_analysis": [],
+        "transform_options": ["hflip", "vflip", "reverse"],
     },
     "sequential": {
         "icon": "\U0001f4cb",

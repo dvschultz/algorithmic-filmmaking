@@ -11,6 +11,7 @@ def constrained_shuffle(
     get_category: Callable[[T], str],
     max_consecutive: int = 1,
     max_attempts: int = 1000,
+    rng: random.Random = None,
 ) -> List[T]:
     """
     Shuffle items with constraint: no more than max_consecutive
@@ -24,23 +25,27 @@ def constrained_shuffle(
         get_category: Function to get category string from an item
         max_consecutive: Maximum consecutive items from same category
         max_attempts: Number of shuffle attempts before falling back
+        rng: Optional Random instance for deterministic shuffling
 
     Returns:
         Shuffled list satisfying the constraint
     """
+    if rng is None:
+        rng = random.Random()
+
     if len(items) <= 1:
         return items.copy()
 
     # Try rejection sampling
     for _ in range(max_attempts):
         shuffled = items.copy()
-        random.shuffle(shuffled)
+        rng.shuffle(shuffled)
 
         if _check_constraints(shuffled, get_category, max_consecutive):
             return shuffled
 
     # Fallback: greedy repair
-    return _greedy_repair(items, get_category, max_consecutive)
+    return _greedy_repair(items, get_category, max_consecutive, rng=rng)
 
 
 def _check_constraints(
@@ -72,13 +77,17 @@ def _greedy_repair(
     items: List[T],
     get_category: Callable[[T], str],
     max_consecutive: int,
+    rng: random.Random = None,
 ) -> List[T]:
     """
     Greedy algorithm when rejection sampling fails.
     Build sequence by always picking valid next item.
     """
+    if rng is None:
+        rng = random.Random()
+
     remaining = items.copy()
-    random.shuffle(remaining)
+    rng.shuffle(remaining)
     result = []
 
     while remaining:
@@ -100,7 +109,7 @@ def _greedy_repair(
             valid = remaining
 
         # Pick random from valid options
-        chosen = random.choice(valid)
+        chosen = rng.choice(valid)
         result.append(chosen)
         remaining.remove(chosen)
 
