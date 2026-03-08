@@ -31,6 +31,9 @@ class ExportConfig:
     audio_bitrate: str = "192k"
     preset: str = "fast"
     crf: int = 18  # Quality (lower = better)
+    show_chromatic_color_bar: bool = False
+    chromatic_color_bar_height_ratio: float = 0.04
+    chromatic_color_bar_min_height: int = 12
 
 
 class SequenceExporter:
@@ -81,6 +84,13 @@ class SequenceExporter:
                     progress_callback(i / total * 0.8, f"Processing clip {i+1}/{total}")
 
                 segment_path = temp_path / f"segment_{i:04d}.mp4"
+                bar_color = None
+                if config.show_chromatic_color_bar:
+                    bar_color = self._resolve_sequence_clip_color(
+                        seq_clip=seq_clip,
+                        clips=clips,
+                        frames=frames,
+                    ) or (0, 0, 0)
 
                 if seq_clip.is_frame_entry:
                     # Frame-based entry: generate video from still image
@@ -104,6 +114,7 @@ class SequenceExporter:
                         hold_seconds=seq_clip.hold_frames / config.fps,
                         fps=config.fps,
                         config=config,
+                        bar_color=bar_color,
                     )
                 else:
                     # Clip-based entry: extract from source video
@@ -119,6 +130,7 @@ class SequenceExporter:
                         end_frame=seq_clip.out_point,
                         fps=config.fps,
                         config=config,
+                        bar_color=bar_color,
                     )
 
                 if success:
@@ -150,10 +162,13 @@ class SequenceExporter:
         end_frame: int,
         fps: float,
         config: ExportConfig,
+        bar_color: Optional[tuple[int, int, int]] = None,
     ) -> bool:
         """Export a single segment from a source video."""
         start_seconds = start_frame / fps
         duration_seconds = (end_frame - start_frame) / fps
+
+        vf = self._build_video_filter(config=config, bar_color=bar_color)
 
         cmd = [
             self.ffmpeg_path,
@@ -168,9 +183,8 @@ class SequenceExporter:
             "-b:a", config.audio_bitrate,
         ]
 
-        # Add resolution if specified
-        if config.width and config.height:
-            cmd.extend(["-vf", f"scale={config.width}:{config.height}"])
+        if vf:
+            cmd.extend(["-vf", vf])
 
         cmd.append(str(output_path))
 
@@ -185,6 +199,7 @@ class SequenceExporter:
         hold_seconds: float,
         fps: float,
         config: ExportConfig,
+        bar_color: Optional[tuple[int, int, int]] = None,
     ) -> bool:
         """Export a still image as a video segment with silent audio.
 
@@ -199,6 +214,9 @@ class SequenceExporter:
                 f",pad={config.width}:{config.height}"
                 ":(ow-iw)/2:(oh-ih)/2"
             )
+        chromatic_filter = self._chromatic_bar_filter(config=config, bar_color=bar_color)
+        if chromatic_filter:
+            vf_parts.append(chromatic_filter)
 
         cmd = [
             self.ffmpeg_path,
@@ -228,6 +246,72 @@ class SequenceExporter:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300,
                                 **get_subprocess_kwargs())
         return result.returncode == 0
+
+    def _resolve_sequence_clip_color(
+        self,
+        seq_clip: SequenceClip,
+        clips: dict[str, tuple],
+        frames: Optional[dict[str, "Frame"]] = None,
+    ) -> Optional[tuple[int, int, int]]:
+        """Resolve the dominant color used for a sequence entry."""
+        dominant_colors = None
+        if seq_clip.is_frame_entry:
+            frame = frames.get(seq_clip.frame_id) if frames and seq_clip.frame_id else None
+            dominant_colors = getattr(frame, "dominant_colors", None) if frame else None
+        else:
+            clip_data = clips.get(seq_clip.source_clip_id)
+            if clip_data:
+                source_clip, _ = clip_data
+                dominant_colors = source_clip.dominant_colors
+
+        if not dominant_colors:
+            return None
+
+        color = dominant_colors[0]
+        if len(color) < 3:
+            return None
+        r, g, b = color[0], color[1], color[2]
+        return (
+            max(0, min(255, int(r))),
+            max(0, min(255, int(g))),
+            max(0, min(255, int(b))),
+        )
+
+    def _build_video_filter(
+        self,
+        config: ExportConfig,
+        bar_color: Optional[tuple[int, int, int]],
+    ) -> Optional[str]:
+        """Build ffmpeg video filter chain for scaling and optional chromatic bar."""
+        vf_parts = []
+        if config.width and config.height:
+            vf_parts.append(f"scale={config.width}:{config.height}")
+        chromatic_filter = self._chromatic_bar_filter(config=config, bar_color=bar_color)
+        if chromatic_filter:
+            vf_parts.append(chromatic_filter)
+        if not vf_parts:
+            return None
+        return ",".join(vf_parts)
+
+    def _chromatic_bar_filter(
+        self,
+        config: ExportConfig,
+        bar_color: Optional[tuple[int, int, int]],
+    ) -> Optional[str]:
+        """Build a drawbox filter that paints the bottom chromatic bar."""
+        if bar_color is None:
+            return None
+
+        ratio = max(0.001, float(config.chromatic_color_bar_height_ratio))
+        min_height = max(1, int(config.chromatic_color_bar_min_height))
+        # Escape comma for ffmpeg filtergraph parsing inside drawbox expressions.
+        bar_h_expr = f"max({min_height}\\,ih*{ratio:.4f})"
+        r, g, b = bar_color
+        color_hex = f"0x{r:02x}{g:02x}{b:02x}"
+        return (
+            f"drawbox=x=0:y=ih-({bar_h_expr})"
+            f":w=iw:h={bar_h_expr}:color={color_hex}@1.0:t=fill"
+        )
 
     def _concat_segments(
         self,
@@ -291,6 +375,10 @@ def export_sequence(
     config = ExportConfig(
         output_path=output_path,
         fps=sequence.fps,
+        show_chromatic_color_bar=(
+            bool(getattr(sequence, "show_chromatic_color_bar", False))
+            and sequence.algorithm == "color"
+        ),
     )
 
     exporter = SequenceExporter()

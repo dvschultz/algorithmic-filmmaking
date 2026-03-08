@@ -57,6 +57,7 @@ def player():
     p._mpv = mock_instance
     p._bridge = MagicMock()
     p._player_ready = True
+    p._media_loaded = True
 
     # Wire up bridge signals to player handlers
     p._bridge.position_changed.connect(p._on_position_changed)
@@ -93,10 +94,23 @@ class TestVideoPlayerPublicAPI:
         player.seek_to(10.5)
         player._mock.seek.assert_called_once_with(10.5, 'absolute', 'exact')
 
+    def test_seek_to_queues_when_media_not_loaded(self, player):
+        player._shutdown_event.clear()
+        player._media_loaded = False
+        player.seek_to(7.25)
+        player._mock.seek.assert_not_called()
+        assert player._pending_seek_seconds == 7.25
+
     def test_play_sets_pause_false(self, player):
         player._shutdown_event.clear()
         player.play()
         assert player._mock.pause is False
+
+    def test_play_queues_when_media_not_loaded(self, player):
+        player._shutdown_event.clear()
+        player._media_loaded = False
+        player.play()
+        assert player._pending_play_on_load is True
 
     def test_pause_sets_pause_true(self, player):
         player._shutdown_event.clear()
@@ -163,6 +177,13 @@ class TestClipRange:
         player.set_clip_range(10.0, 20.0)
         player._mock.seek.assert_called_with(10.0, 'absolute', 'exact')
 
+    def test_set_clip_range_queues_when_media_not_loaded(self, player):
+        player._shutdown_event.clear()
+        player._media_loaded = False
+        player.set_clip_range(10.0, 20.0)
+        player._mock.seek.assert_not_called()
+        assert player._pending_clip_range == (10.0, 20.0)
+
     def test_clear_clip_range_clears_ab_loop(self, player):
         player._shutdown_event.clear()
         player.set_clip_range(10.0, 20.0)
@@ -177,6 +198,15 @@ class TestClipRange:
         player.play_range(5.0, 15.0)
         assert player._clip_start_ms == 5000
         assert player._clip_end_ms == 15000
+        assert player._mock.pause is False
+
+    def test_on_file_loaded_applies_pending_seek_and_play(self, player):
+        player._shutdown_event.clear()
+        player._media_loaded = False
+        player.seek_to(3.5)
+        player.play()
+        player._on_file_loaded()
+        player._mock.seek.assert_called_with(3.5, 'absolute', 'exact')
         assert player._mock.pause is False
 
 

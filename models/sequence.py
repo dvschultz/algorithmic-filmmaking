@@ -142,6 +142,7 @@ class Sequence:
     reference_source_id: Optional[str] = None  # Source used as structural guide
     dimension_weights: Optional[dict[str, float]] = None  # Dimension -> weight (0.0-1.0)
     allow_repeats: bool = False  # Allow same clip matched to multiple positions
+    show_chromatic_color_bar: bool = False  # Optional Chromatic Flow bottom bar
 
     def __post_init__(self):
         """Ensure at least one track exists."""
@@ -200,6 +201,8 @@ class Sequence:
             data["dimension_weights"] = self.dimension_weights
         if self.allow_repeats:
             data["allow_repeats"] = self.allow_repeats
+        if self.show_chromatic_color_bar:
+            data["show_chromatic_color_bar"] = self.show_chromatic_color_bar
         return data
 
     @classmethod
@@ -218,6 +221,7 @@ class Sequence:
             reference_source_id=data.get("reference_source_id"),
             dimension_weights=data.get("dimension_weights"),
             allow_repeats=data.get("allow_repeats", False),
+            show_chromatic_color_bar=data.get("show_chromatic_color_bar", False),
         )
         # If no tracks were loaded, ensure at least one exists
         if not seq.tracks:

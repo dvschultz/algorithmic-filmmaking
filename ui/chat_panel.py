@@ -90,6 +90,27 @@ class ChatPanel(QWidget):
         header_label = QLabel("Agent Chat")
         header_label.setStyleSheet(f"font-weight: bold; font-size: {TypeScale.MD}px;")
         header.addWidget(header_label)
+
+        # Help button - shows agent capabilities
+        help_btn = QPushButton("?")
+        help_btn.setFixedSize(24, 24)
+        help_btn.setToolTip("Show agent capabilities")
+        help_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: transparent;
+                border: 1px solid {theme().border_secondary};
+                border-radius: 12px;
+                color: {theme().text_secondary};
+                font-size: {TypeScale.SM}px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {theme().background_tertiary};
+            }}
+        """)
+        help_btn.clicked.connect(lambda: self._handle_slash_command("/help"))
+        header.addWidget(help_btn)
+
         header.addStretch()
 
         # Header button style (shared)
@@ -172,6 +193,19 @@ class ChatPanel(QWidget):
         self.messages_layout.setContentsMargins(8, 8, 8, 8)
         self.scroll_area.setWidget(self.messages_widget)
 
+        # Welcome message (shown when chat is empty)
+        self._welcome_label = QLabel(
+            "I can detect scenes, analyze clips, build sequences, search YouTube, and more. "
+            "Type /help to see everything I can do."
+        )
+        self._welcome_label.setWordWrap(True)
+        self._welcome_label.setStyleSheet(f"""
+            color: {theme().text_secondary};
+            font-size: {TypeScale.SM}px;
+            padding: {Spacing.SM}px;
+        """)
+        self.messages_layout.addWidget(self._welcome_label)
+
         # Example prompts (shown when chat is empty)
         self.example_prompts = ExamplePromptsWidget()
         self.example_prompts.prompt_clicked.connect(self._on_example_prompt_clicked)
@@ -183,7 +217,7 @@ class ChatPanel(QWidget):
         input_layout = QHBoxLayout()
 
         self.input_field = QTextEdit()
-        self.input_field.setPlaceholderText("Try 'detect scenes', 'analyze colors', 'build a sequence'...")
+        self.input_field.setPlaceholderText("Try 'detect scenes', 'analyze colors', or type /help for all commands...")
         self.input_field.setMaximumHeight(80)
         self.input_field.setStyleSheet(f"""
             QTextEdit {{
@@ -404,6 +438,7 @@ class ChatPanel(QWidget):
         # Hide example prompts after first message
         if self._example_prompts_visible:
             self.example_prompts.hide()
+            self._welcome_label.hide()
             self._example_prompts_visible = False
 
         bubble = MessageBubble(text, is_user=True)
@@ -502,25 +537,6 @@ class ChatPanel(QWidget):
             self._current_bubble.append_text(chunk)
             self._scroll_to_bottom()
 
-    @Slot(str)
-    def on_tool_result_formatted(self, formatted_text: str):
-        """Display a formatted tool result.
-
-        Args:
-            formatted_text: Human-readable tool result
-        """
-        # Clear any junk in the current bubble and show the formatted result
-        if self._current_bubble:
-            # Ensure bubble is in layout (may not be if only tools have run)
-            if self._current_bubble.parent() is None:
-                self.messages_layout.addWidget(self._current_bubble)
-            self._current_bubble.clear_text()
-            self._current_bubble.append_text(formatted_text)
-            self._scroll_to_bottom()
-
-        # Show thinking indicator - LLM is processing after tool result
-        self._show_thinking_indicator()
-
     @Slot()
     def on_stream_complete(self):
         """Handle stream completion - with guard."""
@@ -573,14 +589,16 @@ class ChatPanel(QWidget):
         # Clean up plan widget if present
         self._current_plan_widget = None
 
-        # Remove all widgets except the example prompts
+        # Remove all widgets except the example prompts and welcome label
         while self.messages_layout.count():
             item = self.messages_layout.takeAt(0)
             widget = item.widget()
-            if widget and widget is not self.example_prompts:
+            if widget and widget not in (self.example_prompts, self._welcome_label):
                 widget.deleteLater()
 
-        # Restore example prompts
+        # Restore welcome label and example prompts
+        self.messages_layout.addWidget(self._welcome_label)
+        self._welcome_label.show()
         self.messages_layout.addWidget(self.example_prompts)
         self.example_prompts.show()
         self.example_prompts.reset_guard()
@@ -714,6 +732,7 @@ class ChatPanel(QWidget):
         # Hide example prompts if still visible
         if self._example_prompts_visible:
             self.example_prompts.hide()
+            self._welcome_label.hide()
             self._example_prompts_visible = False
 
         # Remove any existing plan widget

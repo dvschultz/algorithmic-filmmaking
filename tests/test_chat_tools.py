@@ -1179,10 +1179,10 @@ class TestPendingActionTracking:
 
         assert result["success"] is True
         assert result["new_name"] == "My Project"
-        # Should include next action
-        assert result.get("next_action") == "present_plan"
-        assert result["next_action_args"]["steps"] == ["Download videos", "Detect scenes"]
-        assert "present_plan" in result["message"]
+        # Should include pending plan data
+        assert "pending_plan" in result
+        assert result["pending_plan"]["steps"] == ["Download videos", "Detect scenes"]
+        assert result["pending_plan"]["summary"] == "Test plan"
 
         # Pending action should be cleared
         assert main_window._gui_state.pending_action is None

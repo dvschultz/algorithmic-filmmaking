@@ -246,12 +246,9 @@ def colors(
     """
     try:
         from core.project import load_project, save_project, ProjectLoadError
-        from core.thumbnail import ThumbnailGenerator
         from core.analysis.color import extract_dominant_colors
     except ImportError as e:
         exit_with(ExitCode.DEPENDENCY_MISSING, f"Missing dependency: {e}")
-
-    config = CLIConfig.load()
 
     try:
         sources, clips, sequence, metadata, ui_state, _ = load_project(
@@ -284,12 +281,6 @@ def colors(
         output_info("All clips already have color data. Use --force to re-analyze.")
         return
 
-    # Initialize thumbnail generator
-    try:
-        thumb_gen = ThumbnailGenerator(cache_dir=config.cache_dir / "thumbnails")
-    except RuntimeError as e:
-        exit_with(ExitCode.DEPENDENCY_MISSING, str(e))
-
     analyzed_count = 0
     errors = []
 
@@ -304,22 +295,11 @@ def colors(
                 continue
 
             try:
-                # Generate thumbnail for analysis
-                fps = source.fps
-                start_time = clip.start_time(fps)
-                end_time = clip.end_time(fps)
-
-                thumb_path = thumb_gen.generate_clip_thumbnail(
-                    video_path=source.file_path,
-                    start_seconds=start_time,
-                    end_seconds=end_time,
-                    width=320,  # Higher resolution for color analysis
-                    height=180,
-                )
-
-                # Extract colors
+                # Extract colors by sampling frames from the video
                 clip.dominant_colors = extract_dominant_colors(
-                    image_path=thumb_path,
+                    video_path=source.file_path,
+                    start_frame=clip.start_frame,
+                    end_frame=clip.end_frame,
                     n_colors=num_colors,
                 )
                 analyzed_count += 1

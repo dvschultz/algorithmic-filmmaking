@@ -59,23 +59,18 @@ async def analyze_colors(
                 progress = 0.1 + (0.8 * i / len(clips))
                 await ctx.report_progress(progress, f"Analyzing clip {i + 1}/{len(clips)}...")
 
-            # Get thumbnail path
             source = sources_by_id.get(clip.source_id)
-            if not source:
+            if not source or not source.file_path.exists():
                 skipped_count += 1
                 continue
 
-            thumb_path = get_thumbnail_path(source.file_path, clip.start_frame)
-            if not thumb_path or not thumb_path.exists():
-                # Try to find any existing thumbnail
-                if clip.thumbnail_path and Path(clip.thumbnail_path).exists():
-                    thumb_path = Path(clip.thumbnail_path)
-                else:
-                    skipped_count += 1
-                    continue
-
-            # Extract colors
-            colors = extract_dominant_colors(thumb_path, n_colors=num_colors)
+            # Extract colors by sampling frames from the video
+            colors = extract_dominant_colors(
+                video_path=source.file_path,
+                start_frame=clip.start_frame,
+                end_frame=clip.end_frame,
+                n_colors=num_colors,
+            )
             if colors:
                 clip.dominant_colors = colors
                 analyzed_count += 1

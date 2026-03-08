@@ -35,12 +35,14 @@ class SequenceWorker(CancellableWorker):
         algorithm: str,
         clips: List[Tuple[Any, Any]],
         direction: Optional[str] = None,
+        no_color_handling: Optional[str] = None,
         parent=None,
     ):
         super().__init__(parent)
         self._algorithm = algorithm
         self._clips = clips
         self._direction = direction
+        self._no_color_handling = no_color_handling
 
     def run(self):
         self._log_start()
@@ -54,6 +56,7 @@ class SequenceWorker(CancellableWorker):
                 clips=self._clips,
                 clip_count=len(self._clips),
                 direction=self._direction,
+                no_color_handling=self._no_color_handling,
             )
 
             if not self.is_cancelled():
