@@ -1055,10 +1055,14 @@ class SequenceTab(BaseTab):
         return options[0][1]  # Default to first option
 
     def _update_transform_checkboxes(self, algorithm: str | None):
-        """Show/hide transform checkboxes based on the active algorithm."""
+        """Show/hide transform checkboxes based on the active algorithm.
+
+        No state check needed — checkboxes live inside timeline_view which
+        is already gated by the QStackedWidget state.
+        """
         allowed = self._TRANSFORM_OPTIONS.get(algorithm.lower() if algorithm else "", [])
         for key, cb in self.transform_checkboxes.items():
-            cb.setVisible(key in allowed and self._current_state == self.STATE_TIMELINE)
+            cb.setVisible(key in allowed)
 
     def _get_current_transform_options(self) -> dict[str, bool] | None:
         """Get currently checked transform options, or None if none are visible."""
