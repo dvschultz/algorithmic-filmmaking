@@ -82,14 +82,29 @@ def _load_insightface():
                 except ImportError:
                     pass
 
-            _model = FaceAnalysis(
-                name="buffalo_l",
-                root=str(insightface_dir),
-                providers=providers,
-            )
-            _model.prepare(ctx_id=0, det_size=(640, 640))
+            try:
+                _model = FaceAnalysis(
+                    name="buffalo_l",
+                    root=str(insightface_dir),
+                    providers=providers,
+                )
+                _model.prepare(ctx_id=0, det_size=(640, 640))
+            except Exception:
+                if providers != ["CPUExecutionProvider"]:
+                    logger.warning(
+                        "Failed to load InsightFace with %s, falling back to CPU",
+                        providers[0],
+                    )
+                    _model = FaceAnalysis(
+                        name="buffalo_l",
+                        root=str(insightface_dir),
+                        providers=["CPUExecutionProvider"],
+                    )
+                    _model.prepare(ctx_id=0, det_size=(640, 640))
+                else:
+                    raise
 
-            logger.info("InsightFace model loaded")
+            logger.info("InsightFace model loaded (providers: %s)", providers)
 
     return _model
 
