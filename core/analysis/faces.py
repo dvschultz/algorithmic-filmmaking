@@ -9,7 +9,8 @@ import logging
 import sys
 import threading
 from pathlib import Path
-from typing import Optional
+import colorsys
+import random
 
 import numpy as np
 
@@ -74,17 +75,11 @@ def _load_insightface():
             providers = ["CPUExecutionProvider"]
             if sys.platform == "darwin":
                 try:
-                    import platform
-                    if platform.processor() == "arm" or "arm64" in platform.machine():
-                        # Apple Silicon - try CoreML
-                        try:
-                            import onnxruntime
-                            available = onnxruntime.get_available_providers()
-                            if "CoreMLExecutionProvider" in available:
-                                providers = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
-                        except ImportError:
-                            pass
-                except Exception:
+                    import onnxruntime
+                    available = onnxruntime.get_available_providers()
+                    if "CoreMLExecutionProvider" in available:
+                        providers = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
+                except ImportError:
                     pass
 
             _model = FaceAnalysis(
@@ -97,6 +92,32 @@ def _load_insightface():
             logger.info("InsightFace model loaded")
 
     return _model
+
+
+# Maximum pixel count to guard against OOM on huge images (8K = ~33M pixels)
+_MAX_IMAGE_PIXELS = 40_000_000
+
+
+def _format_face(face, frame_number: int | None = None) -> dict:
+    """Convert an InsightFace detection to a standardized dict.
+
+    Args:
+        face: InsightFace face detection result.
+        frame_number: Optional frame number for video-sourced faces.
+
+    Returns:
+        Dict with bbox [x, y, w, h], embedding, confidence, and optional frame_number.
+    """
+    bbox = face.bbox.astype(int).tolist()
+    x, y, x2, y2 = bbox
+    result = {
+        "bbox": [x, y, x2 - x, y2 - y],
+        "embedding": face.embedding.tolist(),
+        "confidence": float(face.det_score),
+    }
+    if frame_number is not None:
+        result["frame_number"] = frame_number
+    return result
 
 
 def extract_faces_from_image(image_path: Path) -> list[dict]:
@@ -120,17 +141,13 @@ def extract_faces_from_image(image_path: Path) -> list[dict]:
         logger.warning(f"Could not read image: {image_path}")
         return []
 
+    h, w = img.shape[:2]
+    if h * w > _MAX_IMAGE_PIXELS:
+        logger.warning(f"Image too large ({w}x{h}), skipping: {image_path}")
+        return []
+
     faces = model.get(img)
-    results = []
-    for face in faces:
-        bbox = face.bbox.astype(int).tolist()
-        # Convert from [x1, y1, x2, y2] to [x, y, w, h]
-        x, y, x2, y2 = bbox
-        results.append({
-            "bbox": [x, y, x2 - x, y2 - y],
-            "embedding": face.embedding.tolist(),
-            "confidence": float(face.det_score),
-        })
+    results = [_format_face(face) for face in faces]
 
     logger.debug(f"Found {len(results)} faces in {image_path.name}")
     return results
@@ -191,15 +208,7 @@ def extract_faces_from_clip(
                 continue
 
             faces = model.get(frame)
-            for face in faces:
-                bbox = face.bbox.astype(int).tolist()
-                x, y, x2, y2 = bbox
-                results.append({
-                    "bbox": [x, y, x2 - x, y2 - y],
-                    "embedding": face.embedding.tolist(),
-                    "confidence": float(face.det_score),
-                    "frame_number": frame_pos,
-                })
+            results.extend(_format_face(face, frame_number=frame_pos) for face in faces)
     finally:
         cap.release()
 
@@ -288,3 +297,45 @@ def unload_model():
         _model = None
 
     logger.info("InsightFace model unloaded")
+
+
+def order_matched_clips(
+    matched: list[tuple],
+    ordering: str,
+) -> list[tuple]:
+    """Order matched clips by the chosen strategy.
+
+    Shared by both the dialog worker and the agent tool so ordering logic
+    is defined in one place.
+
+    Args:
+        matched: List of (Clip, Source, confidence) tuples.
+        ordering: One of "original", "duration", "color", "brightness",
+                  "confidence", "random".
+
+    Returns:
+        List of (Clip, Source) tuples in the requested order.
+    """
+    if ordering in ("Original Order", "original"):
+        matched.sort(key=lambda x: (x[1].file_path.name, x[0].start_frame))
+    elif ordering in ("By Duration", "duration"):
+        matched.sort(key=lambda x: x[0].duration_seconds(x[1].fps))
+    elif ordering in ("By Color", "color"):
+        def _color_key(item):
+            clip = item[0]
+            if clip.dominant_colors and len(clip.dominant_colors) > 0:
+                r, g, b = clip.dominant_colors[0]
+                h, _, _ = colorsys.rgb_to_hsv(r / 255.0, g / 255.0, b / 255.0)
+                return h
+            return 0.5
+        matched.sort(key=_color_key)
+    elif ordering in ("By Brightness", "brightness"):
+        matched.sort(
+            key=lambda x: x[0].average_brightness if x[0].average_brightness is not None else 0.5
+        )
+    elif ordering in ("By Confidence", "confidence"):
+        matched.sort(key=lambda x: x[2], reverse=True)
+    elif ordering in ("Random", "random"):
+        random.shuffle(matched)
+
+    return [(clip, source) for clip, source, _ in matched]

@@ -556,6 +556,7 @@ def filter_clips(
     min_people: Optional[int] = None,
     max_people: Optional[int] = None,
     search_description: Optional[str] = None,
+    has_faces: Optional[bool] = None,
 ) -> list[dict]:
     """Filter clips by various criteria including content analysis.
 
@@ -645,6 +646,12 @@ def filter_clips(
         if max_people is not None:
             person_count = getattr(clip, 'person_count', None) or 0
             if person_count > max_people:
+                continue
+
+        # Apply has_faces filter
+        if has_faces is not None:
+            clip_has_faces = bool(clip.face_embeddings)
+            if clip_has_faces != has_faces:
                 continue
 
         # Calculate aspect ratio for output
@@ -759,6 +766,8 @@ def list_clips(
             "transcript": clip.get_transcript_text() if clip.transcript else None,
             "notes": getattr(clip, 'notes', None),
             "tags": getattr(clip, 'tags', []),
+            "has_face_embeddings": clip.face_embeddings is not None and len(clip.face_embeddings) > 0,
+            "face_count": len(clip.face_embeddings) if clip.face_embeddings else 0,
         })
 
     # Check if detection is in progress when no clips found
@@ -3389,7 +3398,7 @@ def start_clip_analysis(
     """
     valid_operations = {
         "colors", "shots", "transcription", "classification",
-        "description", "objects", "people",
+        "description", "objects", "people", "face_embeddings",
     }
 
     # Validate operations
@@ -3414,6 +3423,7 @@ def start_clip_analysis(
         "description": "description",
         "objects": "object_detection",
         "people": "person_detection",
+        "face_embeddings": "face_detection",
     }
 
     # Single operation: return specific worker marker
@@ -3430,6 +3440,7 @@ def start_clip_analysis(
             "description": ("description_worker", "Description generation"),
             "objects": ("detection_worker_yolo", "Object detection"),
             "people": ("detection_worker_yolo", "Person detection"),
+            "face_embeddings": ("face_detection_worker", "Face detection"),
         }
         worker_attr, worker_name = worker_checks[op]
         worker = getattr(main_window, worker_attr, None)
@@ -3458,6 +3469,7 @@ def start_clip_analysis(
         "description": "describe",
         "objects": "detect_objects",
         "people": "detect_objects",  # people detection uses same YOLO pipeline
+        "face_embeddings": "face_embeddings",
     }
     pipeline_ops = list(dict.fromkeys(pipeline_op_map[op] for op in ops))
 
@@ -3474,7 +3486,7 @@ def start_clip_analysis(
     description="Run analysis operations on clips with live GUI update. "
                 "Supports smart concurrency: local ops run in parallel, then sequential, then cloud. "
                 "Default operations: colors, shots, transcribe. "
-                "Available operations: colors, shots, classify, detect_objects, extract_text, transcribe, describe, cinematography.",
+                "Available operations: colors, shots, classify, detect_objects, face_embeddings, extract_text, transcribe, describe, cinematography.",
     requires_project=True,
     modifies_gui_state=True,
     modifies_project_state=True
@@ -3677,9 +3689,10 @@ def list_sorting_algorithms(project) -> dict:
             "available": has_face_embeddings,
             "reason": None if has_face_embeddings else "Run face detection analysis first",
             "parameters": [
-                {"name": "reference_image_path", "type": "string", "description": "Path to reference image of the person"},
+                {"name": "reference_image_paths", "type": "array", "description": "Paths to 1-3 reference images of the person"},
                 {"name": "sensitivity", "type": "string", "options": ["strict", "balanced", "loose"], "default": "balanced"},
                 {"name": "ordering", "type": "string", "options": ["original", "duration", "color", "brightness", "confidence", "random"], "default": "original"},
+                {"name": "sampling_interval", "type": "number", "description": "Seconds between frame samples (0.25-5.0, default 1.0)"},
             ]
         },
     ]
@@ -3898,33 +3911,37 @@ def generate_reference_guided(
 def generate_rose_hobart(
     project,
     main_window,
-    reference_image_path: str,
+    reference_image_path: str | None = None,
+    reference_image_paths: list[str] | None = None,
     sensitivity: str = "balanced",
     ordering: str = "original",
+    sampling_interval: float = 1.0,
 ) -> dict:
     """Generate a Rose Hobart sequence filtering clips by a specific person's face.
 
     Args:
-        reference_image_path: Path to reference image of the person
+        reference_image_path: (Deprecated) Single reference image path, use reference_image_paths instead
+        reference_image_paths: Paths to 1-3 reference images of the person
         sensitivity: Match sensitivity - "strict", "balanced", or "loose"
         ordering: Result ordering - "original", "duration", "color", "brightness",
                  "confidence", or "random"
+        sampling_interval: Seconds between frame samples (0.25-5.0, default 1.0)
 
     Returns:
         Dict with success status and matched clip count
     """
-    from pathlib import Path
     from core.analysis.faces import (
         average_embeddings,
         compare_faces,
-        extract_faces_from_clip,
         extract_faces_from_image,
+        order_matched_clips,
         SENSITIVITY_PRESETS,
     )
 
-    ref_path = Path(reference_image_path)
-    if not ref_path.exists():
-        return {"success": False, "error": f"Reference image not found: {reference_image_path}"}
+    # Support both singular and plural reference image params
+    paths = reference_image_paths or ([reference_image_path] if reference_image_path else [])
+    if not paths:
+        return {"success": False, "error": "At least one reference image path is required"}
 
     if sensitivity not in SENSITIVITY_PRESETS:
         return {"success": False, "error": f"Invalid sensitivity: {sensitivity}. Use: strict, balanced, loose"}
@@ -3933,13 +3950,22 @@ def generate_rose_hobart(
     if ordering not in valid_orderings:
         return {"success": False, "error": f"Invalid ordering: {ordering}. Use: {sorted(valid_orderings)}"}
 
-    # Extract reference face
-    ref_faces = extract_faces_from_image(ref_path)
-    if not ref_faces:
-        return {"success": False, "error": "No face detected in reference image"}
+    # Extract reference faces from all provided images
+    ref_embeddings = []
+    for path_str in paths:
+        is_valid, err_msg, validated_path = _validate_path(path_str, must_exist=True)
+        if not is_valid:
+            return {"success": False, "error": err_msg}
+        ref_faces = extract_faces_from_image(validated_path)
+        if ref_faces:
+            best = max(ref_faces, key=lambda f: f["confidence"])
+            ref_embeddings.append(best["embedding"])
 
-    best_ref = max(ref_faces, key=lambda f: f["confidence"])
-    ref_embeddings = [best_ref["embedding"]]
+    if not ref_embeddings:
+        return {"success": False, "error": "No face detected in any reference image"}
+
+    if len(ref_embeddings) > 1:
+        ref_embeddings = [average_embeddings(ref_embeddings)]
 
     threshold = SENSITIVITY_PRESETS[sensitivity]
 
@@ -3955,17 +3981,10 @@ def generate_rose_hobart(
         if not source:
             continue
 
-        # Use cached or extract
-        if clip.face_embeddings is not None:
-            clip_faces = clip.face_embeddings
-        else:
-            clip_faces = extract_faces_from_clip(
-                source_path=source.file_path,
-                start_frame=clip.start_frame,
-                end_frame=clip.end_frame,
-                fps=source.fps,
-            )
-            clip.face_embeddings = clip_faces if clip_faces else []
+        # Only use pre-computed face embeddings
+        clip_faces = clip.face_embeddings
+        if clip_faces is None:
+            continue  # Skip clips without pre-computed face embeddings
 
         is_match, confidence = compare_faces(ref_embeddings, clip_faces, threshold)
         if is_match:
@@ -3978,25 +3997,8 @@ def generate_rose_hobart(
             "message": "No clips matched the reference person. Try 'loose' sensitivity.",
         }
 
-    # Order
-    import random as _random
-    _ORDERING_MAP = {
-        "original": lambda m: m.sort(key=lambda x: (x[1].file_path.name, x[0].start_frame)),
-        "duration": lambda m: m.sort(key=lambda x: x[0].duration_seconds(x[1].fps)),
-        "brightness": lambda m: m.sort(key=lambda x: x[0].average_brightness or 0.5),
-        "confidence": lambda m: m.sort(key=lambda x: x[2], reverse=True),
-        "random": lambda m: _random.shuffle(m),
-    }
-    if ordering == "color":
-        import colorsys
-        def _color_sort(m):
-            m.sort(key=lambda x: colorsys.rgb_to_hsv(*(c / 255.0 for c in x[0].dominant_colors[0]))[0]
-                   if x[0].dominant_colors else 0.5)
-        _color_sort(matched)
-    elif ordering in _ORDERING_MAP:
-        _ORDERING_MAP[ordering](matched)
-
-    sequence_clips = [(clip, source) for clip, source, _ in matched]
+    # Order using shared function
+    sequence_clips = order_matched_clips(matched, ordering)
 
     if main_window and hasattr(main_window, 'sequence_tab'):
         main_window.sequence_tab._apply_dialog_sequence(

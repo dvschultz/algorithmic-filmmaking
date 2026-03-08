@@ -321,7 +321,15 @@ class Clip:
         if self.detected_objects:
             data["detected_objects"] = self.detected_objects
         if self.face_embeddings:
-            data["face_embeddings"] = self.face_embeddings
+            data["face_embeddings"] = [
+                {
+                    "bbox": fe["bbox"],
+                    "embedding": [round(v, 5) for v in fe["embedding"]],
+                    "confidence": fe["confidence"],
+                    **({"frame_number": fe["frame_number"]} if "frame_number" in fe else {}),
+                }
+                for fe in self.face_embeddings
+            ]
         if self.person_count is not None:
             data["person_count"] = self.person_count
         # Description fields
@@ -399,12 +407,21 @@ class Clip:
                 bbox = entry.get("bbox")
                 emb = entry.get("embedding")
                 conf = entry.get("confidence")
-                if (isinstance(bbox, list) and len(bbox) == 4
+                if not (isinstance(bbox, list) and len(bbox) == 4
+                        and all(isinstance(v, (int, float)) for v in bbox)
                         and isinstance(emb, list) and len(emb) == 512
+                        and all(isinstance(v, (int, float)) for v in emb)
                         and isinstance(conf, (int, float))):
-                    face_embeddings.append(entry)
-                else:
                     logger.warning("Discarding malformed face embedding entry")
+                    continue
+                clean = {
+                    "bbox": bbox,
+                    "embedding": emb,
+                    "confidence": float(conf),
+                }
+                if "frame_number" in entry and isinstance(entry["frame_number"], int):
+                    clean["frame_number"] = entry["frame_number"]
+                face_embeddings.append(clean)
             if not face_embeddings:
                 face_embeddings = None
 

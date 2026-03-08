@@ -3215,6 +3215,8 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_pipeline_face_detection_finished(self):
+        from core.analysis.faces import unload_model
+        unload_model()
         self._on_analysis_phase_worker_finished("face_embeddings")
 
     @Slot()
@@ -6239,6 +6241,7 @@ class MainWindow(QMainWindow):
             self.progress_bar.setValue(percent)
             self.status_bar.showMessage(f"Detecting faces: {current}/{total} clips...")
 
+    @Slot(int, int)
     def _on_object_detection_progress(self, current: int, total: int):
         """Handle object detection progress updates."""
         if total > 0:

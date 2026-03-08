@@ -5,7 +5,10 @@ as the InsightFace model requires video file access for frame sampling.
 """
 
 import logging
-from typing import Optional
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from models.clip import Clip, Source
 
 from PySide6.QtCore import Signal
 
@@ -34,8 +37,8 @@ class FaceDetectionWorker(CancellableWorker):
 
     def __init__(
         self,
-        clips: list,
-        sources_by_id: dict,
+        clips: list["Clip"],
+        sources_by_id: dict[str, "Source"],
         sample_interval: float = 1.0,
         skip_existing: bool = True,
         parent=None,
@@ -72,6 +75,9 @@ class FaceDetectionWorker(CancellableWorker):
 
         logger.info(f"Starting face detection: {total} clips")
 
+        # Group by source to minimize repeated file opens
+        clips_to_process.sort(key=lambda cs: cs[1].file_path.name)
+
         for i, (clip, source) in enumerate(clips_to_process):
             if self.is_cancelled():
                 self._log_cancelled()
@@ -94,5 +100,7 @@ class FaceDetectionWorker(CancellableWorker):
 
             self.progress.emit(i + 1, total)
 
+        from core.analysis.faces import unload_model
+        unload_model()
         self.detection_completed.emit()
         self._log_complete()

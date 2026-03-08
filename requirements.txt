@@ -25,9 +25,9 @@ httpx>=0.25.0
 
 # Content Analysis
 ultralytics>=8.4.0  # YOLO26 (NMS-free, 43% faster CPU inference)
-insightface>=0.7.3  # Face detection and ArcFace embeddings
-onnxruntime>=1.16.0; sys_platform != 'darwin' or platform_machine != 'arm64'  # InsightFace backend
-onnxruntime-silicon>=0.0.3; sys_platform == 'darwin' and platform_machine == 'arm64'  # Apple Silicon
+insightface>=0.7.3,<1.0  # Face detection and ArcFace embeddings
+onnxruntime>=1.16.0,<2.0; sys_platform != 'darwin' or platform_machine != 'arm64'  # InsightFace backend
+onnxruntime-silicon>=0.0.3,<1.0; sys_platform == 'darwin' and platform_machine == 'arm64'  # Apple Silicon
 torchvision>=0.15.0  # MobileNet (compatible with torch>=2.0)
 einops>=0.7.0
 

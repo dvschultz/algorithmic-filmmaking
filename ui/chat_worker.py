@@ -128,83 +128,6 @@ def _parse_tool_calls_from_text(content: str, available_tools: list[str]) -> tup
     return tool_calls, cleaned_content
 
 
-def _format_tool_result_for_display(tool_name: str, result: dict) -> str:
-    """Format a tool result for human-readable display.
-
-    Args:
-        tool_name: Name of the tool that was executed
-        result: Tool result dict
-
-    Returns:
-        Human-readable summary string
-    """
-    # Check executor-level failure
-    if not result.get("success", False):
-        error = result.get("error", "Unknown error")
-        return f"**Error:** {error}"
-
-    data = result.get("result", result)
-
-    # Check inner tool failure (executor succeeded but tool returned error)
-    if isinstance(data, dict) and data.get("success") is False:
-        error = data.get("error", "Unknown error")
-        return f"**Error:** {error}"
-
-    if tool_name == "get_project_state":
-        name = data.get("name", "Untitled")
-        sources = data.get("sources", [])
-        total_clips = data.get("clip_count", 0)
-        sequence_clips = data.get("sequence_clips", 0)
-
-        lines = [f"**Project:** {name}"]
-        if sources:
-            lines.append(f"**Videos:** {len(sources)}")
-            for src in sources[:3]:  # Show first 3
-                src_name = src.get("name", "Unknown")
-                duration = src.get("duration", 0)
-                clips = src.get("clips", 0)
-                lines.append(f"  • {src_name} ({duration:.1f}s, {clips} clips)")
-            if len(sources) > 3:
-                lines.append(f"  • ...and {len(sources) - 3} more")
-        lines.append(f"**Total Clips:** {total_clips}")
-        if sequence_clips:
-            lines.append(f"**Sequence:** {sequence_clips} clips")
-        return "\n".join(lines)
-
-    elif tool_name == "list_clips":
-        clips = data if isinstance(data, list) else data.get("clips", [])
-        if not clips:
-            return "No clips available."
-        lines = [f"**{len(clips)} clips:**"]
-        for clip in clips[:5]:  # Show first 5
-            clip_id = clip.get("id", "?")[:8]
-            duration = clip.get("duration_seconds", 0)
-            shot_type = clip.get("shot_type", "")
-            shot_info = f" ({shot_type})" if shot_type else ""
-            lines.append(f"  • {clip_id}... {duration:.1f}s{shot_info}")
-        if len(clips) > 5:
-            lines.append(f"  • ...and {len(clips) - 5} more")
-        return "\n".join(lines)
-
-    elif tool_name == "filter_clips":
-        clips = data if isinstance(data, list) else data.get("clips", [])
-        count = len(clips)
-        if count == 0:
-            return "No clips match the filter criteria."
-        return f"Found **{count}** matching clips."
-
-    elif tool_name == "detect_scenes":
-        clip_count = data.get("clip_count", 0)
-        source_name = data.get("source_name", "video")
-        return f"Detected **{clip_count}** scenes in {source_name}."
-
-    elif tool_name == "add_to_sequence":
-        added = data.get("added", 0)
-        return f"Added **{added}** clips to the sequence."
-
-    # Default: show success message
-    return ""
-
 
 def _create_tool_call(name: str, arguments: dict) -> dict:
     """Create a tool call dict in OpenAI format.
@@ -241,7 +164,6 @@ class ChatAgentWorker(QThread):
     clear_current_bubble = Signal()  # Clear the streaming bubble (for JSON suppression)
     tool_called = Signal(str, dict)  # tool_name, arguments
     tool_result = Signal(str, dict, bool)  # tool_name, result, success
-    tool_result_formatted = Signal(str)  # Human-readable tool result summary
     gui_tool_requested = Signal(str, dict, str)  # tool_name, args, tool_call_id (for main thread execution)
     gui_tool_completed = Signal(str)  # tool_call_id (set by main thread when done)
     gui_tool_cancelled = Signal(str)  # tool_name (emitted when GUI tool times out, to cancel workers)
@@ -412,11 +334,6 @@ class ChatAgentWorker(QThread):
 
                     # Emit GUI sync signals for specific tools
                     self._emit_gui_sync_signal(name, args, result)
-
-                    # Emit human-readable summary
-                    formatted = _format_tool_result_for_display(name, result)
-                    if formatted:
-                        self.tool_result_formatted.emit(formatted)
 
                     # Add tool result to messages
                     tool_msg = executor.format_for_llm(result)
@@ -599,7 +516,7 @@ When downloading videos, use these defaults - do NOT ask the user for a path unl
 
 You help users create video projects by:
 - Detecting scenes in videos
-- Analyzing clips (colors, shot types, transcription, description, classification, object detection, person detection)
+- Analyzing clips (colors, shot types, transcription, description, classification, object detection, person detection, face detection)
 - Building sequences from clips
 - Exporting clips and datasets
 
@@ -792,7 +709,7 @@ Available tools:
             if total_clips > 0:
                 for field_name in ("shot_type", "dominant_colors", "description",
                                    "transcript", "detected_objects", "person_count",
-                                   "extracted_texts", "cinematography"):
+                                   "extracted_texts", "cinematography", "face_embeddings"):
                     count = sum(
                         1 for c in self.project.clips
                         if getattr(c, field_name, None) is not None

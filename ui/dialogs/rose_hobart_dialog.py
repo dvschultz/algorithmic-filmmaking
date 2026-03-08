@@ -6,9 +6,7 @@ person's face appears. Named after Joseph Cornell's 1936 film.
 """
 
 import logging
-import random
 from pathlib import Path
-from typing import Optional
 
 from PySide6.QtWidgets import (
     QComboBox,
@@ -24,18 +22,20 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PySide6.QtCore import Qt, Signal, Slot, QThread
+from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtGui import QFont, QImage, QPainter, QPen, QPixmap
 
+from core.analysis.faces import SENSITIVITY_PRESETS, order_matched_clips
 from ui.theme import theme, UISizes
+from ui.workers.base import CancellableWorker
 
 logger = logging.getLogger(__name__)
 
-# Sensitivity presets map to cosine similarity thresholds
-_SENSITIVITY_MAP = {
-    "Strict": 0.50,
-    "Balanced": 0.35,
-    "Loose": 0.25,
+# Map dialog display names to faces.py preset keys
+_SENSITIVITY_DISPLAY_TO_KEY = {
+    "Strict": "strict",
+    "Balanced": "balanced",
+    "Loose": "loose",
 }
 
 _ORDERING_OPTIONS = [
@@ -48,18 +48,17 @@ _ORDERING_OPTIONS = [
 ]
 
 
-class RoseHobartWorker(QThread):
+class RoseHobartWorker(CancellableWorker):
     """Background worker for Rose Hobart face matching and sequence generation."""
 
-    progress = Signal(str)  # Status message
+    progress_message = Signal(str)  # Status message
     match_found = Signal(int)  # Running match count
     finished_sequence = Signal(list)  # list of (Clip, Source)
-    error = Signal(str)
 
     def __init__(
         self,
         reference_image_paths: list[Path],
-        clips: list,  # list of (Clip, Source)
+        clips: list[tuple],  # list of (Clip, Source)
         sensitivity_preset: str,
         ordering: str,
         sample_interval: float,
@@ -71,10 +70,10 @@ class RoseHobartWorker(QThread):
         self._sensitivity = sensitivity_preset
         self._ordering = ordering
         self._sample_interval = sample_interval
-        self._cancelled = False
 
     def run(self):
         """Run face matching pipeline."""
+        self._log_start()
         try:
             from core.analysis.faces import (
                 average_embeddings,
@@ -84,12 +83,11 @@ class RoseHobartWorker(QThread):
             )
 
             # Step 1: Extract reference face embeddings
-            self.progress.emit("Extracting reference face embeddings...")
+            self.progress_message.emit("Extracting reference face embeddings...")
             ref_embeddings = []
             for path in self._reference_paths:
                 faces = extract_faces_from_image(path)
                 if faces:
-                    # Use highest confidence face
                     best = max(faces, key=lambda f: f["confidence"])
                     ref_embeddings.append(best["embedding"])
 
@@ -97,13 +95,14 @@ class RoseHobartWorker(QThread):
                 self.error.emit("No faces detected in reference images.")
                 return
 
-            # Average embeddings if multiple references
             if len(ref_embeddings) > 1:
                 ref_embeddings = [average_embeddings(ref_embeddings)]
 
-            threshold = _SENSITIVITY_MAP.get(self._sensitivity, 0.35)
+            preset_key = _SENSITIVITY_DISPLAY_TO_KEY.get(self._sensitivity, "balanced")
+            threshold = SENSITIVITY_PRESETS[preset_key]
 
-            if self._cancelled:
+            if self.is_cancelled():
+                self._log_cancelled()
                 return
 
             # Step 2: Process clips
@@ -112,16 +111,15 @@ class RoseHobartWorker(QThread):
             match_count = 0
 
             for i, (clip, source) in enumerate(self._clips):
-                if self._cancelled:
+                if self.is_cancelled():
+                    self._log_cancelled()
                     return
 
-                self.progress.emit(f"Processing clip {i + 1} of {total}...")
+                self.progress_message.emit(f"Processing clip {i + 1} of {total}...")
 
-                # Use cached face embeddings if available
                 if clip.face_embeddings is not None:
                     clip_faces = clip.face_embeddings
                 else:
-                    # Extract and cache
                     clip_faces = extract_faces_from_clip(
                         source_path=source.file_path,
                         start_frame=clip.start_frame,
@@ -139,63 +137,41 @@ class RoseHobartWorker(QThread):
                     match_count += 1
                     self.match_found.emit(match_count)
 
-            if self._cancelled:
+            if self.is_cancelled():
+                self._log_cancelled()
                 return
 
             if not matched:
                 self.finished_sequence.emit([])
                 return
 
-            # Step 3: Order matched clips
-            ordered = self._order_clips(matched)
+            # Step 3: Order matched clips (shared function)
+            ordered = order_matched_clips(matched, self._ordering)
 
-            if not self._cancelled:
+            if not self.is_cancelled():
                 self.finished_sequence.emit(ordered)
 
+            self._log_complete()
+
         except Exception as e:
-            if not self._cancelled:
-                logger.error(f"Rose Hobart generation error: {e}")
-                self.error.emit(str(e))
+            if not self.is_cancelled():
+                logger.error(f"Rose Hobart generation error: {e}", exc_info=True)
+                self.error.emit("Face matching failed. Check logs for details.")
 
-    def _order_clips(self, matched: list) -> list:
-        """Order matched clips per user selection.
 
-        Args:
-            matched: List of (Clip, Source, confidence) tuples.
+class _RefImageExtractWorker(CancellableWorker):
+    """Tiny worker that extracts faces from a single reference image off the main thread."""
 
-        Returns:
-            List of (Clip, Source) tuples in order.
-        """
-        if self._ordering == "Original Order":
-            matched.sort(key=lambda x: (x[1].file_path.name, x[0].start_frame))
-        elif self._ordering == "By Duration":
-            matched.sort(key=lambda x: x[0].duration_seconds(x[1].fps))
-        elif self._ordering == "By Color":
-            # Sort by hue of first dominant color
-            def color_key(item):
-                clip = item[0]
-                if clip.dominant_colors:
-                    r, g, b = clip.dominant_colors[0]
-                    # Simple hue approximation
-                    import colorsys
-                    h, _, _ = colorsys.rgb_to_hsv(r / 255.0, g / 255.0, b / 255.0)
-                    return h
-                return 0.5
-            matched.sort(key=color_key)
-        elif self._ordering == "By Brightness":
-            matched.sort(
-                key=lambda x: x[0].average_brightness if x[0].average_brightness is not None else 0.5
-            )
-        elif self._ordering == "By Confidence":
-            matched.sort(key=lambda x: x[2], reverse=True)
-        elif self._ordering == "Random":
-            random.shuffle(matched)
+    faces_extracted = Signal(str, list)  # image_path_str, faces_list
 
-        return [(clip, source) for clip, source, _ in matched]
+    def __init__(self, image_path: Path, parent=None):
+        super().__init__(parent)
+        self._image_path = image_path
 
-    def cancel(self):
-        """Cancel the worker."""
-        self._cancelled = True
+    def run(self):
+        from core.analysis.faces import extract_faces_from_image
+        faces = extract_faces_from_image(self._image_path)
+        self.faces_extracted.emit(str(self._image_path), faces)
 
 
 class _ReferenceImageWidget(QWidget):
@@ -268,13 +244,6 @@ class _ReferenceImageWidget(QWidget):
     def has_face(self) -> bool:
         return len(self._faces) > 0
 
-    @property
-    def best_embedding(self) -> Optional[list[float]]:
-        if self._faces:
-            best = max(self._faces, key=lambda f: f["confidence"])
-            return best["embedding"]
-        return None
-
 
 class RoseHobartDialog(QDialog):
     """Face-filter sequencer dialog.
@@ -300,7 +269,8 @@ class RoseHobartDialog(QDialog):
         super().__init__(parent)
         self.clips = clips
         self.sources_by_id = sources_by_id
-        self.worker: Optional[RoseHobartWorker] = None
+        self.worker: RoseHobartWorker | None = None
+        self._ref_extract_worker: _RefImageExtractWorker | None = None
         self._ref_widgets: list[_ReferenceImageWidget] = []
 
         self.setWindowTitle("Rose Hobart")
@@ -386,7 +356,7 @@ class RoseHobartDialog(QDialog):
 
         self.sensitivity_combo = QComboBox()
         self.sensitivity_combo.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
-        self.sensitivity_combo.addItems(list(_SENSITIVITY_MAP.keys()))
+        self.sensitivity_combo.addItems(list(_SENSITIVITY_DISPLAY_TO_KEY.keys()))
         self.sensitivity_combo.setCurrentText("Balanced")
         self.sensitivity_combo.setToolTip(
             "Strict: frontal faces only\n"
@@ -467,7 +437,7 @@ class RoseHobartDialog(QDialog):
     # ──────────────────────────────────────────────────────────
 
     def _on_add_reference(self):
-        """Add a reference image via file picker."""
+        """Add a reference image via file picker (async face extraction)."""
         if len(self._ref_widgets) >= 3:
             QMessageBox.information(self, "Limit Reached", "Maximum 3 reference images.")
             return
@@ -481,11 +451,24 @@ class RoseHobartDialog(QDialog):
         if not path:
             return
 
-        # Detect faces immediately
-        from core.analysis.faces import extract_faces_from_image
-        faces = extract_faces_from_image(Path(path))
+        # Disable button while extracting
+        self.add_ref_btn.setEnabled(False)
+        self.add_ref_btn.setText("Detecting face...")
 
-        widget = _ReferenceImageWidget(Path(path), faces, parent=self)
+        # Run face extraction off the main thread
+        worker = _RefImageExtractWorker(Path(path), parent=self)
+        worker.faces_extracted.connect(self._on_ref_faces_extracted)
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+        self._ref_extract_worker = worker  # prevent GC
+
+    @Slot(str, list)
+    def _on_ref_faces_extracted(self, image_path_str: str, faces: list):
+        """Handle async face extraction result."""
+        self._ref_extract_worker = None
+        image_path = Path(image_path_str)
+
+        widget = _ReferenceImageWidget(image_path, faces, parent=self)
         widget.remove_requested.connect(lambda w=widget: self._remove_reference(w))
         self._ref_container.addWidget(widget)
         self._ref_widgets.append(widget)
@@ -494,6 +477,10 @@ class RoseHobartDialog(QDialog):
 
         if len(self._ref_widgets) >= 3:
             self.add_ref_btn.setEnabled(False)
+            self.add_ref_btn.setText("+ Add Reference Image")
+        else:
+            self.add_ref_btn.setEnabled(True)
+            self.add_ref_btn.setText("+ Add Reference Image")
 
     def _remove_reference(self, widget: _ReferenceImageWidget):
         """Remove a reference image."""
@@ -547,7 +534,7 @@ class RoseHobartDialog(QDialog):
             sample_interval=self.sample_spin.value(),
             parent=self,
         )
-        self.worker.progress.connect(self._on_progress, Qt.UniqueConnection)
+        self.worker.progress_message.connect(self._on_progress, Qt.UniqueConnection)
         self.worker.match_found.connect(self._on_match_found, Qt.UniqueConnection)
         self.worker.finished_sequence.connect(self._on_finished, Qt.UniqueConnection)
         self.worker.error.connect(self._on_error, Qt.UniqueConnection)
