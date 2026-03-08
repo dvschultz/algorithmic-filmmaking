@@ -221,6 +221,7 @@ class VideoPlayer(QWidget):
     position_updated = Signal(int)  # position in milliseconds
     duration_changed = Signal(int)  # duration in milliseconds
     media_loaded = Signal()  # fires when file is ready to play
+    media_load_failed = Signal()  # fires when file fails to load
     playback_state_changed = Signal(bool)  # True=playing, False=paused/stopped
     play_requested = Signal()  # emitted in sequence mode when play is clicked
     stop_requested = Signal()  # emitted in sequence mode when stop is clicked
@@ -468,7 +469,7 @@ class VideoPlayer(QWidget):
             vo='libmpv',
             keep_open='yes',
             idle='yes',
-            hwdec='auto-copy',
+            hwdec='auto',
             hr_seek='yes',
             input_default_bindings=False,
             input_vo_keyboard=False,
@@ -497,6 +498,23 @@ class VideoPlayer(QWidget):
         def on_file_loaded(event):
             self._bridge.media_loaded.emit()
         self._file_loaded_cb = on_file_loaded  # prevent GC
+
+        # Register end-file event to detect load failures.
+        # Without this, a failed load leaves _media_loaded=False permanently,
+        # causing _sequence_preview_loading to stay True (deadlock).
+        @self._mpv.event_callback('end-file')
+        def on_end_file(event):
+            # event is an MpvEvent ctypes struct; event.data is MpvEventEndFile
+            # MpvEventEndFile.reason: 0=EOF, 1=RESTARTED, 2=ABORTED, 3=QUIT, 4=ERROR
+            try:
+                end_data = event.data
+                if end_data is not None and end_data.reason == 4:  # ERROR
+                    logger.warning("MPV end-file with error — media failed to load")
+                    QMetaObject.invokeMethod(self, "_on_load_failed", Qt.QueuedConnection)
+            except (ValueError, AttributeError):
+                pass  # Struct access can fail during shutdown
+        self._end_file_cb = on_end_file  # prevent GC
+
         self._player_ready = True
 
         # Replay any load_video call that arrived before init completed
@@ -792,45 +810,6 @@ class VideoPlayer(QWidget):
         )
         self._chromatic_color_bar.setVisible(True)
 
-    def set_transforms(self, hflip: bool = False, vflip: bool = False, reverse: bool = False):
-        """Apply per-clip transforms for sequence preview.
-
-        Args:
-            hflip: Horizontal flip
-            vflip: Vertical flip
-            reverse: Reverse playback direction
-        """
-        if not self._player_ready or self._shutting_down:
-            return
-
-        # Build lavfi video filter chain.
-        # Use mpv's 'vf' command (not property assignment) for reliable
-        # runtime filter manipulation with hardware-decoded frames.
-        vf_parts = []
-        if hflip:
-            vf_parts.append("hflip")
-        if vflip:
-            vf_parts.append("vflip")
-
-        try:
-            if vf_parts:
-                filter_str = "lavfi=[" + ",".join(vf_parts) + "]"
-                self._mpv.command("vf", "set", filter_str)
-            else:
-                self._mpv.command("vf", "clr", "")
-        except Exception:
-            logger.warning("Failed to set mpv vf filters: %s", vf_parts, exc_info=True)
-
-        # Reverse playback direction
-        try:
-            self._mpv["play-direction"] = "backward" if reverse else "forward"
-        except Exception:
-            logger.debug("Failed to set mpv play-direction", exc_info=True)
-
-    def clear_transforms(self):
-        """Remove all per-clip transforms."""
-        self.set_transforms()
-
     # --- Internal handlers ---
 
     def _toggle_playback(self):
@@ -992,6 +971,16 @@ class VideoPlayer(QWidget):
             self._mpv.pause = False
             self._pending_play_on_load = False
         self.media_loaded.emit()
+
+    @Slot()
+    def _on_load_failed(self):
+        """Handle media load failure — clear pending state and notify listeners."""
+        logger.warning("Media load failed — clearing pending state")
+        self._media_loaded = False
+        self._pending_seek_seconds = None
+        self._pending_clip_range = None
+        self._pending_play_on_load = False
+        self.media_load_failed.emit()
 
     @Slot()
     def _on_eof(self):

@@ -1374,6 +1374,7 @@ class MainWindow(QMainWindow):
         self.sequence_tab.video_player.position_updated.connect(self._on_video_position_updated)
         self.sequence_tab.video_player.playback_state_changed.connect(self._on_video_state_changed)
         self.sequence_tab.video_player.media_loaded.connect(self._on_sequence_video_loaded)
+        self.sequence_tab.video_player.media_load_failed.connect(self._on_sequence_video_load_failed)
 
     def _setup_chat_panel(self):
         """Initialize the chat panel dock widget."""
@@ -4325,40 +4326,46 @@ class MainWindow(QMainWindow):
             self._pending_sequence_preview_clip_range = None
             self._pending_sequence_preview_seek_seconds = None
             self.sequence_tab.video_player.clear_clip_range()
-            self.sequence_tab.video_player.clear_transforms()
             self.sequence_tab.video_player.seek_to(time_seconds)
             self._update_sequence_chromatic_bar(None)
             return
 
         sequence = self.sequence_tab.timeline.get_sequence()
         timeline_frame = int(time_seconds * sequence.fps)
-        source_seconds = _timeline_frame_to_source_seconds(seq_clip, timeline_frame, source.fps)
-        clip_start_seconds = seq_clip.in_point / source.fps
-        clip_end_seconds = seq_clip.out_point / source.fps
 
-        # Apply per-clip transforms for scrub preview
-        self.sequence_tab.video_player.set_transforms(
-            hflip=getattr(seq_clip, "hflip", False),
-            vflip=getattr(seq_clip, "vflip", False),
-            reverse=getattr(seq_clip, "reverse", False),
-        )
+        # Use pre-rendered clip if available
+        prerendered = getattr(seq_clip, "prerendered_path", None)
+        if prerendered and Path(prerendered).exists():
+            file_to_load = Path(prerendered)
+            clip_start_seconds = 0
+            clip_end_seconds = (seq_clip.out_point - seq_clip.in_point) / source.fps
+            frame_in_clip = timeline_frame - seq_clip.start_frame
+            source_seconds = frame_in_clip / source.fps
+        else:
+            file_to_load = source.file_path
+            source_seconds = _timeline_frame_to_source_seconds(seq_clip, timeline_frame, source.fps)
+            clip_start_seconds = seq_clip.in_point / source.fps
+            clip_end_seconds = seq_clip.out_point / source.fps
+
+        # Determine the source ID for tracking loaded sources
+        preview_source_key = str(file_to_load)
 
         # Keep preview source aligned to the clip under playhead.
-        if self._sequence_preview_source_id != source.id:
+        if self._sequence_preview_source_id != preview_source_key:
             self._preview_sync_clip = seq_clip
             self._update_sequence_chromatic_bar(seq_clip)
-            self._sequence_preview_source_id = source.id
+            self._sequence_preview_source_id = preview_source_key
             self._sequence_preview_loading = True
-            self._pending_sequence_preview_source_id = source.id
+            self._pending_sequence_preview_source_id = preview_source_key
             self._pending_sequence_preview_clip_range = (clip_start_seconds, clip_end_seconds)
             self._pending_sequence_preview_seek_seconds = source_seconds
-            self.sequence_tab.video_player.load_video(source.file_path)
+            self.sequence_tab.video_player.load_video(file_to_load)
             return
 
         self._preview_sync_clip = seq_clip
         if self._sequence_preview_loading:
             # Source is still loading; defer seek/range until media_loaded.
-            self._pending_sequence_preview_source_id = source.id
+            self._pending_sequence_preview_source_id = preview_source_key
             self._pending_sequence_preview_clip_range = (clip_start_seconds, clip_end_seconds)
             self._pending_sequence_preview_seek_seconds = source_seconds
             return
@@ -4408,6 +4415,21 @@ class MainWindow(QMainWindow):
             self.sequence_tab.video_player.set_clip_range(clip_range[0], clip_range[1])
         if seek_seconds is not None:
             self.sequence_tab.video_player.seek_to(seek_seconds)
+
+    @Slot()
+    def _on_sequence_video_load_failed(self):
+        """Handle video load failure — clear loading state to prevent deadlock."""
+        logger.warning("Sequence video load failed — clearing loading state")
+        self._sequence_preview_loading = False
+        self._pending_sequence_preview_source_id = None
+        self._pending_sequence_preview_clip_range = None
+        self._pending_sequence_preview_seek_seconds = None
+        self._pending_sequence_playback_source_id = None
+        self._pending_sequence_playback_range = None
+        # Invalidate the source ID so the next attempt reloads
+        self._sequence_preview_source_id = None
+        if self._is_playing:
+            self._stop_playback()
 
     def _on_sequence_changed(self):
         """Handle sequence modification."""
@@ -4510,7 +4532,6 @@ class MainWindow(QMainWindow):
             self._current_playback_clip = None
             self._pending_sequence_playback_source_id = None
             self._pending_sequence_playback_range = None
-            self.sequence_tab.video_player.clear_transforms()
             self.sequence_tab.video_player.stop()  # Shows black
             self._update_sequence_chromatic_bar(None)
             self._playback_timer.start()
@@ -4520,44 +4541,42 @@ class MainWindow(QMainWindow):
         self._preview_sync_clip = seq_clip
         self._update_sequence_chromatic_bar(seq_clip)
 
-        # Apply per-clip transforms (hflip, vflip, reverse) to the preview player
-        self.sequence_tab.video_player.set_transforms(
-            hflip=getattr(seq_clip, "hflip", False),
-            vflip=getattr(seq_clip, "vflip", False),
-            reverse=getattr(seq_clip, "reverse", False),
-        )
+        # Use pre-rendered clip if available
+        prerendered = getattr(seq_clip, "prerendered_path", None)
+        if prerendered and Path(prerendered).exists():
+            file_to_load = Path(prerendered)
+            clip_start_seconds = 0
+            clip_end_seconds = (seq_clip.out_point - seq_clip.in_point) / source.fps
+            frame_in_clip = frame - seq_clip.start_frame
+            source_seconds = frame_in_clip / source.fps
+        else:
+            file_to_load = source.file_path
+            # Calculate source position
+            # frame_in_clip = where we are relative to clip start on timeline
+            frame_in_clip = frame - seq_clip.start_frame
+            # source_frame = in_point + offset into clip
+            source_frame = seq_clip.in_point + frame_in_clip
+            source_seconds = source_frame / source.fps
 
-        is_reverse = getattr(seq_clip, "reverse", False)
+            # Calculate end of this clip in source time
+            clip_start_seconds = seq_clip.in_point / source.fps
+            clip_end_seconds = seq_clip.out_point / source.fps
 
-        # Calculate source position
-        # frame_in_clip = where we are relative to clip start on timeline
-        frame_in_clip = frame - seq_clip.start_frame
-        # source_frame = in_point + offset into clip
-        source_frame = seq_clip.in_point + frame_in_clip
-        source_seconds = source_frame / source.fps
-
-        # Calculate end of this clip in source time
-        end_seconds = seq_clip.out_point / source.fps
-        clip_start_seconds = seq_clip.in_point / source.fps
-
-        # For reverse playback, seek to end and play backward
-        if is_reverse:
-            clip_duration = end_seconds - clip_start_seconds
-            reverse_offset = clip_duration - (source_seconds - clip_start_seconds)
-            source_seconds = clip_start_seconds + reverse_offset
+        preview_source_key = str(file_to_load)
+        end_seconds = clip_end_seconds
 
         # Load source and play range.
         # If source changes (or is still loading), defer play_range until media_loaded.
-        if self._sequence_preview_source_id != source.id:
-            self._sequence_preview_source_id = source.id
+        if self._sequence_preview_source_id != preview_source_key:
+            self._sequence_preview_source_id = preview_source_key
             self._sequence_preview_loading = True
-            self._pending_sequence_playback_source_id = source.id
+            self._pending_sequence_playback_source_id = preview_source_key
             self._pending_sequence_playback_range = (source_seconds, end_seconds)
-            self.sequence_tab.video_player.load_video(source.file_path)
+            self.sequence_tab.video_player.load_video(file_to_load)
             return
 
         if self._sequence_preview_loading:
-            self._pending_sequence_playback_source_id = source.id
+            self._pending_sequence_playback_source_id = preview_source_key
             self._pending_sequence_playback_range = (source_seconds, end_seconds)
             return
 
@@ -4690,6 +4709,13 @@ class MainWindow(QMainWindow):
         if not self._is_playing:
             return
 
+        # Ignore pause events during source loading — mpv.pause=True is set
+        # synchronously in load_video(), which fires this callback before the
+        # new file is ready. Without this guard, we'd prematurely advance to
+        # the next clip and overwrite pending playback state.
+        if self._sequence_preview_loading:
+            return
+
         if not playing:
             # Clip ended naturally (stopped/paused) - check if we should continue to next
             if self._current_playback_clip:
@@ -4729,7 +4755,6 @@ class MainWindow(QMainWindow):
         self._pending_sequence_preview_seek_seconds = None
         self.sequence_tab.video_player.stop()
         self.sequence_tab.video_player.set_playing(False)
-        self.sequence_tab.video_player.clear_transforms()
         # Restore sidebar audio and speed control
         self.clip_details_sidebar.video_player.mute = False
         self.sequence_tab.video_player.set_speed_control_enabled(True)
