@@ -123,16 +123,28 @@ class SequenceExporter:
                         continue
 
                     orig_clip, source = clip_data
-                    success = self._export_segment(
-                        source_path=source.file_path,
-                        output_path=segment_path,
-                        start_frame=seq_clip.in_point,
-                        end_frame=seq_clip.out_point,
-                        fps=config.fps,
-                        config=config,
-                        bar_color=bar_color,
-                        seq_clip=seq_clip,
-                    )
+
+                    # Use pre-rendered clip if available (transforms already baked in)
+                    prerendered = getattr(seq_clip, "prerendered_path", None)
+                    if prerendered and Path(prerendered).exists():
+                        success = self._export_prerendered_segment(
+                            prerendered_path=Path(prerendered),
+                            output_path=segment_path,
+                            fps=config.fps,
+                            config=config,
+                            bar_color=bar_color,
+                        )
+                    else:
+                        success = self._export_segment(
+                            source_path=source.file_path,
+                            output_path=segment_path,
+                            start_frame=seq_clip.in_point,
+                            end_frame=seq_clip.out_point,
+                            fps=config.fps,
+                            config=config,
+                            bar_color=bar_color,
+                            seq_clip=seq_clip,
+                        )
 
                 if success:
                     segment_paths.append(segment_path)
@@ -207,6 +219,47 @@ class SequenceExporter:
         # Audio: apply areverse if reversing video
         if apply_reverse:
             cmd.extend(["-af", "areverse"])
+
+        cmd.extend([
+            "-c:a", config.audio_codec,
+            "-b:a", config.audio_bitrate,
+            str(output_path),
+        ])
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300,
+                                **get_subprocess_kwargs())
+        return result.returncode == 0
+
+    def _export_prerendered_segment(
+        self,
+        prerendered_path: Path,
+        output_path: Path,
+        fps: float,
+        config: ExportConfig,
+        bar_color: Optional[tuple[int, int, int]] = None,
+    ) -> bool:
+        """Export a pre-rendered clip segment.
+
+        Transforms are already baked in. Only applies scale and chromatic bar.
+        """
+        vf_parts = []
+        if config.width and config.height:
+            vf_parts.append(f"scale={config.width}:{config.height}")
+        chromatic_filter = self._chromatic_bar_filter(config=config, bar_color=bar_color)
+        if chromatic_filter:
+            vf_parts.append(chromatic_filter)
+
+        cmd = [
+            self.ffmpeg_path,
+            "-y",
+            "-i", str(prerendered_path),
+            "-c:v", config.video_codec,
+            "-preset", config.preset,
+            "-crf", str(config.crf),
+        ]
+
+        if vf_parts:
+            cmd.extend(["-vf", ",".join(vf_parts)])
 
         cmd.extend([
             "-c:a", config.audio_codec,

@@ -3573,7 +3573,7 @@ def list_sorting_algorithms(project) -> dict:
     algorithms = [
         {
             "key": "shuffle",
-            "name": "Dice Roll",
+            "name": "Hatchet Job",
             "description": "Randomly shuffle clips into a new order",
             "available": True,
             "reason": None,

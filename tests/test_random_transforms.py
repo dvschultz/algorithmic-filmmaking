@@ -93,6 +93,48 @@ class TestSequenceClipTransformFields:
         assert clip.vflip is False
         assert clip.reverse is True
 
+    def test_prerendered_path_default_none(self):
+        clip = SequenceClip()
+        assert clip.prerendered_path is None
+
+    def test_prerendered_path_not_serialized_when_none(self):
+        clip = SequenceClip()
+        data = clip.to_dict()
+        assert "prerendered_path" not in data
+
+    def test_prerendered_path_round_trip(self):
+        clip = SequenceClip(prerendered_path="/cache/clip_1_0_0.mp4")
+        data = clip.to_dict()
+        assert data["prerendered_path"] == "/cache/clip_1_0_0.mp4"
+        restored = SequenceClip.from_dict(data)
+        assert restored.prerendered_path == "/cache/clip_1_0_0.mp4"
+
+    def test_prerendered_path_backward_compat(self):
+        """Old project files without prerendered_path load with None."""
+        data = {
+            "id": "old-clip",
+            "source_clip_id": "src",
+            "source_id": "s1",
+            "start_frame": 0,
+            "in_point": 0,
+            "out_point": 90,
+        }
+        clip = SequenceClip.from_dict(data)
+        assert clip.prerendered_path is None
+
+    def test_prerendered_path_with_transforms_round_trip(self):
+        """prerendered_path round-trips alongside transform flags."""
+        clip = SequenceClip(
+            hflip=True, reverse=True,
+            prerendered_path="/cache/clip_1_0_1.mp4",
+            in_point=0, out_point=90,
+        )
+        data = clip.to_dict()
+        restored = SequenceClip.from_dict(data)
+        assert restored.hflip is True
+        assert restored.reverse is True
+        assert restored.prerendered_path == "/cache/clip_1_0_1.mp4"
+
 
 # -- Transform assignment ----------------------------------------------------
 

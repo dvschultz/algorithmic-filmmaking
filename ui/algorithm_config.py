@@ -35,11 +35,11 @@ ALGORITHM_CONFIG = {
     },
     "shuffle": {
         "icon": "\U0001f3b2",
-        "label": "Dice Roll",
+        "label": "Hatchet Job",
         "description": "Randomly shuffle clips into a new order",
         "allow_duplicates": False,
         "required_analysis": [],
-        "transform_options": ["hflip", "vflip", "reverse"],
+        "is_dialog": True,
     },
     "sequential": {
         "icon": "\U0001f4cb",

@@ -42,7 +42,7 @@ def test_should_show_chromatic_bar_only_for_color_algorithm(qapp):
     assert tab.should_show_chromatic_color_bar() is True
     assert tab.chromatic_bar_checkbox.isHidden() is False
 
-    tab.algorithm_dropdown.setCurrentText("Dice Roll")
+    tab.algorithm_dropdown.setCurrentText("Hatchet Job")
     tab._update_chromatic_bar_controls("shuffle")
 
     assert tab.should_show_chromatic_color_bar() is False

@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import shutil
 import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -73,6 +74,28 @@ class ProjectMetadata:
         )
 
 
+def _copy_prerendered_clips(sequence: Sequence, base_path: Path) -> None:
+    """Copy pre-rendered clip files into the project's transformed_clips/ folder.
+
+    Updates each SequenceClip.prerendered_path in-place to point to the
+    copied file so that to_dict() serializes the project-local path.
+    """
+    dest_dir = base_path / "transformed_clips"
+    for clip in sequence.get_all_clips():
+        if not clip.prerendered_path:
+            continue
+        src = Path(clip.prerendered_path)
+        if not src.exists():
+            continue
+        dest = dest_dir / src.name
+        # Already inside the project folder — nothing to copy
+        if dest == src.resolve():
+            continue
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest)
+        clip.prerendered_path = str(dest)
+
+
 def save_project(
     filepath: Path,
     sources: list[Source],
@@ -128,12 +151,19 @@ def save_project(
 
     project_data["clips"] = [clip.to_dict() for clip in clips]
 
+    # Copy pre-rendered clips into project folder
+    if progress_callback:
+        progress_callback(0.5, "Copying pre-rendered clips...")
+
+    if sequence:
+        _copy_prerendered_clips(sequence, base_path)
+
     # Serialize sequence
     if progress_callback:
         progress_callback(0.6, "Serializing sequence...")
 
     if sequence:
-        project_data["sequence"] = sequence.to_dict()
+        project_data["sequence"] = sequence.to_dict(base_path=base_path)
     else:
         project_data["sequence"] = None
 
@@ -365,7 +395,7 @@ def load_project(
     # Load sequence
     sequence = None
     if data.get("sequence"):
-        sequence = Sequence.from_dict(data["sequence"])
+        sequence = Sequence.from_dict(data["sequence"], base_path=base_path)
 
         # Validate SequenceClip references - remove clips that reference missing sources/clips
         valid_clip_ids = {clip.id for clip in clips}
