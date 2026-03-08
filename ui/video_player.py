@@ -468,7 +468,7 @@ class VideoPlayer(QWidget):
             vo='libmpv',
             keep_open='yes',
             idle='yes',
-            hwdec='auto',
+            hwdec='auto-copy',
             hr_seek='yes',
             input_default_bindings=False,
             input_vo_keyboard=False,
