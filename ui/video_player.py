@@ -792,6 +792,39 @@ class VideoPlayer(QWidget):
         )
         self._chromatic_color_bar.setVisible(True)
 
+    def set_transforms(self, hflip: bool = False, vflip: bool = False, reverse: bool = False):
+        """Apply per-clip transforms for sequence preview.
+
+        Args:
+            hflip: Horizontal flip
+            vflip: Vertical flip
+            reverse: Reverse playback direction
+        """
+        if not self._player_ready or self._shutting_down:
+            return
+
+        # Build video filter chain
+        vf_parts = []
+        if hflip:
+            vf_parts.append("hflip")
+        if vflip:
+            vf_parts.append("vflip")
+
+        try:
+            self._mpv.vf = ",".join(vf_parts) if vf_parts else ""
+        except Exception:
+            logger.debug("Failed to set mpv vf", exc_info=True)
+
+        # Reverse playback direction
+        try:
+            self._mpv["play-direction"] = "backward" if reverse else "forward"
+        except Exception:
+            logger.debug("Failed to set mpv play-direction", exc_info=True)
+
+    def clear_transforms(self):
+        """Remove all per-clip transforms."""
+        self.set_transforms()
+
     # --- Internal handlers ---
 
     def _toggle_playback(self):
