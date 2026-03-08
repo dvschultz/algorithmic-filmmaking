@@ -7,15 +7,8 @@ sorting_card_grid.py (icons, labels, descriptions).
 ALGORITHM_CONFIG = {
     "color": {
         "icon": "\U0001f3a8",
-        "label": "Chromatic Flow",
-        "description": "Arrange clips along a color gradient",
-        "allow_duplicates": False,
-        "required_analysis": ["colors"],
-    },
-    "color_cycle": {
-        "icon": "\U0001f308",
-        "label": "Color Cycle",
-        "description": "Curate clips with strong color identity and cycle through the spectrum",
+        "label": "Chromatics",
+        "description": "Arrange clips along a color gradient or cycle through the spectrum",
         "allow_duplicates": False,
         "required_analysis": ["colors"],
     },
@@ -112,6 +105,14 @@ ALGORITHM_CONFIG = {
         "description": "Interpret a drawing as an editing guide",
         "allow_duplicates": True,
         "required_analysis": ["colors"],
+        "is_dialog": True,
+    },
+    "rose_hobart": {
+        "icon": "\U0001f464",
+        "label": "Rose Hobart",
+        "description": "Isolate clips featuring a specific person",
+        "allow_duplicates": False,
+        "required_analysis": [],
         "is_dialog": True,
     },
 }

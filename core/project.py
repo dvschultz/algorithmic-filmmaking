@@ -18,7 +18,7 @@ from models.sequence import Sequence
 logger = logging.getLogger(__name__)
 
 # Current project file schema version
-SCHEMA_VERSION = "1.2"
+SCHEMA_VERSION = "1.3"
 
 
 class ProjectError(Exception):

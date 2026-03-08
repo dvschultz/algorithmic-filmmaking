@@ -35,6 +35,7 @@ TIME_PER_CLIP: dict[str, dict[str, float]] = {
     "boundary_embeddings": {"local": 1.5},
     "transcribe": {"local": 0.4, "cloud": 0.3},  # local: mlx-whisper; cloud: Groq API
     "cinematography": {"local": 3.0, "cloud": 1.0},  # local: mlx-vlm 7B; cloud: Gemini
+    "face_embeddings": {"local": 2.0},  # ~2s per clip (30 frames x ~50ms each + overhead)
 }
 
 # Per-clip dollar costs (cloud tiers only)
@@ -67,6 +68,7 @@ OPERATION_LABELS: dict[str, str] = {
     "boundary_embeddings": "Boundary Embeddings",
     "transcribe": "Transcribe",
     "cinematography": "Rich Analysis",
+    "face_embeddings": "Detect Faces",
 }
 
 # Map operation key to a function that checks if a clip has that metadata
@@ -81,6 +83,7 @@ METADATA_CHECKS: dict[str, callable] = {
     "boundary_embeddings": lambda clip: bool(clip.first_frame_embedding),
     "transcribe": lambda clip: bool(clip.transcript),
     "cinematography": lambda clip: bool(clip.cinematography),
+    "face_embeddings": lambda clip: bool(clip.face_embeddings),
 }
 
 # Default parallelism by operation (used when no settings provided)

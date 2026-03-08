@@ -62,27 +62,27 @@ class SortingCardGrid(QWidget):
         grid_layout.setSpacing(Spacing.XL)
         grid_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Create cards in grid layout (15 algorithms, 4 columns)
+        # Create cards in grid layout (14 algorithms, 4 columns)
         # Row 0: basic sorting
-        # Row 1: color/brightness/volume
-        # Row 2: shot analysis + similarity
+        # Row 1: color/brightness/volume/shot
+        # Row 2: analysis + similarity
         # Row 3: text/narrative
         positions = [
             ("shuffle", 0, 0),
             ("sequential", 0, 1),
             ("duration", 0, 2),
             ("color", 0, 3),
-            ("color_cycle", 1, 0),
-            ("brightness", 1, 1),
-            ("volume", 1, 2),
-            ("shot_type", 1, 3),
-            ("proximity", 2, 0),
-            ("similarity_chain", 2, 1),
-            ("match_cut", 2, 2),
-            ("exquisite_corpus", 2, 3),
-            ("storyteller", 3, 0),
-            ("reference_guided", 3, 1),
-            ("signature_style", 3, 2),
+            ("brightness", 1, 0),
+            ("volume", 1, 1),
+            ("shot_type", 1, 2),
+            ("proximity", 1, 3),
+            ("similarity_chain", 2, 0),
+            ("match_cut", 2, 1),
+            ("exquisite_corpus", 2, 2),
+            ("storyteller", 2, 3),
+            ("reference_guided", 3, 0),
+            ("signature_style", 3, 1),
+            ("rose_hobart", 3, 2),
         ]
 
         for key, row, col in positions:

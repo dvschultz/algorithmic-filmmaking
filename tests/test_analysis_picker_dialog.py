@@ -74,6 +74,7 @@ def test_dialog_run_disabled_when_every_operation_complete(qapp):
     )
     clip.extracted_texts = [object()]
     clip.cinematography = object()
+    clip.face_embeddings = [{"bbox": [0, 0, 50, 50], "embedding": [0.1] * 512, "confidence": 0.9}]
 
     settings = _Settings(selected=["colors", "shots", "transcribe"])
     dialog = AnalysisPickerDialog(

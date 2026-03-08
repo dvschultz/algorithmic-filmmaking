@@ -17,9 +17,9 @@ from core.analysis_operations import (
 class TestAnalysisOperationRegistry:
     """Tests for the operation registry."""
 
-    def test_registry_has_8_operations(self):
-        """All 8 operations are registered."""
-        assert len(ANALYSIS_OPERATIONS) == 8
+    def test_registry_has_9_operations(self):
+        """All 9 operations are registered."""
+        assert len(ANALYSIS_OPERATIONS) == 9
 
     def test_operations_by_key_matches(self):
         """OPERATIONS_BY_KEY has an entry for every operation."""

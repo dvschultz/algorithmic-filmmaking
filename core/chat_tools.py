@@ -775,8 +775,7 @@ def list_clips(
                 "clips": [],
                 "count": 0,
                 "message": f"No clips yet. Scene detection is still running "
-                          f"({queue_remaining} sources queued). "
-                          "Call check_detection_status to monitor progress, then retry.",
+                          f"({queue_remaining} sources queued).",
                 "detection_in_progress": True
             }
 
@@ -787,8 +786,7 @@ def list_clips(
                 "success": True,
                 "clips": [],
                 "count": 0,
-                "message": f"No clips found. {unanalyzed_count} sources have not been analyzed. "
-                          "Call detect_all_unanalyzed to detect scenes.",
+                "message": f"No clips found. {unanalyzed_count} sources have not been analyzed.",
                 "detection_in_progress": False,
                 "unanalyzed_sources": unanalyzed_count
             }
@@ -1960,6 +1958,10 @@ def export_sequence(
         crf=preset["crf"],
         preset=preset["preset"],
         video_bitrate=preset["bitrate"],
+        show_chromatic_color_bar=(
+            bool(getattr(sequence, "show_chromatic_color_bar", False))
+            and sequence.algorithm == "color"
+        ),
     )
 
     # Check if export is already running
@@ -2197,12 +2199,10 @@ def set_project_name(main_window, project, name: str) -> dict:
     if hasattr(main_window, '_gui_state') and main_window._gui_state.pending_action:
         pending = main_window._gui_state.pending_action
         if isinstance(pending, NameProjectThenPlanAction):
-            result["next_action"] = "present_plan"
-            result["next_action_args"] = {
+            result["pending_plan"] = {
                 "steps": pending.pending_steps,
                 "summary": pending.pending_summary
             }
-            result["message"] += ". IMPORTANT: Now call present_plan with the pending steps to continue."
             # Clear the pending action
             main_window._gui_state.clear_pending_action()
 
@@ -3271,13 +3271,10 @@ def detect_all_unanalyzed(
 
     return {
         "success": True,
-        "message": f"Queued {len(unanalyzed)} sources for scene detection. "
-                   "IMPORTANT: Detection runs in background. "
-                   "Call check_detection_status to monitor progress before calling list_clips.",
+        "message": f"Queued {len(unanalyzed)} sources for scene detection.",
         "queued_count": len(unanalyzed),
         "source_ids": source_ids,
         "sensitivity": sensitivity,
-        "next_action": "Call check_detection_status periodically until all_complete is True, then call list_clips"
     }
 
 
@@ -3331,7 +3328,6 @@ def check_detection_status(main_window, project) -> dict:
 
     if all_complete:
         message = f"Detection complete. All {analyzed_count} sources analyzed, {clip_count} clips available."
-        patience_note = None
     elif is_running or queue_remaining > 0:
         current = queue_total - queue_remaining if queue_total > 0 else 0
         progress_pct = int(current_progress * 100)
@@ -3342,21 +3338,12 @@ def check_detection_status(main_window, project) -> dict:
             f". {clip_count} clips so far."
             f" Elapsed: {elapsed_seconds // 60}m {elapsed_seconds % 60}s."
         )
-        # Add patience guidance - detection is slow, especially for long videos
-        remaining_videos = total_count - analyzed_count
-        patience_note = (
-            f"PATIENCE REQUIRED: Detection takes 1-5 minutes per video. "
-            f"With {remaining_videos} videos remaining, expect up to {remaining_videos * 5} more minutes. "
-            f"Keep checking status - do NOT assume failure while is_running=True."
-        )
     else:
         unanalyzed = total_count - analyzed_count
         if unanalyzed > 0:
-            message = f"Detection idle. {unanalyzed} sources not yet analyzed. Call detect_all_unanalyzed to start."
-            patience_note = None
+            message = f"Detection idle. {unanalyzed} sources not yet analyzed."
         else:
             message = f"All {analyzed_count} sources analyzed. {clip_count} clips available."
-            patience_note = None
 
     result = {
         "success": True,
@@ -3371,8 +3358,6 @@ def check_detection_status(main_window, project) -> dict:
         "elapsed_seconds": elapsed_seconds,
         "message": message
     }
-    if patience_note:
-        result["patience_note"] = patience_note
     return result
 
 
@@ -3571,6 +3556,7 @@ def list_sorting_algorithms(project) -> dict:
     ) if clips else False
     has_text = any(clip.extracted_texts for clip in clips) if clips else False
     has_descriptions = any(clip.description for clip in clips) if clips else False
+    has_face_embeddings = any(clip.face_embeddings for clip in clips) if clips else False
 
     algorithms = [
         {
@@ -3603,22 +3589,13 @@ def list_sorting_algorithms(project) -> dict:
         },
         {
             "key": "color",
-            "name": "Chromatic Flow",
-            "description": "Arrange clips along a color gradient",
+            "name": "Chromatics",
+            "description": "Arrange clips along a color gradient or cycle through the spectrum",
             "available": has_colors,
             "reason": None if has_colors else "Run color analysis on clips first",
             "parameters": [
-                {"name": "direction", "type": "string", "options": ["rainbow", "warm_to_cool", "cool_to_warm"], "default": "rainbow"}
-            ]
-        },
-        {
-            "key": "color_cycle",
-            "name": "Color Cycle",
-            "description": "Curate clips with strong color identity and cycle through the spectrum",
-            "available": has_colors,
-            "reason": None if has_colors else "Run color analysis on clips first",
-            "parameters": [
-                {"name": "direction", "type": "string", "options": ["rainbow", "warm_to_cool", "cool_to_warm"], "default": "rainbow"}
+                {"name": "direction", "type": "string", "options": ["rainbow", "warm_to_cool", "cool_to_warm", "complementary"], "default": "rainbow"},
+                {"name": "no_color_handling", "type": "string", "options": ["append_end", "exclude", "sort_inline"], "default": "append_end"}
             ]
         },
         {
@@ -3693,6 +3670,18 @@ def list_sorting_algorithms(project) -> dict:
             "reason": None if has_descriptions else "Run clip description analysis first",
             "parameters": []
         },
+        {
+            "key": "rose_hobart",
+            "name": "Rose Hobart",
+            "description": "Isolate clips featuring a specific person (requires reference image)",
+            "available": has_face_embeddings,
+            "reason": None if has_face_embeddings else "Run face detection analysis first",
+            "parameters": [
+                {"name": "reference_image_path", "type": "string", "description": "Path to reference image of the person"},
+                {"name": "sensitivity", "type": "string", "options": ["strict", "balanced", "loose"], "default": "balanced"},
+                {"name": "ordering", "type": "string", "options": ["original", "duration", "color", "brightness", "confidence", "random"], "default": "original"},
+            ]
+        },
     ]
 
     return {
@@ -3709,7 +3698,7 @@ def list_sorting_algorithms(project) -> dict:
 
 @tools.register(
     description="Generate a sequence using a sorting algorithm and apply it to the timeline. "
-                "Available algorithms: color, color_cycle, duration, brightness, volume, "
+                "Available algorithms: color, duration, brightness, volume, "
                 "shuffle, sequential, shot_type, proximity, similarity_chain, match_cut, "
                 "exquisite_corpus, storyteller. Use list_sorting_algorithms to check availability.",
     requires_project=True,
@@ -3722,22 +3711,25 @@ def generate_remix(
     clip_count: int = 10,
     direction: Optional[str] = None,
     seed: Optional[int] = None,
+    no_color_handling: Optional[str] = None,
 ) -> dict:
     """Generate a sequence using the specified algorithm and apply to timeline.
 
     Args:
-        algorithm: One of the 13 sorting algorithms (e.g. "color", "brightness",
+        algorithm: One of the sorting algorithms (e.g. "color", "brightness",
                    "similarity_chain", "match_cut", etc.)
         clip_count: Number of clips to include (1-100)
-        direction: Algorithm-specific direction (e.g. "rainbow", "short_first",
-                   "light_to_dark", "quiet_to_loud", "wide_to_close")
+        direction: Algorithm-specific direction (e.g. "rainbow", "complementary",
+                   "short_first", "light_to_dark", "quiet_to_loud", "wide_to_close")
         seed: For shuffle: random seed for reproducibility (0 = random)
+        no_color_handling: For color algorithm — how to handle clips without color data.
+                   "append_end" (default), "exclude", or "sort_inline"
 
     Returns:
         Dict with success status, applied clips, and algorithm used
     """
     valid_algorithms = [
-        "color", "color_cycle", "duration", "brightness", "volume",
+        "color", "duration", "brightness", "volume",
         "shuffle", "sequential", "shot_type", "proximity",
         "similarity_chain", "match_cut", "exquisite_corpus", "storyteller",
     ]
@@ -3782,7 +3774,8 @@ def generate_remix(
         algorithm=algorithm,
         clip_count=clip_count,
         direction=direction,
-        seed=seed
+        seed=seed,
+        no_color_handling=no_color_handling,
     )
 
     return result
@@ -3893,6 +3886,130 @@ def generate_reference_guided(
     )
 
     return result
+
+
+@tools.register(
+    description="Generate a Rose Hobart sequence filtering clips by a specific person's face. "
+                "Requires a reference image path. Use list_sorting_algorithms to check if "
+                "face_embeddings are available.",
+    requires_project=True,
+    modifies_gui_state=True
+)
+def generate_rose_hobart(
+    project,
+    main_window,
+    reference_image_path: str,
+    sensitivity: str = "balanced",
+    ordering: str = "original",
+) -> dict:
+    """Generate a Rose Hobart sequence filtering clips by a specific person's face.
+
+    Args:
+        reference_image_path: Path to reference image of the person
+        sensitivity: Match sensitivity - "strict", "balanced", or "loose"
+        ordering: Result ordering - "original", "duration", "color", "brightness",
+                 "confidence", or "random"
+
+    Returns:
+        Dict with success status and matched clip count
+    """
+    from pathlib import Path
+    from core.analysis.faces import (
+        average_embeddings,
+        compare_faces,
+        extract_faces_from_clip,
+        extract_faces_from_image,
+        SENSITIVITY_PRESETS,
+    )
+
+    ref_path = Path(reference_image_path)
+    if not ref_path.exists():
+        return {"success": False, "error": f"Reference image not found: {reference_image_path}"}
+
+    if sensitivity not in SENSITIVITY_PRESETS:
+        return {"success": False, "error": f"Invalid sensitivity: {sensitivity}. Use: strict, balanced, loose"}
+
+    valid_orderings = {"original", "duration", "color", "brightness", "confidence", "random"}
+    if ordering not in valid_orderings:
+        return {"success": False, "error": f"Invalid ordering: {ordering}. Use: {sorted(valid_orderings)}"}
+
+    # Extract reference face
+    ref_faces = extract_faces_from_image(ref_path)
+    if not ref_faces:
+        return {"success": False, "error": "No face detected in reference image"}
+
+    best_ref = max(ref_faces, key=lambda f: f["confidence"])
+    ref_embeddings = [best_ref["embedding"]]
+
+    threshold = SENSITIVITY_PRESETS[sensitivity]
+
+    # Match against clips
+    clips = project.clips
+    sources_by_id = project.sources_by_id
+    matched = []
+
+    for clip in clips:
+        if clip.disabled:
+            continue
+        source = sources_by_id.get(clip.source_id)
+        if not source:
+            continue
+
+        # Use cached or extract
+        if clip.face_embeddings is not None:
+            clip_faces = clip.face_embeddings
+        else:
+            clip_faces = extract_faces_from_clip(
+                source_path=source.file_path,
+                start_frame=clip.start_frame,
+                end_frame=clip.end_frame,
+                fps=source.fps,
+            )
+            clip.face_embeddings = clip_faces if clip_faces else []
+
+        is_match, confidence = compare_faces(ref_embeddings, clip_faces, threshold)
+        if is_match:
+            matched.append((clip, source, confidence))
+
+    if not matched:
+        return {
+            "success": True,
+            "matched_count": 0,
+            "message": "No clips matched the reference person. Try 'loose' sensitivity.",
+        }
+
+    # Order
+    import random as _random
+    _ORDERING_MAP = {
+        "original": lambda m: m.sort(key=lambda x: (x[1].file_path.name, x[0].start_frame)),
+        "duration": lambda m: m.sort(key=lambda x: x[0].duration_seconds(x[1].fps)),
+        "brightness": lambda m: m.sort(key=lambda x: x[0].average_brightness or 0.5),
+        "confidence": lambda m: m.sort(key=lambda x: x[2], reverse=True),
+        "random": lambda m: _random.shuffle(m),
+    }
+    if ordering == "color":
+        import colorsys
+        def _color_sort(m):
+            m.sort(key=lambda x: colorsys.rgb_to_hsv(*(c / 255.0 for c in x[0].dominant_colors[0]))[0]
+                   if x[0].dominant_colors else 0.5)
+        _color_sort(matched)
+    elif ordering in _ORDERING_MAP:
+        _ORDERING_MAP[ordering](matched)
+
+    sequence_clips = [(clip, source) for clip, source, _ in matched]
+
+    if main_window and hasattr(main_window, 'sequence_tab'):
+        main_window.sequence_tab._apply_dialog_sequence(
+            sequence_clips, "rose_hobart", "Rose Hobart"
+        )
+
+    return {
+        "success": True,
+        "matched_count": len(matched),
+        "total_clips": len(clips),
+        "sensitivity": sensitivity,
+        "ordering": ordering,
+    }
 
 
 @tools.register(
@@ -5497,4 +5614,352 @@ def set_ab_loop(main_window, a_seconds: float, b_seconds: float) -> dict:
         "a_seconds": a_seconds,
         "b_seconds": b_seconds,
         "message": f"A/B loop set: {a_seconds:.1f}s - {b_seconds:.1f}s",
+    }
+
+
+# ============================================================================
+# Clip Disable Tool
+# ============================================================================
+
+@tools.register(
+    description="Toggle the disabled state of clips. Disabled clips are excluded from sequences and exports.",
+    requires_project=True,
+    modifies_gui_state=True,
+    modifies_project_state=True
+)
+def toggle_clip_disabled(
+    project,
+    clip_ids: list[str],
+    disabled: Optional[bool] = None,
+) -> dict:
+    """Toggle or set the disabled state of clips.
+
+    Args:
+        project: The current project
+        clip_ids: IDs of clips to toggle
+        disabled: If True/False, set explicitly. If None, toggle current state.
+
+    Returns:
+        Dict with updated clip states
+    """
+    if not clip_ids:
+        return {"success": False, "error": "No clip IDs provided"}
+
+    updated = []
+    not_found = []
+
+    for clip_id in clip_ids:
+        clip = project.clips_by_id.get(clip_id)
+        if clip is None:
+            not_found.append(clip_id)
+            continue
+
+        if disabled is None:
+            clip.disabled = not clip.disabled
+        else:
+            clip.disabled = disabled
+
+        updated.append({"id": clip.id, "disabled": clip.disabled})
+
+    if updated:
+        clips_to_update = [
+            project.clips_by_id[u["id"]] for u in updated
+        ]
+        project.update_clips(clips_to_update)
+
+    result = {
+        "success": True,
+        "updated": updated,
+        "updated_count": len(updated),
+    }
+    if not_found:
+        result["not_found"] = not_found
+    return result
+
+
+# ============================================================================
+# Frame Update Tool
+# ============================================================================
+
+@tools.register(
+    description="Update metadata fields on a frame (tags, notes, shot_type).",
+    requires_project=True,
+    modifies_gui_state=False,
+    modifies_project_state=True
+)
+def update_frame(
+    project,
+    frame_id: str,
+    tags: Optional[list[str]] = None,
+    notes: Optional[str] = None,
+    shot_type: Optional[str] = None,
+) -> dict:
+    """Update frame metadata fields.
+
+    Args:
+        project: The current project
+        frame_id: ID of the frame to update
+        tags: New tags list (None to skip, replaces all existing tags)
+        notes: New notes (None to skip, empty string to clear)
+        shot_type: New shot type (None to skip, empty string to clear)
+
+    Returns:
+        Dict with success status and updated fields
+    """
+    frame = project.frames_by_id.get(frame_id)
+    if frame is None:
+        return {"success": False, "error": f"Frame not found: {frame_id}"}
+
+    updated_fields = []
+    kwargs = {}
+
+    # Validate and prepare shot_type
+    if shot_type is not None:
+        if shot_type == "":
+            kwargs["shot_type"] = None
+            updated_fields.append("shot_type")
+        elif shot_type in VALID_SHOT_TYPES:
+            kwargs["shot_type"] = shot_type
+            updated_fields.append("shot_type")
+        else:
+            return {
+                "success": False,
+                "error": f"Invalid shot type: '{shot_type}'. Must be one of: {', '.join(sorted(VALID_SHOT_TYPES))} or empty string to clear."
+            }
+
+    # Update via project.update_frame for fields in _UPDATABLE_FRAME_FIELDS
+    if kwargs:
+        project.update_frame(frame_id, **kwargs)
+
+    # Update tags and notes directly (not in _UPDATABLE_FRAME_FIELDS)
+    if tags is not None:
+        frame.tags = list(tags)
+        updated_fields.append("tags")
+
+    if notes is not None:
+        frame.notes = notes
+        updated_fields.append("notes")
+
+    # Notify observers if we changed tags/notes directly
+    if tags is not None or notes is not None:
+        project._dirty = True
+        project._notify_observers("frames_updated", [frame])
+
+    return {
+        "success": True,
+        "frame_id": frame_id,
+        "updated_fields": updated_fields,
+        "message": f"Updated {', '.join(updated_fields)}" if updated_fields else "No fields updated"
+    }
+
+
+# ============================================================================
+# Cancel Plan Tool
+# ============================================================================
+
+@tools.register(
+    description="Cancel the current plan and clear plan state.",
+    requires_project=False,
+    modifies_gui_state=True,
+)
+def cancel_plan(main_window) -> dict:
+    """Cancel the current plan and clear plan state.
+
+    Returns:
+        Dict with cancellation status
+    """
+    controller = _get_plan_controller(main_window)
+    plan = controller.current_plan
+
+    if plan is None:
+        return {"success": False, "error": "No active plan to cancel."}
+
+    plan_id = plan.id
+    plan_summary = plan.summary
+    plan_status = plan.status
+
+    # Clear the plan from gui_state
+    controller._gui_state.clear_plan_state()
+
+    return {
+        "success": True,
+        "cancelled_plan_id": plan_id,
+        "cancelled_summary": plan_summary,
+        "previous_status": plan_status,
+        "message": f"Plan cancelled: {plan_summary}",
+    }
+
+
+# ============================================================================
+# Export SRT Tool
+# ============================================================================
+
+@tools.register(
+    description="Export sequence clips as an SRT subtitle file with clip metadata.",
+    requires_project=True,
+    modifies_gui_state=True,  # Needs main_window to access sequence_tab
+)
+def export_srt(
+    main_window,
+    project,
+    output_path: Optional[str] = None,
+) -> dict:
+    """Export sequence metadata as SRT subtitle file.
+
+    Args:
+        main_window: Main window reference
+        project: The current project
+        output_path: Path for SRT output (optional, defaults to export_dir)
+
+    Returns:
+        Dict with success status and export details
+    """
+    from core.srt_export import export_srt as _export_srt, SRTExportConfig
+
+    if main_window is None or not hasattr(main_window, 'sequence_tab'):
+        return {"success": False, "error": "Sequence tab not available"}
+
+    sequence = main_window.sequence_tab.get_sequence()
+    all_clips = sequence.get_all_clips()
+
+    if not all_clips:
+        return {"success": False, "error": "No clips in timeline to export."}
+
+    # Determine output path
+    if output_path:
+        valid, error, validated_path = _validate_path(output_path)
+        if not valid:
+            return {"success": False, "error": f"Invalid output path: {error}"}
+        srt_path = validated_path
+    else:
+        settings = load_settings()
+        project_name = project.metadata.name or "sequence_export"
+        srt_path = settings.export_dir / f"{project_name}.srt"
+
+    # Ensure .srt extension
+    if srt_path.suffix.lower() != ".srt":
+        srt_path = srt_path.with_suffix(".srt")
+
+    # Ensure parent directory exists
+    srt_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Build lookups
+    clips_lookup = {clip.id: clip for clip in project.clips}
+    sources_lookup = project.sources_by_id.copy()
+    frames_lookup = project.frames_by_id.copy() if project._frames else None
+
+    config = SRTExportConfig(output_path=srt_path)
+    success, exported, skipped = _export_srt(
+        sequence, clips_lookup, sources_lookup, config, frames=frames_lookup
+    )
+
+    if not success:
+        return {"success": False, "error": "SRT export failed."}
+
+    return {
+        "success": True,
+        "output_path": str(srt_path),
+        "exported_count": exported,
+        "skipped_count": skipped,
+        "message": f"Exported {exported} subtitle entries to {srt_path.name}",
+    }
+
+
+# ============================================================================
+# Export Clips Tool
+# ============================================================================
+
+@tools.register(
+    description="Export individual clips as separate video files. Can export specific clips or all enabled clips.",
+    requires_project=True,
+    modifies_gui_state=True,  # Needs main_window for source context
+)
+def export_clips(
+    main_window,
+    project,
+    clip_ids: Optional[list[str]] = None,
+    output_dir: Optional[str] = None,
+) -> dict:
+    """Export individual clips as separate video files.
+
+    Args:
+        main_window: Main window reference
+        project: The current project
+        clip_ids: IDs of clips to export (None exports all enabled clips)
+        output_dir: Output directory path (optional, defaults to export_dir)
+
+    Returns:
+        Dict with success status and export details
+    """
+    from core.ffmpeg import FFmpegProcessor
+
+    # Determine which clips to export
+    if clip_ids:
+        clips_to_export = []
+        not_found = []
+        for cid in clip_ids:
+            clip = project.clips_by_id.get(cid)
+            if clip is None:
+                not_found.append(cid)
+            else:
+                clips_to_export.append(clip)
+        if not_found:
+            return {"success": False, "error": f"Clips not found: {', '.join(not_found)}"}
+    else:
+        clips_to_export = [c for c in project.clips if not c.disabled]
+
+    if not clips_to_export:
+        return {"success": False, "error": "No clips to export."}
+
+    # Determine output directory
+    if output_dir:
+        valid, error, validated_path = _validate_path(output_dir)
+        if not valid:
+            return {"success": False, "error": f"Invalid output directory: {error}"}
+        out_path = validated_path
+    else:
+        settings = load_settings()
+        project_name = project.metadata.name or "clips_export"
+        out_path = settings.export_dir / project_name
+
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    processor = FFmpegProcessor()
+    exported = 0
+    failed = 0
+    exported_files = []
+
+    for i, clip in enumerate(clips_to_export):
+        source = project.sources_by_id.get(clip.source_id)
+        if source is None:
+            failed += 1
+            continue
+
+        fps = source.fps
+        start = clip.start_time(fps)
+        duration = clip.duration_seconds(fps)
+        source_name = source.file_path.stem
+        output_file = out_path / f"{source_name}_scene_{i + 1:03d}.mp4"
+
+        success = processor.extract_clip(
+            input_path=source.file_path,
+            output_path=output_file,
+            start_seconds=start,
+            duration_seconds=duration,
+            fps=fps,
+        )
+        if success:
+            exported += 1
+            exported_files.append(str(output_file))
+        else:
+            failed += 1
+
+    return {
+        "success": True,
+        "output_dir": str(out_path),
+        "exported_count": exported,
+        "failed_count": failed,
+        "total_clips": len(clips_to_export),
+        "exported_files": exported_files[:10],  # First 10 for brevity
+        "message": f"Exported {exported}/{len(clips_to_export)} clips to {out_path}",
     }
