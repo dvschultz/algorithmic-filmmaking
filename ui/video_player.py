@@ -803,7 +803,9 @@ class VideoPlayer(QWidget):
         if not self._player_ready or self._shutting_down:
             return
 
-        # Build video filter chain
+        # Build lavfi video filter chain.
+        # Use mpv's 'vf' command (not property assignment) for reliable
+        # runtime filter manipulation with hardware-decoded frames.
         vf_parts = []
         if hflip:
             vf_parts.append("hflip")
@@ -811,9 +813,13 @@ class VideoPlayer(QWidget):
             vf_parts.append("vflip")
 
         try:
-            self._mpv.vf = ",".join(vf_parts) if vf_parts else ""
+            if vf_parts:
+                filter_str = "lavfi=[" + ",".join(vf_parts) + "]"
+                self._mpv.command("vf", "set", filter_str)
+            else:
+                self._mpv.command("vf", "clr", "")
         except Exception:
-            logger.debug("Failed to set mpv vf", exc_info=True)
+            logger.warning("Failed to set mpv vf filters: %s", vf_parts, exc_info=True)
 
         # Reverse playback direction
         try:
