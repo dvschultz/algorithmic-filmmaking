@@ -1274,6 +1274,26 @@ class MainWindow(QMainWindow):
         # Store reference to view menu for chat panel toggle
         self._view_menu = view_menu
 
+        # Help menu
+        help_menu = menu_bar.addMenu("&Help")
+
+        from core.update_checker import _GITHUB_OWNER, _GITHUB_REPO
+        _docs_base = f"https://github.com/{_GITHUB_OWNER}/{_GITHUB_REPO}/blob/main/docs/user-guide"
+
+        sequencer_guide_action = QAction("&Sequencer Guide", self)
+        sequencer_guide_action.setToolTip("Opens sequencer algorithm documentation on GitHub")
+        sequencer_guide_action.triggered.connect(
+            lambda: QDesktopServices.openUrl(QUrl(f"{_docs_base}/sequencers.md"))
+        )
+        help_menu.addAction(sequencer_guide_action)
+
+        api_keys_action = QAction("&API Keys Guide", self)
+        api_keys_action.setToolTip("Opens API key setup documentation on GitHub")
+        api_keys_action.triggered.connect(
+            lambda: QDesktopServices.openUrl(QUrl(f"{_docs_base}/api-keys.md"))
+        )
+        help_menu.addAction(api_keys_action)
+
     def _is_any_worker_running(self) -> bool:
         """Check if any background worker is currently running."""
         workers = [
