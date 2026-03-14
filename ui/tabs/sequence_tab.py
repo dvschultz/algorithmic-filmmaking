@@ -424,6 +424,10 @@ class SequenceTab(BaseTab):
             self._apply_chromatic_bar_to_sequence("rose_hobart")
             self._show_rose_hobart_dialog(clips)
             return
+        if algorithm == "staccato":
+            self._apply_chromatic_bar_to_sequence("staccato")
+            self._show_staccato_dialog(clips)
+            return
 
         self._apply_algorithm(algorithm, clips, no_color_handling=no_color_handling)
 
@@ -529,6 +533,9 @@ class SequenceTab(BaseTab):
                 return
             if algorithm == "rose_hobart":
                 self._show_rose_hobart_dialog(clips)
+                return
+            if algorithm == "staccato":
+                self._show_staccato_dialog(clips)
                 return
 
         # Compute cost estimates for this algorithm
@@ -975,6 +982,25 @@ class SequenceTab(BaseTab):
         """Apply the sequence from Rose Hobart dialog."""
         self._apply_dialog_sequence(
             sequence_clips, "rose_hobart", "Rose Hobart",
+        )
+
+    def _show_staccato_dialog(self, clips: list):
+        """Show the Staccato dialog for beat-driven sequencing.
+
+        Args:
+            clips: List of (Clip, Source) tuples to process
+        """
+        from ui.dialogs.staccato_dialog import StaccatoDialog
+
+        dialog = StaccatoDialog(clips=clips, parent=self)
+        dialog.sequence_ready.connect(self._apply_staccato_sequence)
+        dialog.exec()
+
+    @Slot(list)
+    def _apply_staccato_sequence(self, sequence_clips: list):
+        """Apply the sequence from Staccato dialog."""
+        self._apply_dialog_sequence(
+            sequence_clips, "staccato", "Staccato",
         )
 
     def _show_dice_roll_dialog(self, clips: list):
