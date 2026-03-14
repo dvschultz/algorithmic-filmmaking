@@ -1,0 +1,4 @@
+interface:
+  display_name: "Continuous Learning"
+  short_description: "Capture recurring app errors and codify fix playbook skills"
+  default_prompt: "Track this error pattern, update memory, and promote stable fixes into reusable skills."
