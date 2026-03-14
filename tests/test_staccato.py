@@ -1,0 +1,258 @@
+"""Tests for the Staccato beat-driven sequencer algorithm."""
+
+import pytest
+from unittest.mock import MagicMock
+
+from core.analysis.audio import AudioAnalysis
+from core.remix.staccato import (
+    StaccatoSlot,
+    generate_beat_slots,
+    generate_staccato_sequence,
+    _cosine_distance,
+    _select_clip_for_slot,
+)
+
+
+# --- AudioAnalysis onset_strengths tests ---
+
+class TestAudioAnalysisOnsetStrengths:
+    """Tests for the onset_strengths field and onset_strength_at() method."""
+
+    def test_onset_strengths_default_empty(self):
+        analysis = AudioAnalysis()
+        assert analysis.onset_strengths == []
+
+    def test_onset_strengths_serialization(self):
+        analysis = AudioAnalysis(
+            onset_times=[0.5, 1.0, 1.5],
+            onset_strengths=[0.3, 1.0, 0.7],
+        )
+        d = analysis.to_dict()
+        assert d["onset_strengths"] == [0.3, 1.0, 0.7]
+
+        restored = AudioAnalysis.from_dict(d)
+        assert restored.onset_strengths == [0.3, 1.0, 0.7]
+
+    def test_onset_strengths_from_dict_missing_key(self):
+        """Old serialized data without onset_strengths should default to empty."""
+        d = {"tempo_bpm": 120, "beat_times": [0.5], "onset_times": [0.5]}
+        restored = AudioAnalysis.from_dict(d)
+        assert restored.onset_strengths == []
+
+    def test_onset_strength_at_returns_nearest(self):
+        analysis = AudioAnalysis(
+            onset_times=[1.0, 2.0, 3.0],
+            onset_strengths=[0.2, 0.8, 0.5],
+        )
+        # Exactly at onset
+        assert analysis.onset_strength_at(1.0) == 0.2
+        assert analysis.onset_strength_at(2.0) == 0.8
+        # Closer to second onset
+        assert analysis.onset_strength_at(1.6) == 0.8
+        # Before first onset
+        assert analysis.onset_strength_at(0.0) == 0.2
+        # After last onset
+        assert analysis.onset_strength_at(5.0) == 0.5
+
+    def test_onset_strength_at_empty_data(self):
+        analysis = AudioAnalysis()
+        assert analysis.onset_strength_at(1.0) == 0.5
+
+
+# --- Beat slot generation tests ---
+
+class TestGenerateBeatSlots:
+
+    def _make_analysis(self, **kwargs):
+        defaults = dict(
+            tempo_bpm=120,
+            beat_times=[0.5, 1.0, 1.5, 2.0],
+            onset_times=[0.3, 0.8, 1.2, 1.7, 2.1],
+            onset_strengths=[0.4, 1.0, 0.6, 0.8, 0.3],
+            downbeat_times=[0.5, 2.0],
+            duration_seconds=2.5,
+        )
+        defaults.update(kwargs)
+        return AudioAnalysis(**defaults)
+
+    def test_onsets_strategy(self):
+        analysis = self._make_analysis()
+        slots = generate_beat_slots(analysis, strategy="onsets")
+        assert len(slots) == 5
+        assert slots[0].start_time == 0.3
+        assert slots[0].onset_strength == 0.4
+
+    def test_beats_strategy(self):
+        analysis = self._make_analysis()
+        slots = generate_beat_slots(analysis, strategy="beats")
+        assert len(slots) == 4
+        assert slots[0].start_time == 0.5
+
+    def test_downbeats_strategy(self):
+        analysis = self._make_analysis()
+        slots = generate_beat_slots(analysis, strategy="downbeats")
+        assert len(slots) == 2
+        assert slots[0].start_time == 0.5
+        assert slots[1].start_time == 2.0
+
+    def test_empty_analysis(self):
+        analysis = AudioAnalysis()
+        slots = generate_beat_slots(analysis, strategy="onsets")
+        assert slots == []
+
+    def test_short_slots_filtered(self):
+        """Slots shorter than 0.1s should be skipped."""
+        analysis = AudioAnalysis(
+            onset_times=[1.0, 1.05, 2.0],
+            onset_strengths=[0.5, 0.5, 0.5],
+            duration_seconds=3.0,
+        )
+        slots = generate_beat_slots(analysis, strategy="onsets")
+        # slot at 1.0 has end 1.05 = 0.05s duration -> filtered
+        # slot at 1.05 has end 2.0 = 0.95s -> kept
+        # slot at 2.0 has end 3.0 = 1.0s -> kept
+        assert len(slots) == 2
+        assert slots[0].start_time == 1.05
+        assert slots[1].start_time == 2.0
+
+    def test_slot_duration_property(self):
+        slot = StaccatoSlot(start_time=1.0, end_time=2.5, onset_strength=0.7)
+        assert slot.duration == pytest.approx(1.5)
+
+
+# --- Cosine distance tests ---
+
+class TestCosineDistance:
+
+    def test_identical_vectors(self):
+        v = [1.0, 0.0, 0.0]
+        assert _cosine_distance(v, v) == pytest.approx(0.0, abs=1e-6)
+
+    def test_orthogonal_vectors(self):
+        a = [1.0, 0.0, 0.0]
+        b = [0.0, 1.0, 0.0]
+        assert _cosine_distance(a, b) == pytest.approx(1.0, abs=1e-6)
+
+    def test_opposite_vectors(self):
+        a = [1.0, 0.0]
+        b = [-1.0, 0.0]
+        assert _cosine_distance(a, b) == pytest.approx(2.0, abs=1e-6)
+
+
+# --- Clip selection tests ---
+
+class TestSelectClipForSlot:
+
+    def test_strong_onset_prefers_distant_clip(self):
+        slot = StaccatoSlot(start_time=0, end_time=1.0, onset_strength=1.0)
+        prev_emb = [1.0, 0.0, 0.0]
+        clips = [
+            (0, [0.99, 0.1, 0.0]),   # very similar
+            (1, [0.0, 1.0, 0.0]),     # orthogonal (distance ~1.0)
+            (2, [0.5, 0.5, 0.707]),   # moderate distance
+        ]
+        durations = [2.0, 2.0, 2.0]
+        idx = _select_clip_for_slot(slot, prev_emb, clips, durations)
+        assert idx == 1  # Most distant
+
+    def test_weak_onset_prefers_similar_clip(self):
+        slot = StaccatoSlot(start_time=0, end_time=1.0, onset_strength=0.0)
+        prev_emb = [1.0, 0.0, 0.0]
+        clips = [
+            (0, [0.99, 0.1, 0.0]),   # very similar
+            (1, [0.0, 1.0, 0.0]),     # orthogonal
+        ]
+        durations = [2.0, 2.0]
+        idx = _select_clip_for_slot(slot, prev_emb, clips, durations)
+        assert idx == 0  # Most similar
+
+    def test_first_clip_no_prev_embedding(self):
+        slot = StaccatoSlot(start_time=0, end_time=1.0, onset_strength=0.5)
+        clips = [(0, [1.0, 0.0]), (1, [0.0, 1.0])]
+        durations = [2.0, 2.0]
+        idx = _select_clip_for_slot(slot, None, clips, durations)
+        assert idx == 0  # Returns first clip
+
+
+# --- Full sequence generation tests ---
+
+class TestGenerateStaccatoSequence:
+
+    def _make_clip(self, clip_id, embedding=None, start_frame=0, end_frame=48):
+        clip = MagicMock()
+        clip.id = clip_id
+        clip.embedding = embedding
+        clip.start_frame = start_frame
+        clip.end_frame = end_frame
+        clip.thumbnail_path = None
+        return clip
+
+    def _make_source(self, source_id, fps=24.0):
+        source = MagicMock()
+        source.id = source_id
+        source.fps = fps
+        return source
+
+    def test_basic_generation(self):
+        clips = [
+            (self._make_clip("c1", [1.0, 0.0]), self._make_source("s1")),
+            (self._make_clip("c2", [0.0, 1.0]), self._make_source("s1")),
+            (self._make_clip("c3", [0.5, 0.5]), self._make_source("s1")),
+        ]
+        analysis = AudioAnalysis(
+            beat_times=[0.5, 1.0, 1.5, 2.0],
+            onset_times=[0.5, 1.0, 1.5, 2.0],
+            onset_strengths=[0.2, 1.0, 0.3, 0.8],
+            duration_seconds=2.5,
+        )
+        result = generate_staccato_sequence(clips, analysis, strategy="onsets")
+        assert len(result) == 4  # 4 onset slots
+        # Each result is a (Clip, Source) tuple
+        for clip, source in result:
+            assert hasattr(clip, 'id')
+            assert hasattr(source, 'id')
+
+    def test_empty_clips(self):
+        analysis = AudioAnalysis(beat_times=[1.0], onset_times=[1.0])
+        result = generate_staccato_sequence([], analysis)
+        assert result == []
+
+    def test_empty_analysis(self):
+        clips = [(self._make_clip("c1"), self._make_source("s1"))]
+        analysis = AudioAnalysis()
+        result = generate_staccato_sequence(clips, analysis)
+        assert result == []
+
+    def test_clips_repeat_when_more_slots_than_clips(self):
+        """With 1 clip and 4 slots, the clip should repeat."""
+        clips = [
+            (self._make_clip("c1", [1.0, 0.0]), self._make_source("s1")),
+        ]
+        analysis = AudioAnalysis(
+            beat_times=[0.5, 1.0, 1.5, 2.0],
+            onset_times=[0.5, 1.0, 1.5, 2.0],
+            onset_strengths=[0.5, 0.5, 0.5, 0.5],
+            duration_seconds=2.5,
+        )
+        result = generate_staccato_sequence(clips, analysis, strategy="onsets")
+        assert len(result) == 4
+        # All should be the same clip since there's only one
+        assert all(clip.id == "c1" for clip, _ in result)
+
+    def test_progress_callback(self):
+        clips = [
+            (self._make_clip("c1", [1.0, 0.0]), self._make_source("s1")),
+        ]
+        analysis = AudioAnalysis(
+            onset_times=[1.0, 2.0],
+            onset_strengths=[0.5, 0.5],
+            duration_seconds=3.0,
+        )
+        progress_calls = []
+        result = generate_staccato_sequence(
+            clips, analysis, strategy="onsets",
+            progress_cb=lambda c, t: progress_calls.append((c, t)),
+        )
+        assert len(result) == 2
+        # Should have progress calls for each slot + final
+        assert len(progress_calls) >= 2

@@ -116,6 +116,14 @@ ALGORITHM_CONFIG = {
         "required_analysis": [],
         "is_dialog": True,
     },
+    "staccato": {
+        "icon": "\U0001f3b5",
+        "label": "Staccato",
+        "description": "Cut clips to the rhythm of a music track",
+        "allow_duplicates": True,
+        "required_analysis": ["embeddings"],
+        "is_dialog": True,
+    },
 }
 
 

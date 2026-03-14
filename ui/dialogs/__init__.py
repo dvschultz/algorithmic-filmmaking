@@ -9,6 +9,7 @@ from .reference_guide_dialog import ReferenceGuideDialog
 from .signature_style_dialog import SignatureStyleDialog
 from .rose_hobart_dialog import RoseHobartDialog
 from .dice_roll_dialog import DiceRollDialog
+from .staccato_dialog import StaccatoDialog
 
 __all__ = [
     "AnalysisPickerDialog",
@@ -21,4 +22,5 @@ __all__ = [
     "SignatureStyleDialog",
     "RoseHobartDialog",
     "DiceRollDialog",
+    "StaccatoDialog",
 ]

@@ -53,6 +53,7 @@ class AudioAnalysis:
     tempo_bpm: float = 0.0
     beat_times: list[float] = field(default_factory=list)
     onset_times: list[float] = field(default_factory=list)
+    onset_strengths: list[float] = field(default_factory=list)  # normalized [0,1] per onset
     downbeat_times: list[float] = field(default_factory=list)
     duration_seconds: float = 0.0
     sample_rate: int = 22050
@@ -63,6 +64,7 @@ class AudioAnalysis:
             "tempo_bpm": self.tempo_bpm,
             "beat_times": self.beat_times,
             "onset_times": self.onset_times,
+            "onset_strengths": self.onset_strengths,
             "downbeat_times": self.downbeat_times,
             "duration_seconds": self.duration_seconds,
             "sample_rate": self.sample_rate,
@@ -77,6 +79,7 @@ class AudioAnalysis:
             tempo_bpm=data.get("tempo_bpm", 0.0),
             beat_times=data.get("beat_times", []),
             onset_times=data.get("onset_times", []),
+            onset_strengths=data.get("onset_strengths", []),
             downbeat_times=data.get("downbeat_times", []),
             duration_seconds=data.get("duration_seconds", 0.0),
             sample_rate=data.get("sample_rate", 22050),
@@ -107,6 +110,33 @@ class AudioAnalysis:
             Nearest onset timestamp, or the input time if no onsets
         """
         return _find_nearest(self.onset_times, time)
+
+    def onset_strength_at(self, time: float) -> float:
+        """Get the onset strength at or nearest to a given time.
+
+        Args:
+            time: Target time in seconds
+
+        Returns:
+            Normalized onset strength [0, 1], or 0.5 if no onset data
+        """
+        if not self.onset_times or not self.onset_strengths:
+            return 0.5
+
+        idx = bisect.bisect_left(self.onset_times, time)
+
+        if idx == 0:
+            return self.onset_strengths[0]
+        if idx >= len(self.onset_times):
+            return self.onset_strengths[-1]
+
+        # Return strength of nearest onset
+        before = self.onset_times[idx - 1]
+        after = self.onset_times[idx]
+        nearest_idx = idx - 1 if (time - before) <= (after - time) else idx
+        if nearest_idx < len(self.onset_strengths):
+            return self.onset_strengths[nearest_idx]
+        return 0.5
 
 
 def _find_nearest(sorted_times: list[float], time: float) -> float:
@@ -289,10 +319,24 @@ def analyze_audio(
 
         # Onset detection (transients - good for cut points)
         onset_times = []
+        onset_strengths = []
         if include_onsets:
             logger.info("Detecting onsets")
             onset_frames = librosa.onset.onset_detect(y=y, sr=sr)
             onset_times = librosa.frames_to_time(onset_frames, sr=sr).tolist()
+
+            # Compute onset strength envelope and sample at detected onsets
+            onset_env = librosa.onset.onset_strength(y=y, sr=sr)
+            if len(onset_frames) > 0:
+                # Clamp frame indices to envelope length
+                valid_frames = np.clip(onset_frames, 0, len(onset_env) - 1)
+                raw_strengths = onset_env[valid_frames].tolist()
+                # Normalize to [0, 1]
+                max_str = max(raw_strengths) if raw_strengths else 0.0
+                if max_str > 0:
+                    onset_strengths = [s / max_str for s in raw_strengths]
+                else:
+                    onset_strengths = [0.0] * len(raw_strengths)
 
         logger.info(
             f"Analysis complete: {tempo:.1f} BPM, "
@@ -303,6 +347,7 @@ def analyze_audio(
             tempo_bpm=tempo,
             beat_times=beat_times,
             onset_times=onset_times,
+            onset_strengths=onset_strengths,
             downbeat_times=downbeat_times,
             duration_seconds=duration,
             sample_rate=sr,

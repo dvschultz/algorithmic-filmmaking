@@ -1,6 +1,6 @@
 # Sequencer Algorithms
 
-Scene Ripper includes 15 sequencer algorithms that arrange your clips into a sequence. Each algorithm uses a different creative logic to determine the order.
+Scene Ripper includes 16 sequencer algorithms that arrange your clips into a sequence. Each algorithm uses a different creative logic to determine the order.
 
 To use a sequencer, go to the **Sequence** tab, select an algorithm from the dropdown, and click **Generate**. Some algorithms require that you run specific analysis on your clips first (in the **Analyze** tab). Others open a dialog where you configure additional options before generating.
 
@@ -135,6 +135,25 @@ When transforms are enabled, the dialog pre-renders each affected clip via FFmpe
 Keep clips in their original order. This is the simplest algorithm: clips appear in the sequence exactly as they were detected, preserving the source video's timeline.
 
 **Required analysis:** None
+
+---
+
+## Audio-Driven
+
+### Staccato
+
+Cut clips to the rhythm of a music track. Opens a dialog where you select an audio file, preview the waveform with beat markers, and generate a sequence where onset strength drives visual contrast — stronger beats trigger bigger visual jumps between consecutive clips.
+
+**Required analysis:** Embeddings (DINOv2, auto-computed if missing)
+
+**Dialog workflow:**
+1. Click **Select Music File** to choose an MP3, WAV, FLAC, M4A, AAC, or OGG file
+2. The audio is analyzed and a waveform is displayed with beat/onset markers overlaid
+3. Adjust the **Sensitivity** slider to control the number of cut points ("Fewer Cuts" to "More Cuts")
+4. Choose a **Beat Strategy** from the dropdown: Onsets (transients/hits), Beats (regular pulse), or Downbeats (strong beats only)
+5. Click **Generate** to match clips to beat intervals. Each clip is trimmed to fit its slot; clips shorter than their slot are looped. Clips can repeat when there are more beat slots than clips.
+
+The algorithm uses DINOv2 visual embeddings to measure similarity between clips. At each cut point, it measures the onset strength and selects a clip whose visual distance from the previous clip matches that strength — hard hits get jarring visual jumps, soft transitions get visually similar clips.
 
 ---
 
