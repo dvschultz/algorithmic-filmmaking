@@ -83,6 +83,7 @@ class SortingCardGrid(QWidget):
             ("reference_guided", 3, 0),
             ("signature_style", 3, 1),
             ("rose_hobart", 3, 2),
+            ("staccato", 3, 3),
         ]
 
         for key, row, col in positions:
