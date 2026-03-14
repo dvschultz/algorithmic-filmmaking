@@ -47,49 +47,59 @@ def _make_clip_with_thumb(clip_id, thumbnail_path, source_id="src-1", **kwargs):
 # --- ColorAnalysisWorker ---
 
 class TestColorWorkerTaskBuilding:
-    def test_skip_existing_skips_clips_with_colors(self, thumbnail_path):
+    def test_skip_existing_skips_clips_with_colors(self, source, sources_by_id, tmp_path):
         from ui.workers.color_worker import ColorAnalysisWorker
 
+        # Create a real file so source.file_path.exists() passes
+        video_file = tmp_path / "video.mp4"
+        video_file.write_bytes(b"\x00" * 100)
+        source.file_path = video_file
+
         clip_with = _make_clip_with_thumb(
-            "c1", thumbnail_path, dominant_colors=[(255, 0, 0)]
+            "c1", None, dominant_colors=[(255, 0, 0)]
         )
-        clip_without = _make_clip_with_thumb("c2", thumbnail_path)
+        clip_without = _make_clip_with_thumb("c2", None)
 
         worker = ColorAnalysisWorker(
-            [clip_with, clip_without], parallelism=1, skip_existing=True
+            [clip_with, clip_without], parallelism=1, skip_existing=True,
+            sources_by_id=sources_by_id,
         )
         assert len(worker._tasks) == 1
         assert worker._tasks[0].clip_id == "c2"
 
-    def test_skip_existing_false_includes_all(self, thumbnail_path):
+    def test_skip_existing_false_includes_all(self, source, sources_by_id, tmp_path):
         from ui.workers.color_worker import ColorAnalysisWorker
 
+        video_file = tmp_path / "video.mp4"
+        video_file.write_bytes(b"\x00" * 100)
+        source.file_path = video_file
+
         clip_with = _make_clip_with_thumb(
-            "c1", thumbnail_path, dominant_colors=[(255, 0, 0)]
+            "c1", None, dominant_colors=[(255, 0, 0)]
         )
-        clip_without = _make_clip_with_thumb("c2", thumbnail_path)
+        clip_without = _make_clip_with_thumb("c2", None)
 
         worker = ColorAnalysisWorker(
-            [clip_with, clip_without], parallelism=1, skip_existing=False
+            [clip_with, clip_without], parallelism=1, skip_existing=False,
+            sources_by_id=sources_by_id,
         )
         assert len(worker._tasks) == 2
 
-    def test_skips_clips_without_thumbnail(self):
+    def test_skips_clips_without_source(self):
         from ui.workers.color_worker import ColorAnalysisWorker
 
-        clip = make_test_clip("c1")
-        clip.thumbnail_path = None
+        clip = make_test_clip("c1", source_id="missing-source")
 
-        worker = ColorAnalysisWorker([clip], parallelism=1)
+        worker = ColorAnalysisWorker([clip], parallelism=1, sources_by_id={})
         assert len(worker._tasks) == 0
 
-    def test_skips_clips_with_nonexistent_thumbnail(self):
+    def test_skips_clips_with_nonexistent_source(self, source, sources_by_id):
         from ui.workers.color_worker import ColorAnalysisWorker
 
+        # source.file_path points to /test/video.mp4 which doesn't exist
         clip = make_test_clip("c1")
-        clip.thumbnail_path = Path("/nonexistent/thumb.jpg")
 
-        worker = ColorAnalysisWorker([clip], parallelism=1)
+        worker = ColorAnalysisWorker([clip], parallelism=1, sources_by_id=sources_by_id)
         assert len(worker._tasks) == 0
 
     def test_empty_clips_produces_empty_tasks(self):

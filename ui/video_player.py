@@ -221,7 +221,10 @@ class VideoPlayer(QWidget):
     position_updated = Signal(int)  # position in milliseconds
     duration_changed = Signal(int)  # duration in milliseconds
     media_loaded = Signal()  # fires when file is ready to play
+    media_load_failed = Signal()  # fires when file fails to load
     playback_state_changed = Signal(bool)  # True=playing, False=paused/stopped
+    play_requested = Signal()  # emitted in sequence mode when play is clicked
+    stop_requested = Signal()  # emitted in sequence mode when stop is clicked
 
     def __init__(self):
         super().__init__()
@@ -243,10 +246,16 @@ class VideoPlayer(QWidget):
         self._cached_speed: float = 1.0
         self._ab_a_seconds: Optional[float] = None
         self._ab_b_seconds: Optional[float] = None
+        self._chromatic_bar_color: Optional[tuple[int, int, int]] = None
+        self._media_loaded = False
+        self._pending_seek_seconds: Optional[float] = None
+        self._pending_clip_range: Optional[tuple[float, float]] = None
+        self._pending_play_on_load = False
         self._player_ready = False  # True once mpv is initialized
         self._mpv = None
         self._bridge = None
         self._pending_load: Optional[Path] = None  # queued load_video before init
+        self._sequence_mode = False  # When True, play/stop emit signals instead of controlling MPV
 
         self._setup_ui()
 
@@ -270,6 +279,11 @@ class VideoPlayer(QWidget):
         self.video_widget.setStyleSheet("background-color: #000000;")
         layout.addWidget(self.video_widget, 1)
 
+        self._chromatic_color_bar = QWidget()
+        self._chromatic_color_bar.setFixedHeight(16)
+        self._chromatic_color_bar.setVisible(False)
+        layout.addWidget(self._chromatic_color_bar, 0)
+
         # Controls
         controls = QHBoxLayout()
         controls.setContentsMargins(8, 8, 8, 8)
@@ -289,7 +303,7 @@ class VideoPlayer(QWidget):
         self.stop_btn.setFixedSize(44, 32)
         self.stop_btn.setAccessibleName("Stop")
         self.stop_btn.setToolTip("Stop video")
-        self.stop_btn.clicked.connect(self.stop)
+        self.stop_btn.clicked.connect(self._on_stop_clicked)
         controls.addWidget(self.stop_btn)
 
         # Frame step backward button
@@ -484,6 +498,23 @@ class VideoPlayer(QWidget):
         def on_file_loaded(event):
             self._bridge.media_loaded.emit()
         self._file_loaded_cb = on_file_loaded  # prevent GC
+
+        # Register end-file event to detect load failures.
+        # Without this, a failed load leaves _media_loaded=False permanently,
+        # causing _sequence_preview_loading to stay True (deadlock).
+        @self._mpv.event_callback('end-file')
+        def on_end_file(event):
+            # event is an MpvEvent ctypes struct; event.data is MpvEventEndFile
+            # MpvEventEndFile.reason: 0=EOF, 1=RESTARTED, 2=ABORTED, 3=QUIT, 4=ERROR
+            try:
+                end_data = event.data
+                if end_data is not None and end_data.reason == 4:  # ERROR
+                    logger.warning("MPV end-file with error — media failed to load")
+                    QMetaObject.invokeMethod(self, "_on_load_failed", Qt.QueuedConnection)
+            except Exception:
+                pass  # Struct access can fail during shutdown
+        self._end_file_cb = on_end_file  # prevent GC
+
         self._player_ready = True
 
         # Replay any load_video call that arrived before init completed
@@ -518,6 +549,10 @@ class VideoPlayer(QWidget):
             self._pending_load = path
             return
         self._pending_load = None
+        self._media_loaded = False
+        self._pending_seek_seconds = None
+        self._pending_clip_range = None
+        self._pending_play_on_load = False
         self._clip_start_ms = None
         self._clip_end_ms = None
         self._safe_mpv_command(setattr, self._mpv, 'pause', True)
@@ -538,6 +573,9 @@ class VideoPlayer(QWidget):
         """Seek to a position in seconds."""
         if not self._player_ready:
             return
+        if not self._media_loaded:
+            self._pending_seek_seconds = seconds
+            return
         self._safe_mpv_command(self._mpv.seek, seconds, 'absolute', 'exact')
 
     def set_clip_range(self, start_seconds: float, end_seconds: float):
@@ -553,7 +591,15 @@ class VideoPlayer(QWidget):
         self._clip_end_ms = int(end_seconds * 1000)
         clip_duration = self._clip_end_ms - self._clip_start_ms
         self.position_slider.setRange(0, clip_duration)
+        self._pending_clip_range = (start_seconds, end_seconds)
 
+        if not self._media_loaded:
+            return
+
+        self._apply_clip_range(start_seconds, end_seconds)
+
+    def _apply_clip_range(self, start_seconds: float, end_seconds: float):
+        """Apply clip range directly to MPV once media is ready."""
         if self._loop_clip:
             # Set MPV A/B loop for frame-accurate boundaries
             self._mpv.ab_loop_a = start_seconds
@@ -572,6 +618,11 @@ class VideoPlayer(QWidget):
             return
         self._clip_start_ms = None
         self._clip_end_ms = None
+        self._pending_clip_range = None
+        self._pending_play_on_load = False
+        self._pending_seek_seconds = None
+        if not self._media_loaded:
+            return
         self._mpv.ab_loop_a = 'no'
         self._mpv.ab_loop_b = 'no'
         duration_ms = int(self._duration_s * 1000)
@@ -580,11 +631,17 @@ class VideoPlayer(QWidget):
     def play_range(self, start_seconds: float, end_seconds: float):
         """Play a specific range of the video."""
         self.set_clip_range(start_seconds, end_seconds)
+        if not self._media_loaded:
+            self._pending_play_on_load = True
+            return
         self._mpv.pause = False
 
     def play(self):
         """Start or resume playback."""
         if self._shutting_down or not self._player_ready:
+            return
+        if not self._media_loaded:
+            self._pending_play_on_load = True
             return
         self._mpv.pause = False
 
@@ -599,6 +656,8 @@ class VideoPlayer(QWidget):
         if self._shutting_down or not self._player_ready:
             return
         self._mpv.pause = True
+        if not self._media_loaded:
+            return
         if self._clip_start_ms is not None:
             start_s = self._clip_start_ms / 1000.0
             self._safe_mpv_command(self._mpv.seek, start_s, 'absolute', 'exact')
@@ -733,16 +792,55 @@ class VideoPlayer(QWidget):
             self.speed_combo.setCurrentIndex(DEFAULT_SPEED_INDEX)
             self.playback_speed = 1.0
 
+    def set_chromatic_color_bar(self, color: Optional[tuple[int, int, int]]):
+        """Set the full-width chromatic color bar shown below the video.
+
+        Args:
+            color: RGB tuple for the active clip color, or None to hide the bar.
+        """
+        if color is None:
+            self._chromatic_bar_color = None
+            self._chromatic_color_bar.setVisible(False)
+            return
+
+        r, g, b = (max(0, min(255, int(c))) for c in color)
+        self._chromatic_bar_color = (r, g, b)
+        self._chromatic_color_bar.setStyleSheet(
+            f"background-color: rgb({r}, {g}, {b}); border-top: 1px solid rgba(255,255,255,0.08);"
+        )
+        self._chromatic_color_bar.setVisible(True)
+
     # --- Internal handlers ---
 
     def _toggle_playback(self):
         """Toggle play/pause."""
+        if self._sequence_mode:
+            self.play_requested.emit()
+            return
         if self._shutting_down or not self._player_ready:
             return
         if not self._mpv.pause:
             self._mpv.pause = True
         else:
             self._mpv.pause = False
+
+    def _on_stop_clicked(self):
+        """Handle stop button click."""
+        if self._sequence_mode:
+            self.stop_requested.emit()
+            return
+        self.stop()
+
+    def set_sequence_mode(self, enabled: bool):
+        """Enable sequence mode — play/stop emit signals instead of controlling MPV."""
+        self._sequence_mode = enabled
+
+    def set_playing(self, playing: bool):
+        """Update play/pause icon to reflect sequence playback state."""
+        if playing:
+            self.play_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
+        else:
+            self.play_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
 
     @Slot(int)
     def _on_speed_changed(self, index: int):
@@ -799,7 +897,7 @@ class VideoPlayer(QWidget):
 
         In clip mode, slider position is relative to clip start.
         """
-        if self._shutting_down or not self._player_ready:
+        if self._shutting_down or not self._player_ready or not self._media_loaded:
             return
         if self._clip_start_ms is not None:
             absolute_ms = self._clip_start_ms + position
@@ -846,16 +944,43 @@ class VideoPlayer(QWidget):
     @Slot(bool)
     def _on_pause_changed(self, paused: bool):
         """Handle pause state change from MPV."""
-        if paused:
-            self.play_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
-        else:
-            self.play_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
+        # In sequence mode, icon is controlled by set_playing() from the sequence engine
+        if not self._sequence_mode:
+            if paused:
+                self.play_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+            else:
+                self.play_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
         self.playback_state_changed.emit(not paused)
 
     @Slot()
     def _on_file_loaded(self):
         """Handle file loaded event — media is ready to play."""
+        self._media_loaded = True
+        if self._pending_clip_range is not None:
+            start_seconds, end_seconds = self._pending_clip_range
+            self._apply_clip_range(start_seconds, end_seconds)
+        if self._pending_seek_seconds is not None:
+            self._safe_mpv_command(
+                self._mpv.seek,
+                self._pending_seek_seconds,
+                'absolute',
+                'exact',
+            )
+            self._pending_seek_seconds = None
+        if self._pending_play_on_load:
+            self._mpv.pause = False
+            self._pending_play_on_load = False
         self.media_loaded.emit()
+
+    @Slot()
+    def _on_load_failed(self):
+        """Handle media load failure — clear pending state and notify listeners."""
+        logger.warning("Media load failed — clearing pending state")
+        self._media_loaded = False
+        self._pending_seek_seconds = None
+        self._pending_clip_range = None
+        self._pending_play_on_load = False
+        self.media_load_failed.emit()
 
     @Slot()
     def _on_eof(self):

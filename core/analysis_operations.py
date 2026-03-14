@@ -60,6 +60,11 @@ ANALYSIS_OPERATIONS: list[AnalysisOperation] = [
         "Comprehensive film language analysis (shot size, camera angle, movement, lighting)",
         "cloud", False,
     ),
+    AnalysisOperation(
+        "face_embeddings", "Detect Faces",
+        "Extract face embeddings for person identification",
+        "sequential", False,
+    ),
 ]
 
 # Lookup by key

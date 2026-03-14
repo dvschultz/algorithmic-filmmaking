@@ -4,7 +4,7 @@ import logging
 import random
 from typing import List, Tuple, Any, Optional
 from core.remix.shuffle import constrained_shuffle
-from core.analysis.color import get_primary_hue, rgb_to_hsv, compute_color_purity
+from core.analysis.color import get_primary_hue, rgb_to_hsv
 from core.analysis.shots import SHOT_TYPES
 from core.remix.audio_sync import (
     AlignmentSuggestion,
@@ -19,6 +19,7 @@ from core.remix.audio_sync import (
 __all__ = [
     "constrained_shuffle",
     "generate_sequence",
+    "assign_random_transforms",
     # Audio sync
     "AlignmentSuggestion",
     "suggest_beat_aligned_cuts",
@@ -57,9 +58,6 @@ _SHOT_TYPE_PROXIMITY = {
     "extreme close-up": 9.0,
 }
 
-# Default color purity threshold for color_cycle
-COLOR_CYCLE_PURITY_THRESHOLD = 0.4
-
 
 def _get_warmth_score(hue: float) -> float:
     """Calculate a warmth score from hue for warm_to_cool sorting.
@@ -92,6 +90,7 @@ def generate_sequence(
     clip_count: int,
     direction: Optional[str] = None,
     seed: Optional[int] = None,
+    no_color_handling: Optional[str] = None,
 ) -> List[Tuple[Any, Any]]:
     """
     Generate a sequence of clips using the specified algorithm.
@@ -101,9 +100,13 @@ def generate_sequence(
                    "duration", "brightness", "volume", etc.)
         clips: List of (Clip, Source) tuples to sequence
         clip_count: Maximum number of clips to include
-        direction: For color: "rainbow", "warm_to_cool", "cool_to_warm"
+        direction: For color: "rainbow", "warm_to_cool", "cool_to_warm", "complementary"
                    For duration: "short_first", "long_first"
         seed: Random seed for shuffle reproducibility (0 = random)
+        no_color_handling: For color algorithm — how to handle clips without color data.
+                   "append_end" (default): append after sorted clips
+                   "exclude": drop clips without color data
+                   "sort_inline": treat as hue 0 and sort normally
 
     Returns:
         Ordered list of (Clip, Source) tuples ready for timeline
@@ -111,57 +114,115 @@ def generate_sequence(
     clips_to_use = clips[:clip_count]
 
     if algorithm == "shuffle":
-        # Set random seed if provided and non-zero
-        if seed and seed > 0:
-            random.seed(seed)
+        # Use local Random instance for deterministic shuffling
+        rng = random.Random(seed) if seed and seed > 0 else random.Random()
 
         # Constrained shuffle - no same source back-to-back
         result = constrained_shuffle(
             items=clips_to_use,
             get_category=lambda x: x[1].id,  # x is (Clip, Source), category by source
             max_consecutive=1,
+            rng=rng,
         )
-
-        # Reset random state
-        if seed and seed > 0:
-            random.seed()
 
         return result
 
     elif algorithm == "color":
         color_direction = direction or "rainbow"
+        color_handling = no_color_handling or "append_end"
+
+        # Separate clips with and without color data
+        with_colors = []
+        without_colors = []
+        for clip, source in clips_to_use:
+            if clip.dominant_colors:
+                with_colors.append((clip, source))
+            else:
+                without_colors.append((clip, source))
+
+        if without_colors:
+            logger.info(
+                f"Chromatics: {len(without_colors)} clips lack color data "
+                f"(handling: {color_handling})"
+            )
+
+        if not with_colors:
+            logger.warning("No clips with color data for Chromatics sort")
+            if color_handling == "exclude":
+                return []
+            return clips_to_use
 
         if color_direction == "rainbow":
-            # Sort by primary hue (HSV color wheel order)
             def get_hue(item: Tuple[Any, Any]) -> float:
                 clip, _ = item
-                if clip.dominant_colors:
-                    return get_primary_hue(clip.dominant_colors)
-                return 0.0
-
-            return sorted(clips_to_use, key=get_hue)
+                return get_primary_hue(clip.dominant_colors) if clip.dominant_colors else 0.0
+            sorted_clips = sorted(with_colors, key=get_hue)
 
         elif color_direction == "warm_to_cool":
-            # Sort warm colors first, cool colors last
             def get_warmth(item: Tuple[Any, Any]) -> float:
                 clip, _ = item
                 if clip.dominant_colors:
-                    hue = get_primary_hue(clip.dominant_colors)
-                    return _get_warmth_score(hue)
-                return 0.5  # Neutral for clips without colors
-
-            return sorted(clips_to_use, key=get_warmth)
+                    return _get_warmth_score(get_primary_hue(clip.dominant_colors))
+                return 0.5
+            sorted_clips = sorted(with_colors, key=get_warmth)
 
         elif color_direction == "cool_to_warm":
-            # Sort cool colors first, warm colors last
             def get_coolness(item: Tuple[Any, Any]) -> float:
                 clip, _ = item
                 if clip.dominant_colors:
-                    hue = get_primary_hue(clip.dominant_colors)
-                    return 1.0 - _get_warmth_score(hue)
-                return 0.5  # Neutral for clips without colors
+                    return 1.0 - _get_warmth_score(get_primary_hue(clip.dominant_colors))
+                return 0.5
+            sorted_clips = sorted(with_colors, key=get_coolness)
 
-            return sorted(clips_to_use, key=get_coolness)
+        elif color_direction == "complementary":
+            def get_hue(item: Tuple[Any, Any]) -> float:
+                clip, _ = item
+                return get_primary_hue(clip.dominant_colors) if clip.dominant_colors else 0.0
+            sorted_by_hue = sorted(with_colors, key=get_hue)
+            # Interleave from opposite ends for maximum contrast
+            sorted_clips = []
+            lo, hi = 0, len(sorted_by_hue) - 1
+            toggle = True
+            while lo <= hi:
+                if toggle:
+                    sorted_clips.append(sorted_by_hue[lo])
+                    lo += 1
+                else:
+                    sorted_clips.append(sorted_by_hue[hi])
+                    hi -= 1
+                toggle = not toggle
+        else:
+            sorted_clips = sorted(
+                with_colors,
+                key=lambda item: get_primary_hue(item[0].dominant_colors) if item[0].dominant_colors else 0.0,
+            )
+
+        # Apply no-color-data handling
+        if color_handling == "exclude":
+            return sorted_clips
+        elif color_handling == "sort_inline":
+            # Re-sort with colorless clips included (hue 0.0 / warmth 0.5)
+            all_clips = sorted_clips + without_colors
+            if color_direction == "warm_to_cool":
+                all_clips = sorted(
+                    with_colors + without_colors,
+                    key=lambda item: _get_warmth_score(get_primary_hue(item[0].dominant_colors)) if item[0].dominant_colors else 0.5,
+                )
+            elif color_direction == "cool_to_warm":
+                all_clips = sorted(
+                    with_colors + without_colors,
+                    key=lambda item: 1.0 - _get_warmth_score(get_primary_hue(item[0].dominant_colors)) if item[0].dominant_colors else 0.5,
+                )
+            elif color_direction in ("rainbow", "complementary"):
+                # For complementary, inline sort falls back to rainbow order
+                all_clips = sorted(
+                    with_colors + without_colors,
+                    key=lambda item: get_primary_hue(item[0].dominant_colors) if item[0].dominant_colors else 0.0,
+                )
+            return all_clips
+        else:
+            # append_end (default)
+            return sorted_clips + without_colors
 
     elif algorithm == "shot_type":
         # Sort by shot type (wide -> medium -> close-up -> extreme close-up)
@@ -258,58 +319,31 @@ def generate_sequence(
         _auto_compute_boundary_embeddings(clips_to_use)
         return match_cut_chain(clips_to_use, start_clip_id=None)
 
-    elif algorithm == "color_cycle":
-        # Filter to clips with strong color identity, then cycle through hue wheel
-        color_cycle_direction = direction or "spectrum"
-
-        # Filter to clips with dominant_colors and sufficient purity
-        filtered = []
-        for clip, source in clips_to_use:
-            if clip.dominant_colors:
-                purity = compute_color_purity(clip.dominant_colors)
-                if purity >= COLOR_CYCLE_PURITY_THRESHOLD:
-                    filtered.append((clip, source))
-
-        excluded = len(clips_to_use) - len(filtered)
-        if excluded > 0:
-            logger.info(
-                f"Color cycle: {len(filtered)} included, {excluded} excluded (low purity)"
-            )
-
-        if not filtered:
-            logger.warning("No clips with sufficient color purity for color cycle")
-            return clips_to_use
-
-        # Sort by primary hue
-        def get_hue(item: Tuple[Any, Any]) -> float:
-            clip, _ = item
-            if clip.dominant_colors:
-                return get_primary_hue(clip.dominant_colors)
-            return 0.0
-
-        sorted_by_hue = sorted(filtered, key=get_hue)
-
-        if color_cycle_direction == "complementary":
-            # Interleave from bottom and top for maximum contrast
-            result = []
-            lo, hi = 0, len(sorted_by_hue) - 1
-            toggle = True
-            while lo <= hi:
-                if toggle:
-                    result.append(sorted_by_hue[lo])
-                    lo += 1
-                else:
-                    result.append(sorted_by_hue[hi])
-                    hi -= 1
-                toggle = not toggle
-            return result
-        else:
-            # spectrum: linear hue progression
-            return sorted_by_hue
-
     else:
         # Sequential - use original order
         return clips_to_use
+
+
+def assign_random_transforms(
+    sequence_clips: list,
+    transform_options: dict[str, bool],
+    seed: Optional[int] = None,
+) -> None:
+    """Assign random transforms to SequenceClip objects in-place.
+
+    Each enabled transform has a 50% chance of being applied per clip.
+
+    Args:
+        sequence_clips: List of SequenceClip objects to modify
+        transform_options: Dict of transform flags, e.g. {"hflip": True, "vflip": False, "reverse": True}
+        seed: Optional random seed for deterministic assignment
+    """
+    rng = random.Random(seed) if seed is not None else random.Random()
+
+    for seq_clip in sequence_clips:
+        seq_clip.hflip = bool(transform_options.get("hflip")) and rng.random() < 0.5
+        seq_clip.vflip = bool(transform_options.get("vflip")) and rng.random() < 0.5
+        seq_clip.reverse = bool(transform_options.get("reverse")) and rng.random() < 0.5
 
 
 def _auto_compute_brightness(clips: List[Tuple[Any, Any]]) -> None:

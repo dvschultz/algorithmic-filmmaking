@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QGraphicsOpacityEffect,
 )
-from PySide6.QtCore import Qt, Signal, QMimeData, QPoint
+from PySide6.QtCore import Qt, Signal, QMimeData, QPoint, QTimer
 from PySide6.QtGui import QPixmap, QDrag, QPainter, QColor, QKeyEvent, QPainterPath
 
 from ui.widgets.range_slider import RangeSlider
@@ -522,6 +522,7 @@ class ClipBrowser(QWidget):
     clip_selected = Signal(object)  # Clip
     clip_double_clicked = Signal(object)  # Clip
     clip_dragged_to_timeline = Signal(object)  # Clip
+    selection_changed = Signal(list)  # list[str] selected clip IDs
     filters_changed = Signal()  # Emitted when any filter changes
     view_details_requested = Signal(object, object)  # Clip, Source - request to show clip details
 
@@ -698,11 +699,19 @@ class ClipBrowser(QWidget):
         """Recalculate grid columns when widget is resized."""
         super().resizeEvent(event)
         new_cols = self._calculate_columns()
-        if new_cols != self._last_column_count and self._last_column_count > 0:
+        if new_cols != self._last_column_count:
             self._last_column_count = new_cols
-            self._rebuild_grid()
+            if self.thumbnails:
+                self._rebuild_grid()
         else:
             self._last_column_count = new_cols
+
+    def refresh_layout(self):
+        """Force a grid rebuild using the current viewport width."""
+        if not self.thumbnails:
+            return
+        self._last_column_count = 0
+        self._rebuild_grid()
 
     def _show_empty_state(self):
         """Show the empty state label in the grid."""
@@ -762,6 +771,8 @@ class ClipBrowser(QWidget):
 
     def remove_clips_for_source(self, source_id: str):
         """Remove all clips for a specific source (used when re-analyzing)."""
+        selection_before = set(self.selected_clips)
+
         # Separate into keep and remove in single pass (O(n) instead of O(n²))
         keep = []
         remove = []
@@ -792,6 +803,34 @@ class ClipBrowser(QWidget):
         if remove:
             self.thumbnails = keep
             self._rebuild_grid()  # This handles empty state
+            if self.selected_clips != selection_before:
+                self._emit_selection_changed()
+
+    def remove_clips_by_ids(self, clip_ids: list[str]):
+        """Remove specific clips by their IDs."""
+        ids_to_remove = set(clip_ids)
+        selection_before = set(self.selected_clips)
+
+        keep = []
+        remove = []
+        for thumb in self.thumbnails:
+            if thumb.clip.id in ids_to_remove:
+                remove.append(thumb)
+            else:
+                keep.append(thumb)
+
+        for thumb in remove:
+            self.grid.removeWidget(thumb)
+            thumb.deleteLater()
+            self.selected_clips.discard(thumb.clip.id)
+            self._thumbnail_by_id.pop(thumb.clip.id, None)
+            self._source_lookup.pop(thumb.clip.id, None)
+
+        if remove:
+            self.thumbnails = keep
+            self._rebuild_grid()
+            if self.selected_clips != selection_before:
+                self._emit_selection_changed()
 
     def set_drag_enabled(self, enabled: bool):
         """Enable or disable dragging clips to timeline."""
@@ -815,16 +854,22 @@ class ClipBrowser(QWidget):
         for thumb in self.thumbnails:
             thumb.set_selected(thumb.clip.id in self.selected_clips)
 
+        self._emit_selection_changed()
+
     def select_all(self) -> None:
         """Select all visible clips."""
-        # Only select clips that are currently visible (not filtered out)
+        # Only select clips that are currently visible (not filtered out) and enabled.
         self.selected_clips = set(
-            thumb.clip.id for thumb in self.thumbnails if thumb.isVisible()
+            thumb.clip.id
+            for thumb in self.thumbnails
+            if thumb.isVisible() and not thumb.disabled
         )
 
         # Update all thumbnail states
         for thumb in self.thumbnails:
             thumb.set_selected(thumb.clip.id in self.selected_clips)
+
+        self._emit_selection_changed()
 
     def clear_selection(self) -> None:
         """Clear all selections."""
@@ -833,6 +878,17 @@ class ClipBrowser(QWidget):
         # Update all thumbnail states
         for thumb in self.thumbnails:
             thumb.set_selected(False)
+
+        self._emit_selection_changed()
+
+    def _emit_selection_changed(self) -> None:
+        """Emit selected IDs in stable display order."""
+        selected_ids = [
+            thumb.clip.id
+            for thumb in self.thumbnails
+            if thumb.clip.id in self.selected_clips
+        ]
+        self.selection_changed.emit(selected_ids)
 
     def _on_thumbnail_clicked(self, clip: Clip):
         """Handle thumbnail click."""
@@ -846,6 +902,7 @@ class ClipBrowser(QWidget):
         for thumb in self.thumbnails:
             thumb.set_selected(thumb.clip.id in self.selected_clips)
 
+        self._emit_selection_changed()
         self.clip_selected.emit(clip)
 
     def _on_thumbnail_double_clicked(self, clip: Clip):
@@ -865,6 +922,7 @@ class ClipBrowser(QWidget):
         if thumb:
             thumb.set_selected(thumb.clip.id in self.selected_clips)
 
+        self._emit_selection_changed()
         self.clip_double_clicked.emit(clip)
 
     def _on_drag_started(self, clip: Clip):
@@ -1015,7 +1073,20 @@ class ClipBrowser(QWidget):
         self._rebuild_grid()
 
     def _rebuild_grid(self):
-        """Rebuild the grid layout with source grouping, current order, and filter."""
+        """Schedule a grid rebuild on the next event loop iteration.
+
+        Coalesces multiple calls into a single rebuild, which also ensures
+        Qt has processed layouts so viewport dimensions are correct.
+        """
+        if not getattr(self, '_rebuild_pending', False):
+            self._rebuild_pending = True
+            QTimer.singleShot(0, self._do_rebuild_grid)
+
+    def _do_rebuild_grid(self):
+        """Actually rebuild the grid layout with source grouping, current order, and filter."""
+        self._rebuild_pending = False
+        self._last_column_count = self._calculate_columns()
+
         # Remove all thumbnails and headers from grid
         for thumb in self.thumbnails:
             self.grid.removeWidget(thumb)
@@ -1427,6 +1498,13 @@ class ClipBrowser(QWidget):
 
     def toggle_disabled(self, clip_ids: list[str]):
         """Toggle the disabled state of clips by ID via undo stack."""
+        selection_before = set(self.selected_clips)
+        becoming_disabled = {
+            clip_id
+            for clip_id in clip_ids
+            if (thumb := self._thumbnail_by_id.get(clip_id)) is not None and not thumb.clip.disabled
+        }
+
         from ui.commands.toggle_clip_disabled import ToggleClipDisabledCommand
         main_win = self.window()
         if hasattr(main_win, 'undo_stack'):
@@ -1439,6 +1517,14 @@ class ClipBrowser(QWidget):
                 if thumb:
                     thumb.clip.disabled = not thumb.clip.disabled
                     thumb._update_style()
+
+        # Disabling a clip should only clear selection for that clip.
+        self.selected_clips.difference_update(becoming_disabled)
+        for thumb in self.thumbnails:
+            thumb.set_selected(thumb.clip.id in self.selected_clips)
+
+        if self.selected_clips != selection_before:
+            self._emit_selection_changed()
 
     def keyPressEvent(self, event):
         """Handle keyboard shortcuts.

@@ -197,38 +197,103 @@ COLOR_PALETTE_DISPLAY = {
 }
 
 
+def _sample_frame_positions(start_frame: int, end_frame: int) -> list[int]:
+    """Calculate 3 sample positions: early, middle, and near end of a clip.
+
+    Positions are at ~15%, 50%, and ~85% through the clip, never landing
+    on the first or last frame.
+    """
+    duration = end_frame - start_frame
+    if duration <= 0:
+        return [start_frame]
+    # For very short clips (< 5 frames), just use the middle frame
+    if duration <= 2:
+        mid = start_frame + (duration // 2)
+        # end_frame is exclusive; clamp to valid clip bounds
+        mid = min(max(start_frame, mid), end_frame - 1)
+        return [mid]
+    # Offset by 1 to avoid first/last frame, then distribute evenly
+    inner_start = start_frame + 1
+    inner_end = end_frame - 1
+    inner_duration = inner_end - inner_start
+    if inner_duration <= 0:
+        return [start_frame + duration // 2]
+    early = inner_start + int(inner_duration * 0.15)
+    middle = inner_start + int(inner_duration * 0.50)
+    late = inner_start + int(inner_duration * 0.85)
+    # Deduplicate for short clips where positions collapse
+    positions = list(dict.fromkeys([early, middle, late]))
+    return positions
+
+
 def extract_dominant_colors(
-    image_path: Path,
+    video_path: Path,
+    start_frame: int,
+    end_frame: int,
     n_colors: int = 5,
     sample_size: int = 50,
+    random_state: Optional[int] = 42,
+    image_path: Optional[Path] = None,
 ) -> list[tuple[int, int, int]]:
     """
-    Extract dominant colors from an image using k-means clustering.
+    Extract dominant colors by sampling multiple frames from a video clip.
+
+    Samples 3 frames (early, middle, near end) from the clip, combines
+    their pixels, and runs k-means clustering on the pooled result.
+
+    If image_path is provided (e.g. for single-frame analysis targets),
+    falls back to extracting colors from that single image.
 
     Args:
-        image_path: Path to the image file
+        video_path: Path to the source video file
+        start_frame: Clip start frame
+        end_frame: Clip end frame
         n_colors: Number of dominant colors to extract
-        sample_size: Size to resize image for faster processing
+        sample_size: Size to resize each frame for faster processing
+        random_state: Seed for k-means initialization. None for non-deterministic.
+        image_path: Optional single image fallback (skips video sampling)
 
     Returns:
         List of RGB tuples sorted by frequency (most dominant first)
     """
-    # Load image
-    img = cv2.imread(str(image_path))
-    if img is None:
+    all_pixels = []
+
+    if image_path is not None:
+        # Single-image fallback (e.g. AnalysisTarget "frame" type)
+        img = cv2.imread(str(image_path))
+        if img is None:
+            return []
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        img = cv2.resize(img, (sample_size, sample_size), interpolation=cv2.INTER_AREA)
+        all_pixels.append(img.reshape(-1, 3))
+    else:
+        # Sample 3 frames from the video clip
+        positions = _sample_frame_positions(start_frame, end_frame)
+        cap = cv2.VideoCapture(str(video_path))
+        try:
+            if not cap.isOpened():
+                logger.warning(f"Cannot open video for color extraction: {video_path}")
+                return []
+            for pos in positions:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, pos)
+                ret, frame = cap.read()
+                if not ret or frame is None:
+                    continue
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                frame = cv2.resize(
+                    frame, (sample_size, sample_size), interpolation=cv2.INTER_AREA
+                )
+                all_pixels.append(frame.reshape(-1, 3))
+        finally:
+            cap.release()
+
+    if not all_pixels:
         return []
 
-    # Convert BGR to RGB
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
-    # Resize for speed
-    img = cv2.resize(img, (sample_size, sample_size), interpolation=cv2.INTER_AREA)
-
-    # Flatten to pixel array
-    pixels = img.reshape(-1, 3)
+    pixels = np.concatenate(all_pixels, axis=0)
 
     # Run k-means clustering (n_init=1 is sufficient with fixed random_state)
-    kmeans = KMeans(n_clusters=n_colors, random_state=42, n_init=1, max_iter=100)
+    kmeans = KMeans(n_clusters=n_colors, random_state=random_state, n_init=1, max_iter=100)
     kmeans.fit(pixels)
 
     # Get cluster centers (colors) and labels

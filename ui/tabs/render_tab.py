@@ -55,7 +55,7 @@ class RenderTab(BaseTab):
         # State 0: No content to export
         self.no_content_widget = EmptyStateWidget(
             "Nothing to Export",
-            "Add clips to the timeline in the Sequence tab first"
+            "Add clips to the timeline in the Sequence tab first, or ask the Agent to build one"
         )
         self.state_stack.addWidget(self.no_content_widget)
 

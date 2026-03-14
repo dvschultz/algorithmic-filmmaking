@@ -91,6 +91,11 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
         packages=[],  # opencv is bundled in core
         size_estimate_mb=0,
     ),
+    "face_detect": FeatureDeps(
+        binaries=[],
+        packages=["insightface", "onnxruntime"],
+        size_estimate_mb=300,
+    ),
 }
 
 

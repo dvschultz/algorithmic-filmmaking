@@ -597,8 +597,8 @@ class TestProjectFramePersistence:
         assert loaded.frames[0].analyzed is True
 
     def test_schema_version_bumped(self):
-        """Schema version should be 1.2."""
-        assert SCHEMA_VERSION == "1.2"
+        """Schema version should be 1.3."""
+        assert SCHEMA_VERSION == "1.3"
 
     def test_repr_includes_frames(self):
         """Project repr includes frame count."""

@@ -204,6 +204,7 @@ class Clip:
     # Content analysis fields
     object_labels: Optional[list[str]] = None  # ImageNet labels, e.g., ["dog", "car", "tree"]
     detected_objects: Optional[list[dict]] = None  # [{label, confidence, bbox}]
+    face_embeddings: Optional[list[dict]] = None  # [{bbox, embedding, confidence, frame_number}]
     person_count: Optional[int] = None  # Number of people detected
     # Video description fields
     description: Optional[str] = None  # Natural language description
@@ -319,6 +320,16 @@ class Clip:
             data["object_labels"] = self.object_labels
         if self.detected_objects:
             data["detected_objects"] = self.detected_objects
+        if self.face_embeddings:
+            data["face_embeddings"] = [
+                {
+                    "bbox": fe["bbox"],
+                    "embedding": [round(v, 5) for v in fe["embedding"]],
+                    "confidence": fe["confidence"],
+                    **({"frame_number": fe["frame_number"]} if "frame_number" in fe else {}),
+                }
+                for fe in self.face_embeddings
+            ]
         if self.person_count is not None:
             data["person_count"] = self.person_count
         # Description fields
@@ -386,6 +397,34 @@ class Clip:
         if "cinematography" in data:
             cinematography = CinematographyAnalysis.from_dict(data["cinematography"])
 
+        # Parse face embeddings with validation
+        face_embeddings = None
+        if "face_embeddings" in data:
+            face_embeddings = []
+            for entry in data["face_embeddings"]:
+                if not isinstance(entry, dict):
+                    continue
+                bbox = entry.get("bbox")
+                emb = entry.get("embedding")
+                conf = entry.get("confidence")
+                if not (isinstance(bbox, list) and len(bbox) == 4
+                        and all(isinstance(v, (int, float)) for v in bbox)
+                        and isinstance(emb, list) and len(emb) == 512
+                        and all(isinstance(v, (int, float)) for v in emb)
+                        and isinstance(conf, (int, float))):
+                    logger.warning("Discarding malformed face embedding entry")
+                    continue
+                clean = {
+                    "bbox": bbox,
+                    "embedding": emb,
+                    "confidence": float(conf),
+                }
+                if "frame_number" in entry and isinstance(entry["frame_number"], int):
+                    clean["frame_number"] = entry["frame_number"]
+                face_embeddings.append(clean)
+            if not face_embeddings:
+                face_embeddings = None
+
         return cls(
             id=data.get("id", str(uuid.uuid4())),
             source_id=data.get("source_id", ""),
@@ -401,6 +440,7 @@ class Clip:
             # Content analysis fields
             object_labels=data.get("object_labels"),
             detected_objects=data.get("detected_objects"),
+            face_embeddings=face_embeddings,
             person_count=data.get("person_count"),
             # Description fields
             description=data.get("description"),

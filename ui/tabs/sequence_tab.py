@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QPushButton,
     QLabel,
+    QCheckBox,
     QMessageBox,
 )
 from PySide6.QtCore import Signal, Qt, Slot
@@ -20,8 +21,8 @@ from .base_tab import BaseTab
 from ui.video_player import VideoPlayer
 from ui.timeline import TimelineWidget
 from ui.widgets import SortingCardGrid, TimelinePreview, CostEstimatePanel
-from ui.dialogs import ExquisiteCorpusDialog, StorytellerDialog, MissingDescriptionsDialog, ReferenceGuideDialog, SignatureStyleDialog
-from ui.theme import theme, Spacing, TypeScale
+from ui.dialogs import ExquisiteCorpusDialog, StorytellerDialog, MissingDescriptionsDialog, ReferenceGuideDialog, SignatureStyleDialog, RoseHobartDialog, DiceRollDialog
+from ui.theme import theme, Spacing, TypeScale, UISizes
 from ui.workers.sequence_worker import SequenceWorker
 from core.remix import generate_sequence
 from core.cost_estimates import estimate_sequence_cost
@@ -69,6 +70,7 @@ class SequenceTab(BaseTab):
     export_requested = Signal()
     clip_added = Signal(object, object)  # Clip, Source
     clips_data_changed = Signal(list)  # Emitted when auto-compute mutates clip metadata
+    chromatic_bar_setting_changed = Signal(bool)  # True when bottom color bar should be visible
 
     # Intention-first workflow signal: emitted when card is clicked with no clips
     # Parameters: algorithm (str), direction (str or None)
@@ -99,6 +101,7 @@ class SequenceTab(BaseTab):
         # Confirm state: pending algorithm and clips for generation
         self._pending_algorithm: Optional[str] = None
         self._pending_clips: list = []
+        self._show_chromatic_color_bar = False
 
         super().__init__(parent)
 
@@ -145,6 +148,9 @@ class SequenceTab(BaseTab):
         # Video player
         self.video_player = VideoPlayer()
         self.video_player.show_ab_loop_controls(True)
+        self.video_player.set_sequence_mode(True)
+        self.video_player.play_requested.connect(self._on_playback_requested)
+        self.video_player.stop_requested.connect(self._on_stop_requested)
         splitter.addWidget(self.video_player)
 
         # Timeline preview strip (moved from parameter view)
@@ -155,8 +161,6 @@ class SequenceTab(BaseTab):
         # Timeline widget
         self.timeline = TimelineWidget()
         self.timeline.playhead_changed.connect(self._on_playhead_changed)
-        self.timeline.playback_requested.connect(self._on_playback_requested)
-        self.timeline.stop_requested.connect(self._on_stop_requested)
         self.timeline.export_requested.connect(self._on_export_requested)
         splitter.addWidget(self.timeline)
 
@@ -186,7 +190,7 @@ class SequenceTab(BaseTab):
         self.algorithm_dropdown = QComboBox()
         # Populate with labels from non-dialog algorithms (exclude exquisite_corpus, storyteller)
         _dropdown_keys = [
-            "shuffle", "sequential", "duration", "color", "color_cycle",
+            "shuffle", "sequential", "duration", "color",
             "brightness", "volume", "shot_type", "proximity",
             "similarity_chain", "match_cut",
         ]
@@ -205,9 +209,18 @@ class SequenceTab(BaseTab):
         self.direction_dropdown.currentTextChanged.connect(self._on_direction_changed)
         layout.addWidget(self.direction_dropdown)
 
+        self.chromatic_bar_checkbox = QCheckBox("Show Color Bar")
+        self.chromatic_bar_checkbox.setToolTip(
+            "Show a full-width bar at the bottom of playback/export that "
+            "uses each clip's dominant color."
+        )
+        self.chromatic_bar_checkbox.toggled.connect(self._on_chromatic_bar_toggled)
+        layout.addWidget(self.chromatic_bar_checkbox)
+
         # Initially hide direction controls
         self.direction_label.hide()
         self.direction_dropdown.hide()
+        self.chromatic_bar_checkbox.hide()
 
         layout.addStretch()
 
@@ -241,6 +254,31 @@ class SequenceTab(BaseTab):
         self._confirm_cost_panel = CostEstimatePanel()
         self._confirm_cost_panel.tier_changed.connect(self._on_confirm_tier_changed)
         layout.addWidget(self._confirm_cost_panel)
+
+        self._confirm_chromatic_bar_checkbox = QCheckBox(
+            "Show bottom color bar (preview + export)"
+        )
+        self._confirm_chromatic_bar_checkbox.setVisible(False)
+        layout.addWidget(self._confirm_chromatic_bar_checkbox)
+
+        # No-color-data handling dropdown (visible only for color algorithm)
+        self._confirm_no_color_layout = QHBoxLayout()
+        no_color_label = QLabel("Clips without color data:")
+        no_color_label.setStyleSheet(f"color: {theme().text_secondary}; border: none;")
+        self._confirm_no_color_layout.addWidget(no_color_label)
+        self._confirm_no_color_dropdown = QComboBox()
+        self._confirm_no_color_dropdown.addItems([
+            "Append at End",
+            "Exclude",
+            "Sort Inline",
+        ])
+        self._confirm_no_color_dropdown.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
+        self._confirm_no_color_layout.addWidget(self._confirm_no_color_dropdown)
+        self._confirm_no_color_layout.addStretch()
+        self._confirm_no_color_container = QWidget()
+        self._confirm_no_color_container.setLayout(self._confirm_no_color_layout)
+        self._confirm_no_color_container.setVisible(False)
+        layout.addWidget(self._confirm_no_color_container)
 
         layout.addStretch()
 
@@ -281,6 +319,15 @@ class SequenceTab(BaseTab):
         self._confirm_clips_label.setText(f"{len(clips)} clips selected")
         self._confirm_cost_panel.set_estimates(estimates)
         self._update_cloud_api_warning(estimates)
+        is_color = algorithm.lower() == "color"
+        self._confirm_chromatic_bar_checkbox.setVisible(is_color)
+        if is_color:
+            self._confirm_chromatic_bar_checkbox.setChecked(self._show_chromatic_color_bar)
+        else:
+            self._confirm_chromatic_bar_checkbox.setChecked(False)
+        self._confirm_no_color_container.setVisible(is_color)
+        if is_color:
+            self._confirm_no_color_dropdown.setCurrentIndex(0)  # "Append at End"
         self._set_state(self.STATE_CONFIRM)
 
     def _refresh_confirm_estimates(self):
@@ -348,18 +395,37 @@ class SequenceTab(BaseTab):
         self._pending_algorithm = None
         self._pending_clips = []
 
+        no_color_handling = None
+        if algorithm.lower() == "color":
+            self.set_chromatic_color_bar_enabled(
+                self._confirm_chromatic_bar_checkbox.isChecked(),
+                emit_signal=False,
+            )
+            no_color_handling = self._get_confirm_no_color_handling()
+
         # Dialog-based algorithms still use their dialogs for the actual generation
+        if algorithm == "shuffle":
+            self._apply_chromatic_bar_to_sequence("shuffle")
+            self._show_dice_roll_dialog(clips)
+            return
         if algorithm == "exquisite_corpus":
+            self._apply_chromatic_bar_to_sequence("exquisite_corpus")
             self._show_exquisite_corpus_dialog(clips)
             return
         if algorithm == "storyteller":
+            self._apply_chromatic_bar_to_sequence("storyteller")
             self._show_storyteller_dialog(clips)
             return
         if algorithm == "signature_style":
+            self._apply_chromatic_bar_to_sequence("signature_style")
             self._show_signature_style_dialog(clips)
             return
+        if algorithm == "rose_hobart":
+            self._apply_chromatic_bar_to_sequence("rose_hobart")
+            self._show_rose_hobart_dialog(clips)
+            return
 
-        self._apply_algorithm(algorithm, clips)
+        self._apply_algorithm(algorithm, clips, no_color_handling=no_color_handling)
 
     def set_gui_state(self, gui_state):
         """Set the GUI state reference (called by MainWindow)."""
@@ -446,6 +512,9 @@ class SequenceTab(BaseTab):
         # Route them directly to avoid the cost confirmation gate
         cfg = ALGORITHM_CONFIG.get(algorithm, {})
         if cfg.get("is_dialog"):
+            if algorithm == "shuffle":
+                self._show_dice_roll_dialog(clips)
+                return
             if algorithm == "exquisite_corpus":
                 self._show_exquisite_corpus_dialog(clips)
                 return
@@ -458,20 +527,35 @@ class SequenceTab(BaseTab):
             if algorithm == "signature_style":
                 self._show_signature_style_dialog(clips)
                 return
+            if algorithm == "rose_hobart":
+                self._show_rose_hobart_dialog(clips)
+                return
 
         # Compute cost estimates for this algorithm
         clip_objects = [clip for clip, source in clips]
         estimates = estimate_sequence_cost(algorithm, clip_objects)
 
-        if estimates:
-            # Show gatekeeper with cost panel
+        if estimates or algorithm == "color":
+            # Show gatekeeper with cost panel. Chromatics always uses this
+            # step so users can choose color-bar and no-color-data settings.
             self._pending_algorithm = algorithm
             self._pending_clips = clips
             self._show_confirm_view(algorithm, clips, estimates)
         else:
             self._apply_algorithm(algorithm, clips)
 
-    def _apply_algorithm(self, algorithm: str, clips: list, direction: str = None):
+    _NO_COLOR_HANDLING_MAP = {
+        "Append at End": "append_end",
+        "Exclude": "exclude",
+        "Sort Inline": "sort_inline",
+    }
+
+    def _get_confirm_no_color_handling(self) -> str:
+        """Get the no-color-data handling option from the confirm view dropdown."""
+        text = self._confirm_no_color_dropdown.currentText()
+        return self._NO_COLOR_HANDLING_MAP.get(text, "append_end")
+
+    def _apply_algorithm(self, algorithm: str, clips: list, direction: str = None, no_color_handling: str = None):
         """Generate sequence in a background worker and transition to timeline.
 
         Heavy auto-compute operations (brightness, volume, CLIP embeddings)
@@ -481,6 +565,7 @@ class SequenceTab(BaseTab):
             algorithm: Algorithm name
             clips: List of (Clip, Source) tuples
             direction: Sort direction (e.g., "short_first", "long_first" for duration)
+            no_color_handling: For color algorithm — "append_end", "exclude", or "sort_inline"
         """
         if self._apply_in_progress:
             logger.warning("Apply already in progress, ignoring")
@@ -501,10 +586,12 @@ class SequenceTab(BaseTab):
             algorithm=algo_lower,
             clips=clips,
             direction=direction,
+            no_color_handling=no_color_handling,
             parent=self,
         )
         # Store algorithm for the completion slot
         worker._pending_algorithm = algorithm
+        worker._pending_direction = direction
         worker.sequence_ready.connect(self._on_sequence_ready)
         worker.error.connect(self._on_sequence_error)
         self._sequence_worker = worker
@@ -514,6 +601,7 @@ class SequenceTab(BaseTab):
         """Handle completed sequence generation (runs on main thread)."""
         worker = self._sequence_worker
         algorithm = getattr(worker, "_pending_algorithm", "") if worker else ""
+        direction = getattr(worker, "_pending_direction", None) if worker else None
         algo_lower = algorithm.lower()
 
         try:
@@ -538,13 +626,16 @@ class SequenceTab(BaseTab):
             self.algorithm_dropdown.blockSignals(False)
 
             # Update direction dropdown
-            self._update_direction_dropdown(algorithm)
+            self._update_direction_dropdown(algorithm, direction)
 
             self._current_algorithm = algo_lower
 
             # Persist algorithm on the sequence for SRT export
             sequence = self.timeline.get_sequence()
             sequence.algorithm = algo_lower
+            self._apply_chromatic_bar_to_sequence(algo_lower)
+            self._update_chromatic_bar_controls(algo_lower)
+            self._emit_chromatic_bar_setting_changed()
 
             # Transition to timeline state
             self._set_state(self.STATE_TIMELINE)
@@ -640,6 +731,9 @@ class SequenceTab(BaseTab):
 
             sequence = self.timeline.get_sequence()
             sequence.algorithm = algorithm_key
+            self._apply_chromatic_bar_to_sequence(algorithm_key)
+            self._update_chromatic_bar_controls(algorithm_key)
+            self._emit_chromatic_bar_setting_changed()
 
             if sequence_metadata:
                 for key, value in sequence_metadata.items():
@@ -846,6 +940,9 @@ class SequenceTab(BaseTab):
             sequence = self.timeline.get_sequence()
             sequence.algorithm = "signature_style"
             sequence.allow_repeats = True
+            self._apply_chromatic_bar_to_sequence("signature_style")
+            self._update_chromatic_bar_controls("signature_style")
+            self._emit_chromatic_bar_setting_changed()
 
             self._set_state(self.STATE_TIMELINE)
 
@@ -855,26 +952,140 @@ class SequenceTab(BaseTab):
             logger.error(f"Error applying Signature Style sequence: {e}")
             QMessageBox.critical(self, "Error", f"Failed to apply sequence: {e}")
 
+    def _show_rose_hobart_dialog(self, clips: list):
+        """Show the Rose Hobart dialog for face-filter sequencing.
+
+        Args:
+            clips: List of (Clip, Source) tuples to process
+        """
+        clip_objects = [clip for clip, source in clips]
+        sources_by_id = {source.id: source for clip, source in clips}
+
+        dialog = RoseHobartDialog(
+            clips=clip_objects,
+            sources_by_id=sources_by_id,
+            parent=self,
+        )
+
+        dialog.sequence_ready.connect(self._apply_rose_hobart_sequence)
+        dialog.exec()
+
+    @Slot(list)
+    def _apply_rose_hobart_sequence(self, sequence_clips: list):
+        """Apply the sequence from Rose Hobart dialog."""
+        self._apply_dialog_sequence(
+            sequence_clips, "rose_hobart", "Rose Hobart",
+        )
+
+    def _show_dice_roll_dialog(self, clips: list):
+        """Show the Dice Roll dialog for shuffle + optional transforms.
+
+        Args:
+            clips: List of (Clip, Source) tuples to shuffle
+        """
+        dialog = DiceRollDialog(clips=clips, parent=self)
+        dialog.sequence_ready.connect(self._apply_dice_roll_sequence)
+        dialog.exec()
+
+    @Slot(list)
+    def _apply_dice_roll_sequence(self, sequence_data: list):
+        """Apply the sequence from Dice Roll dialog.
+
+        Args:
+            sequence_data: List of (Clip, Source, dict) where dict has
+                hflip, vflip, reverse, prerendered_path keys.
+        """
+        if not sequence_data:
+            logger.warning("No clips in Dice Roll sequence")
+            return
+
+        try:
+            self.timeline.clear_timeline()
+
+            first_clip, first_source, _ = sequence_data[0]
+            self.timeline.set_fps(first_source.fps)
+            self.video_player.load_video(first_source.file_path)
+
+            current_frame = 0
+            for clip, source, transform_info in sequence_data:
+                self.timeline.add_clip(clip, source, track_index=0, start_frame=current_frame)
+                current_frame += clip.duration_frames
+                self.clip_added.emit(clip, source)
+
+            # Set transform flags and prerendered_path on sequence clips
+            sequence = self.timeline.get_sequence()
+            if sequence.tracks and sequence.tracks[0].clips:
+                for seq_clip, (_, _, transform_info) in zip(
+                    sequence.tracks[0].clips, sequence_data
+                ):
+                    seq_clip.hflip = transform_info.get("hflip", False)
+                    seq_clip.vflip = transform_info.get("vflip", False)
+                    seq_clip.reverse = transform_info.get("reverse", False)
+                    seq_clip.prerendered_path = transform_info.get("prerendered_path")
+
+            # Build (Clip, Source) list for timeline preview
+            preview_clips = [(clip, source) for clip, source, _ in sequence_data]
+            self.timeline_preview.set_clips(preview_clips, self._sources)
+            self.timeline._on_zoom_fit()
+
+            self.algorithm_dropdown.blockSignals(True)
+            self.algorithm_dropdown.setCurrentText(get_algorithm_label("shuffle"))
+            self.algorithm_dropdown.blockSignals(False)
+
+            self._current_algorithm = "shuffle"
+
+            sequence.algorithm = "shuffle"
+            self._apply_chromatic_bar_to_sequence("shuffle")
+            self._update_chromatic_bar_controls("shuffle")
+            self._emit_chromatic_bar_setting_changed()
+
+            self._set_state(self.STATE_TIMELINE)
+
+            logger.info(f"Applied {len(sequence_data)} clips from Dice Roll")
+
+            # Notify that clip metadata may have been mutated
+            self.clips_data_changed.emit([clip for clip, _, _ in sequence_data])
+
+        except Exception as e:
+            logger.error(f"Error applying Dice Roll sequence: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to apply sequence: {e}")
+
     # Direction options per algorithm: list of (display_label, internal_key).
     # First entry is the default. Algorithms not listed have no direction.
     _DIRECTION_OPTIONS: dict[str, list[tuple[str, str]]] = {
         "duration": [("Shortest First", "short_first"), ("Longest First", "long_first")],
-        "color": [("Rainbow", "rainbow"), ("Warm to Cool", "warm_to_cool"), ("Cool to Warm", "cool_to_warm")],
+        "color": [("Rainbow", "rainbow"), ("Warm to Cool", "warm_to_cool"), ("Cool to Warm", "cool_to_warm"), ("Complementary", "complementary")],
         "brightness": [("Bright to Dark", "bright_to_dark"), ("Dark to Bright", "dark_to_bright")],
         "volume": [("Quiet to Loud", "quiet_to_loud"), ("Loud to Quiet", "loud_to_quiet")],
         "proximity": [("Far to Close", "far_to_close"), ("Close to Far", "close_to_far")],
-        "color_cycle": [("Spectrum", "spectrum"), ("Complementary", "complementary")],
     }
 
-    def _update_direction_dropdown(self, algorithm: str):
-        """Update direction dropdown options based on selected algorithm."""
+    def _update_direction_dropdown(self, algorithm: str, selected_direction: str | None = None):
+        """Update direction dropdown options based on selected algorithm.
+
+        Args:
+            algorithm: Algorithm key/name
+            selected_direction: Optional internal direction key to select
+                (e.g., "warm_to_cool"). If omitted or unknown, defaults to first option.
+        """
         options = self._DIRECTION_OPTIONS.get(algorithm.lower())
 
         self.direction_dropdown.blockSignals(True)
         self.direction_dropdown.clear()
 
         if options:
-            self.direction_dropdown.addItems([label for label, _ in options])
+            labels = [label for label, _ in options]
+            self.direction_dropdown.addItems(labels)
+
+            # Keep dropdown UI in sync with active direction used for generation.
+            selected_index = 0
+            if selected_direction:
+                for i, (_label, key) in enumerate(options):
+                    if key == selected_direction:
+                        selected_index = i
+                        break
+            self.direction_dropdown.setCurrentIndex(selected_index)
+
             self.direction_label.show()
             self.direction_dropdown.show()
         else:
@@ -916,9 +1127,18 @@ class SequenceTab(BaseTab):
 
         # Update direction dropdown for this algorithm
         self._update_direction_dropdown(algo_key)
+        self._update_chromatic_bar_controls(algo_key)
+        self._emit_chromatic_bar_setting_changed()
 
         # Regenerate sequence
         self._regenerate_sequence(algo_key)
+
+    @Slot(bool)
+    def _on_chromatic_bar_toggled(self, checked: bool):
+        """Handle in-timeline chromatic bar toggle changes."""
+        self.set_chromatic_color_bar_enabled(checked, emit_signal=True)
+        self._apply_chromatic_bar_to_sequence(get_algorithm_key(self.algorithm_dropdown.currentText()))
+        self.timeline.sequence_changed.emit()
 
     def _regenerate_sequence(self, algorithm: str):
         """Regenerate the sequence with current timeline clips."""
@@ -949,6 +1169,9 @@ class SequenceTab(BaseTab):
         self.timeline.clear_timeline()
         self.timeline_preview.clear()
         self._current_algorithm = None
+        self.set_chromatic_color_bar_enabled(False, emit_signal=False)
+        self._update_chromatic_bar_controls(None)
+        self._emit_chromatic_bar_setting_changed()
         self._set_state(self.STATE_CARDS)
 
     def clear(self):
@@ -958,19 +1181,92 @@ class SequenceTab(BaseTab):
         self._sources = {}
         self._current_source = None
         self._current_algorithm = None
+        self.set_chromatic_color_bar_enabled(False, emit_signal=False)
+        self._update_chromatic_bar_controls(None)
+        self._emit_chromatic_bar_setting_changed()
         self.timeline.clear_timeline()
         self.timeline_preview.clear()
         self._set_state(self.STATE_CARDS)
         # Reset all cards to enabled for intention flow (fresh project)
         self._reset_card_availability()
 
+    def _is_chromatic_flow_algorithm(self, algorithm: Optional[str]) -> bool:
+        """Whether the algorithm uses Chromatics (color-based sorting)."""
+        return bool(algorithm and algorithm.lower() == "color")
+
+    def set_chromatic_color_bar_enabled(self, enabled: bool, emit_signal: bool = True):
+        """Set per-sequence Chromatic Flow color-bar preference."""
+        self._show_chromatic_color_bar = bool(enabled)
+
+        self.chromatic_bar_checkbox.blockSignals(True)
+        self.chromatic_bar_checkbox.setChecked(self._show_chromatic_color_bar)
+        self.chromatic_bar_checkbox.blockSignals(False)
+
+        self._confirm_chromatic_bar_checkbox.blockSignals(True)
+        self._confirm_chromatic_bar_checkbox.setChecked(self._show_chromatic_color_bar)
+        self._confirm_chromatic_bar_checkbox.blockSignals(False)
+
+        if emit_signal:
+            self._emit_chromatic_bar_setting_changed()
+
+    def should_show_chromatic_color_bar(self) -> bool:
+        """Whether the preview should currently render the chromatic color bar."""
+        if self._current_state != self.STATE_TIMELINE:
+            return False
+        algorithm = get_algorithm_key(self.algorithm_dropdown.currentText())
+        return self._show_chromatic_color_bar and self._is_chromatic_flow_algorithm(algorithm)
+
+    def _update_chromatic_bar_controls(self, algorithm: Optional[str]):
+        """Show/hide chromatic bar toggle depending on active algorithm and state."""
+        if algorithm is None and self._current_state == self.STATE_TIMELINE:
+            algorithm = get_algorithm_key(self.algorithm_dropdown.currentText())
+        show_toggle = self._current_state == self.STATE_TIMELINE and self._is_chromatic_flow_algorithm(algorithm)
+        self.chromatic_bar_checkbox.setVisible(show_toggle)
+        self.chromatic_bar_checkbox.blockSignals(True)
+        self.chromatic_bar_checkbox.setChecked(self._show_chromatic_color_bar)
+        self.chromatic_bar_checkbox.blockSignals(False)
+
+    def _apply_chromatic_bar_to_sequence(self, algorithm: Optional[str]):
+        """Persist chromatic bar state on the current sequence model."""
+        sequence = self.timeline.get_sequence()
+        show = self._show_chromatic_color_bar and self._is_chromatic_flow_algorithm(algorithm)
+        sequence.show_chromatic_color_bar = show
+
+    def _emit_chromatic_bar_setting_changed(self):
+        """Emit normalized chromatic bar state for preview listeners."""
+        self.chromatic_bar_setting_changed.emit(self.should_show_chromatic_color_bar())
+
+    def sync_sequence_metadata(self, sequence):
+        """Sync header controls from a loaded/restored sequence model."""
+        algorithm = (sequence.algorithm or "").lower()
+        self._current_algorithm = algorithm or None
+
+        if algorithm:
+            label = get_algorithm_label(algorithm)
+            index = self.algorithm_dropdown.findText(label)
+            if index >= 0:
+                self.algorithm_dropdown.blockSignals(True)
+                self.algorithm_dropdown.setCurrentIndex(index)
+                self.algorithm_dropdown.blockSignals(False)
+
+        active_algorithm = algorithm or get_algorithm_key(self.algorithm_dropdown.currentText())
+        self._update_direction_dropdown(active_algorithm)
+
+        self.set_chromatic_color_bar_enabled(
+            getattr(sequence, "show_chromatic_color_bar", False),
+            emit_signal=False,
+        )
+        self._update_chromatic_bar_controls(active_algorithm)
+        self._emit_chromatic_bar_setting_changed()
+
     def _on_playhead_changed(self, time_seconds: float):
         """Handle playhead position change."""
         pass  # Handled by MainWindow for cross-component coordination
 
-    def _on_playback_requested(self, start_frame: int):
-        """Handle playback request."""
-        self.playback_requested.emit(start_frame)
+    def _on_playback_requested(self):
+        """Handle playback request from VideoPlayer."""
+        frame = self.timeline.get_playhead_frame()
+        self.playback_requested.emit(frame)
 
     def _on_stop_requested(self):
         """Handle stop request."""
@@ -1022,9 +1318,13 @@ class SequenceTab(BaseTab):
                 self._set_state(self.STATE_TIMELINE)
             else:
                 self._set_state(self.STATE_CARDS)
+            self._update_chromatic_bar_controls(self._current_algorithm)
+            self._emit_chromatic_bar_setting_changed()
         else:
             self._available_clips = []
             self._set_state(self.STATE_CARDS)
+            self._update_chromatic_bar_controls(None)
+            self._emit_chromatic_bar_setting_changed()
 
     def _has_clips_on_timeline(self) -> bool:
         """Check if there are clips on the timeline."""
@@ -1047,7 +1347,6 @@ class SequenceTab(BaseTab):
 
         availability = {
             "color": (has_colors, "Run color analysis first" if not has_colors else ""),
-            "color_cycle": (has_colors, "Run color analysis first" if not has_colors else ""),
             "duration": True,
             "brightness": True,  # Auto-computed on demand
             "volume": True,  # Auto-computed on demand
@@ -1078,6 +1377,8 @@ class SequenceTab(BaseTab):
 
         # Ensure we're in timeline state
         self._set_state(self.STATE_TIMELINE)
+        self._update_chromatic_bar_controls(self._current_algorithm)
+        self._emit_chromatic_bar_setting_changed()
 
     def get_sequence(self):
         """Get the current sequence from timeline."""
@@ -1094,10 +1395,6 @@ class SequenceTab(BaseTab):
     def get_playhead_time(self) -> float:
         """Get current playhead time in seconds."""
         return self.timeline.get_playhead_time()
-
-    def set_playing(self, is_playing: bool):
-        """Update UI for playing state."""
-        self.timeline.set_playing(is_playing)
 
     def seek_video_to(self, time_seconds: float):
         """Seek the video player to a position."""
@@ -1176,7 +1473,9 @@ class SequenceTab(BaseTab):
         algorithm: str,
         clip_count: int = None,
         direction: str = None,
-        seed: int = None
+        seed: int = None,
+        no_color_handling: str = None,
+        transform_options: dict = None,
     ) -> dict:
         """Generate and apply a sequence (for agent tools).
 
@@ -1185,6 +1484,9 @@ class SequenceTab(BaseTab):
             clip_count: Number of clips (unused - uses all selected)
             direction: Sort direction (passed to generate_sequence)
             seed: Random seed (passed to generate_sequence)
+            no_color_handling: For color algorithm — "append_end", "exclude", or "sort_inline"
+            transform_options: Dict of transform flags, e.g. {"hflip": True}.
+                When provided for shuffle, clips are pre-rendered with baked transforms.
 
         Returns:
             Dict with success status and applied clip info
@@ -1220,6 +1522,7 @@ class SequenceTab(BaseTab):
                 clip_count=len(clips),
                 direction=direction,
                 seed=seed,
+                no_color_handling=no_color_handling,
             )
 
             # Clear and apply to timeline
@@ -1235,7 +1538,53 @@ class SequenceTab(BaseTab):
             self.algorithm_dropdown.blockSignals(True)
             self.algorithm_dropdown.setCurrentText(get_algorithm_label(algorithm))
             self.algorithm_dropdown.blockSignals(False)
+            self._update_direction_dropdown(algorithm, direction)
             self._current_algorithm = algorithm.lower()
+            self._apply_chromatic_bar_to_sequence(self._current_algorithm)
+            self._update_chromatic_bar_controls(self._current_algorithm)
+            self._emit_chromatic_bar_setting_changed()
+
+            # Apply random transforms with pre-rendering if requested
+            if transform_options and any(transform_options.values()):
+                from core.remix import assign_random_transforms
+                from core.remix.prerender import prerender_batch
+                sequence = self.timeline.get_sequence()
+                if sequence.tracks and sequence.tracks[0].clips:
+                    assign_random_transforms(sequence.tracks[0].clips, transform_options, seed=seed)
+
+                    # Pre-render clips with assigned transforms
+                    clips_with_transforms = []
+                    for seq_clip, (clip, source) in zip(sequence.tracks[0].clips, sorted_clips):
+                        clips_with_transforms.append((clip, source, {
+                            "hflip": seq_clip.hflip,
+                            "vflip": seq_clip.vflip,
+                            "reverse": seq_clip.reverse,
+                        }))
+
+                    from core.remix.prerender import get_transform_cache_dir
+                    output_dir = get_transform_cache_dir()
+
+                    # Keep the UI responsive during pre-rendering.
+                    # This runs on the main thread (via gui_tool_requested),
+                    # but prerender_batch uses a ThreadPoolExecutor internally.
+                    # Process Qt events on progress updates so the UI doesn't freeze.
+                    from PySide6.QtWidgets import QApplication
+                    def _progress_keep_alive(current, total):
+                        app = QApplication.instance()
+                        if app:
+                            app.processEvents()
+
+                    rendered = prerender_batch(
+                        clips_with_transforms=clips_with_transforms,
+                        output_dir=output_dir,
+                        progress_cb=_progress_keep_alive,
+                    )
+
+                    # Set prerendered_path on sequence clips
+                    for seq_clip, (_, _, prerendered_path) in zip(
+                        sequence.tracks[0].clips, rendered
+                    ):
+                        seq_clip.prerendered_path = str(prerendered_path) if prerendered_path else None
 
             self.timeline._on_zoom_fit()
 
@@ -1349,6 +1698,9 @@ class SequenceTab(BaseTab):
             sequence.reference_source_id = reference_source_id
             sequence.dimension_weights = weights
             sequence.allow_repeats = allow_repeats
+            self._apply_chromatic_bar_to_sequence("reference_guided")
+            self._update_chromatic_bar_controls("reference_guided")
+            self._emit_chromatic_bar_setting_changed()
 
             self._set_state(self.STATE_TIMELINE)
 
@@ -1449,9 +1801,12 @@ class SequenceTab(BaseTab):
             self.algorithm_dropdown.blockSignals(False)
 
             # Update direction dropdown
-            self._update_direction_dropdown(algorithm)
+            self._update_direction_dropdown(algorithm, direction)
 
             self._current_algorithm = algorithm.lower()
+            self._apply_chromatic_bar_to_sequence(self._current_algorithm)
+            self._update_chromatic_bar_controls(self._current_algorithm)
+            self._emit_chromatic_bar_setting_changed()
 
             # Transition to timeline state
             self._set_state(self.STATE_TIMELINE)
@@ -1491,6 +1846,8 @@ class SequenceTab(BaseTab):
             self._set_state(self.STATE_TIMELINE)
         else:
             self._set_state(self.STATE_CARDS)
+        self._update_chromatic_bar_controls(self._current_algorithm)
+        self._emit_chromatic_bar_setting_changed()
 
     def on_tab_deactivated(self):
         """Called when switching away from this tab."""

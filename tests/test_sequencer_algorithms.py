@@ -6,7 +6,7 @@ Tests cover:
 - Proximity sorting (dual mapping)
 - Similarity chain (greedy nearest-neighbor)
 - Match cut chain (boundary frame similarity + 2-opt)
-- Color cycle (purity filter + hue sort)
+- Color complementary/rainbow (purity filter + hue sort)
 - Auto-analysis helpers
 - Clip model field serialization
 """
@@ -239,12 +239,12 @@ class TestProximityAlgorithm:
         assert ids == ["wide", "none", "cu"]
 
 
-# -- Color Cycle Algorithm --------------------------------------------------
+# -- Color Complementary/Rainbow Algorithm ----------------------------------
 
-class TestColorCycleAlgorithm:
-    """Color cycle: purity filter + hue sorting."""
+class TestColorComplementaryAlgorithm:
+    """Color algorithm: purity filter + hue sorting (rainbow & complementary)."""
 
-    def test_spectrum_sorts_by_hue(self):
+    def test_rainbow_sorts_by_hue(self):
         from core.remix import generate_sequence
         source = _make_source()
         # Pure red, pure green, pure blue
@@ -253,23 +253,23 @@ class TestColorCycleAlgorithm:
             (_make_clip("red", dominant_colors=[(255, 0, 0)]), source),
             (_make_clip("blue", dominant_colors=[(0, 0, 255)]), source),
         ]
-        result = generate_sequence("color_cycle", clips, 3, direction="spectrum")
+        result = generate_sequence("color", clips, 3, direction="rainbow")
         ids = [c.id for c, _ in result]
         # Red hue ~0, Green hue ~120, Blue hue ~240
         assert ids == ["red", "green", "blue"]
 
-    def test_low_purity_clips_excluded(self):
-        """Clips with mixed/desaturated colors are excluded."""
+    def test_low_purity_clips_included(self):
+        """All clips with color data are included regardless of purity."""
         from core.remix import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("pure", dominant_colors=[(255, 0, 0)]), source),
-            # Gray has zero saturation → purity = 0
+            # Gray has zero saturation but still has color data
             (_make_clip("gray", dominant_colors=[(128, 128, 128)]), source),
         ]
-        result = generate_sequence("color_cycle", clips, 2, direction="spectrum")
+        result = generate_sequence("color", clips, 2, direction="rainbow", no_color_handling="append_end")
         ids = [c.id for c, _ in result]
-        assert "gray" not in ids
+        assert "gray" in ids
         assert "pure" in ids
 
     def test_complementary_interleaves(self):
@@ -283,22 +283,23 @@ class TestColorCycleAlgorithm:
             (_make_clip("cyan", dominant_colors=[(0, 255, 255)]), source),   # ~180°
             (_make_clip("blue", dominant_colors=[(0, 0, 255)]), source),    # ~240°
         ]
-        result = generate_sequence("color_cycle", clips, 4, direction="complementary")
+        result = generate_sequence("color", clips, 4, direction="complementary", no_color_handling="append_end")
         ids = [c.id for c, _ in result]
         # Sorted by hue: [red, yellow, cyan, blue]
         # Interleaved: red(lo), blue(hi), yellow(lo), cyan(hi)
         assert ids == ["red", "blue", "yellow", "cyan"]
 
-    def test_clips_without_colors_excluded(self):
+    def test_clips_without_colors_appended_at_end(self):
+        """Clips without color data are appended after sorted clips."""
         from core.remix import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("has_color", dominant_colors=[(255, 0, 0)]), source),
             (_make_clip("no_color"), source),
         ]
-        result = generate_sequence("color_cycle", clips, 2, direction="spectrum")
+        result = generate_sequence("color", clips, 2, direction="rainbow", no_color_handling="append_end")
         ids = [c.id for c, _ in result]
-        assert "no_color" not in ids
+        assert ids == ["has_color", "no_color"]
 
 
 # -- Color Purity Computation -----------------------------------------------
@@ -560,14 +561,14 @@ class TestGenerateSequenceIntegration:
         result = generate_sequence("proximity", clips, 2)
         assert len(result) == 2
 
-    def test_color_cycle_algorithm_key(self):
+    def test_color_complementary_algorithm_key(self):
         from core.remix import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("a", dominant_colors=[(255, 0, 0)]), source),
             (_make_clip("b", dominant_colors=[(0, 0, 255)]), source),
         ]
-        result = generate_sequence("color_cycle", clips, 2)
+        result = generate_sequence("color", clips, 2, direction="complementary")
         assert len(result) == 2
 
     def test_similarity_chain_algorithm_key(self):

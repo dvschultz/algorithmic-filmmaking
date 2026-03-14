@@ -90,6 +90,9 @@ class GUIState:
     # Pending action state - tracks actions agent must complete after user responds
     pending_action: PendingActionType = None
 
+    # Last error from background operations (cleared after agent consumes it)
+    last_error: Optional[str] = None
+
     # Thread safety lock (not included in repr/compare/hash)
     _lock: Lock = field(default_factory=Lock, repr=False, compare=False)
 
@@ -102,6 +105,9 @@ class GUIState:
         """
         with self._lock:
             lines = []
+
+            if self.last_error:
+                lines.append(f"LAST ERROR: {self.last_error}")
 
             if self.search_results:
                 lines.append(f"RECENT YOUTUBE SEARCH: '{self.last_search_query}'")
@@ -134,6 +140,9 @@ class GUIState:
                     ids_str += ", ..."
                 lines.append(f"SEQUENCE_IDS: [{ids_str}]")
 
+            if self.sequence_shot_filter:
+                lines.append(f"SEQUENCE SHOT FILTER: {self.sequence_shot_filter}")
+
             if self.selected_clip_ids:
                 lines.append(f"SELECTED CLIPS: {len(self.selected_clip_ids)}")
                 # Add list of IDs (truncated if too many)
@@ -142,8 +151,18 @@ class GUIState:
                     ids_str += ", ..."
                 lines.append(f"SELECTED_IDS: [{ids_str}]")
 
+            if self.cut_selected_ids:
+                ids_str = ", ".join(self.cut_selected_ids[:20])
+                lines.append(f"CUT TAB SELECTED: {len(self.cut_selected_ids)} clips [{ids_str}]")
+            if self.analyze_selected_ids:
+                ids_str = ", ".join(self.analyze_selected_ids[:20])
+                lines.append(f"ANALYZE TAB SELECTED: {len(self.analyze_selected_ids)} clips [{ids_str}]")
+
             if self.frames_tab_frame_ids:
                 lines.append(f"FRAMES TAB: {len(self.frames_tab_frame_ids)} frames visible")
+
+            if self.frames_tab_source_filter:
+                lines.append(f"FRAMES TAB SOURCE FILTER: {self.frames_tab_source_filter}")
 
             if self.selected_frame_ids:
                 lines.append(f"SELECTED FRAMES: {len(self.selected_frame_ids)}")
@@ -353,6 +372,20 @@ class GUIState:
         with self._lock:
             self.active_filters = {}
 
+    def set_last_error(self, error: str):
+        """Set the last error message for agent context.
+
+        Args:
+            error: Error message string
+        """
+        with self._lock:
+            self.last_error = error
+
+    def clear_last_error(self):
+        """Clear the last error after agent has consumed it."""
+        with self._lock:
+            self.last_error = None
+
     def clear(self):
         """Clear all GUI state for new project.
 
@@ -378,6 +411,7 @@ class GUIState:
 
             # Sequence state
             self.sequence_ids = []
+            self.sequence_shot_filter = None
 
             # Frame state
             self.selected_frame_ids = []
@@ -403,3 +437,6 @@ class GUIState:
 
             # Pending action
             self.pending_action = None
+
+            # Last error
+            self.last_error = None

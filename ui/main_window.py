@@ -79,6 +79,7 @@ from ui.workers.shot_type_worker import ShotTypeWorker
 from ui.workers.transcription_worker import TranscriptionWorker
 from ui.workers.classification_worker import ClassificationWorker
 from ui.workers.object_detection_worker import ObjectDetectionWorker
+from ui.workers.face_detection_worker import FaceDetectionWorker
 from ui.workers.description_worker import DescriptionWorker
 from ui.workers.export_worker import ExportBundleWorker
 from core.gui_state import GUIState
@@ -97,6 +98,50 @@ logging.getLogger("LiteLLM").setLevel(logging.WARNING)
 logging.getLogger("litellm").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+
+def _timeline_frame_to_source_seconds(seq_clip, timeline_frame: int, source_fps: float) -> float:
+    """Map timeline frame position to source-video seconds for a sequence clip."""
+    frame_in_clip = max(0, timeline_frame - seq_clip.start_frame)
+    source_frame = seq_clip.in_point + frame_in_clip
+    source_frame = max(seq_clip.in_point, min(source_frame, seq_clip.out_point))
+    return source_frame / source_fps
+
+
+def _resolve_playback_source(seq_clip, source, timeline_frame: int):
+    """Resolve the file and timing info for playing a sequence clip.
+
+    Returns (file_to_load, clip_start_seconds, clip_end_seconds, source_seconds).
+    """
+    prerendered = getattr(seq_clip, "prerendered_path", None)
+    if prerendered and Path(prerendered).exists():
+        file_to_load = Path(prerendered)
+        clip_start_seconds = 0.0
+        clip_end_seconds = (seq_clip.out_point - seq_clip.in_point) / source.fps
+        frame_in_clip = max(0, timeline_frame - seq_clip.start_frame)
+        source_seconds = frame_in_clip / source.fps
+    else:
+        file_to_load = source.file_path
+        source_seconds = _timeline_frame_to_source_seconds(seq_clip, timeline_frame, source.fps)
+        clip_start_seconds = seq_clip.in_point / source.fps
+        clip_end_seconds = seq_clip.out_point / source.fps
+    return file_to_load, clip_start_seconds, clip_end_seconds, source_seconds
+
+
+def _source_ms_to_timeline_seconds(
+    seq_clip,
+    position_ms: int,
+    source_fps: float,
+    timeline_fps: float,
+) -> float:
+    """Map source-video playback position to timeline seconds for a sequence clip."""
+    source_frame = int((position_ms / 1000.0) * source_fps)
+    frame_offset = source_frame - seq_clip.in_point
+    timeline_frame = seq_clip.start_frame + frame_offset
+    min_frame = seq_clip.start_frame
+    max_frame = max(seq_clip.start_frame, seq_clip.end_frame() - 1)
+    timeline_frame = max(min_frame, min(timeline_frame, max_frame))
+    return timeline_frame / timeline_fps
 
 
 class DetectionWorker(CancellableWorker):
@@ -614,7 +659,10 @@ class MainWindow(QMainWindow):
         # Connect project adapter signals for view synchronization
         self._project_adapter.clips_updated.connect(self._on_clips_updated)
         self._project_adapter.clips_added.connect(self._on_clips_added)
+        self._project_adapter.clips_removed.connect(self._on_clips_removed)
         self._project_adapter.source_added.connect(self._on_source_added)
+        self._project_adapter.source_updated.connect(self._on_source_updated)
+        self._project_adapter.frames_removed.connect(self._on_frames_removed)
         self._project_adapter.sequence_changed.connect(lambda _: self._refresh_timeline_from_project())
 
         # UI state (not part of Project - these are GUI-specific selections)
@@ -726,6 +774,15 @@ class MainWindow(QMainWindow):
         logger.info("Setting up playback state...")
         self._is_playing = False
         self._current_playback_clip = None  # Currently playing SequenceClip
+        self._preview_sync_clip = None  # Clip used for direct preview (non-timeline playback)
+        self._sequence_preview_source_id = None  # Currently loaded source in sequence preview
+        self._sequence_preview_loading = False  # Waiting for sequence preview source to load
+        self._pending_sequence_preview_source_id = None
+        self._pending_sequence_preview_clip_range = None  # (start_seconds, end_seconds)
+        self._pending_sequence_preview_seek_seconds = None
+        self._pending_sequence_playback_source_id = None
+        self._pending_sequence_playback_range = None  # (start_seconds, end_seconds)
+        self._syncing_timeline_from_video = False
         self._playback_timer = QTimer(self)  # Parent to self for proper lifecycle
         self._playback_timer.setInterval(33)  # ~30fps update rate
         self._playback_timer.timeout.connect(self._on_playback_tick)
@@ -1314,6 +1371,7 @@ class MainWindow(QMainWindow):
         self.sequence_tab.timeline.sequence_changed.connect(self._mark_dirty)
         # Persist auto-computed clip metadata (brightness, volume, embeddings)
         self.sequence_tab.clips_data_changed.connect(lambda clips: self.project.update_clips(clips))
+        self.sequence_tab.chromatic_bar_setting_changed.connect(self._on_chromatic_bar_setting_changed)
 
         # Frames tab signals
         self.frames_tab.extract_frames_requested.connect(self._on_extract_frames_requested)
@@ -1335,6 +1393,8 @@ class MainWindow(QMainWindow):
         # Sequence tab video player signals for playback sync
         self.sequence_tab.video_player.position_updated.connect(self._on_video_position_updated)
         self.sequence_tab.video_player.playback_state_changed.connect(self._on_video_state_changed)
+        self.sequence_tab.video_player.media_loaded.connect(self._on_sequence_video_loaded)
+        self.sequence_tab.video_player.media_load_failed.connect(self._on_sequence_video_load_failed)
 
     def _setup_chat_panel(self):
         """Initialize the chat panel dock widget."""
@@ -1548,6 +1608,36 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'analyze_tab'):
             self.analyze_tab.set_lookups(self.clips_by_id, self.sources_by_id)
 
+    @Slot(list)
+    def _on_clips_removed(self, clips: list):
+        """Handle clips removed signal from project.
+
+        Removes clips from both Cut and Analyze tab clip browsers.
+        """
+        clip_ids = [c.id for c in clips]
+        logger.info(f"Project clips_removed event: {len(clips)} clips")
+        if hasattr(self, 'cut_tab') and hasattr(self.cut_tab, 'clip_browser'):
+            self.cut_tab.clip_browser.remove_clips_by_ids(clip_ids)
+        if hasattr(self, 'analyze_tab') and hasattr(self.analyze_tab, 'clip_browser'):
+            self.analyze_tab.clip_browser.remove_clips_by_ids(clip_ids)
+
+    @Slot(list)
+    def _on_frames_removed(self, frames: list):
+        """Handle frames removed signal from project."""
+        logger.info(f"Project frames_removed event: {len(frames)} frames")
+        if hasattr(self, 'frames_tab'):
+            self.frames_tab.update_frame_browser()
+
+    @Slot(object)
+    def _on_source_updated(self, source):
+        """Handle source updated signal from project.
+
+        Refreshes the source browser in the Collect tab.
+        """
+        logger.info(f"Project source_updated event: {source.id}")
+        if hasattr(self, 'collect_tab') and hasattr(self.collect_tab, 'source_browser'):
+            self.collect_tab.source_browser.update()
+
     def _on_chat_message(self, message: str):
         """Handle user message from chat panel."""
         from core.llm_client import ProviderConfig, ProviderType
@@ -1623,6 +1713,8 @@ class MainWindow(QMainWindow):
             busy_check=check_busy,
             gui_state_context=self._gui_state.to_context_string(),
         )
+        # Clear last error after it's been consumed by the agent context
+        self._gui_state.clear_last_error()
 
         # Connect signals
         bubble = self.chat_panel.start_streaming_response()
@@ -1632,7 +1724,6 @@ class MainWindow(QMainWindow):
         self._chat_worker.clear_current_bubble.connect(self.chat_panel.on_clear_bubble)
         self._chat_worker.tool_called.connect(self._on_chat_tool_called)
         self._chat_worker.tool_result.connect(self._on_chat_tool_result)
-        self._chat_worker.tool_result_formatted.connect(self.chat_panel.on_tool_result_formatted)
         self._chat_worker.gui_tool_requested.connect(self._on_gui_tool_requested)
         self._chat_worker.gui_tool_cancelled.connect(self._on_gui_tool_cancelled)
         self._chat_worker.complete.connect(self._on_chat_complete)
@@ -1895,11 +1986,11 @@ class MainWindow(QMainWindow):
             elif active_tab == "analyze":
                 self.analyze_tab.clip_browser.set_selection(selected_ids)
 
-        elif tool_name in ("add_to_sequence", "remove_from_sequence",
-                            "clear_sequence", "reorder_sequence",
-                            "update_sequence_clip"):
-            # Refresh the timeline to reflect sequence changes
-            self._refresh_timeline_from_project()
+        elif tool_name == "navigate_to_frames_tab":
+            # Actually switch the tab in the UI
+            tab_names = ["collect", "cut", "analyze", "frames", "sequence", "render"]
+            index = tab_names.index("frames")
+            self.tab_widget.setCurrentIndex(index)
 
         elif tool_name == "send_to_analyze":
             # Switch to Analyze tab after sending clips
@@ -1960,6 +2051,9 @@ class MainWindow(QMainWindow):
             self.sequence_tab.timeline_preview.set_clips(sorted_clips, sources)
         else:
             self.sequence_tab._set_state(self.sequence_tab.STATE_CARDS)
+
+        self.sequence_tab.sync_sequence_metadata(self.project.sequence)
+        self._update_sequence_chromatic_bar()
 
         # Zoom to fit the content
         self.sequence_tab.timeline._on_zoom_fit()
@@ -2865,6 +2959,8 @@ class MainWindow(QMainWindow):
             self._launch_classification_worker(clips)
         elif op_key == "detect_objects":
             self._launch_object_detection_worker(clips)
+        elif op_key == "face_embeddings":
+            self._launch_face_detection_worker(clips)
         elif op_key == "extract_text":
             self._launch_text_extraction_worker(clips)
         elif op_key == "transcribe":
@@ -2881,7 +2977,7 @@ class MainWindow(QMainWindow):
         """Launch color analysis worker."""
         self._color_analysis_finished_handled = False
         logger.info(f"Creating ColorAnalysisWorker (pipeline) for {len(clips)} clips...")
-        self.color_worker = ColorAnalysisWorker(clips, parallelism=self.settings.color_analysis_parallelism)
+        self.color_worker = ColorAnalysisWorker(clips, parallelism=self.settings.color_analysis_parallelism, sources_by_id=self.project.sources_by_id)
         self.color_worker.progress.connect(self._on_color_progress)
         self.color_worker.color_ready.connect(self._on_color_ready)
         self.color_worker.analysis_completed.connect(
@@ -2932,6 +3028,22 @@ class MainWindow(QMainWindow):
         self.detection_worker_yolo.finished.connect(self.detection_worker_yolo.deleteLater)
         self.detection_worker_yolo.finished.connect(lambda: setattr(self, 'detection_worker_yolo', None))
         self.detection_worker_yolo.start()
+
+    def _launch_face_detection_worker(self, clips: list):
+        """Launch face detection worker."""
+        self._face_detection_finished_handled = False
+        sources_by_id = {s.id: s for s in self.sources}
+        logger.info(f"Creating FaceDetectionWorker (pipeline) for {len(clips)} clips...")
+        self.face_detection_worker = FaceDetectionWorker(
+            clips, sources_by_id=sources_by_id,
+        )
+        self.face_detection_worker.progress.connect(self._on_face_detection_progress)
+        self.face_detection_worker.detection_completed.connect(
+            self._on_pipeline_face_detection_finished, Qt.UniqueConnection
+        )
+        self.face_detection_worker.finished.connect(self.face_detection_worker.deleteLater)
+        self.face_detection_worker.finished.connect(lambda: setattr(self, 'face_detection_worker', None))
+        self.face_detection_worker.start()
 
     def _launch_text_extraction_worker(self, clips: list):
         """Launch text extraction worker."""
@@ -3123,6 +3235,12 @@ class MainWindow(QMainWindow):
         self._on_analysis_phase_worker_finished("detect_objects")
 
     @Slot()
+    def _on_pipeline_face_detection_finished(self):
+        from core.analysis.faces import unload_model
+        unload_model()
+        self._on_analysis_phase_worker_finished("face_embeddings")
+
+    @Slot()
     def _on_pipeline_extract_text_finished(self):
         self._on_analysis_phase_worker_finished("extract_text")
 
@@ -3232,6 +3350,7 @@ class MainWindow(QMainWindow):
     def _on_transcription_error(self, error: str):
         """Handle transcription error."""
         logger.error(f"Transcription error: {error}")
+        self._gui_state.set_last_error(f"Transcription error: {error}")
         self.progress_bar.setVisible(False)
 
         if "not installed" in error.lower():
@@ -3384,6 +3503,7 @@ class MainWindow(QMainWindow):
     def _on_cinematography_error(self, error_msg: str):
         """Handle cinematography analysis error."""
         logger.warning(f"Cinematography analysis error: {error_msg}")
+        self._gui_state.set_last_error(f"Analysis error: {error_msg}")
 
     # Agent-triggered analysis completion handlers
     # These are separate from manual handlers to allow independent tracking
@@ -3684,6 +3804,7 @@ class MainWindow(QMainWindow):
     def _on_download_error(self, error: str):
         """Handle download error."""
         self._gui_state.clear_processing("download")
+        self._gui_state.set_last_error(f"Download error: {error}")
         self.progress_bar.setVisible(False)
         self.collect_tab.set_downloading(False)
         QMessageBox.critical(self, "Download Error", error)
@@ -4028,6 +4149,7 @@ class MainWindow(QMainWindow):
         """Handle detection error."""
         logger.error(f"=== DETECTION ERROR: {error} ===")
         self._gui_state.clear_processing("scene_detection")
+        self._gui_state.set_last_error(f"Detection error: {error}")
         self.progress_bar.setVisible(False)
 
         # If agent was waiting for detection, send error result
@@ -4209,9 +4331,115 @@ class MainWindow(QMainWindow):
 
     def _on_timeline_playhead_changed(self, time_seconds: float):
         """Handle timeline playhead position change."""
-        # Don't seek during playback - playhead is driven by video position
-        if not self._is_playing:
+        # Don't seek during timeline-driven playback or while we're applying
+        # a playhead update that originated from the video player.
+        if self._is_playing or self._syncing_timeline_from_video:
+            return
+
+        seq_clip, _, source = self.sequence_tab.timeline.get_clip_at_playhead()
+        if not seq_clip or not source:
+            # Fallback behavior when no sequence clip is under playhead.
+            self._preview_sync_clip = None
+            self._pending_sequence_playback_source_id = None
+            self._pending_sequence_playback_range = None
+            self._pending_sequence_preview_source_id = None
+            self._pending_sequence_preview_clip_range = None
+            self._pending_sequence_preview_seek_seconds = None
+            self.sequence_tab.video_player.clear_clip_range()
             self.sequence_tab.video_player.seek_to(time_seconds)
+            self._update_sequence_chromatic_bar(None)
+            return
+
+        sequence = self.sequence_tab.timeline.get_sequence()
+        timeline_frame = int(time_seconds * sequence.fps)
+
+        file_to_load, clip_start_seconds, clip_end_seconds, source_seconds = (
+            _resolve_playback_source(seq_clip, source, timeline_frame)
+        )
+
+        # Determine the source ID for tracking loaded sources
+        preview_source_key = str(file_to_load)
+
+        # Keep preview source aligned to the clip under playhead.
+        if self._sequence_preview_source_id != preview_source_key:
+            self._preview_sync_clip = seq_clip
+            self._update_sequence_chromatic_bar(seq_clip)
+            self._sequence_preview_source_id = preview_source_key
+            self._sequence_preview_loading = True
+            self._pending_sequence_preview_source_id = preview_source_key
+            self._pending_sequence_preview_clip_range = (clip_start_seconds, clip_end_seconds)
+            self._pending_sequence_preview_seek_seconds = source_seconds
+            self.sequence_tab.video_player.load_video(file_to_load)
+            return
+
+        self._preview_sync_clip = seq_clip
+        if self._sequence_preview_loading:
+            # Source is still loading; defer seek/range until media_loaded.
+            self._pending_sequence_preview_source_id = preview_source_key
+            self._pending_sequence_preview_clip_range = (clip_start_seconds, clip_end_seconds)
+            self._pending_sequence_preview_seek_seconds = source_seconds
+            return
+
+        self._pending_sequence_preview_source_id = None
+        self._pending_sequence_preview_clip_range = None
+        self._pending_sequence_preview_seek_seconds = None
+        self.sequence_tab.video_player.set_clip_range(clip_start_seconds, clip_end_seconds)
+        self.sequence_tab.video_player.seek_to(source_seconds)
+        self._update_sequence_chromatic_bar(seq_clip)
+
+    @Slot()
+    def _on_sequence_video_loaded(self):
+        """Apply deferred sequence preview sync after a source finishes loading."""
+        self._sequence_preview_loading = False
+
+        if self._is_playing:
+            # During timeline playback, prefer deferred playback ranges.
+            if (
+                self._pending_sequence_playback_source_id is not None
+                and self._pending_sequence_playback_source_id == self._sequence_preview_source_id
+                and self._pending_sequence_playback_range is not None
+            ):
+                start_seconds, end_seconds = self._pending_sequence_playback_range
+                self._pending_sequence_playback_source_id = None
+                self._pending_sequence_playback_range = None
+                self.sequence_tab.video_player.play_range(start_seconds, end_seconds)
+                self._playback_timer.start()
+            self._pending_sequence_preview_source_id = None
+            self._pending_sequence_preview_clip_range = None
+            self._pending_sequence_preview_seek_seconds = None
+            return
+
+        if (
+            self._pending_sequence_preview_source_id is None
+            or self._pending_sequence_preview_source_id != self._sequence_preview_source_id
+        ):
+            return
+
+        clip_range = self._pending_sequence_preview_clip_range
+        seek_seconds = self._pending_sequence_preview_seek_seconds
+        self._pending_sequence_preview_source_id = None
+        self._pending_sequence_preview_clip_range = None
+        self._pending_sequence_preview_seek_seconds = None
+
+        if clip_range:
+            self.sequence_tab.video_player.set_clip_range(clip_range[0], clip_range[1])
+        if seek_seconds is not None:
+            self.sequence_tab.video_player.seek_to(seek_seconds)
+
+    @Slot()
+    def _on_sequence_video_load_failed(self):
+        """Handle video load failure — clear loading state to prevent deadlock."""
+        logger.warning("Sequence video load failed — clearing loading state")
+        self._sequence_preview_loading = False
+        self._pending_sequence_preview_source_id = None
+        self._pending_sequence_preview_clip_range = None
+        self._pending_sequence_preview_seek_seconds = None
+        self._pending_sequence_playback_source_id = None
+        self._pending_sequence_playback_range = None
+        # Invalidate the source ID so the next attempt reloads
+        self._sequence_preview_source_id = None
+        if self._is_playing:
+            self._stop_playback()
 
     def _on_sequence_changed(self):
         """Handle sequence modification."""
@@ -4222,6 +4450,46 @@ class MainWindow(QMainWindow):
 
         # Update chat panel with project state (sequence may have changed)
         self._update_chat_project_state()
+
+    @Slot(bool)
+    def _on_chromatic_bar_setting_changed(self, enabled: bool):
+        """Apply chromatic bar visibility changes to sequence preview."""
+        if not enabled:
+            self.sequence_tab.video_player.set_chromatic_color_bar(None)
+            return
+        self._update_sequence_chromatic_bar()
+
+    def _resolve_sequence_clip_bar_color(self, seq_clip) -> Optional[tuple[int, int, int]]:
+        """Resolve the dominant color for a sequence clip."""
+        if not seq_clip:
+            return None
+        clip_data = self.sequence_tab.timeline._clip_lookup.get(seq_clip.source_clip_id)
+        if not clip_data:
+            return None
+        clip, _ = clip_data
+        if not clip.dominant_colors:
+            return None
+        color = clip.dominant_colors[0]
+        if len(color) < 3:
+            return None
+        r, g, b = color[0], color[1], color[2]
+        return (
+            max(0, min(255, int(r))),
+            max(0, min(255, int(g))),
+            max(0, min(255, int(b))),
+        )
+
+    def _update_sequence_chromatic_bar(self, seq_clip=None):
+        """Update preview's full-width chromatic bar for the active sequence clip."""
+        if not self.sequence_tab.should_show_chromatic_color_bar():
+            self.sequence_tab.video_player.set_chromatic_color_bar(None)
+            return
+
+        active_clip = seq_clip
+        if active_clip is None:
+            active_clip, _, _ = self.sequence_tab.timeline.get_clip_at_playhead()
+        color = self._resolve_sequence_clip_bar_color(active_clip) or (0, 0, 0)
+        self.sequence_tab.video_player.set_chromatic_color_bar(color)
 
     # --- Playback methods ---
 
@@ -4237,7 +4505,15 @@ class MainWindow(QMainWindow):
             return  # Nothing to play
 
         self._is_playing = True
-        self.sequence_tab.timeline.set_playing(True)
+        self._preview_sync_clip = None
+        self._pending_sequence_playback_source_id = None
+        self._pending_sequence_playback_range = None
+        self._pending_sequence_preview_source_id = None
+        self._pending_sequence_preview_clip_range = None
+        self._pending_sequence_preview_seek_seconds = None
+        self.sequence_tab.video_player.set_playing(True)
+        # Timeline playback should advance clip-by-clip, not loop a single clip.
+        self.sequence_tab.video_player.set_loop(False)
 
         # Mute sidebar player to prevent audio overlap
         self.clip_details_sidebar.video_player.mute = True
@@ -4264,24 +4540,41 @@ class MainWindow(QMainWindow):
         if not seq_clip:
             # No clip at this position (gap) - show black and advance via timer
             self._current_playback_clip = None
+            self._pending_sequence_playback_source_id = None
+            self._pending_sequence_playback_range = None
             self.sequence_tab.video_player.stop()  # Shows black
+            self._update_sequence_chromatic_bar(None)
             self._playback_timer.start()
             return
 
         self._current_playback_clip = seq_clip
+        self._preview_sync_clip = seq_clip
+        self._update_sequence_chromatic_bar(seq_clip)
 
-        # Calculate source position
-        # frame_in_clip = where we are relative to clip start on timeline
-        frame_in_clip = frame - seq_clip.start_frame
-        # source_frame = in_point + offset into clip
-        source_frame = seq_clip.in_point + frame_in_clip
-        source_seconds = source_frame / source.fps
+        file_to_load, clip_start_seconds, clip_end_seconds, source_seconds = (
+            _resolve_playback_source(seq_clip, source, frame)
+        )
 
-        # Calculate end of this clip in source time
-        end_seconds = seq_clip.out_point / source.fps
+        preview_source_key = str(file_to_load)
+        end_seconds = clip_end_seconds
 
-        # Load source and play range
-        self.sequence_tab.video_player.load_video(source.file_path)
+        # Load source and play range.
+        # If source changes (or is still loading), defer play_range until media_loaded.
+        if self._sequence_preview_source_id != preview_source_key:
+            self._sequence_preview_source_id = preview_source_key
+            self._sequence_preview_loading = True
+            self._pending_sequence_playback_source_id = preview_source_key
+            self._pending_sequence_playback_range = (source_seconds, end_seconds)
+            self.sequence_tab.video_player.load_video(file_to_load)
+            return
+
+        if self._sequence_preview_loading:
+            self._pending_sequence_playback_source_id = preview_source_key
+            self._pending_sequence_playback_range = (source_seconds, end_seconds)
+            return
+
+        self._pending_sequence_playback_source_id = None
+        self._pending_sequence_playback_range = None
         self.sequence_tab.video_player.play_range(source_seconds, end_seconds)
 
         # Start timer to monitor for clip transitions
@@ -4366,10 +4659,33 @@ class MainWindow(QMainWindow):
         if self.sequence_tab._current_state != self.sequence_tab.STATE_TIMELINE:
             return
 
-        # Simple sync: convert video position to timeline seconds
-        # This assumes video position maps directly to timeline position
+        # Prefer clip-aware mapping when we know which sequence clip this preview
+        # was synced to (e.g. after timeline scrubbing).
+        seq_clip = self._preview_sync_clip
+        if seq_clip:
+            clip_data = self.sequence_tab.timeline._clip_lookup.get(seq_clip.source_clip_id)
+            if clip_data:
+                _, source = clip_data
+                timeline_seconds = _source_ms_to_timeline_seconds(
+                    seq_clip,
+                    position_ms,
+                    source.fps,
+                    self.sequence_tab.timeline.sequence.fps,
+                )
+                self._syncing_timeline_from_video = True
+                try:
+                    self.sequence_tab.timeline.set_playhead_time(timeline_seconds)
+                finally:
+                    self._syncing_timeline_from_video = False
+                return
+
+        # Fallback when no clip context is available.
         video_seconds = position_ms / 1000.0
-        self.sequence_tab.timeline.set_playhead_time(video_seconds)
+        self._syncing_timeline_from_video = True
+        try:
+            self.sequence_tab.timeline.set_playhead_time(video_seconds)
+        finally:
+            self._syncing_timeline_from_video = False
 
     def _on_video_state_changed(self, playing: bool):
         """Handle video player state changes.
@@ -4386,6 +4702,13 @@ class MainWindow(QMainWindow):
         if not self._is_playing:
             return
 
+        # Ignore pause events during source loading — mpv.pause=True is set
+        # synchronously in load_video(), which fires this callback before the
+        # new file is ready. Without this guard, we'd prematurely advance to
+        # the next clip and overwrite pending playback state.
+        if self._sequence_preview_loading:
+            return
+
         if not playing:
             # Clip ended naturally (stopped/paused) - check if we should continue to next
             if self._current_playback_clip:
@@ -4399,14 +4722,17 @@ class MainWindow(QMainWindow):
         """Pause playback."""
         self._is_playing = False
         self._playback_timer.stop()
+        self._pending_sequence_playback_source_id = None
+        self._pending_sequence_playback_range = None
         self.sequence_tab.video_player.pause()
-        self.sequence_tab.timeline.set_playing(False)
+        self.sequence_tab.video_player.set_playing(False)
         # Restore sidebar audio and speed control
         self.clip_details_sidebar.video_player.mute = False
         self.sequence_tab.video_player.set_speed_control_enabled(True)
+        self._update_sequence_chromatic_bar()
 
     def _on_stop_requested(self):
-        """Handle stop request from timeline."""
+        """Handle stop request from video player."""
         self._stop_playback()
 
     def _stop_playback(self):
@@ -4414,11 +4740,18 @@ class MainWindow(QMainWindow):
         self._is_playing = False
         self._playback_timer.stop()
         self._current_playback_clip = None
+        self._preview_sync_clip = None
+        self._pending_sequence_playback_source_id = None
+        self._pending_sequence_playback_range = None
+        self._pending_sequence_preview_source_id = None
+        self._pending_sequence_preview_clip_range = None
+        self._pending_sequence_preview_seek_seconds = None
         self.sequence_tab.video_player.stop()
-        self.sequence_tab.timeline.set_playing(False)
+        self.sequence_tab.video_player.set_playing(False)
         # Restore sidebar audio and speed control
         self.clip_details_sidebar.video_player.mute = False
         self.sequence_tab.video_player.set_speed_control_enabled(True)
+        self._update_sequence_chromatic_bar()
 
     def _on_export_click(self):
         """Export selected clips."""
@@ -4973,6 +5306,10 @@ class MainWindow(QMainWindow):
             crf=quality_preset["crf"],
             preset=quality_preset["preset"],
             video_bitrate=quality_preset["bitrate"],
+            show_chromatic_color_bar=(
+                bool(getattr(sequence, "show_chromatic_color_bar", False))
+                and sequence.algorithm == "color"
+            ),
         )
 
         # Start export in background
@@ -5059,6 +5396,7 @@ class MainWindow(QMainWindow):
 
     def _on_sequence_export_error(self, error: str):
         """Handle sequence export error."""
+        self._gui_state.set_last_error(f"Export error: {error}")
         self.progress_bar.setVisible(False)
         self.sequence_tab.timeline.export_btn.setEnabled(True)
 
@@ -5440,7 +5778,7 @@ class MainWindow(QMainWindow):
 
         # Start worker
         from PySide6.QtCore import Qt
-        self.color_worker = ColorAnalysisWorker(clips, parallelism=self.settings.color_analysis_parallelism)
+        self.color_worker = ColorAnalysisWorker(clips, parallelism=self.settings.color_analysis_parallelism, sources_by_id=self.project.sources_by_id)
         self.color_worker.progress.connect(self._on_color_progress)
         self.color_worker.color_ready.connect(self._on_color_ready)
         self.color_worker.analysis_completed.connect(self._on_agent_color_analysis_finished, Qt.UniqueConnection)
@@ -5938,6 +6276,14 @@ class MainWindow(QMainWindow):
                 self._pending_agent_tool_name = None
                 self._chat_worker.set_gui_tool_result(result)
                 logger.info(f"Sent classification result to agent: {classified_count}/{len(clips)} clips")
+
+    @Slot(int, int)
+    def _on_face_detection_progress(self, current: int, total: int):
+        """Handle face detection progress updates."""
+        if total > 0:
+            percent = int(current / total * 100)
+            self.progress_bar.setValue(percent)
+            self.status_bar.showMessage(f"Detecting faces: {current}/{total} clips...")
 
     @Slot(int, int)
     def _on_object_detection_progress(self, current: int, total: int):
@@ -6804,7 +7150,7 @@ class MainWindow(QMainWindow):
                 self.intention_workflow.on_analysis_finished()
                 return
 
-            self.color_worker = ColorAnalysisWorker(clips_needing_colors, parallelism=self.settings.color_analysis_parallelism)
+            self.color_worker = ColorAnalysisWorker(clips_needing_colors, parallelism=self.settings.color_analysis_parallelism, sources_by_id=self.project.sources_by_id)
             self.color_worker.progress.connect(
                 self.intention_workflow.on_analysis_progress
             )
@@ -7398,7 +7744,6 @@ class MainWindow(QMainWindow):
 
         # Get UI state and update project
         self.project.ui_state = {
-            "sensitivity": self.cut_tab.sensitivity_slider.value() / 10.0,
             "analyze_clip_ids": self.analyze_tab.get_clip_ids(),
         }
 

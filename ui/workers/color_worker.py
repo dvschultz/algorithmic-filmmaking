@@ -1,7 +1,8 @@
-"""Background worker for color extraction from thumbnails.
+"""Background worker for color extraction from video clips.
 
 Runs dominant color extraction on multiple clips in a background thread,
-using ThreadPoolExecutor for parallelism.
+using ThreadPoolExecutor for parallelism. Each clip is analyzed by sampling
+multiple frames from the source video.
 """
 
 import logging
@@ -22,11 +23,14 @@ class ColorAnalysisTask:
     """Immutable task data for thread pool execution."""
 
     clip_id: str
-    thumbnail_path: Path
+    video_path: Path
+    start_frame: int
+    end_frame: int
+    image_path: Optional[Path] = None  # Single-image fallback for frame targets
 
 
 class ColorAnalysisWorker(CancellableWorker):
-    """Background worker for color extraction from thumbnails.
+    """Background worker for color extraction from video clips.
 
     Uses ThreadPoolExecutor for parallel processing. All signal emissions
     happen on the QThread, not from pool worker threads.
@@ -50,6 +54,7 @@ class ColorAnalysisWorker(CancellableWorker):
         parallelism: int = 4,
         skip_existing: bool = True,
         analysis_targets: Optional[list] = None,
+        sources_by_id: Optional[dict] = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -59,23 +64,26 @@ class ColorAnalysisWorker(CancellableWorker):
                 analysis_targets, skip_existing
             )
         else:
-            self._tasks = self._build_tasks(clips, skip_existing)
+            self._tasks = self._build_tasks(clips, skip_existing, sources_by_id or {})
 
     def _build_tasks(
-        self, clips: list, skip_existing: bool
+        self, clips: list, skip_existing: bool, sources_by_id: dict
     ) -> list[ColorAnalysisTask]:
         """Build immutable task list from clips."""
         tasks = []
         for clip in clips:
             if skip_existing and clip.dominant_colors is not None:
                 continue
-            if not clip.thumbnail_path or not clip.thumbnail_path.exists():
-                logger.warning(f"Skipping clip {clip.id}: thumbnail not found")
+            source = sources_by_id.get(clip.source_id)
+            if not source or not source.file_path.exists():
+                logger.warning(f"Skipping clip {clip.id}: source video not found")
                 continue
             tasks.append(
                 ColorAnalysisTask(
                     clip_id=clip.id,
-                    thumbnail_path=clip.thumbnail_path,
+                    video_path=source.file_path,
+                    start_frame=clip.start_frame,
+                    end_frame=clip.end_frame,
                 )
             )
         return tasks
@@ -88,18 +96,33 @@ class ColorAnalysisWorker(CancellableWorker):
         for target in targets:
             if skip_existing and target.dominant_colors is not None:
                 continue
-            image_path = target.image_path
-            if not image_path or not image_path.exists():
-                logger.warning(
-                    f"Skipping target {target.id}: image not found"
+            if target.target_type == "clip" and target.video_path and target.start_frame is not None and target.end_frame is not None:
+                if not target.video_path.exists():
+                    logger.warning(f"Skipping target {target.id}: video not found")
+                    continue
+                tasks.append(
+                    ColorAnalysisTask(
+                        clip_id=target.id,
+                        video_path=target.video_path,
+                        start_frame=target.start_frame,
+                        end_frame=target.end_frame,
+                    )
                 )
-                continue
-            tasks.append(
-                ColorAnalysisTask(
-                    clip_id=target.id,
-                    thumbnail_path=image_path,
+            else:
+                # Frame target — single image fallback
+                image_path = target.image_path
+                if not image_path or not image_path.exists():
+                    logger.warning(f"Skipping target {target.id}: image not found")
+                    continue
+                tasks.append(
+                    ColorAnalysisTask(
+                        clip_id=target.id,
+                        video_path=Path(),  # unused in image_path mode
+                        start_frame=0,
+                        end_frame=0,
+                        image_path=image_path,
+                    )
                 )
-            )
         return tasks
 
     def _process_task(
@@ -116,7 +139,12 @@ class ColorAnalysisWorker(CancellableWorker):
         try:
             from core.analysis.color import extract_dominant_colors
 
-            colors = extract_dominant_colors(task.thumbnail_path)
+            colors = extract_dominant_colors(
+                video_path=task.video_path,
+                start_frame=task.start_frame,
+                end_frame=task.end_frame,
+                image_path=task.image_path,
+            )
             return task.clip_id, colors, None
         except Exception as e:
             return task.clip_id, None, str(e)

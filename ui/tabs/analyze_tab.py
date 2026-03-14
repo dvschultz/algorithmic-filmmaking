@@ -74,7 +74,7 @@ class AnalyzeTab(BaseTab):
         # State 0: No clips sent yet
         self.no_clips_widget = EmptyStateWidget(
             "No Clips to Analyze",
-            "Select clips in the Cut tab and click 'Analyze Selected'"
+            "Select clips in the Cut tab and click 'Analyze Selected', or ask the Agent"
         )
         self.state_stack.addWidget(self.no_clips_widget)
 
@@ -158,6 +158,7 @@ class AnalyzeTab(BaseTab):
         self.clip_browser.clip_selected.connect(self._on_clip_selected)
         self.clip_browser.clip_double_clicked.connect(self._on_clip_double_clicked)
         self.clip_browser.clip_dragged_to_timeline.connect(self._on_clip_dragged)
+        self.clip_browser.selection_changed.connect(self._on_browser_selection_changed)
         self.clip_browser.filters_changed.connect(self._on_filters_changed)
         layout.addWidget(self.clip_browser)
 
@@ -223,6 +224,9 @@ class AnalyzeTab(BaseTab):
     def _on_clip_selected(self, clip):
         """Handle clip selection."""
         self.clip_selected.emit(clip)
+
+    def _on_browser_selection_changed(self, _clip_ids: list[str]):
+        """Handle selection changes from the clip browser."""
         self._update_selection_ui()
 
     def _update_selection_ui(self):
@@ -241,10 +245,7 @@ class AnalyzeTab(BaseTab):
     def _on_filters_changed(self):
         """Handle filter changes - clear selection and update clip count."""
         # Clear selection
-        self.clip_browser.selected_clips.clear()
-        for thumb in self.clip_browser.thumbnails:
-            thumb.set_selected(False)
-        self._update_selection_ui()
+        self.clip_browser.clear_selection()
 
         # Update clip count label
         visible = self.clip_browser.get_visible_clip_count()
@@ -472,3 +473,11 @@ class AnalyzeTab(BaseTab):
             True if at least one filter is set
         """
         return self.clip_browser.has_active_filters()
+
+    def on_tab_activated(self):
+        """Refresh clip browser layout when tab becomes visible."""
+        if (
+            self.state_stack.currentIndex() == self.STATE_CLIPS
+            and self.clip_browser.thumbnails
+        ):
+            self.clip_browser.refresh_layout()

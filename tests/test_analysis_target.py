@@ -136,7 +136,7 @@ class TestWorkerTaskBuilding:
         )
         assert len(worker._tasks) == 1
         assert worker._tasks[0].clip_id == "frame-1"
-        assert worker._tasks[0].thumbnail_path == image_file
+        assert worker._tasks[0].image_path == image_file
 
     def test_color_worker_skips_existing(self, image_file):
         from ui.workers.color_worker import ColorAnalysisWorker
@@ -281,13 +281,25 @@ class TestWorkerTaskBuilding:
         """Ensure existing clip-based workflow is unaffected."""
         from ui.workers.color_worker import ColorAnalysisWorker
 
+        # Create a real video file for the source
+        video_path = image_file.parent / "video.mp4"
+        video_path.write_bytes(b"\x00" * 100)
+        source = Source(
+            id="src-1",
+            file_path=video_path,
+            duration_seconds=10.0,
+            fps=30.0,
+        )
+
         clip = Clip(
             id="clip-1",
             source_id="src-1",
             start_frame=0,
             end_frame=100,
-            thumbnail_path=image_file,
         )
-        worker = ColorAnalysisWorker(clips=[clip])
+        worker = ColorAnalysisWorker(
+            clips=[clip],
+            sources_by_id={"src-1": source},
+        )
         assert len(worker._tasks) == 1
         assert worker._tasks[0].clip_id == "clip-1"

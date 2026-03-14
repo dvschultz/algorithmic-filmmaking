@@ -58,14 +58,14 @@ class CutTab(BaseTab):
         # State 0: No video loaded
         self.no_video_widget = EmptyStateWidget(
             "No Video Loaded",
-            "Import a video in the Collect tab first"
+            "Import a video in the Collect tab first, or ask the Agent to do it for you"
         )
         self.state_stack.addWidget(self.no_video_widget)
 
         # State 1: Video loaded but no clips detected
         self.no_clips_widget = EmptyStateWidget(
             "No Clips Detected",
-            "Run scene detection in the Collect tab first"
+            "Run scene detection in the Collect tab first, or ask the Agent to detect scenes"
         )
         self.state_stack.addWidget(self.no_clips_widget)
 
@@ -116,6 +116,7 @@ class CutTab(BaseTab):
         self.clip_browser.clip_selected.connect(self._on_clip_selected)
         self.clip_browser.clip_double_clicked.connect(self._on_clip_double_clicked)
         self.clip_browser.clip_dragged_to_timeline.connect(self._on_clip_dragged)
+        self.clip_browser.selection_changed.connect(self._on_browser_selection_changed)
         self.clip_browser.filters_changed.connect(self._on_filters_changed)
         layout.addWidget(self.clip_browser)
 
@@ -131,6 +132,9 @@ class CutTab(BaseTab):
     def _on_clip_selected(self, clip):
         """Handle clip selection."""
         self.clip_selected.emit(clip)
+
+    def _on_browser_selection_changed(self, _clip_ids: list[str]):
+        """Handle selection changes from the clip browser."""
         self._update_selection_ui()
 
     def _on_clip_double_clicked(self, clip):
@@ -239,10 +243,7 @@ class CutTab(BaseTab):
 
     def clear_selection(self):
         """Clear the current selection."""
-        self.clip_browser.selected_clips.clear()
-        for thumb in self.clip_browser.thumbnails:
-            thumb.set_selected(False)
-        self._update_selection_ui()
+        self.clip_browser.clear_selection()
 
     def get_active_filters(self) -> dict:
         """Get the current filter state from the clip browser.
@@ -259,3 +260,11 @@ class CutTab(BaseTab):
             True if at least one filter is set
         """
         return self.clip_browser.has_active_filters()
+
+    def on_tab_activated(self):
+        """Refresh clip browser layout when tab becomes visible."""
+        if (
+            self.state_stack.currentIndex() == self.STATE_CLIPS
+            and self.clip_browser.thumbnails
+        ):
+            self.clip_browser.refresh_layout()

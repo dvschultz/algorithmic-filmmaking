@@ -7,6 +7,8 @@ from .glossary_dialog import GlossaryDialog
 from .storyteller_dialog import StorytellerDialog, MissingDescriptionsDialog
 from .reference_guide_dialog import ReferenceGuideDialog
 from .signature_style_dialog import SignatureStyleDialog
+from .rose_hobart_dialog import RoseHobartDialog
+from .dice_roll_dialog import DiceRollDialog
 
 __all__ = [
     "AnalysisPickerDialog",
@@ -17,4 +19,6 @@ __all__ = [
     "MissingDescriptionsDialog",
     "ReferenceGuideDialog",
     "SignatureStyleDialog",
+    "RoseHobartDialog",
+    "DiceRollDialog",
 ]

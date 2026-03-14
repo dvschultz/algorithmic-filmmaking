@@ -473,6 +473,10 @@ def video(
         width=width,
         height=height,
         crf=crf,
+        show_chromatic_color_bar=(
+            bool(getattr(sequence, "show_chromatic_color_bar", False))
+            and sequence.algorithm == "color"
+        ),
     )
 
     # Build clip lookup

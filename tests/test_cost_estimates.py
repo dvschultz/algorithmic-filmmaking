@@ -143,9 +143,9 @@ class TestColor:
         assert result[0].operation == "colors"
         assert result[0].clips_needing == 5
 
-    def test_color_cycle_same_requirement(self):
+    def test_color_partial_clips_need_analysis(self):
         clips = [MockClip(dominant_colors=[(255, 0, 0)])] * 3 + [MockClip()] * 2
-        result = estimate_sequence_cost("color_cycle", clips)
+        result = estimate_sequence_cost("color", clips)
         assert len(result) == 1
         assert result[0].clips_needing == 2
 
