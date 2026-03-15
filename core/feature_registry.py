@@ -96,6 +96,11 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
         packages=["insightface", "onnxruntime"],
         size_estimate_mb=300,
     ),
+    "stem_separation": FeatureDeps(
+        binaries=[],
+        packages=["demucs-infer"],
+        size_estimate_mb=2000,
+    ),
 }
 
 

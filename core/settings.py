@@ -374,6 +374,9 @@ class Settings:
     model_cache_dir: Path = field(
         default_factory=lambda: _get_cache_dir() / "models"
     )
+    stems_cache_dir: Path = field(
+        default_factory=lambda: _get_cache_dir() / "stems"
+    )
     download_dir: Path = field(default_factory=_get_default_download_dir)
     export_dir: Path = field(default_factory=_get_default_export_dir)
 
