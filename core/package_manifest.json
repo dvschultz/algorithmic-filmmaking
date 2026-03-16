@@ -37,7 +37,7 @@
       "features": ["transcribe"]
     },
     "lightning_whisper_mlx": {
-      "pip_specifier": "lightning-whisper-mlx>=0.4.0",
+      "pip_specifier": "lightning-whisper-mlx>=0.0.10",
       "size_mb": 100,
       "features": ["transcribe_mlx"]
     },

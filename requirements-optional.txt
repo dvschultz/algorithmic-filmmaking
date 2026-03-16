@@ -12,7 +12,7 @@ einops>=0.7.0
 
 # Apple Silicon acceleration (mlx stack)
 mlx-vlm>=0.1.0
-lightning-whisper-mlx>=0.4.0
+lightning-whisper-mlx>=0.0.10
 
 # Transcription
 faster-whisper>=1.0.0

@@ -13,8 +13,9 @@ transformers>=4.36
 torch>=2.0
 Pillow>=10.0
 faster-whisper>=1.0.0
-lightning-whisper-mlx>=0.4.0; sys_platform == 'darwin'  # MLX Whisper (Apple Silicon only)
-mlx-vlm>=0.1.0; sys_platform == 'darwin'               # MLX VLM (Apple Silicon only)
+# MLX packages (Apple Silicon) — install on demand via feature registry, not here
+# lightning-whisper-mlx conflicts with litellm on tiktoken version
+# mlx-vlm is heavy; both are in requirements-optional.txt
 google-api-python-client>=2.100.0
 keyring>=24.0
 
@@ -26,8 +27,7 @@ httpx>=0.25.0
 # Content Analysis
 ultralytics>=8.4.0  # YOLO26 (NMS-free, 43% faster CPU inference)
 insightface>=0.7.3,<1.0  # Face detection and ArcFace embeddings
-onnxruntime>=1.16.0,<2.0; sys_platform != 'darwin' or platform_machine != 'arm64'  # InsightFace backend
-onnxruntime-silicon>=0.0.3,<1.0; sys_platform == 'darwin' and platform_machine == 'arm64'  # Apple Silicon
+onnxruntime>=1.16.0,<2.0  # InsightFace backend (supports Apple Silicon natively since 1.16)
 torchvision>=0.15.0  # MobileNet (compatible with torch>=2.0)
 einops>=0.7.0
 
