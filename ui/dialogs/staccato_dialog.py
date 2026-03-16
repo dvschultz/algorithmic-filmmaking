@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -38,18 +39,43 @@ _AUDIO_FORMATS = "Audio Files (*.mp3 *.wav *.flac *.m4a *.aac *.ogg);;All Files 
 
 
 class StaccatoAnalyzeWorker(CancellableWorker):
-    """Background worker for analyzing a music file."""
+    """Background worker for analyzing a music file or separated stem."""
 
     audio_ready = Signal(object, object)  # AudioAnalysis, np.ndarray (samples)
+    progress_message = Signal(str)
 
-    def __init__(self, music_path: Path, parent=None):
+    def __init__(
+        self,
+        music_path: Path,
+        stem_name: str | None = None,
+        stems_cache_dir: Path | None = None,
+        parent=None,
+    ):
         super().__init__(parent)
         self._music_path = music_path
+        self._stem_name = stem_name
+        self._stems_cache_dir = stems_cache_dir
 
     def run(self):
         self._log_start()
         try:
-            analysis = analyze_music_file(self._music_path, include_onsets=True)
+            audio_path = self._music_path
+
+            # If stem separation requested, separate first then use stem audio
+            if self._stem_name and self._stems_cache_dir:
+                audio_path = self._get_or_separate_stem()
+                if audio_path is None:
+                    return  # cancelled or error already emitted
+
+            if self.is_cancelled():
+                self._log_cancelled()
+                return
+
+            self.progress_message.emit(
+                f"Analyzing {self._stem_name} track..."
+                if self._stem_name else "Analyzing audio..."
+            )
+            analysis = analyze_music_file(audio_path, include_onsets=True)
 
             if self.is_cancelled():
                 self._log_cancelled()
@@ -58,7 +84,7 @@ class StaccatoAnalyzeWorker(CancellableWorker):
             # Load raw samples for waveform display
             from core.analysis.audio import _get_librosa
             librosa = _get_librosa()
-            y, _sr = librosa.load(str(self._music_path), sr=22050)
+            y, _sr = librosa.load(str(audio_path), sr=22050)
 
             self.audio_ready.emit(analysis, y)
         except Exception as e:
@@ -66,6 +92,49 @@ class StaccatoAnalyzeWorker(CancellableWorker):
                 logger.error("Staccato audio analysis failed: %s", e)
                 self.error.emit(str(e))
         self._log_complete()
+
+    def _get_or_separate_stem(self) -> Path | None:
+        """Get the stem audio path, running Demucs if not cached."""
+        from core.analysis.stem_separation import (
+            get_cached_stems,
+            get_stem_cache_key,
+            separate_stems,
+        )
+
+        cache_key = get_stem_cache_key(self._music_path)
+        stem_dir = self._stems_cache_dir / cache_key
+
+        # Check cache first
+        cached = get_cached_stems(self._music_path, self._stems_cache_dir)
+        if cached and self._stem_name in cached:
+            logger.info(f"Using cached {self._stem_name} stem")
+            return cached[self._stem_name]
+
+        # Run separation
+        self.progress_message.emit("Separating stems (this may take a minute)...")
+
+        try:
+            stems = separate_stems(
+                self._music_path,
+                stem_dir,
+                progress_cb=lambda msg: self.progress_message.emit(msg),
+            )
+        except ImportError as e:
+            self.error.emit(str(e))
+            return None
+        except RuntimeError as e:
+            self.error.emit(str(e))
+            return None
+
+        if self.is_cancelled():
+            self._log_cancelled()
+            return None
+
+        if self._stem_name in stems:
+            return stems[self._stem_name]
+
+        self.error.emit(f"Stem '{self._stem_name}' not found in separation output")
+        return None
 
 
 class StaccatoGenerateWorker(CancellableWorker):
@@ -215,6 +284,24 @@ class StaccatoDialog(QDialog):
         file_row.addWidget(file_btn)
         layout.addLayout(file_row)
 
+        # Stem separation controls
+        stem_row = QHBoxLayout()
+        self._stem_checkbox = QCheckBox("Separate stems")
+        self._stem_checkbox.setToolTip(
+            "Use Demucs to isolate a specific instrument track for beat detection"
+        )
+        self._stem_checkbox.toggled.connect(self._on_stem_toggled)
+        stem_row.addWidget(self._stem_checkbox)
+
+        self._stem_combo = QComboBox()
+        self._stem_combo.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
+        self._stem_combo.addItems(["Drums", "Bass", "Vocals", "Other"])
+        self._stem_combo.setVisible(False)
+        self._stem_combo.currentTextChanged.connect(self._on_stem_changed)
+        stem_row.addWidget(self._stem_combo)
+        stem_row.addStretch()
+        layout.addLayout(stem_row)
+
         # Waveform
         self._waveform = WaveformWidget()
         layout.addWidget(self._waveform)
@@ -341,6 +428,47 @@ class StaccatoDialog(QDialog):
 
         self._analyze_audio()
 
+    @Slot(bool)
+    def _on_stem_toggled(self, checked: bool):
+        """Show/hide stem dropdown and check dependency availability."""
+        self._stem_combo.setVisible(checked)
+        if checked:
+            # Check if demucs-infer is available
+            from core.feature_registry import check_feature
+            available, missing = check_feature("stem_separation")
+            if not available:
+                self._stem_checkbox.setChecked(False)
+                QMessageBox.information(
+                    self,
+                    "Stem Separation",
+                    "Stem separation requires the demucs-infer package.\n\n"
+                    "Install it with: pip install demucs-infer\n\n"
+                    "Then restart the application.",
+                )
+                return
+
+        # Re-analyze if we already have a file loaded
+        if self._music_path:
+            self._info_label.setText("Re-analyzing...")
+            self._generate_btn.setEnabled(False)
+            self._waveform.clear()
+            self._analyze_audio()
+
+    @Slot(str)
+    def _on_stem_changed(self, _stem_text: str):
+        """Re-analyze when the user changes the stem selection."""
+        if self._music_path and self._stem_checkbox.isChecked():
+            self._info_label.setText("Re-analyzing...")
+            self._generate_btn.setEnabled(False)
+            self._waveform.clear()
+            self._analyze_audio()
+
+    def _get_stem_name(self) -> str | None:
+        """Return the selected stem name if separation is enabled."""
+        if self._stem_checkbox.isChecked():
+            return self._stem_combo.currentText().lower()
+        return None
+
     def _analyze_audio(self):
         """Start background audio analysis."""
         if self._analyze_worker and self._analyze_worker.isRunning():
@@ -348,8 +476,19 @@ class StaccatoDialog(QDialog):
             self._analyze_worker.wait(2000)
 
         self._handler_executed = False
+
+        stem_name = self._get_stem_name()
+        stems_cache_dir = None
+        if stem_name:
+            from core.settings import load_settings
+            settings = load_settings()
+            stems_cache_dir = settings.stems_cache_dir
+
         self._analyze_worker = StaccatoAnalyzeWorker(
-            self._music_path, parent=self,
+            self._music_path,
+            stem_name=stem_name,
+            stems_cache_dir=stems_cache_dir,
+            parent=self,
         )
         self._analyze_worker.audio_ready.connect(
             self._on_audio_ready, Qt.UniqueConnection,
@@ -357,7 +496,15 @@ class StaccatoDialog(QDialog):
         self._analyze_worker.error.connect(
             self._on_analyze_error, Qt.UniqueConnection,
         )
+        self._analyze_worker.progress_message.connect(
+            self._on_analyze_progress, Qt.UniqueConnection,
+        )
         self._analyze_worker.start()
+
+    @Slot(str)
+    def _on_analyze_progress(self, message: str):
+        """Update info label with progress from the analyze worker."""
+        self._info_label.setText(message)
 
     @Slot(object, object)
     def _on_audio_ready(self, analysis: AudioAnalysis, samples: np.ndarray):
@@ -387,9 +534,13 @@ class StaccatoDialog(QDialog):
         # Update info
         n_cuts = len(markers) if markers else len(analysis.beat_times)
         duration_str = f"{analysis.duration_seconds:.1f}s"
+        stem_label = ""
+        stem_name = self._get_stem_name()
+        if stem_name:
+            stem_label = f" ({stem_name} stem)"
         self._info_label.setText(
             f"{analysis.tempo_bpm:.0f} BPM · {n_cuts} cut points · "
-            f"{duration_str} · {len(self._clips)} clips available"
+            f"{duration_str}{stem_label} · {len(self._clips)} clips available"
         )
         self._generate_btn.setEnabled(True)
 
