@@ -71,16 +71,17 @@ def _load_insightface():
             insightface_dir = cache_dir / "insightface"
             insightface_dir.mkdir(parents=True, exist_ok=True)
 
-            # Detect execution providers
+            # Detect execution providers (CUDA > CoreML > CPU)
             providers = ["CPUExecutionProvider"]
-            if sys.platform == "darwin":
-                try:
-                    import onnxruntime
-                    available = onnxruntime.get_available_providers()
-                    if "CoreMLExecutionProvider" in available:
-                        providers = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
-                except ImportError:
-                    pass
+            try:
+                import onnxruntime
+                available = onnxruntime.get_available_providers()
+                if "CUDAExecutionProvider" in available:
+                    providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+                elif "CoreMLExecutionProvider" in available:
+                    providers = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
+            except ImportError:
+                pass
 
             try:
                 _model = FaceAnalysis(

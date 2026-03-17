@@ -39,6 +39,13 @@ if sys.platform == "win32":
         str(Path.home() / "scoop" / "shims"),
     ])
 
+# Linux-specific search paths (Snap packages, explicit /usr/bin for desktop-launched apps)
+if sys.platform == "linux":
+    _EXTRA_SEARCH_PATHS.extend([
+        "/snap/bin",
+        "/usr/bin",
+    ])
+
 
 def find_binary(name: str) -> Optional[str]:
     """Find an external binary by name.

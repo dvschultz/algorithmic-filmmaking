@@ -42,6 +42,12 @@ _YTDLP_URL_MACOS = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt
 _FFMPEG_URL_WINDOWS = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
 _YTDLP_URL_WINDOWS = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
 
+# Linux binaries (BtbN static builds)
+_FFMPEG_URL_LINUX_X64 = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz"
+_FFMPEG_URL_LINUX_ARM64 = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linuxarm64-gpl.tar.xz"
+_YTDLP_URL_LINUX_X64 = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux"
+_YTDLP_URL_LINUX_ARM64 = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux_aarch64"
+
 
 def _get_ffmpeg_url() -> str:
     """Get platform-appropriate FFmpeg download URL."""
@@ -49,6 +55,12 @@ def _get_ffmpeg_url() -> str:
         return _FFMPEG_URL_WINDOWS
     if sys.platform == "darwin" and platform.machine() == "arm64":
         return _FFMPEG_URL_MACOS
+    if sys.platform == "linux":
+        machine = platform.machine()
+        if machine in ("x86_64", "AMD64"):
+            return _FFMPEG_URL_LINUX_X64
+        if machine == "aarch64":
+            return _FFMPEG_URL_LINUX_ARM64
     raise RuntimeError(
         f"Automatic FFmpeg download not available for {sys.platform}/{platform.machine()}"
     )
@@ -61,6 +73,13 @@ def _get_ffprobe_url() -> str:
         return _FFMPEG_URL_WINDOWS
     if sys.platform == "darwin" and platform.machine() == "arm64":
         return _FFPROBE_URL_MACOS
+    if sys.platform == "linux":
+        # BtbN Linux builds include both ffmpeg and ffprobe in the same archive
+        machine = platform.machine()
+        if machine in ("x86_64", "AMD64"):
+            return _FFMPEG_URL_LINUX_X64
+        if machine == "aarch64":
+            return _FFMPEG_URL_LINUX_ARM64
     raise RuntimeError(
         f"Automatic FFprobe download not available for {sys.platform}/{platform.machine()}"
     )
@@ -72,8 +91,14 @@ def _get_ytdlp_url() -> str:
         return _YTDLP_URL_WINDOWS
     if sys.platform == "darwin":
         return _YTDLP_URL_MACOS
+    if sys.platform == "linux":
+        machine = platform.machine()
+        if machine in ("x86_64", "AMD64"):
+            return _YTDLP_URL_LINUX_X64
+        if machine == "aarch64":
+            return _YTDLP_URL_LINUX_ARM64
     raise RuntimeError(
-        f"Automatic yt-dlp download not available for {sys.platform}"
+        f"Automatic yt-dlp download not available for {sys.platform}/{platform.machine()}"
     )
 
 
@@ -86,10 +111,25 @@ def _get_binary_ext() -> str:
 # Self-contained tarball — no .pkg extraction or sudo needed
 _PYTHON_VERSION = "3.11.11"
 _PYTHON_BUILD_TAG = "20250317"
-_PYTHON_URL = (
+_PYTHON_BASE_URL = (
     "https://github.com/astral-sh/python-build-standalone/releases/download/"
-    f"{_PYTHON_BUILD_TAG}/cpython-{_PYTHON_VERSION}+{_PYTHON_BUILD_TAG}-aarch64-apple-darwin-install_only.tar.gz"
+    f"{_PYTHON_BUILD_TAG}/cpython-{_PYTHON_VERSION}+{_PYTHON_BUILD_TAG}"
 )
+
+
+def _get_python_url() -> str:
+    """Get platform-appropriate standalone Python download URL."""
+    if sys.platform == "darwin" and platform.machine() == "arm64":
+        return f"{_PYTHON_BASE_URL}-aarch64-apple-darwin-install_only.tar.gz"
+    if sys.platform == "linux":
+        machine = platform.machine()
+        if machine in ("x86_64", "AMD64"):
+            return f"{_PYTHON_BASE_URL}-x86_64-unknown-linux-gnu-install_only.tar.gz"
+        if machine == "aarch64":
+            return f"{_PYTHON_BASE_URL}-aarch64-unknown-linux-gnu-install_only.tar.gz"
+    raise RuntimeError(
+        f"Automatic Python download not available for {sys.platform}/{platform.machine()}"
+    )
 
 # Minimum expected sizes to validate downloads (bytes)
 _MIN_FFMPEG_SIZE = 10 * 1024 * 1024   # 10 MB
@@ -101,12 +141,15 @@ _MIN_PYTHON_SIZE = 30 * 1024 * 1024   # 30 MB (extracted)
 # Update these when changing download URLs or versions.
 # Set to None to skip verification (e.g., for yt-dlp /latest which changes).
 _CHECKSUMS: dict[str, str | None] = {
-    _FFMPEG_URL_MACOS: None,    # TODO: pin after verifying first download
-    _FFPROBE_URL_MACOS: None,   # TODO: pin after verifying first download
-    _YTDLP_URL_MACOS: None,     # /latest URL changes with each release
-    _FFMPEG_URL_WINDOWS: None,  # /latest URL changes
-    _YTDLP_URL_WINDOWS: None,   # /latest URL changes
-    _PYTHON_URL: None,    # TODO: pin after verifying first download
+    _FFMPEG_URL_MACOS: None,        # TODO: pin after verifying first download
+    _FFPROBE_URL_MACOS: None,       # TODO: pin after verifying first download
+    _YTDLP_URL_MACOS: None,         # /latest URL changes with each release
+    _FFMPEG_URL_WINDOWS: None,      # /latest URL changes
+    _YTDLP_URL_WINDOWS: None,       # /latest URL changes
+    _FFMPEG_URL_LINUX_X64: None,    # /latest URL changes
+    _FFMPEG_URL_LINUX_ARM64: None,  # /latest URL changes
+    _YTDLP_URL_LINUX_X64: None,    # /latest URL changes
+    _YTDLP_URL_LINUX_ARM64: None,  # /latest URL changes
 }
 
 # ABI compatibility marker filename
@@ -237,6 +280,77 @@ def _extract_zip_binary(zip_path: Path, binary_name: str, dest_dir: Path) -> Pat
     return final
 
 
+def _extract_tar_binary(tar_path: Path, binary_name: str, dest_dir: Path) -> Path:
+    """Extract a single binary from a tar archive (.tar.xz, .tar.gz, etc.).
+
+    Args:
+        tar_path: Path to the tar archive.
+        binary_name: Name of the binary to extract (e.g., "ffmpeg").
+        dest_dir: Directory to extract to.
+
+    Returns:
+        Path to the extracted binary.
+    """
+    import tarfile
+
+    # Determine open mode from suffix
+    name = tar_path.name
+    if name.endswith(".tar.xz"):
+        mode = "r:xz"
+    elif name.endswith(".tar.gz") or name.endswith(".tgz"):
+        mode = "r:gz"
+    elif name.endswith(".tar.bz2"):
+        mode = "r:bz2"
+    else:
+        mode = "r:*"
+
+    resolved_dest = dest_dir.resolve()
+
+    with tarfile.open(tar_path, mode) as tf:
+        # Find the binary in the archive (may be in a subdirectory)
+        candidates = [m for m in tf.getmembers() if m.name.endswith("/" + binary_name) or m.name == binary_name]
+        if not candidates:
+            raise RuntimeError(f"{binary_name} not found in archive")
+
+        target = candidates[0]
+
+        # Path traversal protection
+        target_path = (resolved_dest / target.name).resolve()
+        if not target_path.is_relative_to(resolved_dest):
+            raise RuntimeError(f"Suspicious tar member path: {target.name}")
+
+        tf.extract(target, dest_dir)
+
+        extracted = dest_dir / target.name
+        final = dest_dir / binary_name
+
+        # Move to dest_dir root if it was in a subdirectory
+        if extracted != final:
+            os.replace(extracted, final)
+
+    # Make executable
+    final.chmod(final.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    return final
+
+
+def _extract_binary(archive_path: Path, binary_name: str, dest_dir: Path) -> Path:
+    """Extract a binary from an archive, dispatching to zip or tar extractor.
+
+    Args:
+        archive_path: Path to the archive file.
+        binary_name: Name of the binary to extract.
+        dest_dir: Directory to extract to.
+
+    Returns:
+        Path to the extracted binary.
+    """
+    name = archive_path.name
+    if name.endswith(".zip"):
+        return _extract_zip_binary(archive_path, binary_name, dest_dir)
+    return _extract_tar_binary(archive_path, binary_name, dest_dir)
+
+
 def ensure_ffmpeg(progress_callback: ProgressCallback = None) -> Path:
     """Ensure FFmpeg is available, downloading if needed.
 
@@ -255,11 +369,19 @@ def ensure_ffmpeg(progress_callback: ProgressCallback = None) -> Path:
 
     url = _get_ffmpeg_url()
 
+    # Derive archive extension from URL (.tar.xz for Linux, .zip for macOS/Windows)
+    if ".tar.xz" in url:
+        archive_ext = ".tar.xz"
+    elif ".tar.gz" in url:
+        archive_ext = ".tar.gz"
+    else:
+        archive_ext = ".zip"
+
     # Download and extract
     with tempfile.TemporaryDirectory() as tmp:
-        zip_path = Path(tmp) / "ffmpeg.zip"
-        _download_file(url, zip_path, progress_callback, "FFmpeg")
-        _extract_zip_binary(zip_path, f"ffmpeg{ext}", bin_dir)
+        archive_path = Path(tmp) / f"ffmpeg{archive_ext}"
+        _download_file(url, archive_path, progress_callback, "FFmpeg")
+        _extract_binary(archive_path, f"ffmpeg{ext}", bin_dir)
 
     # Validate
     if not ffmpeg_path.is_file() or ffmpeg_path.stat().st_size < _MIN_FFMPEG_SIZE:
@@ -288,10 +410,17 @@ def ensure_ffprobe(progress_callback: ProgressCallback = None) -> Path:
 
     url = _get_ffprobe_url()
 
+    if ".tar.xz" in url:
+        archive_ext = ".tar.xz"
+    elif ".tar.gz" in url:
+        archive_ext = ".tar.gz"
+    else:
+        archive_ext = ".zip"
+
     with tempfile.TemporaryDirectory() as tmp:
-        zip_path = Path(tmp) / "ffprobe.zip"
-        _download_file(url, zip_path, progress_callback, "FFprobe")
-        _extract_zip_binary(zip_path, f"ffprobe{ext}", bin_dir)
+        archive_path = Path(tmp) / f"ffprobe{archive_ext}"
+        _download_file(url, archive_path, progress_callback, "FFprobe")
+        _extract_binary(archive_path, f"ffprobe{ext}", bin_dir)
 
     if not ffprobe_path.is_file() or ffprobe_path.stat().st_size < _MIN_FFPROBE_SIZE:
         ffprobe_path.unlink(missing_ok=True)
@@ -376,18 +505,14 @@ def ensure_python(progress_callback: ProgressCallback = None) -> Path:
     if python_bin.is_file() and (sys.platform == "win32" or os.access(python_bin, os.X_OK)):
         return python_bin
 
-    if sys.platform == "darwin" and platform.machine() != "arm64":
-        raise RuntimeError("Automatic Python download only supports Apple Silicon (arm64)")
-
-    if sys.platform == "win32":
-        raise RuntimeError("Automatic Python download not yet supported on Windows")
+    python_url = _get_python_url()
 
     if progress_callback:
         progress_callback(0.0, "Downloading Python 3.11...")
 
     with tempfile.TemporaryDirectory() as tmp:
         tarball = Path(tmp) / "python.tar.gz"
-        _download_file(_PYTHON_URL, tarball, progress_callback, "Python 3.11")
+        _download_file(python_url, tarball, progress_callback, "Python 3.11")
 
         if progress_callback:
             progress_callback(0.9, "Extracting Python 3.11...")
