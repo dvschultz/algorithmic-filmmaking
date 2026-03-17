@@ -98,7 +98,7 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
     ),
     "stem_separation": FeatureDeps(
         binaries=[],
-        packages=["demucs-infer"],
+        packages=["demucs"],
         size_estimate_mb=2000,
     ),
 }

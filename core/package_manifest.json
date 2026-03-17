@@ -56,7 +56,7 @@
       "size_mb": 80,
       "features": ["audio_analysis"]
     },
-    "demucs-infer": {
+    "demucs": {
       "pip_specifier": "demucs-infer>=4.1.0",
       "size_mb": 200,
       "depends_on": ["torch"],

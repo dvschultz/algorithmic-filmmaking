@@ -10,9 +10,9 @@ transformers>=4.36
 torchvision>=0.15.0
 einops>=0.7.0
 
-# Apple Silicon acceleration (mlx stack)
-mlx-vlm>=0.1.0
-lightning-whisper-mlx>=0.0.10
+# Apple Silicon acceleration (mlx stack — macOS ARM only)
+mlx-vlm>=0.1.0; sys_platform == 'darwin' and platform_machine == 'arm64'
+lightning-whisper-mlx>=0.0.10; sys_platform == 'darwin' and platform_machine == 'arm64'
 
 # Transcription
 faster-whisper>=1.0.0
@@ -26,3 +26,6 @@ rapidfuzz>=3.0.0
 
 # Audio Analysis
 librosa>=0.10.0
+
+# Stem Separation
+demucs-infer>=4.1.0
