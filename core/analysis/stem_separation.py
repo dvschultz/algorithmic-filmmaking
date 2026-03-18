@@ -79,7 +79,6 @@ def separate_stems(
         from demucs_infer.pretrained import get_model
         from demucs_infer.apply import apply_model
         from demucs_infer.audio import save_audio
-        import torchaudio
     except ImportError:
         raise ImportError(
             "demucs-infer is required for stem separation. "
@@ -87,6 +86,8 @@ def separate_stems(
         )
 
     import torch
+    import numpy as np
+    from core.analysis.audio import _get_librosa
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -100,10 +101,13 @@ def separate_stems(
     if progress_cb:
         progress_cb("Loading audio...")
 
-    wav, sr = torchaudio.load(str(music_path))
-    # Resample to model's sample rate if needed
-    if sr != model.samplerate:
-        wav = torchaudio.functional.resample(wav, sr, model.samplerate)
+    librosa = _get_librosa()
+    # Load at model's sample rate, mono=False to preserve stereo
+    y, sr = librosa.load(str(music_path), sr=model.samplerate, mono=False)
+    # librosa returns (samples,) for mono or (channels, samples) for stereo
+    if y.ndim == 1:
+        y = np.stack([y, y])  # mono -> stereo
+    wav = torch.from_numpy(y).float()
     # Add batch dimension: (channels, samples) -> (1, channels, samples)
     ref = wav.mean(0)
     wav = (wav - ref.mean()) / ref.std()
