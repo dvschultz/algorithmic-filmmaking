@@ -863,7 +863,7 @@ class IntentionImportDialog(QDialog):
     def closeEvent(self, event):
         """Handle dialog close (X button)."""
         # If we're in progress view and not complete, treat as cancel
-        if self.stack.currentIndex() == 1:  # Progress view
+        if self.view_stack.currentIndex() == 1:  # Progress view
             if self.progress_cancel_btn.text() != "Close":
                 self.cancelled.emit()
         event.accept()
