@@ -89,7 +89,7 @@ class WaveformWidget(QWidget):
             max_peak = 1.0
 
         # Draw waveform as filled shape
-        waveform_color = QColor(t.accent_primary)
+        waveform_color = QColor(t.accent_blue)
         waveform_color.setAlpha(140)
 
         top_path = QPainterPath()
