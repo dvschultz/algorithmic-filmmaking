@@ -76,7 +76,10 @@ def separate_stems(
         RuntimeError: If separation fails
     """
     try:
-        from demucs.api import Separator, save_audio
+        from demucs_infer.pretrained import get_model
+        from demucs_infer.apply import apply_model
+        from demucs_infer.audio import save_audio
+        import torchaudio
     except ImportError:
         raise ImportError(
             "demucs-infer is required for stem separation. "
@@ -91,32 +94,45 @@ def separate_stems(
         progress_cb("Loading separation model...")
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    separator = Separator(
-        model="htdemucs",
-        device=device,
-        progress=False,
-    )
+    model = get_model("htdemucs")
+    model.to(device)
+
+    if progress_cb:
+        progress_cb("Loading audio...")
+
+    wav, sr = torchaudio.load(str(music_path))
+    # Resample to model's sample rate if needed
+    if sr != model.samplerate:
+        wav = torchaudio.functional.resample(wav, sr, model.samplerate)
+    # Add batch dimension: (channels, samples) -> (1, channels, samples)
+    ref = wav.mean(0)
+    wav = (wav - ref.mean()) / ref.std()
+    mix = wav.unsqueeze(0).to(device)
 
     if progress_cb:
         progress_cb("Separating stems...")
 
     try:
-        _original, separated = separator.separate_audio_file(str(music_path))
+        sources = apply_model(model, mix, device=device, progress=False)
+        # sources shape: (1, num_sources, channels, samples)
+        sources = sources.squeeze(0)  # (num_sources, channels, samples)
+        # Undo normalization
+        sources = sources * ref.std() + ref.mean()
     except Exception as e:
         raise RuntimeError(f"Stem separation failed: {e}") from e
 
     # Save each stem to WAV
     stems = {}
-    for name in STEM_NAMES:
-        if name not in separated:
-            logger.warning(f"Stem '{name}' not found in separation output")
+    source_names = model.sources  # e.g., ['drums', 'bass', 'other', 'vocals']
+    for i, name in enumerate(source_names):
+        if name not in STEM_NAMES:
             continue
 
         out_path = output_dir / f"{name}.wav"
         if progress_cb:
             progress_cb(f"Saving {name} stem...")
 
-        save_audio(separated[name], str(out_path), samplerate=separator.samplerate)
+        save_audio(sources[i].cpu(), str(out_path), samplerate=model.samplerate)
         stems[name] = out_path
 
     logger.info(f"Separated {len(stems)} stems to {output_dir}")
