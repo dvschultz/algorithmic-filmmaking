@@ -5,6 +5,7 @@
 yt-dlp>=2024.1
 
 # ML / Deep Learning (local inference)
+# torch and torchvision MUST be installed together to stay version-compatible
 torch>=2.0
 transformers>=4.36
 torchvision>=0.15.0

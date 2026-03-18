@@ -68,7 +68,7 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
     ),
     "shot_classify": FeatureDeps(
         binaries=[],
-        packages=["torch", "transformers"],
+        packages=["torch", "torchvision", "transformers"],
         size_estimate_mb=450,
     ),
     "object_detect": FeatureDeps(
