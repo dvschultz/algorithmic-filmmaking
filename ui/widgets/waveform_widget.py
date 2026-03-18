@@ -73,9 +73,13 @@ class WaveformWidget(QWidget):
         samples = self._samples
         n_samples = len(samples)
         if n_samples == 0:
+            painter.end()
             return
 
         bins = min(w, n_samples)
+        if bins == 0:
+            painter.end()
+            return
         chunk_size = max(1, n_samples // bins)
         peaks = []
         for i in range(bins):
@@ -125,7 +129,7 @@ class WaveformWidget(QWidget):
 
         # Draw onset markers (prominent vertical lines)
         if self._onset_times and self._duration > 0:
-            onset_color = QColor(t.accent_secondary)
+            onset_color = QColor(t.accent_orange)
             onset_color.setAlpha(180)
             onset_pen = QPen(onset_color)
             onset_pen.setWidth(1)
