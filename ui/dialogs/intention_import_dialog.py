@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
     QComboBox,
 )
-from PySide6.QtCore import Qt, Signal, QThread
+from PySide6.QtCore import Qt, Signal, QThread, QEvent
 from PySide6.QtGui import QFont, QDragEnterEvent, QDropEvent
 
 from ui.theme import theme, TypeScale, Spacing, Radii
@@ -315,6 +315,8 @@ class IntentionImportDialog(QDialog):
 
         self.pending_list = QListWidget()
         self.pending_list.setMaximumHeight(80)
+        self.pending_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self.pending_list.installEventFilter(self)
         left_column.addWidget(self.pending_list)
 
         # Cost estimate panel (at bottom of left column)
@@ -601,6 +603,43 @@ class IntentionImportDialog(QDialog):
             self._url_label.setStyleSheet(f"color: {theme().text_secondary};")
         if hasattr(self, '_pending_label'):
             self._pending_label.setStyleSheet(f"color: {theme().text_secondary};")
+
+    def eventFilter(self, obj, event):
+        """Handle Delete/Backspace on pending list to remove items."""
+        if obj is self.pending_list and event.type() == QEvent.KeyPress:
+            if event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
+                self._remove_selected_pending()
+                return True
+        return super().eventFilter(obj, event)
+
+    def _remove_selected_pending(self):
+        """Remove selected items from the pending imports list."""
+        selected = self.pending_list.selectedItems()
+        if not selected:
+            return
+
+        urls_to_remove = []
+        for item in selected:
+            data = item.data(Qt.UserRole)
+            if not data:
+                continue
+            kind, value = data
+            if kind == "file":
+                if value in self._local_paths:
+                    self._local_paths.remove(value)
+                    self._durations.pop(str(value), None)
+            elif kind == "url":
+                urls_to_remove.append(value)
+
+        # Remove URL lines from text input to prevent reappearance
+        if urls_to_remove:
+            lines = self.url_input.toPlainText().split("\n")
+            remaining = [l for l in lines if l.strip() not in urls_to_remove]
+            self.url_input.blockSignals(True)
+            self.url_input.setPlainText("\n".join(remaining))
+            self.url_input.blockSignals(False)
+
+        self._update_pending_list()
 
     def _on_files_dropped(self, paths: list[Path]):
         """Handle dropped files."""
