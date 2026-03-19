@@ -253,6 +253,7 @@ def _make_tar_xz_with_binary(binary_name: str, content: bytes = b"FAKEBINARY") -
     return buf.getvalue()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix file permissions not supported on Windows")
 class TestExtractTarBinary:
     """Test _extract_tar_binary() with real in-memory .tar.xz archives."""
 
@@ -324,6 +325,7 @@ class TestExtractTarBinary:
 # core/analysis/faces.py — GPU provider detection
 # ---------------------------------------------------------------------------
 
+@pytest.mark.skipif(sys.platform == "win32", reason="insightface not available on Windows CI")
 class TestFacesGpuProviderDetection:
     """Test platform-agnostic GPU provider detection in _load_insightface."""
 
