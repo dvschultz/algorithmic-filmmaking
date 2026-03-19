@@ -993,14 +993,19 @@ class SequenceTab(BaseTab):
         from ui.dialogs.staccato_dialog import StaccatoDialog
 
         dialog = StaccatoDialog(clips=clips, parent=self)
-        dialog.sequence_ready.connect(self._apply_staccato_sequence)
+        dialog.sequence_ready.connect(
+            lambda seq_clips: self._apply_staccato_sequence(seq_clips, dialog.music_path)
+        )
         dialog.exec()
 
-    @Slot(list)
-    def _apply_staccato_sequence(self, sequence_clips: list):
+    def _apply_staccato_sequence(self, sequence_clips: list, music_path=None):
         """Apply the sequence from Staccato dialog."""
+        metadata = {}
+        if music_path:
+            metadata["music_path"] = str(music_path)
         self._apply_dialog_sequence(
             sequence_clips, "staccato", "Staccato",
+            sequence_metadata=metadata if metadata else None,
         )
 
     def _show_dice_roll_dialog(self, clips: list):

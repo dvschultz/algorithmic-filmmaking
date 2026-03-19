@@ -238,6 +238,11 @@ class StaccatoDialog(QDialog):
         self.setMinimumHeight(420)
         self._setup_ui()
 
+    @property
+    def music_path(self) -> Path | None:
+        """The music file used for this staccato sequence."""
+        return self._music_path
+
     def _setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)

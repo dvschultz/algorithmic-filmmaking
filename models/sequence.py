@@ -183,6 +183,7 @@ class Sequence:
     dimension_weights: Optional[dict[str, float]] = None  # Dimension -> weight (0.0-1.0)
     allow_repeats: bool = False  # Allow same clip matched to multiple positions
     show_chromatic_color_bar: bool = False  # Optional Chromatic Flow bottom bar
+    music_path: Optional[str] = None  # Path to music file (staccato sequences)
 
     def __post_init__(self):
         """Ensure at least one track exists."""
@@ -243,6 +244,15 @@ class Sequence:
             data["allow_repeats"] = self.allow_repeats
         if self.show_chromatic_color_bar:
             data["show_chromatic_color_bar"] = self.show_chromatic_color_bar
+        if self.music_path:
+            if base_path:
+                try:
+                    rel = Path(self.music_path).relative_to(base_path)
+                    data["music_path"] = rel.as_posix()
+                except ValueError:
+                    data["music_path"] = self.music_path
+            else:
+                data["music_path"] = self.music_path
         return data
 
     @classmethod
@@ -252,6 +262,19 @@ class Sequence:
             Track.from_dict(track_data, base_path=base_path)
             for track_data in data.get("tracks", [])
         ]
+        # Resolve music_path relative to base_path if needed
+        music_path = data.get("music_path")
+        if music_path and base_path:
+            p = Path(music_path)
+            if not p.is_absolute():
+                resolved = (base_path / p).resolve()
+                music_path = str(resolved) if resolved.exists() else None
+                if not music_path:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "Music file not found: %s", base_path / p
+                    )
+
         seq = cls(
             id=data.get("id", str(uuid.uuid4())),
             name=data.get("name", "Untitled Sequence"),
@@ -262,6 +285,7 @@ class Sequence:
             dimension_weights=data.get("dimension_weights"),
             allow_repeats=data.get("allow_repeats", False),
             show_chromatic_color_bar=data.get("show_chromatic_color_bar", False),
+            music_path=music_path,
         )
         # If no tracks were loaded, ensure at least one exists
         if not seq.tracks:
