@@ -39,19 +39,18 @@ def _find_bundled_mpv_library() -> Optional[Path]:
         return None
 
     base = Path(sys._MEIPASS)
-    names = (
-        ["mpv-2.dll", "libmpv-2.dll", "mpv-1.dll"]
-        if sys.platform == "win32"
-        else ["libmpv.dylib"]
-    )
+    if sys.platform == "win32":
+        patterns = ["mpv-2.dll", "libmpv-2.dll", "mpv-1.dll"]
+    else:
+        patterns = ["libmpv*.dylib"]
 
-    for name in names:
-        for candidate in [base / name, base / "mpv" / name]:
+    for pattern in patterns:
+        for candidate in list(base.glob(pattern)) + list((base / "mpv").glob(pattern)):
             if candidate.is_file():
                 return candidate
 
-    for name in names:
-        for candidate in base.rglob(name):
+    for pattern in patterns:
+        for candidate in base.rglob(pattern):
             if candidate.is_file():
                 return candidate
 

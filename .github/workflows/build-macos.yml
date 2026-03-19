@@ -69,12 +69,12 @@ jobs:
           echo ".app bundle size:"
           du -sh "$APP_PATH"
           echo ""
-          if ! find "$APP_PATH" -name "libmpv.dylib" | grep -q .; then
-            echo "ERROR: bundled libmpv.dylib not found"
+          if ! find "$APP_PATH" -name "libmpv*.dylib" | grep -q .; then
+            echo "ERROR: bundled libmpv dylib not found"
             exit 1
           fi
           echo "Bundled libmpv:"
-          find "$APP_PATH" -name "libmpv.dylib"
+          find "$APP_PATH" -name "libmpv*.dylib"
           echo ""
           echo "Contents:"
           ls -la "$APP_PATH/Contents/"

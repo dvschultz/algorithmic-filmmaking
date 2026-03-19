@@ -72,7 +72,10 @@ jobs:
             Copy-Item $_.FullName -Destination $runtimeDir -Force
           }
 
-          if (-not (Get-ChildItem -Path $runtimeDir -Include "mpv-2.dll","libmpv-2.dll","mpv-1.dll" -File)) {
+          $stagedMpvDll = Get-ChildItem -Path $runtimeDir -File | Where-Object {
+            $_.Name -in @("mpv-2.dll", "libmpv-2.dll", "mpv-1.dll")
+          } | Select-Object -First 1
+          if (-not $stagedMpvDll) {
             throw "Failed to stage an mpv runtime DLL"
           }
 
@@ -90,7 +93,10 @@ jobs:
           if (-not (Test-Path "dist/Scene Ripper/Scene Ripper.exe")) {
             throw "PyInstaller executable missing"
           }
-          if (-not (Get-ChildItem -Path "dist/Scene Ripper" -Include "mpv-2.dll","libmpv-2.dll","mpv-1.dll" -File)) {
+          $bundledMpvDll = Get-ChildItem -Path "dist/Scene Ripper" -File | Where-Object {
+            $_.Name -in @("mpv-2.dll", "libmpv-2.dll", "mpv-1.dll")
+          } | Select-Object -First 1
+          if (-not $bundledMpvDll) {
             throw "Bundled mpv runtime DLL missing from dist output"
           }
 
