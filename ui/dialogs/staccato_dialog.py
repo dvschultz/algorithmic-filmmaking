@@ -326,6 +326,7 @@ class StaccatoDialog(QDialog):
         self._sensitivity_slider.setValue(5)
         self._sensitivity_slider.setTickPosition(QSlider.TicksBelow)
         self._sensitivity_slider.setTickInterval(1)
+        self._sensitivity_slider.valueChanged.connect(self._on_sensitivity_or_strategy_changed)
         sens_row.addWidget(self._sensitivity_slider)
 
         more_label = QLabel("More Cuts")
@@ -344,6 +345,7 @@ class StaccatoDialog(QDialog):
         self._strategy_combo = QComboBox()
         self._strategy_combo.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
         self._strategy_combo.addItems(["Onsets", "Beats", "Downbeats"])
+        self._strategy_combo.currentTextChanged.connect(self._on_sensitivity_or_strategy_changed)
         strat_layout.addWidget(self._strategy_combo)
         controls.addLayout(strat_layout, 1)
 
@@ -515,34 +517,66 @@ class StaccatoDialog(QDialog):
         self._audio_analysis = analysis
         self._audio_samples = samples
 
-        # Update waveform
+        # Update waveform and info using current sensitivity/strategy
+        self._on_sensitivity_or_strategy_changed()
+        self._generate_btn.setEnabled(True)
+
+    def _get_filtered_markers(self) -> list[float]:
+        """Get cut-point markers filtered by current strategy and sensitivity.
+
+        Sensitivity 1 = only the strongest onsets, 10 = all onsets.
+        For beats/downbeats, sensitivity has no effect (all are used).
+        """
+        analysis = self._audio_analysis
+        if not analysis:
+            return []
+
         strategy = self._strategy_combo.currentText().lower()
         if strategy == "downbeats":
-            markers = analysis.downbeat_times
+            return analysis.downbeat_times
         elif strategy == "beats":
-            markers = analysis.beat_times
-        else:
-            markers = analysis.onset_times
+            return analysis.beat_times
 
+        # Onsets: filter by strength threshold based on sensitivity
+        sensitivity = self._sensitivity_slider.value()
+        if sensitivity >= 10 or not analysis.onset_strengths:
+            return analysis.onset_times
+
+        # Map slider 1-10 to threshold 0.9-0.0
+        # Slider 1 (fewer cuts) = threshold 0.9 (only strongest)
+        # Slider 10 (more cuts) = threshold 0.0 (all onsets)
+        threshold = (10 - sensitivity) / 10.0
+
+        filtered = [
+            t for t, s in zip(analysis.onset_times, analysis.onset_strengths)
+            if s >= threshold
+        ]
+        return filtered if filtered else analysis.onset_times[:1]
+
+    @Slot()
+    def _on_sensitivity_or_strategy_changed(self):
+        """Update waveform and info when sensitivity or strategy changes."""
+        if not self._audio_analysis or self._audio_samples is None:
+            return
+
+        markers = self._get_filtered_markers()
         self._waveform.set_audio_data(
-            samples=samples,
-            duration=analysis.duration_seconds,
-            beat_times=analysis.beat_times,
+            samples=self._audio_samples,
+            duration=self._audio_analysis.duration_seconds,
+            beat_times=self._audio_analysis.beat_times,
             onset_times=markers,
         )
 
-        # Update info
-        n_cuts = len(markers) if markers else len(analysis.beat_times)
-        duration_str = f"{analysis.duration_seconds:.1f}s"
+        # Update info label
+        duration_str = f"{self._audio_analysis.duration_seconds:.1f}s"
         stem_label = ""
         stem_name = self._get_stem_name()
         if stem_name:
             stem_label = f" ({stem_name} stem)"
         self._info_label.setText(
-            f"{analysis.tempo_bpm:.0f} BPM · {n_cuts} cut points · "
+            f"{self._audio_analysis.tempo_bpm:.0f} BPM · {len(markers)} cut points · "
             f"{duration_str}{stem_label} · {len(self._clips)} clips available"
         )
-        self._generate_btn.setEnabled(True)
 
     @Slot(str)
     def _on_analyze_error(self, error_msg: str):
