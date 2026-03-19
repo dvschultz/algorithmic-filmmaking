@@ -5318,6 +5318,14 @@ class MainWindow(QMainWindow):
         }
         quality_preset = quality_presets.get(quality_setting, quality_presets["medium"])
 
+        # Resolve music_path if the sequence has one
+        music_path = None
+        raw_music = getattr(sequence, "music_path", None)
+        if raw_music:
+            p = Path(raw_music)
+            if p.exists():
+                music_path = p
+
         config = ExportConfig(
             output_path=output_path,
             fps=target_fps if target_fps else sequence.fps,
@@ -5330,6 +5338,7 @@ class MainWindow(QMainWindow):
                 bool(getattr(sequence, "show_chromatic_color_bar", False))
                 and sequence.algorithm == "color"
             ),
+            music_path=music_path,
         )
 
         # Start export in background

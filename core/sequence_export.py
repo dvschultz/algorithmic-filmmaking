@@ -34,6 +34,7 @@ class ExportConfig:
     show_chromatic_color_bar: bool = False
     chromatic_color_bar_height_ratio: float = 0.04
     chromatic_color_bar_min_height: int = 12
+    music_path: Optional[Path] = None  # Music file to mux onto exported video
 
 
 class SequenceExporter:
@@ -155,11 +156,33 @@ class SequenceExporter:
             if progress_callback:
                 progress_callback(0.8, "Concatenating clips...")
 
+            # If music needs muxing, concat to a temp file first
+            if config.music_path and config.music_path.exists():
+                concat_output = temp_path / "concat_output.mp4"
+            else:
+                concat_output = config.output_path
+                if config.music_path and not config.music_path.exists():
+                    logger.warning(
+                        "Music file not found, exporting without audio: %s",
+                        config.music_path,
+                    )
+
             success = self._concat_segments(
                 segment_paths=segment_paths,
-                output_path=config.output_path,
+                output_path=concat_output,
                 config=config,
             )
+
+            # Mux music audio onto the concatenated video
+            if success and concat_output != config.output_path:
+                if progress_callback:
+                    progress_callback(0.9, "Adding music track...")
+                success = self._mux_audio(
+                    video_path=concat_output,
+                    audio_path=config.music_path,
+                    output_path=config.output_path,
+                    config=config,
+                )
 
             if progress_callback:
                 progress_callback(1.0, "Export complete!")
@@ -403,6 +426,56 @@ class SequenceExporter:
             f":w=iw:h={bar_h_expr}:color={color_hex}@1.0:t=fill"
         )
 
+    def _mux_audio(
+        self,
+        video_path: Path,
+        audio_path: Path,
+        output_path: Path,
+        config: ExportConfig,
+    ) -> bool:
+        """Mux a music audio track onto a video file.
+
+        Uses -c:v copy to avoid re-encoding video. Audio is encoded
+        with the configured codec. Uses -shortest to trim if audio
+        is longer than video.
+        """
+        cmd = [
+            self.ffmpeg_path,
+            "-y",
+            "-i", str(video_path),
+            "-i", str(audio_path),
+            "-map", "0:v",
+            "-map", "1:a",
+            "-c:v", "copy",
+            "-c:a", config.audio_codec,
+            "-b:a", config.audio_bitrate,
+            "-shortest",
+            str(output_path),
+        ]
+
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=600,
+                **get_subprocess_kwargs(),
+            )
+            if result.returncode != 0:
+                logger.error("Audio mux failed: %s", result.stderr[-500:] if result.stderr else "")
+                # Fall back: copy video without audio
+                import shutil
+                shutil.copy2(video_path, output_path)
+                logger.warning("Exported without music due to mux failure")
+            return True
+        except subprocess.TimeoutExpired:
+            logger.error("Audio mux timed out")
+            import shutil
+            shutil.copy2(video_path, output_path)
+            return True
+        except Exception as e:
+            logger.error("Audio mux error: %s", e)
+            import shutil
+            shutil.copy2(video_path, output_path)
+            return True
+
     def _concat_segments(
         self,
         segment_paths: list[Path],
@@ -462,6 +535,14 @@ def export_sequence(
     Returns:
         True if export succeeded
     """
+    # Resolve music_path if the sequence has one
+    music_path = None
+    raw_music = getattr(sequence, "music_path", None)
+    if raw_music:
+        p = Path(raw_music)
+        if p.exists():
+            music_path = p
+
     config = ExportConfig(
         output_path=output_path,
         fps=sequence.fps,
@@ -469,6 +550,7 @@ def export_sequence(
             bool(getattr(sequence, "show_chromatic_color_bar", False))
             and sequence.algorithm == "color"
         ),
+        music_path=music_path,
     )
 
     exporter = SequenceExporter()
