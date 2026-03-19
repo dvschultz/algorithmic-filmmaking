@@ -15,15 +15,24 @@ Write-Host "=== Scene Ripper Windows Build ===" -ForegroundColor Cyan
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $projectRoot = Resolve-Path (Join-Path $scriptDir "..\..")
 $runtimeDir = Join-Path $projectRoot "packaging\runtime\mpv\windows"
+Push-Location $projectRoot
 
 Write-Host "Staging mpv runtime..." -ForegroundColor Yellow
 New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
 Remove-Item (Join-Path $runtimeDir "*.dll") -Force -ErrorAction SilentlyContinue
 
 $mpvArchive = Join-Path $projectRoot "mpv.7z"
-Invoke-WebRequest `
-    -Uri "https://sourceforge.net/projects/mpv-player-windows/files/libmpv/mpv-dev-x86_64-latest.7z/download" `
-    -OutFile $mpvArchive
+$release = Invoke-RestMethod `
+    -Uri "https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest" `
+    -Headers @{ "User-Agent" = "Scene-Ripper-Build" }
+
+$asset = $release.assets | Where-Object { $_.name -like "mpv-dev-x86_64-*.7z" } | Select-Object -First 1
+if (-not $asset) {
+    Write-Host "Could not find a matching mpv development archive in the latest GitHub release." -ForegroundColor Red
+    exit 1
+}
+
+Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $mpvArchive
 
 $extractDir = Join-Path $projectRoot "tmp\mpv"
 New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
@@ -80,3 +89,5 @@ if ($iscc) {
 } else {
     Write-Host "Inno Setup not found — skipping installer. Install from https://jrsoftware.org/isdown.php" -ForegroundColor Yellow
 }
+
+Pop-Location

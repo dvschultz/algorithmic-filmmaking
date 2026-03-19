@@ -49,9 +49,16 @@ jobs:
           New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
           Remove-Item "$runtimeDir/*.dll" -Force -ErrorAction SilentlyContinue
 
-          Invoke-WebRequest `
-            -Uri "https://sourceforge.net/projects/mpv-player-windows/files/libmpv/mpv-dev-x86_64-latest.7z/download" `
-            -OutFile "mpv.7z"
+          $release = Invoke-RestMethod `
+            -Uri "https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest" `
+            -Headers @{ "User-Agent" = "Scene-Ripper-Build" }
+
+          $asset = $release.assets | Where-Object { $_.name -like "mpv-dev-x86_64-*.7z" } | Select-Object -First 1
+          if (-not $asset) {
+            throw "Could not find a matching mpv development archive in the latest release"
+          }
+
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "mpv.7z"
 
           7z x "mpv.7z" "-otmp\\mpv" | Out-Null
 
@@ -113,7 +120,18 @@ jobs:
           path: dist/Scene Ripper
 
       - name: Upload to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: packaging/windows/Output/*.exe
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          RELEASE_TAG="${GITHUB_REF_NAME}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            RELEASE_TAG="v${APP_VERSION}"
+          fi
+
+          gh release view "${RELEASE_TAG}" >/dev/null 2>&1 || \
+            gh release create "${RELEASE_TAG}" --title "${RELEASE_TAG}" --notes ""
+
+          gh release upload "${RELEASE_TAG}" packaging/windows/Output/*.exe --clobber

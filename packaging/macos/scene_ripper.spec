@@ -15,7 +15,7 @@ block_cipher = None
 
 # Version from environment variable or default
 VERSION = os.environ.get("APP_VERSION", "0.2.0")
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path.cwd()
 
 build_support_spec = importlib.util.spec_from_file_location(
     "scene_ripper_build_support",

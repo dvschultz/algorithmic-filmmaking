@@ -47,6 +47,7 @@ pip install pyinstaller --quiet
 # -------------------------------------------------------------------
 echo "==> Running PyInstaller..."
 export APP_VERSION
+cd "$PROJECT_ROOT"
 pyinstaller "${SCRIPT_DIR}/scene_ripper.spec" \
     --distpath "${PROJECT_ROOT}/dist" \
     --workpath "${PROJECT_ROOT}/build" \
