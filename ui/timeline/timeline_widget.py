@@ -241,6 +241,7 @@ class TimelineWidget(QWidget):
     def clear_timeline(self):
         """Remove all clips from the timeline."""
         self.scene.clear_all_clips()
+        self.scene.clear_audio_waveform()
         self._update_export_button()
         self.sequence_changed.emit()
 
@@ -295,8 +296,55 @@ class TimelineWidget(QWidget):
         # Set the sequence on the scene (this rebuilds all visuals)
         self.scene.set_sequence(sequence)
 
+        # Load audio waveform if sequence has a music track
+        self._load_audio_waveform_if_needed(sequence)
+
         self._update_export_button()
         self.sequence_changed.emit()
+
+    def _load_audio_waveform_if_needed(self, sequence: Sequence):
+        """Load audio waveform for sequences with a music track.
+
+        Runs librosa.load in a background thread to avoid blocking the UI.
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        music_path = getattr(sequence, "music_path", None)
+        if not music_path:
+            self.scene.clear_audio_waveform()
+            return
+
+        from pathlib import Path
+        p = Path(music_path)
+        if not p.exists():
+            logger.warning("Music file not found for waveform: %s", music_path)
+            self.scene.clear_audio_waveform()
+            return
+
+        # Load in background thread
+        from PySide6.QtCore import QThread, Signal
+
+        class _WaveformLoader(QThread):
+            waveform_ready = Signal(object, float)  # samples, duration
+
+            def __init__(self, path, parent=None):
+                super().__init__(parent)
+                self._path = path
+
+            def run(self):
+                try:
+                    from core.analysis.audio import _get_librosa
+                    librosa = _get_librosa()
+                    y, sr = librosa.load(str(self._path), sr=22050)
+                    duration = len(y) / sr
+                    self.waveform_ready.emit(y, duration)
+                except Exception as e:
+                    logger.error("Failed to load waveform: %s", e)
+
+        self._waveform_loader = _WaveformLoader(p, parent=self)
+        self._waveform_loader.waveform_ready.connect(self.scene.set_audio_waveform)
+        self._waveform_loader.start()
 
     def set_playhead_time(self, time_seconds: float):
         """Set playhead position."""

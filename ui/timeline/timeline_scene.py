@@ -30,6 +30,7 @@ class TimelineScene(QGraphicsScene):
         self._track_items = []  # TrackItem instances
         self._clip_items = {}  # clip_id -> ClipItem
         self._playhead = None
+        self._audio_track_item = None  # AudioTrackItem (optional)
 
         # Debounced zoom timer
         self._pending_pps = None
@@ -47,10 +48,13 @@ class TimelineScene(QGraphicsScene):
 
     def _update_scene_rect(self):
         """Recalculate scene dimensions based on content."""
-        # Height: ruler + tracks
+        # Height: ruler + video tracks + optional audio track
         height = self.RULER_HEIGHT + len(self.sequence.tracks) * (
             self.TRACK_HEIGHT + self.TRACK_SPACING
         )
+        if self._audio_track_item:
+            from ui.timeline.audio_track_item import AUDIO_TRACK_HEIGHT
+            height += self.TRACK_SPACING + AUDIO_TRACK_HEIGHT
         height = max(height, 200)  # Minimum height
 
         # Width: based on sequence duration or minimum
@@ -67,7 +71,7 @@ class TimelineScene(QGraphicsScene):
 
     def rebuild(self):
         """Rebuild all items from sequence data."""
-        # Clear existing items (except playhead)
+        # Clear existing items (except playhead and audio track)
         for item in list(self._track_items):
             self.removeItem(item)
         self._track_items.clear()
@@ -97,6 +101,15 @@ class TimelineScene(QGraphicsScene):
                 self.addItem(clip_item)
                 self._clip_items[seq_clip.id] = clip_item
 
+        # Reposition audio track below video tracks
+        if self._audio_track_item:
+            audio_y = self.RULER_HEIGHT + len(self.sequence.tracks) * (
+                self.TRACK_HEIGHT + self.TRACK_SPACING
+            )
+            from ui.timeline.audio_track_item import AUDIO_TRACK_HEIGHT
+            rect = self._audio_track_item.rect()
+            self._audio_track_item.setRect(0, audio_y, rect.width(), AUDIO_TRACK_HEIGHT)
+
         self._update_scene_rect()
 
     def set_pixels_per_second(self, pps: float):
@@ -108,6 +121,10 @@ class TimelineScene(QGraphicsScene):
         # Update playhead immediately (it's just one item)
         if self._playhead:
             self._playhead.set_pixels_per_second(pps)
+
+        # Update audio track waveform on zoom
+        if self._audio_track_item:
+            self._audio_track_item.set_pixels_per_second(pps)
 
         # Debounce clip updates for smooth zoom
         if not self._zoom_timer.isActive():
@@ -239,6 +256,35 @@ class TimelineScene(QGraphicsScene):
     def set_playhead(self, playhead):
         """Set the playhead item reference."""
         self._playhead = playhead
+
+    def set_audio_waveform(self, samples, duration: float):
+        """Set audio waveform data for the audio track.
+
+        Creates the AudioTrackItem if it doesn't exist.
+
+        Args:
+            samples: Mono audio samples (numpy array)
+            duration: Audio duration in seconds
+        """
+        from ui.timeline.audio_track_item import AudioTrackItem, AUDIO_TRACK_HEIGHT
+
+        if self._audio_track_item is None:
+            audio_y = self.RULER_HEIGHT + len(self.sequence.tracks) * (
+                self.TRACK_HEIGHT + self.TRACK_SPACING
+            )
+            self._audio_track_item = AudioTrackItem(y_position=audio_y)
+            self._audio_track_item.set_pixels_per_second(self.pixels_per_second)
+            self.addItem(self._audio_track_item)
+
+        self._audio_track_item.set_audio_data(samples, duration)
+        self._update_scene_rect()
+
+    def clear_audio_waveform(self):
+        """Remove the audio waveform track."""
+        if self._audio_track_item:
+            self.removeItem(self._audio_track_item)
+            self._audio_track_item = None
+            self._update_scene_rect()
 
     def get_snap_points(self, exclude_clip_id: str = None) -> list[int]:
         """Get list of frame positions to snap to (clip edges)."""
