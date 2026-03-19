@@ -23,7 +23,7 @@ from PySide6.QtNetwork import QNetworkAccessManager
 
 from ui.theme import theme, UISizes
 from ui.youtube_result_thumbnail import YouTubeResultThumbnail
-from core.youtube_api import YouTubeVideo, ASPECT_RATIO_RANGES, RESOLUTION_THRESHOLDS, SIZE_LIMITS
+from core.youtube_api import YouTubeVideo, ASPECT_RATIO_RANGES, RESOLUTION_THRESHOLDS, SIZE_LIMITS, DURATION_RANGES
 from core.internet_archive_api import InternetArchiveVideo
 
 
@@ -221,6 +221,21 @@ class YouTubeSearchPanel(QWidget):
         self.size_combo.addItem("< 1 GB", "1gb")
         self.size_combo.currentIndexChanged.connect(self._apply_filters)
         filter_row.addWidget(self.size_combo)
+
+        # Duration filter
+        dur_label = QLabel("Duration:")
+        dur_label.setStyleSheet(f"color: {theme().text_secondary};")
+        filter_row.addWidget(dur_label)
+
+        self.duration_combo = QComboBox()
+        self.duration_combo.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
+        self.duration_combo.addItem("Any", "any")
+        self.duration_combo.addItem("Under 15 min", "under_15m")
+        self.duration_combo.addItem("15\u201330 min", "15m_30m")
+        self.duration_combo.addItem("30 min \u2013 1 hr", "30m_1h")
+        self.duration_combo.addItem("Over 1 hour", "over_1h")
+        self.duration_combo.currentIndexChanged.connect(self._apply_filters)
+        filter_row.addWidget(self.duration_combo)
 
         filter_row.addStretch()
 
@@ -448,6 +463,7 @@ class YouTubeSearchPanel(QWidget):
         aspect_filter = self.aspect_combo.currentData()
         resolution_filter = self.resolution_combo.currentData()
         size_filter = self.size_combo.currentData()
+        duration_filter = self.duration_combo.currentData()
 
         # Map combo data back to filter values
         if aspect_filter and aspect_filter != "any":
@@ -460,17 +476,20 @@ class YouTubeSearchPanel(QWidget):
         for thumb in self._thumbnails:
             video = thumb.video
 
-            # If no detailed info yet, show the video (pending metadata)
+            # If no detailed info yet, only apply duration filter (available from API)
             if not video.has_detailed_info:
-                thumb.setVisible(True)
-                visible_count += 1
+                matches = video.matches_duration(duration_filter or "any")
+                thumb.setVisible(matches)
+                if matches:
+                    visible_count += 1
                 continue
 
-            # Apply filters
+            # Apply all filters
             matches = (
                 video.matches_aspect_ratio(aspect_filter) and
                 video.matches_resolution(resolution_filter or "any") and
-                video.matches_max_size(size_filter or "any")
+                video.matches_max_size(size_filter or "any") and
+                video.matches_duration(duration_filter or "any")
             )
             thumb.setVisible(matches)
             if matches:

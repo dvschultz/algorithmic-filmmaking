@@ -32,6 +32,14 @@ SIZE_LIMITS = {
     "1gb": 1024 * 1024 * 1024,
 }
 
+# Duration range filters (min inclusive, max exclusive)
+DURATION_RANGES = {
+    "under_15m": (None, timedelta(minutes=15)),
+    "15m_30m": (timedelta(minutes=15), timedelta(minutes=30)),
+    "30m_1h": (timedelta(minutes=30), timedelta(hours=1)),
+    "over_1h": (timedelta(hours=1), None),
+}
+
 
 @dataclass
 class YouTubeVideo:
@@ -123,6 +131,21 @@ class YouTubeVideo:
         if filter_value not in SIZE_LIMITS:
             return False
         return self.filesize_approx <= SIZE_LIMITS[filter_value]
+
+    def matches_duration(self, filter_value: str) -> bool:
+        """Check if video falls within the given duration range."""
+        if filter_value == "any" or not filter_value:
+            return True
+        if not self.duration:
+            return True  # Show videos without duration data
+        if filter_value not in DURATION_RANGES:
+            return False
+        low, high = DURATION_RANGES[filter_value]
+        if low and self.duration < low:
+            return False
+        if high and self.duration >= high:
+            return False
+        return True
 
 
 @dataclass

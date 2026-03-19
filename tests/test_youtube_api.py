@@ -11,6 +11,7 @@ from core.youtube_api import (
     YouTubeAPIError,
     QuotaExceededError,
     InvalidAPIKeyError,
+    DURATION_RANGES,
 )
 
 
@@ -241,6 +242,79 @@ class TestYouTubeSearchClient:
         assert isinstance(result, YouTubeSearchResult)
         assert len(result.videos) == 0
         assert result.total_results == 0
+
+
+class TestMatchesDuration:
+    """Tests for YouTubeVideo.matches_duration()."""
+
+    def _make_video(self, duration=None):
+        return YouTubeVideo(
+            video_id="test",
+            title="Test",
+            description="",
+            channel_title="",
+            thumbnail_url="",
+            duration=duration,
+        )
+
+    def test_any_always_matches(self):
+        video = self._make_video(timedelta(hours=2))
+        assert video.matches_duration("any") is True
+
+    def test_empty_string_always_matches(self):
+        video = self._make_video(timedelta(hours=2))
+        assert video.matches_duration("") is True
+
+    def test_none_duration_always_matches(self):
+        video = self._make_video(None)
+        assert video.matches_duration("under_15m") is True
+
+    def test_invalid_filter_returns_false(self):
+        video = self._make_video(timedelta(minutes=10))
+        assert video.matches_duration("invalid_key") is False
+
+    def test_under_15m_includes_short(self):
+        video = self._make_video(timedelta(minutes=5))
+        assert video.matches_duration("under_15m") is True
+
+    def test_under_15m_excludes_boundary(self):
+        """15 minutes exactly should NOT match under_15m (exclusive upper)."""
+        video = self._make_video(timedelta(minutes=15))
+        assert video.matches_duration("under_15m") is False
+
+    def test_15m_30m_includes_lower_boundary(self):
+        """15 minutes exactly should match 15m_30m (inclusive lower)."""
+        video = self._make_video(timedelta(minutes=15))
+        assert video.matches_duration("15m_30m") is True
+
+    def test_15m_30m_excludes_upper_boundary(self):
+        """30 minutes exactly should NOT match 15m_30m (exclusive upper)."""
+        video = self._make_video(timedelta(minutes=30))
+        assert video.matches_duration("15m_30m") is False
+
+    def test_15m_30m_includes_mid(self):
+        video = self._make_video(timedelta(minutes=20))
+        assert video.matches_duration("15m_30m") is True
+
+    def test_30m_1h_includes_lower_boundary(self):
+        video = self._make_video(timedelta(minutes=30))
+        assert video.matches_duration("30m_1h") is True
+
+    def test_30m_1h_excludes_upper_boundary(self):
+        video = self._make_video(timedelta(hours=1))
+        assert video.matches_duration("30m_1h") is False
+
+    def test_over_1h_includes_boundary(self):
+        video = self._make_video(timedelta(hours=1))
+        assert video.matches_duration("over_1h") is True
+
+    def test_over_1h_includes_long(self):
+        video = self._make_video(timedelta(hours=3))
+        assert video.matches_duration("over_1h") is True
+
+    def test_over_1h_excludes_short(self):
+        video = self._make_video(timedelta(minutes=59))
+        assert video.matches_duration("over_1h") is False
 
 
 class TestQuotaExceededError:
