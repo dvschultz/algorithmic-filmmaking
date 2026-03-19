@@ -3,7 +3,7 @@
 import numpy as np
 
 from PySide6.QtWidgets import QWidget
-from PySide6.QtCore import Qt, QRectF
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QPainter, QPen, QColor, QPainterPath
 
 from ui.theme import theme

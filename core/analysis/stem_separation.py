@@ -94,7 +94,14 @@ def separate_stems(
     if progress_cb:
         progress_cb("Loading separation model...")
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    # Device detection: prefer CUDA, then MPS (Apple Silicon), then CPU
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        device = "mps"
+    else:
+        device = "cpu"
+
     model = get_model("htdemucs")
     model.to(device)
 
@@ -108,9 +115,12 @@ def separate_stems(
     if y.ndim == 1:
         y = np.stack([y, y])  # mono -> stereo
     wav = torch.from_numpy(y).float()
-    # Add batch dimension: (channels, samples) -> (1, channels, samples)
+
+    # Normalize (canonical demucs normalization with epsilon guard)
     ref = wav.mean(0)
-    wav = (wav - ref.mean()) / ref.std()
+    ref_mean = ref.mean()
+    ref_std = ref.std() + 1e-8
+    wav = (wav - ref_mean) / ref_std
     mix = wav.unsqueeze(0).to(device)
 
     if progress_cb:
@@ -119,9 +129,9 @@ def separate_stems(
     try:
         sources = apply_model(model, mix, device=device, progress=False)
         # sources shape: (1, num_sources, channels, samples)
-        sources = sources.squeeze(0)  # (num_sources, channels, samples)
-        # Undo normalization
-        sources = sources * ref.std() + ref.mean()
+        sources = sources.squeeze(0).cpu()  # (num_sources, channels, samples)
+        # Undo normalization (matching epsilon from above)
+        sources = sources * ref_std + ref_mean
     except Exception as e:
         raise RuntimeError(f"Stem separation failed: {e}") from e
 
@@ -130,14 +140,19 @@ def separate_stems(
     source_names = model.sources  # e.g., ['drums', 'bass', 'other', 'vocals']
     for i, name in enumerate(source_names):
         if name not in STEM_NAMES:
+            logger.warning("Unexpected stem name '%s' from model", name)
             continue
 
         out_path = output_dir / f"{name}.wav"
         if progress_cb:
             progress_cb(f"Saving {name} stem...")
 
-        save_audio(sources[i].cpu(), str(out_path), samplerate=model.samplerate)
+        save_audio(sources[i], str(out_path), samplerate=model.samplerate)
         stems[name] = out_path
+
+    if len(stems) < len(STEM_NAMES):
+        missing = set(STEM_NAMES) - set(stems.keys())
+        logger.warning("Missing stems from separation output: %s", missing)
 
     logger.info(f"Separated {len(stems)} stems to {output_dir}")
     return stems

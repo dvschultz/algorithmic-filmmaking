@@ -482,7 +482,7 @@ class Theme:
             }}
 
             /* Custom-painted widgets: transparent so QPainter gradient glow is visible */
-            SortingCard, ClipThumbnail, EmptyStateWidget {{
+            SortingCard, ClipThumbnail, EmptyStateWidget, WaveformWidget {{
                 background-color: transparent;
             }}
 

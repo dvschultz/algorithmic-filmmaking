@@ -56,7 +56,17 @@
       "size_mb": 80,
       "features": ["audio_analysis"]
     },
-    "demucs": {
+    "insightface": {
+      "pip_specifier": "insightface>=0.7.3,<1.0",
+      "size_mb": 200,
+      "features": ["face_detect"]
+    },
+    "onnxruntime": {
+      "pip_specifier": "onnxruntime>=1.16.0,<2.0",
+      "size_mb": 100,
+      "features": ["face_detect"]
+    },
+    "demucs_infer": {
       "pip_specifier": "demucs-infer>=4.1.0",
       "size_mb": 200,
       "depends_on": ["torch"],
