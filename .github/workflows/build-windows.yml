@@ -41,13 +41,33 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Install system dependencies
-        shell: bash
+        shell: pwsh
         run: |
-          # Download mpv pre-built DLL for Windows
-          curl -L -o mpv.7z "https://sourceforge.net/projects/mpv-player-windows/files/libmpv/mpv-dev-x86_64-latest.7z/download"
-          7z x mpv.7z -ompv_dll || true
-          # Place mpv-2.dll where python-mpv can find it
-          cp mpv_dll/mpv-2.dll .
+          choco install innosetup -y
+
+          $runtimeDir = "packaging/runtime/mpv/windows"
+          New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
+          Remove-Item "$runtimeDir/*.dll" -Force -ErrorAction SilentlyContinue
+
+          Invoke-WebRequest `
+            -Uri "https://sourceforge.net/projects/mpv-player-windows/files/libmpv/mpv-dev-x86_64-latest.7z/download" `
+            -OutFile "mpv.7z"
+
+          7z x "mpv.7z" "-otmp\\mpv" | Out-Null
+
+          $mpvDll = Get-ChildItem -Path "tmp/mpv" -Recurse -Filter "mpv-2.dll" | Select-Object -First 1
+          if (-not $mpvDll) {
+            throw "mpv-2.dll not found in extracted archive"
+          }
+
+          $dllDir = $mpvDll.Directory.FullName
+          Get-ChildItem -Path $dllDir -Filter "*.dll" | ForEach-Object {
+            Copy-Item $_.FullName -Destination $runtimeDir -Force
+          }
+
+          if (-not (Test-Path "$runtimeDir/mpv-2.dll")) {
+            throw "Failed to stage mpv-2.dll"
+          }
 
       - name: Install dependencies
         run: pip install -r requirements-core.txt pyinstaller
@@ -57,16 +77,40 @@ jobs:
           APP_VERSION: ${{ steps.version.outputs.version }}
         run: pyinstaller packaging/windows/scene_ripper.spec --distpath dist --workpath build --noconfirm
 
+      - name: Verify PyInstaller output
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "dist/Scene Ripper/Scene Ripper.exe")) {
+            throw "PyInstaller executable missing"
+          }
+          if (-not (Test-Path "dist/Scene Ripper/mpv-2.dll")) {
+            throw "Bundled mpv-2.dll missing from dist output"
+          }
+
       - name: Build Inno Setup installer
         env:
           APP_VERSION: ${{ steps.version.outputs.version }}
         run: iscc packaging/windows/scene_ripper.iss
+
+      - name: Verify installer output
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem -Path "packaging/windows/Output" -Filter "*.exe" | Select-Object -First 1
+          if (-not $installer) {
+            throw "Windows installer was not created"
+          }
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: SceneRipper-Windows-Installer
           path: packaging/windows/Output/*.exe
+
+      - name: Upload Windows app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SceneRipper-Windows-App
+          path: dist/Scene Ripper
 
       - name: Upload to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')

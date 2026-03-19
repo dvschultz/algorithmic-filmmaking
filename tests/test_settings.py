@@ -11,6 +11,8 @@ import pytest
 
 from core.settings import (
     Settings,
+    KEYRING_SERVICE,
+    LEGACY_KEYRING_SERVICES,
     load_settings,
     save_settings,
     is_from_environment,
@@ -22,6 +24,7 @@ from core.settings import (
     _get_config_dir,
     _get_config_path,
     _get_cache_dir,
+    _get_api_key_from_keyring,
     _apply_env_overrides,
     ENV_YOUTUBE_API_KEY,
     ENV_CACHE_DIR,
@@ -174,6 +177,41 @@ class TestConfigPaths:
             with patch("os.name", "posix"):
                 cache_dir = _get_cache_dir()
                 assert cache_dir == Path("/custom/cache/scene-ripper")
+
+    def test_get_cache_dir_frozen_macos_uses_bundle_identifier(self):
+        """Frozen macOS builds should use the release bundle identifier cache path."""
+        with patch("core.settings.is_frozen", return_value=True), \
+             patch("core.settings.sys.platform", "darwin"):
+            cache_dir = _get_cache_dir()
+            assert cache_dir == Path.home() / "Library" / "Caches" / KEYRING_SERVICE
+
+
+class TestKeyringCompatibility:
+    """Tests for keyring service migration compatibility."""
+
+    def test_reads_current_keyring_service_first(self):
+        """The new bundle identifier service should be the primary lookup target."""
+        keyring = MagicMock()
+        keyring.get_password.side_effect = ["new-value"]
+
+        with patch.dict(sys.modules, {"keyring": keyring}):
+            assert _get_api_key_from_keyring() == "new-value"
+
+        keyring.get_password.assert_called_once_with(KEYRING_SERVICE, "youtube_api_key")
+
+    def test_falls_back_to_legacy_keyring_service(self):
+        """Legacy keyring entries should still be readable after the service rename."""
+        keyring = MagicMock()
+        keyring.get_password.side_effect = ["", "legacy-value"]
+
+        with patch.dict(sys.modules, {"keyring": keyring}):
+            assert _get_api_key_from_keyring() == "legacy-value"
+
+        assert keyring.get_password.call_args_list[0].args == (KEYRING_SERVICE, "youtube_api_key")
+        assert keyring.get_password.call_args_list[1].args == (
+            LEGACY_KEYRING_SERVICES[0],
+            "youtube_api_key",
+        )
 
 
 class TestEnvironmentVariables:

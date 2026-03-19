@@ -7,18 +7,28 @@ Build with:
 Requires: pyinstaller, requirements-core.txt installed.
 """
 
+import importlib.util
 import os
-import sys
+from pathlib import Path
 
 block_cipher = None
 
 # Version from environment variable or default
 VERSION = os.environ.get("APP_VERSION", "0.2.0")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+build_support_spec = importlib.util.spec_from_file_location(
+    "scene_ripper_build_support",
+    PROJECT_ROOT / "packaging" / "build_support.py",
+)
+build_support = importlib.util.module_from_spec(build_support_spec)
+build_support_spec.loader.exec_module(build_support)
+binaries = build_support.collect_macos_mpv_binaries(PROJECT_ROOT)
 
 a = Analysis(
     ["../../main.py"],
     pathex=[],
-    binaries=[],
+    binaries=binaries,
     datas=[
         ("../../core/package_manifest.json", "core"),
     ],

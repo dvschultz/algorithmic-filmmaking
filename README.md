@@ -56,6 +56,14 @@ python main.py
 
 ### macOS
 
+**Downloadable app (Apple Silicon)**
+
+Download the latest DMG from [Releases](https://github.com/dvschultz/algorithmic-filmmaking/releases), open it, and drag `Scene Ripper.app` into `Applications`.
+
+On first launch, the app downloads FFmpeg and other optional dependencies as needed.
+
+**From source**
+
 ```bash
 # Install FFmpeg
 brew install ffmpeg
@@ -70,6 +78,14 @@ python main.py
 ```
 
 ### Windows
+
+**Downloadable app**
+
+Download the latest Windows installer from [Releases](https://github.com/dvschultz/algorithmic-filmmaking/releases) and run the `SceneRipper-Setup-*.exe` installer.
+
+The first run downloads FFmpeg and other optional dependencies when features need them. Early unsigned builds may trigger a Windows SmartScreen warning.
+
+**From source**
 
 1. Install Python 3.11+ from [python.org](https://python.org)
 2. Install FFmpeg from [ffmpeg.org](https://ffmpeg.org/download.html) and add to PATH

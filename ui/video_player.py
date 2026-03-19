@@ -7,9 +7,12 @@ creating a separate pop-out window.
 
 from __future__ import annotations
 
+import ctypes.util
 import ctypes
 import locale
 import logging
+import os
+import sys
 import threading
 import time
 from pathlib import Path
@@ -28,6 +31,68 @@ from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtGui import QOpenGLContext, QSurfaceFormat
 from PySide6.QtCore import Qt, Slot, Signal, QObject, QMetaObject
 from ui.widgets.styled_slider import StyledSlider
+
+
+def _find_bundled_mpv_library() -> Optional[Path]:
+    """Return the bundled libmpv runtime for frozen builds, if present."""
+    if not (getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")):
+        return None
+
+    base = Path(sys._MEIPASS)
+    names = (
+        ["mpv-2.dll", "libmpv-2.dll", "mpv-1.dll"]
+        if sys.platform == "win32"
+        else ["libmpv.dylib"]
+    )
+
+    for name in names:
+        for candidate in [base / name, base / "mpv" / name]:
+            if candidate.is_file():
+                return candidate
+
+    for name in names:
+        for candidate in base.rglob(name):
+            if candidate.is_file():
+                return candidate
+
+    return None
+
+
+def _prepare_frozen_mpv_import() -> Optional[Path]:
+    """Make bundled libmpv discoverable before importing python-mpv."""
+    library_path = _find_bundled_mpv_library()
+    if library_path is None:
+        return None
+
+    library_dir = str(library_path.parent)
+    current_path = os.environ.get("PATH", "")
+    path_parts = current_path.split(os.pathsep) if current_path else []
+    if library_dir not in path_parts:
+        os.environ["PATH"] = (
+            f"{library_dir}{os.pathsep}{current_path}" if current_path else library_dir
+        )
+
+    add_dll_directory = getattr(os, "add_dll_directory", None)
+    if sys.platform == "win32" and add_dll_directory is not None:
+        try:
+            add_dll_directory(library_dir)
+        except OSError:
+            logger = logging.getLogger(__name__)
+            logger.debug("Failed to register bundled mpv DLL directory", exc_info=True)
+
+    original_find_library = ctypes.util.find_library
+    known_names = {"mpv", "libmpv", "mpv-2.dll", "libmpv-2.dll", "mpv-1.dll"}
+
+    def _patched_find_library(name: str):
+        if name in known_names:
+            return str(library_path)
+        return original_find_library(name)
+
+    ctypes.util.find_library = _patched_find_library
+    return library_path
+
+
+_prepare_frozen_mpv_import()
 
 try:
     import mpv

@@ -163,6 +163,32 @@ class TestDependencyManagerPlatformDispatch:
             assert _get_binary_ext() == ""
 
 
+class TestBuildSupportWindows:
+    """Test Windows build helper runtime staging."""
+
+    def test_collects_staged_mpv_dlls(self, tmp_path):
+        """PyInstaller build support should include staged mpv DLLs."""
+        import importlib.util
+
+        module_path = Path(__file__).resolve().parents[1] / "packaging" / "build_support.py"
+        spec = importlib.util.spec_from_file_location("scene_ripper_build_support", module_path)
+        build_support = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(build_support)
+
+        project_root = tmp_path
+        runtime_dir = project_root / "packaging" / "runtime" / "mpv" / "windows"
+        runtime_dir.mkdir(parents=True)
+        (runtime_dir / "mpv-2.dll").write_text("fake")
+        (runtime_dir / "libgcc_s_seh-1.dll").write_text("fake")
+
+        binaries = build_support.collect_windows_mpv_binaries(project_root)
+
+        bundled_names = {Path(src).name for src, _ in binaries}
+        assert "mpv-2.dll" in bundled_names
+        assert "libgcc_s_seh-1.dll" in bundled_names
+
+
 # ---------------------------------------------------------------------------
 # core/analysis/audio.py — null device
 # ---------------------------------------------------------------------------

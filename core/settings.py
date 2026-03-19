@@ -23,7 +23,8 @@ from core.paths import is_frozen, get_app_support_dir
 logger = logging.getLogger(__name__)
 
 # Keyring service name for secure credential storage
-KEYRING_SERVICE = "com.scene-ripper.app"
+KEYRING_SERVICE = "com.algorithmic-filmmaking.scene-ripper"
+LEGACY_KEYRING_SERVICES = ("com.scene-ripper.app",)
 KEYRING_YOUTUBE_KEY = "youtube_api_key"
 KEYRING_LLM_API_KEY = "llm_api_key"  # Legacy, kept for compatibility
 
@@ -65,8 +66,7 @@ def _get_api_key_from_keyring() -> str:
     """Retrieve API key from system keyring."""
     try:
         import keyring
-        key = keyring.get_password(KEYRING_SERVICE, KEYRING_YOUTUBE_KEY)
-        return key or ""
+        return _get_password_from_keyring_services(keyring, KEYRING_YOUTUBE_KEY)
     except Exception as e:
         logger.debug(f"Could not read from keyring: {e}")
         return ""
@@ -79,11 +79,7 @@ def _set_api_key_in_keyring(api_key: str) -> bool:
         if api_key:
             keyring.set_password(KEYRING_SERVICE, KEYRING_YOUTUBE_KEY, api_key)
         else:
-            # Delete the key if empty
-            try:
-                keyring.delete_password(KEYRING_SERVICE, KEYRING_YOUTUBE_KEY)
-            except keyring.errors.PasswordDeleteError:
-                pass  # Key didn't exist
+            _delete_password_from_keyring_services(keyring, KEYRING_YOUTUBE_KEY)
         return True
     except Exception as e:
         logger.warning(f"Could not write to keyring: {e}")
@@ -94,8 +90,7 @@ def _get_llm_api_key_from_keyring() -> str:
     """Retrieve LLM API key from system keyring."""
     try:
         import keyring
-        key = keyring.get_password(KEYRING_SERVICE, KEYRING_LLM_API_KEY)
-        return key or ""
+        return _get_password_from_keyring_services(keyring, KEYRING_LLM_API_KEY)
     except Exception as e:
         logger.debug(f"Could not read LLM API key from keyring: {e}")
         return ""
@@ -108,11 +103,7 @@ def _set_llm_api_key_in_keyring(api_key: str) -> bool:
         if api_key:
             keyring.set_password(KEYRING_SERVICE, KEYRING_LLM_API_KEY, api_key)
         else:
-            # Delete the key if empty
-            try:
-                keyring.delete_password(KEYRING_SERVICE, KEYRING_LLM_API_KEY)
-            except keyring.errors.PasswordDeleteError:
-                pass  # Key didn't exist
+            _delete_password_from_keyring_services(keyring, KEYRING_LLM_API_KEY)
         return True
     except Exception as e:
         logger.warning(f"Could not write LLM API key to keyring: {e}")
@@ -125,8 +116,7 @@ def _get_provider_api_key_from_keyring(keyring_key: str) -> str:
     """Retrieve a provider-specific API key from system keyring."""
     try:
         import keyring
-        key = keyring.get_password(KEYRING_SERVICE, keyring_key)
-        return key or ""
+        return _get_password_from_keyring_services(keyring, keyring_key)
     except Exception as e:
         logger.debug(f"Could not read {keyring_key} from keyring: {e}")
         return ""
@@ -139,14 +129,30 @@ def _set_provider_api_key_in_keyring(keyring_key: str, api_key: str) -> bool:
         if api_key:
             keyring.set_password(KEYRING_SERVICE, keyring_key, api_key)
         else:
-            try:
-                keyring.delete_password(KEYRING_SERVICE, keyring_key)
-            except keyring.errors.PasswordDeleteError:
-                pass
+            _delete_password_from_keyring_services(keyring, keyring_key)
         return True
     except Exception as e:
         logger.warning(f"Could not write {keyring_key} to keyring: {e}")
         return False
+
+
+def _get_password_from_keyring_services(keyring_module, key_name: str) -> str:
+    """Read a password from the current service, then legacy services."""
+    for service in (KEYRING_SERVICE, *LEGACY_KEYRING_SERVICES):
+        key = keyring_module.get_password(service, key_name)
+        if key:
+            return key
+    return ""
+
+
+def _delete_password_from_keyring_services(keyring_module, key_name: str) -> None:
+    """Remove a password from current and legacy keyring services."""
+    services = (KEYRING_SERVICE, *LEGACY_KEYRING_SERVICES)
+    for service in services:
+        try:
+            keyring_module.delete_password(service, key_name)
+        except keyring_module.errors.PasswordDeleteError:
+            pass
 
 
 def get_anthropic_api_key() -> str:
@@ -326,11 +332,12 @@ def _get_config_path() -> Path:
 def _get_cache_dir() -> Path:
     """Get platform-appropriate cache directory.
 
-    When running as a frozen macOS app, uses ~/Library/Caches/com.scene-ripper.app/.
+    When running as a frozen macOS app, uses
+    ~/Library/Caches/com.algorithmic-filmmaking.scene-ripper/.
     Otherwise uses XDG-compliant paths (~/.cache/scene-ripper/).
     """
     if is_frozen() and sys.platform == "darwin":
-        return Path.home() / "Library" / "Caches" / "com.scene-ripper.app"
+        return Path.home() / "Library" / "Caches" / KEYRING_SERVICE
     if os.name == "nt":  # Windows
         base = Path(os.environ.get("LOCALAPPDATA", Path.home()))
         return base / "scene-ripper" / "cache"

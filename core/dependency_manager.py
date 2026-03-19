@@ -25,6 +25,7 @@ import urllib.request
 from pathlib import Path
 from typing import Callable, Optional
 
+from core.binary_resolver import get_subprocess_kwargs
 from core.paths import get_managed_bin_dir, get_managed_packages_dir, get_managed_python_dir
 
 logger = logging.getLogger(__name__)
@@ -556,6 +557,7 @@ def ensure_python(progress_callback: ProgressCallback = None) -> Path:
     result = subprocess.run(
         [str(python_bin), "-m", "pip", "--version"],
         capture_output=True, text=True, timeout=30,
+        **get_subprocess_kwargs(),
     )
     if result.returncode != 0:
         logger.warning(f"pip check failed: {result.stderr}")
@@ -563,6 +565,7 @@ def ensure_python(progress_callback: ProgressCallback = None) -> Path:
         subprocess.run(
             [str(python_bin), "-m", "ensurepip", "--upgrade"],
             capture_output=True, text=True, timeout=60,
+            **get_subprocess_kwargs(),
         )
 
     if progress_callback:
@@ -584,6 +587,7 @@ def get_python_version() -> Optional[str]:
         result = subprocess.run(
             [str(python_bin), "--version"],
             capture_output=True, text=True, timeout=10,
+            **get_subprocess_kwargs(),
         )
         if result.returncode == 0:
             # "Python 3.11.11" -> "3.11.11"
@@ -686,7 +690,13 @@ def install_package(
     ]
 
     logger.info(f"Installing package: {' '.join(cmd)}")
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=600,
+        **get_subprocess_kwargs(),
+    )
 
     if result.returncode != 0:
         logger.error(f"pip install failed: {result.stderr}")
