@@ -187,6 +187,7 @@ class YouTubeSearchPanel(QWidget):
 
         self.aspect_combo = QComboBox()
         self.aspect_combo.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
+        self.aspect_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         self.aspect_combo.addItem("Any", "any")
         for name in ASPECT_RATIO_RANGES.keys():
             self.aspect_combo.addItem(name, name.lower().replace(":", "-"))
@@ -200,6 +201,7 @@ class YouTubeSearchPanel(QWidget):
 
         self.resolution_combo = QComboBox()
         self.resolution_combo.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
+        self.resolution_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         self.resolution_combo.addItem("Any", "any")
         self.resolution_combo.addItem("4K (2160p+)", "4k")
         self.resolution_combo.addItem("1080p+", "1080p")
@@ -215,6 +217,7 @@ class YouTubeSearchPanel(QWidget):
 
         self.size_combo = QComboBox()
         self.size_combo.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
+        self.size_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         self.size_combo.addItem("Any", "any")
         self.size_combo.addItem("< 100 MB", "100mb")
         self.size_combo.addItem("< 500 MB", "500mb")

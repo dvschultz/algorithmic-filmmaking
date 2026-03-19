@@ -179,13 +179,13 @@ class TestBuildSupportWindows:
         project_root = tmp_path
         runtime_dir = project_root / "packaging" / "runtime" / "mpv" / "windows"
         runtime_dir.mkdir(parents=True)
-        (runtime_dir / "mpv-2.dll").write_text("fake")
+        (runtime_dir / "libmpv-2.dll").write_text("fake")
         (runtime_dir / "libgcc_s_seh-1.dll").write_text("fake")
 
         binaries = build_support.collect_windows_mpv_binaries(project_root)
 
         bundled_names = {Path(src).name for src, _ in binaries}
-        assert "mpv-2.dll" in bundled_names
+        assert "libmpv-2.dll" in bundled_names
         assert "libgcc_s_seh-1.dll" in bundled_names
 
 

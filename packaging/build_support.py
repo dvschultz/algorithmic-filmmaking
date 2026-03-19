@@ -6,6 +6,8 @@ import os
 import subprocess
 from pathlib import Path
 
+WINDOWS_MPV_DLL_NAMES = ("mpv-2.dll", "libmpv-2.dll", "mpv-1.dll")
+
 
 def _project_root_from_file(path: str) -> Path:
     return Path(path).resolve().parent.parent
@@ -20,8 +22,9 @@ def find_windows_mpv_runtime_dir(project_root: Path) -> Path | None:
     ]
 
     for candidate in candidates:
-        if candidate and candidate.is_dir() and (candidate / "mpv-2.dll").is_file():
-            return candidate
+        if candidate and candidate.is_dir():
+            if any((candidate / dll_name).is_file() for dll_name in WINDOWS_MPV_DLL_NAMES):
+                return candidate
     return None
 
 
@@ -38,8 +41,8 @@ def collect_windows_mpv_binaries(project_root: Path) -> list[tuple[str, str]]:
     for dll_path in sorted(runtime_dir.glob("*.dll")):
         binaries.append((str(dll_path), "."))
 
-    if not any(Path(src).name.lower() == "mpv-2.dll" for src, _ in binaries):
-        raise RuntimeError(f"mpv-2.dll not found in {runtime_dir}")
+    if not any(Path(src).name.lower() in WINDOWS_MPV_DLL_NAMES for src, _ in binaries):
+        raise RuntimeError(f"No supported mpv runtime DLL found in {runtime_dir}")
 
     return binaries
 

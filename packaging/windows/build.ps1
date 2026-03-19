@@ -38,9 +38,9 @@ $extractDir = Join-Path $projectRoot "tmp\mpv"
 New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
 7z x $mpvArchive "-o$extractDir" | Out-Null
 
-$mpvDll = Get-ChildItem -Path $extractDir -Recurse -Filter "mpv-2.dll" | Select-Object -First 1
+$mpvDll = Get-ChildItem -Path $extractDir -Recurse -Include "mpv-2.dll","libmpv-2.dll","mpv-1.dll" | Select-Object -First 1
 if (-not $mpvDll) {
-    Write-Host "mpv-2.dll not found in downloaded runtime archive." -ForegroundColor Red
+    Write-Host "No supported mpv runtime DLL found in downloaded runtime archive." -ForegroundColor Red
     exit 1
 }
 
@@ -67,8 +67,8 @@ if (-not (Test-Path (Join-Path $projectRoot "dist\Scene Ripper\Scene Ripper.exe"
     Write-Host "Built executable missing from dist/Scene Ripper/" -ForegroundColor Red
     exit 1
 }
-if (-not (Test-Path (Join-Path $projectRoot "dist\Scene Ripper\mpv-2.dll"))) {
-    Write-Host "Bundled mpv-2.dll missing from dist/Scene Ripper/" -ForegroundColor Red
+if (-not (Get-ChildItem -Path (Join-Path $projectRoot "dist\Scene Ripper") -Include "mpv-2.dll","libmpv-2.dll","mpv-1.dll" -File -ErrorAction SilentlyContinue)) {
+    Write-Host "Bundled mpv runtime DLL missing from dist/Scene Ripper/" -ForegroundColor Red
     exit 1
 }
 

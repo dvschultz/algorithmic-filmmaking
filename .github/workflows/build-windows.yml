@@ -62,9 +62,9 @@ jobs:
 
           7z x "mpv.7z" "-otmp\\mpv" | Out-Null
 
-          $mpvDll = Get-ChildItem -Path "tmp/mpv" -Recurse -Filter "mpv-2.dll" | Select-Object -First 1
+          $mpvDll = Get-ChildItem -Path "tmp/mpv" -Recurse -Include "mpv-2.dll","libmpv-2.dll","mpv-1.dll" | Select-Object -First 1
           if (-not $mpvDll) {
-            throw "mpv-2.dll not found in extracted archive"
+            throw "No supported mpv runtime DLL found in extracted archive"
           }
 
           $dllDir = $mpvDll.Directory.FullName
@@ -72,8 +72,8 @@ jobs:
             Copy-Item $_.FullName -Destination $runtimeDir -Force
           }
 
-          if (-not (Test-Path "$runtimeDir/mpv-2.dll")) {
-            throw "Failed to stage mpv-2.dll"
+          if (-not (Get-ChildItem -Path $runtimeDir -Include "mpv-2.dll","libmpv-2.dll","mpv-1.dll" -File)) {
+            throw "Failed to stage an mpv runtime DLL"
           }
 
       - name: Install dependencies
@@ -90,8 +90,8 @@ jobs:
           if (-not (Test-Path "dist/Scene Ripper/Scene Ripper.exe")) {
             throw "PyInstaller executable missing"
           }
-          if (-not (Test-Path "dist/Scene Ripper/mpv-2.dll")) {
-            throw "Bundled mpv-2.dll missing from dist output"
+          if (-not (Get-ChildItem -Path "dist/Scene Ripper" -Include "mpv-2.dll","libmpv-2.dll","mpv-1.dll" -File)) {
+            throw "Bundled mpv runtime DLL missing from dist output"
           }
 
       - name: Build Inno Setup installer
