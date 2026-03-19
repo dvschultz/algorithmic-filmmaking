@@ -1,9 +1,12 @@
 """Data models for timeline sequences."""
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 import uuid
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -270,8 +273,7 @@ class Sequence:
                 resolved = (base_path / p).resolve()
                 music_path = str(resolved) if resolved.exists() else None
                 if not music_path:
-                    import logging
-                    logging.getLogger(__name__).warning(
+                    logger.warning(
                         "Music file not found: %s", base_path / p
                     )
 

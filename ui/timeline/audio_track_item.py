@@ -2,8 +2,8 @@
 
 import numpy as np
 
-from PySide6.QtWidgets import QGraphicsRectItem, QGraphicsItem
-from PySide6.QtCore import Qt, QRectF
+from PySide6.QtWidgets import QGraphicsRectItem, QGraphicsItem, QStyleOptionGraphicsItem
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor, QPen, QPainter, QPainterPath
 
 from ui.theme import theme
@@ -101,23 +101,31 @@ class AudioTrackItem(QGraphicsRectItem):
         if max_peak == 0:
             max_peak = 1.0
 
-        # Draw waveform
+        # Clip to visible portion for performance
+        exposed = option.exposedRect
+        start_x = max(0, int(exposed.left()))
+        end_x = min(len(peaks), int(exposed.right()) + 1)
+        if start_x >= end_x:
+            return
+
+        # Draw waveform (visible portion only)
         waveform_color = QColor(theme().accent_blue)
         waveform_color.setAlpha(140)
 
         top_path = QPainterPath()
         bottom_path = QPainterPath()
-        top_path.moveTo(0, mid_y)
-        bottom_path.moveTo(0, mid_y)
+        first_amp = (peaks[start_x] / max_peak) * (h * 0.4) if start_x < len(peaks) else 0
+        top_path.moveTo(start_x, mid_y - first_amp)
+        bottom_path.moveTo(start_x, mid_y + first_amp)
 
-        for i, peak in enumerate(peaks):
+        for i in range(start_x + 1, end_x):
             x = float(i)
-            amplitude = (peak / max_peak) * (h * 0.4)
+            amplitude = (peaks[i] / max_peak) * (h * 0.4)
             top_path.lineTo(x, mid_y - amplitude)
             bottom_path.lineTo(x, mid_y + amplitude)
 
-        top_path.lineTo(waveform_width, mid_y)
-        bottom_path.lineTo(waveform_width, mid_y)
+        top_path.lineTo(end_x - 1, mid_y)
+        bottom_path.lineTo(end_x - 1, mid_y)
 
         painter.setPen(Qt.NoPen)
         painter.setBrush(waveform_color)

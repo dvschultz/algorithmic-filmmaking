@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QLabel,
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QThread
 
 from models.sequence import Sequence, SequenceClip
 from models.clip import Clip, Source
@@ -15,6 +15,40 @@ from ui.timeline.timeline_scene import TimelineScene
 from ui.timeline.timeline_view import TimelineView
 from ui.timeline.playhead import Playhead
 from ui.theme import theme
+
+import logging
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+
+class _WaveformLoader(QThread):
+    """Background worker to load audio samples for timeline waveform display."""
+
+    waveform_ready = Signal(object, float)  # samples, duration
+
+    def __init__(self, path: Path, parent=None):
+        super().__init__(parent)
+        self._path = path
+        self._cancelled = False
+
+    def run(self):
+        try:
+            from core.analysis.audio import _get_librosa
+            librosa = _get_librosa()
+            if self._cancelled:
+                return
+            y, sr = librosa.load(str(self._path), sr=22050)
+            if self._cancelled:
+                return
+            duration = len(y) / sr
+            self.waveform_ready.emit(y, duration)
+        except Exception as e:
+            if not self._cancelled:
+                logger.error("Failed to load waveform: %s", e)
+
+    def cancel(self):
+        self._cancelled = True
 
 
 class TimelineWidget(QWidget):
@@ -305,42 +339,24 @@ class TimelineWidget(QWidget):
     def _load_audio_waveform_if_needed(self, sequence: Sequence):
         """Load audio waveform for sequences with a music track.
 
+        Cancels any running loader before starting a new one.
         Runs librosa.load in a background thread to avoid blocking the UI.
         """
-        import logging
-        logger = logging.getLogger(__name__)
+        # Cancel any existing loader
+        if hasattr(self, "_waveform_loader") and self._waveform_loader and self._waveform_loader.isRunning():
+            self._waveform_loader.cancel()
+            self._waveform_loader.wait(2000)
 
         music_path = getattr(sequence, "music_path", None)
         if not music_path:
             self.scene.clear_audio_waveform()
             return
 
-        from pathlib import Path
         p = Path(music_path)
         if not p.exists():
             logger.warning("Music file not found for waveform: %s", music_path)
             self.scene.clear_audio_waveform()
             return
-
-        # Load in background thread
-        from PySide6.QtCore import QThread, Signal
-
-        class _WaveformLoader(QThread):
-            waveform_ready = Signal(object, float)  # samples, duration
-
-            def __init__(self, path, parent=None):
-                super().__init__(parent)
-                self._path = path
-
-            def run(self):
-                try:
-                    from core.analysis.audio import _get_librosa
-                    librosa = _get_librosa()
-                    y, sr = librosa.load(str(self._path), sr=22050)
-                    duration = len(y) / sr
-                    self.waveform_ready.emit(y, duration)
-                except Exception as e:
-                    logger.error("Failed to load waveform: %s", e)
 
         self._waveform_loader = _WaveformLoader(p, parent=self)
         self._waveform_loader.waveform_ready.connect(self.scene.set_audio_waveform)

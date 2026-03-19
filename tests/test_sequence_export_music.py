@@ -67,8 +67,8 @@ def test_mux_audio_fallback_on_failure():
                 config=config,
             )
 
-        assert result is True  # Falls back gracefully
-        assert output.exists()  # Video copied without audio
+        assert result is False  # Indicates mux failure
+        assert output.exists()  # Video still copied as fallback
         assert output.read_bytes() == b"fake video data"
 
 

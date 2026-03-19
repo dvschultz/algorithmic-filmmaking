@@ -1,6 +1,7 @@
 """Export timeline sequences to video files."""
 
 import logging
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -460,21 +461,18 @@ class SequenceExporter:
             )
             if result.returncode != 0:
                 logger.error("Audio mux failed: %s", result.stderr[-500:] if result.stderr else "")
-                # Fall back: copy video without audio
-                import shutil
                 shutil.copy2(video_path, output_path)
                 logger.warning("Exported without music due to mux failure")
+                return False
             return True
         except subprocess.TimeoutExpired:
             logger.error("Audio mux timed out")
-            import shutil
             shutil.copy2(video_path, output_path)
-            return True
+            return False
         except Exception as e:
             logger.error("Audio mux error: %s", e)
-            import shutil
             shutil.copy2(video_path, output_path)
-            return True
+            return False
 
     def _concat_segments(
         self,
