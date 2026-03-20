@@ -16,6 +16,9 @@ block_cipher = None
 # Version from environment variable or default
 VERSION = os.environ.get("APP_VERSION", "0.2.0")
 PROJECT_ROOT = Path.cwd()
+VERSION_FILE = PROJECT_ROOT / "build" / "release-metadata" / "app_version.txt"
+VERSION_FILE.parent.mkdir(parents=True, exist_ok=True)
+VERSION_FILE.write_text(VERSION, encoding="utf-8")
 
 build_support_spec = importlib.util.spec_from_file_location(
     "scene_ripper_build_support",
@@ -31,6 +34,7 @@ a = Analysis(
     binaries=binaries,
     datas=[
         ("../../core/package_manifest.json", "core"),
+        (str(VERSION_FILE), "core"),
     ],
     hiddenimports=[
         # PySide6 modules actually used by the app

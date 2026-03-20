@@ -85,6 +85,8 @@ from ui.workers.export_worker import ExportBundleWorker
 from core.gui_state import GUIState
 from core.plan_controller import PlanController
 from core.intention_workflow import IntentionWorkflowCoordinator, WorkflowState
+from core.app_version import get_app_version
+from core.update_service import UpdateService
 
 # Set up logging
 logging.basicConfig(
@@ -476,15 +478,17 @@ class YouTubeSearchWorker(QThread):
     search_completed = Signal(object)  # YouTubeSearchResult (renamed from 'finished' to avoid shadowing QThread.finished)
     error = Signal(str)
 
-    def __init__(self, client: YouTubeSearchClient, query: str, max_results: int = 25):
+    def __init__(self, client: YouTubeSearchClient, query: str, max_results: int = 25, video_duration: str = "", video_definition: str = ""):
         super().__init__()
         self.client = client
         self.query = query
         self.max_results = max_results
+        self.video_duration = video_duration or None
+        self.video_definition = video_definition or None
 
     def run(self):
         try:
-            result = self.client.search(self.query, self.max_results)
+            result = self.client.search(self.query, self.max_results, video_duration=self.video_duration, video_definition=self.video_definition)
             self.search_completed.emit(result)
         except QuotaExceededError as e:
             self.error.emit(str(e))
@@ -794,6 +798,8 @@ class MainWindow(QMainWindow):
 
         # Launch update checker in background (frozen mode only)
         self._update_check_worker = None
+        self._manual_update_check = False
+        self._update_service = UpdateService(get_app_version(), self.settings)
         self._start_update_check()
 
         logger.info(f"=== MAINWINDOW INIT COMPLETE (instance #{self._instance_id}) ===")
@@ -1066,8 +1072,6 @@ class MainWindow(QMainWindow):
     def _show_update_banner(self, version: str, release_url: str):
         """Show an update-available banner at the top of the window."""
         from ui.widgets.dependency_widgets import UpdateBanner
-        from PySide6.QtGui import QDesktopServices
-        from PySide6.QtCore import QUrl
 
         if self._update_banner:
             self._update_banner.setVisible(False)
@@ -1089,23 +1093,84 @@ class MainWindow(QMainWindow):
             return
         if not self.settings.check_for_updates:
             return
+        self._launch_update_check(interactive=False)
 
-        import os
-        current_version = os.environ.get("APP_VERSION", "0.2.0")
+    def _launch_update_check(self, interactive: bool) -> None:
+        """Start an update check if one is not already running."""
+        if self._update_check_worker and self._update_check_worker.isRunning():
+            if interactive:
+                self.status_bar.showMessage("Already checking for updates...", 3000)
+            return
 
         from core.update_checker import UpdateCheckWorker
-        self._update_check_worker = UpdateCheckWorker(current_version, self.settings)
+
+        self._manual_update_check = interactive
+        self._update_service = UpdateService(get_app_version(), self.settings)
+        self._update_check_worker = UpdateCheckWorker(
+            get_app_version(),
+            self.settings,
+            interactive=interactive,
+        )
         self._update_check_worker.update_available.connect(self._show_update_banner)
+        if interactive:
+            self._update_check_worker.update_available.connect(self._on_manual_update_available)
+            self._update_check_worker.up_to_date.connect(self._on_manual_update_up_to_date)
+            self._update_check_worker.check_failed.connect(self._on_manual_update_failed)
+            self.status_bar.showMessage("Checking for updates...", 3000)
         self._update_check_worker.finished.connect(self._on_update_check_done)
+        if hasattr(self, "check_for_updates_action") and self.check_for_updates_action is not None:
+            self.check_for_updates_action.setEnabled(False)
         self._update_check_worker.start()
+
+    def _on_manual_check_for_updates(self) -> None:
+        """Run an explicit user-triggered update check."""
+        self._launch_update_check(interactive=True)
+
+    def _on_manual_update_available(self, version: str, release_url: str) -> None:
+        """Prompt the user to open the release page for a newer version."""
+        current_version = get_app_version()
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Information)
+        msg.setWindowTitle("Update Available")
+        msg.setText(f"Scene Ripper {version} is available.")
+        msg.setInformativeText(
+            f"You're currently running {current_version}. Open the release page to download the update?"
+        )
+        open_button = msg.addButton("Open Release Page", QMessageBox.AcceptRole)
+        skip_button = msg.addButton("Skip This Version", QMessageBox.ActionRole)
+        msg.addButton(QMessageBox.Cancel)
+        msg.exec()
+
+        if msg.clickedButton() == open_button:
+            QDesktopServices.openUrl(QUrl(release_url))
+        elif msg.clickedButton() == skip_button:
+            self._update_service.skip_version(version)
+            try:
+                save_settings(self.settings)
+            except Exception:
+                logger.debug("Failed to persist skipped update version", exc_info=True)
+
+    def _on_manual_update_up_to_date(self, version: str, _release_url: str) -> None:
+        """Notify the user when no newer release is available."""
+        QMessageBox.information(
+            self,
+            "You're Up to Date",
+            f"Scene Ripper {get_app_version()} is up to date.\nLatest release: {version}",
+        )
+
+    def _on_manual_update_failed(self, message: str) -> None:
+        """Report update check failures for manual checks."""
+        QMessageBox.warning(self, "Update Check Failed", message)
 
     def _on_update_check_done(self):
         """Save settings after update check (records last_update_check timestamp)."""
-        from core.settings import save_settings
         try:
             save_settings(self.settings)
         except Exception:
             pass  # Non-critical
+        if hasattr(self, "check_for_updates_action") and self.check_for_updates_action is not None:
+            self.check_for_updates_action.setEnabled(True)
+        self._manual_update_check = False
         self._update_check_worker = None
 
     def _on_tab_changed(self, index: int):
@@ -1276,6 +1341,12 @@ class MainWindow(QMainWindow):
 
         # Help menu
         help_menu = menu_bar.addMenu("&Help")
+
+        self.check_for_updates_action = QAction("Check for &Updates...", self)
+        self.check_for_updates_action.triggered.connect(self._on_manual_check_for_updates)
+        help_menu.addAction(self.check_for_updates_action)
+
+        help_menu.addSeparator()
 
         from core.update_checker import _GITHUB_OWNER, _GITHUB_REPO
         _docs_base = f"https://github.com/{_GITHUB_OWNER}/{_GITHUB_REPO}/blob/main/docs/user-guide"
@@ -3831,16 +3902,16 @@ class MainWindow(QMainWindow):
 
     # Video search handlers (YouTube and Internet Archive)
     @Slot(str, str)
-    def _on_video_search(self, source: str, query: str):
+    def _on_video_search(self, source: str, query: str, video_duration: str = "", video_definition: str = ""):
         """Route search request to appropriate handler based on source."""
         if source == "youtube":
-            self._on_youtube_search(query)
+            self._on_youtube_search(query, video_duration, video_definition)
         elif source == "internet_archive":
             self._on_internet_archive_search(query)
         else:
             logger.warning(f"Unknown search source: {source}")
 
-    def _on_youtube_search(self, query: str):
+    def _on_youtube_search(self, query: str, video_duration: str = "", video_definition: str = ""):
         """Handle YouTube search request."""
         if not self.settings.youtube_api_key:
             QMessageBox.warning(
@@ -3864,7 +3935,9 @@ class MainWindow(QMainWindow):
 
         # Run search in thread
         self.youtube_search_worker = YouTubeSearchWorker(
-            self.youtube_client, query, self.settings.youtube_results_count
+            self.youtube_client, query, self.settings.youtube_results_count,
+            video_duration=video_duration,
+            video_definition=video_definition,
         )
         self.youtube_search_worker.search_completed.connect(self._on_youtube_search_finished)
         self.youtube_search_worker.error.connect(self._on_youtube_search_error)

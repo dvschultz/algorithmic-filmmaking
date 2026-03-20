@@ -11,6 +11,7 @@ import logging
 import os
 import sys
 
+from core.app_version import get_app_version
 from core.paths import is_frozen, get_managed_packages_dir, get_log_dir, ensure_app_dirs
 
 
@@ -137,6 +138,7 @@ def main():
 
     app = QApplication(sys.argv)
     app.setApplicationName("Scene Ripper")
+    app.setApplicationVersion(get_app_version())
     app.setOrganizationName("Algorithmic Filmmaking")
 
     # Check for libmpv before creating the main window

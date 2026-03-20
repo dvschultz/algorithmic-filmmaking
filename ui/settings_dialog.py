@@ -61,6 +61,7 @@ from core.settings import (
     is_api_key_from_env,
 )
 from core.llm_client import get_provider_models
+from core.update_models import UpdateChannel
 from ui.theme import theme, UISizes
 
 logger = logging.getLogger(__name__)
@@ -240,6 +241,7 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.settings = settings
         self._paths_disabled = paths_disabled
+        self._pending_skipped_update_version = settings.skipped_update_version
         self.original_settings = Settings(
             thumbnail_cache_dir=settings.thumbnail_cache_dir,
             download_dir=settings.download_dir,
@@ -269,6 +271,11 @@ class SettingsDialog(QDialog):
             description_model_cloud=settings.description_model_cloud,
             description_temporal_frames=settings.description_temporal_frames,
             description_input_mode=settings.description_input_mode,
+            check_for_updates=settings.check_for_updates,
+            automatically_download_updates=settings.automatically_download_updates,
+            skipped_update_version=settings.skipped_update_version,
+            last_prompted_update_version=settings.last_prompted_update_version,
+            update_channel=settings.update_channel,
             text_extraction_method=settings.text_extraction_method,
             text_extraction_vlm_model=settings.text_extraction_vlm_model,
             exquisite_corpus_model=settings.exquisite_corpus_model,
@@ -1135,6 +1142,35 @@ class SettingsDialog(QDialog):
         self.check_updates_checkbox.setChecked(self.settings.check_for_updates)
         updates_layout.addWidget(self.check_updates_checkbox)
 
+        self.auto_download_updates_checkbox = QCheckBox("Automatically download updates when supported")
+        self.auto_download_updates_checkbox.setToolTip(
+            "Used by future native updater integrations. Has no effect for browser-based release checks."
+        )
+        self.auto_download_updates_checkbox.setChecked(self.settings.automatically_download_updates)
+        updates_layout.addWidget(self.auto_download_updates_checkbox)
+
+        channel_row = QHBoxLayout()
+        channel_row.addWidget(QLabel("Release channel:"))
+        self.update_channel_combo = QComboBox()
+        self.update_channel_combo.addItem("Stable", UpdateChannel.STABLE.value)
+        self.update_channel_combo.addItem("Beta", UpdateChannel.BETA.value)
+        channel_index = max(0, self.update_channel_combo.findData(self.settings.update_channel))
+        self.update_channel_combo.setCurrentIndex(channel_index)
+        self.update_channel_combo.setToolTip(
+            "Stable uses production releases. Beta is reserved for future pre-release update feeds."
+        )
+        channel_row.addWidget(self.update_channel_combo)
+        channel_row.addStretch()
+        updates_layout.addLayout(channel_row)
+
+        skipped_row = QHBoxLayout()
+        self.skipped_update_label = QLabel(self._format_skipped_update_label())
+        skipped_row.addWidget(self.skipped_update_label, stretch=1)
+        self.reset_skipped_update_btn = QPushButton("Reset Skipped Version")
+        self.reset_skipped_update_btn.clicked.connect(self._clear_skipped_update_version)
+        skipped_row.addWidget(self.reset_skipped_update_btn)
+        updates_layout.addLayout(skipped_row)
+
         layout.addWidget(updates_group)
 
         layout.addStretch()
@@ -1587,6 +1623,14 @@ class SettingsDialog(QDialog):
             theme_map.get(self.settings.theme_preference, 0)
         )
 
+        # Updates
+        self.check_updates_checkbox.setChecked(self.settings.check_for_updates)
+        self.auto_download_updates_checkbox.setChecked(self.settings.automatically_download_updates)
+        update_channel_index = max(0, self.update_channel_combo.findData(self.settings.update_channel))
+        self.update_channel_combo.setCurrentIndex(update_channel_index)
+        self._pending_skipped_update_version = self.settings.skipped_update_version
+        self.skipped_update_label.setText(self._format_skipped_update_label())
+
         # YouTube
         self.youtube_api_key_edit.setText(self.settings.youtube_api_key)
         self.youtube_results_spin.setValue(self.settings.youtube_results_count)
@@ -1727,6 +1771,9 @@ class SettingsDialog(QDialog):
 
         # Updates
         self.settings.check_for_updates = self.check_updates_checkbox.isChecked()
+        self.settings.automatically_download_updates = self.auto_download_updates_checkbox.isChecked()
+        self.settings.update_channel = self.update_channel_combo.currentData()
+        self.settings.skipped_update_version = self._pending_skipped_update_version
 
         # YouTube
         self.settings.youtube_api_key = self.youtube_api_key_edit.text()
@@ -1746,6 +1793,16 @@ class SettingsDialog(QDialog):
 
         # Update llm_model to match current provider's selection
         self.settings.llm_model = self.settings.get_model_for_provider(self.settings.llm_provider)
+
+    def _format_skipped_update_label(self) -> str:
+        """Return a user-facing label for the skipped update state."""
+        skipped_version = self._pending_skipped_update_version or "none"
+        return f"Skipped update version: {skipped_version}"
+
+    def _clear_skipped_update_version(self) -> None:
+        """Reset any skipped update version stored in settings."""
+        self._pending_skipped_update_version = ""
+        self.skipped_update_label.setText(self._format_skipped_update_label())
 
     def _validate(self) -> tuple[bool, str]:
         """Validate all settings. Returns (is_valid, error_message)."""
@@ -1838,6 +1895,7 @@ class SettingsDialog(QDialog):
         if reply == QMessageBox.Yes:
             defaults = get_default_settings()
             self.settings = defaults
+            self._pending_skipped_update_version = defaults.skipped_update_version
             self._load_settings()
 
     def _on_accept(self):
@@ -1890,6 +1948,10 @@ class SettingsDialog(QDialog):
             or self.settings.description_temporal_frames != self.original_settings.description_temporal_frames
             or self.settings.description_input_mode != self.original_settings.description_input_mode
             or self.settings.theme_preference != self.original_settings.theme_preference
+            or self.settings.check_for_updates != self.original_settings.check_for_updates
+            or self.settings.automatically_download_updates != self.original_settings.automatically_download_updates
+            or self.settings.update_channel != self.original_settings.update_channel
+            or self.settings.skipped_update_version != self.original_settings.skipped_update_version
             or self.settings.youtube_api_key != self.original_settings.youtube_api_key
             or self.settings.youtube_results_count != self.original_settings.youtube_results_count
             or self.settings.youtube_parallel_downloads != self.original_settings.youtube_parallel_downloads

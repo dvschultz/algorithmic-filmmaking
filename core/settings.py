@@ -407,6 +407,10 @@ class Settings:
 
     # Update checker
     check_for_updates: bool = True  # Check GitHub Releases on launch
+    automatically_download_updates: bool = False  # Used when native updaters are available
+    skipped_update_version: str = ""  # User-chosen skipped version
+    last_prompted_update_version: str = ""  # Last version shown to the user
+    update_channel: str = "stable"  # stable, beta
     last_update_check: int = 0  # Unix timestamp of last check
 
     # YouTube API
@@ -678,6 +682,14 @@ def _load_from_json(config_path: Path, settings: Settings) -> Settings:
     if updates := data.get("updates"):
         if "check_for_updates" in updates:
             settings.check_for_updates = bool(updates["check_for_updates"])
+        if "automatically_download_updates" in updates:
+            settings.automatically_download_updates = bool(updates["automatically_download_updates"])
+        if "skipped_update_version" in updates:
+            settings.skipped_update_version = str(updates["skipped_update_version"])
+        if "last_prompted_update_version" in updates:
+            settings.last_prompted_update_version = str(updates["last_prompted_update_version"])
+        if "update_channel" in updates:
+            settings.update_channel = str(updates["update_channel"])
         if "last_update_check" in updates:
             settings.last_update_check = int(updates["last_update_check"])
 
@@ -833,6 +845,10 @@ def _settings_to_json(settings: Settings) -> dict:
         },
         "updates": {
             "check_for_updates": settings.check_for_updates,
+            "automatically_download_updates": settings.automatically_download_updates,
+            "skipped_update_version": settings.skipped_update_version,
+            "last_prompted_update_version": settings.last_prompted_update_version,
+            "update_channel": settings.update_channel,
             "last_update_check": settings.last_update_check,
         },
         "youtube": {

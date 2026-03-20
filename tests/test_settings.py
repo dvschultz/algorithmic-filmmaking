@@ -59,6 +59,15 @@ class TestSettingsDefaults:
         settings = Settings()
         assert settings.theme_preference == "system"
 
+    def test_default_update_settings(self):
+        """Update settings should have stable defaults for future native updater support."""
+        settings = Settings()
+        assert settings.check_for_updates is True
+        assert settings.automatically_download_updates is False
+        assert settings.skipped_update_version == ""
+        assert settings.last_prompted_update_version == ""
+        assert settings.update_channel == "stable"
+
     def test_get_default_settings(self):
         """Test get_default_settings factory function."""
         settings = get_default_settings()
