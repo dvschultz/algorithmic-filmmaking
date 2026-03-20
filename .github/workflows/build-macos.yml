@@ -113,18 +113,86 @@ jobs:
           # Clean up
           rm certificate.p12
 
+      - name: Fix framework structures for signing
+        if: env.CODESIGN_IDENTITY != ''
+        env:
+          CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
+        run: |
+          APP_PATH="dist/Scene Ripper.app"
+          FRAMEWORKS_DIR="$APP_PATH/Contents/Frameworks"
+
+          # Fix Python.framework — PyInstaller creates an invalid versioned layout
+          PYTHON_FW="$FRAMEWORKS_DIR/Python.framework"
+          if [ -d "$PYTHON_FW/Versions" ]; then
+            echo "Fixing Python.framework structure..."
+            PYTHON_BIN=$(find "$PYTHON_FW/Versions" -name "Python" -type f | head -1)
+            if [ -n "$PYTHON_BIN" ]; then
+              cp "$PYTHON_BIN" "$PYTHON_FW/Python.tmp"
+            fi
+            rm -rf "$PYTHON_FW/Versions"
+            rm -f "$PYTHON_FW/Python"
+            if [ -f "$PYTHON_FW/Python.tmp" ]; then
+              mv "$PYTHON_FW/Python.tmp" "$PYTHON_FW/Python"
+            fi
+            rm -f "$PYTHON_FW/Resources"
+            echo "Python.framework flattened"
+          fi
+
+          # Fix Qt .framework bundles with broken version structures
+          for fw in "$FRAMEWORKS_DIR"/PySide6/Qt/lib/*.framework; do
+            [ -d "$fw/Versions" ] || continue
+            FWNAME=$(basename "$fw" .framework)
+            FW_BIN=$(find "$fw/Versions" -name "$FWNAME" -type f | head -1)
+            if [ -n "$FW_BIN" ]; then
+              cp "$FW_BIN" "$fw/$FWNAME.tmp"
+            fi
+            rm -rf "$fw/Versions"
+            rm -f "$fw/$FWNAME"
+            if [ -f "$fw/$FWNAME.tmp" ]; then
+              mv "$fw/$FWNAME.tmp" "$fw/$FWNAME"
+            fi
+            rm -f "$fw/Resources"
+          done
+          echo "Framework structures fixed"
+
       - name: Code sign .app
         if: env.CODESIGN_IDENTITY != ''
         env:
           CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
         run: |
-          codesign --force --deep --options runtime \
-            --entitlements packaging/macos/entitlements.plist \
+          APP_PATH="dist/Scene Ripper.app"
+          ENTITLEMENTS="packaging/macos/entitlements.plist"
+
+          # Sign all .so files
+          find "$APP_PATH" -name "*.so" -exec \
+            codesign --force --options runtime --sign "$CODESIGN_IDENTITY" {} \;
+
+          # Sign all .dylib files
+          find "$APP_PATH" -name "*.dylib" -exec \
+            codesign --force --options runtime --sign "$CODESIGN_IDENTITY" {} \;
+
+          # Sign framework bundles
+          find "$APP_PATH" -name "*.framework" -type d | while read fw; do
+            FWNAME=$(basename "$fw" .framework)
+            if [ -f "$fw/$FWNAME" ]; then
+              codesign --force --options runtime --sign "$CODESIGN_IDENTITY" "$fw"
+            fi
+          done
+
+          # Sign the main executable with entitlements
+          codesign --force --options runtime \
+            --entitlements "$ENTITLEMENTS" \
             --sign "$CODESIGN_IDENTITY" \
-            "dist/Scene Ripper.app"
+            "$APP_PATH/Contents/MacOS/Scene Ripper"
+
+          # Sign the top-level .app bundle
+          codesign --force --options runtime \
+            --entitlements "$ENTITLEMENTS" \
+            --sign "$CODESIGN_IDENTITY" \
+            "$APP_PATH"
 
           echo "Verifying signature..."
-          codesign --verify --deep --strict --verbose=2 "dist/Scene Ripper.app"
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
       # ---------------------------------------------------------------
       # Create DMG
