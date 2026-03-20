@@ -46,12 +46,10 @@ def test_collect_macos_sparkle_datas_preserves_relative_layout(tmp_path):
 
     collected = collect_macos_sparkle_datas(tmp_path)
 
-    assert collected == [
-        (
-            str(sparkle_cli),
-            "Sparkle.framework/Versions/B/Resources/bin",
-        )
-    ]
+    assert len(collected) == 1
+    source, destination = collected[0]
+    assert source == str(sparkle_cli)
+    assert destination.replace("\\", "/") == "Sparkle.framework/Versions/B/Resources/bin"
 
 
 def test_collect_windows_winsparkle_binaries_returns_empty_when_not_staged(tmp_path):

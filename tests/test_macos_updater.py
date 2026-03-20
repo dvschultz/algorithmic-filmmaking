@@ -17,7 +17,8 @@ from core.macos_updater import (
 
 def test_get_bundle_path_finds_enclosing_app():
     """Executable paths inside a bundle should resolve to the enclosing .app."""
-    bundle = get_bundle_path("/Applications/Scene Ripper.app/Contents/MacOS/Scene Ripper")
+    with patch("core.macos_updater.sys.platform", "darwin"):
+        bundle = get_bundle_path("/Applications/Scene Ripper.app/Contents/MacOS/Scene Ripper")
     assert bundle == Path("/Applications/Scene Ripper.app")
 
 
