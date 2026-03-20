@@ -16,6 +16,7 @@ _DEFAULT_VERSION = "0.0.0"
 _VERSION_RESOURCE = "core/app_version.txt"
 _BUILD_VERSION_RESOURCE = "core/app_build_version.txt"
 _UPDATE_CHANNEL_ENV = "APP_UPDATE_CHANNEL"
+_UPDATE_CHANNEL_RESOURCE = "core/app_update_channel.txt"
 
 
 def get_app_version() -> str:
@@ -66,7 +67,22 @@ def get_machine_version() -> str:
 
 def get_release_channel() -> str:
     """Return the configured update channel for the running build."""
-    return os.environ.get(_UPDATE_CHANNEL_ENV, "stable").strip() or "stable"
+    if env_channel := os.environ.get(_UPDATE_CHANNEL_ENV, "").strip():
+        return env_channel
+
+    try:
+        path = get_resource_path(_UPDATE_CHANNEL_RESOURCE)
+    except Exception as exc:
+        logger.debug("Could not resolve bundled update channel resource: %s", exc)
+        path = None
+
+    if path and path.exists():
+        try:
+            return path.read_text(encoding="utf-8").strip() or "stable"
+        except Exception as exc:
+            logger.debug("Could not read bundled update channel resource %s: %s", path, exc)
+
+    return "stable"
 
 
 def _version_from_env() -> str:

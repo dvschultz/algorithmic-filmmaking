@@ -85,7 +85,7 @@ from ui.workers.export_worker import ExportBundleWorker
 from core.gui_state import GUIState
 from core.plan_controller import PlanController
 from core.intention_workflow import IntentionWorkflowCoordinator, WorkflowState
-from core.app_version import get_app_version
+from core.app_version import get_app_version, get_release_channel
 from core.update_service import UpdateService
 
 # Set up logging
@@ -1124,6 +1124,24 @@ class MainWindow(QMainWindow):
 
     def _on_manual_check_for_updates(self) -> None:
         """Run an explicit user-triggered update check."""
+        if sys.platform == "darwin":
+            from core.paths import is_frozen
+            from core.macos_updater import start_interactive_update_check
+
+            native_status = start_interactive_update_check(
+                update_channel=getattr(self.settings, "update_channel", get_release_channel()),
+            )
+            if native_status.launched:
+                self.status_bar.showMessage("Checking for updates...", 3000)
+                return
+
+            if is_frozen() and native_status.reason:
+                QMessageBox.information(
+                    self,
+                    "Native Updates Unavailable",
+                    f"{native_status.reason}\n\nFalling back to browser-based update checks.",
+                )
+
         self._launch_update_check(interactive=True)
 
     def _on_manual_update_available(self, version: str, release_url: str) -> None:

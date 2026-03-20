@@ -15,10 +15,18 @@ block_cipher = None
 
 # Version from environment variable or default
 VERSION = os.environ.get("APP_VERSION", "0.2.0")
+BUILD_VERSION = os.environ.get("APP_BUILD_VERSION", VERSION)
+UPDATE_CHANNEL = os.environ.get("APP_UPDATE_CHANNEL", "stable")
+SPARKLE_FEED_URL = os.environ.get("SPARKLE_FEED_URL", "")
+SPARKLE_PUBLIC_ED_KEY = os.environ.get("SPARKLE_PUBLIC_ED_KEY", "")
 PROJECT_ROOT = Path.cwd()
 VERSION_FILE = PROJECT_ROOT / "build" / "release-metadata" / "app_version.txt"
+BUILD_VERSION_FILE = PROJECT_ROOT / "build" / "release-metadata" / "app_build_version.txt"
+UPDATE_CHANNEL_FILE = PROJECT_ROOT / "build" / "release-metadata" / "app_update_channel.txt"
 VERSION_FILE.parent.mkdir(parents=True, exist_ok=True)
 VERSION_FILE.write_text(VERSION, encoding="utf-8")
+BUILD_VERSION_FILE.write_text(BUILD_VERSION, encoding="utf-8")
+UPDATE_CHANNEL_FILE.write_text(UPDATE_CHANNEL, encoding="utf-8")
 
 build_support_spec = importlib.util.spec_from_file_location(
     "scene_ripper_build_support",
@@ -35,6 +43,8 @@ a = Analysis(
     datas=[
         ("../../core/package_manifest.json", "core"),
         (str(VERSION_FILE), "core"),
+        (str(BUILD_VERSION_FILE), "core"),
+        (str(UPDATE_CHANNEL_FILE), "core"),
     ],
     hiddenimports=[
         # PySide6 modules actually used by the app
@@ -153,21 +163,28 @@ coll = COLLECT(
     name="Scene Ripper",
 )
 
+info_plist = {
+    "CFBundleDisplayName": "Scene Ripper",
+    "CFBundleShortVersionString": VERSION,
+    "CFBundleVersion": BUILD_VERSION,
+    "NSHighResolutionCapable": True,
+    "LSMinimumSystemVersion": "13.0",
+    "NSHumanReadableCopyright": "Copyright 2024-2026 Algorithmic Filmmaking",
+    # Permissions descriptions
+    "NSAppleEventsUsageDescription": "Scene Ripper needs automation access.",
+    # Dark mode support
+    "NSRequiresAquaSystemAppearance": False,
+}
+
+if SPARKLE_FEED_URL:
+    info_plist["SUFeedURL"] = SPARKLE_FEED_URL
+if SPARKLE_PUBLIC_ED_KEY:
+    info_plist["SUPublicEDKey"] = SPARKLE_PUBLIC_ED_KEY
+
 app = BUNDLE(
     coll,
     name="Scene Ripper.app",
     icon="../../assets/icon.icns",
     bundle_identifier="com.algorithmic-filmmaking.scene-ripper",
-    info_plist={
-        "CFBundleDisplayName": "Scene Ripper",
-        "CFBundleShortVersionString": VERSION,
-        "CFBundleVersion": VERSION,
-        "NSHighResolutionCapable": True,
-        "LSMinimumSystemVersion": "13.0",
-        "NSHumanReadableCopyright": "Copyright 2024-2026 Algorithmic Filmmaking",
-        # Permissions descriptions
-        "NSAppleEventsUsageDescription": "Scene Ripper needs automation access.",
-        # Dark mode support
-        "NSRequiresAquaSystemAppearance": False,
-    },
+    info_plist=info_plist,
 )

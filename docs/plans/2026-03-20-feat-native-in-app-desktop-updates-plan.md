@@ -289,9 +289,8 @@ Add native macOS update installation on top of the signed appcast feed.
 
 **Files**
 
-- `platform/macos_updater.py`
+- `core/macos_updater.py`
 - `ui/main_window.py`
-- `main.py`
 - `packaging/macos/scene_ripper.spec`
 - `.github/workflows/build-macos.yml`
 
@@ -316,7 +315,7 @@ Add native macOS update installation on top of the signed appcast feed.
 - [ ] Installed notarized macOS builds can perform a manual Sparkle update check.
 - [ ] Background checks surface native update UI for newer versions.
 - [ ] App updates do not break bundle signing/notarization.
-- [ ] Running-from-DMG/translocated states degrade gracefully.
+- [x] Running-from-DMG/translocated states degrade gracefully.
 
 ### Phase 4: Windows WinSparkle Integration
 
