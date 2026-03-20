@@ -21,6 +21,8 @@ Scene Ripper analyzes video files to detect scene boundaries, enriches clips wit
 
 ## Installation
 
+Release process for maintainers: [docs/releases.md](docs/releases.md)
+
 ### Linux
 
 **Option 1: AppImage (Recommended)**
