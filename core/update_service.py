@@ -130,6 +130,26 @@ class UpdateService:
         if self._settings is not None:
             self._settings.last_update_check = int(time.time())
 
+    def record_result(self, result: UpdateCheckResult) -> None:
+        """Persist the latest update check outcome for diagnostics."""
+        if self._settings is None:
+            return
+
+        self._settings.last_update_check = int(time.time())
+        self._settings.last_update_status = result.availability.value
+        self._settings.last_update_version = result.update.version if result.update is not None else ""
+        self._settings.last_update_error = result.error_message or ""
+
+    def record_native_check_started(self) -> None:
+        """Persist that a native updater UI was launched."""
+        if self._settings is None:
+            return
+
+        self._settings.last_update_check = int(time.time())
+        self._settings.last_update_status = "native_check_started"
+        self._settings.last_update_version = ""
+        self._settings.last_update_error = ""
+
     def is_skipped_version(self, version: str) -> bool:
         """Return True when the provided version is currently skipped."""
         if self._settings is None:

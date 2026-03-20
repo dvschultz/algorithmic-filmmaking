@@ -2,7 +2,7 @@
 
 from core.settings import Settings
 from core.update_models import UpdateAvailability, UpdateChannel, UpdateInfo
-from core.update_service import UpdateService
+from core.update_service import UpdateCheckResult, UpdateService
 
 
 class StubProvider:
@@ -63,3 +63,32 @@ def test_update_service_skip_version_persists_normalized_value():
 
     assert settings.skipped_update_version == "0.1.2"
     assert settings.last_prompted_update_version == "0.1.2"
+
+
+def test_update_service_records_last_result_metadata():
+    """Completed checks should persist status, version, and error details."""
+    settings = Settings()
+    service = UpdateService("0.1.0", settings, provider=StubProvider(None))
+
+    service.record_result(
+        UpdateCheckResult(
+            availability=UpdateAvailability.UPDATE_AVAILABLE,
+            update=UpdateInfo("0.1.1", "https://example.com", "v0.1.1"),
+        )
+    )
+
+    assert settings.last_update_status == UpdateAvailability.UPDATE_AVAILABLE.value
+    assert settings.last_update_version == "0.1.1"
+    assert settings.last_update_error == ""
+
+
+def test_update_service_records_native_check_started():
+    """Native updater launches should be visible in diagnostics."""
+    settings = Settings()
+    service = UpdateService("0.1.0", settings, provider=StubProvider(None))
+
+    service.record_native_check_started()
+
+    assert settings.last_update_status == "native_check_started"
+    assert settings.last_update_version == ""
+    assert settings.last_update_error == ""

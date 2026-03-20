@@ -383,9 +383,9 @@ Move update behavior from ad hoc dialogs into a clear update subsystem visible t
 
 **Success Criteria**
 
-- [ ] Users can understand whether updates are native, informational, or disabled.
+- [x] Users can understand whether updates are native, informational, or disabled.
 - [ ] "Skip this version" and "Remind me later" are persisted.
-- [ ] Support/debugging can inspect the last update outcome from app logs/settings.
+- [x] Support/debugging can inspect the last update outcome from app logs/settings.
 
 ### Phase 6: Release Validation and Rollout Policy
 

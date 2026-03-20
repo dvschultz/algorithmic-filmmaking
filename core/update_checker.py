@@ -48,6 +48,7 @@ class UpdateCheckWorker(QThread):
 
             result = self._service.get_latest_release(interactive=self._interactive)
             if result.availability is UpdateAvailability.ERROR:
+                self._service.record_result(result)
                 if self._interactive:
                     self.check_failed.emit(result.error_message or "Update check failed.")
                 return
@@ -74,10 +75,16 @@ class UpdateCheckWorker(QThread):
             elif result.availability is UpdateAvailability.SKIPPED:
                 logger.debug("Skipping suppressed update banner for version %s", result.update.version)
 
-            self._service.record_check_completed()
+            self._service.record_result(result)
 
         except Exception as e:
             # Never crash from a failed update check
             logger.debug(f"Update check failed: {e}")
+            self._service.record_result(
+                UpdateCheckResult(
+                    availability=UpdateAvailability.ERROR,
+                    error_message=str(e),
+                )
+            )
             if self._interactive:
                 self.check_failed.emit(str(e))

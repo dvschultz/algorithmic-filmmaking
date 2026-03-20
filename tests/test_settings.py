@@ -67,6 +67,9 @@ class TestSettingsDefaults:
         assert settings.skipped_update_version == ""
         assert settings.last_prompted_update_version == ""
         assert settings.update_channel == "stable"
+        assert settings.last_update_status == "never_checked"
+        assert settings.last_update_version == ""
+        assert settings.last_update_error == ""
 
     def test_get_default_settings(self):
         """Test get_default_settings factory function."""
@@ -326,6 +329,8 @@ class TestJSONSettings:
                         settings.default_sensitivity = 8.5
                         settings.export_quality = "high"
                         settings.transcription_model = "medium.en"
+                        settings.last_update_status = "update_available"
+                        settings.last_update_version = "0.1.1"
 
                         assert save_settings(settings) is True
                         assert config_path.exists()
@@ -335,6 +340,8 @@ class TestJSONSettings:
                         assert loaded.default_sensitivity == 8.5
                         assert loaded.export_quality == "high"
                         assert loaded.transcription_model == "medium.en"
+                        assert loaded.last_update_status == "update_available"
+                        assert loaded.last_update_version == "0.1.1"
 
     def test_json_schema_structure(self):
         """Test saved JSON has expected structure."""

@@ -1133,6 +1133,11 @@ class MainWindow(QMainWindow):
                 update_channel=getattr(self.settings, "update_channel", get_release_channel()),
             )
             if native_status.launched:
+                self._update_service.record_native_check_started()
+                try:
+                    save_settings(self.settings)
+                except Exception:
+                    logger.debug("Failed to persist native update launch state", exc_info=True)
                 self.status_bar.showMessage("Checking for updates...", 3000)
                 return
 
@@ -1151,6 +1156,11 @@ class MainWindow(QMainWindow):
                 automatically_check=bool(getattr(self.settings, "check_for_updates", True)),
             )
             if native_status.launched:
+                self._update_service.record_native_check_started()
+                try:
+                    save_settings(self.settings)
+                except Exception:
+                    logger.debug("Failed to persist native update launch state", exc_info=True)
                 self.status_bar.showMessage("Checking for updates...", 3000)
                 return
 

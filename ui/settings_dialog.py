@@ -1,6 +1,8 @@
 """Settings dialog with tabbed interface."""
 
+from datetime import datetime
 import logging
+import sys
 from pathlib import Path
 
 from PySide6.QtWidgets import (
@@ -276,6 +278,10 @@ class SettingsDialog(QDialog):
             skipped_update_version=settings.skipped_update_version,
             last_prompted_update_version=settings.last_prompted_update_version,
             update_channel=settings.update_channel,
+            last_update_check=settings.last_update_check,
+            last_update_status=settings.last_update_status,
+            last_update_version=settings.last_update_version,
+            last_update_error=settings.last_update_error,
             text_extraction_method=settings.text_extraction_method,
             text_extraction_vlm_model=settings.text_extraction_vlm_model,
             exquisite_corpus_model=settings.exquisite_corpus_model,
@@ -1171,6 +1177,17 @@ class SettingsDialog(QDialog):
         skipped_row.addWidget(self.reset_skipped_update_btn)
         updates_layout.addLayout(skipped_row)
 
+        diagnostics_group = QGroupBox("Diagnostics")
+        diagnostics_layout = QVBoxLayout(diagnostics_group)
+        self.update_mode_label = QLabel()
+        self.last_update_check_label = QLabel()
+        self.last_update_result_label = QLabel()
+        diagnostics_layout.addWidget(self.update_mode_label)
+        diagnostics_layout.addWidget(self.last_update_check_label)
+        diagnostics_layout.addWidget(self.last_update_result_label)
+        updates_layout.addWidget(diagnostics_group)
+        self._refresh_update_diagnostics()
+
         layout.addWidget(updates_group)
 
         layout.addStretch()
@@ -1630,6 +1647,7 @@ class SettingsDialog(QDialog):
         self.update_channel_combo.setCurrentIndex(update_channel_index)
         self._pending_skipped_update_version = self.settings.skipped_update_version
         self.skipped_update_label.setText(self._format_skipped_update_label())
+        self._refresh_update_diagnostics()
 
         # YouTube
         self.youtube_api_key_edit.setText(self.settings.youtube_api_key)
@@ -1803,6 +1821,69 @@ class SettingsDialog(QDialog):
         """Reset any skipped update version stored in settings."""
         self._pending_skipped_update_version = ""
         self.skipped_update_label.setText(self._format_skipped_update_label())
+
+    def _refresh_update_diagnostics(self) -> None:
+        """Refresh read-only update diagnostics shown in the dialog."""
+        self.update_mode_label.setText(f"Update mode: {self._format_update_mode_label()}")
+        self.last_update_check_label.setText(
+            f"Last check: {self._format_last_update_check_label()}"
+        )
+        self.last_update_result_label.setText(
+            f"Last result: {self._format_last_update_result_label()}"
+        )
+
+    def _format_update_mode_label(self) -> str:
+        """Describe how this build currently handles updates."""
+        from core.paths import is_frozen
+
+        if not is_frozen():
+            return "Browser fallback (development build)"
+
+        if sys.platform == "darwin":
+            from core.macos_updater import get_status
+
+            status = get_status()
+            if status.available:
+                return "Native macOS updates (Sparkle)"
+            return f"Browser fallback ({status.reason})"
+
+        if sys.platform == "win32":
+            from core.windows_updater import get_status
+
+            status = get_status(update_channel=self.settings.update_channel)
+            if status.available:
+                return "Native Windows updates (WinSparkle)"
+            return f"Browser fallback ({status.reason})"
+
+        return "Browser fallback (unsupported platform)"
+
+    def _format_last_update_check_label(self) -> str:
+        """Format the last update check timestamp."""
+        last_check = getattr(self.settings, "last_update_check", 0) or 0
+        if last_check <= 0:
+            return "never"
+        return datetime.fromtimestamp(last_check).strftime("%Y-%m-%d %H:%M:%S")
+
+    def _format_last_update_result_label(self) -> str:
+        """Format the last recorded update outcome."""
+        status = getattr(self.settings, "last_update_status", "never_checked") or "never_checked"
+        version = getattr(self.settings, "last_update_version", "") or ""
+        error_message = getattr(self.settings, "last_update_error", "") or ""
+
+        if status == "never_checked":
+            return "never checked"
+        if status == "native_check_started":
+            return "native updater launched"
+        if status == "up_to_date":
+            return f"up to date ({version})" if version else "up to date"
+        if status == "update_available":
+            return f"update available ({version})" if version else "update available"
+        if status == "skipped":
+            return f"skipped ({version})" if version else "skipped"
+        if status == "error":
+            return f"failed ({error_message})" if error_message else "failed"
+
+        return status.replace("_", " ")
 
     def _validate(self) -> tuple[bool, str]:
         """Validate all settings. Returns (is_valid, error_message)."""
