@@ -323,9 +323,8 @@ Add native Windows update checks and installer handoff.
 
 **Files**
 
-- `platform/windows_updater.py`
+- `core/windows_updater.py`
 - `ui/main_window.py`
-- `main.py`
 - `packaging/windows/scene_ripper.spec`
 - `.github/workflows/build-windows.yml`
 

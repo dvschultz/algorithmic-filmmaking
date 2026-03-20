@@ -1124,12 +1124,31 @@ class MainWindow(QMainWindow):
 
     def _on_manual_check_for_updates(self) -> None:
         """Run an explicit user-triggered update check."""
+        from core.paths import is_frozen
+
         if sys.platform == "darwin":
-            from core.paths import is_frozen
             from core.macos_updater import start_interactive_update_check
 
             native_status = start_interactive_update_check(
                 update_channel=getattr(self.settings, "update_channel", get_release_channel()),
+            )
+            if native_status.launched:
+                self.status_bar.showMessage("Checking for updates...", 3000)
+                return
+
+            if is_frozen() and native_status.reason:
+                QMessageBox.information(
+                    self,
+                    "Native Updates Unavailable",
+                    f"{native_status.reason}\n\nFalling back to browser-based update checks.",
+                )
+
+        if sys.platform == "win32":
+            from core.windows_updater import start_interactive_update_check
+
+            native_status = start_interactive_update_check(
+                update_channel=getattr(self.settings, "update_channel", get_release_channel()),
+                automatically_check=bool(getattr(self.settings, "check_for_updates", True)),
             )
             if native_status.launched:
                 self.status_bar.showMessage("Checking for updates...", 3000)
@@ -8301,5 +8320,10 @@ class MainWindow(QMainWindow):
                         worker.terminate()
                         worker.wait(1000)
                     logger.info(f"{name} worker stopped")
+
+        if sys.platform == "win32":
+            from core.windows_updater import shutdown as shutdown_windows_updater
+
+            shutdown_windows_updater()
 
         event.accept()
