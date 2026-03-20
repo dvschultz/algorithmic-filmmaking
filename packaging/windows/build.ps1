@@ -67,7 +67,7 @@ if (-not (Test-Path (Join-Path $projectRoot "dist\Scene Ripper\Scene Ripper.exe"
     Write-Host "Built executable missing from dist/Scene Ripper/" -ForegroundColor Red
     exit 1
 }
-$bundledMpvDll = Get-ChildItem -Path (Join-Path $projectRoot "dist\Scene Ripper") -File -ErrorAction SilentlyContinue | Where-Object {
+$bundledMpvDll = Get-ChildItem -Path (Join-Path $projectRoot "dist\Scene Ripper") -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
     $_.Name -in @("mpv-2.dll","libmpv-2.dll","mpv-1.dll")
 } | Select-Object -First 1
 if (-not $bundledMpvDll) {
