@@ -259,13 +259,70 @@ jobs:
           APP_VERSION: ${{ steps.version.outputs.version }}
         run: |
           DMG_NAME="Scene-Ripper-${APP_VERSION}-arm64.dmg"
+          RESULT_JSON="$(mktemp)"
           xcrun notarytool store-credentials "AC_PASSWORD" \
             --apple-id "$APPLE_ID" \
             --team-id "$APPLE_TEAM_ID" \
             --password "$APPLE_APP_PASSWORD"
+
+          set +e
           xcrun notarytool submit "dist/${DMG_NAME}" \
             --keychain-profile "AC_PASSWORD" \
-            --wait
+            --wait \
+            --output-format json > "$RESULT_JSON"
+          SUBMIT_EXIT_CODE=$?
+          set -e
+
+          SUBMISSION_ID="$(RESULT_JSON_PATH="$RESULT_JSON" python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["RESULT_JSON_PATH"])
+          if not path.exists() or path.stat().st_size == 0:
+              print("")
+              raise SystemExit(0)
+
+          try:
+              data = json.loads(path.read_text(encoding="utf-8"))
+          except json.JSONDecodeError:
+              print("")
+              raise SystemExit(0)
+
+          print(data.get("id", ""))
+          PY
+          )"
+          STATUS="$(RESULT_JSON_PATH="$RESULT_JSON" python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["RESULT_JSON_PATH"])
+          if not path.exists() or path.stat().st_size == 0:
+              print("")
+              raise SystemExit(0)
+
+          try:
+              data = json.loads(path.read_text(encoding="utf-8"))
+          except json.JSONDecodeError:
+              print("")
+              raise SystemExit(0)
+
+          print(data.get("status", ""))
+          PY
+          )"
+
+          if [ -n "$SUBMISSION_ID" ] && [ "$STATUS" != "Accepted" ]; then
+            echo "Apple notarization failed with status: ${STATUS:-unknown}"
+            echo "Fetching notarization log for submission ${SUBMISSION_ID}..."
+            xcrun notarytool log "$SUBMISSION_ID" --keychain-profile "AC_PASSWORD" || true
+          fi
+
+          if [ "$SUBMIT_EXIT_CODE" -ne 0 ] || [ "$STATUS" != "Accepted" ]; then
+            echo "ERROR: Apple notarization did not succeed"
+            exit 1
+          fi
+
           xcrun stapler staple "dist/${DMG_NAME}"
 
       - name: Upload .app artifact
