@@ -144,3 +144,44 @@ jobs:
             gh release create "${RELEASE_TAG}" --title "${RELEASE_TAG}" --notes ""
 
           gh release upload "${RELEASE_TAG}" packaging/windows/Output/*.exe --clobber
+
+      - name: Generate update feed artifact
+        shell: bash
+        env:
+          APP_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          INSTALLER_NAME="SceneRipper-Setup-${APP_VERSION}.exe"
+          RELEASE_TAG="${GITHUB_REF_NAME}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            RELEASE_TAG="v${APP_VERSION}"
+          fi
+
+          RELEASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}"
+          ASSET_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${INSTALLER_NAME}"
+          ASSET_PATH="packaging/windows/Output/${INSTALLER_NAME}"
+          ASSET_SIZE="$(python - <<'PY'
+from pathlib import Path
+print(Path("packaging/windows/Output").glob("*.exe").__iter__().__next__().stat().st_size)
+PY
+)"
+          FEED_DIR="dist/update-feed/windows"
+
+          python packaging/release/generate_appcast.py \
+            --platform windows \
+            --version "${APP_VERSION}" \
+            --build-version "${APP_VERSION}" \
+            --release-tag "${RELEASE_TAG}" \
+            --release-url "${RELEASE_URL}" \
+            --enclosure-url "${ASSET_URL}" \
+            --enclosure-length "${ASSET_SIZE}" \
+            --output "${FEED_DIR}/appcast-windows.xml" \
+            --notes-output "${FEED_DIR}/release-notes-windows.html"
+
+          python packaging/release/verify_update_feed.py "${FEED_DIR}/appcast-windows.xml"
+
+      - name: Upload update feed artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SceneRipper-Windows-Appcast
+          path: dist/update-feed/windows
+          if-no-files-found: error

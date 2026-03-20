@@ -30,6 +30,13 @@ gh release view v0.1.1
 
 The release workflows upload both assets to the GitHub release for the matching tag.
 
+They also generate per-platform update-feed artifacts in workflow artifacts:
+
+- macOS: `Scene-Ripper-macOS-Appcast`
+- Windows: `SceneRipper-Windows-Appcast`
+
+These appcast artifacts are foundation for future native in-app updates. They are generated and verified in CI, but they are not published to a stable public feed URL yet.
+
 ## Workflow Files
 
 - [build-macos.yml](../.github/workflows/build-macos.yml)
