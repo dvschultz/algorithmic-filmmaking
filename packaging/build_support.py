@@ -189,9 +189,24 @@ def _collect_runtime_files(root_dir: Path) -> list[tuple[str, str]]:
 
 
 def collect_macos_sparkle_datas(project_root: Path) -> list[tuple[str, str]]:
-    """Collect staged macOS Sparkle runtime assets for PyInstaller if present."""
+    """Collect the Sparkle framework for app bundling if a runtime is staged.
+
+    The staged runtime directory may also contain helper apps and standalone CLI tools
+    used by CI for signing and feed generation. Those should not be bundled into the
+    shipped app because PyInstaller attempts to re-sign them as independent bundles.
+    """
     runtime_dir = find_macos_sparkle_runtime_dir(project_root)
     if runtime_dir is None:
         return []
 
-    return _collect_runtime_files(runtime_dir)
+    framework_dir = runtime_dir / "Sparkle.framework"
+    if not framework_dir.is_dir():
+        return []
+
+    collected = []
+    for source_path, destination in _collect_runtime_files(framework_dir):
+        target = Path("Sparkle.framework")
+        if destination != ".":
+            target = target / destination
+        collected.append((source_path, str(target)))
+    return collected
