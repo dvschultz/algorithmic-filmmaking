@@ -183,16 +183,18 @@ jobs:
             rm -f "$fw/Versions/Current"
             ln -s "$ver_name" "$fw/Versions/Current"
 
-            rm -f "$fw/$fwname"
-            ln -s "Versions/Current/$fwname" "$fw/$fwname"
+            while IFS= read -r entry; do
+              local entry_name
+              entry_name=$(basename "$entry")
+              local root_entry="$fw/$entry_name"
 
-            if [ -d "$ver_dir/Resources" ]; then
-              rm -f "$fw/Resources"
-              ln -s "Versions/Current/Resources" "$fw/Resources"
-            fi
+              rm -rf "$root_entry"
+              ln -s "Versions/Current/$entry_name" "$root_entry"
+            done < <(find "$ver_dir" -mindepth 1 -maxdepth 1 ! -name "_CodeSignature" | sort)
           }
 
           fix_framework "$FRAMEWORKS_DIR/Python.framework"
+          fix_framework "$FRAMEWORKS_DIR/Sparkle.framework"
           for fw in "$FRAMEWORKS_DIR"/PySide6/Qt/lib/*.framework; do
             [ -d "$fw" ] || continue
             fix_framework "$fw"

@@ -27,7 +27,7 @@ def test_collect_macos_sparkle_datas_returns_empty_when_not_staged(tmp_path):
 
 
 def test_collect_macos_sparkle_datas_preserves_relative_layout(tmp_path):
-    """Staged Sparkle assets should keep their framework-relative destination paths."""
+    """Staged Sparkle assets should bundle only the canonical versioned framework tree."""
     sparkle_cli = (
         tmp_path
         / "packaging"
@@ -36,7 +36,7 @@ def test_collect_macos_sparkle_datas_preserves_relative_layout(tmp_path):
         / "macos"
         / "Sparkle.framework"
         / "Versions"
-        / "Current"
+        / "B"
         / "Resources"
         / "bin"
         / "sparkle"
@@ -49,7 +49,7 @@ def test_collect_macos_sparkle_datas_preserves_relative_layout(tmp_path):
     assert collected == [
         (
             str(sparkle_cli),
-            "Sparkle.framework/Versions/Current/Resources/bin",
+            "Sparkle.framework/Versions/B/Resources/bin",
         )
     ]
 

@@ -194,6 +194,8 @@ def collect_macos_sparkle_datas(project_root: Path) -> list[tuple[str, str]]:
     The staged runtime directory may also contain helper apps and standalone CLI tools
     used by CI for signing and feed generation. Those should not be bundled into the
     shipped app because PyInstaller attempts to re-sign them as independent bundles.
+    We also only bundle the framework's versioned contents and reconstruct the top-level
+    symlink layout later so the embedded framework remains codesign-compatible.
     """
     runtime_dir = find_macos_sparkle_runtime_dir(project_root)
     if runtime_dir is None:
@@ -203,9 +205,21 @@ def collect_macos_sparkle_datas(project_root: Path) -> list[tuple[str, str]]:
     if not framework_dir.is_dir():
         return []
 
+    versions_dir = framework_dir / "Versions"
+    version_dir = next(
+        (
+            path
+            for path in sorted(versions_dir.iterdir())
+            if path.is_dir() and path.name != "Current"
+        ),
+        None,
+    )
+    if version_dir is None:
+        return []
+
     collected = []
-    for source_path, destination in _collect_runtime_files(framework_dir):
-        target = Path("Sparkle.framework")
+    for source_path, destination in _collect_runtime_files(version_dir):
+        target = Path("Sparkle.framework") / "Versions" / version_dir.name
         if destination != ".":
             target = target / destination
         collected.append((source_path, str(target)))
