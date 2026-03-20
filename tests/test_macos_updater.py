@@ -15,11 +15,15 @@ from core.macos_updater import (
 )
 
 
-def test_get_bundle_path_finds_enclosing_app():
+def test_get_bundle_path_finds_enclosing_app(tmp_path):
     """Executable paths inside a bundle should resolve to the enclosing .app."""
+    executable = tmp_path / "Applications" / "Scene Ripper.app" / "Contents" / "MacOS" / "Scene Ripper"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("binary", encoding="utf-8")
+
     with patch("core.macos_updater.sys.platform", "darwin"):
-        bundle = get_bundle_path("/Applications/Scene Ripper.app/Contents/MacOS/Scene Ripper")
-    assert bundle == Path("/Applications/Scene Ripper.app")
+        bundle = get_bundle_path(executable)
+    assert bundle == executable.parent.parent.parent
 
 
 def test_detects_translocated_bundle_path():
