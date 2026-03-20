@@ -47,16 +47,25 @@ jobs:
 
       - name: Install system dependencies and stage runtimes
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           choco install innosetup -y
 
           $mpvRuntimeDir = "packaging/runtime/mpv/windows"
           New-Item -ItemType Directory -Force -Path $mpvRuntimeDir | Out-Null
           Remove-Item "$mpvRuntimeDir/*.dll" -Force -ErrorAction SilentlyContinue
+          Remove-Item "tmp/mpv" -Recurse -Force -ErrorAction SilentlyContinue
+
+          $releaseHeaders = @{
+            "User-Agent" = "Scene-Ripper-Build"
+            "Authorization" = "Bearer $env:GH_TOKEN"
+            "X-GitHub-Api-Version" = "2022-11-28"
+          }
 
           $mpvRelease = Invoke-RestMethod `
             -Uri "https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest" `
-            -Headers @{ "User-Agent" = "Scene-Ripper-Build" }
+            -Headers $releaseHeaders
 
           $mpvAsset = $mpvRelease.assets | Where-Object { $_.name -like "mpv-dev-x86_64-*.7z" } | Select-Object -First 1
           if (-not $mpvAsset) {
@@ -88,18 +97,11 @@ jobs:
           New-Item -ItemType Directory -Force -Path $winSparkleToolsDir | Out-Null
           Remove-Item "$winSparkleRuntimeDir/*.dll" -Force -ErrorAction SilentlyContinue
           Remove-Item "$winSparkleToolsDir/*" -Force -ErrorAction SilentlyContinue
+          Remove-Item "tmp/winsparkle" -Recurse -Force -ErrorAction SilentlyContinue
 
           $winSparkleVersion = "${{ env.WINSPARKLE_VERSION }}"
-          $winSparkleRelease = Invoke-RestMethod `
-            -Uri "https://api.github.com/repos/vslavik/winsparkle/releases/tags/v$winSparkleVersion" `
-            -Headers @{ "User-Agent" = "Scene-Ripper-Build" }
-
-          $winSparkleAsset = $winSparkleRelease.assets | Where-Object { $_.name -like "*.zip" } | Select-Object -First 1
-          if (-not $winSparkleAsset) {
-            throw "Could not find a WinSparkle zip asset in the tagged release"
-          }
-
-          Invoke-WebRequest -Uri $winSparkleAsset.browser_download_url -OutFile "winsparkle.zip"
+          $winSparkleAssetUrl = "https://github.com/vslavik/winsparkle/releases/download/v$winSparkleVersion/WinSparkle-$winSparkleVersion.zip"
+          Invoke-WebRequest -Uri $winSparkleAssetUrl -OutFile "winsparkle.zip"
           Expand-Archive -Path "winsparkle.zip" -DestinationPath "tmp/winsparkle" -Force
 
           $dllCandidates = Get-ChildItem -Path "tmp/winsparkle" -Recurse -Filter "WinSparkle.dll"
