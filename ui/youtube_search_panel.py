@@ -101,6 +101,16 @@ class MetadataFetchWorker(QObject):
         self.finished.emit()
 
 
+def _fit_combo_popup(combo: QComboBox):
+    """Set the dropdown popup width to fit the widest item text."""
+    fm = combo.fontMetrics()
+    max_width = 0
+    for i in range(combo.count()):
+        max_width = max(max_width, fm.horizontalAdvance(combo.itemText(i)))
+    # Padding for checkmark icon + scrollbar margin
+    combo.view().setMinimumWidth(max_width + 40)
+
+
 class YouTubeSearchPanel(QWidget):
     """Collapsible panel for video search and results (YouTube and Internet Archive)."""
 
@@ -192,6 +202,7 @@ class YouTubeSearchPanel(QWidget):
         for name in ASPECT_RATIO_RANGES.keys():
             self.aspect_combo.addItem(name, name.lower().replace(":", "-"))
         self.aspect_combo.currentIndexChanged.connect(self._apply_filters)
+        _fit_combo_popup(self.aspect_combo)
         filter_row.addWidget(self.aspect_combo)
 
         # Resolution filter
@@ -208,6 +219,7 @@ class YouTubeSearchPanel(QWidget):
         self.resolution_combo.addItem("720p+", "720p")
         self.resolution_combo.addItem("480p+", "480p")
         self.resolution_combo.currentIndexChanged.connect(self._apply_filters)
+        _fit_combo_popup(self.resolution_combo)
         filter_row.addWidget(self.resolution_combo)
 
         # Max size filter
@@ -223,6 +235,7 @@ class YouTubeSearchPanel(QWidget):
         self.size_combo.addItem("< 500 MB", "500mb")
         self.size_combo.addItem("< 1 GB", "1gb")
         self.size_combo.currentIndexChanged.connect(self._apply_filters)
+        _fit_combo_popup(self.size_combo)
         filter_row.addWidget(self.size_combo)
 
         # Duration filter
@@ -232,12 +245,14 @@ class YouTubeSearchPanel(QWidget):
 
         self.duration_combo = QComboBox()
         self.duration_combo.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
+        self.duration_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         self.duration_combo.addItem("Any", "any")
         self.duration_combo.addItem("Under 15 min", "under_15m")
         self.duration_combo.addItem("15\u201330 min", "15m_30m")
         self.duration_combo.addItem("30 min \u2013 1 hr", "30m_1h")
         self.duration_combo.addItem("Over 1 hour", "over_1h")
         self.duration_combo.currentIndexChanged.connect(self._apply_filters)
+        _fit_combo_popup(self.duration_combo)
         filter_row.addWidget(self.duration_combo)
 
         filter_row.addStretch()
