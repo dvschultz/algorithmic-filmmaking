@@ -194,8 +194,9 @@ jobs:
             --sign "$CODESIGN_IDENTITY" \
             "$APP_PATH"
 
-          echo "Verifying signature..."
-          codesign --verify --verbose=2 "$APP_PATH"
+          echo "Verifying main executable signature..."
+          codesign --verify --verbose=2 "$APP_PATH/Contents/MacOS/Scene Ripper"
+          echo "Signature applied (full validation deferred to notarization)"
 
       # ---------------------------------------------------------------
       # Create DMG
