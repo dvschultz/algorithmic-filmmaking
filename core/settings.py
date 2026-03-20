@@ -407,7 +407,14 @@ class Settings:
 
     # Update checker
     check_for_updates: bool = True  # Check GitHub Releases on launch
+    automatically_download_updates: bool = False  # Used when native updaters are available
+    skipped_update_version: str = ""  # User-chosen skipped version
+    last_prompted_update_version: str = ""  # Last version shown to the user
+    update_channel: str = "stable"  # stable, beta
     last_update_check: int = 0  # Unix timestamp of last check
+    last_update_status: str = "never_checked"  # never_checked, up_to_date, update_available, failed
+    last_update_version: str = ""  # Latest version observed during the last check
+    last_update_error: str = ""  # Last update check failure message
 
     # YouTube API
     youtube_api_key: str = ""
@@ -678,8 +685,22 @@ def _load_from_json(config_path: Path, settings: Settings) -> Settings:
     if updates := data.get("updates"):
         if "check_for_updates" in updates:
             settings.check_for_updates = bool(updates["check_for_updates"])
+        if "automatically_download_updates" in updates:
+            settings.automatically_download_updates = bool(updates["automatically_download_updates"])
+        if "skipped_update_version" in updates:
+            settings.skipped_update_version = str(updates["skipped_update_version"])
+        if "last_prompted_update_version" in updates:
+            settings.last_prompted_update_version = str(updates["last_prompted_update_version"])
+        if "update_channel" in updates:
+            settings.update_channel = str(updates["update_channel"])
         if "last_update_check" in updates:
             settings.last_update_check = int(updates["last_update_check"])
+        if "last_update_status" in updates:
+            settings.last_update_status = str(updates["last_update_status"])
+        if "last_update_version" in updates:
+            settings.last_update_version = str(updates["last_update_version"])
+        if "last_update_error" in updates:
+            settings.last_update_error = str(updates["last_update_error"])
 
     # YouTube section (API key comes from keyring, not JSON)
     if youtube := data.get("youtube"):
@@ -833,7 +854,14 @@ def _settings_to_json(settings: Settings) -> dict:
         },
         "updates": {
             "check_for_updates": settings.check_for_updates,
+            "automatically_download_updates": settings.automatically_download_updates,
+            "skipped_update_version": settings.skipped_update_version,
+            "last_prompted_update_version": settings.last_prompted_update_version,
+            "update_channel": settings.update_channel,
             "last_update_check": settings.last_update_check,
+            "last_update_status": settings.last_update_status,
+            "last_update_version": settings.last_update_version,
+            "last_update_error": settings.last_update_error,
         },
         "youtube": {
             "results_count": settings.youtube_results_count,

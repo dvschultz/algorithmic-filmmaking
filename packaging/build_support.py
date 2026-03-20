@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 
 WINDOWS_MPV_DLL_NAMES = ("mpv-2.dll", "libmpv-2.dll", "mpv-1.dll")
+WINDOWS_WINSPARKLE_DLL_NAMES = ("WinSparkle.dll", "winsparkle.dll")
 
 
 def _project_root_from_file(path: str) -> Path:
@@ -44,6 +45,33 @@ def collect_windows_mpv_binaries(project_root: Path) -> list[tuple[str, str]]:
     if not any(Path(src).name.lower() in WINDOWS_MPV_DLL_NAMES for src, _ in binaries):
         raise RuntimeError(f"No supported mpv runtime DLL found in {runtime_dir}")
 
+    return binaries
+
+
+def find_windows_winsparkle_runtime_dir(project_root: Path) -> Path | None:
+    """Return the staged Windows WinSparkle runtime directory, if available."""
+    env_dir = os.environ.get("SCENE_RIPPER_WINSPARKLE_DIR")
+    candidates = [
+        Path(env_dir) if env_dir else None,
+        project_root / "packaging" / "runtime" / "winsparkle" / "windows",
+    ]
+
+    for candidate in candidates:
+        if candidate and candidate.is_dir():
+            if any((candidate / dll_name).is_file() for dll_name in WINDOWS_WINSPARKLE_DLL_NAMES):
+                return candidate
+    return None
+
+
+def collect_windows_winsparkle_binaries(project_root: Path) -> list[tuple[str, str]]:
+    """Collect staged Windows WinSparkle binaries for PyInstaller if present."""
+    runtime_dir = find_windows_winsparkle_runtime_dir(project_root)
+    if runtime_dir is None:
+        return []
+
+    binaries: list[tuple[str, str]] = []
+    for dll_path in sorted(runtime_dir.glob("*.dll")):
+        binaries.append((str(dll_path), "."))
     return binaries
 
 
@@ -126,3 +154,73 @@ def collect_macos_mpv_binaries(project_root: Path) -> list[tuple[str, str]]:
         to_visit.extend(_macos_dependency_paths(current))
 
     return sorted(binaries)
+
+
+def find_macos_sparkle_runtime_dir(project_root: Path) -> Path | None:
+    """Return the staged macOS Sparkle runtime directory, if available."""
+    env_dir = os.environ.get("SCENE_RIPPER_SPARKLE_DIR")
+    candidates = [
+        Path(env_dir) if env_dir else None,
+        project_root / "packaging" / "runtime" / "sparkle" / "macos",
+    ]
+
+    for candidate in candidates:
+        if not candidate or not candidate.is_dir():
+            continue
+
+        expected_paths = (
+            candidate / "Sparkle.framework",
+            candidate / "sparkle.app",
+            candidate / "bin" / "sparkle",
+        )
+        if any(path.exists() for path in expected_paths):
+            return candidate
+    return None
+
+
+def _collect_runtime_files(root_dir: Path) -> list[tuple[str, str]]:
+    """Collect all files in a runtime directory preserving their relative layout."""
+    collected: list[tuple[str, str]] = []
+    for file_path in sorted(path for path in root_dir.rglob("*") if path.is_file()):
+        relative_parent = file_path.relative_to(root_dir).parent
+        destination = "." if str(relative_parent) == "." else str(relative_parent)
+        collected.append((str(file_path), destination))
+    return collected
+
+
+def collect_macos_sparkle_datas(project_root: Path) -> list[tuple[str, str]]:
+    """Collect the Sparkle framework for app bundling if a runtime is staged.
+
+    The staged runtime directory may also contain helper apps and standalone CLI tools
+    used by CI for signing and feed generation. Those should not be bundled into the
+    shipped app because PyInstaller attempts to re-sign them as independent bundles.
+    We also only bundle the framework's versioned contents and reconstruct the top-level
+    symlink layout later so the embedded framework remains codesign-compatible.
+    """
+    runtime_dir = find_macos_sparkle_runtime_dir(project_root)
+    if runtime_dir is None:
+        return []
+
+    framework_dir = runtime_dir / "Sparkle.framework"
+    if not framework_dir.is_dir():
+        return []
+
+    versions_dir = framework_dir / "Versions"
+    version_dir = next(
+        (
+            path
+            for path in sorted(versions_dir.iterdir())
+            if path.is_dir() and path.name != "Current"
+        ),
+        None,
+    )
+    if version_dir is None:
+        return []
+
+    collected = []
+    for source_path, destination in _collect_runtime_files(version_dir):
+        target = Path("Sparkle.framework") / "Versions" / version_dir.name
+        if destination != ".":
+            target = target / destination
+        collected.append((source_path, str(target)))
+    return collected
