@@ -672,6 +672,9 @@ class ClipBrowser(QWidget):
         self.grid.setContentsMargins(UISizes.GRID_MARGIN, UISizes.GRID_MARGIN, UISizes.GRID_MARGIN, UISizes.GRID_MARGIN)
         self.grid.setAlignment(Qt.AlignTop | Qt.AlignLeft)
 
+        # Clicking empty space in the grid clears clip selection
+        self.container.mousePressEvent = self._on_container_clicked
+
         self.scroll.setWidget(self.container)
         layout.addWidget(self.scroll)
 
@@ -870,6 +873,11 @@ class ClipBrowser(QWidget):
             thumb.set_selected(thumb.clip.id in self.selected_clips)
 
         self._emit_selection_changed()
+
+    def _on_container_clicked(self, event):
+        """Clicking empty grid space deselects all clips."""
+        if event.button() == Qt.LeftButton:
+            self.clear_selection()
 
     def clear_selection(self) -> None:
         """Clear all selections."""

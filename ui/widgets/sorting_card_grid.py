@@ -2,7 +2,7 @@
 
 from PySide6.QtWidgets import QWidget, QGridLayout, QVBoxLayout, QLabel
 from PySide6.QtCore import Signal, Qt
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QMouseEvent
 
 from ui.theme import theme, Spacing, TypeScale
 from ui.widgets.sorting_card import SortingCard
@@ -94,6 +94,9 @@ class SortingCardGrid(QWidget):
             grid_layout.addWidget(card, row, col, Qt.AlignCenter)
             self._cards[key] = card
 
+        # Let clicks on empty grid space propagate to this widget
+        grid_container.mousePressEvent = lambda e: e.ignore()
+
         # Center the grid
         center_layout = QVBoxLayout()
         center_layout.addWidget(grid_container, 0, Qt.AlignCenter)
@@ -134,6 +137,12 @@ class SortingCardGrid(QWidget):
     def get_selected(self) -> str | None:
         """Get the currently selected algorithm key."""
         return self._selected_key
+
+    def mousePressEvent(self, event: QMouseEvent):
+        """Clicking empty space deselects the current card."""
+        if event.button() == Qt.LeftButton:
+            self.clear_selection()
+        super().mousePressEvent(event)
 
     def clear_selection(self):
         """Clear the current selection."""
