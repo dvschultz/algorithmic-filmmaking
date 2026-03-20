@@ -132,7 +132,6 @@ a = Analysis(
         "paddleocr",
         "paddlepaddle",
         "librosa",
-        "scipy",
         "einops",
         # Unused stdlib
         "tkinter",

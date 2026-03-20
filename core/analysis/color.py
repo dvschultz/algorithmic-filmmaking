@@ -7,7 +7,6 @@ from typing import Optional
 
 import cv2
 import numpy as np
-from sklearn.cluster import KMeans
 
 logger = logging.getLogger(__name__)
 
@@ -291,6 +290,13 @@ def extract_dominant_colors(
         return []
 
     pixels = np.concatenate(all_pixels, axis=0)
+
+    try:
+        from sklearn.cluster import KMeans
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "Color analysis requires scikit-learn and scipy to be installed."
+        ) from exc
 
     # Run k-means clustering (n_init=1 is sufficient with fixed random_state)
     kmeans = KMeans(n_clusters=n_colors, random_state=random_state, n_init=1, max_iter=100)

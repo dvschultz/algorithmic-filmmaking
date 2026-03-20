@@ -119,7 +119,6 @@ a = Analysis(
         "mlx_vlm",
         "mlx",
         "librosa",
-        "scipy",
         "einops",
         # Unused stdlib
         "tkinter",
