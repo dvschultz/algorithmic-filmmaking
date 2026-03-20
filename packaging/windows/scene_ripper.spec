@@ -41,7 +41,10 @@ build_support_spec = importlib.util.spec_from_file_location(
 )
 build_support = importlib.util.module_from_spec(build_support_spec)
 build_support_spec.loader.exec_module(build_support)
-binaries = build_support.collect_windows_mpv_binaries(PROJECT_ROOT)
+binaries = (
+    build_support.collect_windows_mpv_binaries(PROJECT_ROOT)
+    + build_support.collect_windows_winsparkle_binaries(PROJECT_ROOT)
+)
 
 a = Analysis(
     ["../../main.py"],

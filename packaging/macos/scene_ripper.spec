@@ -35,6 +35,7 @@ build_support_spec = importlib.util.spec_from_file_location(
 build_support = importlib.util.module_from_spec(build_support_spec)
 build_support_spec.loader.exec_module(build_support)
 binaries = build_support.collect_macos_mpv_binaries(PROJECT_ROOT)
+sparkle_datas = build_support.collect_macos_sparkle_datas(PROJECT_ROOT)
 
 a = Analysis(
     ["../../main.py"],
@@ -45,7 +46,7 @@ a = Analysis(
         (str(VERSION_FILE), "core"),
         (str(BUILD_VERSION_FILE), "core"),
         (str(UPDATE_CHANNEL_FILE), "core"),
-    ],
+    ] + sparkle_datas,
     hiddenimports=[
         # PySide6 modules actually used by the app
         "PySide6.QtWidgets",

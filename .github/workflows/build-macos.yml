@@ -13,6 +13,8 @@ on:
 
 env:
   PYTHON_VERSION: '3.11'
+  SPARKLE_VERSION: '2.8.1'
+  UPDATE_FEED_TAG: 'update-feed'
 
 permissions:
   contents: write
@@ -20,7 +22,7 @@ permissions:
 jobs:
   build-macos:
     name: Build macOS .app
-    runs-on: macos-14  # Apple Silicon (arm64)
+    runs-on: macos-14
 
     steps:
       - name: Checkout code
@@ -36,7 +38,6 @@ jobs:
         id: version
         run: |
           if [ "${{ github.event_name }}" = "push" ]; then
-            # Extract version from tag (v0.2.0 -> 0.2.0)
             VERSION="${GITHUB_REF_NAME#v}"
           else
             VERSION="${{ github.event.inputs.version || '0.2.0' }}"
@@ -45,7 +46,79 @@ jobs:
           echo "Building version: ${VERSION}"
 
       - name: Install system dependencies
-        run: brew install mpv
+        run: brew install mpv create-dmg
+
+      - name: Stage Sparkle runtime
+        env:
+          SPARKLE_VERSION: ${{ env.SPARKLE_VERSION }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import shutil
+          import tarfile
+          import tempfile
+          import urllib.request
+          import zipfile
+          from pathlib import Path
+
+          version = os.environ["SPARKLE_VERSION"]
+          output_dir = Path("packaging/runtime/sparkle/macos")
+          shutil.rmtree(output_dir, ignore_errors=True)
+          output_dir.mkdir(parents=True, exist_ok=True)
+
+          request = urllib.request.Request(
+              f"https://api.github.com/repos/sparkle-project/Sparkle/releases/tags/{version}",
+              headers={"User-Agent": "Scene-Ripper-Build"},
+          )
+          with urllib.request.urlopen(request, timeout=30) as response:
+              release = json.load(response)
+
+          asset = next(
+              (
+                  candidate
+                  for candidate in release.get("assets", [])
+                  if candidate["name"].startswith("Sparkle-")
+                  and (candidate["name"].endswith(".tar.xz") or candidate["name"].endswith(".zip"))
+              ),
+              None,
+          )
+          if asset is None:
+              raise SystemExit("Could not find a Sparkle binary distribution asset")
+
+          with tempfile.TemporaryDirectory() as temp_dir:
+              temp_path = Path(temp_dir)
+              archive_path = temp_path / asset["name"]
+              urllib.request.urlretrieve(asset["browser_download_url"], archive_path)
+
+              extract_dir = temp_path / "extract"
+              extract_dir.mkdir()
+              if archive_path.suffix == ".zip":
+                  with zipfile.ZipFile(archive_path) as archive:
+                      archive.extractall(extract_dir)
+              else:
+                  with tarfile.open(archive_path, "r:*") as archive:
+                      archive.extractall(extract_dir)
+
+              copied_any = False
+              for candidate_name in ("Sparkle.framework", "sparkle.app", "bin"):
+                  for source in extract_dir.rglob(candidate_name):
+                      destination = output_dir / candidate_name
+                      if destination.exists():
+                          continue
+                      if source.is_dir():
+                          shutil.copytree(source, destination)
+                      else:
+                          destination.parent.mkdir(parents=True, exist_ok=True)
+                          shutil.copy2(source, destination)
+                      copied_any = True
+                      break
+
+              sparkle_cli = next(output_dir.rglob("sparkle"), None)
+              sign_tool = next(output_dir.rglob("sign_update"), None)
+              if not copied_any or sparkle_cli is None or sign_tool is None:
+                  raise SystemExit("Failed to stage Sparkle runtime with sparkle and sign_update tools")
+          PY
 
       - name: Install Python dependencies
         run: |
@@ -56,6 +129,9 @@ jobs:
       - name: Run PyInstaller
         env:
           APP_VERSION: ${{ steps.version.outputs.version }}
+          APP_BUILD_VERSION: ${{ steps.version.outputs.version }}
+          SPARKLE_FEED_URL: https://github.com/${{ github.repository }}/releases/download/${{ env.UPDATE_FEED_TAG }}/appcast-macos.xml
+          SPARKLE_PUBLIC_ED_KEY: ${{ secrets.UPDATE_PUBLIC_ED_KEY }}
         run: |
           pyinstaller packaging/macos/scene_ripper.spec \
             --distpath dist \
@@ -69,22 +145,17 @@ jobs:
             echo "ERROR: .app bundle not found"
             exit 1
           fi
-          echo ".app bundle size:"
-          du -sh "$APP_PATH"
-          echo ""
           if ! find "$APP_PATH" -name "libmpv*.dylib" | grep -q .; then
             echo "ERROR: bundled libmpv dylib not found"
             exit 1
           fi
-          echo "Bundled libmpv:"
-          find "$APP_PATH" -name "libmpv*.dylib"
-          echo ""
-          echo "Contents:"
+          if ! find "$APP_PATH" \( -name "sparkle" -o -name "Sparkle.framework" \) | grep -q .; then
+            echo "ERROR: bundled Sparkle runtime not found"
+            exit 1
+          fi
+          du -sh "$APP_PATH"
           ls -la "$APP_PATH/Contents/"
 
-      # ---------------------------------------------------------------
-      # Code signing (only when secrets are configured)
-      # ---------------------------------------------------------------
       - name: Import signing certificate
         if: env.MACOS_CERTIFICATE != ''
         env:
@@ -92,69 +163,58 @@ jobs:
           MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
-          # Decode certificate
           echo "$MACOS_CERTIFICATE" | base64 --decode > certificate.p12
-
-          # Create temporary keychain
           security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
           security default-keychain -s build.keychain
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
-
-          # Import certificate
           security import certificate.p12 \
             -k build.keychain \
             -P "$MACOS_CERTIFICATE_PWD" \
             -T /usr/bin/codesign
-
-          # Allow codesign to access keychain
           security set-key-partition-list -S apple-tool:,apple:,codesign: \
             -s -k "$KEYCHAIN_PASSWORD" build.keychain
-
-          # Clean up
           rm certificate.p12
 
       - name: Fix framework structures for signing
         if: env.CODESIGN_IDENTITY != ''
-        env:
-          CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
         run: |
           APP_PATH="dist/Scene Ripper.app"
           FRAMEWORKS_DIR="$APP_PATH/Contents/Frameworks"
 
-          # Fix Python.framework — PyInstaller creates an invalid versioned layout
-          PYTHON_FW="$FRAMEWORKS_DIR/Python.framework"
-          if [ -d "$PYTHON_FW/Versions" ]; then
-            echo "Fixing Python.framework structure..."
-            # Flatten — move the actual binary up and remove Versions dir
-            PYTHON_BIN=$(find "$PYTHON_FW/Versions" -name "Python" -type f | head -1)
-            if [ -n "$PYTHON_BIN" ]; then
-              cp "$PYTHON_BIN" "$PYTHON_FW/Python.tmp"
-            fi
-            rm -rf "$PYTHON_FW/Versions"
-            rm -f "$PYTHON_FW/Python"
-            if [ -f "$PYTHON_FW/Python.tmp" ]; then
-              mv "$PYTHON_FW/Python.tmp" "$PYTHON_FW/Python"
-            fi
-            rm -f "$PYTHON_FW/Resources"
-            echo "Python.framework flattened"
-          fi
+          fix_framework() {
+            local fw="$1"
+            local fwname
+            fwname=$(basename "$fw" .framework)
 
-          # Fix Qt .framework bundles with broken version structures
+            [ -d "$fw/Versions" ] || return 0
+
+            echo "Fixing $fwname.framework..."
+            local ver_dir
+            ver_dir=$(find "$fw/Versions" -mindepth 1 -maxdepth 1 -type d ! -name "Current" | head -1)
+            if [ -z "$ver_dir" ]; then
+              echo "  No version directory found, skipping"
+              return 0
+            fi
+            local ver_name
+            ver_name=$(basename "$ver_dir")
+
+            rm -f "$fw/Versions/Current"
+            ln -s "$ver_name" "$fw/Versions/Current"
+
+            rm -f "$fw/$fwname"
+            ln -s "Versions/Current/$fwname" "$fw/$fwname"
+
+            if [ -d "$ver_dir/Resources" ]; then
+              rm -f "$fw/Resources"
+              ln -s "Versions/Current/Resources" "$fw/Resources"
+            fi
+          }
+
+          fix_framework "$FRAMEWORKS_DIR/Python.framework"
           for fw in "$FRAMEWORKS_DIR"/PySide6/Qt/lib/*.framework; do
-            [ -d "$fw/Versions" ] || continue
-            FWNAME=$(basename "$fw" .framework)
-            FW_BIN=$(find "$fw/Versions" -name "$FWNAME" -type f | head -1)
-            if [ -n "$FW_BIN" ]; then
-              cp "$FW_BIN" "$fw/$FWNAME.tmp"
-            fi
-            rm -rf "$fw/Versions"
-            rm -f "$fw/$FWNAME"
-            if [ -f "$fw/$FWNAME.tmp" ]; then
-              mv "$fw/$FWNAME.tmp" "$fw/$FWNAME"
-            fi
-            rm -f "$fw/Resources"
+            [ -d "$fw" ] || continue
+            fix_framework "$fw"
           done
-          echo "Framework structures fixed"
 
       - name: Code sign .app
         if: env.CODESIGN_IDENTITY != ''
@@ -164,42 +224,25 @@ jobs:
           APP_PATH="dist/Scene Ripper.app"
           ENTITLEMENTS="packaging/macos/entitlements.plist"
 
-          # Sign all .so files
           find "$APP_PATH" -name "*.so" -exec \
             codesign --force --options runtime --sign "$CODESIGN_IDENTITY" {} \;
-
-          # Sign all .dylib files
           find "$APP_PATH" -name "*.dylib" -exec \
             codesign --force --options runtime --sign "$CODESIGN_IDENTITY" {} \;
-
-          # Sign framework bundles
-          find "$APP_PATH" -name "*.framework" -type d | while read fw; do
-            FWNAME=$(basename "$fw" .framework)
-            if [ -f "$fw/$FWNAME" ]; then
-              codesign --force --options runtime --sign "$CODESIGN_IDENTITY" "$fw"
-            fi
+          find "$APP_PATH" -name "*.framework" -type d -depth | while read -r fw; do
+            codesign --force --deep --options runtime --sign "$CODESIGN_IDENTITY" "$fw" || true
           done
 
-          # Sign the main executable with entitlements
           codesign --force --options runtime \
             --entitlements "$ENTITLEMENTS" \
             --sign "$CODESIGN_IDENTITY" \
             "$APP_PATH/Contents/MacOS/Scene Ripper"
 
-          # Sign the top-level .app bundle
           codesign --force --options runtime \
             --entitlements "$ENTITLEMENTS" \
             --sign "$CODESIGN_IDENTITY" \
             "$APP_PATH"
 
-          echo "Verifying signature..."
-          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
-
-      # ---------------------------------------------------------------
-      # Create DMG
-      # ---------------------------------------------------------------
-      - name: Install create-dmg
-        run: brew install create-dmg
+          codesign --verify --verbose=2 "$APP_PATH"
 
       - name: Create DMG
         env:
@@ -218,19 +261,13 @@ jobs:
             --no-internet-enable \
             "dist/${DMG_NAME}" \
             "dist/Scene Ripper.app" \
-          || true  # create-dmg returns non-zero even on success sometimes
+          || true
 
           if [ ! -f "dist/${DMG_NAME}" ]; then
             echo "ERROR: DMG not created"
             exit 1
           fi
 
-          echo "DMG created:"
-          ls -lh "dist/${DMG_NAME}"
-
-      # ---------------------------------------------------------------
-      # Notarize (only when Apple credentials are configured)
-      # ---------------------------------------------------------------
       - name: Notarize DMG
         if: env.APPLE_ID != ''
         env:
@@ -240,26 +277,15 @@ jobs:
           APP_VERSION: ${{ steps.version.outputs.version }}
         run: |
           DMG_NAME="Scene-Ripper-${APP_VERSION}-arm64.dmg"
-
-          # Store credentials
           xcrun notarytool store-credentials "AC_PASSWORD" \
             --apple-id "$APPLE_ID" \
             --team-id "$APPLE_TEAM_ID" \
             --password "$APPLE_APP_PASSWORD"
-
-          # Submit for notarization and wait
           xcrun notarytool submit "dist/${DMG_NAME}" \
             --keychain-profile "AC_PASSWORD" \
             --wait
-
-          # Staple the ticket
           xcrun stapler staple "dist/${DMG_NAME}"
 
-          echo "Notarization complete"
-
-      # ---------------------------------------------------------------
-      # Upload artifacts
-      # ---------------------------------------------------------------
       - name: Upload .app artifact
         uses: actions/upload-artifact@v4
         with:
@@ -274,9 +300,6 @@ jobs:
           path: dist/Scene-Ripper-*.dmg
           if-no-files-found: warn
 
-      # ---------------------------------------------------------------
-      # Upload to GitHub Release (only on tag push)
-      # ---------------------------------------------------------------
       - name: Upload to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         env:
@@ -294,9 +317,41 @@ jobs:
 
           gh release upload "${RELEASE_TAG}" "dist/${DMG_NAME}" --clobber
 
+      - name: Sign update archive
+        id: sign_archive
+        if: env.UPDATE_PRIVATE_ED_KEY != ''
+        env:
+          UPDATE_PRIVATE_ED_KEY: ${{ secrets.UPDATE_PRIVATE_ED_KEY }}
+          APP_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          DMG_PATH="dist/Scene-Ripper-${APP_VERSION}-arm64.dmg"
+          SIGN_TOOL="$(find packaging/runtime/sparkle/macos -type f -name sign_update | head -1)"
+          if [ -z "$SIGN_TOOL" ]; then
+            echo "ERROR: sign_update tool not found in staged Sparkle runtime"
+            exit 1
+          fi
+
+          SIGNATURE_OUTPUT="$(printf '%s' "$UPDATE_PRIVATE_ED_KEY" | "$SIGN_TOOL" --ed-key-file - "$DMG_PATH")"
+          echo "$SIGNATURE_OUTPUT"
+
+          SIGNATURE="$(SIGNATURE_OUTPUT="$SIGNATURE_OUTPUT" python - <<'PY'
+          import os
+          import re
+
+          text = os.environ["SIGNATURE_OUTPUT"]
+          match = re.search(r'sparkle:edSignature="([^"]+)"', text)
+          if match is None:
+              raise SystemExit("Missing sparkle:edSignature in sign_update output")
+          print(match.group(1))
+          PY
+          )"
+          echo "signature=${SIGNATURE}" >> "$GITHUB_OUTPUT"
+
       - name: Generate update feed artifact
         env:
           APP_VERSION: ${{ steps.version.outputs.version }}
+          UPDATE_FEED_TAG: ${{ env.UPDATE_FEED_TAG }}
+          SIGNATURE: ${{ steps.sign_archive.outputs.signature }}
         run: |
           DMG_NAME="Scene-Ripper-${APP_VERSION}-arm64.dmg"
           RELEASE_TAG="${GITHUB_REF_NAME}"
@@ -306,22 +361,47 @@ jobs:
 
           RELEASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}"
           ASSET_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${DMG_NAME}"
+          NOTES_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${UPDATE_FEED_TAG}/release-notes-macos.html"
           ASSET_SIZE="$(stat -f%z "dist/${DMG_NAME}")"
           FEED_DIR="dist/update-feed/macos"
 
-          python packaging/release/generate_appcast.py \
-            --platform macos \
-            --version "${APP_VERSION}" \
-            --build-version "${APP_VERSION}" \
-            --release-tag "${RELEASE_TAG}" \
-            --release-url "${RELEASE_URL}" \
-            --enclosure-url "${ASSET_URL}" \
-            --enclosure-length "${ASSET_SIZE}" \
-            --minimum-system-version "13.0" \
-            --output "${FEED_DIR}/appcast-macos.xml" \
+          APPCAST_ARGS=(
+            --platform macos
+            --version "${APP_VERSION}"
+            --build-version "${APP_VERSION}"
+            --release-tag "${RELEASE_TAG}"
+            --release-url "${RELEASE_URL}"
+            --enclosure-url "${ASSET_URL}"
+            --enclosure-length "${ASSET_SIZE}"
+            --minimum-system-version "13.0"
+            --notes-url "${NOTES_URL}"
+            --output "${FEED_DIR}/appcast-macos.xml"
             --notes-output "${FEED_DIR}/release-notes-macos.html"
+          )
+          if [ -n "$SIGNATURE" ]; then
+            APPCAST_ARGS+=(--signature "$SIGNATURE")
+          fi
+          python packaging/release/generate_appcast.py "${APPCAST_ARGS[@]}"
 
-          python packaging/release/verify_update_feed.py "${FEED_DIR}/appcast-macos.xml"
+          VERIFY_ARGS=("${FEED_DIR}/appcast-macos.xml")
+          if [ -n "$SIGNATURE" ]; then
+            VERIFY_ARGS+=(--require-signature)
+          fi
+          python packaging/release/verify_update_feed.py "${VERIFY_ARGS[@]}"
+
+      - name: Publish update feed release assets
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPDATE_FEED_TAG: ${{ env.UPDATE_FEED_TAG }}
+        run: |
+          gh release view "${UPDATE_FEED_TAG}" >/dev/null 2>&1 || \
+            gh release create "${UPDATE_FEED_TAG}" --title "Update Feed" --notes ""
+
+          gh release upload "${UPDATE_FEED_TAG}" \
+            dist/update-feed/macos/appcast-macos.xml \
+            dist/update-feed/macos/release-notes-macos.html \
+            --clobber
 
       - name: Upload update feed artifact
         uses: actions/upload-artifact@v4
@@ -330,9 +410,6 @@ jobs:
           path: dist/update-feed/macos
           if-no-files-found: error
 
-      # ---------------------------------------------------------------
-      # Cleanup
-      # ---------------------------------------------------------------
       - name: Cleanup keychain
         if: always()
         run: |

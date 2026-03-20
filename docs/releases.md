@@ -35,7 +35,14 @@ They also generate per-platform update-feed artifacts in workflow artifacts:
 - macOS: `Scene-Ripper-macOS-Appcast`
 - Windows: `SceneRipper-Windows-Appcast`
 
-These appcast artifacts are foundation for future native in-app updates. They are generated and verified in CI, but they are not published to a stable public feed URL yet.
+The workflows also publish stable feed assets to a dedicated GitHub release tag named `update-feed`:
+
+- `appcast-macos.xml`
+- `release-notes-macos.html`
+- `appcast-windows.xml`
+- `release-notes-windows.html`
+
+These assets are the stable public URLs used by native in-app updates, while the DMG and installer downloads still come from the versioned `vX.Y.Z` releases.
 
 ## Workflow Files
 
@@ -111,6 +118,15 @@ The macOS workflow signs and notarizes only when these GitHub secrets are config
 
 Without those secrets, the DMG still builds, but it will not be signed or notarized.
 
+## Updater Signing
+
+Native updater feeds use EdDSA signatures for the DMG and Windows installer when these secrets are configured:
+
+- `UPDATE_PUBLIC_ED_KEY`
+- `UPDATE_PRIVATE_ED_KEY`
+
+The public key is embedded into packaged builds. The private key is only used in CI to sign release artifacts before generating appcast metadata.
+
 ## Local Build Fallback
 
 Use local builds to test packaging before tagging.
@@ -146,4 +162,5 @@ After tagging:
 - macOS workflow succeeds
 - Windows workflow succeeds
 - `gh release view vX.Y.Z` shows both assets
+- `gh release view update-feed` shows refreshed appcast and release-notes assets
 - the tag points to the exact commit used by the successful release builds

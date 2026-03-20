@@ -100,15 +100,24 @@ def find_sparkle_cli(bundle_path: Path | None = None, base_path: Path | None = N
     base = base_path or get_base_path()
     bundle = bundle_path or get_bundle_path()
     candidates = [
+        base / "bin" / "sparkle",
         base / "Sparkle" / "bin" / "sparkle",
         base / "sparkle" / "bin" / "sparkle",
+        base / "sparkle.app" / "Contents" / "MacOS" / "sparkle",
+        base / "Sparkle.framework" / "Versions" / "Current" / "Resources" / "bin" / "sparkle",
+        base / "Sparkle.framework" / "Versions" / "A" / "Resources" / "bin" / "sparkle",
     ]
     if bundle is not None:
         candidates.extend(
             [
                 bundle / "Contents" / "MacOS" / "sparkle",
+                bundle / "Contents" / "Resources" / "bin" / "sparkle",
+                bundle / "Contents" / "Resources" / "sparkle.app" / "Contents" / "MacOS" / "sparkle",
+                bundle / "Contents" / "Resources" / "Sparkle.framework" / "Versions" / "Current" / "Resources" / "bin" / "sparkle",
+                bundle / "Contents" / "Resources" / "Sparkle.framework" / "Versions" / "A" / "Resources" / "bin" / "sparkle",
                 bundle / "Contents" / "Frameworks" / "Sparkle.framework" / "Versions" / "Current" / "Resources" / "bin" / "sparkle",
                 bundle / "Contents" / "Frameworks" / "Sparkle.framework" / "Versions" / "B" / "Resources" / "bin" / "sparkle",
+                bundle / "Contents" / "Frameworks" / "Sparkle.framework" / "Versions" / "A" / "Resources" / "bin" / "sparkle",
                 bundle / "Contents" / "Frameworks" / "sparkle.app" / "Contents" / "MacOS" / "sparkle",
             ]
         )

@@ -279,8 +279,8 @@ Build the release metadata pipeline required by Sparkle and WinSparkle.
 **Success Criteria**
 
 - [ ] Every tagged release publishes DMG and installer artifacts plus signed appcast metadata.
-- [ ] The appcast is hosted at a stable public URL.
-- [ ] CI fails if appcast generation or signature validation fails.
+- [x] The appcast is hosted at a stable public URL.
+- [x] CI fails if appcast generation or signature validation fails.
 - [ ] Rollback is possible by publishing a newer appcast item or removing a bad one.
 
 ### Phase 3: macOS Sparkle Integration

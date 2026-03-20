@@ -6,6 +6,7 @@ from unittest.mock import patch
 from core.update_models import UpdateCapability
 from core.macos_updater import (
     MacOSUpdaterStatus,
+    find_sparkle_cli,
     get_bundle_path,
     get_status,
     is_running_from_disk_image,
@@ -30,6 +31,23 @@ def test_detects_translocated_bundle_path():
 def test_detects_disk_image_bundle_path():
     """Apps running from /Volumes should be treated as DMG-mounted."""
     assert is_running_from_disk_image(Path("/Volumes/Scene Ripper/Scene Ripper.app"))
+
+
+def test_find_sparkle_cli_supports_framework_staged_at_base_path(tmp_path):
+    """Bundled Sparkle runtimes staged under the base path should be discoverable."""
+    sparkle_cli = (
+        tmp_path
+        / "Sparkle.framework"
+        / "Versions"
+        / "Current"
+        / "Resources"
+        / "bin"
+        / "sparkle"
+    )
+    sparkle_cli.parent.mkdir(parents=True)
+    sparkle_cli.write_text("binary", encoding="utf-8")
+
+    assert find_sparkle_cli(base_path=tmp_path) == sparkle_cli
 
 
 def test_get_status_requires_bundle_metadata_for_native_updates(tmp_path):
