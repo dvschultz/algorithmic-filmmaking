@@ -151,6 +151,17 @@ jobs:
             throw "Bundled WinSparkle.dll missing from dist output"
           }
 
+      - name: Smoke test frozen app startup
+        shell: pwsh
+        run: |
+          $env:SCENE_RIPPER_STARTUP_SMOKE_TEST = "1"
+          & "dist/Scene Ripper/Scene Ripper.exe"
+          $exitCode = $LASTEXITCODE
+          Remove-Item Env:\SCENE_RIPPER_STARTUP_SMOKE_TEST -ErrorAction SilentlyContinue
+          if ($exitCode -ne 0) {
+            throw "Frozen app startup smoke test failed with exit code $exitCode"
+          }
+
       - name: Build Inno Setup installer
         env:
           APP_VERSION: ${{ steps.version.outputs.version }}

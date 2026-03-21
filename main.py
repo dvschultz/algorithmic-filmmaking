@@ -52,6 +52,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+STARTUP_SMOKE_TEST_ENV = "SCENE_RIPPER_STARTUP_SMOKE_TEST"
 
 # Frozen app setup (before importing heavy dependencies)
 if is_frozen():
@@ -113,6 +114,8 @@ def main():
     logger.info(f"sys.argv: {sys.argv}")
     logger.info(f"Frozen: {is_frozen()}")
 
+    startup_smoke_test = os.environ.get(STARTUP_SMOKE_TEST_ENV) == "1"
+
     # Enable GL context sharing so QOpenGLWidget gets a shared context on macOS.
     # Without this, mpv's render API sees stale compositor data in the FBO.
     from PySide6.QtCore import Qt
@@ -144,11 +147,19 @@ def main():
     # Check for libmpv before creating the main window
     if not _check_mpv_available():
         logger.error("libmpv not found — showing install dialog")
+        if startup_smoke_test:
+            return 1
         _show_mpv_missing_dialog(app)
-        sys.exit(1)
+        return 1
 
     logger.info("Creating MainWindow...")
     window = MainWindow()
+
+    if startup_smoke_test:
+        logger.info("Startup smoke test completed successfully")
+        window.close()
+        app.processEvents()
+        return 0
 
     # Apply theme (uses saved preference from settings loaded in MainWindow)
     logger.info("Applying initial theme...")
@@ -158,9 +169,9 @@ def main():
     window.show()
 
     logger.info("Starting event loop...")
-    sys.exit(app.exec())
+    return app.exec()
 
 
 if __name__ == "__main__":
     logger.info("=== SCRIPT START ===")
-    main()
+    sys.exit(main())

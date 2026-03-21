@@ -4,10 +4,11 @@ import importlib.util
 import sys
 from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 
 def _load_module(name: str, relative_path: str):
-    project_root = Path(__file__).resolve().parent.parent
-    module_path = project_root / relative_path
+    module_path = PROJECT_ROOT / relative_path
     spec = importlib.util.spec_from_file_location(name, module_path)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
@@ -19,8 +20,9 @@ def _load_module(name: str, relative_path: str):
 build_support = _load_module("scene_ripper_build_support_tests", "packaging/build_support.py")
 collect_macos_sparkle_datas = build_support.collect_macos_sparkle_datas
 collect_windows_winsparkle_binaries = build_support.collect_windows_winsparkle_binaries
+get_core_pyinstaller_collect_targets = build_support.get_core_pyinstaller_collect_targets
 get_core_pyinstaller_metadata = build_support.get_core_pyinstaller_metadata
-get_core_pyinstaller_modules = build_support.get_core_pyinstaller_modules
+read_core_requirement_distributions = build_support.read_core_requirement_distributions
 
 
 def test_collect_macos_sparkle_datas_returns_empty_when_not_staged(tmp_path):
@@ -77,20 +79,33 @@ def test_collect_windows_winsparkle_binaries_collects_staged_dll(tmp_path):
     assert collected == [(str(winsparkle_dll), ".")]
 
 
-def test_core_pyinstaller_modules_cover_packaged_runtime_dependencies():
-    """Frozen builds should explicitly collect modules with dynamic imports."""
-    modules = get_core_pyinstaller_modules()
-    assert "googleapiclient" in modules
-    assert "httplib2" in modules
-    assert "sklearn" in modules
-    assert "scipy" in modules
-    assert "keyring" in modules
+def test_core_requirement_distributions_follow_requirements_file(tmp_path):
+    """Frozen bundle mappings should be derived from requirements-core.txt."""
+    distributions = read_core_requirement_distributions(PROJECT_ROOT)
+    assert "scikit-learn" in distributions
+    assert "opencv-python" in distributions
+    assert "google-api-python-client" in distributions
+    assert "pyside6" in distributions
 
 
-def test_core_pyinstaller_metadata_covers_core_requirements():
+def test_core_pyinstaller_collect_targets_cover_packaged_runtime_dependencies(tmp_path):
+    """Frozen builds should explicitly collect dynamic-import package trees."""
+    targets = get_core_pyinstaller_collect_targets(PROJECT_ROOT)
+    assert "googleapiclient" in targets
+    assert "google_auth_httplib2" in targets
+    assert "httplib2" in targets
+    assert "sklearn" in targets
+    assert "scipy" in targets
+    assert "cv2" in targets
+    assert "numpy" in targets
+    assert "mpv" in targets
+
+
+def test_core_pyinstaller_metadata_covers_core_requirements(tmp_path):
     """Frozen builds should carry distribution metadata for bundled core requirements."""
-    metadata = get_core_pyinstaller_metadata()
+    metadata = get_core_pyinstaller_metadata(PROJECT_ROOT)
     assert "google-api-python-client" in metadata
     assert "scikit-learn" in metadata
     assert "scipy" in metadata
-    assert "Pillow" in metadata
+    assert "pillow" in metadata
+    assert "opencv-python" in metadata

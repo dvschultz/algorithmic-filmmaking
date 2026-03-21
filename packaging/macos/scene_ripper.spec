@@ -11,7 +11,7 @@ import importlib.util
 import os
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_submodules, copy_metadata
+from PyInstaller.utils.hooks import collect_all, copy_metadata
 
 block_cipher = None
 
@@ -45,17 +45,21 @@ def _unique(items):
 
 
 core_requirement_hiddenimports = []
-for module_name in build_support.get_core_pyinstaller_modules():
-    core_requirement_hiddenimports.extend(collect_submodules(module_name))
-
 core_requirement_datas = []
-for metadata_name in build_support.get_core_pyinstaller_metadata():
+core_requirement_binaries = []
+for module_name in build_support.get_core_pyinstaller_collect_targets(PROJECT_ROOT):
+    module_datas, module_binaries, module_hiddenimports = collect_all(module_name)
+    core_requirement_datas.extend(module_datas)
+    core_requirement_binaries.extend(module_binaries)
+    core_requirement_hiddenimports.extend(module_hiddenimports)
+
+for metadata_name in build_support.get_core_pyinstaller_metadata(PROJECT_ROOT):
     core_requirement_datas.extend(copy_metadata(metadata_name))
 
 a = Analysis(
     ["../../main.py"],
     pathex=[],
-    binaries=binaries,
+    binaries=binaries + core_requirement_binaries,
     datas=[
         ("../../core/package_manifest.json", "core"),
         (str(VERSION_FILE), "core"),
@@ -116,8 +120,6 @@ a = Analysis(
         "PySide6.QtVirtualKeyboard",
         "PySide6.QtDesigner",
         "PySide6.QtHelp",
-        "PySide6.QtOpenGL",
-        "PySide6.QtOpenGLWidgets",
         "PySide6.QtDBus",
         # No longer used (video playback via MPV, not Qt Multimedia)
         "PySide6.QtMultimedia",

@@ -8,54 +8,90 @@ from pathlib import Path
 
 WINDOWS_MPV_DLL_NAMES = ("mpv-2.dll", "libmpv-2.dll", "mpv-1.dll")
 WINDOWS_WINSPARKLE_DLL_NAMES = ("WinSparkle.dll", "winsparkle.dll")
-CORE_PYINSTALLER_MODULES = (
-    "click",
-    "scenedetect",
-    "googleapiclient",
+REQUIREMENT_TO_IMPORT_TARGET = {
+    "click": "click",
+    "python-mpv": "mpv",
+    "scenedetect": "scenedetect",
+    "opencv-python": "cv2",
+    "numpy": "numpy",
+    "scikit-learn": "sklearn",
+    "pillow": "PIL",
+    "google-api-python-client": "googleapiclient",
+    "keyring": "keyring",
+    "litellm": "litellm",
+    "tenacity": "tenacity",
+    "httpx": "httpx",
+}
+SUPPLEMENTAL_IMPORT_TARGETS = (
     "google_auth_httplib2",
     "google.auth",
     "google.oauth2",
     "httplib2",
-    "keyring",
-    "litellm",
-    "httpx",
-    "tenacity",
-    "sklearn",
     "scipy",
-    "PIL",
 )
-CORE_PYINSTALLER_METADATA = (
-    "click",
-    "scenedetect",
-    "google-api-python-client",
+SUPPLEMENTAL_METADATA_TARGETS = (
     "google-auth",
     "google-auth-httplib2",
     "google-api-core",
     "googleapis-common-protos",
     "httplib2",
     "uritemplate",
-    "keyring",
-    "litellm",
-    "httpx",
-    "tenacity",
-    "scikit-learn",
     "scipy",
-    "Pillow",
 )
+PYINSTALLER_HANDLED_REQUIREMENTS = {
+    "pyside6",
+}
 
 
 def _project_root_from_file(path: str) -> Path:
     return Path(path).resolve().parent.parent
 
 
-def get_core_pyinstaller_modules() -> tuple[str, ...]:
-    """Return importable modules that must be bundled in frozen desktop apps."""
-    return CORE_PYINSTALLER_MODULES
+def _normalize_requirement_name(name: str) -> str:
+    return name.strip().lower().replace("_", "-")
 
 
-def get_core_pyinstaller_metadata() -> tuple[str, ...]:
+def read_core_requirement_distributions(project_root: Path) -> tuple[str, ...]:
+    """Return normalized distribution names from requirements-core.txt."""
+    requirements_file = project_root / "requirements-core.txt"
+    distributions: list[str] = []
+    for raw_line in requirements_file.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        requirement = line.split(";", 1)[0].strip()
+        for separator in ("[", ">", "<", "=", "!", "~"):
+            requirement = requirement.split(separator, 1)[0].strip()
+        if requirement:
+            distributions.append(_normalize_requirement_name(requirement))
+    return tuple(distributions)
+
+
+def get_core_pyinstaller_collect_targets(project_root: Path) -> tuple[str, ...]:
+    """Return import-package roots that should be collected for frozen builds."""
+    targets: list[str] = []
+    for dist_name in read_core_requirement_distributions(project_root):
+        if dist_name in PYINSTALLER_HANDLED_REQUIREMENTS:
+            continue
+        import_target = REQUIREMENT_TO_IMPORT_TARGET.get(dist_name)
+        if import_target is None:
+            raise RuntimeError(f"Missing PyInstaller import target mapping for {dist_name}")
+        targets.append(import_target)
+
+    targets.extend(SUPPLEMENTAL_IMPORT_TARGETS)
+    return tuple(dict.fromkeys(targets))
+
+
+def get_core_pyinstaller_metadata(project_root: Path) -> tuple[str, ...]:
     """Return distribution metadata names required by frozen desktop apps."""
-    return CORE_PYINSTALLER_METADATA
+    metadata = [
+        dist_name
+        for dist_name in read_core_requirement_distributions(project_root)
+        if dist_name not in PYINSTALLER_HANDLED_REQUIREMENTS
+    ]
+    metadata.extend(SUPPLEMENTAL_METADATA_TARGETS)
+    return tuple(dict.fromkeys(metadata))
 
 
 def find_windows_mpv_runtime_dir(project_root: Path) -> Path | None:
