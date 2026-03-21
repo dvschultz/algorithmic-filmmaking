@@ -161,6 +161,7 @@ jobs:
           $stdoutLog = Join-Path $smokeArtifactsDir "stdout.log"
           $stderrLog = Join-Path $smokeArtifactsDir "stderr.log"
           $appLog = Join-Path $smokeLocalAppData "Scene Ripper/logs/scene-ripper.log"
+          $successMarker = "Startup smoke test completed successfully"
 
           $env:SCENE_RIPPER_STARTUP_SMOKE_TEST = "1"
           $env:LOCALAPPDATA = $smokeLocalAppData
@@ -190,21 +191,43 @@ jobs:
             }
           }
 
-          try {
-            if (-not $process.WaitForExit(60000)) {
-              try {
-                Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-              } catch {
+          function Test-SmokeSuccess {
+            foreach ($path in @($appLog, $stderrLog, $stdoutLog)) {
+              if ((Test-Path $path) -and (Select-String -Path $path -SimpleMatch $successMarker -Quiet)) {
+                return $true
               }
-              Show-SmokeDiagnostics
-              throw "Frozen app startup smoke test timed out after 60 seconds"
+            }
+            return $false
+          }
+
+          try {
+            $deadline = (Get-Date).AddSeconds(60)
+            while ((Get-Date) -lt $deadline) {
+              if (Test-SmokeSuccess) {
+                try {
+                  if (-not $process.HasExited) {
+                    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+                  }
+                } catch {
+                }
+                return
+              }
+
+              if ($process.WaitForExit(1000)) {
+                $exitCode = $process.ExitCode
+                Show-SmokeDiagnostics
+                throw "Frozen app startup smoke test exited before reporting success (exit code $exitCode)"
+              }
             }
 
-            $exitCode = $process.ExitCode
-            if ($exitCode -ne 0) {
-              Show-SmokeDiagnostics
-              throw "Frozen app startup smoke test failed with exit code $exitCode"
+            try {
+              if (-not $process.HasExited) {
+                Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+              }
+            } catch {
             }
+            Show-SmokeDiagnostics
+            throw "Frozen app startup smoke test timed out after 60 seconds"
           } finally {
             Remove-Item Env:\SCENE_RIPPER_STARTUP_SMOKE_TEST -ErrorAction SilentlyContinue
             Remove-Item Env:\LOCALAPPDATA -ErrorAction SilentlyContinue

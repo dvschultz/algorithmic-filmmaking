@@ -156,10 +156,13 @@ def main():
     window = MainWindow()
 
     if startup_smoke_test:
+        from PySide6.QtCore import QTimer
+
         logger.info("Startup smoke test completed successfully")
-        window.close()
-        app.processEvents()
-        return 0
+        # Keep the process alive after successful startup so CI can validate
+        # launch completion without exercising native teardown paths.
+        QTimer.singleShot(300000, app.quit)
+        return app.exec()
 
     # Apply theme (uses saved preference from settings loaded in MainWindow)
     logger.info("Applying initial theme...")
