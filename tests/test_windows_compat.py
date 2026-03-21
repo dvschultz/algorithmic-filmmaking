@@ -163,6 +163,54 @@ class TestDependencyManagerPlatformDispatch:
             assert _get_binary_ext() == ""
 
 
+class TestDependencyManagerTls:
+    """Test HTTPS certificate handling for runtime downloads."""
+
+    def test_ssl_context_prefers_certifi_bundle(self):
+        """Downloader should use certifi when available."""
+        from core.dependency_manager import _get_ssl_context
+
+        with patch("core.dependency_manager.certifi") as mock_certifi, \
+             patch("core.dependency_manager.ssl.create_default_context", return_value="ctx") as mock_create:
+            mock_certifi.where.return_value = "C:/bundle/cacert.pem"
+
+            result = _get_ssl_context()
+
+        assert result == "ctx"
+        mock_create.assert_called_once_with(cafile="C:/bundle/cacert.pem")
+
+    def test_download_file_passes_ssl_context_for_https(self, tmp_path):
+        """HTTPS downloads should pass an explicit SSL context to urllib."""
+        from core.dependency_manager import _download_file
+
+        class FakeResponse:
+            headers = {"Content-Length": "4"}
+
+            def __init__(self):
+                self._chunks = iter((b"test", b""))
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self, _size):
+                return next(self._chunks)
+
+        destination = tmp_path / "ffmpeg.zip"
+
+        with patch("core.dependency_manager._get_ssl_context", return_value="ctx"), \
+             patch("core.dependency_manager.urllib.request.urlopen", return_value=FakeResponse()) as mock_urlopen:
+            result = _download_file("https://example.com/ffmpeg.zip", destination, label="FFmpeg")
+
+        assert result == destination
+        assert destination.read_bytes() == b"test"
+        _, kwargs = mock_urlopen.call_args
+        assert kwargs["timeout"] == 120
+        assert kwargs["context"] == "ctx"
+
+
 class TestBuildSupportWindows:
     """Test Windows build helper runtime staging."""
 

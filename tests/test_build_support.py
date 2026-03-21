@@ -85,6 +85,7 @@ def test_collect_windows_winsparkle_binaries_collects_staged_dll(tmp_path):
 def test_core_requirement_distributions_follow_requirements_file(tmp_path):
     """Frozen bundle mappings should be derived from requirements-core.txt."""
     distributions = read_core_requirement_distributions(PROJECT_ROOT)
+    assert "certifi" in distributions
     assert "scikit-learn" in distributions
     assert "opencv-python" in distributions
     assert "google-api-python-client" in distributions
@@ -94,6 +95,7 @@ def test_core_requirement_distributions_follow_requirements_file(tmp_path):
 def test_core_pyinstaller_collect_targets_cover_packaged_runtime_dependencies(tmp_path):
     """Frozen builds should explicitly collect dynamic-import package trees."""
     targets = get_core_pyinstaller_collect_targets(PROJECT_ROOT)
+    assert "certifi" in targets
     assert "googleapiclient" in targets
     assert "google_auth_httplib2" in targets
     assert "httplib2" in targets
@@ -107,6 +109,7 @@ def test_core_pyinstaller_collect_targets_cover_packaged_runtime_dependencies(tm
 def test_core_pyinstaller_metadata_covers_core_requirements(tmp_path):
     """Frozen builds should carry distribution metadata for bundled core requirements."""
     metadata = get_core_pyinstaller_metadata(PROJECT_ROOT)
+    assert "certifi" in metadata
     assert "google-api-python-client" in metadata
     assert "scikit-learn" in metadata
     assert "scipy" in metadata

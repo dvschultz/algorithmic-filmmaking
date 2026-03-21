@@ -1,6 +1,7 @@
 # Algorithmic Filmmaking - Pure Python MVP
 # Core dependencies for scene detection and video processing
 
+certifi>=2024.0.0
 click>=8.0
 PySide6>=6.6
 python-mpv>=1.0.8

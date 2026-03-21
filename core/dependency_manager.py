@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import platform
+import ssl
 import stat
 import subprocess
 import sys
@@ -24,6 +25,11 @@ import tempfile
 import urllib.request
 from pathlib import Path
 from typing import Callable, Optional
+
+try:
+    import certifi
+except ImportError:  # pragma: no cover - optional during local development
+    certifi = None
 
 from core.binary_resolver import get_subprocess_kwargs
 from core.paths import get_managed_bin_dir, get_managed_packages_dir, get_managed_python_dir
@@ -172,6 +178,18 @@ def _verify_sha256(file_path: Path, expected_hash: str) -> bool:
     return True
 
 
+def _get_ssl_context() -> ssl.SSLContext:
+    """Return an SSL context for HTTPS downloads.
+
+    Frozen Windows builds cannot rely on OpenSSL's default CA search paths
+    being present inside the packaged app. Prefer certifi's bundled CA store
+    when available so runtime downloads keep working after packaging.
+    """
+    if certifi is not None:
+        return ssl.create_default_context(cafile=certifi.where())
+    return ssl.create_default_context()
+
+
 def _download_file(
     url: str,
     dest: Path,
@@ -202,7 +220,11 @@ def _download_file(
             progress_callback(0.0, f"Downloading {label}...")
 
         req = urllib.request.Request(url, headers={"User-Agent": "Scene-Ripper/1.0"})
-        with urllib.request.urlopen(req, timeout=120) as response:
+        urlopen_kwargs: dict[str, object] = {"timeout": 120}
+        if url.lower().startswith("https://"):
+            urlopen_kwargs["context"] = _get_ssl_context()
+
+        with urllib.request.urlopen(req, **urlopen_kwargs) as response:
             total = int(response.headers.get("Content-Length", 0))
             downloaded = 0
             chunk_size = 64 * 1024  # 64 KB chunks

@@ -9,6 +9,7 @@ from pathlib import Path
 WINDOWS_MPV_DLL_NAMES = ("mpv-2.dll", "libmpv-2.dll", "mpv-1.dll")
 WINDOWS_WINSPARKLE_DLL_NAMES = ("WinSparkle.dll", "winsparkle.dll")
 REQUIREMENT_TO_IMPORT_TARGET = {
+    "certifi": "certifi",
     "click": "click",
     "python-mpv": "mpv",
     "scenedetect": "scenedetect",
