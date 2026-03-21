@@ -114,6 +114,7 @@ jobs:
           APP_BUILD_VERSION: ${{ steps.version.outputs.version }}
           SPARKLE_FEED_URL: https://github.com/${{ github.repository }}/releases/download/${{ env.UPDATE_FEED_TAG }}/appcast-macos.xml
           SPARKLE_PUBLIC_ED_KEY: ${{ secrets.UPDATE_PUBLIC_ED_KEY }}
+          UPDATE_PRIVATE_ED_KEY: ${{ secrets.UPDATE_PRIVATE_ED_KEY }}
         run: |
           pyinstaller packaging/macos/scene_ripper.spec \
             --distpath dist \

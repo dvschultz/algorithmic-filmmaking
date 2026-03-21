@@ -21,10 +21,12 @@ build_support = _load_module("scene_ripper_build_support_tests", "packaging/buil
 collect_macos_sparkle_datas = build_support.collect_macos_sparkle_datas
 collect_windows_winsparkle_binaries = build_support.collect_windows_winsparkle_binaries
 get_core_pyinstaller_collect_targets = build_support.get_core_pyinstaller_collect_targets
+get_core_pyinstaller_hiddenimports = build_support.get_core_pyinstaller_hiddenimports
 get_core_pyinstaller_metadata = build_support.get_core_pyinstaller_metadata
 get_pyinstaller_data_excludes = build_support.get_pyinstaller_data_excludes
 get_pyinstaller_hiddenimport_excludes = build_support.get_pyinstaller_hiddenimport_excludes
 read_core_requirement_distributions = build_support.read_core_requirement_distributions
+resolve_update_public_ed_key = build_support.resolve_update_public_ed_key
 use_full_package_collection = build_support.use_full_package_collection
 
 
@@ -115,6 +117,45 @@ def test_core_pyinstaller_metadata_covers_core_requirements(tmp_path):
     assert "scipy" in metadata
     assert "pillow" in metadata
     assert "opencv-python" in metadata
+
+
+def test_core_pyinstaller_hiddenimports_include_on_demand_stdlib_dependencies():
+    """Frozen builds should carry stdlib modules needed by on-demand packages."""
+    hiddenimports = get_core_pyinstaller_hiddenimports()
+    assert "pickletools" in hiddenimports
+
+
+def test_resolve_update_public_ed_key_prefers_explicit_value():
+    """Explicitly configured updater keys should pass through unchanged."""
+    assert resolve_update_public_ed_key("public-key", "ignored") == "public-key"
+
+
+def test_resolve_update_public_ed_key_derives_from_private_seed():
+    """Updater packaging should derive the public key from a raw Ed25519 seed."""
+    import base64
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+
+    private = ed25519.Ed25519PrivateKey.generate()
+    private_seed = private.private_bytes(
+        serialization.Encoding.Raw,
+        serialization.PrivateFormat.Raw,
+        serialization.NoEncryption(),
+    )
+    expected_public = base64.b64encode(
+        private.public_key().public_bytes(
+            serialization.Encoding.Raw,
+            serialization.PublicFormat.Raw,
+        )
+    ).decode("ascii")
+
+    derived_public = resolve_update_public_ed_key(
+        "",
+        base64.b64encode(private_seed).decode("ascii"),
+    )
+
+    assert derived_public == expected_public
 
 
 def test_litellm_uses_curated_collection_rules():

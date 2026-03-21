@@ -28,6 +28,7 @@ UPDATE_CHANNEL = os.environ.get("APP_UPDATE_CHANNEL", "stable")
 WINSPARKLE_FEED_URL = os.environ.get("WINSPARKLE_APPCAST_URL", "")
 WINSPARKLE_BETA_FEED_URL = os.environ.get("WINSPARKLE_APPCAST_BETA_URL", "")
 WINSPARKLE_PUBLIC_ED_KEY = os.environ.get("WINSPARKLE_PUBLIC_ED_KEY", "")
+WINSPARKLE_PRIVATE_ED_KEY = os.environ.get("UPDATE_PRIVATE_ED_KEY", "")
 PROJECT_ROOT = Path.cwd()
 VERSION_FILE = PROJECT_ROOT / "build" / "release-metadata" / "app_version.txt"
 BUILD_VERSION_FILE = PROJECT_ROOT / "build" / "release-metadata" / "app_build_version.txt"
@@ -49,6 +50,10 @@ build_support_spec = importlib.util.spec_from_file_location(
 )
 build_support = importlib.util.module_from_spec(build_support_spec)
 build_support_spec.loader.exec_module(build_support)
+WINSPARKLE_PUBLIC_ED_KEY = build_support.resolve_update_public_ed_key(
+    WINSPARKLE_PUBLIC_ED_KEY,
+    WINSPARKLE_PRIVATE_ED_KEY,
+)
 binaries = (
     build_support.collect_windows_mpv_binaries(PROJECT_ROOT)
     + build_support.collect_windows_winsparkle_binaries(PROJECT_ROOT)
@@ -120,7 +125,7 @@ a = Analysis(
         # scenedetect
         "scenedetect",
         "scenedetect.detectors",
-    ] + core_requirement_hiddenimports),
+    ] + list(build_support.get_core_pyinstaller_hiddenimports()) + core_requirement_hiddenimports),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import os
 import subprocess
 from pathlib import Path
@@ -38,6 +40,11 @@ SUPPLEMENTAL_METADATA_TARGETS = (
     "httplib2",
     "uritemplate",
     "scipy",
+)
+SUPPLEMENTAL_HIDDENIMPORTS = (
+    # torch.package imports this stdlib module at runtime. The frozen base app
+    # still needs it even when torch itself is installed on demand later.
+    "pickletools",
 )
 PYINSTALLER_HANDLED_REQUIREMENTS = {
     "pyside6",
@@ -122,6 +129,11 @@ def get_core_pyinstaller_metadata(project_root: Path) -> tuple[str, ...]:
     return tuple(dict.fromkeys(metadata))
 
 
+def get_core_pyinstaller_hiddenimports() -> tuple[str, ...]:
+    """Return extra hidden imports needed beyond collected package trees."""
+    return SUPPLEMENTAL_HIDDENIMPORTS
+
+
 def use_full_package_collection(module_name: str) -> bool:
     """Return whether PyInstaller should use collect_all() for this package."""
     return module_name not in CURATED_PACKAGE_COLLECTIONS
@@ -135,6 +147,55 @@ def get_pyinstaller_data_excludes(module_name: str) -> tuple[str, ...]:
 def get_pyinstaller_hiddenimport_excludes(module_name: str) -> tuple[str, ...]:
     """Return package-specific hidden import prefixes to skip."""
     return PACKAGE_HIDDENIMPORT_EXCLUDES.get(module_name, ())
+
+
+def resolve_update_public_ed_key(
+    explicit_public_key: str = "",
+    private_key: str = "",
+) -> str:
+    """Return the updater public Ed25519 key, deriving it from the private key if needed.
+
+    The private key is expected to be a base64-encoded raw Ed25519 seed, which is
+    the format used by Sparkle/WinSparkle tooling. A PEM-encoded private key is
+    also accepted.
+    """
+    public_key = explicit_public_key.strip()
+    if public_key:
+        return public_key
+
+    private_key = private_key.strip()
+    if not private_key:
+        return ""
+
+    try:
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import ed25519
+    except Exception:
+        return ""
+
+    try:
+        if private_key.startswith("-----BEGIN"):
+            private = serialization.load_pem_private_key(
+                private_key.encode("utf-8"),
+                password=None,
+            )
+            if not isinstance(private, ed25519.Ed25519PrivateKey):
+                return ""
+        else:
+            raw_key = base64.b64decode(private_key.encode("utf-8"), validate=True)
+            if len(raw_key) == 64:
+                raw_key = raw_key[:32]
+            if len(raw_key) != 32:
+                return ""
+            private = ed25519.Ed25519PrivateKey.from_private_bytes(raw_key)
+
+        public = private.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+        return base64.b64encode(public).decode("ascii")
+    except (ValueError, TypeError, binascii.Error):
+        return ""
 
 
 def find_windows_mpv_runtime_dir(project_root: Path) -> Path | None:

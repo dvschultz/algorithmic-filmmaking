@@ -27,6 +27,7 @@ BUILD_VERSION = os.environ.get("APP_BUILD_VERSION", VERSION)
 UPDATE_CHANNEL = os.environ.get("APP_UPDATE_CHANNEL", "stable")
 SPARKLE_FEED_URL = os.environ.get("SPARKLE_FEED_URL", "")
 SPARKLE_PUBLIC_ED_KEY = os.environ.get("SPARKLE_PUBLIC_ED_KEY", "")
+SPARKLE_PRIVATE_ED_KEY = os.environ.get("UPDATE_PRIVATE_ED_KEY", "")
 PROJECT_ROOT = Path.cwd()
 VERSION_FILE = PROJECT_ROOT / "build" / "release-metadata" / "app_version.txt"
 BUILD_VERSION_FILE = PROJECT_ROOT / "build" / "release-metadata" / "app_build_version.txt"
@@ -42,6 +43,10 @@ build_support_spec = importlib.util.spec_from_file_location(
 )
 build_support = importlib.util.module_from_spec(build_support_spec)
 build_support_spec.loader.exec_module(build_support)
+SPARKLE_PUBLIC_ED_KEY = build_support.resolve_update_public_ed_key(
+    SPARKLE_PUBLIC_ED_KEY,
+    SPARKLE_PRIVATE_ED_KEY,
+)
 binaries = build_support.collect_macos_mpv_binaries(PROJECT_ROOT)
 sparkle_datas = build_support.collect_macos_sparkle_datas(PROJECT_ROOT)
 
@@ -108,7 +113,7 @@ a = Analysis(
         # scenedetect
         "scenedetect",
         "scenedetect.detectors",
-    ] + core_requirement_hiddenimports),
+    ] + list(build_support.get_core_pyinstaller_hiddenimports()) + core_requirement_hiddenimports),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

@@ -130,6 +130,7 @@ jobs:
           APP_BUILD_VERSION: ${{ steps.version.outputs.version }}
           WINSPARKLE_APPCAST_URL: https://github.com/${{ github.repository }}/releases/download/${{ env.UPDATE_FEED_TAG }}/appcast-windows.xml
           WINSPARKLE_PUBLIC_ED_KEY: ${{ secrets.UPDATE_PUBLIC_ED_KEY }}
+          UPDATE_PRIVATE_ED_KEY: ${{ secrets.UPDATE_PRIVATE_ED_KEY }}
         run: pyinstaller packaging/windows/scene_ripper.spec --distpath dist --workpath build --noconfirm
 
       - name: Verify PyInstaller output
@@ -149,6 +150,26 @@ jobs:
           } | Select-Object -First 1
           if (-not $bundledWinSparkleDll) {
             throw "Bundled WinSparkle.dll missing from dist output"
+          }
+
+          $bundledFeedFile = Get-ChildItem -Path "dist/Scene Ripper" -Recurse -File | Where-Object {
+            $_.Name -eq "app_update_feed_url.txt"
+          } | Select-Object -First 1
+          if (-not $bundledFeedFile) {
+            throw "Bundled WinSparkle feed metadata file missing from dist output"
+          }
+          if ([string]::IsNullOrWhiteSpace((Get-Content $bundledFeedFile.FullName -Raw))) {
+            throw "Bundled WinSparkle feed metadata file is empty"
+          }
+
+          $bundledPublicKeyFile = Get-ChildItem -Path "dist/Scene Ripper" -Recurse -File | Where-Object {
+            $_.Name -eq "app_update_public_key.txt"
+          } | Select-Object -First 1
+          if (-not $bundledPublicKeyFile) {
+            throw "Bundled WinSparkle public-key metadata file missing from dist output"
+          }
+          if ([string]::IsNullOrWhiteSpace((Get-Content $bundledPublicKeyFile.FullName -Raw))) {
+            throw "Bundled WinSparkle public-key metadata file is empty"
           }
 
       - name: Smoke test frozen app startup
