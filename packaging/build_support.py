@@ -170,7 +170,11 @@ def resolve_update_public_ed_key(
     try:
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric import ed25519
-    except Exception:
+    except Exception as exc:
+        if private_key:
+            raise RuntimeError(
+                "Cannot derive updater public key because cryptography is unavailable."
+            ) from exc
         return ""
 
     def _derive_from_private(private: object) -> str:

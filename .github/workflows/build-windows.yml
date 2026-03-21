@@ -122,14 +122,59 @@ jobs:
           Copy-Item $winSparkleTool.FullName -Destination $winSparkleToolsDir -Force
 
       - name: Install dependencies
-        run: pip install -r requirements-core.txt pyinstaller
+        run: pip install -r requirements-core.txt pyinstaller cryptography
+
+      - name: Validate updater signing metadata
+        shell: bash
+        env:
+          UPDATE_FEED_URL: https://github.com/${{ github.repository }}/releases/download/${{ env.UPDATE_FEED_TAG }}/appcast-windows.xml
+          UPDATE_PUBLIC_ED_KEY: ${{ secrets.UPDATE_PUBLIC_ED_KEY }}
+          UPDATE_PRIVATE_ED_KEY: ${{ secrets.UPDATE_PRIVATE_ED_KEY }}
+        run: |
+          python - <<'PY'
+          import importlib.util
+          import os
+          from pathlib import Path
+
+          spec = importlib.util.spec_from_file_location(
+              "scene_ripper_build_support",
+              Path("packaging/build_support.py"),
+          )
+          build_support = importlib.util.module_from_spec(spec)
+          assert spec.loader is not None
+          spec.loader.exec_module(build_support)
+
+          feed_url = os.environ.get("UPDATE_FEED_URL", "").strip()
+          explicit_public = os.environ.get("UPDATE_PUBLIC_ED_KEY", "").strip()
+          private_key = os.environ.get("UPDATE_PRIVATE_ED_KEY", "").strip()
+          resolved_public = build_support.resolve_update_public_ed_key(
+              explicit_public,
+              private_key,
+          )
+
+          print(f"windows_feed_url_present={bool(feed_url)}")
+          print(f"windows_public_key_present={bool(explicit_public)}")
+          print(f"windows_private_key_present={bool(private_key)}")
+          print(f"windows_resolved_public_key_present={bool(resolved_public)}")
+
+          if not feed_url:
+              raise SystemExit("Windows updater feed URL is missing for the release build.")
+          if not resolved_public:
+              raise SystemExit(
+                  "Unable to resolve Windows updater public key from "
+                  "UPDATE_PUBLIC_ED_KEY or UPDATE_PRIVATE_ED_KEY."
+              )
+
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as fh:
+              fh.write(f"RESOLVED_UPDATE_PUBLIC_ED_KEY={resolved_public}\n")
+          PY
 
       - name: Build with PyInstaller
         env:
           APP_VERSION: ${{ steps.version.outputs.version }}
           APP_BUILD_VERSION: ${{ steps.version.outputs.version }}
           WINSPARKLE_APPCAST_URL: https://github.com/${{ github.repository }}/releases/download/${{ env.UPDATE_FEED_TAG }}/appcast-windows.xml
-          WINSPARKLE_PUBLIC_ED_KEY: ${{ secrets.UPDATE_PUBLIC_ED_KEY }}
+          WINSPARKLE_PUBLIC_ED_KEY: ${{ env.RESOLVED_UPDATE_PUBLIC_ED_KEY }}
           UPDATE_PRIVATE_ED_KEY: ${{ secrets.UPDATE_PRIVATE_ED_KEY }}
         run: pyinstaller packaging/windows/scene_ripper.spec --distpath dist --workpath build --noconfirm
 
