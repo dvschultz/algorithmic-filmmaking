@@ -155,11 +155,23 @@ jobs:
         shell: pwsh
         run: |
           $env:SCENE_RIPPER_STARTUP_SMOKE_TEST = "1"
-          & "dist/Scene Ripper/Scene Ripper.exe"
-          $exitCode = $LASTEXITCODE
-          Remove-Item Env:\SCENE_RIPPER_STARTUP_SMOKE_TEST -ErrorAction SilentlyContinue
-          if ($exitCode -ne 0) {
-            throw "Frozen app startup smoke test failed with exit code $exitCode"
+          $appPath = "dist/Scene Ripper/Scene Ripper.exe"
+          $process = Start-Process -FilePath $appPath -PassThru
+          try {
+            if (-not $process.WaitForExit(60000)) {
+              try {
+                Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+              } catch {
+              }
+              throw "Frozen app startup smoke test timed out after 60 seconds"
+            }
+
+            $exitCode = $process.ExitCode
+            if ($exitCode -ne 0) {
+              throw "Frozen app startup smoke test failed with exit code $exitCode"
+            }
+          } finally {
+            Remove-Item Env:\SCENE_RIPPER_STARTUP_SMOKE_TEST -ErrorAction SilentlyContinue
           }
 
       - name: Build Inno Setup installer
