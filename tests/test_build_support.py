@@ -158,6 +158,34 @@ def test_resolve_update_public_ed_key_derives_from_private_seed():
     assert derived_public == expected_public
 
 
+def test_resolve_update_public_ed_key_derives_from_private_pkcs8_der():
+    """Updater packaging should also accept base64-encoded PKCS8 DER private keys."""
+    import base64
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+
+    private = ed25519.Ed25519PrivateKey.generate()
+    private_der = private.private_bytes(
+        serialization.Encoding.DER,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    )
+    expected_public = base64.b64encode(
+        private.public_key().public_bytes(
+            serialization.Encoding.Raw,
+            serialization.PublicFormat.Raw,
+        )
+    ).decode("ascii")
+
+    derived_public = resolve_update_public_ed_key(
+        "",
+        base64.b64encode(private_der).decode("ascii"),
+    )
+
+    assert derived_public == expected_public
+
+
 def test_litellm_uses_curated_collection_rules():
     """Frozen builds should not collect LiteLLM proxy/test payloads wholesale."""
     assert not use_full_package_collection("litellm")

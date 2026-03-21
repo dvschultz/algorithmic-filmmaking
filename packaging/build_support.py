@@ -173,27 +173,64 @@ def resolve_update_public_ed_key(
     except Exception:
         return ""
 
-    try:
-        if private_key.startswith("-----BEGIN"):
-            private = serialization.load_pem_private_key(
-                private_key.encode("utf-8"),
-                password=None,
-            )
-            if not isinstance(private, ed25519.Ed25519PrivateKey):
-                return ""
-        else:
-            raw_key = base64.b64decode(private_key.encode("utf-8"), validate=True)
-            if len(raw_key) == 64:
-                raw_key = raw_key[:32]
-            if len(raw_key) != 32:
-                return ""
-            private = ed25519.Ed25519PrivateKey.from_private_bytes(raw_key)
-
+    def _derive_from_private(private: object) -> str:
+        if not isinstance(private, ed25519.Ed25519PrivateKey):
+            return ""
         public = private.public_key().public_bytes(
             encoding=serialization.Encoding.Raw,
             format=serialization.PublicFormat.Raw,
         )
         return base64.b64encode(public).decode("ascii")
+
+    try:
+        if private_key.startswith("-----BEGIN"):
+            return _derive_from_private(
+                serialization.load_pem_private_key(
+                    private_key.encode("utf-8"),
+                    password=None,
+                )
+            )
+
+        try:
+            raw_key = base64.b64decode(private_key.encode("utf-8"), validate=True)
+        except binascii.Error:
+            raw_key = b""
+
+        if raw_key:
+            if len(raw_key) == 64:
+                raw_key = raw_key[:32]
+            if len(raw_key) == 32:
+                return _derive_from_private(
+                    ed25519.Ed25519PrivateKey.from_private_bytes(raw_key)
+                )
+            try:
+                return _derive_from_private(
+                    serialization.load_der_private_key(raw_key, password=None)
+                )
+            except ValueError:
+                pass
+
+        hex_candidate = private_key.removeprefix("0x").removeprefix("0X")
+        if len(hex_candidate) % 2 == 0:
+            try:
+                raw_hex = bytes.fromhex(hex_candidate)
+            except ValueError:
+                raw_hex = b""
+            if raw_hex:
+                if len(raw_hex) == 64:
+                    raw_hex = raw_hex[:32]
+                if len(raw_hex) == 32:
+                    return _derive_from_private(
+                        ed25519.Ed25519PrivateKey.from_private_bytes(raw_hex)
+                    )
+                try:
+                    return _derive_from_private(
+                        serialization.load_der_private_key(raw_hex, password=None)
+                    )
+                except ValueError:
+                    pass
+
+        return ""
     except (ValueError, TypeError, binascii.Error):
         return ""
 
