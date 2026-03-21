@@ -8,6 +8,7 @@ Covers:
 
 import platform
 from unittest.mock import patch
+import pytest
 
 from core.settings import Settings
 
@@ -78,6 +79,23 @@ class TestSigLIP2Classification:
         from core.analysis import shots
         assert hasattr(shots, "is_model_loaded")
         assert hasattr(shots, "unload_model")
+
+    def test_classify_shot_type_raises_on_runtime_failure(self, tmp_path, monkeypatch):
+        from core.analysis.shots import (
+            ShotClassificationError,
+            classify_shot_type,
+        )
+
+        image_path = tmp_path / "thumb.jpg"
+        image_path.write_bytes(b"not-a-real-image")
+
+        monkeypatch.setattr(
+            "core.analysis.shots.load_classification_model",
+            lambda: (_ for _ in ()).throw(RuntimeError("transformers missing")),
+        )
+
+        with pytest.raises(ShotClassificationError, match="transformers missing"):
+            classify_shot_type(image_path)
 
 
 # --- P1.2: Gemini Flash Lite cloud shot classification ---

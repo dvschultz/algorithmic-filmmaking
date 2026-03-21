@@ -52,6 +52,22 @@ class ShotTypeWorker(CancellableWorker):
     shot_type_ready = Signal(str, str, float)  # clip_id, shot_type, confidence
     analysis_completed = Signal()
 
+    @staticmethod
+    def _summarize_errors(errors: list[tuple[str, str]]) -> str:
+        """Create a readable summary for one or more clip failures."""
+        preview = "\n".join(
+            f"- {clip_id}: {message}" for clip_id, message in errors[:3]
+        )
+        if len(errors) == 1:
+            return f"Shot type classification failed:\n\n{preview}"
+
+        remaining = len(errors) - 3
+        extra = f"\n- ...and {remaining} more clip(s)" if remaining > 0 else ""
+        return (
+            f"Shot type classification failed for {len(errors)} clips:\n\n"
+            f"{preview}{extra}"
+        )
+
     def __init__(
         self,
         clips: list,
@@ -166,6 +182,7 @@ class ShotTypeWorker(CancellableWorker):
         )
 
         completed = 0
+        errors: list[tuple[str, str]] = []
 
         with ThreadPoolExecutor(max_workers=self._parallelism) as executor:
             future_to_task = {
@@ -188,12 +205,17 @@ class ShotTypeWorker(CancellableWorker):
 
                     if error_msg and error_msg != "Cancelled":
                         self._log_error(error_msg, clip_id)
+                        errors.append((clip_id, error_msg))
                     elif shot_type is not None:
                         self.shot_type_ready.emit(clip_id, shot_type, confidence)
                 except Exception as e:
                     self._log_error(str(e), task.clip_id)
+                    errors.append((task.clip_id, str(e)))
 
                 self.progress.emit(completed, total)
+
+        if errors:
+            self.error.emit(self._summarize_errors(errors))
 
         self.analysis_completed.emit()
         self._log_complete()

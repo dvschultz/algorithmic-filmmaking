@@ -14,6 +14,10 @@ from PIL import Image
 
 logger = logging.getLogger(__name__)
 
+
+class ShotClassificationError(RuntimeError):
+    """Raised when shot classification cannot complete."""
+
 # Shot type categories for zero-shot classification
 # Matches VideoMAE categories: LS, FS, MS, CS, ECS
 SHOT_TYPES = [
@@ -203,8 +207,11 @@ def classify_shot_type(
         return (best_type, confidence)
 
     except Exception as e:
-        logger.error(f"Error classifying shot type: {e}")
-        return ("unknown", 0.0)
+        logger.exception("Error classifying shot type for %s", image_path)
+        reason = str(e).strip() or e.__class__.__name__
+        raise ShotClassificationError(
+            f"Shot type classification failed for {image_path.name}: {reason}"
+        ) from e
 
 
 def get_display_name(shot_type: str) -> str:

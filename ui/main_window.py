@@ -778,6 +778,7 @@ class MainWindow(QMainWindow):
         self._object_detection_finished_handled = False
         self._description_finished_handled = False
         self._shot_type_finished_handled = False
+        self._shot_type_run_error: Optional[str] = None
         self._transcription_finished_handled = False
         self._text_extraction_finished_handled = False
         self._cinematography_finished_handled = False
@@ -3089,6 +3090,9 @@ class MainWindow(QMainWindow):
         if not valid_ops:
             return
 
+        if "shots" in valid_ops:
+            self._shot_type_run_error = None
+
         logger.info(f"Starting analysis pipeline: {valid_ops} on {len(clips)} clips")
         self._gui_state.set_processing("analysis", f"{', '.join(valid_ops)} on {len(clips)} clips")
 
@@ -3203,10 +3207,12 @@ class MainWindow(QMainWindow):
     def _launch_shots_worker(self, clips: list):
         """Launch shot type classification worker."""
         self._shot_type_finished_handled = False
+        self._shot_type_run_error = None
         logger.info(f"Creating ShotTypeWorker (pipeline) for {len(clips)} clips...")
         self.shot_type_worker = ShotTypeWorker(clips, self.project.sources_by_id, parallelism=self.settings.local_model_parallelism)
         self.shot_type_worker.progress.connect(self._on_shot_type_progress)
         self.shot_type_worker.shot_type_ready.connect(self._on_shot_type_ready)
+        self.shot_type_worker.error.connect(self._on_shot_type_error)
         self.shot_type_worker.analysis_completed.connect(
             self._on_pipeline_shots_finished, Qt.UniqueConnection
         )
@@ -3495,9 +3501,14 @@ class MainWindow(QMainWindow):
 
         self.analyze_tab.set_analyzing(False)
         self.progress_bar.setVisible(False)
-        self.status_bar.showMessage(
-            f"Analysis complete - {clip_count} clips ({', '.join(completed)})"
-        )
+        if self._shot_type_run_error and "shots" in completed:
+            self.status_bar.showMessage(
+                f"Analysis finished with shot type errors - {clip_count} clips ({', '.join(completed)})"
+            )
+        else:
+            self.status_bar.showMessage(
+                f"Analysis complete - {clip_count} clips ({', '.join(completed)})"
+            )
 
         # Save project
         if self.project.path:
@@ -3589,6 +3600,24 @@ class MainWindow(QMainWindow):
                 "Transcription Error",
                 f"An error occurred during transcription:\n\n{error}"
             )
+
+    @Slot(str)
+    def _on_shot_type_error(self, error_msg: str):
+        """Handle shot type classification errors."""
+        logger.warning(f"Shot type classification error: {error_msg}")
+        self._shot_type_run_error = error_msg
+        self._gui_state.set_last_error(
+            f"Shot type classification error: {error_msg}"
+        )
+        self.status_bar.showMessage(
+            "Shot type classification finished with errors",
+            5000,
+        )
+        QMessageBox.warning(
+            self,
+            "Shot Type Classification Error",
+            error_msg,
+        )
 
     def _on_classify_from_tab(self):
         """Handle classification request (standalone redirect to pipeline)."""
@@ -3778,7 +3807,14 @@ class MainWindow(QMainWindow):
 
         clips = self._agent_shot_clips
         clip_count = len(clips)
-        self.status_bar.showMessage(f"Shot type classification complete - {clip_count} clips")
+        if self._shot_type_run_error:
+            self.status_bar.showMessage(
+                f"Shot type classification finished with errors - {clip_count} clips"
+            )
+        else:
+            self.status_bar.showMessage(
+                f"Shot type classification complete - {clip_count} clips"
+            )
 
         # Build shot type summary
         shot_types = {}
@@ -5223,6 +5259,8 @@ class MainWindow(QMainWindow):
         if not operations:
             return
 
+        self._shot_type_run_error = None
+
         logger.info(
             f"Starting frame analysis: {operations} on {len(targets)} targets"
         )
@@ -5272,6 +5310,7 @@ class MainWindow(QMainWindow):
             )
             worker.progress.connect(self._on_shot_type_progress)
             worker.shot_type_ready.connect(self._on_shot_type_ready)
+            worker.error.connect(self._on_shot_type_error)
             worker.analysis_completed.connect(
                 lambda: self._on_frame_analysis_op_finished("shots")
             )
@@ -5381,7 +5420,13 @@ class MainWindow(QMainWindow):
         """Handle completion of all frame analysis operations."""
         logger.info("Frame analysis complete")
         self.progress_bar.setVisible(False)
-        self.status_bar.showMessage("Frame analysis complete", 3000)
+        if self._shot_type_run_error:
+            self.status_bar.showMessage(
+                "Frame analysis finished with shot type errors",
+                5000,
+            )
+        else:
+            self.status_bar.showMessage("Frame analysis complete", 3000)
 
         # Mark analyzed frames
         targets = getattr(self, '_frame_analysis_targets', [])
@@ -6054,6 +6099,7 @@ class MainWindow(QMainWindow):
 
         # Reset guard
         self._shot_type_finished_handled = False
+        self._shot_type_run_error = None
 
         # Mark that we're waiting for shot analysis via agent
         self._pending_agent_shot_analysis = True
@@ -6074,6 +6120,7 @@ class MainWindow(QMainWindow):
         self.shot_type_worker = ShotTypeWorker(clips, self.project.sources_by_id, parallelism=self.settings.local_model_parallelism)
         self.shot_type_worker.progress.connect(self._on_shot_type_progress)
         self.shot_type_worker.shot_type_ready.connect(self._on_shot_type_ready)
+        self.shot_type_worker.error.connect(self._on_shot_type_error)
         self.shot_type_worker.analysis_completed.connect(self._on_agent_shot_analysis_finished, Qt.UniqueConnection)
         # Clean up thread safely after it finishes
         self.shot_type_worker.finished.connect(self.shot_type_worker.deleteLater)
@@ -7435,11 +7482,13 @@ class MainWindow(QMainWindow):
                 return
 
             self._shot_type_finished_handled = False
+            self._shot_type_run_error = None
             self.shot_type_worker = ShotTypeWorker(clips_needing_shots, self.project.sources_by_id, parallelism=self.settings.local_model_parallelism)
             self.shot_type_worker.progress.connect(
                 self.intention_workflow.on_analysis_progress
             )
             self.shot_type_worker.shot_type_ready.connect(self._on_shot_type_ready)
+            self.shot_type_worker.error.connect(self._on_shot_type_error)
             self.shot_type_worker.analysis_completed.connect(
                 self._on_intention_shot_analysis_finished, Qt.UniqueConnection
             )
@@ -7509,6 +7558,11 @@ class MainWindow(QMainWindow):
         self._shot_type_finished_handled = True
 
         logger.info("Intention shot type analysis finished")
+        if self._shot_type_run_error:
+            self.status_bar.showMessage(
+                "Shot type classification finished with errors",
+                5000,
+            )
 
         if self.intention_workflow:
             self.intention_workflow.on_analysis_finished()

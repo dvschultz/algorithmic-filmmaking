@@ -94,7 +94,7 @@ def _build_fake_worker(completion_signal: str, extra_signals: list[str]):
             "_launch_shots_worker",
             "ShotTypeWorker",
             "analysis_completed",
-            ["progress", "shot_type_ready"],
+            ["progress", "shot_type_ready", "error"],
             "shots",
         ),
         (
@@ -163,6 +163,9 @@ def test_launch_worker_emits_pipeline_completion(
         def _on_shot_type_ready(self, *_args):
             return None
 
+        def _on_shot_type_error(self, *_args):
+            return None
+
         def _on_classification_progress(self, *_args):
             return None
 
@@ -207,3 +210,26 @@ def test_launch_worker_emits_pipeline_completion(
     getattr(MainWindow, launcher)(harness, [SimpleNamespace(id="clip-1")])
 
     assert harness.finished_ops == [expected_op]
+
+
+def test_shot_type_error_handler_shows_reason(monkeypatch):
+    messages = []
+
+    class Harness:
+        def __init__(self):
+            self._shot_type_run_error = None
+            self._gui_state = SimpleNamespace(set_last_error=lambda value: messages.append(("last_error", value)))
+            self.status_bar = SimpleNamespace(showMessage=lambda text, timeout=0: messages.append(("status", text, timeout)))
+
+    def _capture_warning(parent, title, message):
+        messages.append(("dialog", title, message))
+
+    monkeypatch.setattr("ui.main_window.QMessageBox.warning", _capture_warning)
+
+    harness = Harness()
+    MainWindow._on_shot_type_error(harness, "clip-1: torch import failed")
+
+    assert harness._shot_type_run_error == "clip-1: torch import failed"
+    assert ("last_error", "Shot type classification error: clip-1: torch import failed") in messages
+    assert ("status", "Shot type classification finished with errors", 5000) in messages
+    assert ("dialog", "Shot Type Classification Error", "clip-1: torch import failed") in messages

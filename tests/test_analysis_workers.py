@@ -188,6 +188,49 @@ class TestShotTypeWorkerTaskBuilding:
         assert len(worker._tasks) == 0
 
 
+class TestShotTypeWorkerErrors:
+    def test_emits_aggregated_error_summary(
+        self,
+        monkeypatch,
+        thumbnail_path,
+        sources_by_id,
+    ):
+        from ui.workers.shot_type_worker import ShotTypeWorker
+
+        clips = [
+            _make_clip_with_thumb("clip-1", thumbnail_path),
+            _make_clip_with_thumb("clip-2", thumbnail_path),
+        ]
+        worker = ShotTypeWorker(
+            clips,
+            sources_by_id,
+            parallelism=1,
+            skip_existing=False,
+        )
+
+        def _raise_for_all(*_args, **_kwargs):
+            raise RuntimeError("torch import failed")
+
+        monkeypatch.setattr(
+            "core.analysis.shots.classify_shot_type_tiered",
+            _raise_for_all,
+        )
+
+        errors = []
+        completed = []
+        worker.error.connect(errors.append)
+        worker.analysis_completed.connect(lambda: completed.append(True))
+
+        worker.run()
+
+        assert completed == [True]
+        assert len(errors) == 1
+        assert "Shot type classification failed for 2 clips" in errors[0]
+        assert "clip-1" in errors[0]
+        assert "clip-2" in errors[0]
+        assert "torch import failed" in errors[0]
+
+
 # --- TranscriptionWorker ---
 
 class TestTranscriptionWorkerTaskBuilding:
