@@ -13,6 +13,10 @@ import sys
 
 from core.app_version import get_app_version
 from core.paths import is_frozen, get_managed_packages_dir, get_log_dir, ensure_app_dirs
+from core.runtime_smoke import (
+    RUNTIME_SMOKE_TARGET_ENV,
+    run_runtime_smoke_target,
+)
 
 
 def _setup_frozen_environment():
@@ -115,6 +119,12 @@ def main():
     logger.info(f"Frozen: {is_frozen()}")
 
     startup_smoke_test = os.environ.get(STARTUP_SMOKE_TEST_ENV) == "1"
+    runtime_smoke_target = os.environ.get(RUNTIME_SMOKE_TARGET_ENV, "").strip()
+
+    if runtime_smoke_target:
+        completed_target = run_runtime_smoke_target(runtime_smoke_target)
+        logger.info("Runtime smoke test '%s' completed successfully", completed_target)
+        return 0
 
     # Enable GL context sharing so QOpenGLWidget gets a shared context on macOS.
     # Without this, mpv's render API sees stale compositor data in the FBO.

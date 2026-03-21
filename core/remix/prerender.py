@@ -105,8 +105,8 @@ def prerender_clip(
         ffmpeg_path,
         "-y",
         "-ss", str(start_seconds),
-        "-i", str(source_path),
         "-t", str(duration_seconds),
+        "-i", str(source_path),
     ]
 
     if vf_parts:

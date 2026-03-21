@@ -233,12 +233,124 @@ jobs:
             Remove-Item Env:\LOCALAPPDATA -ErrorAction SilentlyContinue
           }
 
+      - name: Run frozen runtime validation suite
+        shell: pwsh
+        run: |
+          function Show-SmokeDiagnostics {
+            param(
+              [string]$stdoutLog,
+              [string]$stderrLog,
+              [string]$appLog
+            )
+
+            if (Test-Path $stdoutLog) {
+              Write-Host "=== Smoke test stdout ==="
+              Get-Content $stdoutLog -Tail 200
+            }
+
+            if (Test-Path $stderrLog) {
+              Write-Host "=== Smoke test stderr ==="
+              Get-Content $stderrLog -Tail 200
+            }
+
+            if (Test-Path $appLog) {
+              Write-Host "=== Scene Ripper app log ==="
+              Get-Content $appLog -Tail 300
+            } else {
+              Write-Host "Scene Ripper app log not found at $appLog"
+            }
+          }
+
+          function Test-SmokeSuccess {
+            param(
+              [string]$successMarker,
+              [string[]]$paths
+            )
+
+            foreach ($path in $paths) {
+              if ((Test-Path $path) -and (Select-String -Path $path -SimpleMatch $successMarker -Quiet)) {
+                return $true
+              }
+            }
+            return $false
+          }
+
+          function Invoke-SceneRipperSmokeTarget {
+            param(
+              [string]$Target,
+              [int]$TimeoutSeconds = 60
+            )
+
+            $targetArtifactsDir = Join-Path $PWD "runtime-validation-artifacts/$Target"
+            $targetLocalAppData = Join-Path $targetArtifactsDir "localappdata"
+            New-Item -ItemType Directory -Force -Path $targetLocalAppData | Out-Null
+
+            $stdoutLog = Join-Path $targetArtifactsDir "stdout.log"
+            $stderrLog = Join-Path $targetArtifactsDir "stderr.log"
+            $appLog = Join-Path $targetLocalAppData "Scene Ripper/logs/scene-ripper.log"
+            $successMarker = "Runtime smoke test '$Target' completed successfully"
+
+            $env:SCENE_RIPPER_RUNTIME_SMOKE_TEST_TARGET = $Target
+            $env:LOCALAPPDATA = $targetLocalAppData
+
+            $process = Start-Process `
+              -FilePath "dist/Scene Ripper/Scene Ripper.exe" `
+              -PassThru `
+              -RedirectStandardOutput $stdoutLog `
+              -RedirectStandardError $stderrLog
+
+            try {
+              $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+              while ((Get-Date) -lt $deadline) {
+                if (Test-SmokeSuccess -successMarker $successMarker -paths @($appLog, $stderrLog, $stdoutLog)) {
+                  if (-not $process.WaitForExit(5000)) {
+                    try {
+                      Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+                    } catch {
+                    }
+                  }
+
+                  if ($process.HasExited -and $process.ExitCode -ne 0) {
+                    Show-SmokeDiagnostics -stdoutLog $stdoutLog -stderrLog $stderrLog -appLog $appLog
+                    throw "Frozen runtime smoke target '$Target' exited with code $($process.ExitCode)"
+                  }
+                  return
+                }
+
+                if ($process.WaitForExit(1000)) {
+                  $exitCode = $process.ExitCode
+                  Show-SmokeDiagnostics -stdoutLog $stdoutLog -stderrLog $stderrLog -appLog $appLog
+                  throw "Frozen runtime smoke target '$Target' exited before reporting success (exit code $exitCode)"
+                }
+              }
+
+              try {
+                if (-not $process.HasExited) {
+                  Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+                }
+              } catch {
+              }
+              Show-SmokeDiagnostics -stdoutLog $stdoutLog -stderrLog $stderrLog -appLog $appLog
+              throw "Frozen runtime smoke target '$Target' timed out after $TimeoutSeconds seconds"
+            } finally {
+              Remove-Item Env:\SCENE_RIPPER_RUNTIME_SMOKE_TEST_TARGET -ErrorAction SilentlyContinue
+              Remove-Item Env:\LOCALAPPDATA -ErrorAction SilentlyContinue
+            }
+          }
+
+          Invoke-SceneRipperSmokeTarget -Target "imports"
+          Invoke-SceneRipperSmokeTarget -Target "project"
+          Invoke-SceneRipperSmokeTarget -Target "scene-detect"
+          Invoke-SceneRipperSmokeTarget -Target "updater"
+
       - name: Upload smoke test diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: SceneRipper-Windows-SmokeTest-Diagnostics
-          path: smoke-test-artifacts
+          path: |
+            smoke-test-artifacts
+            runtime-validation-artifacts
           if-no-files-found: ignore
 
       - name: Build Inno Setup installer
