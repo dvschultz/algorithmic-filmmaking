@@ -8,10 +8,54 @@ from pathlib import Path
 
 WINDOWS_MPV_DLL_NAMES = ("mpv-2.dll", "libmpv-2.dll", "mpv-1.dll")
 WINDOWS_WINSPARKLE_DLL_NAMES = ("WinSparkle.dll", "winsparkle.dll")
+CORE_PYINSTALLER_MODULES = (
+    "click",
+    "scenedetect",
+    "googleapiclient",
+    "google_auth_httplib2",
+    "google.auth",
+    "google.oauth2",
+    "httplib2",
+    "keyring",
+    "litellm",
+    "httpx",
+    "tenacity",
+    "sklearn",
+    "scipy",
+    "PIL",
+)
+CORE_PYINSTALLER_METADATA = (
+    "click",
+    "scenedetect",
+    "google-api-python-client",
+    "google-auth",
+    "google-auth-httplib2",
+    "google-api-core",
+    "googleapis-common-protos",
+    "httplib2",
+    "uritemplate",
+    "keyring",
+    "litellm",
+    "httpx",
+    "tenacity",
+    "scikit-learn",
+    "scipy",
+    "Pillow",
+)
 
 
 def _project_root_from_file(path: str) -> Path:
     return Path(path).resolve().parent.parent
+
+
+def get_core_pyinstaller_modules() -> tuple[str, ...]:
+    """Return importable modules that must be bundled in frozen desktop apps."""
+    return CORE_PYINSTALLER_MODULES
+
+
+def get_core_pyinstaller_metadata() -> tuple[str, ...]:
+    """Return distribution metadata names required by frozen desktop apps."""
+    return CORE_PYINSTALLER_METADATA
 
 
 def find_windows_mpv_runtime_dir(project_root: Path) -> Path | None:

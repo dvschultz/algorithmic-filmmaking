@@ -11,6 +11,8 @@ import importlib.util
 import os
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_submodules, copy_metadata
+
 block_cipher = None
 
 # Version from environment variable or default
@@ -37,6 +39,19 @@ build_support_spec.loader.exec_module(build_support)
 binaries = build_support.collect_macos_mpv_binaries(PROJECT_ROOT)
 sparkle_datas = build_support.collect_macos_sparkle_datas(PROJECT_ROOT)
 
+
+def _unique(items):
+    return list(dict.fromkeys(items))
+
+
+core_requirement_hiddenimports = []
+for module_name in build_support.get_core_pyinstaller_modules():
+    core_requirement_hiddenimports.extend(collect_submodules(module_name))
+
+core_requirement_datas = []
+for metadata_name in build_support.get_core_pyinstaller_metadata():
+    core_requirement_datas.extend(copy_metadata(metadata_name))
+
 a = Analysis(
     ["../../main.py"],
     pathex=[],
@@ -46,8 +61,8 @@ a = Analysis(
         (str(VERSION_FILE), "core"),
         (str(BUILD_VERSION_FILE), "core"),
         (str(UPDATE_CHANNEL_FILE), "core"),
-    ] + sparkle_datas,
-    hiddenimports=[
+    ] + sparkle_datas + core_requirement_datas,
+    hiddenimports=_unique([
         # PySide6 modules actually used by the app
         "PySide6.QtWidgets",
         "PySide6.QtCore",
@@ -62,7 +77,7 @@ a = Analysis(
         # scenedetect
         "scenedetect",
         "scenedetect.detectors",
-    ],
+    ] + core_requirement_hiddenimports),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -120,11 +135,6 @@ a = Analysis(
         "mlx",
         "librosa",
         "einops",
-        # Unused stdlib
-        "tkinter",
-        "unittest",
-        "test",
-        "distutils",
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,

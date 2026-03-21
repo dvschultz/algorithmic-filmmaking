@@ -19,6 +19,8 @@ def _load_module(name: str, relative_path: str):
 build_support = _load_module("scene_ripper_build_support_tests", "packaging/build_support.py")
 collect_macos_sparkle_datas = build_support.collect_macos_sparkle_datas
 collect_windows_winsparkle_binaries = build_support.collect_windows_winsparkle_binaries
+get_core_pyinstaller_metadata = build_support.get_core_pyinstaller_metadata
+get_core_pyinstaller_modules = build_support.get_core_pyinstaller_modules
 
 
 def test_collect_macos_sparkle_datas_returns_empty_when_not_staged(tmp_path):
@@ -73,3 +75,22 @@ def test_collect_windows_winsparkle_binaries_collects_staged_dll(tmp_path):
     collected = collect_windows_winsparkle_binaries(tmp_path)
 
     assert collected == [(str(winsparkle_dll), ".")]
+
+
+def test_core_pyinstaller_modules_cover_packaged_runtime_dependencies():
+    """Frozen builds should explicitly collect modules with dynamic imports."""
+    modules = get_core_pyinstaller_modules()
+    assert "googleapiclient" in modules
+    assert "httplib2" in modules
+    assert "sklearn" in modules
+    assert "scipy" in modules
+    assert "keyring" in modules
+
+
+def test_core_pyinstaller_metadata_covers_core_requirements():
+    """Frozen builds should carry distribution metadata for bundled core requirements."""
+    metadata = get_core_pyinstaller_metadata()
+    assert "google-api-python-client" in metadata
+    assert "scikit-learn" in metadata
+    assert "scipy" in metadata
+    assert "Pillow" in metadata

@@ -11,6 +11,8 @@ import importlib.util
 import os
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_submodules, copy_metadata
+
 block_cipher = None
 
 # Version from environment variable or default
@@ -46,6 +48,19 @@ binaries = (
     + build_support.collect_windows_winsparkle_binaries(PROJECT_ROOT)
 )
 
+
+def _unique(items):
+    return list(dict.fromkeys(items))
+
+
+core_requirement_hiddenimports = []
+for module_name in build_support.get_core_pyinstaller_modules():
+    core_requirement_hiddenimports.extend(collect_submodules(module_name))
+
+core_requirement_datas = []
+for metadata_name in build_support.get_core_pyinstaller_metadata():
+    core_requirement_datas.extend(copy_metadata(metadata_name))
+
 a = Analysis(
     ["../../main.py"],
     pathex=[],
@@ -58,8 +73,8 @@ a = Analysis(
         (str(UPDATE_FEED_FILE), "core"),
         (str(UPDATE_BETA_FEED_FILE), "core"),
         (str(UPDATE_PUBLIC_KEY_FILE), "core"),
-    ],
-    hiddenimports=[
+    ] + core_requirement_datas,
+    hiddenimports=_unique([
         # PySide6 modules actually used by the app
         "PySide6.QtWidgets",
         "PySide6.QtCore",
@@ -74,7 +89,7 @@ a = Analysis(
         # scenedetect
         "scenedetect",
         "scenedetect.detectors",
-    ],
+    ] + core_requirement_hiddenimports),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -133,11 +148,6 @@ a = Analysis(
         "paddlepaddle",
         "librosa",
         "einops",
-        # Unused stdlib
-        "tkinter",
-        "unittest",
-        "test",
-        "distutils",
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
