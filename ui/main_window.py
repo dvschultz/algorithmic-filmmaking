@@ -1,6 +1,7 @@
 """Main application window."""
 
 import logging
+import os
 import re
 import sys
 import time
@@ -8288,6 +8289,11 @@ class MainWindow(QMainWindow):
         # Check for unsaved changes
         if not self._check_unsaved_changes():
             event.ignore()
+            return
+
+        if os.environ.get("SCENE_RIPPER_STARTUP_SMOKE_TEST") == "1":
+            logger.info("Skipping native shutdown during startup smoke test")
+            event.accept()
             return
 
         # Stop playback timer
