@@ -154,25 +154,69 @@ jobs:
       - name: Smoke test frozen app startup
         shell: pwsh
         run: |
+          $smokeArtifactsDir = Join-Path $PWD "smoke-test-artifacts"
+          $smokeLocalAppData = Join-Path $smokeArtifactsDir "localappdata"
+          New-Item -ItemType Directory -Force -Path $smokeLocalAppData | Out-Null
+
+          $stdoutLog = Join-Path $smokeArtifactsDir "stdout.log"
+          $stderrLog = Join-Path $smokeArtifactsDir "stderr.log"
+          $appLog = Join-Path $smokeLocalAppData "Scene Ripper/logs/scene-ripper.log"
+
           $env:SCENE_RIPPER_STARTUP_SMOKE_TEST = "1"
+          $env:LOCALAPPDATA = $smokeLocalAppData
           $appPath = "dist/Scene Ripper/Scene Ripper.exe"
-          $process = Start-Process -FilePath $appPath -PassThru
+          $process = Start-Process `
+            -FilePath $appPath `
+            -PassThru `
+            -RedirectStandardOutput $stdoutLog `
+            -RedirectStandardError $stderrLog
+
+          function Show-SmokeDiagnostics {
+            if (Test-Path $stdoutLog) {
+              Write-Host "=== Smoke test stdout ==="
+              Get-Content $stdoutLog -Tail 200
+            }
+
+            if (Test-Path $stderrLog) {
+              Write-Host "=== Smoke test stderr ==="
+              Get-Content $stderrLog -Tail 200
+            }
+
+            if (Test-Path $appLog) {
+              Write-Host "=== Scene Ripper app log ==="
+              Get-Content $appLog -Tail 300
+            } else {
+              Write-Host "Scene Ripper app log not found at $appLog"
+            }
+          }
+
           try {
             if (-not $process.WaitForExit(60000)) {
               try {
                 Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
               } catch {
               }
+              Show-SmokeDiagnostics
               throw "Frozen app startup smoke test timed out after 60 seconds"
             }
 
             $exitCode = $process.ExitCode
             if ($exitCode -ne 0) {
+              Show-SmokeDiagnostics
               throw "Frozen app startup smoke test failed with exit code $exitCode"
             }
           } finally {
             Remove-Item Env:\SCENE_RIPPER_STARTUP_SMOKE_TEST -ErrorAction SilentlyContinue
+            Remove-Item Env:\LOCALAPPDATA -ErrorAction SilentlyContinue
           }
+
+      - name: Upload smoke test diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SceneRipper-Windows-SmokeTest-Diagnostics
+          path: smoke-test-artifacts
+          if-no-files-found: ignore
 
       - name: Build Inno Setup installer
         env:
