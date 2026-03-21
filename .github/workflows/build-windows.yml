@@ -319,6 +319,13 @@ jobs:
 
                 if ($process.WaitForExit(1000)) {
                   $exitCode = $process.ExitCode
+                  if (Test-SmokeSuccess -successMarker $successMarker -paths @($appLog, $stderrLog, $stdoutLog)) {
+                    if ($exitCode -ne 0) {
+                      Show-SmokeDiagnostics -stdoutLog $stdoutLog -stderrLog $stderrLog -appLog $appLog
+                      throw "Frozen runtime smoke target '$Target' reported success but exited with code $exitCode"
+                    }
+                    return
+                  }
                   Show-SmokeDiagnostics -stdoutLog $stdoutLog -stderrLog $stderrLog -appLog $appLog
                   throw "Frozen runtime smoke target '$Target' exited before reporting success (exit code $exitCode)"
                 }
