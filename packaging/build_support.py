@@ -41,6 +41,33 @@ SUPPLEMENTAL_METADATA_TARGETS = (
 PYINSTALLER_HANDLED_REQUIREMENTS = {
     "pyside6",
 }
+CURATED_PACKAGE_COLLECTIONS = {
+    "litellm",
+}
+PACKAGE_DATA_EXCLUDES = {
+    "litellm": (
+        "**/proxy/**",
+        "**/tests/**",
+        "**/test/**",
+        "**/benchmarks/**",
+        "**/examples/**",
+        "**/example*/**",
+        "**/__pycache__/**",
+        "**/*.md",
+        "**/*.png",
+        "**/*.jpg",
+        "**/*.jpeg",
+        "**/*.gif",
+        "**/*.svg",
+    ),
+}
+PACKAGE_HIDDENIMPORT_EXCLUDES = {
+    "litellm": (
+        "litellm.proxy",
+        "litellm.integrations.test_httpx",
+        "litellm.responses.mcp.litellm_proxy_mcp_handler",
+    ),
+}
 
 
 def _project_root_from_file(path: str) -> Path:
@@ -92,6 +119,21 @@ def get_core_pyinstaller_metadata(project_root: Path) -> tuple[str, ...]:
     ]
     metadata.extend(SUPPLEMENTAL_METADATA_TARGETS)
     return tuple(dict.fromkeys(metadata))
+
+
+def use_full_package_collection(module_name: str) -> bool:
+    """Return whether PyInstaller should use collect_all() for this package."""
+    return module_name not in CURATED_PACKAGE_COLLECTIONS
+
+
+def get_pyinstaller_data_excludes(module_name: str) -> tuple[str, ...]:
+    """Return package-specific data-file excludes for frozen builds."""
+    return PACKAGE_DATA_EXCLUDES.get(module_name, ())
+
+
+def get_pyinstaller_hiddenimport_excludes(module_name: str) -> tuple[str, ...]:
+    """Return package-specific hidden import prefixes to skip."""
+    return PACKAGE_HIDDENIMPORT_EXCLUDES.get(module_name, ())
 
 
 def find_windows_mpv_runtime_dir(project_root: Path) -> Path | None:

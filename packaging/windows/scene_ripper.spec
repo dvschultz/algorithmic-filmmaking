@@ -11,7 +11,13 @@ import importlib.util
 import os
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_all, copy_metadata
+from PyInstaller.utils.hooks import (
+    collect_all,
+    collect_data_files,
+    collect_dynamic_libs,
+    collect_submodules,
+    copy_metadata,
+)
 
 block_cipher = None
 
@@ -53,11 +59,32 @@ def _unique(items):
     return list(dict.fromkeys(items))
 
 
+def _collect_module_payload(module_name):
+    if build_support.use_full_package_collection(module_name):
+        return collect_all(module_name)
+
+    excluded_hiddenimports = build_support.get_pyinstaller_hiddenimport_excludes(module_name)
+    return (
+        collect_data_files(
+            module_name,
+            excludes=list(build_support.get_pyinstaller_data_excludes(module_name)),
+        ),
+        collect_dynamic_libs(module_name),
+        collect_submodules(
+            module_name,
+            filter=lambda name: not any(
+                name == prefix or name.startswith(prefix + ".")
+                for prefix in excluded_hiddenimports
+            ),
+        ),
+    )
+
+
 core_requirement_hiddenimports = []
 core_requirement_datas = []
 core_requirement_binaries = []
 for module_name in build_support.get_core_pyinstaller_collect_targets(PROJECT_ROOT):
-    module_datas, module_binaries, module_hiddenimports = collect_all(module_name)
+    module_datas, module_binaries, module_hiddenimports = _collect_module_payload(module_name)
     core_requirement_datas.extend(module_datas)
     core_requirement_binaries.extend(module_binaries)
     core_requirement_hiddenimports.extend(module_hiddenimports)

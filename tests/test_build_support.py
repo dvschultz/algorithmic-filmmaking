@@ -22,7 +22,10 @@ collect_macos_sparkle_datas = build_support.collect_macos_sparkle_datas
 collect_windows_winsparkle_binaries = build_support.collect_windows_winsparkle_binaries
 get_core_pyinstaller_collect_targets = build_support.get_core_pyinstaller_collect_targets
 get_core_pyinstaller_metadata = build_support.get_core_pyinstaller_metadata
+get_pyinstaller_data_excludes = build_support.get_pyinstaller_data_excludes
+get_pyinstaller_hiddenimport_excludes = build_support.get_pyinstaller_hiddenimport_excludes
 read_core_requirement_distributions = build_support.read_core_requirement_distributions
+use_full_package_collection = build_support.use_full_package_collection
 
 
 def test_collect_macos_sparkle_datas_returns_empty_when_not_staged(tmp_path):
@@ -109,3 +112,10 @@ def test_core_pyinstaller_metadata_covers_core_requirements(tmp_path):
     assert "scipy" in metadata
     assert "pillow" in metadata
     assert "opencv-python" in metadata
+
+
+def test_litellm_uses_curated_collection_rules():
+    """Frozen builds should not collect LiteLLM proxy/test payloads wholesale."""
+    assert not use_full_package_collection("litellm")
+    assert "**/proxy/**" in get_pyinstaller_data_excludes("litellm")
+    assert "litellm.proxy" in get_pyinstaller_hiddenimport_excludes("litellm")
