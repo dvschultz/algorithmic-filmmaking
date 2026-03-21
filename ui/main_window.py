@@ -66,6 +66,7 @@ from ui.chat_panel import ChatPanel
 from ui.chat_worker import ChatAgentWorker
 from ui.clip_details_sidebar import ClipDetailsSidebar
 from ui.dialogs import IntentionImportDialog, AnalysisPickerDialog
+from core.analysis_dependencies import get_operation_feature_candidates
 from core.analysis_operations import (
     OPERATIONS_BY_KEY,
     LOCAL_OPS,
@@ -631,6 +632,77 @@ class MainWindow(QMainWindow):
         if len(sanitized) > 100:
             sanitized = sanitized[:100]
         return sanitized or "video"
+
+    def _ensure_video_download_available(self) -> bool:
+        """Prompt to install yt-dlp if the video download feature is missing."""
+        from ui.widgets.dependency_widgets import prompt_feature_download
+
+        return prompt_feature_download("video_download", self)
+
+    def _ensure_analysis_operation_available(
+        self,
+        op_key: str,
+        *,
+        prompt_cache: Optional[dict[str, bool]] = None,
+        description_tier: Optional[str] = None,
+    ) -> bool:
+        """Prompt for installable analysis dependencies when required."""
+        feature_candidates = get_operation_feature_candidates(
+            op_key,
+            self.settings,
+            description_tier=description_tier,
+        )
+        if not feature_candidates:
+            return True
+
+        from core.feature_registry import check_feature
+
+        for feature_name in feature_candidates:
+            available, _ = check_feature(feature_name)
+            if available:
+                if prompt_cache is not None:
+                    prompt_cache[feature_name] = True
+                return True
+
+        preferred_feature = feature_candidates[0]
+        if prompt_cache is not None and preferred_feature in prompt_cache:
+            return prompt_cache[preferred_feature]
+
+        from ui.widgets.dependency_widgets import prompt_feature_download
+
+        available = prompt_feature_download(preferred_feature, self)
+        if prompt_cache is not None:
+            prompt_cache[preferred_feature] = available
+        return available
+
+    def _filter_available_analysis_operations(
+        self,
+        operations: list[str],
+        *,
+        description_tier: Optional[str] = None,
+    ) -> list[str]:
+        """Return only analysis operations whose dependencies are available."""
+        prompt_cache: dict[str, bool] = {}
+        available_ops: list[str] = []
+        skipped_ops: list[str] = []
+
+        for op_key in operations:
+            if self._ensure_analysis_operation_available(
+                op_key,
+                prompt_cache=prompt_cache,
+                description_tier=description_tier,
+            ):
+                available_ops.append(op_key)
+            else:
+                skipped_ops.append(op_key)
+
+        if skipped_ops:
+            logger.info(
+                "Skipping analysis operations with unavailable dependencies: %s",
+                skipped_ops,
+            )
+
+        return available_ops
 
     # Class-level counter to track instances
     _instance_count = 0
@@ -3013,6 +3085,7 @@ class MainWindow(QMainWindow):
 
         # Validate operation keys
         valid_ops = [op for op in operations if op in OPERATIONS_BY_KEY]
+        valid_ops = self._filter_available_analysis_operations(valid_ops)
         if not valid_ops:
             return
 
@@ -3229,12 +3302,15 @@ class MainWindow(QMainWindow):
         """Launch transcription worker (handles multi-source sequentially)."""
         self._transcription_finished_handled = False
 
-        # Check if faster-whisper is available
-        from core.transcription import is_faster_whisper_available
-        if not is_faster_whisper_available():
-            logger.warning("Transcription skipped: faster-whisper not installed")
+        # Pipeline entry points should prompt before launch, but keep a
+        # non-interactive guard here so internal calls fail safely.
+        from core.feature_registry import check_feature
+
+        feature_candidates = get_operation_feature_candidates("transcribe", self.settings)
+        if feature_candidates and not any(check_feature(name)[0] for name in feature_candidates):
+            logger.warning("Transcription skipped: dependencies unavailable")
             self.status_bar.showMessage(
-                "Transcription unavailable - install faster-whisper"
+                "Transcription unavailable - install dependencies in Settings > Dependencies"
             )
             self._on_analysis_phase_worker_finished("transcribe")
             return
@@ -3906,6 +3982,9 @@ class MainWindow(QMainWindow):
 
     def _download_video(self, url: str):
         """Start downloading a video from URL."""
+        if not self._ensure_video_download_available():
+            return
+
         # Update UI state
         self.collect_tab.set_downloading(True)
 
@@ -4066,6 +4145,9 @@ class MainWindow(QMainWindow):
     def _on_bulk_download(self, videos: list):
         """Start bulk download of selected videos."""
         if not videos:
+            return
+
+        if not self._ensure_video_download_available():
             return
 
         # Track download results for summary
@@ -5137,6 +5219,10 @@ class MainWindow(QMainWindow):
         if not targets or not operations:
             return
 
+        operations = self._filter_available_analysis_operations(operations)
+        if not operations:
+            return
+
         logger.info(
             f"Starting frame analysis: {operations} on {len(targets)} targets"
         )
@@ -5707,6 +5793,9 @@ class MainWindow(QMainWindow):
         if self.url_bulk_download_worker and self.url_bulk_download_worker.isRunning():
             return False
 
+        if not self._ensure_video_download_available():
+            return False
+
         # Validate download directory
         validated_dir = self._validate_download_directory(download_dir)
         if validated_dir is None:
@@ -5956,6 +6045,9 @@ class MainWindow(QMainWindow):
         if not clips:
             return False
 
+        if not self._ensure_analysis_operation_available("shots"):
+            return False
+
         # Check if worker already running
         if self.shot_type_worker and self.shot_type_worker.isRunning():
             return False
@@ -5999,9 +6091,7 @@ class MainWindow(QMainWindow):
         Returns:
             True if started, False if already running or unavailable
         """
-        # Check if faster-whisper is available
-        from core.transcription import is_faster_whisper_available
-        if not is_faster_whisper_available():
+        if not self._ensure_analysis_operation_available("transcribe"):
             return False
 
         # Resolve clips
@@ -6095,6 +6185,9 @@ class MainWindow(QMainWindow):
         if not clips:
             return False
 
+        if not self._ensure_analysis_operation_available("classify"):
+            return False
+
         # Check if worker already running
         if self.classification_worker and self.classification_worker.isRunning():
             return False
@@ -6145,6 +6238,9 @@ class MainWindow(QMainWindow):
         clips = [c for c in clips if c is not None]
 
         if not clips:
+            return False
+
+        if not self._ensure_analysis_operation_available("detect_objects"):
             return False
 
         # Check if worker already running
@@ -6200,6 +6296,9 @@ class MainWindow(QMainWindow):
         clips = [c for c in clips if c is not None]
 
         if not clips:
+            return False
+
+        if not self._ensure_analysis_operation_available("describe", description_tier=tier):
             return False
 
         # Check if worker already running
@@ -6887,6 +6986,10 @@ class MainWindow(QMainWindow):
         if not urls:
             return
 
+        if not self._ensure_video_download_available():
+            self._on_intention_workflow_error("yt-dlp is required to download videos.")
+            return
+
         download_dir = validate_download_dir(self.settings.download_dir)
         if not download_dir:
             download_dir = get_default_download_dir()
@@ -7327,6 +7430,10 @@ class MainWindow(QMainWindow):
                 self.intention_workflow.on_analysis_finished()
                 return
 
+            if not self._ensure_analysis_operation_available("shots"):
+                self.intention_workflow.on_analysis_finished()
+                return
+
             self._shot_type_finished_handled = False
             self.shot_type_worker = ShotTypeWorker(clips_needing_shots, self.project.sources_by_id, parallelism=self.settings.local_model_parallelism)
             self.shot_type_worker.progress.connect(
@@ -7356,6 +7463,10 @@ class MainWindow(QMainWindow):
             # Get description settings
             tier = self.settings.description_model_tier
             sources = self.project.sources_by_id
+
+            if not self._ensure_analysis_operation_available("describe", description_tier=tier):
+                self.intention_workflow.on_analysis_finished()
+                return
 
             self._description_finished_handled = False
             logger.info(f"Creating DescriptionWorker (intention) for {len(clips_needing_descriptions)} clips with tier={tier}")

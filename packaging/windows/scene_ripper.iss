@@ -8,7 +8,7 @@
 #define MyAppName "Scene Ripper"
 #define MyAppVersion GetEnv("APP_VERSION")
 #if MyAppVersion == ""
-  #define MyAppVersion "0.2.0"
+  #define MyAppVersion "0.2.4"
 #endif
 #define MyAppPublisher "Algorithmic Filmmaking"
 #define MyAppURL "https://github.com/dvschultz/algorithmic-filmmaking"

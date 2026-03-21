@@ -5,19 +5,19 @@
     "torch": {
       "pip_specifier": "torch>=2.0",
       "size_mb": 350,
-      "features": ["shot_classify", "object_detect"]
+      "features": ["shot_classify", "image_classify", "describe_local_cpu", "object_detect"]
     },
     "transformers": {
       "pip_specifier": "transformers>=4.36",
       "size_mb": 100,
       "depends_on": ["torch"],
-      "features": ["shot_classify"]
+      "features": ["shot_classify", "describe_local_cpu"]
     },
     "torchvision": {
       "pip_specifier": "torchvision>=0.15.0",
       "size_mb": 50,
       "depends_on": ["torch"],
-      "features": ["shot_classify"]
+      "features": ["shot_classify", "image_classify"]
     },
     "einops": {
       "pip_specifier": "einops>=0.7.0",

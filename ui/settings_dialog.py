@@ -1286,11 +1286,15 @@ class SettingsDialog(QDialog):
         # Human-readable feature names
         feature_labels = {
             "transcribe": "Transcription (faster-whisper)",
+            "transcribe_cloud": "Transcription (Groq / FFmpeg)",
             "transcribe_mlx": "Transcription MLX (Apple Silicon)",
             "describe_local": "Local Descriptions (MLX-VLM)",
+            "describe_local_cpu": "Local Descriptions (CPU fallback)",
             "shot_classify": "Shot Classification (CLIP)",
+            "image_classify": "Content Classification (ImageNet)",
             "object_detect": "Object Detection (YOLO)",
             "ocr": "OCR / Text Extraction",
+            "face_detect": "Face Detection / Embeddings",
             "audio_analysis": "Audio Analysis (librosa)",
         }
 

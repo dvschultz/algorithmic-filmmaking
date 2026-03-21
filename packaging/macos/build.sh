@@ -8,7 +8,7 @@
 #   ./packaging/macos/build.sh --dmg --sign  # Build all + sign
 #
 # Environment variables:
-#   APP_VERSION       Version string (default: 0.2.0)
+#   APP_VERSION       Version string (default: 0.2.4)
 #   CODESIGN_IDENTITY Signing identity (default: ad-hoc "-")
 
 set -euo pipefail
@@ -16,7 +16,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-APP_VERSION="${APP_VERSION:-0.2.0}"
+APP_VERSION="${APP_VERSION:-0.2.4}"
 CODESIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
 BUILD_DMG=false
 CODE_SIGN=false

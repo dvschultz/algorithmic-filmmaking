@@ -51,8 +51,13 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
         packages=["faster_whisper"],
         size_estimate_mb=150,
     ),
+    "transcribe_cloud": FeatureDeps(
+        binaries=["ffmpeg"],
+        packages=[],
+        size_estimate_mb=0,
+    ),
     "transcribe_mlx": FeatureDeps(
-        binaries=[],
+        binaries=["ffmpeg"],
         packages=["lightning_whisper_mlx"],
         size_estimate_mb=100,
     ),
@@ -60,6 +65,11 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
         binaries=[],
         packages=["mlx_vlm"],
         size_estimate_mb=200,
+    ),
+    "describe_local_cpu": FeatureDeps(
+        binaries=[],
+        packages=["torch", "transformers"],
+        size_estimate_mb=450,
     ),
     "describe_cloud": FeatureDeps(
         binaries=[],
@@ -70,6 +80,11 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
         binaries=[],
         packages=["torch", "torchvision", "transformers"],
         size_estimate_mb=450,
+    ),
+    "image_classify": FeatureDeps(
+        binaries=[],
+        packages=["torch", "torchvision"],
+        size_estimate_mb=400,
     ),
     "object_detect": FeatureDeps(
         binaries=[],
