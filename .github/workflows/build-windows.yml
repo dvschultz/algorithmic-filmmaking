@@ -124,7 +124,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-core.txt pyinstaller cryptography
 
-      - name: Validate updater signing metadata
+      - name: Resolve updater signing metadata
         shell: bash
         env:
           UPDATE_FEED_URL: https://github.com/${{ github.repository }}/releases/download/${{ env.UPDATE_FEED_TAG }}/appcast-windows.xml
@@ -151,29 +151,35 @@ jobs:
               explicit_public,
               private_key,
           )
+          updater_enabled = bool(feed_url and resolved_public and private_key)
 
           print(f"windows_feed_url_present={bool(feed_url)}")
           print(f"windows_public_key_present={bool(explicit_public)}")
           print(f"windows_private_key_present={bool(private_key)}")
           print(f"windows_resolved_public_key_present={bool(resolved_public)}")
+          print(f"windows_updater_enabled={updater_enabled}")
 
-          if not feed_url:
-              raise SystemExit("Windows updater feed URL is missing for the release build.")
-          if not resolved_public:
-              raise SystemExit(
-                  "Unable to resolve Windows updater public key from "
-                  "UPDATE_PUBLIC_ED_KEY or UPDATE_PRIVATE_ED_KEY."
+          if not updater_enabled:
+              print(
+                  "::warning::Windows native updater disabled for this build because "
+                  "release signing metadata is incomplete."
               )
 
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as fh:
-              fh.write(f"RESOLVED_UPDATE_PUBLIC_ED_KEY={resolved_public}\n")
+              fh.write(
+                  f"RESOLVED_UPDATE_FEED_URL={feed_url if updater_enabled else ''}\n"
+              )
+              fh.write(
+                  f"RESOLVED_UPDATE_PUBLIC_ED_KEY={resolved_public if updater_enabled else ''}\n"
+              )
+              fh.write(f"UPDATER_ENABLED={'true' if updater_enabled else 'false'}\n")
           PY
 
       - name: Build with PyInstaller
         env:
           APP_VERSION: ${{ steps.version.outputs.version }}
           APP_BUILD_VERSION: ${{ steps.version.outputs.version }}
-          WINSPARKLE_APPCAST_URL: https://github.com/${{ github.repository }}/releases/download/${{ env.UPDATE_FEED_TAG }}/appcast-windows.xml
+          WINSPARKLE_APPCAST_URL: ${{ env.RESOLVED_UPDATE_FEED_URL }}
           WINSPARKLE_PUBLIC_ED_KEY: ${{ env.RESOLVED_UPDATE_PUBLIC_ED_KEY }}
           UPDATE_PRIVATE_ED_KEY: ${{ secrets.UPDATE_PRIVATE_ED_KEY }}
         run: pyinstaller packaging/windows/scene_ripper.spec --distpath dist --workpath build --noconfirm
@@ -197,24 +203,28 @@ jobs:
             throw "Bundled WinSparkle.dll missing from dist output"
           }
 
-          $bundledFeedFile = Get-ChildItem -Path "dist/Scene Ripper" -Recurse -File | Where-Object {
-            $_.Name -eq "app_update_feed_url.txt"
-          } | Select-Object -First 1
-          if (-not $bundledFeedFile) {
-            throw "Bundled WinSparkle feed metadata file missing from dist output"
-          }
-          if ([string]::IsNullOrWhiteSpace((Get-Content $bundledFeedFile.FullName -Raw))) {
-            throw "Bundled WinSparkle feed metadata file is empty"
-          }
+          if ($env:UPDATER_ENABLED -eq "true") {
+            $bundledFeedFile = Get-ChildItem -Path "dist/Scene Ripper" -Recurse -File | Where-Object {
+              $_.Name -eq "app_update_feed_url.txt"
+            } | Select-Object -First 1
+            if (-not $bundledFeedFile) {
+              throw "Bundled WinSparkle feed metadata file missing from dist output"
+            }
+            if ([string]::IsNullOrWhiteSpace((Get-Content $bundledFeedFile.FullName -Raw))) {
+              throw "Bundled WinSparkle feed metadata file is empty"
+            }
 
-          $bundledPublicKeyFile = Get-ChildItem -Path "dist/Scene Ripper" -Recurse -File | Where-Object {
-            $_.Name -eq "app_update_public_key.txt"
-          } | Select-Object -First 1
-          if (-not $bundledPublicKeyFile) {
-            throw "Bundled WinSparkle public-key metadata file missing from dist output"
-          }
-          if ([string]::IsNullOrWhiteSpace((Get-Content $bundledPublicKeyFile.FullName -Raw))) {
-            throw "Bundled WinSparkle public-key metadata file is empty"
+            $bundledPublicKeyFile = Get-ChildItem -Path "dist/Scene Ripper" -Recurse -File | Where-Object {
+              $_.Name -eq "app_update_public_key.txt"
+            } | Select-Object -First 1
+            if (-not $bundledPublicKeyFile) {
+              throw "Bundled WinSparkle public-key metadata file missing from dist output"
+            }
+            if ([string]::IsNullOrWhiteSpace((Get-Content $bundledPublicKeyFile.FullName -Raw))) {
+              throw "Bundled WinSparkle public-key metadata file is empty"
+            }
+          } else {
+            Write-Host "Skipping updater metadata verification because native updater is disabled for this build."
           }
 
       - name: Smoke test frozen app startup
@@ -414,7 +424,11 @@ jobs:
           Invoke-SceneRipperSmokeTarget -Target "imports"
           Invoke-SceneRipperSmokeTarget -Target "project"
           Invoke-SceneRipperSmokeTarget -Target "scene-detect"
-          Invoke-SceneRipperSmokeTarget -Target "updater"
+          if ($env:UPDATER_ENABLED -eq "true") {
+            Invoke-SceneRipperSmokeTarget -Target "updater"
+          } else {
+            Write-Host "Skipping updater smoke target because native updater is disabled for this build."
+          }
 
       - name: Upload smoke test diagnostics
         if: failure()
@@ -470,7 +484,7 @@ jobs:
 
       - name: Sign update archive
         id: sign_archive
-        if: env.UPDATE_PRIVATE_ED_KEY != ''
+        if: env.UPDATER_ENABLED == 'true'
         shell: pwsh
         env:
           UPDATE_PRIVATE_ED_KEY: ${{ secrets.UPDATE_PRIVATE_ED_KEY }}
@@ -499,6 +513,7 @@ jobs:
           "signature=$($signatureMatch.Groups[1].Value)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Generate update feed artifact
+        if: env.UPDATER_ENABLED == 'true'
         shell: bash
         env:
           APP_VERSION: ${{ steps.version.outputs.version }}
@@ -545,7 +560,7 @@ jobs:
           python packaging/release/verify_update_feed.py "${VERIFY_ARGS[@]}"
 
       - name: Publish update feed release assets
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        if: env.UPDATER_ENABLED == 'true' && (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch')
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -560,6 +575,7 @@ jobs:
             --clobber
 
       - name: Upload update feed artifact
+        if: env.UPDATER_ENABLED == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: SceneRipper-Windows-Appcast
