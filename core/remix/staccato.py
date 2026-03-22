@@ -6,7 +6,7 @@ previous one, measured by DINOv2 embedding cosine distance.
 """
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 import numpy as np
@@ -14,6 +14,68 @@ import numpy as np
 from core.analysis.audio import AudioAnalysis
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class StaccatoSlotDebug:
+    """Debug metadata for a single slot assignment."""
+
+    slot_index: int
+    start_time: float
+    end_time: float
+    onset_strength: float
+    clip_id: str
+    clip_name: str
+    source_filename: str
+    cosine_distance: Optional[float]  # None for first slot
+    target_distance: float
+    distance_score: float
+    needs_loop: bool
+
+
+@dataclass
+class StaccatoDebugInfo:
+    """Complete debug information for a Staccato generation run."""
+
+    strategy: str
+    total_slots: int
+    total_clips_available: int
+    slots: list[StaccatoSlotDebug] = field(default_factory=list)
+
+
+class StaccatoResult:
+    """Result wrapper that acts as a list but also carries debug info."""
+
+    def __init__(
+        self,
+        sequence: list[tuple],
+        debug: Optional[StaccatoDebugInfo] = None,
+    ):
+        self.sequence = sequence
+        self.debug = debug
+
+    def __iter__(self):
+        return iter(self.sequence)
+
+    def __len__(self):
+        return len(self.sequence)
+
+    def __getitem__(self, index):
+        return self.sequence[index]
+
+    def __bool__(self):
+        return bool(self.sequence)
+
+    def __eq__(self, other):
+        if isinstance(other, list):
+            return self.sequence == other
+        if isinstance(other, StaccatoResult):
+            return self.sequence == other.sequence
+        return NotImplemented
+
+    def __repr__(self):
+        debug_str = f", debug={self.debug.strategy}/{self.debug.total_slots} slots" if self.debug else ""
+        return f"StaccatoResult({len(self.sequence)} clips{debug_str})"
 
 
 @dataclass
@@ -100,7 +162,7 @@ def _select_clip_for_slot(
     prev_embedding: Optional[list[float]],
     clips_with_embeddings: list[tuple],
     clip_durations: list[float],
-) -> int:
+) -> tuple[int, Optional[float], float]:
     """Select the best clip for a beat slot based on onset strength.
 
     Stronger onset → pick clip with greater visual distance from previous.
@@ -113,14 +175,15 @@ def _select_clip_for_slot(
         clip_durations: Duration of each clip in seconds
 
     Returns:
-        Index of the selected clip in the original clips list
+        Tuple of (clip_index, cosine_distance, distance_score).
+        cosine_distance is None when prev_embedding is None (first slot).
     """
     if not clips_with_embeddings:
-        return 0
+        return (0, None, 0.0)
 
     if prev_embedding is None:
-        # First clip: pick randomly from the pool
-        return clips_with_embeddings[0][0]
+        # First clip: pick first from the pool
+        return (clips_with_embeddings[0][0], None, 0.0)
 
     # Calculate distances from previous clip to all candidates
     distances = []
@@ -146,11 +209,12 @@ def _select_clip_for_slot(
         if idx < len(clip_durations) and clip_durations[idx] < slot.duration:
             duration_penalty = 0.05  # Small penalty for needing loop
 
-        scored.append((idx, distance_score + duration_penalty))
+        scored.append((idx, dist, distance_score + duration_penalty))
 
     # Return the best-scoring clip
-    scored.sort(key=lambda x: x[1])
-    return scored[0][0]
+    scored.sort(key=lambda x: x[2])
+    best_idx, best_distance, best_score = scored[0]
+    return (best_idx, best_distance, best_score)
 
 
 def generate_staccato_sequence(
@@ -158,7 +222,7 @@ def generate_staccato_sequence(
     audio_analysis: AudioAnalysis,
     strategy: str = "onsets",
     progress_cb=None,
-) -> list[tuple]:
+) -> StaccatoResult:
     """Generate a beat-driven sequence using onset strength for visual contrast.
 
     Args:
@@ -168,18 +232,19 @@ def generate_staccato_sequence(
         progress_cb: Optional callback(current, total) for progress
 
     Returns:
-        List of (Clip, Source) tuples in sequence order.
+        StaccatoResult wrapping the sequence list and debug metadata.
+        Behaves like list[tuple] for backward compat (supports iter/len/getitem).
         Clips may repeat. Clip in_point/out_point should be set by caller
         based on slot timing.
     """
     if not clips:
-        return []
+        return StaccatoResult([])
 
     # Build the beat slot schedule
     slots = generate_beat_slots(audio_analysis, strategy)
     if not slots:
         logger.warning("No beat slots generated from audio analysis")
-        return []
+        return StaccatoResult([])
 
     # Prepare embeddings and durations
     clips_with_embeddings = []
@@ -193,6 +258,12 @@ def generate_staccato_sequence(
         end = getattr(clip, 'end_frame', start + int(fps))
         clip_durations.append((end - start) / fps)
 
+    debug = StaccatoDebugInfo(
+        strategy=strategy,
+        total_slots=len(slots),
+        total_clips_available=len(clips),
+    )
+
     # Assign clips to slots
     result = []
     prev_embedding = None
@@ -201,12 +272,34 @@ def generate_staccato_sequence(
         if progress_cb:
             progress_cb(slot_idx, len(slots))
 
-        best_idx = _select_clip_for_slot(
+        best_idx, cosine_dist, dist_score = _select_clip_for_slot(
             slot, prev_embedding, clips_with_embeddings, clip_durations,
         )
 
         clip, source = clips[best_idx]
         result.append((clip, source))
+
+        # Build debug entry
+        clip_name = getattr(clip, 'name', None) or getattr(clip, 'id', f'clip_{best_idx}')
+        source_file = getattr(source, 'file_path', None)
+        source_filename = source_file.name if hasattr(source_file, 'name') else str(source_file or '')
+        needs_loop = (
+            best_idx < len(clip_durations) and clip_durations[best_idx] < slot.duration
+        )
+
+        debug.slots.append(StaccatoSlotDebug(
+            slot_index=slot_idx,
+            start_time=slot.start_time,
+            end_time=slot.end_time,
+            onset_strength=slot.onset_strength,
+            clip_id=getattr(clip, 'id', f'clip_{best_idx}'),
+            clip_name=str(clip_name),
+            source_filename=source_filename,
+            cosine_distance=cosine_dist,
+            target_distance=slot.onset_strength,
+            distance_score=dist_score,
+            needs_loop=needs_loop,
+        ))
 
         # Update previous embedding for next iteration
         prev_embedding = getattr(clip, 'embedding', None)
@@ -214,4 +307,4 @@ def generate_staccato_sequence(
     if progress_cb:
         progress_cb(len(slots), len(slots))
 
-    return result
+    return StaccatoResult(result, debug=debug)

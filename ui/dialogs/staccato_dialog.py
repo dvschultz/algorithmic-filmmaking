@@ -25,7 +25,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PySide6.QtCore import Qt, Signal, Slot
+from PySide6.QtCore import Qt, QUrl, Signal, Slot
+from PySide6.QtGui import QDesktopServices
 
 from core.analysis.audio import AudioAnalysis, analyze_music_file
 from core.remix.staccato import generate_staccato_sequence
@@ -142,7 +143,7 @@ class StaccatoGenerateWorker(CancellableWorker):
 
     progress_update = Signal(int, int)
     progress_message = Signal(str)
-    finished_sequence = Signal(list)
+    finished_sequence = Signal(object)  # StaccatoResult (list-like)
 
     def __init__(
         self,
@@ -221,7 +222,7 @@ class StaccatoDialog(QDialog):
     Page 1: Progress — progress bar during generation
     """
 
-    sequence_ready = Signal(list)  # list of (Clip, Source)
+    sequence_ready = Signal(object)  # list of (Clip, Source)
 
     def __init__(self, clips: list, parent=None):
         super().__init__(parent)
@@ -232,6 +233,8 @@ class StaccatoDialog(QDialog):
         self._audio_samples: np.ndarray | None = None
         self._music_path: Path | None = None
         self._handler_executed = False
+        self._sequence_data = None
+        self._debug_info = None
 
         self.setWindowTitle("Staccato")
         self.setMinimumWidth(520)
@@ -255,6 +258,9 @@ class StaccatoDialog(QDialog):
 
         self._progress_page = self._create_progress_page()
         self._stack.addWidget(self._progress_page)
+
+        self._results_page = self._create_results_page()
+        self._stack.addWidget(self._results_page)
 
         self._stack.setCurrentIndex(0)
 
@@ -626,12 +632,110 @@ class StaccatoDialog(QDialog):
     def _on_progress_message(self, message: str):
         self._progress_label.setText(message)
 
-    @Slot(list)
-    def _on_finished(self, sequence_data: list):
+    def _create_results_page(self) -> QWidget:
+        """Create the results page shown after generation completes."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(Spacing.MD)
+
+        title = QLabel("Staccato")
+        title.setStyleSheet(f"font-size: {TypeScale.XL}px; font-weight: bold;")
+        layout.addWidget(title)
+
+        self._results_summary = QLabel("")
+        self._results_summary.setWordWrap(True)
+        self._results_summary.setStyleSheet(f"color: {theme().text_secondary};")
+        layout.addWidget(self._results_summary)
+
+        layout.addStretch()
+
+        # Action buttons
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+
+        save_report_btn = QPushButton("Save Debug Report")
+        save_report_btn.setToolTip(
+            "Export an interactive HTML report with onset/distance analysis"
+        )
+        save_report_btn.clicked.connect(self._on_save_debug_report)
+        btn_layout.addWidget(save_report_btn)
+
+        use_btn = QPushButton("Use Sequence")
+        use_btn.setStyleSheet(f"""
+            QPushButton {{
+                padding: {Spacing.SM}px {Spacing.XL}px;
+                font-weight: bold;
+            }}
+        """)
+        use_btn.clicked.connect(self._on_use_sequence)
+        btn_layout.addWidget(use_btn)
+
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+
+        return page
+
+    @Slot(object)
+    def _on_finished(self, sequence_data):
         if self._handler_executed:
             return
         self._handler_executed = True
-        self.sequence_ready.emit(sequence_data)
+
+        self._sequence_data = sequence_data
+
+        # Extract debug info from StaccatoResult or from worker
+        if hasattr(sequence_data, 'debug'):
+            self._debug_info = sequence_data.debug
+        elif self._generate_worker and hasattr(self._generate_worker, '_debug_info'):
+            self._debug_info = self._generate_worker._debug_info
+
+        # Update results summary
+        n_slots = len(sequence_data)
+        unique_clips = len({
+            getattr(clip, 'id', i) for i, (clip, _) in enumerate(sequence_data)
+        })
+        summary = f"Generated {n_slots} slots using {unique_clips} unique clips."
+        if self._debug_info:
+            summary += f"\nStrategy: {self._debug_info.strategy}"
+        self._results_summary.setText(summary)
+
+        self._stack.setCurrentIndex(2)
+
+    @Slot()
+    def _on_save_debug_report(self):
+        """Save the debug report as an interactive HTML file."""
+        if not self._debug_info:
+            QMessageBox.warning(self, "No Debug Data", "No debug data available.")
+            return
+
+        from core.settings import load_settings
+        settings = load_settings()
+        default_dir = str(settings.export_dir) if settings.export_dir else ""
+        default_path = Path(default_dir) / "staccato_debug_report.html"
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Debug Report", str(default_path),
+            "HTML Files (*.html);;All Files (*)",
+        )
+        if not path:
+            return
+
+        try:
+            from core.remix.staccato_report import save_staccato_report
+            save_staccato_report(self._debug_info, Path(path))
+            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+        except Exception as e:
+            logger.error(f"Failed to save debug report: {e}")
+            QMessageBox.critical(
+                self, "Save Failed", f"Could not save report:\n{e}",
+            )
+
+    @Slot()
+    def _on_use_sequence(self):
+        """Emit the sequence and close the dialog."""
+        if self._sequence_data is not None:
+            self.sequence_ready.emit(self._sequence_data)
         self.accept()
 
     @Slot(str)

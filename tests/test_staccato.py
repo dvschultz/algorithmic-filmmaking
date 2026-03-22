@@ -6,6 +6,9 @@ from unittest.mock import MagicMock
 from core.analysis.audio import AudioAnalysis
 from core.remix.staccato import (
     StaccatoSlot,
+    StaccatoResult,
+    StaccatoDebugInfo,
+    StaccatoSlotDebug,
     generate_beat_slots,
     generate_staccato_sequence,
     _cosine_distance,
@@ -152,8 +155,10 @@ class TestSelectClipForSlot:
             (2, [0.5, 0.5, 0.707]),   # moderate distance
         ]
         durations = [2.0, 2.0, 2.0]
-        idx = _select_clip_for_slot(slot, prev_emb, clips, durations)
+        idx, cos_dist, score = _select_clip_for_slot(slot, prev_emb, clips, durations)
         assert idx == 1  # Most distant
+        assert cos_dist == pytest.approx(1.0, abs=0.01)
+        assert score < 0.1  # Good match: distance ~1.0, target 1.0
 
     def test_weak_onset_prefers_similar_clip(self):
         slot = StaccatoSlot(start_time=0, end_time=1.0, onset_strength=0.0)
@@ -163,15 +168,19 @@ class TestSelectClipForSlot:
             (1, [0.0, 1.0, 0.0]),     # orthogonal
         ]
         durations = [2.0, 2.0]
-        idx = _select_clip_for_slot(slot, prev_emb, clips, durations)
+        idx, cos_dist, score = _select_clip_for_slot(slot, prev_emb, clips, durations)
         assert idx == 0  # Most similar
+        assert cos_dist is not None
+        assert cos_dist < 0.5
 
     def test_first_clip_no_prev_embedding(self):
         slot = StaccatoSlot(start_time=0, end_time=1.0, onset_strength=0.5)
         clips = [(0, [1.0, 0.0]), (1, [0.0, 1.0])]
         durations = [2.0, 2.0]
-        idx = _select_clip_for_slot(slot, None, clips, durations)
+        idx, cos_dist, score = _select_clip_for_slot(slot, None, clips, durations)
         assert idx == 0  # Returns first clip
+        assert cos_dist is None
+        assert score == 0.0
 
 
 # --- Full sequence generation tests ---
@@ -256,3 +265,137 @@ class TestGenerateStaccatoSequence:
         assert len(result) == 2
         # Should have progress calls for each slot + final
         assert len(progress_calls) >= 2
+
+
+# --- StaccatoResult wrapper tests ---
+
+class TestStaccatoResult:
+
+    def test_acts_like_list_iter(self):
+        items = [("a", 1), ("b", 2)]
+        result = StaccatoResult(items)
+        assert list(result) == items
+
+    def test_acts_like_list_len(self):
+        result = StaccatoResult([("a", 1), ("b", 2)])
+        assert len(result) == 2
+
+    def test_acts_like_list_getitem(self):
+        items = [("a", 1), ("b", 2)]
+        result = StaccatoResult(items)
+        assert result[0] == ("a", 1)
+        assert result[1] == ("b", 2)
+
+    def test_acts_like_list_bool(self):
+        assert bool(StaccatoResult([("a", 1)])) is True
+        assert bool(StaccatoResult([])) is False
+
+    def test_equality_with_list(self):
+        items = [("a", 1), ("b", 2)]
+        result = StaccatoResult(items)
+        assert result == items
+
+    def test_carries_debug_info(self):
+        debug = StaccatoDebugInfo(
+            strategy="onsets", total_slots=3, total_clips_available=5,
+        )
+        result = StaccatoResult([("a", 1)], debug=debug)
+        assert result.debug is debug
+        assert result.debug.strategy == "onsets"
+
+    def test_debug_defaults_to_none(self):
+        result = StaccatoResult([])
+        assert result.debug is None
+
+
+# --- Debug info from sequence generation ---
+
+class TestStaccatoDebugInfo:
+
+    def _make_clip(self, clip_id, embedding=None, start_frame=0, end_frame=48):
+        clip = MagicMock()
+        clip.id = clip_id
+        clip.name = clip_id
+        clip.embedding = embedding
+        clip.start_frame = start_frame
+        clip.end_frame = end_frame
+        clip.thumbnail_path = None
+        return clip
+
+    def _make_source(self, source_id, fps=24.0, file_path="video.mp4"):
+        source = MagicMock()
+        source.id = source_id
+        source.fps = fps
+        source.file_path = MagicMock()
+        source.file_path.name = file_path
+        return source
+
+    def test_debug_info_populated(self):
+        clips = [
+            (self._make_clip("c1", [1.0, 0.0]), self._make_source("s1")),
+            (self._make_clip("c2", [0.0, 1.0]), self._make_source("s1")),
+        ]
+        analysis = AudioAnalysis(
+            onset_times=[0.5, 1.0, 1.5],
+            onset_strengths=[0.3, 0.9, 0.5],
+            duration_seconds=2.0,
+        )
+        result = generate_staccato_sequence(clips, analysis, strategy="onsets")
+
+        assert isinstance(result, StaccatoResult)
+        assert result.debug is not None
+        assert result.debug.strategy == "onsets"
+        assert result.debug.total_slots == 3
+        assert result.debug.total_clips_available == 2
+        assert len(result.debug.slots) == 3
+
+    def test_first_slot_has_no_cosine_distance(self):
+        clips = [
+            (self._make_clip("c1", [1.0, 0.0]), self._make_source("s1")),
+        ]
+        analysis = AudioAnalysis(
+            onset_times=[1.0, 2.0],
+            onset_strengths=[0.5, 0.5],
+            duration_seconds=3.0,
+        )
+        result = generate_staccato_sequence(clips, analysis, strategy="onsets")
+        assert result.debug.slots[0].cosine_distance is None
+
+    def test_subsequent_slots_have_cosine_distance(self):
+        clips = [
+            (self._make_clip("c1", [1.0, 0.0]), self._make_source("s1")),
+            (self._make_clip("c2", [0.0, 1.0]), self._make_source("s1")),
+        ]
+        analysis = AudioAnalysis(
+            onset_times=[0.5, 1.5],
+            onset_strengths=[0.3, 0.9],
+            duration_seconds=2.0,
+        )
+        result = generate_staccato_sequence(clips, analysis, strategy="onsets")
+        # Second slot should have a cosine distance value
+        assert result.debug.slots[1].cosine_distance is not None
+        assert result.debug.slots[1].cosine_distance >= 0.0
+
+    def test_debug_slot_fields(self):
+        clips = [
+            (self._make_clip("c1", [1.0, 0.0]), self._make_source("s1", file_path="test.mp4")),
+        ]
+        analysis = AudioAnalysis(
+            onset_times=[1.0],
+            onset_strengths=[0.7],
+            duration_seconds=2.0,
+        )
+        result = generate_staccato_sequence(clips, analysis, strategy="onsets")
+        slot = result.debug.slots[0]
+        assert slot.slot_index == 0
+        assert slot.start_time == 1.0
+        assert slot.onset_strength == 0.7
+        assert slot.clip_id == "c1"
+        assert slot.clip_name == "c1"
+        assert slot.source_filename == "test.mp4"
+        assert slot.target_distance == 0.7
+
+    def test_empty_result_has_no_debug_slots(self):
+        result = generate_staccato_sequence([], AudioAnalysis())
+        assert isinstance(result, StaccatoResult)
+        assert len(result) == 0
