@@ -19,6 +19,8 @@ def _load_module(name: str, relative_path: str):
 
 build_support = _load_module("scene_ripper_build_support_tests", "packaging/build_support.py")
 collect_macos_sparkle_datas = build_support.collect_macos_sparkle_datas
+collect_macos_ffmpeg_binaries = build_support.collect_macos_ffmpeg_binaries
+collect_windows_ffmpeg_binaries = build_support.collect_windows_ffmpeg_binaries
 collect_windows_winsparkle_binaries = build_support.collect_windows_winsparkle_binaries
 get_core_pyinstaller_collect_targets = build_support.get_core_pyinstaller_collect_targets
 get_core_pyinstaller_hiddenimports = build_support.get_core_pyinstaller_hiddenimports
@@ -82,6 +84,48 @@ def test_collect_windows_winsparkle_binaries_collects_staged_dll(tmp_path):
     collected = collect_windows_winsparkle_binaries(tmp_path)
 
     assert collected == [(str(winsparkle_dll), ".")]
+
+
+def test_collect_windows_ffmpeg_binaries_collects_staged_runtime(tmp_path):
+    """Staged Windows FFmpeg runtime files should bundle under bin/."""
+    runtime_dir = (
+        tmp_path
+        / "packaging"
+        / "runtime"
+        / "ffmpeg"
+        / "windows"
+    )
+    runtime_dir.mkdir(parents=True)
+    (runtime_dir / "ffmpeg.exe").write_text("binary", encoding="utf-8")
+    (runtime_dir / "ffprobe.exe").write_text("binary", encoding="utf-8")
+    (runtime_dir / "avcodec-61.dll").write_text("binary", encoding="utf-8")
+
+    collected = collect_windows_ffmpeg_binaries(tmp_path)
+
+    bundled = {(Path(src).name, destination.replace("\\", "/")) for src, destination in collected}
+    assert ("ffmpeg.exe", "bin") in bundled
+    assert ("ffprobe.exe", "bin") in bundled
+    assert ("avcodec-61.dll", "bin") in bundled
+
+
+def test_collect_macos_ffmpeg_binaries_collects_staged_runtime(tmp_path):
+    """Staged macOS FFmpeg runtime files should bundle under bin/."""
+    runtime_dir = (
+        tmp_path
+        / "packaging"
+        / "runtime"
+        / "ffmpeg"
+        / "macos"
+    )
+    runtime_dir.mkdir(parents=True)
+    (runtime_dir / "ffmpeg").write_text("binary", encoding="utf-8")
+    (runtime_dir / "ffprobe").write_text("binary", encoding="utf-8")
+
+    collected = collect_macos_ffmpeg_binaries(tmp_path)
+
+    bundled = {(Path(src).name, destination.replace("\\", "/")) for src, destination in collected}
+    assert ("ffmpeg", "bin") in bundled
+    assert ("ffprobe", "bin") in bundled
 
 
 def test_core_requirement_distributions_follow_requirements_file(tmp_path):

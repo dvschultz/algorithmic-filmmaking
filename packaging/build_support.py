@@ -10,6 +10,8 @@ from pathlib import Path
 
 WINDOWS_MPV_DLL_NAMES = ("mpv-2.dll", "libmpv-2.dll", "mpv-1.dll")
 WINDOWS_WINSPARKLE_DLL_NAMES = ("WinSparkle.dll", "winsparkle.dll")
+WINDOWS_FFMPEG_BINARY_NAMES = ("ffmpeg.exe", "ffprobe.exe")
+MACOS_FFMPEG_BINARY_NAMES = ("ffmpeg", "ffprobe")
 REQUIREMENT_TO_IMPORT_TARGET = {
     "certifi": "certifi",
     "click": "click",
@@ -300,6 +302,21 @@ def collect_windows_winsparkle_binaries(project_root: Path) -> list[tuple[str, s
     return binaries
 
 
+def find_windows_ffmpeg_runtime_dir(project_root: Path) -> Path | None:
+    """Return the staged Windows FFmpeg runtime directory, if available."""
+    env_dir = os.environ.get("SCENE_RIPPER_FFMPEG_DIR")
+    candidates = [
+        Path(env_dir) if env_dir else None,
+        project_root / "packaging" / "runtime" / "ffmpeg" / "windows",
+    ]
+
+    for candidate in candidates:
+        if candidate and candidate.is_dir():
+            if all((candidate / name).is_file() for name in WINDOWS_FFMPEG_BINARY_NAMES):
+                return candidate
+    return None
+
+
 def _find_macos_libmpv(project_root: Path) -> Path | None:
     env_path = os.environ.get("SCENE_RIPPER_LIBMPV_DYLIB")
     candidates = [
@@ -410,6 +427,67 @@ def _collect_runtime_files(root_dir: Path) -> list[tuple[str, str]]:
         relative_parent = file_path.relative_to(root_dir).parent
         destination = "." if str(relative_parent) == "." else str(relative_parent)
         collected.append((str(file_path), destination))
+    return collected
+
+
+def _prefix_runtime_destination(
+    collected: list[tuple[str, str]],
+    prefix: str,
+) -> list[tuple[str, str]]:
+    """Apply a destination prefix to collected runtime files."""
+    prefixed: list[tuple[str, str]] = []
+    for source_path, destination in collected:
+        target = Path(prefix)
+        if destination != ".":
+            target = target / destination
+        prefixed.append((source_path, str(target)))
+    return prefixed
+
+
+def collect_windows_ffmpeg_binaries(project_root: Path) -> list[tuple[str, str]]:
+    """Collect staged Windows FFmpeg runtime files for PyInstaller."""
+    runtime_dir = find_windows_ffmpeg_runtime_dir(project_root)
+    if runtime_dir is None:
+        raise RuntimeError(
+            "Windows FFmpeg runtime not found. Stage FFmpeg in "
+            "packaging/runtime/ffmpeg/windows or set SCENE_RIPPER_FFMPEG_DIR."
+        )
+
+    collected = _prefix_runtime_destination(_collect_runtime_files(runtime_dir), "bin")
+    bundled_names = {Path(src).name.lower() for src, _ in collected}
+    if not all(name.lower() in bundled_names for name in WINDOWS_FFMPEG_BINARY_NAMES):
+        raise RuntimeError(f"Missing FFmpeg runtime binaries in {runtime_dir}")
+    return collected
+
+
+def find_macos_ffmpeg_runtime_dir(project_root: Path) -> Path | None:
+    """Return the staged macOS FFmpeg runtime directory, if available."""
+    env_dir = os.environ.get("SCENE_RIPPER_FFMPEG_DIR")
+    candidates = [
+        Path(env_dir) if env_dir else None,
+        project_root / "packaging" / "runtime" / "ffmpeg" / "macos",
+    ]
+
+    for candidate in candidates:
+        if candidate and candidate.is_dir():
+            if all((candidate / name).is_file() for name in MACOS_FFMPEG_BINARY_NAMES):
+                return candidate
+    return None
+
+
+def collect_macos_ffmpeg_binaries(project_root: Path) -> list[tuple[str, str]]:
+    """Collect staged macOS FFmpeg runtime files for PyInstaller."""
+    runtime_dir = find_macos_ffmpeg_runtime_dir(project_root)
+    if runtime_dir is None:
+        raise RuntimeError(
+            "macOS FFmpeg runtime not found. Stage FFmpeg in "
+            "packaging/runtime/ffmpeg/macos or set SCENE_RIPPER_FFMPEG_DIR."
+        )
+
+    collected = _prefix_runtime_destination(_collect_runtime_files(runtime_dir), "bin")
+    bundled_names = {Path(src).name for src, _ in collected}
+    if not all(name in bundled_names for name in MACOS_FFMPEG_BINARY_NAMES):
+        raise RuntimeError(f"Missing FFmpeg runtime binaries in {runtime_dir}")
     return collected
 
 

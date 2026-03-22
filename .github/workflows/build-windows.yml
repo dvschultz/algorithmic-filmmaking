@@ -92,6 +92,34 @@ jobs:
             throw "Failed to stage an mpv runtime DLL"
           }
 
+          $ffmpegRuntimeDir = "packaging/runtime/ffmpeg/windows"
+          New-Item -ItemType Directory -Force -Path $ffmpegRuntimeDir | Out-Null
+          Remove-Item "$ffmpegRuntimeDir/*" -Force -ErrorAction SilentlyContinue
+          Remove-Item "tmp/winffmpeg" -Recurse -Force -ErrorAction SilentlyContinue
+
+          Invoke-WebRequest `
+            -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" `
+            -OutFile "ffmpeg.zip"
+          Expand-Archive -Path "ffmpeg.zip" -DestinationPath "tmp/winffmpeg" -Force
+
+          $ffmpegExe = Get-ChildItem -Path "tmp/winffmpeg" -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
+          $ffprobeExe = Get-ChildItem -Path "tmp/winffmpeg" -Recurse -Filter "ffprobe.exe" | Select-Object -First 1
+          if (-not $ffmpegExe -or -not $ffprobeExe) {
+            throw "Failed to locate FFmpeg runtime executables in extracted archive"
+          }
+
+          $ffmpegBinDir = $ffmpegExe.Directory.FullName
+          Get-ChildItem -Path $ffmpegBinDir -File | ForEach-Object {
+            Copy-Item $_.FullName -Destination $ffmpegRuntimeDir -Force
+          }
+
+          if (-not (Test-Path (Join-Path $ffmpegRuntimeDir "ffmpeg.exe"))) {
+            throw "Failed to stage ffmpeg.exe runtime"
+          }
+          if (-not (Test-Path (Join-Path $ffmpegRuntimeDir "ffprobe.exe"))) {
+            throw "Failed to stage ffprobe.exe runtime"
+          }
+
           $winSparkleRuntimeDir = "packaging/runtime/winsparkle/windows"
           $winSparkleToolsDir = Join-Path $winSparkleRuntimeDir "tools"
           New-Item -ItemType Directory -Force -Path $winSparkleToolsDir | Out-Null
@@ -201,6 +229,18 @@ jobs:
           } | Select-Object -First 1
           if (-not $bundledWinSparkleDll) {
             throw "Bundled WinSparkle.dll missing from dist output"
+          }
+          $bundledFfmpegExe = Get-ChildItem -Path "dist/Scene Ripper" -Recurse -File | Where-Object {
+            $_.Name -eq "ffmpeg.exe"
+          } | Select-Object -First 1
+          if (-not $bundledFfmpegExe) {
+            throw "Bundled ffmpeg.exe missing from dist output"
+          }
+          $bundledFfprobeExe = Get-ChildItem -Path "dist/Scene Ripper" -Recurse -File | Where-Object {
+            $_.Name -eq "ffprobe.exe"
+          } | Select-Object -First 1
+          if (-not $bundledFfprobeExe) {
+            throw "Bundled ffprobe.exe missing from dist output"
           }
 
           if ($env:UPDATER_ENABLED -eq "true") {

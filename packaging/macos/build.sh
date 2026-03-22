@@ -36,6 +36,44 @@ echo "    DMG: ${BUILD_DMG}"
 echo ""
 
 # -------------------------------------------------------------------
+# 0. Stage FFmpeg runtime
+# -------------------------------------------------------------------
+echo "==> Staging FFmpeg runtime..."
+FFMPEG_RUNTIME_DIR="${PROJECT_ROOT}/packaging/runtime/ffmpeg/macos"
+rm -rf "${FFMPEG_RUNTIME_DIR}"
+mkdir -p "${FFMPEG_RUNTIME_DIR}"
+
+PROJECT_ROOT="$PROJECT_ROOT" python - <<'PY'
+import shutil
+import tempfile
+import urllib.request
+import zipfile
+import os
+from pathlib import Path
+
+project_root = Path(os.environ["PROJECT_ROOT"])
+runtime_dir = project_root / "packaging" / "runtime" / "ffmpeg" / "macos"
+downloads = {
+    "ffmpeg": "https://www.osxexperts.net/ffmpeg7arm.zip",
+    "ffprobe": "https://www.osxexperts.net/ffprobe7arm.zip",
+}
+
+with tempfile.TemporaryDirectory() as temp_dir:
+    temp_path = Path(temp_dir)
+    for binary_name, url in downloads.items():
+        archive_path = temp_path / f"{binary_name}.zip"
+        urllib.request.urlretrieve(url, archive_path)
+        with zipfile.ZipFile(archive_path, "r") as archive:
+            members = [name for name in archive.namelist() if name.endswith(binary_name)]
+            if not members:
+                raise SystemExit(f"{binary_name} not found in downloaded archive")
+            extracted = Path(archive.extract(members[0], temp_path))
+            target_path = runtime_dir / binary_name
+            shutil.move(str(extracted), target_path)
+            target_path.chmod(0o755)
+PY
+
+# -------------------------------------------------------------------
 # 1. Install dependencies
 # -------------------------------------------------------------------
 echo "==> Installing core dependencies..."
@@ -62,12 +100,26 @@ fi
 
 echo "==> .app bundle created: ${APP_PATH}"
 du -sh "$APP_PATH"
+if ! find "$APP_PATH" -name "ffmpeg" | grep -q .; then
+    echo "ERROR: bundled ffmpeg binary not found in ${APP_PATH}"
+    exit 1
+fi
+if ! find "$APP_PATH" -name "ffprobe" | grep -q .; then
+    echo "ERROR: bundled ffprobe binary not found in ${APP_PATH}"
+    exit 1
+fi
 
 # -------------------------------------------------------------------
 # 3. Code signing (optional)
 # -------------------------------------------------------------------
 if [ "$CODE_SIGN" = true ]; then
     echo "==> Code signing..."
+    while IFS= read -r helper_binary; do
+        codesign --force --options runtime \
+            --sign "${CODESIGN_IDENTITY}" \
+            "$helper_binary"
+    done < <(find "$APP_PATH" -type f \( -name "ffmpeg" -o -name "ffprobe" \) | sort)
+
     codesign --force --deep --options runtime \
         --entitlements "${SCRIPT_DIR}/entitlements.plist" \
         --sign "${CODESIGN_IDENTITY}" \

@@ -84,6 +84,68 @@ class TestFindBinaryWindows:
                 assert result is not None
                 assert not result.endswith(".exe")
 
+    def test_finds_bundled_runtime_in_frozen_app(self, tmp_path):
+        """find_binary should detect FFmpeg bundled inside a frozen app."""
+        from core.binary_resolver import find_binary
+
+        managed_dir = tmp_path / "managed"
+        managed_dir.mkdir()
+        bundled_dir = tmp_path / "bin"
+        bundled_dir.mkdir()
+        (bundled_dir / "ffmpeg.exe").write_text("fake")
+
+        with patch("core.binary_resolver.sys") as mock_sys, \
+             patch("core.binary_resolver.is_frozen", return_value=True), \
+             patch("core.binary_resolver.get_base_path", return_value=tmp_path), \
+             patch("core.binary_resolver.get_bundled_bin_dir", return_value=bundled_dir), \
+             patch("core.binary_resolver.get_managed_bin_dir", return_value=managed_dir):
+            mock_sys.platform = "win32"
+            mock_sys.executable = str(tmp_path / "Scene Ripper.exe")
+            with patch("shutil.which", return_value=None):
+                result = find_binary("ffmpeg")
+                assert result is not None
+                assert result.endswith("ffmpeg.exe")
+
+    def test_identifies_bundled_binary_paths_in_frozen_app(self, tmp_path):
+        """Bundled binary detection should recognize frozen app runtime paths."""
+        from core.binary_resolver import is_bundled_binary_path
+
+        bundled_dir = tmp_path / "bin"
+        bundled_dir.mkdir()
+        ffmpeg = bundled_dir / "ffmpeg.exe"
+        ffmpeg.write_text("fake")
+
+        with patch("core.binary_resolver.sys") as mock_sys, \
+             patch("core.binary_resolver.is_frozen", return_value=True), \
+             patch("core.binary_resolver.get_base_path", return_value=tmp_path), \
+             patch("core.binary_resolver.get_bundled_bin_dir", return_value=bundled_dir):
+            mock_sys.executable = str(tmp_path / "Scene Ripper.exe")
+            assert is_bundled_binary_path(str(ffmpeg)) is True
+
+
+class TestGetSubprocessEnv:
+    """Test get_subprocess_env() PATH behavior."""
+
+    def test_prepends_bundled_bin_in_frozen_app(self, tmp_path):
+        """Frozen subprocess env should expose bundled binaries on PATH."""
+        from core.binary_resolver import get_subprocess_env
+
+        managed_dir = tmp_path / "managed"
+        managed_dir.mkdir()
+        bundled_dir = tmp_path / "bin"
+        bundled_dir.mkdir()
+
+        with patch("core.binary_resolver.sys") as mock_sys, \
+             patch("core.binary_resolver.is_frozen", return_value=True), \
+             patch("core.binary_resolver.get_bundled_bin_dir", return_value=bundled_dir), \
+             patch("core.binary_resolver.get_managed_bin_dir", return_value=managed_dir), \
+             patch.dict(os.environ, {"PATH": r"C:\Windows\System32"}, clear=False):
+            mock_sys.executable = str(tmp_path / "Scene Ripper.exe")
+            env = get_subprocess_env()
+            path_parts = env["PATH"].split(os.pathsep)
+            assert path_parts[0] == str(managed_dir)
+            assert str(bundled_dir) in path_parts[:3]
+
 
 class TestGetSubprocessKwargs:
     """Test get_subprocess_kwargs() platform behavior."""

@@ -47,7 +47,10 @@ SPARKLE_PUBLIC_ED_KEY = build_support.resolve_update_public_ed_key(
     SPARKLE_PUBLIC_ED_KEY,
     SPARKLE_PRIVATE_ED_KEY,
 )
-binaries = build_support.collect_macos_mpv_binaries(PROJECT_ROOT)
+binaries = (
+    build_support.collect_macos_mpv_binaries(PROJECT_ROOT)
+    + build_support.collect_macos_ffmpeg_binaries(PROJECT_ROOT)
+)
 sparkle_datas = build_support.collect_macos_sparkle_datas(PROJECT_ROOT)
 
 

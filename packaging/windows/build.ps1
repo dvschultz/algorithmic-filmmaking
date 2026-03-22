@@ -15,6 +15,7 @@ Write-Host "=== Scene Ripper Windows Build ===" -ForegroundColor Cyan
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $projectRoot = Resolve-Path (Join-Path $scriptDir "..\..")
 $runtimeDir = Join-Path $projectRoot "packaging\runtime\mpv\windows"
+$ffmpegRuntimeDir = Join-Path $projectRoot "packaging\runtime\ffmpeg\windows"
 Push-Location $projectRoot
 
 Write-Host "Staging mpv runtime..." -ForegroundColor Yellow
@@ -49,6 +50,31 @@ Get-ChildItem -Path $dllDir -Filter "*.dll" | ForEach-Object {
     Copy-Item $_.FullName -Destination $runtimeDir -Force
 }
 
+Write-Host "Staging FFmpeg runtime..." -ForegroundColor Yellow
+New-Item -ItemType Directory -Force -Path $ffmpegRuntimeDir | Out-Null
+Remove-Item (Join-Path $ffmpegRuntimeDir "*") -Force -ErrorAction SilentlyContinue
+
+$ffmpegArchive = Join-Path $projectRoot "ffmpeg.zip"
+Invoke-WebRequest `
+    -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" `
+    -OutFile $ffmpegArchive
+
+$ffmpegExtractDir = Join-Path $projectRoot "tmp\winffmpeg"
+New-Item -ItemType Directory -Force -Path $ffmpegExtractDir | Out-Null
+Expand-Archive -Path $ffmpegArchive -DestinationPath $ffmpegExtractDir -Force
+
+$ffmpegExe = Get-ChildItem -Path $ffmpegExtractDir -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
+$ffprobeExe = Get-ChildItem -Path $ffmpegExtractDir -Recurse -Filter "ffprobe.exe" | Select-Object -First 1
+if (-not $ffmpegExe -or -not $ffprobeExe) {
+    Write-Host "FFmpeg runtime executables not found in downloaded archive." -ForegroundColor Red
+    exit 1
+}
+
+$ffmpegBinDir = $ffmpegExe.Directory.FullName
+Get-ChildItem -Path $ffmpegBinDir -File | ForEach-Object {
+    Copy-Item $_.FullName -Destination $ffmpegRuntimeDir -Force
+}
+
 # Install dependencies
 Write-Host "Installing dependencies..." -ForegroundColor Yellow
 pip install -r requirements-core.txt pyinstaller
@@ -72,6 +98,20 @@ $bundledMpvDll = Get-ChildItem -Path (Join-Path $projectRoot "dist\Scene Ripper"
 } | Select-Object -First 1
 if (-not $bundledMpvDll) {
     Write-Host "Bundled mpv runtime DLL missing from dist/Scene Ripper/" -ForegroundColor Red
+    exit 1
+}
+$bundledFfmpegExe = Get-ChildItem -Path (Join-Path $projectRoot "dist\Scene Ripper") -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
+    $_.Name -eq "ffmpeg.exe"
+} | Select-Object -First 1
+if (-not $bundledFfmpegExe) {
+    Write-Host "Bundled ffmpeg.exe missing from dist/Scene Ripper/" -ForegroundColor Red
+    exit 1
+}
+$bundledFfprobeExe = Get-ChildItem -Path (Join-Path $projectRoot "dist\Scene Ripper") -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
+    $_.Name -eq "ffprobe.exe"
+} | Select-Object -First 1
+if (-not $bundledFfprobeExe) {
+    Write-Host "Bundled ffprobe.exe missing from dist/Scene Ripper/" -ForegroundColor Red
     exit 1
 }
 

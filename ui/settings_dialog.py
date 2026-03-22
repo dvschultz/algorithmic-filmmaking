@@ -116,6 +116,18 @@ def is_network_or_cloud_path(path: Path) -> tuple[bool, str]:
     return False, ""
 
 
+def _path_is_within(path_text: str | None, root: Path) -> bool:
+    """Return True when a string path is inside the provided root."""
+    if not path_text:
+        return False
+    try:
+        candidate = Path(path_text).resolve(strict=False)
+        resolved_root = root.resolve(strict=False)
+    except OSError:
+        return False
+    return candidate == resolved_root or candidate.is_relative_to(resolved_root)
+
+
 class PathSelector(QWidget):
     """Widget for selecting a directory path with browse button."""
 
@@ -1195,8 +1207,8 @@ class SettingsDialog(QDialog):
 
     def _create_dependencies_tab(self) -> QWidget:
         """Create the Dependencies management tab."""
-        from core.paths import is_frozen
-        from core.binary_resolver import find_binary
+        from core.paths import get_managed_bin_dir, is_frozen
+        from core.binary_resolver import find_binary, is_bundled_binary_path
         from core.dependency_manager import (
             get_python_version,
             is_binary_available,
@@ -1223,16 +1235,30 @@ class SettingsDialog(QDialog):
         ffmpeg_label.setFixedWidth(UISizes.FORM_LABEL_WIDTH)
         ffmpeg_row.addWidget(ffmpeg_label)
         ffmpeg_path = find_binary("ffmpeg")
+        ffmpeg_is_bundled = is_bundled_binary_path(ffmpeg_path)
+        ffmpeg_is_managed = _path_is_within(ffmpeg_path, get_managed_bin_dir())
         if ffmpeg_path:
-            self._ffmpeg_status = QLabel(f"Installed ({ffmpeg_path})")
+            if ffmpeg_is_bundled:
+                status_text = f"Bundled with app ({ffmpeg_path})"
+            elif ffmpeg_is_managed:
+                status_text = f"Installed in app data ({ffmpeg_path})"
+            else:
+                status_text = f"Installed externally ({ffmpeg_path})"
+            self._ffmpeg_status = QLabel(status_text)
             self._ffmpeg_status.setStyleSheet(f"color: {theme().accent_green};")
         else:
             self._ffmpeg_status = QLabel("Not installed")
             self._ffmpeg_status.setStyleSheet(f"color: {theme().accent_red};")
         ffmpeg_row.addWidget(self._ffmpeg_status, stretch=1)
 
-        if is_frozen():
-            ffmpeg_btn = QPushButton("Download" if not ffmpeg_path else "Re-download")
+        if is_frozen() and not ffmpeg_is_bundled:
+            if not ffmpeg_path:
+                button_text = "Download"
+            elif ffmpeg_is_managed:
+                button_text = "Re-download"
+            else:
+                button_text = "Install managed copy"
+            ffmpeg_btn = QPushButton(button_text)
             ffmpeg_btn.clicked.connect(lambda: self._download_binary("ffmpeg"))
             ffmpeg_row.addWidget(ffmpeg_btn)
         bin_layout.addLayout(ffmpeg_row)

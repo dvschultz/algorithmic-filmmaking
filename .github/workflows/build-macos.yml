@@ -48,6 +48,40 @@ jobs:
       - name: Install system dependencies
         run: brew install mpv create-dmg
 
+      - name: Stage FFmpeg runtime
+        run: |
+          python - <<'PY'
+          import shutil
+          import tempfile
+          import urllib.request
+          import zipfile
+          from pathlib import Path
+
+          runtime_dir = Path("packaging/runtime/ffmpeg/macos")
+          shutil.rmtree(runtime_dir, ignore_errors=True)
+          runtime_dir.mkdir(parents=True, exist_ok=True)
+
+          downloads = {
+              "ffmpeg": "https://www.osxexperts.net/ffmpeg7arm.zip",
+              "ffprobe": "https://www.osxexperts.net/ffprobe7arm.zip",
+          }
+
+          with tempfile.TemporaryDirectory() as temp_dir:
+              temp_path = Path(temp_dir)
+              for binary_name, url in downloads.items():
+                  archive_path = temp_path / f"{binary_name}.zip"
+                  urllib.request.urlretrieve(url, archive_path)
+                  with zipfile.ZipFile(archive_path, "r") as archive:
+                      members = [name for name in archive.namelist() if name.endswith(binary_name)]
+                      if not members:
+                          raise SystemExit(f"{binary_name} not found in downloaded archive")
+                      member = members[0]
+                      extracted = Path(archive.extract(member, temp_path))
+                      target_path = runtime_dir / binary_name
+                      shutil.move(str(extracted), target_path)
+                      target_path.chmod(0o755)
+          PY
+
       - name: Stage Sparkle runtime
         env:
           SPARKLE_VERSION: ${{ env.SPARKLE_VERSION }}
@@ -178,6 +212,14 @@ jobs:
             echo "ERROR: .app bundle not found"
             exit 1
           fi
+          if ! find "$APP_PATH" -name "ffmpeg" | grep -q .; then
+            echo "ERROR: bundled ffmpeg binary not found"
+            exit 1
+          fi
+          if ! find "$APP_PATH" -name "ffprobe" | grep -q .; then
+            echo "ERROR: bundled ffprobe binary not found"
+            exit 1
+          fi
           if ! find "$APP_PATH" -name "libmpv*.dylib" | grep -q .; then
             echo "ERROR: bundled libmpv dylib not found"
             exit 1
@@ -276,6 +318,11 @@ jobs:
           while IFS= read -r binary; do
             sign_item "$binary"
           done < <(find "$APP_PATH" -type f \( -name "*.so" -o -name "*.dylib" \) | sort)
+
+          # Sign bundled helper executables before the enclosing app.
+          while IFS= read -r helper_binary; do
+            sign_item "$helper_binary"
+          done < <(find "$APP_PATH" -type f \( -name "ffmpeg" -o -name "ffprobe" \) | sort)
 
           # Sparkle embeds nested XPCs and helper apps that must be signed before the framework.
           if [ -d "$FRAMEWORKS_DIR/Sparkle.framework" ]; then

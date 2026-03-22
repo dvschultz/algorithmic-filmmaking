@@ -56,6 +56,7 @@ WINSPARKLE_PUBLIC_ED_KEY = build_support.resolve_update_public_ed_key(
 )
 binaries = (
     build_support.collect_windows_mpv_binaries(PROJECT_ROOT)
+    + build_support.collect_windows_ffmpeg_binaries(PROJECT_ROOT)
     + build_support.collect_windows_winsparkle_binaries(PROJECT_ROOT)
 )
 
