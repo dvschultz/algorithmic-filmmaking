@@ -15,6 +15,75 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
+# Poetic form definitions
+# Each form has a description for the LLM and optional line count constraints
+POETIC_FORMS = {
+    "free_verse": {
+        "label": "Free Verse",
+        "description": "No fixed structure. Arrange phrases for maximum emotional impact.",
+        "line_count": None,  # Uses length setting
+    },
+    "haiku": {
+        "label": "Haiku",
+        "description": (
+            "A 3-line poem. The lines should evoke a single vivid image or moment. "
+            "Traditional haiku captures nature or a fleeting sensation. "
+            "Since you are using found phrases (not syllable-counted words), "
+            "focus on brevity and the juxtaposition of the three chosen phrases."
+        ),
+        "line_count": 3,
+    },
+    "limerick": {
+        "label": "Limerick",
+        "description": (
+            "A 5-line poem with a humorous or absurd tone. "
+            "Lines 1, 2, and 5 should feel longer or more emphatic. "
+            "Lines 3 and 4 should be shorter or punchier. "
+            "The overall effect should be playful or comedic."
+        ),
+        "line_count": 5,
+    },
+    "couplets": {
+        "label": "Couplets",
+        "description": (
+            "Arrange phrases in pairs. Each pair of consecutive lines should "
+            "relate to each other — through contrast, echo, or continuation. "
+            "The total number of lines should be even."
+        ),
+        "line_count": None,
+    },
+    "triptych": {
+        "label": "Triptych",
+        "description": (
+            "A three-section poem. Divide the phrases into three groups: "
+            "an opening section, a contrasting middle, and a resolution. "
+            "Leave a visual pause between sections (the sequencer will "
+            "handle timing). Each section should have at least 2 phrases."
+        ),
+        "line_count": None,
+    },
+    "list_poem": {
+        "label": "List Poem",
+        "description": (
+            "An accumulative list structure. Each line builds on a theme, "
+            "creating rhythm through repetition and variation. "
+            "The effect should feel like an incantation or inventory."
+        ),
+        "line_count": None,
+    },
+    "golden_shovel": {
+        "label": "Golden Shovel",
+        "description": (
+            "Inspired by the Golden Shovel form: choose one phrase as the "
+            "'spine' and arrange the other phrases so that reading them "
+            "in order builds toward or away from that central phrase. "
+            "Place the spine phrase last."
+        ),
+        "line_count": None,
+    },
+}
+
+
 @dataclass
 class PoemLine:
     """A single line of the generated poem.
@@ -58,6 +127,7 @@ def generate_poem(
     mood_prompt: str,
     model: Optional[str] = None,
     length: str = "medium",
+    form: str = "free_verse",
 ) -> list[PoemLine]:
     """Generate a poem using LLM from extracted clip texts.
 
@@ -72,6 +142,7 @@ def generate_poem(
         model: LLM model to use (default: from settings)
         length: Target poem length - "short" (up to 11 lines), "medium" (12-25 lines),
             or "long" (26+ lines). Default: "medium"
+        form: Poetic form key from POETIC_FORMS. Default: "free_verse"
 
     Returns:
         List of PoemLine objects in poem order
@@ -87,7 +158,7 @@ def generate_poem(
     temperature = settings.exquisite_corpus_temperature
     original_model = model
 
-    logger.info(f"Generating poem with mood: '{mood_prompt}', length: '{length}' using model: {model}, temperature: {temperature}")
+    logger.info(f"Generating poem with mood: '{mood_prompt}', length: '{length}', form: '{form}' using model: {model}, temperature: {temperature}")
 
     # Build the phrase inventory with short IDs for LLM communication
     # LLMs tend to truncate long UUIDs, so we use simple indexed IDs (c1, c2, ...)
@@ -112,13 +183,20 @@ def generate_poem(
 
     api_key = get_llm_api_key()
 
-    # Length guidance for the LLM
-    length_guidance = {
-        "short": "Create a SHORT poem with up to 11 lines. Be selective and choose impactful phrases.",
-        "medium": "Create a MEDIUM poem with 12-25 lines. Balance breadth and focus.",
-        "long": "Create a LONG poem with 26 or more lines. Use as many phrases as create a cohesive whole.",
-    }
-    length_instruction = length_guidance.get(length, length_guidance["medium"])
+    # Resolve poetic form
+    form_def = POETIC_FORMS.get(form, POETIC_FORMS["free_verse"])
+    form_instruction = f"POETIC FORM: {form_def['label']}\n{form_def['description']}"
+
+    # Length guidance — fixed-count forms override the length setting
+    if form_def.get("line_count"):
+        length_instruction = f"Your poem must have exactly {form_def['line_count']} lines."
+    else:
+        length_guidance = {
+            "short": "Create a SHORT poem with up to 11 lines. Be selective and choose impactful phrases.",
+            "medium": "Create a MEDIUM poem with 12-25 lines. Balance breadth and focus.",
+            "long": "Create a LONG poem with 26 or more lines. Use as many phrases as create a cohesive whole.",
+        }
+        length_instruction = length_guidance.get(length, length_guidance["medium"])
 
     # Create the LLM prompt
     system_prompt = f"""You are a poet creating visual poetry from found text.
@@ -131,6 +209,8 @@ CRITICAL RULES:
 5. Create a cohesive poem that evokes the requested mood
 6. Consider the visual and sonic qualities of the phrases
 7. LENGTH REQUIREMENT: {length_instruction}
+
+{form_instruction}
 
 OUTPUT FORMAT:
 Return a JSON array where each element is the clip_id of the phrase to use, in poem order.

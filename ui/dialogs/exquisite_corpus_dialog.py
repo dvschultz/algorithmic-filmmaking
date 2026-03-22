@@ -50,7 +50,7 @@ class ExquisiteCorpusDialog(QDialog):
     PAGE_PROGRESS = 1
     PAGE_PREVIEW = 2
 
-    def __init__(self, clips, sources_by_id, project, parent=None, initial_poem_length: str = None):
+    def __init__(self, clips, sources_by_id, project, parent=None, initial_poem_length: str = None, initial_form: str = None):
         """Initialize the dialog.
 
         Args:
@@ -59,6 +59,7 @@ class ExquisiteCorpusDialog(QDialog):
             project: Project object (for access to clips_by_id if needed)
             parent: Parent widget
             initial_poem_length: Optional pre-selected poem length ("short", "medium", "long")
+            initial_form: Optional pre-selected poetic form key (e.g. "haiku", "limerick")
         """
         super().__init__(parent)
         self.clips = clips
@@ -68,6 +69,7 @@ class ExquisiteCorpusDialog(QDialog):
         self.poem_lines = []
         self.worker = None
         self._initial_poem_length = initial_poem_length
+        self._initial_form = initial_form
 
         self.setWindowTitle("Exquisite Corpus")
         self.setMinimumSize(600, 500)
@@ -175,6 +177,33 @@ class ExquisiteCorpusDialog(QDialog):
         initial_index = length_to_index.get(self._initial_poem_length, 1)
         self.length_combo.setCurrentIndex(initial_index)
         layout.addWidget(self.length_combo)
+
+        layout.addSpacing(16)
+
+        # Poetic form selection
+        form_label = QLabel("Poetic form:")
+        layout.addWidget(form_label)
+        self._form_label = form_label
+
+        from core.remix.exquisite_corpus import POETIC_FORMS
+        self._form_keys = list(POETIC_FORMS.keys())
+        self.form_combo = QComboBox()
+        self.form_combo.addItems([
+            POETIC_FORMS[k]["label"] for k in self._form_keys
+        ])
+        # Set initial form
+        initial_form_index = 0
+        if self._initial_form and self._initial_form in self._form_keys:
+            initial_form_index = self._form_keys.index(self._initial_form)
+        self.form_combo.setCurrentIndex(initial_form_index)
+        self.form_combo.currentIndexChanged.connect(self._on_form_changed)
+        layout.addWidget(self.form_combo)
+
+        # Form description (updates when selection changes)
+        self._form_desc = QLabel(POETIC_FORMS[self._form_keys[initial_form_index]]["description"])
+        self._form_desc.setWordWrap(True)
+        self._form_desc.setStyleSheet(f"color: {theme().text_muted}; font-size: 11px;")
+        layout.addWidget(self._form_desc)
 
         layout.addSpacing(16)
 
@@ -354,6 +383,16 @@ class ExquisiteCorpusDialog(QDialog):
         if hasattr(self, '_preview_instruction'):
             self._preview_instruction.setStyleSheet(f"color: {theme().text_secondary};")
 
+    def _on_form_changed(self, index: int):
+        """Update form description and disable length for fixed-count forms."""
+        from core.remix.exquisite_corpus import POETIC_FORMS
+        form_key = self._form_keys[index]
+        form_def = POETIC_FORMS[form_key]
+        self._form_desc.setText(form_def["description"])
+        # Disable length combo when the form has a fixed line count
+        has_fixed_count = form_def.get("line_count") is not None
+        self.length_combo.setEnabled(not has_fixed_count)
+
     def _go_back(self):
         """Navigate to previous page."""
         current = self.stack.currentIndex()
@@ -505,8 +544,11 @@ class ExquisiteCorpusDialog(QDialog):
         length_map = {0: "short", 1: "medium", 2: "long"}
         length = length_map.get(self.length_combo.currentIndex(), "medium")
 
+        # Get selected poetic form
+        form = self._form_keys[self.form_combo.currentIndex()]
+
         try:
-            self.poem_lines = generate_poem(clips_with_text, mood, length=length)
+            self.poem_lines = generate_poem(clips_with_text, mood, length=length, form=form)
             self._display_poem()
             self.stack.setCurrentIndex(self.PAGE_PREVIEW)
             self._update_nav_buttons()
