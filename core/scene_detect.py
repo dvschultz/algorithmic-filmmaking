@@ -552,8 +552,12 @@ class SceneDetector:
         """
         Detect scenes based on text changes with progress reporting.
 
-        Uses OCR to detect when on-screen text changes, optimized for
-        karaoke videos, lyrics overlays, and subtitle-based content.
+        Uses a two-phase coarse-then-refine strategy:
+        1. Coarse pass: sample every ~1 second, run OCR on each sample
+        2. Refine: binary search intervals where text changed to find exact frames
+
+        This is much faster than per-frame OCR. For a 5-min video at 30fps,
+        ~300 coarse OCR calls + ~5-6 per transition vs 1000+ per-frame calls.
 
         Args:
             video_path: Path to the video file
@@ -590,48 +594,115 @@ class SceneDetector:
 
         progress_callback(0.05, "Initializing text detector...")
 
-        # Create karaoke detector
         config = karaoke_config or KaraokeDetectionConfig()
         detector = KaraokeTextDetector(config)
 
-        progress_callback(0.1, "Analyzing text changes...")
+        # --- Phase 1: Coarse sampling ---
+        # Sample ~1 frame per second (or use frame_skip from config if larger)
+        coarse_step = max(int(fps), config.frame_skip)
+        sample_frames = list(range(0, total_frames, coarse_step))
+        if not sample_frames:
+            sample_frames = [0]
 
-        # Process frames
-        frame_num = 0
-        frame_skip = config.frame_skip
-        last_progress = 0.1
+        progress_callback(0.1, f"Coarse pass: sampling {len(sample_frames)} frames...")
 
-        while True:
+        # Extract text at each sample point
+        sample_texts: list[tuple[int, str]] = []
+        for i, frame_num in enumerate(sample_frames):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
             ret, frame = cap.read()
             if not ret:
                 break
 
-            # Apply frame skip
-            if frame_num % frame_skip == 0:
-                detector.process_frame(frame_num, frame)
+            roi = detector._extract_roi(frame)
+            text = detector._extract_text(roi)
+            sample_texts.append((frame_num, text))
 
-            frame_num += 1
+            # Progress: coarse pass is 10%-60%
+            if i % 5 == 0:
+                progress = 0.1 + (0.5 * i / len(sample_frames))
+                progress_callback(
+                    progress,
+                    f"Coarse scan: {i}/{len(sample_frames)} samples"
+                )
 
-            # Update progress periodically (every 30 frames)
-            if frame_num % 30 == 0:
-                progress = 0.1 + (0.8 * frame_num / total_frames)
-                if progress > last_progress + 0.01:  # Update at least 1% increments
-                    stats = detector.get_stats()
-                    progress_callback(
-                        progress,
-                        f"Frame {frame_num}/{total_frames} ({stats['cuts_detected']} cuts)"
-                    )
-                    last_progress = progress
+        progress_callback(0.6, "Finding text transitions...")
 
-        cap.release()
+        # --- Find intervals where text changed ---
+        change_intervals: list[tuple[int, int, str, str]] = []
+        for i in range(len(sample_texts) - 1):
+            frame_a, text_a = sample_texts[i]
+            frame_b, text_b = sample_texts[i + 1]
+            similarity = detector._text_similarity(text_a, text_b)
+            if similarity < config.text_similarity_threshold:
+                change_intervals.append((frame_a, frame_b, text_a, text_b))
+
+        logger.info(
+            f"Coarse pass: {len(sample_texts)} samples, "
+            f"{len(change_intervals)} transitions found"
+        )
+
+        if not change_intervals:
+            cap.release()
+            progress_callback(0.9, "No text transitions found")
+        else:
+            # --- Phase 2: Binary search each transition ---
+            progress_callback(
+                0.65,
+                f"Refining {len(change_intervals)} transitions..."
+            )
+
+            scene_cuts: list[int] = []
+            min_scene_frames = config.min_scene_frames
+
+            for t_idx, (lo, hi, text_lo, text_hi) in enumerate(change_intervals):
+                # Binary search for the exact transition frame
+                while hi - lo > 1:
+                    mid = (lo + hi) // 2
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, mid)
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+
+                    roi = detector._extract_roi(frame)
+                    mid_text = detector._extract_text(roi)
+                    sim_to_lo = detector._text_similarity(mid_text, text_lo)
+
+                    if sim_to_lo >= config.text_similarity_threshold:
+                        # Mid still has the old text — transition is after mid
+                        lo = mid
+                        text_lo = mid_text
+                    else:
+                        # Mid has new text — transition is before mid
+                        hi = mid
+                        text_hi = mid_text
+
+                # The transition is at frame `hi`
+                cut_frame = max(0, hi - config.cut_offset)
+
+                # Enforce minimum distance between cuts
+                if scene_cuts and cut_frame - scene_cuts[-1] < min_scene_frames:
+                    continue
+
+                scene_cuts.append(cut_frame)
+
+                progress = 0.65 + (0.25 * (t_idx + 1) / len(change_intervals))
+                progress_callback(
+                    progress,
+                    f"Refined {t_idx + 1}/{len(change_intervals)} transitions"
+                )
+
+            cap.release()
+
+            # Inject the found cuts into the detector for stats
+            detector._scene_cuts = scene_cuts
 
         progress_callback(0.9, "Building clips...")
 
-        # Get stats for logging
         stats = detector.get_stats()
         logger.info(
-            f"Karaoke detection complete: {stats['frames_processed']} frames, "
-            f"{stats['ocr_calls']} OCR calls ({stats['ocr_skip_ratio']:.1%} skipped), "
+            f"Karaoke detection complete: {len(sample_texts)} coarse samples, "
+            f"{detector._ocr_calls} OCR calls, "
             f"{stats['cuts_detected']} cuts"
         )
 
