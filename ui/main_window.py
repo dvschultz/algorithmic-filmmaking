@@ -6713,6 +6713,7 @@ class MainWindow(QMainWindow):
         direction: str = None,
         shot_type: str = None,
         poem_length: str = None,
+        poem_form: str = None,
         storyteller_duration: str = None,
         storyteller_structure: str = None,
         storyteller_theme: str = None,
@@ -6724,7 +6725,7 @@ class MainWindow(QMainWindow):
         logger.info(
             f"Intention import confirmed: {len(local_files)} files, {len(urls)} URLs, "
             f"direction={direction}, shot_type={shot_type}, poem_length={poem_length}, "
-            f"storyteller_duration={storyteller_duration}"
+            f"poem_form={poem_form}, storyteller_duration={storyteller_duration}"
         )
 
         # Use stored algorithm (from card click) if dialog didn't provide one
@@ -6733,8 +6734,9 @@ class MainWindow(QMainWindow):
         direction_to_use = direction or getattr(self, '_intention_pending_direction', None)
         # Store shot type for filtering when workflow completes
         self._intention_pending_shot_type = shot_type
-        # Store poem length for exquisite_corpus
+        # Store poem length and form for exquisite_corpus
         self._intention_pending_poem_length = poem_length
+        self._intention_pending_poem_form = poem_form
         # Store storyteller params
         self._intention_pending_storyteller_duration = storyteller_duration
         self._intention_pending_storyteller_structure = storyteller_structure
@@ -7624,8 +7626,9 @@ class MainWindow(QMainWindow):
         all_sources = self.intention_workflow.get_all_sources() if self.intention_workflow else []
         sources_by_id = {s.id: s for s in all_sources}
 
-        # Get poem length from import dialog if set
+        # Get poem length and form from import dialog if set
         poem_length = getattr(self, '_intention_pending_poem_length', None)
+        poem_form = getattr(self, '_intention_pending_poem_form', None)
 
         dialog = ExquisiteCorpusDialog(
             clips=clips,
@@ -7633,6 +7636,7 @@ class MainWindow(QMainWindow):
             project=self.project,
             parent=self,
             initial_poem_length=poem_length,
+            initial_form=poem_form,
         )
 
         # Connect to sequence_ready signal - this is how the dialog returns results
@@ -8289,6 +8293,8 @@ class MainWindow(QMainWindow):
             self._intention_pending_shot_type = None
         if hasattr(self, '_intention_pending_poem_length'):
             self._intention_pending_poem_length = None
+        if hasattr(self, '_intention_pending_poem_form'):
+            self._intention_pending_poem_form = None
         if hasattr(self, '_intention_pending_storyteller_duration'):
             self._intention_pending_storyteller_duration = None
         if hasattr(self, '_intention_pending_storyteller_structure'):

@@ -217,7 +217,9 @@ class IntentionImportDialog(QDialog):
     """
 
     # local_paths, urls, algorithm, direction, shot_type, poem_length, storyteller_duration, storyteller_structure, storyteller_theme
-    import_requested = Signal(list, list, str, str, str, str, str, str, str)
+    # local_paths, urls, algorithm, direction, shot_type, poem_length, poem_form,
+    # storyteller_duration, storyteller_structure, storyteller_theme
+    import_requested = Signal(list, list, str, str, str, str, str, str, str, str)
     cancelled = Signal()
 
     # View indices
@@ -380,9 +382,27 @@ class IntentionImportDialog(QDialog):
             ])
             self.poem_length_dropdown.setCurrentIndex(1)  # Default to Medium
             right_column.addWidget(self.poem_length_dropdown)
+
+            # Poetic form selector
+            from core.remix.exquisite_corpus import POETIC_FORMS
+            self._form_keys = list(POETIC_FORMS.keys())
+
+            poem_form_label = QLabel("Poetic form:")
+            poem_form_label.setStyleSheet(f"color: {theme().text_secondary};")
+            right_column.addWidget(poem_form_label)
+            self._poem_form_label = poem_form_label
+
+            self.poem_form_dropdown = QComboBox()
+            self.poem_form_dropdown.addItems([
+                POETIC_FORMS[k]["label"] for k in self._form_keys
+            ])
+            self.poem_form_dropdown.currentIndexChanged.connect(self._on_poem_form_changed)
+            right_column.addWidget(self.poem_form_dropdown)
         else:
             self.poem_length_dropdown = QComboBox()
             self.poem_length_dropdown.setCurrentIndex(1)
+            self.poem_form_dropdown = QComboBox()
+            self._form_keys = ["free_verse"]
 
         # Storyteller configuration (for storyteller algorithm only)
         if self._algorithm.lower() == "storyteller":
@@ -717,6 +737,23 @@ class IntentionImportDialog(QDialog):
         length_map = {0: "short", 1: "medium", 2: "long"}
         return length_map.get(self.poem_length_dropdown.currentIndex(), "medium")
 
+    def _get_poem_form(self) -> str | None:
+        """Get the selected poetic form (for exquisite_corpus algorithm)."""
+        if self._algorithm.lower() != "exquisite_corpus":
+            return None
+        idx = self.poem_form_dropdown.currentIndex()
+        if 0 <= idx < len(self._form_keys):
+            return self._form_keys[idx]
+        return "free_verse"
+
+    def _on_poem_form_changed(self, index: int):
+        """Disable length combo when the form has a fixed line count."""
+        from core.remix.exquisite_corpus import POETIC_FORMS
+        if 0 <= index < len(self._form_keys):
+            form_def = POETIC_FORMS[self._form_keys[index]]
+            has_fixed_count = form_def.get("line_count") is not None
+            self.poem_length_dropdown.setEnabled(not has_fixed_count)
+
     def _get_storyteller_duration(self) -> str | None:
         """Get the selected target duration (for storyteller algorithm)."""
         if self._algorithm.lower() != "storyteller":
@@ -838,6 +875,7 @@ class IntentionImportDialog(QDialog):
         direction = self._get_direction()
         shot_type = self._get_shot_type()
         poem_length = self._get_poem_length()
+        poem_form = self._get_poem_form()
         storyteller_duration = self._get_storyteller_duration()
         storyteller_structure = self._get_storyteller_structure()
         storyteller_theme = self._get_storyteller_theme()
@@ -850,6 +888,7 @@ class IntentionImportDialog(QDialog):
             direction,
             shot_type,
             poem_length,
+            poem_form,
             storyteller_duration,
             storyteller_structure,
             storyteller_theme,
