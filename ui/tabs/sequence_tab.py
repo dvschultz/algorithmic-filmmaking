@@ -113,10 +113,9 @@ class SequenceTab(BaseTab):
         # State stack for cards vs timeline
         self.state_stack = QStackedWidget()
 
-        # STATE_CARDS (index 0): Just the card grid
-        self.card_grid = SortingCardGrid()
-        self.card_grid.algorithm_selected.connect(self._on_card_clicked)
-        self.state_stack.addWidget(self.card_grid)
+        # STATE_CARDS (index 0): Guidance + card grid
+        self.cards_view = self._create_cards_view()
+        self.state_stack.addWidget(self.cards_view)
 
         # STATE_TIMELINE (index 1): Header + content
         self.timeline_view = self._create_timeline_view()
@@ -131,6 +130,28 @@ class SequenceTab(BaseTab):
         # Start in cards state
         self._set_state(self.STATE_CARDS)
 
+    def _create_cards_view(self) -> QWidget:
+        """Create the cards view with empty-sequence guidance."""
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(Spacing.XL, Spacing.XL, Spacing.XL, Spacing.XL)
+        layout.setSpacing(Spacing.MD)
+
+        self.cards_hint_label = QLabel(
+            "Timeline is empty. Select clips in Analyze or Cut, or choose a sequencer below to build one."
+        )
+        self.cards_hint_label.setWordWrap(True)
+        self.cards_hint_label.setStyleSheet(
+            f"color: {theme().text_muted}; font-size: {TypeScale.SM}px;"
+        )
+        layout.addWidget(self.cards_hint_label)
+
+        self.card_grid = SortingCardGrid()
+        self.card_grid.algorithm_selected.connect(self._on_card_clicked)
+        layout.addWidget(self.card_grid)
+
+        return container
+
     def _create_timeline_view(self) -> QWidget:
         """Create the timeline view with header, player, preview, and timeline."""
         container = QWidget()
@@ -143,31 +164,37 @@ class SequenceTab(BaseTab):
         layout.addWidget(self.header_widget)
 
         # Main content splitter
-        splitter = QSplitter(Qt.Vertical)
+        self.timeline_splitter = QSplitter(Qt.Vertical)
+        self.timeline_splitter.setChildrenCollapsible(False)
 
         # Video player
         self.video_player = VideoPlayer()
+        self.video_player.setMinimumHeight(180)
         self.video_player.show_ab_loop_controls(True)
         self.video_player.set_sequence_mode(True)
         self.video_player.play_requested.connect(self._on_playback_requested)
         self.video_player.stop_requested.connect(self._on_stop_requested)
-        splitter.addWidget(self.video_player)
+        self.timeline_splitter.addWidget(self.video_player)
 
         # Timeline preview strip (moved from parameter view)
         self.timeline_preview = TimelinePreview()
+        self.timeline_preview.setMinimumHeight(90)
         self.timeline_preview.setMaximumHeight(100)
-        splitter.addWidget(self.timeline_preview)
+        self.timeline_splitter.addWidget(self.timeline_preview)
 
         # Timeline widget
         self.timeline = TimelineWidget()
+        self.timeline.setMinimumHeight(180)
         self.timeline.playhead_changed.connect(self._on_playhead_changed)
         self.timeline.export_requested.connect(self._on_export_requested)
-        splitter.addWidget(self.timeline)
+        self.timeline_splitter.addWidget(self.timeline)
 
         # Set splitter sizes
-        splitter.setSizes([300, 80, 200])
+        self.timeline_splitter.setSizes([300, 90, 220])
+        for index in range(self.timeline_splitter.count()):
+            self.timeline_splitter.setCollapsible(index, False)
 
-        layout.addWidget(splitter)
+        layout.addWidget(self.timeline_splitter)
 
         return container
 

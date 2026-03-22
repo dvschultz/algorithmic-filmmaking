@@ -2228,6 +2228,8 @@ class MainWindow(QMainWindow):
     def _refresh_timeline_from_project(self):
         """Refresh the sequence tab timeline from the project's sequence."""
         if not self.project.sequence:
+            self.sequence_tab.timeline_preview.clear()
+            self.sequence_tab._set_state(self.sequence_tab.STATE_CARDS)
             return
 
         # Build sources dict from project
@@ -2251,18 +2253,28 @@ class MainWindow(QMainWindow):
             ]
             self.sequence_tab._clips = self.project.clips
 
+        sequence_clip_ids = [
+            seq_clip.source_clip_id
+            for seq_clip in self.project.sequence.get_all_clips()
+            if seq_clip.source_clip_id
+        ]
+        sequence_preview = [
+            (self.project.clips_by_id[clip_id], sources.get(self.project.clips_by_id[clip_id].source_id))
+            for clip_id in sequence_clip_ids
+            if clip_id in self.project.clips_by_id
+            and sources.get(self.project.clips_by_id[clip_id].source_id) is not None
+        ]
+
+        has_timeline_clips = any(track.clips for track in self.project.sequence.tracks)
+
         # Update state based on timeline content
-        if self.project.sequence.tracks[0].clips:
+        if has_timeline_clips:
             # Show timeline state (2-state model: CARDS vs TIMELINE)
             self.sequence_tab._set_state(self.sequence_tab.STATE_TIMELINE)
             # Update timeline preview
-            sorted_clips = [
-                (clip, sources.get(clip.source_id))
-                for clip in self.project.clips
-                if sources.get(clip.source_id)
-            ]
-            self.sequence_tab.timeline_preview.set_clips(sorted_clips, sources)
+            self.sequence_tab.timeline_preview.set_clips(sequence_preview, sources)
         else:
+            self.sequence_tab.timeline_preview.clear()
             self.sequence_tab._set_state(self.sequence_tab.STATE_CARDS)
 
         self.sequence_tab.sync_sequence_metadata(self.project.sequence)
@@ -2271,7 +2283,10 @@ class MainWindow(QMainWindow):
         # Zoom to fit the content
         self.sequence_tab.timeline._on_zoom_fit()
 
-        logger.info(f"Refreshed timeline with {len(self.project.sequence.tracks[0].clips)} clips")
+        logger.info(
+            "Refreshed timeline with %s clips",
+            len(self.project.sequence.get_all_clips()),
+        )
 
     def _on_chat_complete(self, response: str, tool_history: list[dict]):
         """Handle chat completion with full history."""
@@ -8167,11 +8182,8 @@ class MainWindow(QMainWindow):
             if clip.transcript:
                 self.cut_tab.update_clip_transcript(clip.id, clip.transcript)
 
-        # Restore sequence (pass all sources for multi-source playback)
-        if self.project.sequence:
-            self.sequence_tab.timeline.load_sequence(
-                self.project.sequence, self.sources_by_id, self.clips
-            )
+        # Restore sequence UI and timeline state
+        self._refresh_timeline_from_project()
 
         # Restore UI state
         ui_state = self.project.ui_state
@@ -8326,11 +8338,8 @@ class MainWindow(QMainWindow):
                 if clip.transcript:
                     self.cut_tab.update_clip_transcript(clip.id, clip.transcript)
 
-        # Restore sequence
-        if self.project.sequence:
-            self.sequence_tab.timeline.load_sequence(
-                self.project.sequence, self.sources_by_id, self.clips
-            )
+        # Restore sequence UI and timeline state
+        self._refresh_timeline_from_project()
 
         # Restore UI state
         ui_state = self.project.ui_state
