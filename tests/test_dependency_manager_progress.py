@@ -109,3 +109,32 @@ def test_install_for_feature_batches_missing_packages_and_validates_runtime(monk
     assert package_batches == [["torch>=1.0", "torchvision>=1.0", "transformers>=1.0"]]
     assert validated == ["describe_local_cpu"]
     assert [round(progress, 2) for progress, _ in progress_calls] == [0.0, 0.5, 1.0]
+
+
+def test_install_for_feature_reinstalls_broken_runtime_even_when_packages_exist(monkeypatch):
+    """Fragile local runtimes should be repaired if imports are broken on disk."""
+    package_batches: list[list[str]] = []
+    validations: list[str] = []
+
+    def _fake_validate(name: str):
+        validations.append(name)
+        if len(validations) == 1:
+            raise RuntimeError("Could not import module 'AutoProcessor'")
+
+    def _fake_install(specifiers: list[str], _progress_callback):
+        package_batches.append(specifiers)
+        return True
+
+    monkeypatch.setattr("core.feature_registry.check_feature", lambda _name: (True, []))
+    monkeypatch.setattr("core.feature_registry._validate_feature_runtime", _fake_validate)
+    monkeypatch.setattr("core.dependency_manager.get_pip_specifier", lambda name: f"{name}>=1.0")
+    monkeypatch.setattr("core.dependency_manager.install_packages", _fake_install)
+
+    assert install_for_feature("shot_classify") is True
+    assert validations == ["shot_classify", "shot_classify"]
+    assert package_batches == [[
+        "torch>=1.0",
+        "torchvision>=1.0",
+        "transformers>=1.0",
+        "einops>=1.0",
+    ]]

@@ -103,7 +103,7 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
     ),
     "shot_classify": FeatureDeps(
         binaries=[],
-        packages=["torch", "torchvision", "transformers"],
+        packages=["torch", "torchvision", "transformers", "einops"],
         size_estimate_mb=450,
     ),
     "image_classify": FeatureDeps(
@@ -235,8 +235,17 @@ def install_for_feature(
 
     available, missing = check_feature(name)
     if available:
-        logger.info(f"Feature '{name}' already has all dependencies")
-        return True
+        try:
+            _validate_feature_runtime(name)
+            logger.info(f"Feature '{name}' already has all dependencies")
+            return True
+        except Exception as e:
+            logger.warning(
+                "Feature '%s' appears installed but runtime validation failed; reinstalling packages: %s",
+                name,
+                e,
+            )
+            missing = [f"package:{package_name}" for package_name in deps.packages]
 
     success = True
 
