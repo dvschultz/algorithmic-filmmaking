@@ -3,6 +3,7 @@
 Downloads and manages external dependencies that are not bundled in the app:
 - FFmpeg / FFprobe (platform-specific static builds)
 - yt-dlp (standalone binary)
+- Deno (JavaScript runtime required by yt-dlp for modern YouTube extraction)
 - Python 3.11 standalone (for pip install --target)
 - Python packages via pip install --target (using standalone Python)
 
@@ -17,6 +18,7 @@ import json
 import logging
 import os
 import platform
+import re
 import ssl
 import stat
 import subprocess
@@ -44,16 +46,20 @@ logger = logging.getLogger(__name__)
 _FFMPEG_URL_MACOS = "https://www.osxexperts.net/ffmpeg7arm.zip"
 _FFPROBE_URL_MACOS = "https://www.osxexperts.net/ffprobe7arm.zip"
 _YTDLP_URL_MACOS = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos"
+_DENO_URL_MACOS = "https://github.com/denoland/deno/releases/latest/download/deno-aarch64-apple-darwin.zip"
 
 # Windows x64 binaries
 _FFMPEG_URL_WINDOWS = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
 _YTDLP_URL_WINDOWS = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
+_DENO_URL_WINDOWS = "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip"
 
 # Linux binaries (BtbN static builds)
 _FFMPEG_URL_LINUX_X64 = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz"
 _FFMPEG_URL_LINUX_ARM64 = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linuxarm64-gpl.tar.xz"
 _YTDLP_URL_LINUX_X64 = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux"
 _YTDLP_URL_LINUX_ARM64 = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux_aarch64"
+_DENO_URL_LINUX_X64 = "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip"
+_DENO_URL_LINUX_ARM64 = "https://github.com/denoland/deno/releases/latest/download/deno-aarch64-unknown-linux-gnu.zip"
 
 
 def _get_ffmpeg_url() -> str:
@@ -109,6 +115,23 @@ def _get_ytdlp_url() -> str:
     )
 
 
+def _get_deno_url() -> str:
+    """Get platform-appropriate Deno download URL."""
+    if sys.platform == "win32":
+        return _DENO_URL_WINDOWS
+    if sys.platform == "darwin" and platform.machine() == "arm64":
+        return _DENO_URL_MACOS
+    if sys.platform == "linux":
+        machine = platform.machine()
+        if machine in ("x86_64", "AMD64"):
+            return _DENO_URL_LINUX_X64
+        if machine == "aarch64":
+            return _DENO_URL_LINUX_ARM64
+    raise RuntimeError(
+        f"Automatic Deno download not available for {sys.platform}/{platform.machine()}"
+    )
+
+
 def _get_binary_ext() -> str:
     """Get the platform-appropriate binary file extension."""
     return ".exe" if sys.platform == "win32" else ""
@@ -142,6 +165,7 @@ def _get_python_url() -> str:
 _MIN_FFMPEG_SIZE = 10 * 1024 * 1024   # 10 MB
 _MIN_FFPROBE_SIZE = 5 * 1024 * 1024   # 5 MB
 _MIN_YTDLP_SIZE = 1 * 1024 * 1024     # 1 MB
+_MIN_DENO_SIZE = 10 * 1024 * 1024     # 10 MB
 _MIN_PYTHON_SIZE = 30 * 1024 * 1024   # 30 MB (extracted)
 
 # SHA-256 checksums for download integrity verification.
@@ -151,18 +175,70 @@ _CHECKSUMS: dict[str, str | None] = {
     _FFMPEG_URL_MACOS: None,        # TODO: pin after verifying first download
     _FFPROBE_URL_MACOS: None,       # TODO: pin after verifying first download
     _YTDLP_URL_MACOS: None,         # /latest URL changes with each release
+    _DENO_URL_MACOS: None,          # /latest URL changes with each release
     _FFMPEG_URL_WINDOWS: None,      # /latest URL changes
     _YTDLP_URL_WINDOWS: None,       # /latest URL changes
+    _DENO_URL_WINDOWS: None,        # /latest URL changes
     _FFMPEG_URL_LINUX_X64: None,    # /latest URL changes
     _FFMPEG_URL_LINUX_ARM64: None,  # /latest URL changes
     _YTDLP_URL_LINUX_X64: None,    # /latest URL changes
     _YTDLP_URL_LINUX_ARM64: None,  # /latest URL changes
+    _DENO_URL_LINUX_X64: None,      # /latest URL changes
+    _DENO_URL_LINUX_ARM64: None,    # /latest URL changes
 }
 
 # ABI compatibility marker filename
 _COMPAT_MARKER = "compat_version.json"
 
 ProgressCallback = Optional[Callable[[float, str], None]]
+
+_PIP_PROGRESS_PATTERNS: tuple[tuple[re.Pattern[str], float], ...] = (
+    (re.compile(r"^(Collecting|Obtaining)\s+", re.IGNORECASE), 0.1),
+    (re.compile(r"^(Using cached|Downloading)\s+", re.IGNORECASE), 0.35),
+    (re.compile(r"^(Installing build dependencies|Getting requirements to build wheel|Preparing metadata)", re.IGNORECASE), 0.5),
+    (re.compile(r"^Building wheel", re.IGNORECASE), 0.65),
+    (re.compile(r"^Installing collected packages", re.IGNORECASE), 0.8),
+    (re.compile(r"^Successfully installed", re.IGNORECASE), 0.95),
+)
+
+
+def _emit_progress(progress_callback: ProgressCallback, progress: float, message: str) -> None:
+    """Send a bounded progress update if a callback was provided."""
+    if progress_callback is None:
+        return
+    progress_callback(max(0.0, min(1.0, progress)), message)
+
+
+def _scaled_progress_callback(
+    progress_callback: ProgressCallback,
+    start: float,
+    end: float,
+) -> Callable[[float, str], None]:
+    """Map nested progress callbacks into a subrange of the overall progress bar."""
+    span = max(0.0, end - start)
+
+    def _callback(progress: float, message: str) -> None:
+        clamped = max(0.0, min(1.0, progress))
+        _emit_progress(progress_callback, start + (span * clamped), message)
+
+    return _callback
+
+
+def _pip_progress_from_output_line(line: str, specifier: str) -> tuple[float, str] | None:
+    """Translate pip output into coarse but visible progress updates."""
+    text = (line or "").strip()
+    if not text:
+        return None
+
+    normalized_specifier = specifier.strip()
+    for pattern, progress in _PIP_PROGRESS_PATTERNS:
+        if pattern.search(text):
+            return progress, text
+
+    if normalized_specifier and normalized_specifier.lower() in text.lower():
+        return 0.25, text
+
+    return None
 
 
 def _verify_sha256(file_path: Path, expected_hash: str) -> bool:
@@ -403,14 +479,17 @@ def ensure_ffmpeg(progress_callback: ProgressCallback = None) -> Path:
     # Download and extract
     with tempfile.TemporaryDirectory() as tmp:
         archive_path = Path(tmp) / f"ffmpeg{archive_ext}"
-        _download_file(url, archive_path, progress_callback, "FFmpeg")
+        _download_file(url, archive_path, _scaled_progress_callback(progress_callback, 0.0, 0.85), "FFmpeg")
+        _emit_progress(progress_callback, 0.9, "Extracting FFmpeg...")
         _extract_binary(archive_path, f"ffmpeg{ext}", bin_dir)
 
     # Validate
+    _emit_progress(progress_callback, 0.97, "Validating FFmpeg...")
     if not ffmpeg_path.is_file() or ffmpeg_path.stat().st_size < _MIN_FFMPEG_SIZE:
         ffmpeg_path.unlink(missing_ok=True)
         raise RuntimeError("FFmpeg download appears corrupt (too small)")
 
+    _emit_progress(progress_callback, 1.0, "FFmpeg installed")
     logger.info(f"FFmpeg installed: {ffmpeg_path}")
     return ffmpeg_path
 
@@ -442,13 +521,16 @@ def ensure_ffprobe(progress_callback: ProgressCallback = None) -> Path:
 
     with tempfile.TemporaryDirectory() as tmp:
         archive_path = Path(tmp) / f"ffprobe{archive_ext}"
-        _download_file(url, archive_path, progress_callback, "FFprobe")
+        _download_file(url, archive_path, _scaled_progress_callback(progress_callback, 0.0, 0.85), "FFprobe")
+        _emit_progress(progress_callback, 0.9, "Extracting FFprobe...")
         _extract_binary(archive_path, f"ffprobe{ext}", bin_dir)
 
+    _emit_progress(progress_callback, 0.97, "Validating FFprobe...")
     if not ffprobe_path.is_file() or ffprobe_path.stat().st_size < _MIN_FFPROBE_SIZE:
         ffprobe_path.unlink(missing_ok=True)
         raise RuntimeError("FFprobe download appears corrupt (too small)")
 
+    _emit_progress(progress_callback, 1.0, "FFprobe installed")
     logger.info(f"FFprobe installed: {ffprobe_path}")
     return ffprobe_path
 
@@ -470,18 +552,56 @@ def ensure_yt_dlp(progress_callback: ProgressCallback = None) -> Path:
         return ytdlp_path
 
     url = _get_ytdlp_url()
-    _download_file(url, ytdlp_path, progress_callback, "yt-dlp")
+    _download_file(url, ytdlp_path, _scaled_progress_callback(progress_callback, 0.0, 0.9), "yt-dlp")
 
     # Make executable (no-op on Windows)
     if sys.platform != "win32":
         ytdlp_path.chmod(ytdlp_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
+    _emit_progress(progress_callback, 0.97, "Validating yt-dlp...")
     if ytdlp_path.stat().st_size < _MIN_YTDLP_SIZE:
         ytdlp_path.unlink(missing_ok=True)
         raise RuntimeError("yt-dlp download appears corrupt (too small)")
 
+    _emit_progress(progress_callback, 1.0, "yt-dlp installed")
     logger.info(f"yt-dlp installed: {ytdlp_path}")
     return ytdlp_path
+
+
+def ensure_deno(progress_callback: ProgressCallback = None) -> Path:
+    """Ensure Deno is available, downloading if needed.
+
+    Returns:
+        Path to the Deno binary.
+
+    Raises:
+        RuntimeError: If download or extraction fails.
+    """
+    bin_dir = get_managed_bin_dir()
+    ext = _get_binary_ext()
+    deno_path = bin_dir / f"deno{ext}"
+
+    if deno_path.is_file():
+        return deno_path
+
+    url = _get_deno_url()
+    with tempfile.TemporaryDirectory() as tmp:
+        archive_path = Path(tmp) / "deno.zip"
+        _download_file(url, archive_path, _scaled_progress_callback(progress_callback, 0.0, 0.85), "Deno")
+        _emit_progress(progress_callback, 0.9, "Extracting Deno...")
+        _extract_binary(archive_path, f"deno{ext}", bin_dir)
+
+    if sys.platform != "win32":
+        deno_path.chmod(deno_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    _emit_progress(progress_callback, 0.97, "Validating Deno...")
+    if not deno_path.is_file() or deno_path.stat().st_size < _MIN_DENO_SIZE:
+        deno_path.unlink(missing_ok=True)
+        raise RuntimeError("Deno download appears corrupt (too small)")
+
+    _emit_progress(progress_callback, 1.0, "Deno installed")
+    logger.info(f"Deno installed: {deno_path}")
+    return deno_path
 
 
 def update_yt_dlp(progress_callback: ProgressCallback = None) -> Path:
@@ -497,6 +617,16 @@ def update_yt_dlp(progress_callback: ProgressCallback = None) -> Path:
     # Remove existing to force re-download
     ytdlp_path.unlink(missing_ok=True)
     return ensure_yt_dlp(progress_callback)
+
+
+def update_deno(progress_callback: ProgressCallback = None) -> Path:
+    """Force re-download of Deno to get the latest version."""
+    bin_dir = get_managed_bin_dir()
+    ext = _get_binary_ext()
+    deno_path = bin_dir / f"deno{ext}"
+
+    deno_path.unlink(missing_ok=True)
+    return ensure_deno(progress_callback)
 
 
 def ensure_python(progress_callback: ProgressCallback = None) -> Path:
@@ -530,15 +660,13 @@ def ensure_python(progress_callback: ProgressCallback = None) -> Path:
 
     python_url = _get_python_url()
 
-    if progress_callback:
-        progress_callback(0.0, "Downloading Python 3.11...")
+    _emit_progress(progress_callback, 0.0, "Downloading Python 3.11...")
 
     with tempfile.TemporaryDirectory() as tmp:
         tarball = Path(tmp) / "python.tar.gz"
-        _download_file(python_url, tarball, progress_callback, "Python 3.11")
+        _download_file(python_url, tarball, _scaled_progress_callback(progress_callback, 0.0, 0.85), "Python 3.11")
 
-        if progress_callback:
-            progress_callback(0.9, "Extracting Python 3.11...")
+        _emit_progress(progress_callback, 0.9, "Extracting Python 3.11...")
 
         # Extract tarball — python-build-standalone archives contain a
         # top-level "python/" directory with bin/, lib/, include/, etc.
@@ -590,8 +718,7 @@ def ensure_python(progress_callback: ProgressCallback = None) -> Path:
             **get_subprocess_kwargs(),
         )
 
-    if progress_callback:
-        progress_callback(1.0, "Python 3.11 installed")
+    _emit_progress(progress_callback, 1.0, "Python 3.11 installed")
 
     logger.info(f"Standalone Python installed: {python_bin}")
     return python_bin
@@ -694,13 +821,12 @@ def install_package(
         RuntimeError: If Python download or pip install fails.
     """
     # Ensure standalone Python is available
-    python_bin = ensure_python(progress_callback)
+    python_bin = ensure_python(_scaled_progress_callback(progress_callback, 0.0, 0.2))
 
     packages_dir = get_managed_packages_dir()
     packages_dir.mkdir(parents=True, exist_ok=True)
 
-    if progress_callback:
-        progress_callback(0.0, f"Installing {specifier}...")
+    _emit_progress(progress_callback, 0.2, f"Preparing install for {specifier}...")
 
     cmd = [
         str(python_bin),
@@ -708,29 +834,58 @@ def install_package(
         "--target", str(packages_dir),
         "--no-user",
         "--disable-pip-version-check",
+        "--progress-bar", "off",
         specifier,
     ]
 
     logger.info(f"Installing package: {' '.join(cmd)}")
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        timeout=600,
-        **get_subprocess_kwargs(),
-    )
+    kwargs = get_subprocess_kwargs()
+    output_lines: list[str] = []
 
-    if result.returncode != 0:
-        logger.error(f"pip install failed: {result.stderr}")
-        if progress_callback:
-            progress_callback(0.0, f"Failed to install {specifier}")
+    try:
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            **kwargs,
+        )
+    except OSError as exc:
+        logger.error("pip install failed to start: %s", exc)
+        _emit_progress(progress_callback, 0.0, f"Failed to install {specifier}")
+        return False
+
+    try:
+        assert process.stdout is not None
+        for raw_line in process.stdout:
+            line = raw_line.rstrip()
+            output_lines.append(line)
+            parsed = _pip_progress_from_output_line(line, specifier)
+            if parsed is not None:
+                progress, message = parsed
+                _emit_progress(progress_callback, 0.2 + (0.75 * progress), message)
+        returncode = process.wait(timeout=600)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=30)
+        logger.error("pip install timed out for %s", specifier)
+        _emit_progress(progress_callback, 0.0, f"Failed to install {specifier}")
+        return False
+    finally:
+        if process.stdout is not None:
+            process.stdout.close()
+
+    if returncode != 0:
+        output = "\n".join(output_lines).strip()
+        logger.error(f"pip install failed: {output}")
+        _emit_progress(progress_callback, 0.0, f"Failed to install {specifier}")
         return False
 
     # Update ABI compatibility marker after successful install
     _write_compat_marker()
 
-    if progress_callback:
-        progress_callback(1.0, f"Installed {specifier}")
+    _emit_progress(progress_callback, 1.0, f"Installed {specifier}")
 
     logger.info(f"Package installed: {specifier}")
     return True

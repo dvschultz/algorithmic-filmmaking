@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from core.downloader import VideoDownloader
+from core.feature_registry import check_feature
 from ui.main_window import MainWindow
 
 
@@ -78,3 +79,14 @@ def test_bulk_download_aborts_when_video_download_dependency_missing():
     MainWindow._on_bulk_download(harness, videos)
 
     assert harness.bulk_download_worker is None
+
+
+def test_video_download_feature_requires_deno_runtime():
+    """Video downloads should require both yt-dlp and a JS runtime."""
+    with patch("core.feature_registry.find_binary") as mock_find_binary:
+        mock_find_binary.side_effect = lambda name: "C:/bin/yt-dlp.exe" if name == "yt-dlp" else None
+
+        available, missing = check_feature("video_download")
+
+    assert available is False
+    assert missing == ["binary:deno"]

@@ -15,6 +15,23 @@ from core.dependency_manager import is_binary_available, is_package_available
 logger = logging.getLogger(__name__)
 
 
+def _scaled_progress_callback(
+    progress_callback: Optional[Callable[[float, str], None]],
+    start: float,
+    end: float,
+) -> Callable[[float, str], None]:
+    """Map dependency progress into a subrange of the overall feature install."""
+    span = max(0.0, end - start)
+
+    def _callback(progress: float, message: str) -> None:
+        if progress_callback is None:
+            return
+        clamped = max(0.0, min(1.0, progress))
+        progress_callback(start + (span * clamped), message)
+
+    return _callback
+
+
 @dataclass
 class FeatureDeps:
     """Dependencies required for a feature."""
@@ -37,9 +54,9 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
         size_estimate_mb=0,
     ),
     "video_download": FeatureDeps(
-        binaries=["yt-dlp"],
+        binaries=["yt-dlp", "deno"],
         packages=[],
-        size_estimate_mb=20,
+        size_estimate_mb=80,
     ),
     "video_export": FeatureDeps(
         binaries=["ffmpeg"],
@@ -198,6 +215,7 @@ def install_for_feature(
     from core.dependency_manager import (
         ensure_ffmpeg,
         ensure_ffprobe,
+        ensure_deno,
         ensure_yt_dlp,
         get_pip_specifier,
         install_package,
@@ -214,30 +232,41 @@ def install_for_feature(
 
     success = True
 
-    # Install missing binaries
     binary_installers = {
         "ffmpeg": ensure_ffmpeg,
         "ffprobe": ensure_ffprobe,
+        "deno": ensure_deno,
         "yt-dlp": ensure_yt_dlp,
     }
 
+    install_steps: list[tuple[str, Callable, str]] = []
     for dep in missing:
         if dep.startswith("binary:"):
             binary_name = dep.split(":", 1)[1]
             installer = binary_installers.get(binary_name)
-            if installer:
-                try:
-                    installer(progress_callback)
-                except RuntimeError as e:
-                    logger.error(f"Failed to install {binary_name}: {e}")
-                    success = False
-
-    # Install missing packages
-    for dep in missing:
-        if dep.startswith("package:"):
+            if installer is not None:
+                install_steps.append((binary_name, installer, "binary"))
+        elif dep.startswith("package:"):
             package_name = dep.split(":", 1)[1]
-            specifier = get_pip_specifier(package_name)
-            if not install_package(specifier, progress_callback):
-                success = False
+            install_steps.append((package_name, install_package, "package"))
+
+    if not install_steps:
+        return success
+
+    total_steps = len(install_steps)
+    for index, (dep_name, installer, dep_type) in enumerate(install_steps):
+        start = index / total_steps
+        end = (index + 1) / total_steps
+        scaled_callback = _scaled_progress_callback(progress_callback, start, end)
+        try:
+            if dep_type == "binary":
+                installer(scaled_callback)
+            else:
+                specifier = get_pip_specifier(dep_name)
+                if not installer(specifier, scaled_callback):
+                    success = False
+        except RuntimeError as e:
+            logger.error(f"Failed to install {dep_name}: {e}")
+            success = False
 
     return success

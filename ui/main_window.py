@@ -31,7 +31,13 @@ from PySide6.QtGui import QDesktopServices, QKeySequence, QAction, QDragEnterEve
 from models.clip import Source, Clip
 from core.scene_detect import SceneDetector, DetectionConfig, KaraokeDetectionConfig
 from core.thumbnail import ThumbnailGenerator
-from core.downloader import VideoDownloader
+from core.downloader import (
+    VideoDownloader,
+    YTDLP_COOKIE_HELP_URL,
+    DOWNLOAD_ERROR_COOKIES_REQUIRED,
+    DOWNLOAD_ERROR_JS_RUNTIME_REQUIRED,
+    classify_download_error_message,
+)
 from core.sequence_export import SequenceExporter, ExportConfig
 from core.dataset_export import export_dataset, DatasetExportConfig
 from core.edl_export import export_edl, EDLExportConfig
@@ -4071,13 +4077,68 @@ class MainWindow(QMainWindow):
         else:
             QMessageBox.warning(self, "Download Error", "Download completed but file not found")
 
+    def _show_download_error_dialog(
+        self,
+        error: str,
+        *,
+        failed_titles: Optional[list[str]] = None,
+    ) -> None:
+        """Show a recovery-oriented dialog for download failures."""
+        error_kind = classify_download_error_message(error)
+
+        if error_kind == DOWNLOAD_ERROR_COOKIES_REQUIRED:
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Warning)
+            msg.setWindowTitle(
+                "YouTube Cookies Required"
+                if not failed_titles
+                else "Some Downloads Need Cookies"
+            )
+            if failed_titles:
+                title_list = "\n".join(f"• {title}" for title in failed_titles)
+                msg.setText(
+                    "YouTube requires browser authentication cookies for some selected videos."
+                )
+                msg.setInformativeText(
+                    "Sign in to YouTube in your browser, export cookies for yt-dlp, "
+                    "then retry these videos.\n\nAffected videos:\n"
+                    f"{title_list}"
+                )
+            else:
+                msg.setText("YouTube requires browser authentication cookies for this video.")
+                msg.setInformativeText(
+                    "Sign in to YouTube in your browser, export cookies for yt-dlp, "
+                    "then retry the download."
+                )
+            msg.setDetailedText(error)
+            open_button = msg.addButton("Open Cookie Instructions", QMessageBox.AcceptRole)
+            msg.addButton(QMessageBox.Close)
+            msg.exec()
+            if msg.clickedButton() == open_button:
+                QDesktopServices.openUrl(QUrl(YTDLP_COOKIE_HELP_URL))
+            return
+
+        if error_kind == DOWNLOAD_ERROR_JS_RUNTIME_REQUIRED:
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Warning)
+            msg.setWindowTitle("JavaScript Runtime Required")
+            msg.setText("YouTube downloads require a JavaScript runtime.")
+            msg.setInformativeText(
+                "Install Deno from Settings > Dependencies, then retry the download."
+            )
+            msg.setDetailedText(error)
+            msg.exec()
+            return
+
+        QMessageBox.critical(self, "Download Error", error)
+
     def _on_download_error(self, error: str):
         """Handle download error."""
         self._gui_state.clear_processing("download")
         self._gui_state.set_last_error(f"Download error: {error}")
         self.progress_bar.setVisible(False)
         self.collect_tab.set_downloading(False)
-        QMessageBox.critical(self, "Download Error", error)
+        self._show_download_error_dialog(error)
 
     # Video search handlers (YouTube and Internet Archive)
     @Slot(str, str)
@@ -4262,16 +4323,26 @@ class MainWindow(QMainWindow):
                 f"Download complete: {success}/{total} succeeded, {len(errors)} failed"
             )
 
-            # Show detailed error dialog
-            error_details = "\n".join(
-                f"• {title}: {error}" for title, error in errors
-            )
-            QMessageBox.warning(
-                self,
-                "Some Downloads Failed",
-                f"Successfully downloaded {success} of {total} videos.\n\n"
-                f"Failed downloads:\n{error_details}",
-            )
+            cookie_failures = [
+                (title, error)
+                for title, error in errors
+                if classify_download_error_message(error) == DOWNLOAD_ERROR_COOKIES_REQUIRED
+            ]
+            if cookie_failures and len(cookie_failures) == len(errors):
+                self._show_download_error_dialog(
+                    cookie_failures[0][1],
+                    failed_titles=[title for title, _error in cookie_failures],
+                )
+            else:
+                error_details = "\n".join(
+                    f"• {title}: {error}" for title, error in errors
+                )
+                QMessageBox.warning(
+                    self,
+                    "Some Downloads Failed",
+                    f"Successfully downloaded {success} of {total} videos.\n\n"
+                    f"Failed downloads:\n{error_details}",
+                )
         else:
             self.status_bar.showMessage(f"Downloaded {success} videos successfully")
 

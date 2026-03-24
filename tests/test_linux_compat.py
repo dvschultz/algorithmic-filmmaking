@@ -192,6 +192,30 @@ class TestDependencyManagerLinuxDispatch:
             url = _get_ytdlp_url()
             assert "yt-dlp_linux_aarch64" in url
 
+    def test_deno_url_linux_x86_64(self):
+        """Should return the x86_64 Deno archive on Linux."""
+        from core.dependency_manager import _get_deno_url
+
+        with patch("core.dependency_manager.sys") as mock_sys, \
+             patch("core.dependency_manager.platform") as mock_platform:
+            mock_sys.platform = "linux"
+            mock_platform.machine.return_value = "x86_64"
+            url = _get_deno_url()
+            assert "x86_64-unknown-linux-gnu" in url
+            assert url.endswith(".zip")
+
+    def test_deno_url_linux_aarch64(self):
+        """Should return the aarch64 Deno archive on Linux."""
+        from core.dependency_manager import _get_deno_url
+
+        with patch("core.dependency_manager.sys") as mock_sys, \
+             patch("core.dependency_manager.platform") as mock_platform:
+            mock_sys.platform = "linux"
+            mock_platform.machine.return_value = "aarch64"
+            url = _get_deno_url()
+            assert "aarch64-unknown-linux-gnu" in url
+            assert url.endswith(".zip")
+
     def test_python_url_linux_x86_64(self):
         """Should return x86_64-unknown-linux-gnu URL."""
         from core.dependency_manager import _get_python_url

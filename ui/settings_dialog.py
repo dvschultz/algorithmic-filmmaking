@@ -1283,6 +1283,26 @@ class SettingsDialog(QDialog):
             ytdlp_row.addWidget(ytdlp_btn)
         bin_layout.addLayout(ytdlp_row)
 
+        # Deno row
+        deno_row = QHBoxLayout()
+        deno_label = QLabel("Deno:")
+        deno_label.setFixedWidth(UISizes.FORM_LABEL_WIDTH)
+        deno_row.addWidget(deno_label)
+        deno_path = find_binary("deno")
+        if deno_path:
+            self._deno_status = QLabel(f"Installed ({deno_path})")
+            self._deno_status.setStyleSheet(f"color: {theme().accent_green};")
+        else:
+            self._deno_status = QLabel("Not installed")
+            self._deno_status.setStyleSheet(f"color: {theme().accent_red};")
+        deno_row.addWidget(self._deno_status, stretch=1)
+
+        if is_frozen():
+            deno_btn = QPushButton("Download" if not deno_path else "Update")
+            deno_btn.clicked.connect(lambda: self._download_binary("deno"))
+            deno_row.addWidget(deno_btn)
+        bin_layout.addLayout(deno_row)
+
         layout.addWidget(bin_group)
 
         # --- Managed Python group ---
@@ -1405,11 +1425,18 @@ class SettingsDialog(QDialog):
 
     def _download_binary(self, name: str):
         """Download a binary tool via the dependency manager."""
-        from core.dependency_manager import ensure_ffmpeg, ensure_ffprobe, ensure_yt_dlp, update_yt_dlp
+        from core.dependency_manager import (
+            ensure_deno,
+            ensure_ffmpeg,
+            ensure_ffprobe,
+            update_deno,
+            update_yt_dlp,
+        )
         from ui.widgets.dependency_widgets import DependencyDownloadDialog
 
         installers = {
             "ffmpeg": lambda cb: (ensure_ffmpeg(cb), ensure_ffprobe(cb)),
+            "deno": update_deno,
             "yt-dlp": update_yt_dlp,
         }
         installer = installers.get(name)

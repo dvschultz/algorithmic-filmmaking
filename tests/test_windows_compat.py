@@ -208,6 +208,16 @@ class TestDependencyManagerPlatformDispatch:
             url = _get_ytdlp_url()
             assert url.endswith(".exe")
 
+    def test_deno_url_windows(self):
+        """Should return the Windows Deno archive on Windows."""
+        from core.dependency_manager import _get_deno_url
+
+        with patch("core.dependency_manager.sys") as mock_sys:
+            mock_sys.platform = "win32"
+            url = _get_deno_url()
+            assert "windows" in url or "pc-windows-msvc" in url
+            assert url.endswith(".zip")
+
     def test_binary_ext_windows(self):
         """Should return .exe on Windows."""
         from core.dependency_manager import _get_binary_ext

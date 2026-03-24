@@ -5,6 +5,7 @@ import os
 import subprocess
 import re
 import json
+import sys
 import time
 from pathlib import Path
 from typing import Callable, Optional
@@ -15,6 +16,94 @@ from core.binary_resolver import find_binary, get_subprocess_env, get_subprocess
 from core.paths import get_managed_bin_dir, is_frozen
 
 logger = logging.getLogger(__name__)
+
+YTDLP_COOKIE_HELP_URL = (
+    "https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies"
+)
+
+DOWNLOAD_ERROR_GENERIC = "generic"
+DOWNLOAD_ERROR_JS_RUNTIME_REQUIRED = "js_runtime_required"
+DOWNLOAD_ERROR_COOKIES_REQUIRED = "cookies_required"
+
+
+def classify_download_error_message(message: str) -> str:
+    """Classify a user-facing yt-dlp error message."""
+    text = (message or "").lower()
+
+    if (
+        "browser authentication cookies" in text
+        or "sign in to confirm you're not a bot" in text
+        or "--cookies-from-browser" in text
+        or "--cookies for the authentication" in text
+    ):
+        return DOWNLOAD_ERROR_COOKIES_REQUIRED
+
+    if "javascript runtime" in text or "install deno" in text:
+        return DOWNLOAD_ERROR_JS_RUNTIME_REQUIRED
+
+    return DOWNLOAD_ERROR_GENERIC
+
+
+def _deno_install_hint() -> str:
+    """Return a platform-appropriate Deno install hint."""
+    if sys.platform == "win32":
+        return "Install Deno from Settings > Dependencies"
+    if sys.platform == "darwin":
+        return "Install Deno: brew install deno"
+    return "Install Deno: curl -fsSL https://deno.land/install.sh | sh"
+
+
+def _format_yt_dlp_error(output_lines: list[str], *, deno_solver_ran: bool = False) -> str:
+    """Convert noisy yt-dlp output into a user-facing error message."""
+    recent_text = " ".join(line.strip() for line in output_lines if line).strip()
+
+    if "No supported JavaScript runtime" in recent_text:
+        return (
+            "yt-dlp requires a JavaScript runtime for YouTube downloads. "
+            f"{_deno_install_hint()} or see https://github.com/yt-dlp/yt-dlp/wiki/EJS"
+        )
+
+    if (
+        "Sign in to confirm you're not a bot" in recent_text
+        or "--cookies-from-browser" in recent_text
+        or "--cookies" in recent_text
+    ):
+        return (
+            "YouTube is asking for browser authentication cookies for this video. "
+            f"Export cookies from a signed-in browser and retry. See {YTDLP_COOKIE_HELP_URL}"
+        )
+
+    if "HTTP Error 403: Forbidden" in recent_text and "JavaScript runtime" in recent_text:
+        return (
+            "YouTube download blocked (403). This is usually caused by a missing "
+            f"JavaScript runtime. {_deno_install_hint()}"
+        )
+
+    if "HTTP Error 403: Forbidden" in recent_text and "SABR" in recent_text:
+        if deno_solver_ran:
+            return (
+                "YouTube is blocking this download despite challenge solver running. "
+                "This may be rate limiting. Try again in a few minutes or try a different video."
+            )
+        return (
+            "YouTube is blocking this download (SABR streaming restriction). "
+            "Try updating yt-dlp from Settings > Dependencies."
+        )
+
+    if "HTTP Error 403: Forbidden" in recent_text:
+        return (
+            "YouTube blocked the download (403 Forbidden). This may be due to "
+            "geo-restrictions, age-restrictions, or rate limiting. Try again later or try a different video."
+        )
+
+    error_lines = [line for line in output_lines if "ERROR:" in line]
+    if error_lines:
+        return error_lines[-1]
+
+    if output_lines:
+        return f"Download failed: {'; '.join(output_lines[-3:])}"
+
+    return "Download failed. Check URL and try again."
 
 
 @dataclass
@@ -155,10 +244,16 @@ class VideoDownloader:
                 json.loads(first_json)  # Validate it's parseable
             except json.JSONDecodeError:
                 if result.returncode != 0:
-                    raise RuntimeError(f"Failed to get video info: {result.stderr}")
+                    output_lines = [
+                        line for line in (result.stderr or result.stdout).splitlines() if line.strip()
+                    ]
+                    raise RuntimeError(_format_yt_dlp_error(output_lines))
 
         if result.returncode != 0 and not result.stdout.strip():
-            raise RuntimeError(f"Failed to get video info: {result.stderr}")
+            output_lines = [
+                line for line in (result.stderr or result.stdout).splitlines() if line.strip()
+            ]
+            raise RuntimeError(_format_yt_dlp_error(output_lines))
 
         # Parse first JSON object (in case of multi-file items outputting multiple JSON lines)
         data = json.loads(result.stdout.strip().split('\n')[0])
@@ -371,58 +466,9 @@ class VideoDownloader:
             logger.error(f"Recent output: {recent_lines}")
             logger.error(f"Deno challenge solver ran: {deno_solver_ran}")
 
-            # Check for specific known issues
-            recent_text = " ".join(recent_lines)
-
-            # Platform-specific Deno install hint
-            import sys as _sys
-            if _sys.platform == "win32":
-                deno_hint = "Install Deno: winget install DenoLand.Deno"
-            elif _sys.platform == "darwin":
-                deno_hint = "Install Deno: brew install deno"
-            else:
-                deno_hint = "Install Deno: curl -fsSL https://deno.land/install.sh | sh"
-
-            # JavaScript runtime missing (yt-dlp 2025+ requirement)
-            if "No supported JavaScript runtime" in recent_text:
-                error_msg = (
-                    "yt-dlp requires a JavaScript runtime for YouTube downloads. "
-                    f"{deno_hint} — or see "
-                    "https://github.com/yt-dlp/yt-dlp/wiki/EJS"
-                )
-            # 403 with JS runtime issue
-            elif "HTTP Error 403: Forbidden" in recent_text and "JavaScript runtime" in recent_text:
-                error_msg = (
-                    "YouTube download blocked (403). This is usually caused by missing "
-                    f"JavaScript runtime. {deno_hint}"
-                )
-            # SABR streaming 403 errors (GitHub issue #12482)
-            elif "HTTP Error 403: Forbidden" in recent_text and "SABR" in recent_text:
-                if deno_solver_ran:
-                    error_msg = (
-                        "YouTube is blocking this download despite challenge solver running. "
-                        "This may be YouTube rate limiting. Try again in a few minutes or "
-                        "try a different video."
-                    )
-                else:
-                    error_msg = (
-                        "YouTube is blocking this download (SABR streaming restriction). "
-                        "Try updating yt-dlp: pip install -U yt-dlp"
-                    )
-            # Generic 403 - could be geo-restriction, age-restriction, or other
-            elif "HTTP Error 403: Forbidden" in recent_text:
-                error_msg = (
-                    "YouTube blocked the download (403 Forbidden). This may be due to "
-                    "geo-restrictions, age-restrictions, or YouTube rate limiting. "
-                    "Try again later or try a different video."
-                )
-            elif last_error:
+            error_msg = _format_yt_dlp_error(recent_lines, deno_solver_ran=deno_solver_ran)
+            if error_msg.startswith("Download failed:") and last_error:
                 error_msg = last_error
-            elif recent_lines:
-                # Show last few lines that might contain error info
-                error_msg = f"Download failed: {'; '.join(recent_lines[-3:])}"
-            else:
-                error_msg = "Download failed. Check URL and try again."
             return DownloadResult(
                 success=False,
                 error=error_msg
