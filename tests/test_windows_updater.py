@@ -70,20 +70,21 @@ def test_get_status_requires_metadata_for_native_updates():
     assert "metadata" in status.reason.lower()
 
 
-def test_get_status_requires_beta_feed_for_beta_channel(tmp_path):
-    """Beta checks should fall back when no beta-specific feed is configured."""
+def test_get_status_beta_channel_falls_back_to_stable_feed(tmp_path):
+    """Beta checks should use the stable feed when no beta-specific feed is configured."""
     dll_path = tmp_path / "WinSparkle.dll"
     dll_path.write_text("binary", encoding="utf-8")
 
     with patch("core.windows_updater.sys.platform", "win32"), \
          patch("core.windows_updater.is_frozen", return_value=True), \
-         patch("core.windows_updater.get_feed_url", return_value=""), \
+         patch("core.windows_updater.get_feed_url", return_value="https://example.com/appcast.xml"), \
          patch("core.windows_updater.get_public_ed_key", return_value="pubkey"), \
          patch("core.windows_updater.find_winsparkle_dll", return_value=dll_path):
         status = get_status(update_channel="beta")
 
-    assert status.available is False
-    assert "beta" in status.reason.lower()
+    assert status.available is True
+    assert status.capability is UpdateCapability.NATIVE_CHECK
+    assert status.feed_url == "https://example.com/appcast.xml"
 
 
 def test_get_status_reports_native_check_when_dll_and_metadata_exist(tmp_path):

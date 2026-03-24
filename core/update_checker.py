@@ -12,6 +12,7 @@ from core.update_models import UpdateAvailability
 from core.update_service import (
     GITHUB_OWNER as _GITHUB_OWNER,
     GITHUB_REPO as _GITHUB_REPO,
+    UpdateCheckResult,
     UpdateService,
 )
 

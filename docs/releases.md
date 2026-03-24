@@ -75,9 +75,9 @@ Use this flow if the first tag-triggered release fails and you need to fix packa
 
 1. Fix the issue on `main`.
 2. Push the fix.
-3. Rerun the platform workflows manually with the same version number.
-4. Confirm both successful runs uploaded the correct assets to the existing release.
-5. Move the tag to the exact commit used by the successful release builds.
+3. Rerun the failed tag workflow or push a corrected replacement tag.
+4. Confirm the successful runs uploaded the correct assets to the existing release.
+5. Make sure the tag still points to the exact commit used by the successful release builds.
 
 Example:
 
@@ -89,11 +89,11 @@ git tag -f v0.1.1 <good_commit_sha>
 git push origin -f v0.1.1
 ```
 
-This matters because a GitHub release can contain assets built from a newer commit than the tag currently points to.
+Do not use Windows `workflow_dispatch` to publish release assets from an arbitrary branch tip. The Windows workflow now treats manual dispatch as a validation build only.
 
 ## Manual Workflow Dispatch
 
-Use manual dispatch when you want to rebuild a release without creating a new tag yet, or after fixing a broken workflow.
+Use manual dispatch when you want a validation build without creating a new tag yet.
 
 From GitHub Actions:
 
@@ -102,7 +102,7 @@ From GitHub Actions:
 3. Open `Windows Build`.
 4. Run workflow on `main` with `version=0.1.1`.
 
-The workflows are configured to upload assets to release tag `v0.1.1` when dispatched with version `0.1.1`.
+The macOS workflow can still publish from manual dispatch. The Windows workflow uploads artifacts for inspection but only publishes release assets from tagged runs.
 
 ## macOS Signing and Notarization
 
@@ -143,6 +143,15 @@ Windows:
 $env:APP_VERSION="0.1.1"
 .\packaging\windows\build.ps1
 ```
+
+To build a local Windows installer with native updater metadata, also set:
+
+```powershell
+$env:WINSPARKLE_APPCAST_URL="https://github.com/<owner>/<repo>/releases/download/update-feed/appcast-windows.xml"
+$env:WINSPARKLE_PUBLIC_ED_KEY="<base64-public-key>"
+```
+
+If you only have the private updater key available locally, `build.ps1` will derive the public key from `UPDATE_PRIVATE_ED_KEY` before invoking PyInstaller.
 
 Scripts:
 

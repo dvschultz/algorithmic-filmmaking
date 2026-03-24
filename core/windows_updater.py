@@ -65,10 +65,12 @@ def get_feed_url(update_channel: str = "stable") -> str:
     """Return the configured WinSparkle appcast URL for a channel."""
     normalized_channel = (update_channel or "stable").strip().lower()
     if normalized_channel == "beta":
-        return (
+        beta_feed_url = (
             os.environ.get(WINSPARKLE_BETA_FEED_ENV, "").strip()
             or _read_resource_text(WINSPARKLE_BETA_FEED_RESOURCE)
         )
+        if beta_feed_url:
+            return beta_feed_url
 
     return (
         os.environ.get(WINSPARKLE_FEED_ENV, "").strip()
@@ -121,15 +123,6 @@ def get_status(
     feed_url = get_feed_url(update_channel)
     public_key = get_public_ed_key()
     dll_path = find_winsparkle_dll(base_path)
-
-    if update_channel and update_channel != "stable" and not feed_url:
-        return WindowsUpdaterStatus(
-            available=False,
-            capability=UpdateCapability.FALLBACK_BROWSER,
-            reason=f"No WinSparkle feed is configured for the {update_channel} channel.",
-            dll_path=dll_path,
-            public_key=public_key,
-        )
 
     if not feed_url or not public_key:
         return WindowsUpdaterStatus(

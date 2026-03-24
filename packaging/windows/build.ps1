@@ -14,70 +14,52 @@ Write-Host "=== Scene Ripper Windows Build ===" -ForegroundColor Cyan
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $projectRoot = Resolve-Path (Join-Path $scriptDir "..\..")
-$runtimeDir = Join-Path $projectRoot "packaging\runtime\mpv\windows"
-$ffmpegRuntimeDir = Join-Path $projectRoot "packaging\runtime\ffmpeg\windows"
 Push-Location $projectRoot
 
-Write-Host "Staging mpv runtime..." -ForegroundColor Yellow
-New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
-Remove-Item (Join-Path $runtimeDir "*.dll") -Force -ErrorAction SilentlyContinue
-
-$mpvArchive = Join-Path $projectRoot "mpv.7z"
-$release = Invoke-RestMethod `
-    -Uri "https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest" `
-    -Headers @{ "User-Agent" = "Scene-Ripper-Build" }
-
-$asset = $release.assets | Where-Object { $_.name -like "mpv-dev-x86_64-*.7z" } | Select-Object -First 1
-if (-not $asset) {
-    Write-Host "Could not find a matching mpv development archive in the latest GitHub release." -ForegroundColor Red
-    exit 1
+if (-not $env:APP_VERSION) {
+    $gitVersion = (git describe --tags --abbrev=0 2>$null)
+    if ($gitVersion) {
+        $env:APP_VERSION = $gitVersion.TrimStart("v")
+    } else {
+        $env:APP_VERSION = "0.0.0"
+    }
+}
+if (-not $env:APP_BUILD_VERSION) {
+    $env:APP_BUILD_VERSION = $env:APP_VERSION
+}
+if (-not $env:APP_UPDATE_CHANNEL) {
+    $env:APP_UPDATE_CHANNEL = "stable"
+}
+if (-not $env:WINSPARKLE_APPCAST_BETA_URL -and $env:WINSPARKLE_APPCAST_URL) {
+    $env:WINSPARKLE_APPCAST_BETA_URL = $env:WINSPARKLE_APPCAST_URL
 }
 
-Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $mpvArchive
-
-$extractDir = Join-Path $projectRoot "tmp\mpv"
-New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
-7z x $mpvArchive "-o$extractDir" | Out-Null
-
-$mpvDll = Get-ChildItem -Path $extractDir -Recurse -Include "mpv-2.dll","libmpv-2.dll","mpv-1.dll" | Select-Object -First 1
-if (-not $mpvDll) {
-    Write-Host "No supported mpv runtime DLL found in downloaded runtime archive." -ForegroundColor Red
-    exit 1
+if (-not $env:WINSPARKLE_PUBLIC_ED_KEY -and $env:UPDATE_PRIVATE_ED_KEY) {
+    $resolvedPublicKey = python -c @"
+import importlib.util
+from pathlib import Path
+import os
+spec = importlib.util.spec_from_file_location("scene_ripper_build_support", Path("packaging/build_support.py"))
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+print(module.resolve_update_public_ed_key("", os.environ.get("UPDATE_PRIVATE_ED_KEY", "")), end="")
+"@
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to derive WINSPARKLE_PUBLIC_ED_KEY from UPDATE_PRIVATE_ED_KEY"
+    }
+    if ($resolvedPublicKey) {
+        $env:WINSPARKLE_PUBLIC_ED_KEY = $resolvedPublicKey
+    }
 }
 
-$dllDir = $mpvDll.Directory.FullName
-Get-ChildItem -Path $dllDir -Filter "*.dll" | ForEach-Object {
-    Copy-Item $_.FullName -Destination $runtimeDir -Force
-}
+Write-Host "Building Scene Ripper version $($env:APP_VERSION)" -ForegroundColor Yellow
 
-Write-Host "Staging FFmpeg runtime..." -ForegroundColor Yellow
-New-Item -ItemType Directory -Force -Path $ffmpegRuntimeDir | Out-Null
-Remove-Item (Join-Path $ffmpegRuntimeDir "*") -Force -ErrorAction SilentlyContinue
-
-$ffmpegArchive = Join-Path $projectRoot "ffmpeg.zip"
-Invoke-WebRequest `
-    -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" `
-    -OutFile $ffmpegArchive
-
-$ffmpegExtractDir = Join-Path $projectRoot "tmp\winffmpeg"
-New-Item -ItemType Directory -Force -Path $ffmpegExtractDir | Out-Null
-Expand-Archive -Path $ffmpegArchive -DestinationPath $ffmpegExtractDir -Force
-
-$ffmpegExe = Get-ChildItem -Path $ffmpegExtractDir -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
-$ffprobeExe = Get-ChildItem -Path $ffmpegExtractDir -Recurse -Filter "ffprobe.exe" | Select-Object -First 1
-if (-not $ffmpegExe -or -not $ffprobeExe) {
-    Write-Host "FFmpeg runtime executables not found in downloaded archive." -ForegroundColor Red
-    exit 1
-}
-
-$ffmpegBinDir = $ffmpegExe.Directory.FullName
-Get-ChildItem -Path $ffmpegBinDir -File | ForEach-Object {
-    Copy-Item $_.FullName -Destination $ffmpegRuntimeDir -Force
-}
+& (Join-Path $scriptDir "stage-runtimes.ps1") -ProjectRoot $projectRoot
 
 # Install dependencies
 Write-Host "Installing dependencies..." -ForegroundColor Yellow
-pip install -r requirements-core.txt pyinstaller
+pip install -r requirements-core.txt pyinstaller cryptography
 
 # Build with PyInstaller
 Write-Host "Building with PyInstaller..." -ForegroundColor Yellow
@@ -112,6 +94,27 @@ $bundledFfprobeExe = Get-ChildItem -Path (Join-Path $projectRoot "dist\Scene Rip
 } | Select-Object -First 1
 if (-not $bundledFfprobeExe) {
     Write-Host "Bundled ffprobe.exe missing from dist/Scene Ripper/" -ForegroundColor Red
+    exit 1
+}
+$bundledWinSparkleDll = Get-ChildItem -Path (Join-Path $projectRoot "dist\Scene Ripper") -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
+    $_.Name -eq "WinSparkle.dll"
+} | Select-Object -First 1
+if (-not $bundledWinSparkleDll) {
+    Write-Host "Bundled WinSparkle.dll missing from dist/Scene Ripper/" -ForegroundColor Red
+    exit 1
+}
+$bundledFeedFile = Get-ChildItem -Path (Join-Path $projectRoot "dist\Scene Ripper") -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
+    $_.Name -eq "app_update_feed_url.txt"
+} | Select-Object -First 1
+$bundledPublicKeyFile = Get-ChildItem -Path (Join-Path $projectRoot "dist\Scene Ripper") -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
+    $_.Name -eq "app_update_public_key.txt"
+} | Select-Object -First 1
+if ($env:WINSPARKLE_APPCAST_URL -and (-not $bundledFeedFile -or [string]::IsNullOrWhiteSpace((Get-Content $bundledFeedFile.FullName -Raw)))) {
+    Write-Host "Bundled WinSparkle feed metadata file missing or empty from dist/Scene Ripper/" -ForegroundColor Red
+    exit 1
+}
+if ($env:WINSPARKLE_PUBLIC_ED_KEY -and (-not $bundledPublicKeyFile -or [string]::IsNullOrWhiteSpace((Get-Content $bundledPublicKeyFile.FullName -Raw)))) {
+    Write-Host "Bundled WinSparkle public-key metadata file missing or empty from dist/Scene Ripper/" -ForegroundColor Red
     exit 1
 }
 

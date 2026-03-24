@@ -70,3 +70,16 @@ def test_automatic_update_check_suppresses_skipped_version():
     worker.run()
 
     assert received == []
+
+
+def test_interactive_update_check_reports_unexpected_exceptions():
+    """Unexpected update-check errors should emit a clean failure signal."""
+    worker = UpdateCheckWorker("0.1.0", Settings(), interactive=True)
+    failures = []
+
+    worker.check_failed.connect(failures.append)
+    worker._service.get_latest_release = lambda interactive: (_ for _ in ()).throw(RuntimeError("boom"))
+
+    worker.run()
+
+    assert failures == ["boom"]
