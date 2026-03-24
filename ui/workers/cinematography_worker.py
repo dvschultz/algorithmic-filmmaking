@@ -19,6 +19,19 @@ from ui.workers.base import CancellableWorker
 logger = logging.getLogger(__name__)
 
 
+def _summarize_errors(errors: list[tuple[str, str]]) -> str:
+    """Return a compact user-facing summary for a batch failure."""
+    preview = "\n".join(f"- {clip_id}: {message}" for clip_id, message in errors[:3])
+    if len(errors) == 1:
+        return errors[0][1]
+
+    remaining = len(errors) - 3
+    summary = f"Cinematography analysis failed for {len(errors)} clips:\n\n{preview}"
+    if remaining > 0:
+        summary += f"\n\n... and {remaining} more"
+    return summary
+
+
 @dataclass(frozen=True)
 class ClipAnalysisTask:
     """Immutable task data for thread pool execution.
@@ -217,6 +230,7 @@ class CinematographyWorker(CancellableWorker):
 
         results: dict[str, CinematographyAnalysis] = {}
         completed = 0
+        errors: list[tuple[str, str]] = []
 
         with ThreadPoolExecutor(max_workers=self._parallelism) as executor:
             # Submit all tasks
@@ -242,7 +256,7 @@ class CinematographyWorker(CancellableWorker):
 
                     if error_msg and error_msg != "Cancelled":
                         self._log_error(error_msg, clip_id)
-                        self.error.emit(f"Error analyzing {clip_id}: {error_msg}")
+                        errors.append((clip_id, error_msg))
                     elif analysis:
                         results[clip_id] = analysis
                         # Emit on QThread (this is safe)
@@ -254,7 +268,7 @@ class CinematographyWorker(CancellableWorker):
 
                 except Exception as e:
                     self._log_error(str(e), task.clip_id)
-                    self.error.emit(f"Error analyzing {task.clip_id}: {e}")
+                    errors.append((task.clip_id, str(e)))
 
                 self.progress.emit(completed, total, task.clip_id)
 
@@ -263,5 +277,7 @@ class CinematographyWorker(CancellableWorker):
                 f"Cinematography analysis complete: "
                 f"{len(results)}/{total} clips processed"
             )
+            if errors:
+                self.error.emit(_summarize_errors(errors))
             self.finished.emit(results)
             self._log_complete()

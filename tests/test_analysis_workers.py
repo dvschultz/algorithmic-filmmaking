@@ -8,6 +8,7 @@ These tests validate that workers correctly:
 """
 
 from pathlib import Path
+from unittest.mock import patch
 import pytest
 
 from tests.conftest import make_test_clip
@@ -229,6 +230,104 @@ class TestShotTypeWorkerErrors:
         assert "clip-1" in errors[0]
         assert "clip-2" in errors[0]
         assert "torch import failed" in errors[0]
+
+
+class TestColorWorkerErrors:
+    def test_emits_aggregated_error_summary(self, tmp_path, source, sources_by_id):
+        from ui.workers.color_worker import ColorAnalysisWorker
+
+        video_file = tmp_path / "video.mp4"
+        video_file.write_bytes(b"\x00" * 100)
+        source.file_path = video_file
+
+        clips = [make_test_clip("clip-1"), make_test_clip("clip-2")]
+        worker = ColorAnalysisWorker(
+            clips,
+            parallelism=1,
+            skip_existing=False,
+            sources_by_id=sources_by_id,
+        )
+
+        with patch(
+            "core.analysis.color.extract_dominant_colors",
+            side_effect=RuntimeError("ffmpeg read failed"),
+        ):
+            errors = []
+            completed = []
+            worker.error.connect(errors.append)
+            worker.analysis_completed.connect(lambda: completed.append(True))
+            worker.run()
+
+        assert completed == [True]
+        assert len(errors) == 1
+        assert "Color extraction failed for 2 clips" in errors[0]
+        assert "clip-1" in errors[0]
+        assert "clip-2" in errors[0]
+        assert "ffmpeg read failed" in errors[0]
+
+
+class TestClassificationWorkerErrors:
+    def test_emits_aggregated_error_summary(self, thumbnail_path):
+        from ui.workers.classification_worker import ClassificationWorker
+
+        clips = [
+            _make_clip_with_thumb("clip-1", thumbnail_path),
+            _make_clip_with_thumb("clip-2", thumbnail_path),
+        ]
+        worker = ClassificationWorker(
+            clips,
+            parallelism=1,
+            skip_existing=False,
+        )
+
+        with patch(
+            "core.analysis.classification.classify_frame",
+            side_effect=RuntimeError("torch import failed"),
+        ):
+            errors = []
+            completed = []
+            worker.error.connect(errors.append)
+            worker.classification_completed.connect(lambda: completed.append(True))
+            worker.run()
+
+        assert completed == [True]
+        assert len(errors) == 1
+        assert "Content classification failed for 2 clips" in errors[0]
+        assert "clip-1" in errors[0]
+        assert "clip-2" in errors[0]
+        assert "torch import failed" in errors[0]
+
+
+class TestObjectDetectionWorkerErrors:
+    def test_emits_aggregated_error_summary(self, thumbnail_path):
+        from ui.workers.object_detection_worker import ObjectDetectionWorker
+
+        clips = [
+            _make_clip_with_thumb("clip-1", thumbnail_path),
+            _make_clip_with_thumb("clip-2", thumbnail_path),
+        ]
+        worker = ObjectDetectionWorker(
+            clips,
+            parallelism=1,
+            skip_existing=False,
+        )
+
+        with patch(
+            "core.analysis.detection.detect_objects",
+            side_effect=RuntimeError("yolo weights missing"),
+        ):
+            errors = []
+            completed = []
+            worker.error.connect(errors.append)
+            worker.detection_completed.connect(lambda: completed.append(True))
+            worker.run()
+
+        assert completed == [True]
+        assert len(errors) == 1
+        assert "Object detection failed for 2 clips" in errors[0]
+        assert "clip-1" in errors[0]
+        assert "clip-2" in errors[0]
+        assert "yolo weights missing" in errors[0]
 
 
 # --- TranscriptionWorker ---

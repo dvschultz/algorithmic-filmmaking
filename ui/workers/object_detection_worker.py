@@ -17,6 +17,19 @@ from ui.workers.base import CancellableWorker
 logger = logging.getLogger(__name__)
 
 
+def _summarize_errors(errors: list[tuple[str, str]]) -> str:
+    """Return a compact user-facing summary for a batch failure."""
+    preview = "\n".join(f"- {clip_id}: {message}" for clip_id, message in errors[:3])
+    if len(errors) == 1:
+        return errors[0][1]
+
+    remaining = len(errors) - 3
+    summary = f"Object detection failed for {len(errors)} clips:\n\n{preview}"
+    if remaining > 0:
+        summary += f"\n\n... and {remaining} more"
+    return summary
+
+
 @dataclass(frozen=True)
 class ObjectDetectionTask:
     """Immutable task data for thread pool execution."""
@@ -155,6 +168,7 @@ class ObjectDetectionWorker(CancellableWorker):
         )
 
         completed = 0
+        errors: list[tuple[str, str]] = []
 
         with ThreadPoolExecutor(max_workers=self._parallelism) as executor:
             future_to_task = {
@@ -179,14 +193,18 @@ class ObjectDetectionWorker(CancellableWorker):
 
                     if error_msg and error_msg != "Cancelled":
                         self._log_error(error_msg, clip_id)
+                        errors.append((clip_id, error_msg))
                     elif detections is not None:
                         self.objects_ready.emit(
                             clip_id, detections, person_count
                         )
                 except Exception as e:
                     self._log_error(str(e), task.clip_id)
+                    errors.append((task.clip_id, str(e)))
 
                 self.progress.emit(completed, total)
 
+        if errors:
+            self.error.emit(_summarize_errors(errors))
         self.detection_completed.emit()
         self._log_complete()

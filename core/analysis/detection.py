@@ -189,7 +189,7 @@ def detect_objects_open_vocab(
 
     except Exception as e:
         logger.error(f"Open-vocab detection failed for {image_path}: {e}")
-        return []
+        raise RuntimeError(f"Open-vocabulary detection failed for {image_path.name}: {e}") from e
 
 
 def detect_objects(
@@ -246,7 +246,7 @@ def detect_objects(
 
     except Exception as e:
         logger.error(f"Object detection failed for {image_path}: {e}")
-        return []
+        raise RuntimeError(f"Object detection failed for {image_path.name}: {e}") from e
 
 
 def count_people(

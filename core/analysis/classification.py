@@ -147,7 +147,7 @@ def classify_frame(
 
     except Exception as e:
         logger.error(f"Classification failed for {image_path}: {e}")
-        return []
+        raise RuntimeError(f"Classification failed for {image_path.name}: {e}") from e
 
 
 def get_top_labels(

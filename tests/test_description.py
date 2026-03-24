@@ -126,6 +126,57 @@ class TestDescriptionAnalysis(unittest.TestCase):
         self.assertEqual(len(call_kwargs["messages"]), 1)
         self.assertEqual(call_kwargs["messages"][0]["role"], "user")
 
+    @patch("litellm.completion")
+    @patch("core.analysis.description.encode_image_base64")
+    @patch("core.analysis.description.load_settings")
+    @patch("core.settings.get_openai_api_key")
+    def test_cloud_inference_surfaces_auth_error(self, mock_get_key, mock_settings, mock_encode, mock_completion):
+        """Authentication failures should tell the user exactly what to check."""
+        mock_encode.return_value = "base64_data"
+        mock_get_key.return_value = "sk-test-key"
+        mock_settings.return_value = Settings(description_model_cloud="gpt-4o")
+        mock_completion.side_effect = RuntimeError("401 Unauthorized")
+
+        from core.analysis.description import describe_frame_cloud
+
+        with self.assertRaisesRegex(RuntimeError, "Check your OpenAI API key in Settings"):
+            describe_frame_cloud(self.image_path, "Test prompt")
+
+    @patch("core.analysis.description.describe_frame_cloud")
+    @patch("core.analysis.description.describe_video_cloud")
+    @patch("core.analysis.description.extract_clip_segment")
+    @patch("core.analysis.description.load_settings")
+    def test_video_mode_propagates_api_failures(
+        self,
+        mock_settings,
+        mock_extract,
+        mock_describe_video,
+        mock_describe_frame_cloud,
+    ):
+        """Video API failures should not silently fall back to frame mode."""
+        mock_settings.return_value = Settings(
+            description_model_tier="cloud",
+            description_model_cloud="gemini-3-flash-preview",
+            description_input_mode="video",
+        )
+
+        temp_video = Path(self.test_dir) / "temp.mp4"
+        temp_video.write_bytes(b"fake video")
+        mock_extract.return_value = temp_video
+        mock_describe_video.side_effect = RuntimeError("authentication failed")
+
+        with self.assertRaisesRegex(RuntimeError, "authentication failed"):
+            describe_frame(
+                self.image_path,
+                source_path=Path(self.test_dir) / "source.mp4",
+                start_frame=0,
+                end_frame=30,
+                fps=24.0,
+            )
+
+        mock_describe_frame_cloud.assert_not_called()
+        self.assertFalse(temp_video.exists())
+
 class TestFilterClipsSearchDescription(unittest.TestCase):
     """Test filter_clips with search_description parameter."""
 

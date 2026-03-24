@@ -864,8 +864,14 @@ def analyze_cinematography(
                 model=model,
             )
         except Exception as e:
-            logger.warning(f"Video mode failed, falling back to frame mode: {e}")
-            # Fall through to frame mode
+            message = str(e)
+            if (
+                "falling back to frame mode" in message.lower()
+                or "ffmpeg extraction failed" in message.lower()
+            ):
+                logger.warning(f"Video mode failed, falling back to frame mode: {e}")
+            else:
+                raise
 
     # Use frame mode (cloud)
     return analyze_cinematography_frame(thumbnail_path, model=model)

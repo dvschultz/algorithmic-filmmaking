@@ -87,7 +87,7 @@ def _build_fake_worker(completion_signal: str, extra_signals: list[str]):
             "_launch_colors_worker",
             "ColorAnalysisWorker",
             "analysis_completed",
-            ["progress", "color_ready"],
+            ["progress", "color_ready", "error"],
             "colors",
         ),
         (
@@ -101,14 +101,14 @@ def _build_fake_worker(completion_signal: str, extra_signals: list[str]):
             "_launch_classification_worker",
             "ClassificationWorker",
             "classification_completed",
-            ["progress", "labels_ready"],
+            ["progress", "labels_ready", "error"],
             "classify",
         ),
         (
             "_launch_object_detection_worker",
             "ObjectDetectionWorker",
             "detection_completed",
-            ["progress", "objects_ready"],
+            ["progress", "objects_ready", "error"],
             "detect_objects",
         ),
         (
@@ -157,6 +157,9 @@ def test_launch_worker_emits_pipeline_completion(
         def _on_color_ready(self, *_args):
             return None
 
+        def _on_color_error(self, *_args):
+            return None
+
         def _on_shot_type_progress(self, *_args):
             return None
 
@@ -172,10 +175,16 @@ def test_launch_worker_emits_pipeline_completion(
         def _on_classification_ready(self, *_args):
             return None
 
+        def _on_classification_error(self, *_args):
+            return None
+
         def _on_object_detection_progress(self, *_args):
             return None
 
         def _on_objects_ready(self, *_args):
+            return None
+
+        def _on_object_detection_error(self, *_args):
             return None
 
         def _on_description_progress(self, *_args):
@@ -185,6 +194,13 @@ def test_launch_worker_emits_pipeline_completion(
             return None
 
         def _on_description_error(self, *_args):
+            return None
+
+        def _reset_description_run_errors(self):
+            self._description_run_error = None
+            self._description_run_errors = []
+
+        def _reset_analysis_run_error(self, *_args):
             return None
 
         def _on_analysis_phase_worker_finished(self, op_key):
@@ -233,3 +249,67 @@ def test_shot_type_error_handler_shows_reason(monkeypatch):
     assert ("last_error", "Shot type classification error: clip-1: torch import failed") in messages
     assert ("status", "Shot type classification finished with errors", 5000) in messages
     assert ("dialog", "Shot Type Classification Error", "clip-1: torch import failed") in messages
+
+
+def test_description_error_handler_surfaces_first_error(monkeypatch):
+    messages = []
+
+    class Harness:
+        def __init__(self):
+            self._description_run_error = None
+            self._description_run_errors = []
+            self._gui_state = SimpleNamespace(
+                set_last_error=lambda value: messages.append(("last_error", value))
+            )
+            self.status_bar = SimpleNamespace(
+                showMessage=lambda text, timeout=0: messages.append(("status", text, timeout))
+            )
+
+        def _summarize_description_errors(self):
+            return MainWindow._summarize_description_errors(self)
+
+    def _capture_warning(parent, title, message):
+        messages.append(("dialog", title, message))
+
+    monkeypatch.setattr("ui.main_window.QMessageBox.warning", _capture_warning)
+
+    harness = Harness()
+    MainWindow._on_description_error(harness, "clip-1", "401 Unauthorized")
+
+    assert harness._description_run_error == "clip-1: 401 Unauthorized"
+    assert (
+        "last_error",
+        "Description error: clip-1: 401 Unauthorized",
+    ) in messages
+    assert ("status", "Description generation finished with errors", 5000) in messages
+    assert ("dialog", "Description Error", "clip-1: 401 Unauthorized") in messages
+
+
+def test_description_error_handler_summarizes_multiple_failures(monkeypatch):
+    messages = []
+
+    class Harness:
+        def __init__(self):
+            self._description_run_error = None
+            self._description_run_errors = []
+            self._gui_state = SimpleNamespace(
+                set_last_error=lambda value: messages.append(("last_error", value))
+            )
+            self.status_bar = SimpleNamespace(
+                showMessage=lambda text, timeout=0: messages.append(("status", text, timeout))
+            )
+
+        def _summarize_description_errors(self):
+            return MainWindow._summarize_description_errors(self)
+
+    monkeypatch.setattr("ui.main_window.QMessageBox.warning", lambda *args: messages.append(("dialog", args[1], args[2])))
+
+    harness = Harness()
+    MainWindow._on_description_error(harness, "clip-1", "401 Unauthorized")
+    MainWindow._on_description_error(harness, "clip-2", "429 Too Many Requests")
+
+    assert "Description failed for 2 clips" in harness._description_run_error
+    assert "- clip-1: 401 Unauthorized" in harness._description_run_error
+    assert "- clip-2: 429 Too Many Requests" in harness._description_run_error
+    assert messages.count(("status", "Description generation finished with errors", 5000)) == 2
+    assert len([m for m in messages if m[0] == "dialog"]) == 1

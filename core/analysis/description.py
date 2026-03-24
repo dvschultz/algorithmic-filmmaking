@@ -41,6 +41,77 @@ _CPU_MODEL = None
 _CPU_TOKENIZER = None
 
 
+def _cloud_provider_name(model: str) -> str:
+    """Return a human-readable provider label for a cloud model."""
+    model_lower = model.lower()
+    if "gpt" in model_lower or "openai" in model_lower:
+        return "OpenAI"
+    if "claude" in model_lower or "anthropic" in model_lower:
+        return "Anthropic"
+    if "gemini" in model_lower or "vertex" in model_lower:
+        return "Gemini"
+    return "cloud provider"
+
+
+def _format_cloud_api_error(error: Exception, original_model: str, input_kind: str) -> str:
+    """Translate provider failures into user-facing error messages."""
+    raw = str(error).strip() or error.__class__.__name__
+    normalized = raw.lower()
+    provider = _cloud_provider_name(original_model)
+    prefix = f"{input_kind.title()} description failed ({original_model})"
+
+    if "api key" in normalized and ("not configured" in normalized or "no api key" in normalized):
+        return raw
+    if (
+        "401" in normalized
+        or "unauthorized" in normalized
+        or "authentication" in normalized
+        or "invalid api key" in normalized
+        or "incorrect api key" in normalized
+    ):
+        return (
+            f"{prefix}: authentication failed. Check your {provider} API key in Settings. "
+            f"Provider message: {raw}"
+        )
+    if "403" in normalized or "forbidden" in normalized or "permission" in normalized:
+        return (
+            f"{prefix}: access was denied by {provider}. Check model access and account permissions. "
+            f"Provider message: {raw}"
+        )
+    if "429" in normalized or "rate limit" in normalized or "too many requests" in normalized:
+        return (
+            f"{prefix}: {provider} rate limited the request. Wait and retry, or lower concurrency. "
+            f"Provider message: {raw}"
+        )
+    if (
+        "model" in normalized
+        and (
+            "not found" in normalized
+            or "does not exist" in normalized
+            or "invalid model" in normalized
+            or "unknown model" in normalized
+        )
+    ):
+        return (
+            f"{prefix}: model configuration looks invalid. Check the selected model in Settings. "
+            f"Provider message: {raw}"
+        )
+    if (
+        "timeout" in normalized
+        or "timed out" in normalized
+        or "connection" in normalized
+        or "dns" in normalized
+        or "network" in normalized
+        or "temporarily unavailable" in normalized
+    ):
+        return (
+            f"{prefix}: network request failed before {provider} returned a usable response. "
+            f"Provider message: {raw}"
+        )
+
+    return f"{prefix}: {raw}"
+
+
 def encode_image_base64(image_path: Path) -> str:
     """Encode image to base64 string."""
     with open(image_path, "rb") as f:
@@ -224,7 +295,7 @@ def describe_video_cloud(
         return description, f"{original_model} (video)"
     except Exception as e:
         logger.error(f"Video description failed for model {model}: {e}")
-        raise RuntimeError(f"Video description failed ({original_model}): {e}") from e
+        raise RuntimeError(_format_cloud_api_error(e, original_model, "video")) from e
 
 
 def _load_local_model():
@@ -427,7 +498,7 @@ def describe_frame_cloud(image_path: Path, prompt: str = "Describe this image.")
         return content
     except Exception as e:
         logger.error(f"Cloud inference failed for model {model}: {e}")
-        raise RuntimeError(f"Cloud inference failed ({original_model}): {e}") from e
+        raise RuntimeError(_format_cloud_api_error(e, original_model, "frame")) from e
 
 
 def describe_frame(
@@ -487,22 +558,19 @@ def describe_frame(
             and end_frame is not None
             and fps is not None
         ):
+            temp_video = None
             try:
-                # Extract and describe video clip
                 logger.info(f"Using video mode for cloud VLM (frames {start_frame}-{end_frame})")
-                temp_video = extract_clip_segment(
-                    source_path, start_frame, end_frame, fps
-                )
+                temp_video = extract_clip_segment(source_path, start_frame, end_frame, fps)
+            except Exception as e:
+                logger.warning(f"Video extraction failed, falling back to frame: {e}")
+            else:
                 try:
                     return describe_video_cloud(temp_video, prompt)
                 finally:
-                    # Cleanup temp file
                     if temp_video.exists():
                         temp_video.unlink()
                         logger.debug(f"Cleaned up temp video: {temp_video}")
-            except Exception as e:
-                logger.warning(f"Video description failed, falling back to frame: {e}")
-                # Fall through to frame-based description
 
         # Frame-based description (default or when video mode not selected)
         logger.info(f"Using frame mode for description")

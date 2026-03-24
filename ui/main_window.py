@@ -784,6 +784,13 @@ class MainWindow(QMainWindow):
         self._object_detection_finished_handled = False
         self._description_finished_handled = False
         self._shot_type_finished_handled = False
+        self._color_run_error: Optional[str] = None
+        self._classification_run_error: Optional[str] = None
+        self._object_detection_run_error: Optional[str] = None
+        self._description_run_error: Optional[str] = None
+        self._description_run_errors: list[str] = []
+        self._text_extraction_run_error: Optional[str] = None
+        self._cinematography_run_error: Optional[str] = None
         self._shot_type_run_error: Optional[str] = None
         self._transcription_finished_handled = False
         self._text_extraction_finished_handled = False
@@ -3111,8 +3118,8 @@ class MainWindow(QMainWindow):
         if not valid_ops:
             return
 
-        if "shots" in valid_ops:
-            self._shot_type_run_error = None
+        for op_key in valid_ops:
+            self._reset_analysis_run_error(op_key)
 
         logger.info(f"Starting analysis pipeline: {valid_ops} on {len(clips)} clips")
         self._gui_state.set_processing("analysis", f"{', '.join(valid_ops)} on {len(clips)} clips")
@@ -3214,10 +3221,12 @@ class MainWindow(QMainWindow):
     def _launch_colors_worker(self, clips: list):
         """Launch color analysis worker."""
         self._color_analysis_finished_handled = False
+        self._reset_analysis_run_error("colors")
         logger.info(f"Creating ColorAnalysisWorker (pipeline) for {len(clips)} clips...")
         self.color_worker = ColorAnalysisWorker(clips, parallelism=self.settings.color_analysis_parallelism, sources_by_id=self.project.sources_by_id)
         self.color_worker.progress.connect(self._on_color_progress)
         self.color_worker.color_ready.connect(self._on_color_ready)
+        self.color_worker.error.connect(self._on_color_error)
         self.color_worker.analysis_completed.connect(
             self._on_pipeline_colors_finished, Qt.UniqueConnection
         )
@@ -3244,10 +3253,12 @@ class MainWindow(QMainWindow):
     def _launch_classification_worker(self, clips: list):
         """Launch content classification worker."""
         self._classification_finished_handled = False
+        self._reset_analysis_run_error("classify")
         logger.info(f"Creating ClassificationWorker (pipeline) for {len(clips)} clips...")
         self.classification_worker = ClassificationWorker(clips, parallelism=self.settings.local_model_parallelism)
         self.classification_worker.progress.connect(self._on_classification_progress)
         self.classification_worker.labels_ready.connect(self._on_classification_ready)
+        self.classification_worker.error.connect(self._on_classification_error)
         self.classification_worker.classification_completed.connect(
             self._on_pipeline_classify_finished, Qt.UniqueConnection
         )
@@ -3258,10 +3269,12 @@ class MainWindow(QMainWindow):
     def _launch_object_detection_worker(self, clips: list):
         """Launch object detection worker."""
         self._object_detection_finished_handled = False
+        self._reset_analysis_run_error("detect_objects")
         logger.info(f"Creating ObjectDetectionWorker (pipeline) for {len(clips)} clips...")
         self.detection_worker_yolo = ObjectDetectionWorker(clips, parallelism=self.settings.local_model_parallelism)
         self.detection_worker_yolo.progress.connect(self._on_object_detection_progress)
         self.detection_worker_yolo.objects_ready.connect(self._on_objects_ready)
+        self.detection_worker_yolo.error.connect(self._on_object_detection_error)
         self.detection_worker_yolo.detection_completed.connect(
             self._on_pipeline_detect_objects_finished, Qt.UniqueConnection
         )
@@ -3288,6 +3301,7 @@ class MainWindow(QMainWindow):
     def _launch_text_extraction_worker(self, clips: list):
         """Launch text extraction worker."""
         self._text_extraction_finished_handled = False
+        self._reset_analysis_run_error("extract_text")
         sources_by_id = {s.id: s for s in self.sources}
 
         # Filter to clips needing extraction
@@ -3412,6 +3426,7 @@ class MainWindow(QMainWindow):
     def _launch_description_worker(self, clips: list):
         """Launch description worker."""
         self._description_finished_handled = False
+        self._reset_description_run_errors()
         tier = self.settings.description_model_tier
         sources = self.project.sources_by_id
 
@@ -3433,6 +3448,7 @@ class MainWindow(QMainWindow):
     def _launch_cinematography_worker(self, clips: list):
         """Launch cinematography analysis worker."""
         self._cinematography_finished_handled = False
+        self._reset_analysis_run_error("cinematography")
         sources_by_id = {s.id: s for s in self.sources}
         mode = self.settings.cinematography_input_mode
         model = self.settings.cinematography_model
@@ -3522,9 +3538,10 @@ class MainWindow(QMainWindow):
 
         self.analyze_tab.set_analyzing(False)
         self.progress_bar.setVisible(False)
-        if self._shot_type_run_error and "shots" in completed:
+        error_labels = self._get_completed_analysis_error_labels(completed)
+        if error_labels:
             self.status_bar.showMessage(
-                f"Analysis finished with shot type errors - {clip_count} clips ({', '.join(completed)})"
+                f"Analysis finished with errors ({', '.join(error_labels)}) - {clip_count} clips ({', '.join(completed)})"
             )
         else:
             self.status_bar.showMessage(
@@ -3662,6 +3679,126 @@ class MainWindow(QMainWindow):
     def _on_description_error(self, clip_id: str, error_msg: str):
         """Handle description error for a single clip."""
         logger.warning(f"Description error for clip {clip_id}: {error_msg}")
+        summary_line = f"{clip_id}: {error_msg}"
+        self._description_run_errors.append(summary_line)
+        self._description_run_error = self._summarize_description_errors()
+        self._gui_state.set_last_error(f"Description error: {summary_line}")
+        self.status_bar.showMessage(
+            "Description generation finished with errors",
+            5000,
+        )
+        if len(self._description_run_errors) == 1:
+            QMessageBox.warning(
+                self,
+                "Description Error",
+                summary_line,
+            )
+
+    @Slot(str)
+    def _on_color_error(self, error_msg: str):
+        """Handle aggregated color extraction errors."""
+        logger.warning(f"Color extraction error: {error_msg}")
+        self._record_analysis_run_error(
+            "_color_run_error",
+            "Color extraction",
+            error_msg,
+            "Color Extraction Error",
+        )
+
+    @Slot(str)
+    def _on_classification_error(self, error_msg: str):
+        """Handle aggregated content classification errors."""
+        logger.warning(f"Content classification error: {error_msg}")
+        self._record_analysis_run_error(
+            "_classification_run_error",
+            "Content classification",
+            error_msg,
+            "Classification Error",
+        )
+
+    @Slot(str)
+    def _on_object_detection_error(self, error_msg: str):
+        """Handle aggregated object detection errors."""
+        logger.warning(f"Object detection error: {error_msg}")
+        self._record_analysis_run_error(
+            "_object_detection_run_error",
+            error_msg=error_msg,
+            ui_label="Object detection",
+            dialog_title="Object Detection Error",
+            attr_name="_object_detection_run_error",
+        )
+
+    def _reset_description_run_errors(self) -> None:
+        """Clear accumulated description errors for a new run."""
+        self._description_run_error = None
+        self._description_run_errors = []
+
+    def _summarize_description_errors(self) -> Optional[str]:
+        """Return a compact summary of accumulated description errors."""
+        if not self._description_run_errors:
+            return None
+
+        preview = "\n".join(f"- {message}" for message in self._description_run_errors[:3])
+        if len(self._description_run_errors) == 1:
+            return self._description_run_errors[0]
+
+        remaining = len(self._description_run_errors) - 3
+        summary = (
+            f"Description failed for {len(self._description_run_errors)} clips:\n\n"
+            f"{preview}"
+        )
+        if remaining > 0:
+            summary += f"\n\n... and {remaining} more"
+        return summary
+
+    def _reset_analysis_run_error(self, op_key: str) -> None:
+        """Clear the stored error summary for an analysis operation."""
+        attr_map = {
+            "colors": "_color_run_error",
+            "classify": "_classification_run_error",
+            "detect_objects": "_object_detection_run_error",
+            "extract_text": "_text_extraction_run_error",
+            "cinematography": "_cinematography_run_error",
+        }
+        attr_name = attr_map.get(op_key)
+        if attr_name:
+            setattr(self, attr_name, None)
+        elif op_key == "describe":
+            self._reset_description_run_errors()
+        elif op_key == "shots":
+            self._shot_type_run_error = None
+
+    def _record_analysis_run_error(
+        self,
+        attr_name: str,
+        ui_label: str,
+        error_msg: str,
+        dialog_title: str,
+    ) -> None:
+        """Persist and surface a summarized analysis error."""
+        first_error = getattr(self, attr_name) is None
+        setattr(self, attr_name, error_msg)
+        self._gui_state.set_last_error(f"{ui_label} error: {error_msg}")
+        self.status_bar.showMessage(f"{ui_label} finished with errors", 5000)
+        if first_error:
+            QMessageBox.warning(self, dialog_title, error_msg)
+
+    def _get_completed_analysis_error_labels(self, completed_ops: list[str]) -> list[str]:
+        """Return user-facing labels for analysis operations that finished with errors."""
+        labels: list[str] = []
+        op_errors = [
+            ("colors", self._color_run_error, "colors"),
+            ("shots", self._shot_type_run_error, "shot type"),
+            ("classify", self._classification_run_error, "classification"),
+            ("detect_objects", self._object_detection_run_error, "object detection"),
+            ("extract_text", self._text_extraction_run_error, "text extraction"),
+            ("describe", self._description_run_error, "description"),
+            ("cinematography", self._cinematography_run_error, "cinematography"),
+        ]
+        for op_key, error_value, label in op_errors:
+            if error_value and op_key in completed_ops:
+                labels.append(label)
+        return labels
 
     def _on_description_analysis_requested(self, clip_ids: list):
         """Handle description analysis request from Sequence tab (Storyteller).
@@ -3727,6 +3864,12 @@ class MainWindow(QMainWindow):
     def _on_text_extraction_error(self, error_msg: str):
         """Handle text extraction error."""
         logger.warning(f"Text extraction error: {error_msg}")
+        self._record_analysis_run_error(
+            "_text_extraction_run_error",
+            "Text extraction",
+            error_msg,
+            "Text Extraction Error",
+        )
 
     def _on_cinematography_from_tab(self):
         """Handle cinematography analysis request (standalone redirect to pipeline)."""
@@ -3769,7 +3912,12 @@ class MainWindow(QMainWindow):
     def _on_cinematography_error(self, error_msg: str):
         """Handle cinematography analysis error."""
         logger.warning(f"Cinematography analysis error: {error_msg}")
-        self._gui_state.set_last_error(f"Analysis error: {error_msg}")
+        self._record_analysis_run_error(
+            "_cinematography_run_error",
+            "Cinematography analysis",
+            error_msg,
+            "Cinematography Error",
+        )
 
     # Agent-triggered analysis completion handlers
     # These are separate from manual handlers to allow independent tracking
@@ -3790,7 +3938,12 @@ class MainWindow(QMainWindow):
 
         clips = self._agent_color_clips
         clip_count = len(clips)
-        self.status_bar.showMessage(f"Color extraction complete - {clip_count} clips")
+        if self._color_run_error:
+            self.status_bar.showMessage(
+                f"Color extraction finished with errors - {clip_count} clips"
+            )
+        else:
+            self.status_bar.showMessage(f"Color extraction complete - {clip_count} clips")
 
         # Send result back to agent
         if self._pending_agent_color_analysis and self._chat_worker:
@@ -5345,7 +5498,8 @@ class MainWindow(QMainWindow):
         if not operations:
             return
 
-        self._shot_type_run_error = None
+        for op_key in operations:
+            self._reset_analysis_run_error(op_key)
 
         logger.info(
             f"Starting frame analysis: {operations} on {len(targets)} targets"
@@ -5359,6 +5513,7 @@ class MainWindow(QMainWindow):
         # Track running workers for completion
         self._frame_analysis_remaining = len(operations)
         self._frame_analysis_targets = targets
+        self._frame_analysis_ops = list(operations)
 
         for op_key in operations:
             self._launch_frame_analysis_worker(op_key, targets)
@@ -5379,6 +5534,7 @@ class MainWindow(QMainWindow):
             )
             worker.progress.connect(self._on_color_progress)
             worker.color_ready.connect(self._on_color_ready)
+            worker.error.connect(self._on_color_error)
             worker.analysis_completed.connect(
                 lambda: self._on_frame_analysis_op_finished("colors")
             )
@@ -5413,6 +5569,7 @@ class MainWindow(QMainWindow):
             )
             worker.progress.connect(self._on_classification_progress)
             worker.labels_ready.connect(self._on_classification_ready)
+            worker.error.connect(self._on_classification_error)
             worker.classification_completed.connect(
                 lambda: self._on_frame_analysis_op_finished("classify")
             )
@@ -5429,6 +5586,7 @@ class MainWindow(QMainWindow):
             )
             worker.progress.connect(self._on_object_detection_progress)
             worker.objects_ready.connect(self._on_objects_ready)
+            worker.error.connect(self._on_object_detection_error)
             worker.detection_completed.connect(
                 lambda: self._on_frame_analysis_op_finished("detect_objects")
             )
@@ -5506,9 +5664,11 @@ class MainWindow(QMainWindow):
         """Handle completion of all frame analysis operations."""
         logger.info("Frame analysis complete")
         self.progress_bar.setVisible(False)
-        if self._shot_type_run_error:
+        completed_ops = getattr(self, "_frame_analysis_ops", [])
+        error_labels = self._get_completed_analysis_error_labels(completed_ops)
+        if error_labels:
             self.status_bar.showMessage(
-                "Frame analysis finished with shot type errors",
+                f"Frame analysis finished with errors ({', '.join(error_labels)})",
                 5000,
             )
         else:
@@ -6136,6 +6296,7 @@ class MainWindow(QMainWindow):
         # Mark that we're waiting for color analysis via agent
         self._pending_agent_color_analysis = True
         self._agent_color_clips = clips
+        self._reset_analysis_run_error("colors")
 
         # Add clips to Analyze tab and switch
         self.analyze_tab.add_clips([c.id for c in clips])
@@ -6152,6 +6313,7 @@ class MainWindow(QMainWindow):
         self.color_worker = ColorAnalysisWorker(clips, parallelism=self.settings.color_analysis_parallelism, sources_by_id=self.project.sources_by_id)
         self.color_worker.progress.connect(self._on_color_progress)
         self.color_worker.color_ready.connect(self._on_color_ready)
+        self.color_worker.error.connect(self._on_color_error)
         self.color_worker.analysis_completed.connect(self._on_agent_color_analysis_finished, Qt.UniqueConnection)
         # Clean up thread safely after it finishes
         self.color_worker.finished.connect(self.color_worker.deleteLater)
@@ -6327,6 +6489,7 @@ class MainWindow(QMainWindow):
 
         # Reset guard
         self._classification_finished_handled = False
+        self._reset_analysis_run_error("classify")
 
         # Mark that we're waiting for classification via agent
         self._pending_agent_classification = True
@@ -6347,6 +6510,7 @@ class MainWindow(QMainWindow):
         self.classification_worker = ClassificationWorker(clips, top_k=top_k, parallelism=self.settings.local_model_parallelism)
         self.classification_worker.progress.connect(self._on_classification_progress)
         self.classification_worker.labels_ready.connect(self._on_classification_ready)
+        self.classification_worker.error.connect(self._on_classification_error)
         self.classification_worker.classification_completed.connect(self._on_agent_classification_finished, Qt.UniqueConnection)
         # Clean up thread safely after it finishes
         self.classification_worker.finished.connect(self.classification_worker.deleteLater)
@@ -6382,6 +6546,7 @@ class MainWindow(QMainWindow):
 
         # Reset guard
         self._object_detection_finished_handled = False
+        self._reset_analysis_run_error("detect_objects")
 
         # Mark that we're waiting for object detection via agent
         self._pending_agent_object_detection = True
@@ -6405,6 +6570,7 @@ class MainWindow(QMainWindow):
         self.detection_worker_yolo = ObjectDetectionWorker(clips, confidence=confidence, detect_all=detect_all, parallelism=self.settings.local_model_parallelism)
         self.detection_worker_yolo.progress.connect(self._on_object_detection_progress)
         self.detection_worker_yolo.objects_ready.connect(self._on_objects_ready)
+        self.detection_worker_yolo.error.connect(self._on_object_detection_error)
         self.detection_worker_yolo.detection_completed.connect(self._on_agent_object_detection_finished, Qt.UniqueConnection)
         # Clean up thread safely after it finishes
         self.detection_worker_yolo.finished.connect(self.detection_worker_yolo.deleteLater)
@@ -6440,6 +6606,7 @@ class MainWindow(QMainWindow):
 
         # Reset guard
         self._description_finished_handled = False
+        self._reset_description_run_errors()
 
         # Mark that we're waiting for description via agent
         self._pending_agent_description = True
@@ -6524,6 +6691,9 @@ class MainWindow(QMainWindow):
             last_error = self.description_worker.last_error
 
         if error_count > 0:
+            self._gui_state.set_last_error(
+                f"Description error: {self._description_run_error or last_error or 'Unknown'}"
+            )
             self.status_bar.showMessage(
                 f"Description complete with {error_count} errors. Last: {last_error[:80] if last_error else 'Unknown'}",
                 5000
@@ -6620,7 +6790,10 @@ class MainWindow(QMainWindow):
         # Reset UI state
         self.analyze_tab.set_analyzing(False)
         self.progress_bar.setVisible(False)
-        self.status_bar.showMessage("Classification complete", 3000)
+        if self._classification_run_error:
+            self.status_bar.showMessage("Classification finished with errors", 5000)
+        else:
+            self.status_bar.showMessage("Classification complete", 3000)
 
         # Save project if path is set
         if self.project.path:
@@ -6707,7 +6880,10 @@ class MainWindow(QMainWindow):
         # Reset UI state
         self.analyze_tab.set_analyzing(False)
         self.progress_bar.setVisible(False)
-        self.status_bar.showMessage("Object detection complete", 3000)
+        if self._object_detection_run_error:
+            self.status_bar.showMessage("Object detection finished with errors", 5000)
+        else:
+            self.status_bar.showMessage("Object detection complete", 3000)
 
         # Save project if path is set
         if self.project.path:
@@ -7539,11 +7715,13 @@ class MainWindow(QMainWindow):
                 self.intention_workflow.on_analysis_finished()
                 return
 
+            self._reset_analysis_run_error("colors")
             self.color_worker = ColorAnalysisWorker(clips_needing_colors, parallelism=self.settings.color_analysis_parallelism, sources_by_id=self.project.sources_by_id)
             self.color_worker.progress.connect(
                 self.intention_workflow.on_analysis_progress
             )
             self.color_worker.color_ready.connect(self._on_color_ready)
+            self.color_worker.error.connect(self._on_color_error)
             self.color_worker.analysis_completed.connect(
                 self._on_intention_analysis_finished
             )
@@ -7606,6 +7784,7 @@ class MainWindow(QMainWindow):
                 return
 
             self._description_finished_handled = False
+            self._reset_description_run_errors()
             logger.info(f"Creating DescriptionWorker (intention) for {len(clips_needing_descriptions)} clips with tier={tier}")
             self.description_worker = DescriptionWorker(clips_needing_descriptions, tier=tier, sources=sources, parallelism=self.settings.description_parallelism)
             self.description_worker.progress.connect(
@@ -7635,6 +7814,11 @@ class MainWindow(QMainWindow):
         self._color_analysis_finished_handled = True
 
         logger.info("Intention analysis finished")
+        if self._color_run_error:
+            self.status_bar.showMessage(
+                "Color extraction finished with errors",
+                5000,
+            )
 
         if self.intention_workflow:
             self.intention_workflow.on_analysis_finished()
@@ -7662,6 +7846,11 @@ class MainWindow(QMainWindow):
         self._description_finished_handled = True
 
         logger.info("Intention description analysis finished")
+        if self._description_run_error:
+            self.status_bar.showMessage(
+                "Description generation finished with errors",
+                5000,
+            )
 
         if self.intention_workflow:
             self.intention_workflow.on_analysis_finished()

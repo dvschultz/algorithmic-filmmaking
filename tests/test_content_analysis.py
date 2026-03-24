@@ -34,26 +34,20 @@ class TestClassificationModule:
     """Tests for core/analysis/classification.py."""
 
     @pytest.mark.skipif(not _has_torch, reason="torch not installed")
-    def test_classify_frame_returns_list_type(self):
-        """Test classify_frame returns a list."""
-        # Since the actual function has complex dependencies on torch/PIL,
-        # we test the contract: it should return a list
+    def test_classify_frame_raises_for_missing_image(self):
+        """Test classify_frame surfaces invalid-path failures."""
         from core.analysis.classification import classify_frame
 
-        # Test with a non-existent file (should return empty list gracefully)
-        result = classify_frame(Path("/nonexistent/image.jpg"))
-        assert isinstance(result, list)
-        # Should be empty since file doesn't exist
-        assert result == []
+        with pytest.raises(RuntimeError, match="Classification failed"):
+            classify_frame(Path("/nonexistent/image.jpg"))
 
     @pytest.mark.skipif(not _has_torch, reason="torch not installed")
-    def test_classify_frame_handles_invalid_path_gracefully(self):
-        """Test classify_frame returns empty list for invalid paths."""
+    def test_classify_frame_handles_invalid_path_explicitly(self):
+        """Test classify_frame raises instead of silently returning no labels."""
         from core.analysis.classification import classify_frame
 
-        # Invalid file should return empty list
-        result = classify_frame(Path("/nonexistent/path/image.jpg"))
-        assert result == []
+        with pytest.raises(RuntimeError, match="Classification failed"):
+            classify_frame(Path("/nonexistent/path/image.jpg"))
 
     def test_get_top_labels_returns_strings(self):
         """Test get_top_labels returns list of label strings only."""
@@ -142,8 +136,8 @@ class TestDetectionModule:
             # Should return a list
             assert isinstance(result, list)
 
-    def test_detect_objects_handles_errors_gracefully(self):
-        """Test detect_objects returns empty list on error."""
+    def test_detect_objects_raises_on_error(self):
+        """Test detect_objects surfaces inference failures."""
         with patch("core.analysis.detection._load_yolo") as mock_load:
             mock_model = MagicMock()
             mock_model.side_effect = Exception("Inference failed")
@@ -152,9 +146,8 @@ class TestDetectionModule:
             from core.analysis.detection import detect_objects
 
             with tempfile.NamedTemporaryFile(suffix=".jpg") as f:
-                result = detect_objects(Path(f.name))
-
-            assert result == []
+                with pytest.raises(RuntimeError, match="Object detection failed"):
+                    detect_objects(Path(f.name))
 
     def test_count_people_calls_detect_with_person_class(self):
         """Test count_people filters to person class only."""

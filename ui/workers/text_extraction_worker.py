@@ -14,6 +14,19 @@ from ui.workers.base import CancellableWorker
 logger = logging.getLogger(__name__)
 
 
+def _summarize_errors(errors: list[tuple[str, str]]) -> str:
+    """Return a compact user-facing summary for a batch failure."""
+    preview = "\n".join(f"- {clip_id}: {message}" for clip_id, message in errors[:3])
+    if len(errors) == 1:
+        return errors[0][1]
+
+    remaining = len(errors) - 3
+    summary = f"Text extraction failed for {len(errors)} clips:\n\n{preview}"
+    if remaining > 0:
+        summary += f"\n\n... and {remaining} more"
+    return summary
+
+
 class TextExtractionWorker(CancellableWorker):
     """Extract text from multiple clips or frames in background.
 
@@ -87,6 +100,7 @@ class TextExtractionWorker(CancellableWorker):
 
         results = {}
         total = len(self.clips)
+        errors: list[tuple[str, str]] = []
 
         logger.info(f"Starting text extraction for {total} clips")
 
@@ -119,11 +133,13 @@ class TextExtractionWorker(CancellableWorker):
 
             except Exception as e:
                 self._log_error(str(e), clip.id)
-                self.error.emit(f"Error extracting text from clip {clip.id}: {e}")
+                errors.append((clip.id, str(e)))
                 results[clip.id] = []
 
         if not self.is_cancelled():
             logger.info(f"Text extraction complete: {len(results)} clips processed")
+            if errors:
+                self.error.emit(_summarize_errors(errors))
             self.finished.emit(results)
             self._log_complete()
 
@@ -134,6 +150,7 @@ class TextExtractionWorker(CancellableWorker):
 
         results = {}
         total = len(self._analysis_targets)
+        errors: list[tuple[str, str]] = []
 
         logger.info(f"Starting text extraction for {total} targets")
 
@@ -176,10 +193,12 @@ class TextExtractionWorker(CancellableWorker):
 
             except Exception as e:
                 self._log_error(str(e), target.id)
-                self.error.emit(f"Error extracting text from target {target.id}: {e}")
+                errors.append((target.id, str(e)))
                 results[target.id] = []
 
         if not self.is_cancelled():
             logger.info(f"Text extraction complete: {len(results)} targets processed")
+            if errors:
+                self.error.emit(_summarize_errors(errors))
             self.finished.emit(results)
             self._log_complete()
