@@ -20,6 +20,9 @@ def test_pipeline_skips_blocked_operations_and_runs_remaining():
         def _start_next_analysis_phase(self):
             self.started = True
 
+        def _reset_analysis_run_error(self, _op_key):
+            pass
+
     harness = Harness()
 
     MainWindow._run_analysis_pipeline(
@@ -48,6 +51,9 @@ def test_frame_analysis_skips_blocked_operations():
 
         def _launch_frame_analysis_worker(self, op_key, targets):
             self.launched.append((op_key, targets))
+
+        def _reset_analysis_run_error(self, _op_key):
+            pass
 
     harness = Harness()
     targets = [SimpleNamespace(id="frame-1")]
