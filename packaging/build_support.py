@@ -98,6 +98,7 @@ def read_core_requirement_distributions(project_root: Path) -> tuple[str, ...]:
             continue
 
         requirement = line.split(";", 1)[0].strip()
+        requirement = requirement.split("@", 1)[0].strip()
         for separator in ("[", ">", "<", "=", "!", "~"):
             requirement = requirement.split(separator, 1)[0].strip()
         if requirement:

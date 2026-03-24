@@ -23,7 +23,8 @@ google-api-python-client>=2.100.0
 keyring>=24.0
 
 # LLM Integration
-litellm>=1.40.0
+# PyPI quarantined litellm on 2026-03-24; install from the official GitHub release tarball.
+litellm @ https://github.com/BerriAI/litellm/archive/refs/tags/v1.82.3-stable.patch.2.tar.gz
 tenacity>=8.2.0
 httpx>=0.25.0
 

@@ -132,10 +132,24 @@ def test_core_requirement_distributions_follow_requirements_file(tmp_path):
     """Frozen bundle mappings should be derived from requirements-core.txt."""
     distributions = read_core_requirement_distributions(PROJECT_ROOT)
     assert "certifi" in distributions
+    assert "litellm" in distributions
     assert "scikit-learn" in distributions
     assert "opencv-python" in distributions
     assert "google-api-python-client" in distributions
     assert "pyside6" in distributions
+
+
+def test_core_requirement_distributions_support_direct_reference_requirements(tmp_path):
+    """PEP 508 direct references should still resolve to the package distribution name."""
+    requirements_file = tmp_path / "requirements-core.txt"
+    requirements_file.write_text(
+        "litellm @ https://github.com/BerriAI/litellm/archive/refs/tags/v1.82.3-stable.patch.2.tar.gz\n",
+        encoding="utf-8",
+    )
+
+    distributions = read_core_requirement_distributions(tmp_path)
+
+    assert distributions == ("litellm",)
 
 
 def test_core_pyinstaller_collect_targets_cover_packaged_runtime_dependencies(tmp_path):
