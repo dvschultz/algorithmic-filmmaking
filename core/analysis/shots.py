@@ -82,6 +82,31 @@ _model_lock = threading.Lock()
 _SIGLIP_MODEL_NAME = "google/siglip2-base-patch16-224"
 
 
+def _import_transformers_auto_components():
+    """Import the Hugging Face auto classes needed by shot classification.
+
+    Prefer the concrete auto-module paths over the top-level transformers lazy
+    exports. This avoids a class of runtime failures where the lazy attribute
+    loader breaks even though the underlying auto modules are present.
+    """
+    try:
+        from transformers.models.auto.modeling_auto import AutoModel
+        from transformers.models.auto.processing_auto import AutoProcessor
+
+        return AutoProcessor, AutoModel
+    except Exception:
+        from transformers import AutoProcessor, AutoModel
+
+        return AutoProcessor, AutoModel
+
+
+def ensure_classification_runtime_available():
+    """Validate that the local shot-classification runtime imports cleanly."""
+    import torch  # noqa: F401
+
+    return _import_transformers_auto_components()
+
+
 def load_classification_model():
     """Lazy load SigLIP 2 model and processor (thread-safe)."""
     global _model, _processor
@@ -92,7 +117,7 @@ def load_classification_model():
     with _model_lock:
         if _model is None:
             logger.info("Loading SigLIP 2 model for shot classification...")
-            from transformers import AutoProcessor, AutoModel
+            AutoProcessor, AutoModel = ensure_classification_runtime_available()
 
             _processor = AutoProcessor.from_pretrained(_SIGLIP_MODEL_NAME)
             _model = AutoModel.from_pretrained(_SIGLIP_MODEL_NAME)

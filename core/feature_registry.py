@@ -32,6 +32,14 @@ def _scaled_progress_callback(
     return _callback
 
 
+def _validate_feature_runtime(name: str) -> None:
+    """Run narrow runtime import checks for fragile on-demand features."""
+    if name == "shot_classify":
+        from core.analysis.shots import ensure_classification_runtime_available
+
+        ensure_classification_runtime_available()
+
+
 @dataclass
 class FeatureDeps:
     """Dependencies required for a feature."""
@@ -218,7 +226,7 @@ def install_for_feature(
         ensure_deno,
         ensure_yt_dlp,
         get_pip_specifier,
-        install_package,
+        install_packages,
     )
 
     deps = FEATURE_DEPS.get(name)
@@ -239,34 +247,44 @@ def install_for_feature(
         "yt-dlp": ensure_yt_dlp,
     }
 
-    install_steps: list[tuple[str, Callable, str]] = []
+    binary_steps: list[tuple[str, Callable]] = []
+    package_names: list[str] = []
     for dep in missing:
         if dep.startswith("binary:"):
             binary_name = dep.split(":", 1)[1]
             installer = binary_installers.get(binary_name)
             if installer is not None:
-                install_steps.append((binary_name, installer, "binary"))
+                binary_steps.append((binary_name, installer))
         elif dep.startswith("package:"):
             package_name = dep.split(":", 1)[1]
-            install_steps.append((package_name, install_package, "package"))
+            package_names.append(package_name)
 
-    if not install_steps:
+    total_steps = len(binary_steps) + (1 if package_names else 0)
+    if total_steps == 0:
         return success
 
-    total_steps = len(install_steps)
-    for index, (dep_name, installer, dep_type) in enumerate(install_steps):
+    for index, (dep_name, installer) in enumerate(binary_steps):
         start = index / total_steps
         end = (index + 1) / total_steps
         scaled_callback = _scaled_progress_callback(progress_callback, start, end)
         try:
-            if dep_type == "binary":
-                installer(scaled_callback)
-            else:
-                specifier = get_pip_specifier(dep_name)
-                if not installer(specifier, scaled_callback):
-                    success = False
+            installer(scaled_callback)
         except RuntimeError as e:
             logger.error(f"Failed to install {dep_name}: {e}")
+            success = False
+
+    if package_names:
+        start = len(binary_steps) / total_steps
+        scaled_callback = _scaled_progress_callback(progress_callback, start, 1.0)
+        specifiers = [get_pip_specifier(dep_name) for dep_name in package_names]
+        if not install_packages(specifiers, scaled_callback):
+            success = False
+
+    if success:
+        try:
+            _validate_feature_runtime(name)
+        except Exception as e:
+            logger.error(f"Runtime validation failed for {name}: {e}")
             success = False
 
     return success

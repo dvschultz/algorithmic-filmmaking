@@ -25,6 +25,7 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -268,6 +269,89 @@ def _get_ssl_context() -> ssl.SSLContext:
     if certifi is not None:
         return ssl.create_default_context(cafile=certifi.where())
     return ssl.create_default_context()
+
+
+def _get_external_subprocess_env() -> dict[str, str]:
+    """Return a sanitized environment for external helper programs.
+
+    In frozen builds, external programs should not inherit PyInstaller-specific
+    Python environment variables or PATH entries anchored in the bundled app.
+    """
+    env = os.environ.copy()
+
+    for key in (
+        "PYTHONHOME",
+        "PYTHONPATH",
+        "PYTHONEXECUTABLE",
+        "__PYVENV_LAUNCHER__",
+        "VIRTUAL_ENV",
+    ):
+        env.pop(key, None)
+
+    meipass = getattr(sys, "_MEIPASS", None)
+    raw_path = env.get("PATH", "")
+    if meipass and raw_path:
+        try:
+            resolved_meipass = Path(meipass).resolve(strict=False)
+            filtered_parts = []
+            for part in raw_path.split(os.pathsep):
+                if not part:
+                    continue
+                try:
+                    resolved_part = Path(part).resolve(strict=False)
+                except OSError:
+                    filtered_parts.append(part)
+                    continue
+                if resolved_part == resolved_meipass or resolved_part.is_relative_to(resolved_meipass):
+                    continue
+                filtered_parts.append(part)
+            env["PATH"] = os.pathsep.join(filtered_parts)
+        except OSError:
+            pass
+
+    return env
+
+
+@contextmanager
+def _external_subprocess_runtime():
+    """Temporarily disable PyInstaller's DLL search override for child processes."""
+    restore_dir: str | None = None
+    set_dll_directory = None
+
+    if sys.platform == "win32" and getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        try:
+            import ctypes
+
+            restore_dir = str(Path(sys._MEIPASS).resolve(strict=False))
+            set_dll_directory = ctypes.windll.kernel32.SetDllDirectoryW
+            set_dll_directory(None)
+        except Exception:
+            logger.debug("Failed to sanitize Windows DLL search path for external subprocess", exc_info=True)
+            set_dll_directory = None
+            restore_dir = None
+
+    try:
+        yield
+    finally:
+        if set_dll_directory is not None and restore_dir is not None:
+            try:
+                set_dll_directory(restore_dir)
+            except Exception:
+                logger.debug("Failed to restore Windows DLL search path after external subprocess", exc_info=True)
+
+
+def _run_external_subprocess(cmd: list[str], **kwargs):
+    """Run an external helper process with a sanitized frozen-app environment."""
+    kwargs.setdefault("env", _get_external_subprocess_env())
+    with _external_subprocess_runtime():
+        return subprocess.run(cmd, **kwargs)
+
+
+def _popen_external_subprocess(cmd: list[str], **kwargs) -> subprocess.Popen:
+    """Launch an external helper process with a sanitized frozen-app environment."""
+    kwargs.setdefault("env", _get_external_subprocess_env())
+    with _external_subprocess_runtime():
+        return subprocess.Popen(cmd, **kwargs)
 
 
 def _download_file(
@@ -701,7 +785,7 @@ def ensure_python(progress_callback: ProgressCallback = None) -> Path:
         raise RuntimeError("Python extraction failed — python3 binary not found")
 
     # Ensure pip is available
-    result = subprocess.run(
+    result = _run_external_subprocess(
         [str(python_bin), "-m", "pip", "--version"],
         capture_output=True, text=True, timeout=30,
         **get_subprocess_kwargs(),
@@ -709,7 +793,7 @@ def ensure_python(progress_callback: ProgressCallback = None) -> Path:
     if result.returncode != 0:
         logger.warning(f"pip check failed: {result.stderr}")
         # Try to bootstrap pip
-        subprocess.run(
+        _run_external_subprocess(
             [str(python_bin), "-m", "ensurepip", "--upgrade"],
             capture_output=True, text=True, timeout=60,
             **get_subprocess_kwargs(),
@@ -730,7 +814,7 @@ def get_python_version() -> Optional[str]:
     if not python_bin.is_file():
         return None
     try:
-        result = subprocess.run(
+        result = _run_external_subprocess(
             [str(python_bin), "--version"],
             capture_output=True, text=True, timeout=10,
             **get_subprocess_kwargs(),
@@ -804,11 +888,24 @@ def install_package(
 ) -> bool:
     """Install a Python package into the managed packages directory.
 
+    Thin wrapper around install_packages() for legacy call sites.
+    """
+    return install_packages([specifier], progress_callback)
+
+
+def install_packages(
+    specifiers: list[str],
+    progress_callback: ProgressCallback = None,
+) -> bool:
+    """Install Python packages into the managed packages directory.
+
     Uses the standalone managed Python (not the frozen app's Python) to run
     pip install --target. Automatically downloads Python if not present.
+    Installing related packages together lets pip resolve a coherent set of
+    dependencies instead of layering separate installs into one flat target dir.
 
     Args:
-        specifier: pip install specifier (e.g., "torch>=2.4,<2.6").
+        specifiers: pip install specifiers (e.g., ["torch>=2.4,<2.6"]).
         progress_callback: Optional progress callback.
 
     Returns:
@@ -817,30 +914,35 @@ def install_package(
     Raises:
         RuntimeError: If Python download or pip install fails.
     """
+    normalized_specifiers = [specifier.strip() for specifier in specifiers if specifier.strip()]
+    if not normalized_specifiers:
+        return True
+
     # Ensure standalone Python is available
     python_bin = ensure_python(_scaled_progress_callback(progress_callback, 0.0, 0.2))
 
     packages_dir = get_managed_packages_dir()
     packages_dir.mkdir(parents=True, exist_ok=True)
 
-    _emit_progress(progress_callback, 0.2, f"Preparing install for {specifier}...")
+    install_label = ", ".join(normalized_specifiers)
+    _emit_progress(progress_callback, 0.2, f"Preparing install for {install_label}...")
 
     cmd = [
         str(python_bin),
         "-m", "pip", "install",
         "--target", str(packages_dir),
+        "--upgrade",
         "--no-user",
         "--disable-pip-version-check",
         "--progress-bar", "off",
-        specifier,
-    ]
+    ] + normalized_specifiers
 
     logger.info(f"Installing package: {' '.join(cmd)}")
     kwargs = get_subprocess_kwargs()
     output_lines: list[str] = []
 
     try:
-        process = subprocess.Popen(
+        process = _popen_external_subprocess(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -858,7 +960,7 @@ def install_package(
         for raw_line in process.stdout:
             line = raw_line.rstrip()
             output_lines.append(line)
-            parsed = _pip_progress_from_output_line(line, specifier)
+            parsed = _pip_progress_from_output_line(line, install_label)
             if parsed is not None:
                 progress, message = parsed
                 _emit_progress(progress_callback, 0.2 + (0.75 * progress), message)
@@ -866,8 +968,8 @@ def install_package(
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait(timeout=30)
-        logger.error("pip install timed out for %s", specifier)
-        _emit_progress(progress_callback, 0.0, f"Failed to install {specifier}")
+        logger.error("pip install timed out for %s", install_label)
+        _emit_progress(progress_callback, 0.0, f"Failed to install {install_label}")
         return False
     finally:
         if process.stdout is not None:
@@ -876,15 +978,15 @@ def install_package(
     if returncode != 0:
         output = "\n".join(output_lines).strip()
         logger.error(f"pip install failed: {output}")
-        _emit_progress(progress_callback, 0.0, f"Failed to install {specifier}")
+        _emit_progress(progress_callback, 0.0, f"Failed to install {install_label}")
         return False
 
     # Update ABI compatibility marker after successful install
     _write_compat_marker()
 
-    _emit_progress(progress_callback, 1.0, f"Installed {specifier}")
+    _emit_progress(progress_callback, 1.0, f"Installed {install_label}")
 
-    logger.info(f"Package installed: {specifier}")
+    logger.info(f"Package installed: {install_label}")
     return True
 
 

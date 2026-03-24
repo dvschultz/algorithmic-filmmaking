@@ -342,6 +342,61 @@ class TestEnsurePythonWindows:
         assert str(python_bin) != mock_sys.executable
 
 
+class TestExternalSubprocessWindows:
+    """Test frozen Windows subprocess sanitization for external Python helpers."""
+
+    def test_external_subprocess_sanitizes_env_and_dll_search_path(self, tmp_path):
+        """External helper processes should not inherit PyInstaller's runtime environment."""
+        from core.dependency_manager import _run_external_subprocess
+
+        meipass = tmp_path / "bundle"
+        meipass.mkdir()
+        pyinstaller_bin = meipass / "bin"
+        pyinstaller_bin.mkdir()
+
+        dll_calls: list[object] = []
+
+        def _fake_set_dll_directory(value):
+            dll_calls.append(value)
+            return 1
+
+        fake_ctypes = SimpleNamespace(
+            windll=SimpleNamespace(
+                kernel32=SimpleNamespace(SetDllDirectoryW=_fake_set_dll_directory)
+            )
+        )
+
+        with patch("core.dependency_manager.sys") as mock_sys, \
+             patch.dict(
+                 os.environ,
+                 {
+                     "PATH": os.pathsep.join([str(pyinstaller_bin), r"C:\Windows\System32"]),
+                     "PYTHONHOME": r"C:\Program Files\Scene Ripper\_internal",
+                     "PYTHONPATH": r"C:\Program Files\Scene Ripper\_internal",
+                 },
+                 clear=False,
+             ), \
+             patch.dict(sys.modules, {"ctypes": fake_ctypes}), \
+             patch(
+                 "core.dependency_manager.subprocess.run",
+                 return_value=SimpleNamespace(returncode=0, stdout="Python 3.11.11", stderr=""),
+             ) as mock_run:
+            mock_sys.platform = "win32"
+            mock_sys.frozen = True
+            mock_sys._MEIPASS = str(meipass)
+
+            _run_external_subprocess(["python.exe", "--version"], capture_output=True, text=True)
+
+        _, kwargs = mock_run.call_args
+        env = kwargs["env"]
+        assert "PYTHONHOME" not in env
+        assert "PYTHONPATH" not in env
+        assert str(pyinstaller_bin) not in env["PATH"]
+        assert r"C:\Windows\System32" in env["PATH"]
+        assert dll_calls[0] is None
+        assert str(meipass) in str(dll_calls[-1])
+
+
 class TestBuildSupportWindows:
     """Test Windows build helper runtime staging."""
 

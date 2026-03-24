@@ -102,6 +102,33 @@ class TestSigLIP2Classification:
         with pytest.raises(ShotClassificationError, match="transformers missing"):
             classify_shot_type(image_path)
 
+    def test_load_classification_model_uses_runtime_import_helper(self, monkeypatch):
+        import core.analysis.shots as shots
+
+        shots.unload_model()
+
+        class _FakeProcessor:
+            @staticmethod
+            def from_pretrained(_name):
+                return "processor"
+
+        class _FakeModel:
+            @staticmethod
+            def from_pretrained(_name):
+                return "model"
+
+        monkeypatch.setattr(
+            shots,
+            "ensure_classification_runtime_available",
+            lambda: (_FakeProcessor, _FakeModel),
+        )
+
+        model, processor = shots.load_classification_model()
+        assert model == "model"
+        assert processor == "processor"
+
+        shots.unload_model()
+
 
 # --- P1.2: Gemini Flash Lite cloud shot classification ---
 
