@@ -7,6 +7,8 @@ Covers:
 """
 
 import platform
+import sys
+from types import ModuleType
 from unittest.mock import patch
 import pytest
 
@@ -89,6 +91,9 @@ class TestSigLIP2Classification:
         image_path = tmp_path / "thumb.jpg"
         image_path.write_bytes(b"not-a-real-image")
 
+        # This test is about runtime failures from model loading, not whether
+        # optional torch is installed on the current CI image.
+        monkeypatch.setitem(sys.modules, "torch", ModuleType("torch"))
         monkeypatch.setattr(
             "core.analysis.shots.load_classification_model",
             lambda: (_ for _ in ()).throw(RuntimeError("transformers missing")),

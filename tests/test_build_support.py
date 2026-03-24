@@ -152,6 +152,19 @@ def test_core_requirement_distributions_support_direct_reference_requirements(tm
     assert distributions == ("litellm",)
 
 
+def test_core_requirement_distributions_support_local_wheel_requirements(tmp_path):
+    """Local vendored wheel paths should still resolve to the package distribution name."""
+    requirements_file = tmp_path / "requirements-core.txt"
+    requirements_file.write_text(
+        "./vendor/wheels/litellm-1.82.6-py3-none-any.whl\n",
+        encoding="utf-8",
+    )
+
+    distributions = read_core_requirement_distributions(tmp_path)
+
+    assert distributions == ("litellm",)
+
+
 def test_core_pyinstaller_collect_targets_cover_packaged_runtime_dependencies(tmp_path):
     """Frozen builds should explicitly collect dynamic-import package trees."""
     targets = get_core_pyinstaller_collect_targets(PROJECT_ROOT)

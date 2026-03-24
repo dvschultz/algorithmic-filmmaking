@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import binascii
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -88,6 +89,27 @@ def _normalize_requirement_name(name: str) -> str:
     return name.strip().lower().replace("_", "-")
 
 
+def _extract_requirement_name(requirement_line: str) -> str:
+    """Extract a normalized distribution name from a requirements.txt line."""
+    wheel_line = requirement_line.split(";", 1)[0].strip()
+    wheel_name = Path(wheel_line.split("#", 1)[0]).name
+    wheel_match = re.match(
+        r"(?P<name>.+)-\d+(?:\.\d+)*(?:[A-Za-z0-9_.+-]*)-[^-]+-[^-]+-[^-]+\.whl$",
+        wheel_name,
+    )
+    if wheel_match:
+        return _normalize_requirement_name(wheel_match.group("name"))
+
+    requirement = wheel_line.split("@", 1)[0].strip()
+    for separator in ("[", ">", "<", "=", "!", "~"):
+        requirement = requirement.split(separator, 1)[0].strip()
+
+    if requirement:
+        return _normalize_requirement_name(requirement)
+
+    return ""
+
+
 def read_core_requirement_distributions(project_root: Path) -> tuple[str, ...]:
     """Return normalized distribution names from requirements-core.txt."""
     requirements_file = project_root / "requirements-core.txt"
@@ -97,12 +119,9 @@ def read_core_requirement_distributions(project_root: Path) -> tuple[str, ...]:
         if not line or line.startswith("#"):
             continue
 
-        requirement = line.split(";", 1)[0].strip()
-        requirement = requirement.split("@", 1)[0].strip()
-        for separator in ("[", ">", "<", "=", "!", "~"):
-            requirement = requirement.split(separator, 1)[0].strip()
+        requirement = _extract_requirement_name(line)
         if requirement:
-            distributions.append(_normalize_requirement_name(requirement))
+            distributions.append(requirement)
     return tuple(distributions)
 
 
