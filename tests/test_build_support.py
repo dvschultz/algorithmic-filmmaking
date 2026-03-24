@@ -143,7 +143,7 @@ def test_core_requirement_distributions_support_direct_reference_requirements(tm
     """PEP 508 direct references should still resolve to the package distribution name."""
     requirements_file = tmp_path / "requirements-core.txt"
     requirements_file.write_text(
-        "litellm @ https://github.com/BerriAI/litellm/archive/refs/tags/v1.82.3-stable.patch.2.tar.gz\n",
+        "litellm @ https://files.pythonhosted.org/packages/02/6c/5327667e6dbe9e98cbfbd4261c8e91386a52e38f41419575854248bbab6a/litellm-1.82.6-py3-none-any.whl#sha256=164a3ef3e19f309e3cabc199bef3d2045212712fefdfa25fc7f75884a5b5b205\n",
         encoding="utf-8",
     )
 
