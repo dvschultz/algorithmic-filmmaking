@@ -255,8 +255,8 @@ class TestDependencyManagerLinuxDispatch:
 
         with patch("core.dependency_manager.sys") as mock_sys, \
              patch("core.dependency_manager.platform") as mock_platform:
-            mock_sys.platform = "win32"
-            mock_platform.machine.return_value = "AMD64"
+            mock_sys.platform = "darwin"
+            mock_platform.machine.return_value = "x86_64"
             with pytest.raises(RuntimeError, match="not available"):
                 _get_python_url()
 

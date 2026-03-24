@@ -149,6 +149,10 @@ _PYTHON_BASE_URL = (
 
 def _get_python_url() -> str:
     """Get platform-appropriate standalone Python download URL."""
+    if sys.platform == "win32":
+        machine = platform.machine()
+        if machine in ("x86_64", "AMD64"):
+            return f"{_PYTHON_BASE_URL}-x86_64-pc-windows-msvc-install_only.tar.gz"
     if sys.platform == "darwin" and platform.machine() == "arm64":
         return f"{_PYTHON_BASE_URL}-aarch64-apple-darwin-install_only.tar.gz"
     if sys.platform == "linux":
@@ -636,19 +640,12 @@ def ensure_python(progress_callback: ProgressCallback = None) -> Path:
     This Python is used exclusively for `pip install --target` to install
     on-demand packages — it is NOT the app's runtime Python.
 
-    On frozen Windows builds, Python is bundled by PyInstaller, so this
-    function is not needed and returns the current interpreter.
-
     Returns:
         Path to the python3 binary.
 
     Raises:
         RuntimeError: If download or extraction fails.
     """
-    # On frozen Windows builds, Python is bundled — no managed Python needed
-    if getattr(sys, "frozen", False) and sys.platform == "win32":
-        return Path(sys.executable)
-
     python_dir = get_managed_python_dir()
     if sys.platform == "win32":
         python_bin = python_dir / "python.exe"

@@ -4,9 +4,12 @@ These tests mock sys.platform to exercise Windows-specific branches
 on any platform (macOS, Linux, or Windows CI).
 """
 
+import io
 import os
 import sys
+import tarfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -208,6 +211,18 @@ class TestDependencyManagerPlatformDispatch:
             url = _get_ytdlp_url()
             assert url.endswith(".exe")
 
+    def test_python_url_windows(self):
+        """Should return the Windows standalone Python archive on Windows."""
+        from core.dependency_manager import _get_python_url
+
+        with patch("core.dependency_manager.sys") as mock_sys, \
+             patch("core.dependency_manager.platform") as mock_platform:
+            mock_sys.platform = "win32"
+            mock_platform.machine.return_value = "AMD64"
+            url = _get_python_url()
+            assert "x86_64-pc-windows-msvc" in url
+            assert url.endswith(".tar.gz")
+
     def test_deno_url_windows(self):
         """Should return the Windows Deno archive on Windows."""
         from core.dependency_manager import _get_deno_url
@@ -281,6 +296,50 @@ class TestDependencyManagerTls:
         _, kwargs = mock_urlopen.call_args
         assert kwargs["timeout"] == 120
         assert kwargs["context"] == "ctx"
+
+
+def _make_windows_python_tarball() -> bytes:
+    """Create a minimal python-build-standalone style tarball for Windows."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        info = tarfile.TarInfo(name="python/python.exe")
+        info.size = len(b"FAKEPYTHON")
+        tf.addfile(info, io.BytesIO(b"FAKEPYTHON"))
+    return buf.getvalue()
+
+
+class TestEnsurePythonWindows:
+    """Test managed Python install behavior on Windows."""
+
+    def test_frozen_windows_uses_managed_python_not_app_executable(self, tmp_path):
+        """Frozen Windows installs should download a real python.exe for pip work."""
+        from core.dependency_manager import ensure_python
+
+        managed_python_dir = tmp_path / "managed-python"
+        tarball_bytes = _make_windows_python_tarball()
+
+        def _fake_download(_url, dest, _progress=None, _label=""):
+            dest.write_bytes(tarball_bytes)
+            return dest
+
+        with patch("core.dependency_manager.sys") as mock_sys, \
+             patch("core.dependency_manager.platform") as mock_platform, \
+             patch("core.dependency_manager.get_managed_python_dir", return_value=managed_python_dir), \
+             patch("core.dependency_manager._download_file", side_effect=_fake_download), \
+             patch(
+                 "core.dependency_manager.subprocess.run",
+                 return_value=SimpleNamespace(returncode=0, stdout="pip 24.0", stderr=""),
+             ):
+            mock_sys.platform = "win32"
+            mock_sys.frozen = True
+            mock_sys.executable = r"C:\Program Files\Scene Ripper\Scene Ripper.exe"
+            mock_platform.machine.return_value = "AMD64"
+
+            python_bin = ensure_python()
+
+        assert python_bin == managed_python_dir / "python.exe"
+        assert python_bin.is_file()
+        assert str(python_bin) != mock_sys.executable
 
 
 class TestBuildSupportWindows:
