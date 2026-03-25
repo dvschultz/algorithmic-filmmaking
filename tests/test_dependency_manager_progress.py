@@ -6,8 +6,10 @@ import io
 import sys
 from pathlib import Path
 
+import pytest
+
 from core.dependency_manager import install_package, install_packages
-from core.feature_registry import install_for_feature
+from core.feature_registry import install_for_feature, requires_full_package_repair
 
 
 class _FakePopen:
@@ -167,7 +169,7 @@ def test_install_for_feature_batches_missing_packages_and_validates_runtime(monk
 
     monkeypatch.setattr(
         "core.feature_registry.check_feature",
-        lambda _name: (False, ["package:torch", "package:torchvision", "package:transformers"]),
+        lambda _name: (False, ["package:torch", "package:transformers"]),
     )
     monkeypatch.setattr("core.dependency_manager.get_pip_specifier", lambda name: f"{name}>=1.0")
     monkeypatch.setattr("core.dependency_manager.install_packages", _fake_install)
@@ -177,7 +179,7 @@ def test_install_for_feature_batches_missing_packages_and_validates_runtime(monk
     )
 
     assert install_for_feature("describe_local_cpu", _on_progress) is True
-    assert package_batches == [["torch>=1.0", "torchvision>=1.0", "transformers>=1.0"]]
+    assert package_batches == [["torch>=1.0", "transformers>=1.0"]]
     assert validated == ["describe_local_cpu"]
     assert [round(progress, 2) for progress, _ in progress_calls] == [0.0, 0.5, 1.0]
 
@@ -211,3 +213,108 @@ def test_install_for_feature_reinstalls_broken_runtime_even_when_packages_exist(
         "sentencepiece>=1.0",
         "protobuf>=1.0",
     ]]
+
+
+@pytest.mark.parametrize(
+    ("feature_name", "missing", "expected_packages"),
+    [
+        (
+            "describe_local",
+            ["package:mlx_vlm"],
+            ["mlx_vlm"],
+        ),
+        (
+            "describe_local_cpu",
+            ["package:transformers"],
+            ["torch", "transformers"],
+        ),
+        (
+            "shot_classify",
+            ["package:sentencepiece", "package:protobuf"],
+            ["torch", "torchvision", "transformers", "einops", "sentencepiece", "protobuf"],
+        ),
+        (
+            "image_classify",
+            ["package:torchvision"],
+            ["torch", "torchvision"],
+        ),
+        (
+            "object_detect",
+            ["package:ultralytics"],
+            ["torch", "ultralytics"],
+        ),
+        (
+            "face_detect",
+            ["package:onnxruntime"],
+            ["insightface", "onnxruntime"],
+        ),
+        (
+            "ocr",
+            ["package:paddleocr"],
+            ["paddleocr"],
+        ),
+        (
+            "audio_analysis",
+            ["package:librosa"],
+            ["librosa"],
+        ),
+        (
+            "transcribe",
+            ["package:faster_whisper"],
+            ["faster_whisper"],
+        ),
+        (
+            "transcribe_mlx",
+            ["package:lightning_whisper_mlx"],
+            ["lightning_whisper_mlx"],
+        ),
+    ],
+)
+def test_install_for_feature_repairs_full_runtime_stack_when_only_subset_is_missing(
+    monkeypatch,
+    feature_name,
+    missing,
+    expected_packages,
+):
+    """Fragile runtimes should reinstall their full repair package set."""
+    package_batches: list[list[str]] = []
+    cleared: list[list[str]] = []
+
+    monkeypatch.setattr(
+        "core.feature_registry.check_feature",
+        lambda _name: (False, missing),
+    )
+    monkeypatch.setattr("core.dependency_manager.get_pip_specifier", lambda name: f"{name}>=1.0")
+    monkeypatch.setattr("core.feature_registry._validate_feature_runtime", lambda _name: None)
+    monkeypatch.setattr(
+        "core.dependency_manager.clear_package_roots",
+        lambda package_names: cleared.append(list(package_names)),
+    )
+    monkeypatch.setattr(
+        "core.dependency_manager.install_packages",
+        lambda specifiers, _progress=None: package_batches.append(list(specifiers)) or True,
+    )
+
+    assert install_for_feature(feature_name) is True
+    assert cleared == [expected_packages]
+    assert package_batches == [[f"{package_name}>=1.0" for package_name in expected_packages]]
+
+
+@pytest.mark.parametrize(
+    "feature_name",
+    [
+        "describe_local",
+        "describe_local_cpu",
+        "shot_classify",
+        "image_classify",
+        "object_detect",
+        "ocr",
+        "audio_analysis",
+        "face_detect",
+        "transcribe",
+        "transcribe_mlx",
+    ],
+)
+def test_runtime_validated_analysis_features_force_full_repair(feature_name):
+    """Runtime-validated analysis features should prefer a full repair install."""
+    assert requires_full_package_repair(feature_name, ["package:anything"]) is True

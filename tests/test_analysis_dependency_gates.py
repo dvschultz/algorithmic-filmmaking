@@ -123,6 +123,35 @@ def test_start_agent_transcription_aborts_when_dependency_missing():
     assert started is False
 
 
+def test_launch_transcription_worker_skips_runtime_broken_backend(monkeypatch):
+    class Harness:
+        def __init__(self):
+            self.settings = SimpleNamespace()
+            self.status = []
+            self.finished = []
+
+            self.status_bar = SimpleNamespace(showMessage=lambda message: self.status.append(message))
+
+        def _on_analysis_phase_worker_finished(self, op_key):
+            self.finished.append(op_key)
+
+    monkeypatch.setattr(
+        "ui.main_window.get_operation_feature_candidates",
+        lambda *_args, **_kwargs: ["transcribe"],
+    )
+    monkeypatch.setattr(
+        "core.feature_registry.check_feature_ready",
+        lambda _feature: (False, ["runtime:broken"]),
+    )
+
+    harness = Harness()
+
+    MainWindow._launch_transcription_worker(harness, [SimpleNamespace(source_id="source-1")])
+
+    assert harness.finished == ["transcribe"]
+    assert harness.status == ["Transcription unavailable - install dependencies in Settings > Dependencies"]
+
+
 def test_intention_shot_analysis_finishes_when_dependency_missing():
     class Workflow:
         def __init__(self):

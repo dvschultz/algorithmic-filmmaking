@@ -274,14 +274,24 @@ def prompt_feature_download(
     Returns:
         True if all deps are now available, False if user cancelled or download failed.
     """
-    from core.feature_registry import check_feature_ready, get_feature_size_estimate, install_for_feature
+    from core.feature_registry import (
+        FEATURE_DEPS,
+        check_feature_ready,
+        get_feature_size_estimate,
+        install_for_feature,
+        requires_full_package_repair,
+    )
 
     available, missing = check_feature_ready(feature_name)
     if available:
         return True
 
     size_mb = get_feature_size_estimate(feature_name)
-    missing_str = ", ".join(dep.split(":", 1)[1] for dep in missing)
+    if requires_full_package_repair(feature_name, missing):
+        repair_packages = FEATURE_DEPS[feature_name].repair_packages or FEATURE_DEPS[feature_name].packages
+        missing_str = ", ".join(repair_packages)
+    else:
+        missing_str = ", ".join(dep.split(":", 1)[1] for dep in missing)
 
     reply = QMessageBox.question(
         parent_widget,

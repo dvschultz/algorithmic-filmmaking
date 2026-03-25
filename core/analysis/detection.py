@@ -46,6 +46,17 @@ _ov_model_classes: Optional[list[str]] = None
 _ov_model_lock = threading.Lock()
 
 
+def ensure_object_detection_runtime_available():
+    """Validate that the object-detection runtime imports cleanly."""
+    try:
+        import torch  # noqa: F401
+        from ultralytics import YOLO
+
+        return YOLO
+    except Exception as e:
+        raise RuntimeError(f"object detection runtime is incomplete: {e}") from e
+
+
 def _get_model_cache_dir() -> Path:
     """Get the model cache directory from settings."""
     try:
@@ -89,7 +100,7 @@ def _load_yolo(model_size: str = "n"):
             cache_dir = _get_model_cache_dir()
             os.environ.setdefault("YOLO_CONFIG_DIR", str(cache_dir))
 
-            from ultralytics import YOLO
+            YOLO = ensure_object_detection_runtime_available()
 
             # YOLO26 will download the model to cache on first use (~6MB for nano)
             model_name = f"yolo26{model_size}.pt"
@@ -119,7 +130,7 @@ def _load_yoloe(custom_classes: list[str]):
             cache_dir = _get_model_cache_dir()
             os.environ.setdefault("YOLO_CONFIG_DIR", str(cache_dir))
 
-            from ultralytics import YOLO
+            YOLO = ensure_object_detection_runtime_available()
 
             _ov_model = YOLO(_YOLOE_MODEL_NAME)
             _ov_model.set_classes(custom_classes)

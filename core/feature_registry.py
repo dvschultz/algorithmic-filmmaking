@@ -6,13 +6,26 @@ to download exactly what's needed.
 """
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from core.binary_resolver import find_binary
 from core.dependency_manager import is_binary_available, is_package_available
 
 logger = logging.getLogger(__name__)
+
+_FULL_PACKAGE_REPAIR_FEATURES = {
+    "audio_analysis",
+    "describe_local",
+    "describe_local_cpu",
+    "ocr",
+    "image_classify",
+    "object_detect",
+    "face_detect",
+    "shot_classify",
+    "transcribe",
+    "transcribe_mlx",
+}
 
 
 def _scaled_progress_callback(
@@ -34,10 +47,53 @@ def _scaled_progress_callback(
 
 def _validate_feature_runtime(name: str) -> None:
     """Run narrow runtime import checks for fragile on-demand features."""
-    if name == "shot_classify":
+    if name == "describe_local":
+        from core.analysis.description import ensure_local_description_runtime_available
+
+        ensure_local_description_runtime_available()
+    elif name == "describe_local_cpu":
+        from core.analysis.description import ensure_local_cpu_description_runtime_available
+
+        ensure_local_cpu_description_runtime_available()
+    elif name == "shot_classify":
         from core.analysis.shots import ensure_classification_runtime_available
 
         ensure_classification_runtime_available()
+    elif name == "image_classify":
+        from core.analysis.classification import ensure_image_classification_runtime_available
+
+        ensure_image_classification_runtime_available()
+    elif name == "object_detect":
+        from core.analysis.detection import ensure_object_detection_runtime_available
+
+        ensure_object_detection_runtime_available()
+    elif name == "ocr":
+        from core.analysis.ocr import ensure_ocr_runtime_available
+
+        ensure_ocr_runtime_available()
+    elif name == "audio_analysis":
+        from core.analysis.audio import ensure_audio_analysis_runtime_available
+
+        ensure_audio_analysis_runtime_available()
+    elif name == "face_detect":
+        from core.analysis.faces import ensure_face_detection_runtime_available
+
+        ensure_face_detection_runtime_available()
+    elif name == "transcribe":
+        from core.transcription import ensure_faster_whisper_runtime_available
+
+        ensure_faster_whisper_runtime_available()
+    elif name == "transcribe_mlx":
+        from core.transcription import ensure_mlx_whisper_runtime_available
+
+        ensure_mlx_whisper_runtime_available()
+
+
+def requires_full_package_repair(name: str, missing: list[str]) -> bool:
+    """Return True when a feature should reinstall its full package set."""
+    if name not in _FULL_PACKAGE_REPAIR_FEATURES:
+        return False
+    return any(dep.startswith("package:") or dep.startswith("runtime:") for dep in missing)
 
 
 @dataclass
@@ -47,6 +103,7 @@ class FeatureDeps:
     binaries: list[str]
     packages: list[str]
     size_estimate_mb: int  # Rough download size in MB
+    repair_packages: list[str] = field(default_factory=list)
 
 
 # Map feature names to their dependency requirements
@@ -95,6 +152,7 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
         binaries=[],
         packages=["torch", "transformers"],
         size_estimate_mb=450,
+        repair_packages=["torch", "transformers"],
     ),
     "describe_cloud": FeatureDeps(
         binaries=[],
@@ -105,16 +163,19 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
         binaries=[],
         packages=["torch", "torchvision", "transformers", "einops", "sentencepiece", "protobuf"],
         size_estimate_mb=450,
+        repair_packages=["torch", "torchvision", "transformers", "einops", "sentencepiece", "protobuf"],
     ),
     "image_classify": FeatureDeps(
         binaries=[],
         packages=["torch", "torchvision"],
         size_estimate_mb=400,
+        repair_packages=["torch", "torchvision"],
     ),
     "object_detect": FeatureDeps(
         binaries=[],
         packages=["ultralytics"],
-        size_estimate_mb=80,
+        size_estimate_mb=430,
+        repair_packages=["torch", "ultralytics"],
     ),
     "ocr": FeatureDeps(
         binaries=[],
@@ -135,6 +196,7 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
         binaries=[],
         packages=["insightface", "onnxruntime"],
         size_estimate_mb=300,
+        repair_packages=["insightface", "onnxruntime"],
     ),
     "stem_separation": FeatureDeps(
         binaries=[],
@@ -265,6 +327,13 @@ def install_for_feature(
             )
             runtime_repair = True
             missing = [f"package:{package_name}" for package_name in deps.packages]
+    elif requires_full_package_repair(name, missing):
+        logger.info(
+            "Feature '%s' has partial package coverage; reinstalling the full package set",
+            name,
+        )
+        runtime_repair = True
+        missing = [f"package:{package_name}" for package_name in deps.packages]
 
     success = True
 
@@ -304,9 +373,11 @@ def install_for_feature(
     if package_names:
         start = len(binary_steps) / total_steps
         scaled_callback = _scaled_progress_callback(progress_callback, start, 1.0)
-        specifiers = [get_pip_specifier(dep_name) for dep_name in package_names]
+        repair_package_names = deps.repair_packages or deps.packages
+        package_batch_names = repair_package_names if runtime_repair else package_names
+        specifiers = [get_pip_specifier(dep_name) for dep_name in package_batch_names]
         if runtime_repair:
-            clear_package_roots(package_names)
+            clear_package_roots(repair_package_names)
         if not install_packages(specifiers, scaled_callback):
             success = False
 
@@ -315,6 +386,6 @@ def install_for_feature(
             _validate_feature_runtime(name)
         except Exception as e:
             logger.error(f"Runtime validation failed for {name}: {e}")
-            success = False
+            raise RuntimeError(str(e)) from e
 
     return success

@@ -3345,10 +3345,10 @@ class MainWindow(QMainWindow):
 
         # Pipeline entry points should prompt before launch, but keep a
         # non-interactive guard here so internal calls fail safely.
-        from core.feature_registry import check_feature
+        from core.feature_registry import check_feature_ready
 
         feature_candidates = get_operation_feature_candidates("transcribe", self.settings)
-        if feature_candidates and not any(check_feature(name)[0] for name in feature_candidates):
+        if feature_candidates and not any(check_feature_ready(name)[0] for name in feature_candidates):
             logger.warning("Transcription skipped: dependencies unavailable")
             self.status_bar.showMessage(
                 "Transcription unavailable - install dependencies in Settings > Dependencies"

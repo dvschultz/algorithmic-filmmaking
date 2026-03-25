@@ -29,12 +29,21 @@ logger = logging.getLogger(__name__)
 _librosa = None
 
 
+def ensure_audio_analysis_runtime_available():
+    """Validate that the audio-analysis runtime imports cleanly."""
+    try:
+        import librosa
+
+        return librosa
+    except Exception as e:
+        raise RuntimeError(f"audio analysis runtime is incomplete: {e}") from e
+
+
 def _get_librosa():
     """Lazy load librosa module."""
     global _librosa
     if _librosa is None:
-        import librosa
-        _librosa = librosa
+        _librosa = ensure_audio_analysis_runtime_available()
     return _librosa
 
 

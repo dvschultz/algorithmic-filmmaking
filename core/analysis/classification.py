@@ -21,6 +21,17 @@ _labels: Optional[list[str]] = None
 _preprocess = None
 
 
+def ensure_image_classification_runtime_available():
+    """Validate that the local image-classification runtime imports cleanly."""
+    try:
+        import torch  # noqa: F401
+        from torchvision import models, transforms  # noqa: F401
+
+        return models, transforms
+    except Exception as e:
+        raise RuntimeError(f"image classification runtime is incomplete: {e}") from e
+
+
 def _get_model_cache_dir() -> Path:
     """Get the model cache directory from settings."""
     try:
@@ -59,7 +70,8 @@ def _load_model():
             os.environ.setdefault("TORCH_HOME", str(cache_dir))
 
             import torch
-            from torchvision import models, transforms
+
+            models, transforms = ensure_image_classification_runtime_available()
 
             # Use MobileNetV3-Small with ImageNet weights
             _model = models.mobilenet_v3_small(weights="IMAGENET1K_V1")

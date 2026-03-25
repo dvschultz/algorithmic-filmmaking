@@ -139,6 +139,30 @@ def is_mlx_vlm_available() -> bool:
         return False
 
 
+def ensure_local_description_runtime_available():
+    """Validate that the local MLX VLM runtime imports cleanly."""
+    if platform.system() != "Darwin" or platform.machine() != "arm64":
+        raise RuntimeError("mlx-vlm local description is only available on Apple Silicon")
+
+    try:
+        from mlx_vlm import generate, load  # noqa: F401
+
+        return load, generate
+    except Exception as e:
+        raise RuntimeError(f"local description runtime is incomplete: {e}") from e
+
+
+def ensure_local_cpu_description_runtime_available():
+    """Validate that the local CPU VLM runtime imports cleanly."""
+    try:
+        import torch  # noqa: F401
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        return AutoModelForCausalLM, AutoTokenizer
+    except Exception as e:
+        raise RuntimeError(f"local CPU description runtime is incomplete: {e}") from e
+
+
 def is_video_capable_model(model: str) -> bool:
     """Check if model supports video input.
 
@@ -324,7 +348,7 @@ def _load_qwen3_vlm():
     """Load Qwen3-VL via mlx-vlm."""
     global _LOCAL_MODEL, _LOCAL_PROCESSOR
 
-    from mlx_vlm import load
+    load, _generate = ensure_local_description_runtime_available()
 
     settings = load_settings()
     model_id = settings.description_model_local
@@ -339,7 +363,8 @@ def _load_moondream_fallback():
     global _LOCAL_MODEL, _LOCAL_PROCESSOR, _CPU_MODEL, _CPU_TOKENIZER
 
     import torch
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    AutoModelForCausalLM, AutoTokenizer = ensure_local_cpu_description_runtime_available()
 
     settings = load_settings()
     model_id = settings.description_model_local

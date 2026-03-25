@@ -49,6 +49,25 @@ def test_prompt_feature_download_rechecks_runtime_readiness(monkeypatch):
     assert prompt_feature_download("shot_classify") is False
 
 
+def test_prompt_feature_download_shows_full_repair_stack(monkeypatch):
+    captured = {}
+
+    monkeypatch.setattr(
+        "core.feature_registry.check_feature_ready",
+        lambda _feature: (False, ["package:ultralytics"]),
+    )
+    monkeypatch.setattr("core.feature_registry.get_feature_size_estimate", lambda _feature: 430)
+
+    def _fake_question(_parent, _title, text, *_args, **_kwargs):
+        captured["text"] = text
+        return QMessageBox.No
+
+    monkeypatch.setattr("ui.widgets.dependency_widgets.QMessageBox.question", _fake_question)
+
+    assert prompt_feature_download("object_detect") is False
+    assert "torch, ultralytics" in captured["text"]
+
+
 def test_analysis_operation_gate_uses_runtime_ready_check(monkeypatch):
     class Harness:
         def __init__(self):

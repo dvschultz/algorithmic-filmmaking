@@ -91,6 +91,16 @@ def is_faster_whisper_available() -> bool:
     return _faster_whisper_available
 
 
+def ensure_faster_whisper_runtime_available():
+    """Validate that the faster-whisper runtime imports cleanly."""
+    try:
+        from faster_whisper import WhisperModel
+
+        return WhisperModel
+    except Exception as e:
+        raise RuntimeError(f"transcription runtime is incomplete: {e}") from e
+
+
 def is_mlx_whisper_available() -> bool:
     """Check if lightning-whisper-mlx is installed and running on Apple Silicon."""
     global _mlx_whisper_available
@@ -104,6 +114,19 @@ def is_mlx_whisper_available() -> bool:
             except ImportError:
                 _mlx_whisper_available = False
     return _mlx_whisper_available
+
+
+def ensure_mlx_whisper_runtime_available():
+    """Validate that the MLX transcription runtime imports cleanly."""
+    if platform.machine() != "arm64" or platform.system() != "Darwin":
+        raise RuntimeError("mlx-whisper is only available on Apple Silicon")
+
+    try:
+        from lightning_whisper_mlx import LightningWhisperMLX
+
+        return LightningWhisperMLX
+    except Exception as e:
+        raise RuntimeError(f"mlx transcription runtime is incomplete: {e}") from e
 
 
 def _resolve_backend(backend: str = "auto") -> str:
@@ -178,7 +201,7 @@ def get_model(model_name: str = "small.en"):
         raise FasterWhisperNotInstalledError()
 
     if _model is None or _model_name != model_name:
-        from faster_whisper import WhisperModel
+        WhisperModel = ensure_faster_whisper_runtime_available()
 
         logger.info(f"Loading Whisper model: {model_name}")
         model_info = WHISPER_MODELS.get(model_name, {})
@@ -225,7 +248,7 @@ def get_mlx_model(model_name: str = "small.en"):
     mlx_name = _MLX_MODEL_MAP.get(model_name, model_name)
 
     if _mlx_model is None or _mlx_model_name != mlx_name:
-        from lightning_whisper_mlx import LightningWhisperMLX
+        LightningWhisperMLX = ensure_mlx_whisper_runtime_available()
 
         logger.info(f"Loading MLX Whisper model: {mlx_name}")
 

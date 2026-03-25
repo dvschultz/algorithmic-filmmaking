@@ -28,6 +28,18 @@ SENSITIVITY_PRESETS = {
 }
 
 
+def ensure_face_detection_runtime_available():
+    """Validate that the face-detection runtime imports cleanly."""
+    try:
+        import insightface  # noqa: F401
+        import onnxruntime  # noqa: F401
+        from insightface.app import FaceAnalysis
+
+        return FaceAnalysis
+    except Exception as e:
+        raise RuntimeError(f"face detection runtime is incomplete: {e}") from e
+
+
 def _get_model_cache_dir() -> Path:
     """Get the model cache directory from settings."""
     try:
@@ -65,7 +77,8 @@ def _load_insightface():
             logger.info("Loading InsightFace model...")
 
             import insightface
-            from insightface.app import FaceAnalysis
+
+            FaceAnalysis = ensure_face_detection_runtime_available()
 
             cache_dir = _get_model_cache_dir()
             insightface_dir = cache_dir / "insightface"
