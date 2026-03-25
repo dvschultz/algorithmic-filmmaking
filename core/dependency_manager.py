@@ -284,7 +284,23 @@ def _reset_imported_package_roots(package_roots: list[str]) -> None:
         importlib.invalidate_caches()
         return
 
+    packages_dir = get_managed_packages_dir()
+    try:
+        resolved_packages_dir = packages_dir.resolve(strict=False)
+    except OSError:
+        resolved_packages_dir = packages_dir
+
     for module_name in list(sys.modules):
+        module = sys.modules.get(module_name)
+        module_file = getattr(module, "__file__", None) if module is not None else None
+        if module_file:
+            try:
+                resolved_module_file = Path(module_file).resolve(strict=False)
+            except OSError:
+                continue
+            if not resolved_module_file.is_relative_to(resolved_packages_dir):
+                continue
+
         for root in package_roots:
             if module_name == root or module_name.startswith(f"{root}."):
                 sys.modules.pop(module_name, None)

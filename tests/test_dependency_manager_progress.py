@@ -113,6 +113,42 @@ def test_install_packages_refreshes_sys_path_and_clears_stale_modules(monkeypatc
         sys.modules.pop("transformers.models.auto.processing_auto", None)
 
 
+def test_reset_imported_package_roots_only_evicts_managed_package_modules(monkeypatch, tmp_path):
+    """Global site-packages modules must not be purged during managed-package installs."""
+    from types import ModuleType
+
+    packages_dir = tmp_path / "packages"
+    managed_root = packages_dir / "transformers"
+    managed_root.mkdir(parents=True)
+    managed_file = managed_root / "__init__.py"
+    managed_file.write_text("# managed transformers")
+
+    site_root = tmp_path / "site-packages" / "torch"
+    site_root.mkdir(parents=True)
+    site_file = site_root / "__init__.py"
+    site_file.write_text("# site torch")
+
+    managed_module = ModuleType("transformers")
+    managed_module.__file__ = str(managed_file)
+    site_module = ModuleType("torch")
+    site_module.__file__ = str(site_file)
+
+    monkeypatch.setattr("core.dependency_manager.get_managed_packages_dir", lambda: packages_dir)
+    sys.modules["transformers"] = managed_module
+    sys.modules["torch"] = site_module
+
+    try:
+        from core.dependency_manager import _reset_imported_package_roots
+
+        _reset_imported_package_roots(["transformers", "torch"])
+
+        assert "transformers" not in sys.modules
+        assert sys.modules["torch"] is site_module
+    finally:
+        sys.modules.pop("transformers", None)
+        sys.modules.pop("torch", None)
+
+
 def test_install_for_feature_batches_missing_packages_and_validates_runtime(monkeypatch):
     """Feature installs should use one package batch and then validate runtime imports."""
     progress_calls: list[tuple[float, str]] = []
