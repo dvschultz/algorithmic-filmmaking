@@ -1351,7 +1351,9 @@ class SettingsDialog(QDialog):
             label.setFixedWidth(220)
             row.addWidget(label)
 
-            available, missing = check_feature(feat_name)
+            from core.feature_registry import check_feature_ready
+
+            available, missing = check_feature_ready(feat_name)
             if available:
                 status = QLabel("Ready")
                 status.setStyleSheet(f"color: {theme().accent_green};")

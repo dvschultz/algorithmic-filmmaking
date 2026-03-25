@@ -100,11 +100,45 @@ def _import_transformers_auto_components():
         return AutoProcessor, AutoModel
 
 
+def _classification_runtime_reason(exc: BaseException) -> str:
+    """Extract a more actionable runtime error for shot classification imports."""
+    messages: list[str] = []
+    current: BaseException | None = exc
+    seen: set[int] = set()
+
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        text = str(current).strip()
+        if text:
+            messages.append(text)
+        current = current.__cause__ or current.__context__
+
+    combined = " | ".join(dict.fromkeys(messages))
+    lowered = combined.lower()
+
+    if "sentencepiece" in lowered:
+        return "sentencepiece is missing or broken in the managed shot-classification install"
+    if "protobuf" in lowered or "google.protobuf" in lowered:
+        return "protobuf is missing or broken in the managed shot-classification install"
+    if "torch.compiler" in lowered:
+        return "installed torch is too old for the current transformers runtime"
+    if "autoprocessor" in combined:
+        return (
+            "transformers is installed but the shot-classification runtime is incomplete. "
+            "Reinstall shot-classification dependencies."
+        )
+
+    return combined or exc.__class__.__name__
+
+
 def ensure_classification_runtime_available():
     """Validate that the local shot-classification runtime imports cleanly."""
-    import torch  # noqa: F401
+    try:
+        import torch  # noqa: F401
 
-    return _import_transformers_auto_components()
+        return _import_transformers_auto_components()
+    except Exception as e:
+        raise RuntimeError(_classification_runtime_reason(e)) from e
 
 
 def load_classification_model():

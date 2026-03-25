@@ -14,6 +14,7 @@ Managed files are stored in the platform-appropriate app support directory:
 """
 
 import hashlib
+import importlib
 import json
 import logging
 import os
@@ -244,6 +245,79 @@ def _pip_progress_from_output_line(line: str, specifier: str) -> tuple[float, st
         return 0.25, text
 
     return None
+
+
+def _ensure_managed_packages_importable() -> Path:
+    """Ensure the managed packages directory exists and is importable now."""
+    packages_dir = get_managed_packages_dir()
+    packages_dir.mkdir(parents=True, exist_ok=True)
+
+    packages_str = str(packages_dir)
+    if packages_str not in sys.path:
+        sys.path.append(packages_str)
+
+    importlib.invalidate_caches()
+    return packages_dir
+
+
+def _specifier_import_roots(specifiers: list[str]) -> list[str]:
+    """Extract top-level import roots from pip specifiers."""
+    roots: list[str] = []
+    seen: set[str] = set()
+
+    for specifier in specifiers:
+        match = re.match(r"^\s*([A-Za-z0-9_.-]+)", specifier)
+        if not match:
+            continue
+        root = match.group(1).replace("-", "_").strip()
+        if not root or root in seen:
+            continue
+        seen.add(root)
+        roots.append(root)
+
+    return roots
+
+
+def _reset_imported_package_roots(package_roots: list[str]) -> None:
+    """Drop cached modules for package roots that were just installed."""
+    if not package_roots:
+        importlib.invalidate_caches()
+        return
+
+    for module_name in list(sys.modules):
+        for root in package_roots:
+            if module_name == root or module_name.startswith(f"{root}."):
+                sys.modules.pop(module_name, None)
+                break
+
+    importlib.invalidate_caches()
+
+
+def clear_package_roots(package_names: list[str]) -> None:
+    """Remove installed package roots and matching dist-info from managed packages."""
+    import shutil
+
+    packages_dir = get_managed_packages_dir()
+    if not packages_dir.exists():
+        return
+
+    normalized = {name.replace("-", "_").lower() for name in package_names}
+    for child in packages_dir.iterdir():
+        child_name = child.name.lower()
+        if child_name.endswith((".dist-info", ".data")):
+            base_name = child_name.split("-", 1)[0].replace("-", "_")
+        else:
+            base_name = child.stem.replace("-", "_")
+
+        if base_name not in normalized:
+            continue
+
+        if child.is_dir():
+            shutil.rmtree(child, ignore_errors=True)
+        else:
+            child.unlink(missing_ok=True)
+
+    _reset_imported_package_roots(sorted(normalized))
 
 
 def _verify_sha256(file_path: Path, expected_hash: str) -> bool:
@@ -918,6 +992,8 @@ def install_packages(
     if not normalized_specifiers:
         return True
 
+    _ensure_managed_packages_importable()
+
     # Ensure standalone Python is available
     python_bin = ensure_python(_scaled_progress_callback(progress_callback, 0.0, 0.2))
 
@@ -983,6 +1059,7 @@ def install_packages(
 
     # Update ABI compatibility marker after successful install
     _write_compat_marker()
+    _reset_imported_package_roots(_specifier_import_roots(normalized_specifiers))
 
     _emit_progress(progress_callback, 1.0, f"Installed {install_label}")
 
@@ -1003,6 +1080,7 @@ def is_package_available(module_name: str) -> bool:
         True if the module can be imported.
     """
     import importlib.util
+    _ensure_managed_packages_importable()
     return importlib.util.find_spec(module_name) is not None
 
 
@@ -1094,6 +1172,7 @@ def clear_packages(progress_callback: ProgressCallback = None) -> None:
 
     shutil.rmtree(packages_dir)
     packages_dir.mkdir(parents=True, exist_ok=True)
+    importlib.invalidate_caches()
 
     if progress_callback:
         progress_callback(1.0, "Managed packages removed")

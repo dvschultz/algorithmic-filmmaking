@@ -3,18 +3,18 @@
   "python_build_tag": "20250317",
   "packages": {
     "torch": {
-      "pip_specifier": "torch>=2.0",
+      "pip_specifier": "torch>=2.4,<2.7",
       "size_mb": 350,
       "features": ["shot_classify", "image_classify", "describe_local_cpu", "object_detect"]
     },
     "transformers": {
-      "pip_specifier": "transformers>=4.36",
+      "pip_specifier": "transformers>=4.50,<5",
       "size_mb": 100,
       "depends_on": ["torch"],
       "features": ["shot_classify", "describe_local_cpu"]
     },
     "torchvision": {
-      "pip_specifier": "torchvision>=0.15.0",
+      "pip_specifier": "torchvision>=0.19,<0.22",
       "size_mb": 50,
       "depends_on": ["torch"],
       "features": ["shot_classify", "image_classify"]
@@ -23,6 +23,16 @@
       "pip_specifier": "einops>=0.7.0",
       "size_mb": 1,
       "depends_on": ["torch"],
+      "features": ["shot_classify"]
+    },
+    "sentencepiece": {
+      "pip_specifier": "sentencepiece>=0.2.0",
+      "size_mb": 8,
+      "features": ["shot_classify"]
+    },
+    "protobuf": {
+      "pip_specifier": "protobuf>=4.25,<6",
+      "size_mb": 8,
       "features": ["shot_classify"]
     },
     "ultralytics": {

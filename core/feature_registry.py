@@ -103,7 +103,7 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
     ),
     "shot_classify": FeatureDeps(
         binaries=[],
-        packages=["torch", "torchvision", "transformers", "einops"],
+        packages=["torch", "torchvision", "transformers", "einops", "sentencepiece", "protobuf"],
         size_estimate_mb=450,
     ),
     "image_classify": FeatureDeps(
@@ -172,6 +172,21 @@ def check_feature(name: str) -> tuple[bool, list[str]]:
     return len(missing) == 0, missing
 
 
+def check_feature_ready(name: str) -> tuple[bool, list[str]]:
+    """Check whether a feature is both installed and runtime-usable."""
+    available, missing = check_feature(name)
+    if not available:
+        return available, missing
+
+    try:
+        _validate_feature_runtime(name)
+    except Exception as e:
+        reason = str(e).strip() or e.__class__.__name__
+        return False, [f"runtime:{reason}"]
+
+    return True, []
+
+
 def get_feature_size_estimate(name: str) -> int:
     """Get the estimated download size in MB for a feature's missing dependencies.
 
@@ -185,7 +200,7 @@ def get_feature_size_estimate(name: str) -> int:
     if deps is None:
         return 0
 
-    available, missing = check_feature(name)
+    available, missing = check_feature_ready(name)
     if available:
         return 0
 
@@ -221,6 +236,7 @@ def install_for_feature(
         ValueError: If feature name is unknown.
     """
     from core.dependency_manager import (
+        clear_package_roots,
         ensure_ffmpeg,
         ensure_ffprobe,
         ensure_deno,
@@ -232,6 +248,8 @@ def install_for_feature(
     deps = FEATURE_DEPS.get(name)
     if deps is None:
         raise ValueError(f"Unknown feature: {name}")
+
+    runtime_repair = False
 
     available, missing = check_feature(name)
     if available:
@@ -245,6 +263,7 @@ def install_for_feature(
                 name,
                 e,
             )
+            runtime_repair = True
             missing = [f"package:{package_name}" for package_name in deps.packages]
 
     success = True
@@ -286,6 +305,8 @@ def install_for_feature(
         start = len(binary_steps) / total_steps
         scaled_callback = _scaled_progress_callback(progress_callback, start, 1.0)
         specifiers = [get_pip_specifier(dep_name) for dep_name in package_names]
+        if runtime_repair:
+            clear_package_roots(package_names)
         if not install_packages(specifiers, scaled_callback):
             success = False
 

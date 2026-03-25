@@ -90,6 +90,7 @@ def ensure_app_dirs() -> None:
     for dir_path in [
         get_app_support_dir(),
         get_managed_bin_dir(),
+        get_managed_packages_dir(),
         get_log_dir(),
     ]:
         dir_path.mkdir(parents=True, exist_ok=True)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import sys
 from pathlib import Path
 
 from core.dependency_manager import install_package, install_packages
@@ -61,8 +62,8 @@ def test_install_packages_batches_specifiers_into_one_pip_run(monkeypatch):
         return _FakePopen(
             [
                 "Collecting torch>=2.0",
-                "Collecting torchvision>=0.15.0",
-                "Collecting transformers>=4.36",
+                "Collecting torchvision>=0.19,<0.22",
+                "Collecting transformers>=4.50,<5",
                 "Successfully installed torch-2.6.0 torchvision-0.21.0 transformers-4.52.0",
             ]
         )
@@ -72,10 +73,44 @@ def test_install_packages_batches_specifiers_into_one_pip_run(monkeypatch):
     monkeypatch.setattr("core.dependency_manager.subprocess.Popen", _fake_popen)
     monkeypatch.setattr("core.dependency_manager._write_compat_marker", lambda: None)
 
-    assert install_packages(["torch>=2.0", "torchvision>=0.15.0", "transformers>=4.36"]) is True
+    assert install_packages(["torch>=2.0", "torchvision>=0.19,<0.22", "transformers>=4.50,<5"]) is True
     assert captured_cmd.count("--target") == 1
     assert "--upgrade" in captured_cmd
-    assert captured_cmd[-3:] == ["torch>=2.0", "torchvision>=0.15.0", "transformers>=4.36"]
+    assert captured_cmd[-3:] == ["torch>=2.0", "torchvision>=0.19,<0.22", "transformers>=4.50,<5"]
+
+
+def test_install_packages_refreshes_sys_path_and_clears_stale_modules(monkeypatch, tmp_path):
+    """Newly installed managed packages should be importable in the current app session."""
+    packages_dir = tmp_path / "packages"
+    package_path = str(packages_dir)
+    original_path = list(sys.path)
+    transformers_module = object()
+    transformers_auto_module = object()
+
+    if package_path in sys.path:
+        sys.path.remove(package_path)
+
+    monkeypatch.setattr("core.dependency_manager.get_managed_packages_dir", lambda: packages_dir)
+    monkeypatch.setattr("core.dependency_manager.ensure_python", lambda cb=None: Path("/tmp/python"))
+    monkeypatch.setattr("core.dependency_manager.get_subprocess_kwargs", lambda: {})
+    monkeypatch.setattr(
+        "core.dependency_manager.subprocess.Popen",
+        lambda cmd, **kwargs: _FakePopen(["Successfully installed transformers-4.52.0"]),
+    )
+    monkeypatch.setattr("core.dependency_manager._write_compat_marker", lambda: None)
+
+    sys.modules["transformers"] = transformers_module
+    sys.modules["transformers.models.auto.processing_auto"] = transformers_auto_module
+
+    try:
+        assert install_packages(["transformers>=4.50,<5"]) is True
+        assert package_path in sys.path
+        assert "transformers" not in sys.modules
+        assert "transformers.models.auto.processing_auto" not in sys.modules
+    finally:
+        sys.path[:] = original_path
+        sys.modules.pop("transformers", None)
+        sys.modules.pop("transformers.models.auto.processing_auto", None)
 
 
 def test_install_for_feature_batches_missing_packages_and_validates_runtime(monkeypatch):
@@ -137,4 +172,6 @@ def test_install_for_feature_reinstalls_broken_runtime_even_when_packages_exist(
         "torchvision>=1.0",
         "transformers>=1.0",
         "einops>=1.0",
+        "sentencepiece>=1.0",
+        "protobuf>=1.0",
     ]]

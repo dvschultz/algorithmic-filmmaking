@@ -145,9 +145,12 @@ class _DownloadWorker(QThread):
 
     def run(self):
         try:
-            self._install_func(self._progress_adapter)
+            result = self._install_func(self._progress_adapter)
             if not self._cancelled:
-                self.finished_ok.emit()
+                if result is False:
+                    self.failed.emit("Install completed but dependency verification failed.")
+                else:
+                    self.finished_ok.emit()
         except Exception as e:
             if not self._cancelled:
                 self.failed.emit(str(e))
@@ -271,9 +274,9 @@ def prompt_feature_download(
     Returns:
         True if all deps are now available, False if user cancelled or download failed.
     """
-    from core.feature_registry import check_feature, get_feature_size_estimate, install_for_feature
+    from core.feature_registry import check_feature_ready, get_feature_size_estimate, install_for_feature
 
-    available, missing = check_feature(feature_name)
+    available, missing = check_feature_ready(feature_name)
     if available:
         return True
 
@@ -301,7 +304,9 @@ def prompt_feature_download(
     )
 
     result = dialog.exec()
+    if result != QDialog.Accepted:
+        return False
 
-    # Re-check availability
-    available, _ = check_feature(feature_name)
+    # Re-check full runtime readiness, not just package presence.
+    available, _ = check_feature_ready(feature_name)
     return available

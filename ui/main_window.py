@@ -661,10 +661,10 @@ class MainWindow(QMainWindow):
         if not feature_candidates:
             return True
 
-        from core.feature_registry import check_feature
+        from core.feature_registry import check_feature_ready
 
         for feature_name in feature_candidates:
-            available, _ = check_feature(feature_name)
+            available, _ = check_feature_ready(feature_name)
             if available:
                 if prompt_cache is not None:
                     prompt_cache[feature_name] = True
