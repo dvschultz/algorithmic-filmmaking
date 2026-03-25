@@ -195,6 +195,8 @@ def test_core_pyinstaller_hiddenimports_include_on_demand_stdlib_dependencies():
     hiddenimports = get_core_pyinstaller_hiddenimports()
     assert "pickletools" in hiddenimports
     assert "filecmp" in hiddenimports
+    assert "modulefinder" in hiddenimports
+    assert "cProfile" in hiddenimports
 
 
 def test_resolve_update_public_ed_key_prefers_explicit_value():

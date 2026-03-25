@@ -51,6 +51,11 @@ SUPPLEMENTAL_HIDDENIMPORTS = (
     # transformers.dynamic_module_utils imports this stdlib module at runtime.
     # The frozen base app still needs it even when transformers is installed on demand.
     "filecmp",
+    # transformers imports these stdlib modules indirectly in generation and
+    # dynamic-module paths. The frozen base app still needs them even when
+    # transformers is installed on demand later.
+    "modulefinder",
+    "cProfile",
 )
 PYINSTALLER_HANDLED_REQUIREMENTS = {
     "pyside6",
