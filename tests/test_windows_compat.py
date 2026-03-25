@@ -341,6 +341,40 @@ class TestEnsurePythonWindows:
         assert python_bin.is_file()
         assert str(python_bin) != mock_sys.executable
 
+    def test_invalid_cached_managed_python_is_replaced(self, tmp_path):
+        """Broken cached helpers should be replaced instead of being reused forever."""
+        from core.dependency_manager import ensure_python
+
+        managed_python_dir = tmp_path / "managed-python"
+        managed_python_dir.mkdir(parents=True)
+        cached_python = managed_python_dir / "python.exe"
+        cached_python.write_text("not-python", encoding="utf-8")
+        tarball_bytes = _make_windows_python_tarball()
+
+        def _fake_download(_url, dest, _progress=None, _label=""):
+            dest.write_bytes(tarball_bytes)
+            return dest
+
+        run_results = iter([
+            SimpleNamespace(returncode=0, stdout="", stderr=""),
+            SimpleNamespace(returncode=0, stdout="pip 24.0", stderr=""),
+        ])
+
+        with patch("core.dependency_manager.sys") as mock_sys, \
+             patch("core.dependency_manager.platform") as mock_platform, \
+             patch("core.dependency_manager.get_managed_python_dir", return_value=managed_python_dir), \
+             patch("core.dependency_manager._download_file", side_effect=_fake_download), \
+             patch("core.dependency_manager.subprocess.run", side_effect=lambda *args, **kwargs: next(run_results)):
+            mock_sys.platform = "win32"
+            mock_sys.frozen = True
+            mock_sys.executable = r"C:\Program Files\Scene Ripper\Scene Ripper.exe"
+            mock_platform.machine.return_value = "AMD64"
+
+            python_bin = ensure_python()
+
+        assert python_bin == managed_python_dir / "python.exe"
+        assert python_bin.read_bytes() == b"FAKEPYTHON"
+
 
 class TestExternalSubprocessWindows:
     """Test frozen Windows subprocess sanitization for external Python helpers."""

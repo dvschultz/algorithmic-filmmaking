@@ -48,6 +48,9 @@ SUPPLEMENTAL_HIDDENIMPORTS = (
     # torch.package imports this stdlib module at runtime. The frozen base app
     # still needs it even when torch itself is installed on demand later.
     "pickletools",
+    # transformers.dynamic_module_utils imports this stdlib module at runtime.
+    # The frozen base app still needs it even when transformers is installed on demand.
+    "filecmp",
 )
 PYINSTALLER_HANDLED_REQUIREMENTS = {
     "pyside6",

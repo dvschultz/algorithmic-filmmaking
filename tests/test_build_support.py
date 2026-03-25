@@ -194,6 +194,7 @@ def test_core_pyinstaller_hiddenimports_include_on_demand_stdlib_dependencies():
     """Frozen builds should carry stdlib modules needed by on-demand packages."""
     hiddenimports = get_core_pyinstaller_hiddenimports()
     assert "pickletools" in hiddenimports
+    assert "filecmp" in hiddenimports
 
 
 def test_resolve_update_public_ed_key_prefers_explicit_value():

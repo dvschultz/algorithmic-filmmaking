@@ -20,6 +20,7 @@ import logging
 import os
 import platform
 import re
+import shutil
 import ssl
 import stat
 import subprocess
@@ -807,6 +808,33 @@ def update_deno(progress_callback: ProgressCallback = None) -> Path:
     return ensure_deno(progress_callback)
 
 
+def _managed_python_looks_usable(python_bin: Path) -> bool:
+    """Return True when an existing managed Python behaves like Python."""
+    try:
+        result = _run_external_subprocess(
+            [str(python_bin), "--version"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            **get_subprocess_kwargs(),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        logger.warning("Existing managed Python is not runnable: %s", python_bin)
+        return False
+
+    output = " ".join(part for part in (result.stdout, result.stderr) if part).strip()
+    if result.returncode != 0 or not output.startswith("Python "):
+        logger.warning(
+            "Existing managed Python failed validation: %s (returncode=%s, output=%r)",
+            python_bin,
+            result.returncode,
+            output,
+        )
+        return False
+
+    return True
+
+
 def ensure_python(progress_callback: ProgressCallback = None) -> Path:
     """Ensure a standalone Python interpreter is available for pip operations.
 
@@ -827,7 +855,11 @@ def ensure_python(progress_callback: ProgressCallback = None) -> Path:
         python_bin = python_dir / "bin" / "python3"
 
     if python_bin.is_file() and (sys.platform == "win32" or os.access(python_bin, os.X_OK)):
-        return python_bin
+        if _managed_python_looks_usable(python_bin):
+            return python_bin
+
+        logger.warning("Removing invalid managed Python runtime at %s", python_dir)
+        shutil.rmtree(python_dir, ignore_errors=True)
 
     python_url = _get_python_url()
 

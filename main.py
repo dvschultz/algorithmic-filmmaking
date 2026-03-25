@@ -17,6 +17,7 @@ from core.runtime_smoke import (
     RUNTIME_SMOKE_TARGET_ENV,
     run_runtime_smoke_target,
 )
+from core.single_instance import acquire_single_instance_lock, release_single_instance_lock
 
 
 def _setup_frozen_environment():
@@ -115,6 +116,7 @@ def _show_mpv_missing_dialog(app: QApplication):
 
 def main():
     logger.info("=== MAIN() CALLED ===")
+    logger.info("PID: %s", os.getpid())
     logger.info(f"sys.argv: {sys.argv}")
     logger.info(f"Frozen: {is_frozen()}")
 
@@ -124,6 +126,10 @@ def main():
     if runtime_smoke_target:
         completed_target = run_runtime_smoke_target(runtime_smoke_target)
         logger.info("Runtime smoke test '%s' completed successfully", completed_target)
+        return 0
+
+    if is_frozen() and not acquire_single_instance_lock():
+        logger.info("Duplicate frozen app launch detected for pid=%s; exiting early", os.getpid())
         return 0
 
     # Enable GL context sharing so QOpenGLWidget gets a shared context on macOS.
@@ -150,6 +156,7 @@ def main():
         )
 
     app = QApplication(sys.argv)
+    app.aboutToQuit.connect(release_single_instance_lock)
     app.setApplicationName("Scene Ripper")
     app.setApplicationVersion(get_app_version())
     app.setOrganizationName("Algorithmic Filmmaking")
