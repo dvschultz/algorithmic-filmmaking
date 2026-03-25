@@ -146,21 +146,40 @@ def ensure_local_description_runtime_available():
 
     try:
         from mlx_vlm import generate, load  # noqa: F401
+        from tokenizers import AddedToken as _TokenizerAddedToken  # noqa: F401
+        from transformers import AddedToken as _TransformersAddedToken  # noqa: F401
 
         return load, generate
     except Exception as e:
-        raise RuntimeError(f"local description runtime is incomplete: {e}") from e
+        message = str(e).strip() or e.__class__.__name__
+        if "AddedToken" in message:
+            message = (
+                "local description runtime is incomplete: the transformers/tokenizers install is broken. "
+                "Reinstall local description dependencies."
+            )
+        else:
+            message = f"local description runtime is incomplete: {message}"
+        raise RuntimeError(message) from e
 
 
 def ensure_local_cpu_description_runtime_available():
     """Validate that the local CPU VLM runtime imports cleanly."""
     try:
         import torch  # noqa: F401
+        from tokenizers import AddedToken as _TokenizerAddedToken  # noqa: F401
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         return AutoModelForCausalLM, AutoTokenizer
     except Exception as e:
-        raise RuntimeError(f"local CPU description runtime is incomplete: {e}") from e
+        message = str(e).strip() or e.__class__.__name__
+        if "AddedToken" in message:
+            message = (
+                "local CPU description runtime is incomplete: the transformers/tokenizers install is broken. "
+                "Reinstall local description dependencies."
+            )
+        else:
+            message = f"local CPU description runtime is incomplete: {message}"
+        raise RuntimeError(message) from e
 
 
 def is_video_capable_model(model: str) -> bool:

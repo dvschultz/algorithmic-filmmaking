@@ -147,12 +147,13 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
         binaries=[],
         packages=["mlx_vlm"],
         size_estimate_mb=200,
+        repair_packages=["mlx_vlm", "transformers", "tokenizers", "sentencepiece", "protobuf"],
     ),
     "describe_local_cpu": FeatureDeps(
         binaries=[],
         packages=["torch", "transformers"],
         size_estimate_mb=450,
-        repair_packages=["torch", "transformers"],
+        repair_packages=["torch", "transformers", "tokenizers"],
     ),
     "describe_cloud": FeatureDeps(
         binaries=[],
@@ -163,7 +164,7 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
         binaries=[],
         packages=["torch", "torchvision", "transformers", "einops", "sentencepiece", "protobuf"],
         size_estimate_mb=450,
-        repair_packages=["torch", "torchvision", "transformers", "einops", "sentencepiece", "protobuf"],
+        repair_packages=["torch", "torchvision", "transformers", "tokenizers", "einops", "sentencepiece", "protobuf"],
     ),
     "image_classify": FeatureDeps(
         binaries=[],

@@ -10,8 +10,13 @@
     "transformers": {
       "pip_specifier": "transformers>=4.50,<5",
       "size_mb": 100,
-      "depends_on": ["torch"],
+      "depends_on": ["torch", "tokenizers"],
       "features": ["shot_classify", "describe_local_cpu"]
+    },
+    "tokenizers": {
+      "pip_specifier": "tokenizers>=0.21,<0.22",
+      "size_mb": 20,
+      "features": ["shot_classify", "describe_local", "describe_local_cpu"]
     },
     "torchvision": {
       "pip_specifier": "torchvision>=0.19,<0.22",
@@ -53,6 +58,7 @@
     },
     "mlx_vlm": {
       "pip_specifier": "mlx-vlm>=0.1.0",
+      "depends_on": ["transformers", "sentencepiece", "protobuf"],
       "size_mb": 200,
       "features": ["describe_local"]
     },

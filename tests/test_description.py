@@ -1,5 +1,6 @@
 """Tests for video description analysis."""
 
+import sys
 import unittest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
@@ -176,6 +177,37 @@ class TestDescriptionAnalysis(unittest.TestCase):
 
         mock_describe_frame_cloud.assert_not_called()
         self.assertFalse(temp_video.exists())
+
+    @patch("core.analysis.description.platform.machine", return_value="arm64")
+    @patch("core.analysis.description.platform.system", return_value="Darwin")
+    def test_local_description_runtime_surfaces_addedtoken_as_reinstall_hint(
+        self,
+        _mock_system,
+        _mock_machine,
+    ):
+        """Broken tokenizer stacks should produce an actionable reinstall message."""
+        from types import ModuleType
+
+        from core.analysis.description import ensure_local_description_runtime_available
+
+        fake_mlx_vlm = ModuleType("mlx_vlm")
+        fake_mlx_vlm.load = object()
+        fake_mlx_vlm.generate = object()
+        fake_tokenizers = ModuleType("tokenizers")
+        fake_tokenizers.AddedToken = object()
+        fake_transformers = ModuleType("transformers")
+
+        with patch.dict(
+            sys.modules,
+            {
+                "mlx_vlm": fake_mlx_vlm,
+                "tokenizers": fake_tokenizers,
+                "transformers": fake_transformers,
+            },
+            clear=False,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "transformers/tokenizers install is broken"):
+                ensure_local_description_runtime_available()
 
 class TestFilterClipsSearchDescription(unittest.TestCase):
     """Test filter_clips with search_description parameter."""

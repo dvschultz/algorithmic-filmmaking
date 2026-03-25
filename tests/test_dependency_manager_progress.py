@@ -179,7 +179,7 @@ def test_install_for_feature_batches_missing_packages_and_validates_runtime(monk
     )
 
     assert install_for_feature("describe_local_cpu", _on_progress) is True
-    assert package_batches == [["torch>=1.0", "transformers>=1.0"]]
+    assert package_batches == [["torch>=1.0", "transformers>=1.0", "tokenizers>=1.0"]]
     assert validated == ["describe_local_cpu"]
     assert [round(progress, 2) for progress, _ in progress_calls] == [0.0, 0.5, 1.0]
 
@@ -209,6 +209,7 @@ def test_install_for_feature_reinstalls_broken_runtime_even_when_packages_exist(
         "torch>=1.0",
         "torchvision>=1.0",
         "transformers>=1.0",
+        "tokenizers>=1.0",
         "einops>=1.0",
         "sentencepiece>=1.0",
         "protobuf>=1.0",
@@ -221,17 +222,17 @@ def test_install_for_feature_reinstalls_broken_runtime_even_when_packages_exist(
         (
             "describe_local",
             ["package:mlx_vlm"],
-            ["mlx_vlm"],
+            ["mlx_vlm", "transformers", "tokenizers", "sentencepiece", "protobuf"],
         ),
         (
             "describe_local_cpu",
             ["package:transformers"],
-            ["torch", "transformers"],
+            ["torch", "transformers", "tokenizers"],
         ),
         (
             "shot_classify",
             ["package:sentencepiece", "package:protobuf"],
-            ["torch", "torchvision", "transformers", "einops", "sentencepiece", "protobuf"],
+            ["torch", "torchvision", "transformers", "tokenizers", "einops", "sentencepiece", "protobuf"],
         ),
         (
             "image_classify",
