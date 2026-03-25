@@ -279,6 +279,40 @@ def _specifier_import_roots(specifiers: list[str]) -> list[str]:
     return roots
 
 
+def _path_is_within_managed_packages(path_value: str | os.PathLike[str], packages_dir: Path) -> bool:
+    """Return True when a module path resolves inside the managed packages dir."""
+    try:
+        resolved_path = Path(path_value).resolve(strict=False)
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return False
+
+    return resolved_path.is_relative_to(packages_dir)
+
+
+def _module_loaded_from_managed_packages(module: object, packages_dir: Path) -> bool:
+    """Return True when a module clearly originated from the managed packages dir."""
+    module_file = getattr(module, "__file__", None)
+    if module_file and _path_is_within_managed_packages(module_file, packages_dir):
+        return True
+
+    module_spec = getattr(module, "__spec__", None)
+    spec_origin = getattr(module_spec, "origin", None)
+    if (
+        spec_origin
+        and spec_origin not in {"built-in", "frozen"}
+        and _path_is_within_managed_packages(spec_origin, packages_dir)
+    ):
+        return True
+
+    module_path = getattr(module, "__path__", None)
+    if module_path:
+        for path_entry in list(module_path):
+            if _path_is_within_managed_packages(path_entry, packages_dir):
+                return True
+
+    return False
+
+
 def _reset_imported_package_roots(package_roots: list[str]) -> None:
     """Drop cached modules for package roots that were just installed."""
     if not package_roots:
@@ -293,14 +327,8 @@ def _reset_imported_package_roots(package_roots: list[str]) -> None:
 
     for module_name in list(sys.modules):
         module = sys.modules.get(module_name)
-        module_file = getattr(module, "__file__", None) if module is not None else None
-        if module_file:
-            try:
-                resolved_module_file = Path(module_file).resolve(strict=False)
-            except OSError:
-                continue
-            if not resolved_module_file.is_relative_to(resolved_packages_dir):
-                continue
+        if module is None or not _module_loaded_from_managed_packages(module, resolved_packages_dir):
+            continue
 
         for root in package_roots:
             if module_name == root or module_name.startswith(f"{root}."):

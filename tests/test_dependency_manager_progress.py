@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -86,8 +87,17 @@ def test_install_packages_refreshes_sys_path_and_clears_stale_modules(monkeypatc
     packages_dir = tmp_path / "packages"
     package_path = str(packages_dir)
     original_path = list(sys.path)
-    transformers_module = object()
-    transformers_auto_module = object()
+    transformers_root = packages_dir / "transformers"
+    transformers_root.mkdir(parents=True)
+    transformers_init = transformers_root / "__init__.py"
+    transformers_init.write_text("# managed transformers")
+    processing_auto = transformers_root / "processing_auto.py"
+    processing_auto.write_text("# managed auto")
+
+    transformers_module = ModuleType("transformers")
+    transformers_module.__file__ = str(transformers_init)
+    transformers_auto_module = ModuleType("transformers.models.auto.processing_auto")
+    transformers_auto_module.__file__ = str(processing_auto)
 
     if package_path in sys.path:
         sys.path.remove(package_path)
@@ -148,6 +158,29 @@ def test_reset_imported_package_roots_only_evicts_managed_package_modules(monkey
         assert sys.modules["torch"] is site_module
     finally:
         sys.modules.pop("transformers", None)
+        sys.modules.pop("torch", None)
+
+
+def test_reset_imported_package_roots_keeps_modules_without_managed_origin(monkeypatch, tmp_path):
+    """Modules without a managed-packages path should not be evicted by name alone."""
+    from types import ModuleType
+
+    packages_dir = tmp_path / "packages"
+    packages_dir.mkdir(parents=True)
+
+    global_torch = ModuleType("torch")
+    global_torch.__spec__ = None
+
+    monkeypatch.setattr("core.dependency_manager.get_managed_packages_dir", lambda: packages_dir)
+    sys.modules["torch"] = global_torch
+
+    try:
+        from core.dependency_manager import _reset_imported_package_roots
+
+        _reset_imported_package_roots(["torch"])
+
+        assert sys.modules["torch"] is global_torch
+    finally:
         sys.modules.pop("torch", None)
 
 
