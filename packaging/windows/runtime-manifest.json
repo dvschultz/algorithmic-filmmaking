@@ -7,7 +7,7 @@
   "ffmpeg": {
     "asset_name": "ffmpeg-master-latest-win64-gpl.zip",
     "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip",
-    "sha256": "b4b86a5f529422fa201f5df7bf2b8673b842a1c8ace429e066883df2d3b5d842"
+    "sha256": "f60b5e2fb30d5cf4efdbee97f7c43a83df65fd1dfa94d8fafe8f70ce10c9eeaf"
   },
   "winsparkle": {
     "asset_name": "WinSparkle-0.9.2.zip",
