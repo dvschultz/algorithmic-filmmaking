@@ -306,7 +306,11 @@ def _module_loaded_from_managed_packages(module: object, packages_dir: Path) -> 
 
     module_path = getattr(module, "__path__", None)
     if module_path:
-        for path_entry in list(module_path):
+        try:
+            path_entries = list(module_path)
+        except TypeError:
+            path_entries = []
+        for path_entry in path_entries:
             if _path_is_within_managed_packages(path_entry, packages_dir):
                 return True
 

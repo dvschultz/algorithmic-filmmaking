@@ -13,6 +13,14 @@ from core.dependency_manager import install_package, install_packages
 from core.feature_registry import install_for_feature, requires_full_package_repair
 
 
+def _restore_sys_module(name: str, original: object | None) -> None:
+    """Restore a sys.modules entry without disturbing preloaded global modules."""
+    if original is None:
+        sys.modules.pop(name, None)
+    else:
+        sys.modules[name] = original
+
+
 class _FakePopen:
     """Minimal subprocess.Popen stand-in for pip progress tests."""
 
@@ -114,6 +122,9 @@ def test_install_packages_refreshes_sys_path_and_clears_stale_modules(monkeypatc
     sys.modules["transformers"] = transformers_module
     sys.modules["transformers.models.auto.processing_auto"] = transformers_auto_module
 
+    original_transformers = sys.modules.get("transformers")
+    original_processing_auto = sys.modules.get("transformers.models.auto.processing_auto")
+
     try:
         assert install_packages(["transformers>=4.50,<5"]) is True
         assert package_path in sys.path
@@ -121,8 +132,8 @@ def test_install_packages_refreshes_sys_path_and_clears_stale_modules(monkeypatc
         assert "transformers.models.auto.processing_auto" not in sys.modules
     finally:
         sys.path[:] = original_path
-        sys.modules.pop("transformers", None)
-        sys.modules.pop("transformers.models.auto.processing_auto", None)
+        _restore_sys_module("transformers", original_transformers)
+        _restore_sys_module("transformers.models.auto.processing_auto", original_processing_auto)
 
 
 def test_reset_imported_package_roots_only_evicts_managed_package_modules(monkeypatch, tmp_path):
@@ -146,6 +157,8 @@ def test_reset_imported_package_roots_only_evicts_managed_package_modules(monkey
     site_module.__file__ = str(site_file)
 
     monkeypatch.setattr("core.dependency_manager.get_managed_packages_dir", lambda: packages_dir)
+    original_transformers = sys.modules.get("transformers")
+    original_torch = sys.modules.get("torch")
     sys.modules["transformers"] = managed_module
     sys.modules["torch"] = site_module
 
@@ -157,8 +170,8 @@ def test_reset_imported_package_roots_only_evicts_managed_package_modules(monkey
         assert "transformers" not in sys.modules
         assert sys.modules["torch"] is site_module
     finally:
-        sys.modules.pop("transformers", None)
-        sys.modules.pop("torch", None)
+        _restore_sys_module("transformers", original_transformers)
+        _restore_sys_module("torch", original_torch)
 
 
 def test_reset_imported_package_roots_keeps_modules_without_managed_origin(monkeypatch, tmp_path):
@@ -172,6 +185,7 @@ def test_reset_imported_package_roots_keeps_modules_without_managed_origin(monke
     global_torch.__spec__ = None
 
     monkeypatch.setattr("core.dependency_manager.get_managed_packages_dir", lambda: packages_dir)
+    original_torch = sys.modules.get("torch")
     sys.modules["torch"] = global_torch
 
     try:
@@ -181,7 +195,7 @@ def test_reset_imported_package_roots_keeps_modules_without_managed_origin(monke
 
         assert sys.modules["torch"] is global_torch
     finally:
-        sys.modules.pop("torch", None)
+        _restore_sys_module("torch", original_torch)
 
 
 def test_install_for_feature_batches_missing_packages_and_validates_runtime(monkeypatch):
