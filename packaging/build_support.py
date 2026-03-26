@@ -56,6 +56,8 @@ SUPPLEMENTAL_HIDDENIMPORTS = (
     # transformers is installed on demand later.
     "modulefinder",
     "cProfile",
+    "html",
+    "html.parser",
 )
 PYINSTALLER_HANDLED_REQUIREMENTS = {
     "pyside6",

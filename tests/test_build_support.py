@@ -197,6 +197,8 @@ def test_core_pyinstaller_hiddenimports_include_on_demand_stdlib_dependencies():
     assert "filecmp" in hiddenimports
     assert "modulefinder" in hiddenimports
     assert "cProfile" in hiddenimports
+    assert "html" in hiddenimports
+    assert "html.parser" in hiddenimports
 
 
 def test_resolve_update_public_ed_key_prefers_explicit_value():
