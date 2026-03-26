@@ -43,6 +43,24 @@ class TestGetAppSupportDirWindows:
             result = core.paths.get_app_support_dir()
             assert "Scene Ripper" in str(result)
 
+    def test_managed_package_search_paths_prioritize_overlays(self, tmp_path):
+        """Managed package overlays should take precedence over the base packages dir."""
+        import core.paths
+
+        overlays_dir = tmp_path / "Scene Ripper" / "packages-overlays"
+        newest = overlays_dir / "overlay-200"
+        oldest = overlays_dir / "overlay-100"
+        newest.mkdir(parents=True)
+        oldest.mkdir(parents=True)
+        base_packages = tmp_path / "Scene Ripper" / "packages"
+        base_packages.mkdir(parents=True)
+
+        with patch.object(sys, "platform", "win32"), \
+             patch.dict(os.environ, {"LOCALAPPDATA": str(tmp_path)}):
+            paths = core.paths.get_managed_package_search_paths()
+
+        assert paths == [newest, oldest, base_packages]
+
 
 # ---------------------------------------------------------------------------
 # core/binary_resolver.py

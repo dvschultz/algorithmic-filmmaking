@@ -58,6 +58,28 @@ def get_managed_packages_dir() -> Path:
     return get_app_support_dir() / "packages"
 
 
+def get_managed_package_overlays_dir() -> Path:
+    """Return the directory for versioned package overlay installs."""
+    return get_app_support_dir() / "packages-overlays"
+
+
+def get_managed_package_search_paths() -> list[Path]:
+    """Return managed package search paths in import-precedence order."""
+    search_paths: list[Path] = []
+
+    overlays_dir = get_managed_package_overlays_dir()
+    if overlays_dir.exists():
+        overlay_dirs = sorted(
+            (path for path in overlays_dir.iterdir() if path.is_dir()),
+            key=lambda path: path.name,
+            reverse=True,
+        )
+        search_paths.extend(overlay_dirs)
+
+    search_paths.append(get_managed_packages_dir())
+    return search_paths
+
+
 def get_managed_python_dir() -> Path:
     """Return the directory for the standalone Python used by pip."""
     return get_app_support_dir() / "python"
@@ -91,6 +113,7 @@ def ensure_app_dirs() -> None:
         get_app_support_dir(),
         get_managed_bin_dir(),
         get_managed_packages_dir(),
+        get_managed_package_overlays_dir(),
         get_log_dir(),
     ]:
         dir_path.mkdir(parents=True, exist_ok=True)

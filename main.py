@@ -12,7 +12,12 @@ import os
 import sys
 
 from core.app_version import get_app_version
-from core.paths import is_frozen, get_managed_packages_dir, get_log_dir, ensure_app_dirs
+from core.paths import (
+    is_frozen,
+    get_managed_package_search_paths,
+    get_log_dir,
+    ensure_app_dirs,
+)
 from core.runtime_smoke import (
     RUNTIME_SMOKE_TARGET_ENV,
     run_runtime_smoke_target,
@@ -30,13 +35,18 @@ def _setup_frozen_environment():
     ensure_app_dirs()
 
     # Add managed packages dir to sys.path so on-demand packages are importable
-    packages_dir = get_managed_packages_dir()
-    if packages_dir.exists():
+    for packages_dir in get_managed_package_search_paths():
+        if not packages_dir.exists():
+            continue
+
         packages_str = str(packages_dir)
-        if packages_str not in sys.path:
-            # Append (not insert) so bundled/stdlib packages take priority
-            # over on-demand packages, preventing module shadowing attacks
-            sys.path.append(packages_str)
+        if packages_str in sys.path:
+            continue
+
+        # Append (not insert) so bundled/stdlib packages take priority over
+        # on-demand packages, preventing module shadowing attacks.
+        # Overlay dirs are yielded before the base dir, so newer repairs win.
+        sys.path.append(packages_str)
 
     # Set up file logging for frozen app (users can't see console output)
     log_dir = get_log_dir()

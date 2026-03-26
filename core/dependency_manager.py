@@ -26,6 +26,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 from contextlib import contextmanager
 from pathlib import Path
@@ -37,7 +38,13 @@ except ImportError:  # pragma: no cover - optional during local development
     certifi = None
 
 from core.binary_resolver import get_subprocess_kwargs
-from core.paths import get_managed_bin_dir, get_managed_packages_dir, get_managed_python_dir
+from core.paths import (
+    get_managed_bin_dir,
+    get_managed_package_overlays_dir,
+    get_managed_package_search_paths,
+    get_managed_packages_dir,
+    get_managed_python_dir,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -248,14 +255,39 @@ def _pip_progress_from_output_line(line: str, specifier: str) -> tuple[float, st
     return None
 
 
+def _make_overlay_dir() -> Path:
+    """Create and return a fresh managed package overlay directory."""
+    overlays_dir = get_managed_package_overlays_dir()
+    overlays_dir.mkdir(parents=True, exist_ok=True)
+    overlay_dir = overlays_dir / f"overlay-{int(time.time() * 1000)}"
+    overlay_dir.mkdir(parents=True, exist_ok=False)
+    return overlay_dir
+
+
+def _should_retry_install_in_overlay(output: str) -> bool:
+    """Return True when pip failed because a managed Windows extension is locked."""
+    if sys.platform != "win32":
+        return False
+
+    normalized_output = output or ""
+    return (
+        "PermissionError: [WinError 5]" in normalized_output
+        and "Access is denied" in normalized_output
+        and str(get_managed_packages_dir()) in normalized_output
+    )
+
+
 def _ensure_managed_packages_importable() -> Path:
     """Ensure the managed packages directory exists and is importable now."""
     packages_dir = get_managed_packages_dir()
     packages_dir.mkdir(parents=True, exist_ok=True)
+    get_managed_package_overlays_dir().mkdir(parents=True, exist_ok=True)
 
-    packages_str = str(packages_dir)
-    if packages_str not in sys.path:
-        sys.path.append(packages_str)
+    for search_path in get_managed_package_search_paths():
+        search_path.mkdir(parents=True, exist_ok=True)
+        search_path_str = str(search_path)
+        if search_path_str not in sys.path:
+            sys.path.append(search_path_str)
 
     importlib.invalidate_caches()
     return packages_dir
@@ -1077,69 +1109,87 @@ def install_packages(
     # Ensure standalone Python is available
     python_bin = ensure_python(_scaled_progress_callback(progress_callback, 0.0, 0.2))
 
-    packages_dir = get_managed_packages_dir()
-    packages_dir.mkdir(parents=True, exist_ok=True)
-
     install_label = ", ".join(normalized_specifiers)
     _emit_progress(progress_callback, 0.2, f"Preparing install for {install_label}...")
+    base_packages_dir = get_managed_packages_dir()
+    base_packages_dir.mkdir(parents=True, exist_ok=True)
 
-    cmd = [
-        str(python_bin),
-        "-m", "pip", "install",
-        "--target", str(packages_dir),
-        "--upgrade",
-        "--no-user",
-        "--disable-pip-version-check",
-        "--progress-bar", "off",
-    ] + normalized_specifiers
+    def _run_pip_install(target_dir: Path) -> tuple[bool, str]:
+        cmd = [
+            str(python_bin),
+            "-m", "pip", "install",
+            "--target", str(target_dir),
+            "--upgrade",
+            "--no-user",
+            "--disable-pip-version-check",
+            "--progress-bar", "off",
+        ] + normalized_specifiers
 
-    logger.info(f"Installing package: {' '.join(cmd)}")
-    kwargs = get_subprocess_kwargs()
-    output_lines: list[str] = []
+        logger.info(f"Installing package: {' '.join(cmd)}")
+        kwargs = get_subprocess_kwargs()
+        output_lines: list[str] = []
 
-    try:
-        process = _popen_external_subprocess(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-            **kwargs,
-        )
-    except OSError as exc:
-        logger.error("pip install failed to start: %s", exc)
-        _emit_progress(progress_callback, 0.0, f"Failed to install {specifier}")
-        return False
+        try:
+            process = _popen_external_subprocess(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                **kwargs,
+            )
+        except OSError as exc:
+            logger.error("pip install failed to start: %s", exc)
+            return False, str(exc)
 
-    try:
-        assert process.stdout is not None
-        for raw_line in process.stdout:
-            line = raw_line.rstrip()
-            output_lines.append(line)
-            parsed = _pip_progress_from_output_line(line, install_label)
-            if parsed is not None:
-                progress, message = parsed
-                _emit_progress(progress_callback, 0.2 + (0.75 * progress), message)
-        returncode = process.wait(timeout=600)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait(timeout=30)
-        logger.error("pip install timed out for %s", install_label)
-        _emit_progress(progress_callback, 0.0, f"Failed to install {install_label}")
-        return False
-    finally:
-        if process.stdout is not None:
-            process.stdout.close()
+        try:
+            assert process.stdout is not None
+            for raw_line in process.stdout:
+                line = raw_line.rstrip()
+                output_lines.append(line)
+                parsed = _pip_progress_from_output_line(line, install_label)
+                if parsed is not None:
+                    progress, message = parsed
+                    _emit_progress(progress_callback, 0.2 + (0.75 * progress), message)
+            returncode = process.wait(timeout=600)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=30)
+            logger.error("pip install timed out for %s", install_label)
+            return False, "pip install timed out"
+        finally:
+            if process.stdout is not None:
+                process.stdout.close()
 
-    if returncode != 0:
         output = "\n".join(output_lines).strip()
-        logger.error(f"pip install failed: {output}")
+        if returncode != 0:
+            logger.error(f"pip install failed: {output}")
+            return False, output
+
+        return True, output
+
+    success, output = _run_pip_install(base_packages_dir)
+    if not success and _should_retry_install_in_overlay(output):
+        overlay_dir = _make_overlay_dir()
+        logger.warning(
+            "pip install hit a locked managed package; retrying into overlay dir %s",
+            overlay_dir,
+        )
+        _emit_progress(
+            progress_callback,
+            0.2,
+            f"Retrying install in a fresh package overlay for {install_label}...",
+        )
+        success, output = _run_pip_install(overlay_dir)
+
+    if not success:
         _emit_progress(progress_callback, 0.0, f"Failed to install {install_label}")
         return False
 
     # Update ABI compatibility marker after successful install
     _write_compat_marker()
     _reset_imported_package_roots(_specifier_import_roots(normalized_specifiers))
+    _ensure_managed_packages_importable()
 
     _emit_progress(progress_callback, 1.0, f"Installed {install_label}")
 

@@ -53,10 +53,17 @@ def test_install_package_reports_intermediate_pip_progress(monkeypatch):
             ]
         )
 
+    overlays_dir = Path("/tmp/packages-overlays")
     monkeypatch.setattr("core.dependency_manager.ensure_python", lambda cb=None: Path("/tmp/python"))
     monkeypatch.setattr("core.dependency_manager.get_subprocess_kwargs", lambda: {})
     monkeypatch.setattr("core.dependency_manager.subprocess.Popen", _fake_popen)
     monkeypatch.setattr("core.dependency_manager._write_compat_marker", lambda: None)
+    monkeypatch.setattr("core.dependency_manager.get_managed_packages_dir", lambda: Path("/tmp/packages"))
+    monkeypatch.setattr("core.dependency_manager.get_managed_package_overlays_dir", lambda: overlays_dir)
+    monkeypatch.setattr(
+        "core.dependency_manager.get_managed_package_search_paths",
+        lambda: [overlays_dir, Path("/tmp/packages")],
+    )
 
     assert install_package("torch>=2.0", _on_progress) is True
     assert progress_calls[0][0] == 0.2
@@ -79,15 +86,59 @@ def test_install_packages_batches_specifiers_into_one_pip_run(monkeypatch):
             ]
         )
 
+    overlays_dir = Path("/tmp/packages-overlays")
     monkeypatch.setattr("core.dependency_manager.ensure_python", lambda cb=None: Path("/tmp/python"))
     monkeypatch.setattr("core.dependency_manager.get_subprocess_kwargs", lambda: {})
     monkeypatch.setattr("core.dependency_manager.subprocess.Popen", _fake_popen)
     monkeypatch.setattr("core.dependency_manager._write_compat_marker", lambda: None)
+    monkeypatch.setattr("core.dependency_manager.get_managed_packages_dir", lambda: Path("/tmp/packages"))
+    monkeypatch.setattr("core.dependency_manager.get_managed_package_overlays_dir", lambda: overlays_dir)
+    monkeypatch.setattr(
+        "core.dependency_manager.get_managed_package_search_paths",
+        lambda: [overlays_dir, Path("/tmp/packages")],
+    )
 
     assert install_packages(["torch>=2.0", "torchvision>=0.19,<0.22", "transformers>=4.50,<5"]) is True
     assert captured_cmd.count("--target") == 1
     assert "--upgrade" in captured_cmd
     assert captured_cmd[-3:] == ["torch>=2.0", "torchvision>=0.19,<0.22", "transformers>=4.50,<5"]
+
+
+def test_install_packages_retries_locked_windows_extensions_in_overlay(monkeypatch, tmp_path):
+    """Windows should retry into a fresh overlay when pip cannot replace a loaded .pyd."""
+    packages_dir = tmp_path / "packages"
+    overlays_dir = tmp_path / "packages-overlays"
+    commands: list[list[str]] = []
+
+    def _fake_popen(cmd, **kwargs):
+        commands.append(cmd)
+        target_dir = cmd[cmd.index("--target") + 1]
+        if target_dir == str(packages_dir):
+            return _FakePopen(
+                [
+                    "Successfully installed transformers-4.55.4 safetensors-0.6.1",
+                    f"PermissionError: [WinError 5] Access is denied: '{packages_dir / 'safetensors' / '_safetensors_rust.pyd'}'",
+                ],
+                returncode=1,
+            )
+        return _FakePopen(["Successfully installed transformers-4.55.4 safetensors-0.6.1"])
+
+    monkeypatch.setattr("core.dependency_manager.ensure_python", lambda cb=None: Path("/tmp/python"))
+    monkeypatch.setattr("core.dependency_manager.get_subprocess_kwargs", lambda: {})
+    monkeypatch.setattr("core.dependency_manager.subprocess.Popen", _fake_popen)
+    monkeypatch.setattr("core.dependency_manager._write_compat_marker", lambda: None)
+    monkeypatch.setattr("core.dependency_manager.get_managed_packages_dir", lambda: packages_dir)
+    monkeypatch.setattr("core.dependency_manager.get_managed_package_overlays_dir", lambda: overlays_dir)
+    monkeypatch.setattr(
+        "core.dependency_manager.get_managed_package_search_paths",
+        lambda: [overlays_dir, packages_dir],
+    )
+    monkeypatch.setattr("core.dependency_manager.sys.platform", "win32")
+
+    assert install_packages(["transformers>=4.50,<5"]) is True
+    assert len(commands) == 2
+    assert commands[0][commands[0].index("--target") + 1] == str(packages_dir)
+    assert commands[1][commands[1].index("--target") + 1].startswith(str(overlays_dir))
 
 
 def test_install_packages_refreshes_sys_path_and_clears_stale_modules(monkeypatch, tmp_path):
@@ -110,7 +161,13 @@ def test_install_packages_refreshes_sys_path_and_clears_stale_modules(monkeypatc
     if package_path in sys.path:
         sys.path.remove(package_path)
 
+    overlays_dir = tmp_path / "packages-overlays"
     monkeypatch.setattr("core.dependency_manager.get_managed_packages_dir", lambda: packages_dir)
+    monkeypatch.setattr("core.dependency_manager.get_managed_package_overlays_dir", lambda: overlays_dir)
+    monkeypatch.setattr(
+        "core.dependency_manager.get_managed_package_search_paths",
+        lambda: [overlays_dir, packages_dir],
+    )
     monkeypatch.setattr("core.dependency_manager.ensure_python", lambda cb=None: Path("/tmp/python"))
     monkeypatch.setattr("core.dependency_manager.get_subprocess_kwargs", lambda: {})
     monkeypatch.setattr(
