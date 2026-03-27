@@ -436,7 +436,7 @@ class Settings:
 
     # Vision Description Settings
     description_model_tier: str = "local"  # local, cloud (legacy: cpu, gpu)
-    description_model_local: str = "mlx-community/Qwen3-VL-4B-4bit"
+    description_model_local: str = "mlx-community/Qwen3-VL-4B-Instruct-4bit"
     description_model_cpu: str = "vikhyatk/moondream2"  # Legacy — kept for backward compat
     description_model_gpu: str = "llava-hf/llava-onevision-qwen2-7b-ov-hf"  # Legacy
     description_model_cloud: str = "gemini-3-flash-preview"

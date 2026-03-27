@@ -136,7 +136,7 @@ class TestQwen3VLDescriptions:
 
     def test_local_vlm_name(self):
         from core.analysis.description import _LOCAL_VLM_NAME
-        assert _LOCAL_VLM_NAME == "mlx-community/Qwen3-VL-4B-4bit"
+        assert _LOCAL_VLM_NAME == "mlx-community/Qwen3-VL-4B-Instruct-4bit"
 
     def test_moondream_fallback_preserved(self):
         from core.analysis.description import _LOCAL_VLM_FALLBACK
@@ -161,7 +161,7 @@ class TestQwen3VLDescriptions:
 
     def test_description_model_local_default(self):
         settings = Settings()
-        assert settings.description_model_local == "mlx-community/Qwen3-VL-4B-4bit"
+        assert settings.description_model_local == "mlx-community/Qwen3-VL-4B-Instruct-4bit"
 
     def test_tier_migration_cpu_to_local(self, tmp_path):
         """Legacy 'cpu' tier should be migrated to 'local' on load."""
