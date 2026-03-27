@@ -374,6 +374,12 @@ class SettingsDialog(QDialog):
         )
         paths_layout.addWidget(self.export_path)
 
+        self.model_cache_path = PathSelector(
+            "Model Cache:",
+            "Directory where AI models are stored (SigLIP, Moondream, YOLO, etc.)",
+        )
+        paths_layout.addWidget(self.model_cache_path)
+
         layout.addWidget(paths_group)
 
         # Cache management group
@@ -1604,6 +1610,7 @@ class SettingsDialog(QDialog):
         self.cache_path.set_path(self.settings.thumbnail_cache_dir)
         self.download_path.set_path(self.settings.download_dir)
         self.export_path.set_path(self.settings.export_dir)
+        self.model_cache_path.set_path(self.settings.model_cache_dir)
 
         # Apply environment override indicators for paths
         if is_from_environment("thumbnail_cache_dir"):
@@ -1801,6 +1808,7 @@ class SettingsDialog(QDialog):
         self.settings.thumbnail_cache_dir = self.cache_path.get_path()
         self.settings.download_dir = self.download_path.get_path()
         self.settings.export_dir = self.export_path.get_path()
+        self.settings.model_cache_dir = self.model_cache_path.get_path()
 
         # Detection
         self.settings.default_sensitivity = self.sensitivity_slider.value() / 10.0
@@ -2075,6 +2083,7 @@ class SettingsDialog(QDialog):
             self.settings.thumbnail_cache_dir != self.original_settings.thumbnail_cache_dir
             or self.settings.download_dir != self.original_settings.download_dir
             or self.settings.export_dir != self.original_settings.export_dir
+            or self.settings.model_cache_dir != self.original_settings.model_cache_dir
             or self.settings.default_sensitivity != self.original_settings.default_sensitivity
             or self.settings.min_scene_length_seconds != self.original_settings.min_scene_length_seconds
             or self.settings.export_quality != self.original_settings.export_quality

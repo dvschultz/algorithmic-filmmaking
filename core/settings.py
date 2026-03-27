@@ -948,8 +948,21 @@ def load_settings() -> Settings:
     # 3. Apply environment variable overrides (highest priority)
     settings = _apply_env_overrides(settings)
 
+    # 4. Sync model_cache_dir to env vars so HuggingFace and PyTorch respect it
+    _sync_model_cache_env(settings.model_cache_dir)
+
     logger.debug(f"Settings loaded (env overrides: {_env_overridden})")
     return settings
+
+
+def _sync_model_cache_env(model_cache_dir: Path) -> None:
+    """Set HF_HUB_CACHE and TORCH_HOME so all model downloads use model_cache_dir.
+
+    Uses setdefault so explicit user env vars still take priority.
+    """
+    cache_str = str(model_cache_dir)
+    os.environ.setdefault("HF_HUB_CACHE", str(model_cache_dir / "huggingface"))
+    os.environ.setdefault("TORCH_HOME", cache_str)
 
 
 def save_settings(settings: Settings) -> bool:
@@ -990,6 +1003,9 @@ def save_settings(settings: Settings) -> bool:
         # Save API key to keyring (secure storage)
         if settings.youtube_api_key:
             _set_api_key_in_keyring(settings.youtube_api_key)
+
+        # Re-sync model cache env in case the path changed
+        _sync_model_cache_env(settings.model_cache_dir)
 
         logger.info(f"Settings saved to {config_path}")
         return True
