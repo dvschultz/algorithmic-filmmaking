@@ -59,6 +59,14 @@ def get_operation_feature_candidates(
             return ["describe_local_cpu"]
         return []
 
+    if op_key == "custom_query":
+        tier = description_tier or getattr(settings, "description_model_tier", "local")
+        if tier == "local":
+            if _is_apple_silicon():
+                return ["describe_local", "describe_local_cpu"]
+            return ["describe_local_cpu"]
+        return []
+
     if op_key == "cinematography":
         tier = cinematography_tier or getattr(settings, "cinematography_tier", "cloud")
         if tier == "local" and _is_apple_silicon():
