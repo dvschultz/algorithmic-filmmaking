@@ -3850,6 +3850,17 @@ class MainWindow(QMainWindow):
         elif op_key == "shots":
             self._shot_type_run_error = None
 
+    # Map error handler attr names to analysis op keys for reinstall prompts
+    _ERROR_ATTR_TO_OP_KEY: dict[str, str] = {
+        "_color_run_error": "colors",
+        "_shot_type_run_error": "shots",
+        "_classification_run_error": "classify",
+        "_object_detection_run_error": "detect_objects",
+        "_text_extraction_run_error": "extract_text",
+        "_description_run_error": "describe",
+        "_cinematography_run_error": "cinematography",
+    }
+
     def _record_analysis_run_error(
         self,
         attr_name: str,
@@ -3857,13 +3868,70 @@ class MainWindow(QMainWindow):
         error_msg: str,
         dialog_title: str,
     ) -> None:
-        """Persist and surface a summarized analysis error."""
+        """Persist and surface a summarized analysis error.
+
+        If the error looks like a missing module, offers to reinstall dependencies.
+        """
         first_error = getattr(self, attr_name) is None
         setattr(self, attr_name, error_msg)
         self._gui_state.set_last_error(f"{ui_label} error: {error_msg}")
         self.status_bar.showMessage(f"{ui_label} finished with errors", 5000)
         if first_error:
-            QMessageBox.warning(self, dialog_title, error_msg)
+            if self._is_missing_module_error(error_msg):
+                self._offer_dependency_reinstall(attr_name, ui_label, error_msg, dialog_title)
+            else:
+                QMessageBox.warning(self, dialog_title, error_msg)
+
+    @staticmethod
+    def _is_missing_module_error(error_msg: str) -> bool:
+        """Check if an error message indicates a missing Python module."""
+        lowered = error_msg.lower()
+        return (
+            "no module named" in lowered
+            or "runtime is incomplete" in lowered
+            or "cannot import name" in lowered
+            or "module" in lowered and "has no attribute" in lowered
+        )
+
+    def _offer_dependency_reinstall(
+        self,
+        attr_name: str,
+        ui_label: str,
+        error_msg: str,
+        dialog_title: str,
+    ) -> None:
+        """Show error with option to reinstall missing dependencies."""
+        op_key = self._ERROR_ATTR_TO_OP_KEY.get(attr_name)
+
+        reply = QMessageBox.question(
+            self,
+            dialog_title,
+            f"{error_msg}\n\n"
+            "This looks like a missing or corrupted package.\n"
+            "Would you like to reinstall the dependencies?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+
+        if reply != QMessageBox.Yes or not op_key:
+            return
+
+        from core.analysis_dependencies import get_operation_feature_candidates
+
+        candidates = get_operation_feature_candidates(op_key, self.settings)
+        if not candidates:
+            return
+
+        from ui.widgets.dependency_widgets import prompt_feature_download
+
+        feature_name = candidates[0]
+        if prompt_feature_download(feature_name, self):
+            self.status_bar.showMessage(
+                f"{ui_label} dependencies reinstalled. Try running the analysis again.",
+                5000,
+            )
+            # Clear the error so the next run starts fresh
+            setattr(self, attr_name, None)
 
     def _get_completed_analysis_error_labels(self, completed_ops: list[str]) -> list[str]:
         """Return user-facing labels for analysis operations that finished with errors."""
