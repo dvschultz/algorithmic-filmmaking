@@ -231,6 +231,124 @@ jobs:
           du -sh "$APP_PATH"
           ls -la "$APP_PATH/Contents/"
 
+      - name: Smoke test frozen app startup
+        run: |
+          SMOKE_DIR="$(pwd)/smoke-test-artifacts"
+          mkdir -p "$SMOKE_DIR"
+
+          APP_BIN="dist/Scene Ripper.app/Contents/MacOS/Scene Ripper"
+          SMOKE_LOG_DIR="$SMOKE_DIR/logs"
+          mkdir -p "$SMOKE_LOG_DIR"
+          APP_LOG="$HOME/Library/Logs/Scene Ripper/scene-ripper.log"
+          STDOUT_LOG="$SMOKE_DIR/stdout.log"
+          STDERR_LOG="$SMOKE_DIR/stderr.log"
+          SUCCESS_MARKER="Startup smoke test completed successfully"
+
+          # Clear any previous app log
+          rm -f "$APP_LOG"
+
+          SCENE_RIPPER_STARTUP_SMOKE_TEST=1 \
+            "$APP_BIN" > "$STDOUT_LOG" 2> "$STDERR_LOG" &
+          PID=$!
+
+          show_diagnostics() {
+            echo "=== stdout ==="
+            tail -200 "$STDOUT_LOG" 2>/dev/null || true
+            echo "=== stderr ==="
+            tail -200 "$STDERR_LOG" 2>/dev/null || true
+            echo "=== app log ==="
+            tail -300 "$APP_LOG" 2>/dev/null || echo "(no app log found)"
+          }
+
+          DEADLINE=$((SECONDS + 60))
+          while [ $SECONDS -lt $DEADLINE ]; do
+            if grep -q "$SUCCESS_MARKER" "$APP_LOG" "$STDERR_LOG" "$STDOUT_LOG" 2>/dev/null; then
+              kill $PID 2>/dev/null || true
+              wait $PID 2>/dev/null || true
+              echo "Startup smoke test passed"
+              exit 0
+            fi
+            if ! kill -0 $PID 2>/dev/null; then
+              wait $PID 2>/dev/null
+              EXIT_CODE=$?
+              show_diagnostics
+              echo "ERROR: App exited with code $EXIT_CODE before reporting success"
+              exit 1
+            fi
+            sleep 1
+          done
+
+          kill $PID 2>/dev/null || true
+          wait $PID 2>/dev/null || true
+          show_diagnostics
+          echo "ERROR: Startup smoke test timed out after 60 seconds"
+          exit 1
+
+      - name: Run frozen runtime validation suite
+        run: |
+          APP_BIN="dist/Scene Ripper.app/Contents/MacOS/Scene Ripper"
+
+          run_smoke_target() {
+            local TARGET="$1"
+            local TIMEOUT="${2:-60}"
+            echo "--- Running runtime smoke target: $TARGET ---"
+
+            local TARGET_DIR="$(pwd)/runtime-validation-artifacts/$TARGET"
+            mkdir -p "$TARGET_DIR"
+            local APP_LOG="$HOME/Library/Logs/Scene Ripper/scene-ripper.log"
+            local STDOUT_LOG="$TARGET_DIR/stdout.log"
+            local STDERR_LOG="$TARGET_DIR/stderr.log"
+            local SUCCESS_MARKER="Runtime smoke test '$TARGET' completed successfully"
+
+            rm -f "$APP_LOG"
+
+            SCENE_RIPPER_RUNTIME_SMOKE_TEST_TARGET="$TARGET" \
+              "$APP_BIN" > "$STDOUT_LOG" 2> "$STDERR_LOG" &
+            local PID=$!
+
+            local DEADLINE=$((SECONDS + TIMEOUT))
+            while [ $SECONDS -lt $DEADLINE ]; do
+              if grep -q "$SUCCESS_MARKER" "$APP_LOG" "$STDERR_LOG" "$STDOUT_LOG" 2>/dev/null; then
+                # Wait for clean exit
+                if ! wait $PID 2>/dev/null; then
+                  local EXIT_CODE=$?
+                  if [ $EXIT_CODE -ne 0 ] 2>/dev/null; then
+                    echo "WARNING: Target '$TARGET' reported success but exited with code $EXIT_CODE"
+                  fi
+                fi
+                echo "Runtime smoke target '$TARGET' passed"
+                return 0
+              fi
+              if ! kill -0 $PID 2>/dev/null; then
+                wait $PID 2>/dev/null
+                local EXIT_CODE=$?
+                # Check one more time after exit
+                if grep -q "$SUCCESS_MARKER" "$APP_LOG" "$STDERR_LOG" "$STDOUT_LOG" 2>/dev/null; then
+                  echo "Runtime smoke target '$TARGET' passed"
+                  return 0
+                fi
+                echo "=== stdout ===" && tail -200 "$STDOUT_LOG" 2>/dev/null || true
+                echo "=== stderr ===" && tail -200 "$STDERR_LOG" 2>/dev/null || true
+                echo "=== app log ===" && tail -300 "$APP_LOG" 2>/dev/null || true
+                echo "ERROR: Target '$TARGET' exited with code $EXIT_CODE before reporting success"
+                return 1
+              fi
+              sleep 1
+            done
+
+            kill $PID 2>/dev/null || true
+            wait $PID 2>/dev/null || true
+            echo "=== stdout ===" && tail -200 "$STDOUT_LOG" 2>/dev/null || true
+            echo "=== stderr ===" && tail -200 "$STDERR_LOG" 2>/dev/null || true
+            echo "=== app log ===" && tail -300 "$APP_LOG" 2>/dev/null || true
+            echo "ERROR: Target '$TARGET' timed out after $TIMEOUT seconds"
+            return 1
+          }
+
+          run_smoke_target "imports"
+          run_smoke_target "project"
+          run_smoke_target "scene-detect"
+
       - name: Import signing certificate
         if: env.MACOS_CERTIFICATE != ''
         env:
@@ -589,6 +707,17 @@ jobs:
           name: Scene-Ripper-macOS-Appcast
           path: dist/update-feed/macos
           if-no-files-found: error
+
+      - name: Upload smoke test artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Scene-Ripper-macOS-smoke-logs
+          path: |
+            smoke-test-artifacts/
+            runtime-validation-artifacts/
+            ~/Library/Logs/Scene Ripper/
+          if-no-files-found: ignore
 
       - name: Cleanup keychain
         if: always()
