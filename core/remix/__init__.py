@@ -396,14 +396,24 @@ def _auto_compute_volume(clips: List[Tuple[Any, Any]]) -> None:
 
 def _auto_compute_embeddings(clips: List[Tuple[Any, Any]]) -> None:
     """Compute DINOv2 embeddings for clips that don't have them."""
-    from core.analysis.embeddings import extract_clip_embeddings_batch, _EMBEDDING_MODEL_TAG
-
     needs_embedding = [
         (clip, source) for clip, source in clips
         if clip.embedding is None and clip.thumbnail_path
     ]
     if not needs_embedding:
         return
+
+    from core.feature_registry import check_feature
+
+    available, missing = check_feature("embeddings")
+    if not available:
+        raise RuntimeError(
+            "DINOv2 embeddings require torch and transformers. "
+            f"Missing: {', '.join(missing)}. "
+            "Run embedding analysis first or install dependencies via Settings."
+        )
+
+    from core.analysis.embeddings import extract_clip_embeddings_batch, _EMBEDDING_MODEL_TAG
 
     thumbnail_paths = [clip.thumbnail_path for clip, _ in needs_embedding]
     try:
@@ -417,6 +427,23 @@ def _auto_compute_embeddings(clips: List[Tuple[Any, Any]]) -> None:
 
 def _auto_compute_boundary_embeddings(clips: List[Tuple[Any, Any]]) -> None:
     """Compute first/last frame DINOv2 embeddings for clips that don't have them."""
+    needs_compute = any(
+        clip.first_frame_embedding is None or clip.last_frame_embedding is None
+        for clip, source in clips
+    )
+    if not needs_compute:
+        return
+
+    from core.feature_registry import check_feature
+
+    available, missing = check_feature("embeddings")
+    if not available:
+        raise RuntimeError(
+            "DINOv2 boundary embeddings require torch and transformers. "
+            f"Missing: {', '.join(missing)}. "
+            "Run embedding analysis first or install dependencies via Settings."
+        )
+
     from core.analysis.embeddings import extract_boundary_embeddings, _EMBEDDING_MODEL_TAG
 
     for clip, source in clips:

@@ -42,9 +42,36 @@ def _get_model():
         if _model is None:
             logger.info("Loading DINOv2 model for embeddings...")
             from transformers import AutoImageProcessor, AutoModel
+            from core.errors import ModelDownloadError
 
-            _processor = AutoImageProcessor.from_pretrained(_DINOV2_MODEL_NAME)
-            _model = AutoModel.from_pretrained(_DINOV2_MODEL_NAME)
+            try:
+                _processor = AutoImageProcessor.from_pretrained(_DINOV2_MODEL_NAME)
+                _model = AutoModel.from_pretrained(_DINOV2_MODEL_NAME)
+            except Exception as e:
+                if "additional_chat_templates" in str(e):
+                    # Newer huggingface_hub tries to fetch additional_chat_templates
+                    # from model repos that don't have it, causing a 404.
+                    # Workaround: download files locally first, then load from cache.
+                    logger.warning(
+                        "additional_chat_templates 404 — downloading DINOv2 "
+                        "model files explicitly and loading from local cache"
+                    )
+                    from huggingface_hub import snapshot_download
+
+                    local_dir = snapshot_download(
+                        _DINOV2_MODEL_NAME,
+                        allow_patterns=["*.json", "*.safetensors", "*.txt", "*.bin"],
+                    )
+                    _processor = AutoImageProcessor.from_pretrained(
+                        local_dir, local_files_only=True
+                    )
+                    _model = AutoModel.from_pretrained(
+                        local_dir, local_files_only=True
+                    )
+                else:
+                    raise ModelDownloadError(
+                        f"Failed to load DINOv2 model '{_DINOV2_MODEL_NAME}': {e}"
+                    ) from e
             logger.info("DINOv2 embedding model loaded")
 
     return _model, _processor

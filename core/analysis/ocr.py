@@ -69,11 +69,18 @@ def _get_ocr_engine():
         if _ocr_engine is None:
             PaddleOCR = ensure_ocr_runtime_available()
             logger.info("Initializing PaddleOCR engine...")
-            _ocr_engine = PaddleOCR(
-                use_angle_cls=True,
-                lang="en",
-                show_log=False,
-            )
+            try:
+                _ocr_engine = PaddleOCR(
+                    use_angle_cls=True,
+                    lang="en",
+                    show_log=False,
+                )
+            except Exception as e:
+                from core.errors import ModelDownloadError
+
+                raise ModelDownloadError(
+                    f"Failed to initialize PaddleOCR (model download may have failed): {e}"
+                ) from e
             logger.info("PaddleOCR engine ready")
 
     return _ocr_engine

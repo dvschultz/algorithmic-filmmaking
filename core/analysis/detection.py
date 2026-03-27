@@ -104,7 +104,14 @@ def _load_yolo(model_size: str = "n"):
 
             # YOLO26 will download the model to cache on first use (~6MB for nano)
             model_name = f"yolo26{model_size}.pt"
-            _model = YOLO(model_name)
+            try:
+                _model = YOLO(model_name)
+            except Exception as e:
+                from core.errors import ModelDownloadError
+
+                raise ModelDownloadError(
+                    f"Failed to load YOLO26{model_size} model: {e}"
+                ) from e
 
             logger.info(f"YOLO26{model_size} model loaded")
 
@@ -132,7 +139,14 @@ def _load_yoloe(custom_classes: list[str]):
 
             YOLO = ensure_object_detection_runtime_available()
 
-            _ov_model = YOLO(_YOLOE_MODEL_NAME)
+            try:
+                _ov_model = YOLO(_YOLOE_MODEL_NAME)
+            except Exception as e:
+                from core.errors import ModelDownloadError
+
+                raise ModelDownloadError(
+                    f"Failed to load YOLOE-26s model: {e}"
+                ) from e
             _ov_model.set_classes(custom_classes)
             _ov_model_classes = list(custom_classes)
 

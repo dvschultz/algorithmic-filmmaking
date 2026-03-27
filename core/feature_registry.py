@@ -18,6 +18,7 @@ _FULL_PACKAGE_REPAIR_FEATURES = {
     "audio_analysis",
     "describe_local",
     "describe_local_cpu",
+    "embeddings",
     "ocr",
     "image_classify",
     "object_detect",
@@ -87,6 +88,8 @@ def _validate_feature_runtime(name: str) -> None:
         from core.transcription import ensure_mlx_whisper_runtime_available
 
         ensure_mlx_whisper_runtime_available()
+    elif name == "embeddings":
+        from transformers import AutoImageProcessor, AutoModel  # noqa: F401
 
 
 def requires_full_package_repair(name: str, missing: list[str]) -> bool:
@@ -217,6 +220,13 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
         binaries=[],
         packages=["torch", "demucs_infer"],
         size_estimate_mb=2000,
+    ),
+    "embeddings": FeatureDeps(
+        binaries=[],
+        packages=["torch", "transformers"],
+        size_estimate_mb=450,
+        repair_packages=["torch", "transformers", "tokenizers"],
+        native_install=True,
     ),
 }
 

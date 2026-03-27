@@ -11,7 +11,7 @@ from PIL import Image
 
 logger = logging.getLogger(__name__)
 
-# ImageNet class labels URL
+# PINNED: Raw GitHub URL, unversioned; consider vendoring the file if URL breaks
 IMAGENET_LABELS_URL = "https://raw.githubusercontent.com/pytorch/hub/master/imagenet_classes.txt"
 
 # Lazy load model and labels

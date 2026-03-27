@@ -59,6 +59,7 @@ def _download_east_model(dest_path: Path) -> bool:
     Returns:
         True if download succeeded, False otherwise.
     """
+    import shutil
     import urllib.request
     import urllib.error
 
@@ -69,8 +70,10 @@ def _download_east_model(dest_path: Path) -> bool:
         # Create parent directory if needed
         dest_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Download with progress
-        urllib.request.urlretrieve(EAST_MODEL_URL, dest_path)
+        # Download with timeout (urlretrieve has no timeout parameter)
+        response = urllib.request.urlopen(EAST_MODEL_URL, timeout=60)
+        with open(dest_path, "wb") as f:
+            shutil.copyfileobj(response, f)
 
         # Verify file was downloaded
         if dest_path.exists() and dest_path.stat().st_size > 0:

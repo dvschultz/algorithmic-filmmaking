@@ -959,6 +959,13 @@ def _sync_model_cache_env(model_cache_dir: Path) -> None:
     """Set HF_HUB_CACHE and TORCH_HOME so all model downloads use model_cache_dir.
 
     Force-sets the env vars so changes made in Settings take effect immediately.
+
+    Covered libraries:
+      - HuggingFace transformers/hub (HF_HOME, HF_HUB_CACHE, HF_MODULES_CACHE)
+      - PyTorch hub / torchvision / Demucs (TORCH_HOME)
+      - Ultralytics YOLO (YOLO_CONFIG_DIR — set in detection.py per-load)
+    NOT covered (uses library defaults):
+      - PaddleOCR (~/.paddleocr/) — does not support custom cache dirs
     """
     huggingface_dir = model_cache_dir / "huggingface"
     modules_cache_dir = huggingface_dir / "modules"

@@ -20,7 +20,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Default cloud model for shot classification
+# PINNED: Gemini model version; must exist in Gemini API
 _DEFAULT_CLOUD_MODEL = "gemini-2.5-flash-lite"
 
 # Shot type display names

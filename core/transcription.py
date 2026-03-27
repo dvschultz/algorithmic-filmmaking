@@ -49,7 +49,7 @@ _MLX_MODEL_MAP = {
     "small.en": "small.en",
     "medium.en": "medium.en",
     "large-v3": "large-v3",
-    "large-v3-turbo": "large-v3",  # mlx-whisper doesn't have turbo; fall back to large-v3
+    "large-v3-turbo": "large-v3",  # PINNED: lightning-whisper-mlx lacks turbo variant; silently maps to large-v3
 }
 
 # Distilled variants available in mlx-whisper (faster, slightly less accurate)

@@ -35,8 +35,10 @@ _LOCAL_MODEL = None
 _LOCAL_PROCESSOR = None
 
 # Local VLM model
+# PINNED: mlx-community quantized model; verify availability before updating
 _LOCAL_VLM_NAME = "mlx-community/Qwen3-VL-4B-Instruct-4bit"
 _LOCAL_VLM_FALLBACK = "vikhyatk/moondream2"  # Fallback for non-Apple-Silicon
+# PINNED: Git revision (tag) on vikhyatk/moondream2; bump when new release tested
 MOONDREAM_REVISION = "2025-06-21"
 
 # Backward-compatible aliases

@@ -190,14 +190,24 @@ class StaccatoGenerateWorker(CancellableWorker):
 
     def _auto_compute_embeddings(self):
         """Compute DINOv2 embeddings for clips that don't have them."""
-        from core.analysis.embeddings import extract_clip_embeddings_batch, _EMBEDDING_MODEL_TAG
-
         needs_embedding = [
             (clip, source) for clip, source in self._clips
             if clip.embedding is None and clip.thumbnail_path
         ]
         if not needs_embedding:
             return
+
+        from core.feature_registry import check_feature
+
+        available, missing = check_feature("embeddings")
+        if not available:
+            raise RuntimeError(
+                "DINOv2 embeddings require torch and transformers. "
+                f"Missing: {', '.join(missing)}. "
+                "Run embedding analysis first or install dependencies via Settings."
+            )
+
+        from core.analysis.embeddings import extract_clip_embeddings_batch, _EMBEDDING_MODEL_TAG
 
         self.progress_message.emit(
             f"Computing embeddings for {len(needs_embedding)} clips..."

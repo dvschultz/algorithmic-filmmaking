@@ -102,8 +102,15 @@ def separate_stems(
     else:
         device = "cpu"
 
-    model = get_model("htdemucs")
-    model.to(device)
+    try:
+        model = get_model("htdemucs")
+        model.to(device)
+    except Exception as e:
+        from core.errors import ModelDownloadError
+
+        raise ModelDownloadError(
+            f"Failed to load Demucs htdemucs model: {e}"
+        ) from e
 
     if progress_cb:
         progress_cb("Loading audio...")
