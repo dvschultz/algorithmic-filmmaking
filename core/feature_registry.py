@@ -157,6 +157,7 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
         packages=["torch", "transformers"],
         size_estimate_mb=450,
         repair_packages=["torch", "transformers", "tokenizers"],
+        native_install=True,  # torch/transformers need proper site-packages
     ),
     "describe_cloud": FeatureDeps(
         binaries=[],
@@ -173,18 +174,21 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
         packages=["torch", "torchvision", "transformers", "einops", "sentencepiece", "protobuf"],
         size_estimate_mb=450,
         repair_packages=["torch", "torchvision", "transformers", "tokenizers", "einops", "sentencepiece", "protobuf"],
+        native_install=True,  # torch/transformers need proper site-packages to avoid circular imports
     ),
     "image_classify": FeatureDeps(
         binaries=[],
         packages=["torch", "torchvision"],
         size_estimate_mb=400,
         repair_packages=["torch", "torchvision"],
+        native_install=True,  # torch needs proper site-packages
     ),
     "object_detect": FeatureDeps(
         binaries=[],
         packages=["ultralytics"],
         size_estimate_mb=430,
         repair_packages=["torch", "ultralytics"],
+        native_install=True,  # ultralytics/torch need proper site-packages
     ),
     "ocr": FeatureDeps(
         binaries=[],
