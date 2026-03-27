@@ -77,6 +77,21 @@ def get_managed_package_search_paths() -> list[Path]:
         search_paths.extend(overlay_dirs)
 
     search_paths.append(get_managed_packages_dir())
+
+    # Include standalone Python's site-packages for native extension packages
+    # (e.g., mlx with Metal) that can't be installed via --target.
+    python_dir = get_managed_python_dir()
+    import sys as _sys
+    if _sys.platform == "darwin":
+        for sp in sorted(python_dir.glob("lib/python3.*/site-packages"), reverse=True):
+            if sp.is_dir():
+                search_paths.append(sp)
+                break
+    elif _sys.platform == "win32":
+        sp = python_dir / "Lib" / "site-packages"
+        if sp.is_dir():
+            search_paths.append(sp)
+
     return search_paths
 
 

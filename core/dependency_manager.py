@@ -1197,6 +1197,101 @@ def install_packages(
     return True
 
 
+def get_managed_python_site_packages() -> Path | None:
+    """Return the standalone Python's site-packages directory, if it exists.
+
+    Native extension packages (e.g., mlx with Metal) must be installed here
+    instead of via --target because their .dylib/.so files need a proper
+    Python directory structure to load correctly.
+    """
+    python_dir = get_managed_python_dir()
+    if sys.platform == "darwin":
+        # python-build-standalone layout: python/lib/python3.X/site-packages/
+        for sp in sorted(python_dir.glob("lib/python3.*/site-packages"), reverse=True):
+            if sp.is_dir():
+                return sp
+    elif sys.platform == "win32":
+        sp = python_dir / "Lib" / "site-packages"
+        if sp.is_dir():
+            return sp
+    return None
+
+
+def install_native_packages(
+    specifiers: list[str],
+    progress_callback: ProgressCallback = None,
+) -> bool:
+    """Install packages with native extensions into the standalone Python's site-packages.
+
+    Unlike install_packages() which uses --target, this uses a standard pip install
+    so native extensions (.dylib/.so) are placed in a proper Python directory
+    structure. Required for packages like mlx that have Metal native extensions.
+
+    The standalone Python's site-packages is added to sys.path at startup.
+    """
+    normalized = [s.strip() for s in specifiers if s.strip()]
+    if not normalized:
+        return True
+
+    python_bin = ensure_python(_scaled_progress_callback(progress_callback, 0.0, 0.2))
+    install_label = ", ".join(normalized)
+    _emit_progress(progress_callback, 0.2, f"Installing native packages: {install_label}...")
+
+    cmd = [
+        str(python_bin),
+        "-m", "pip", "install",
+        "--upgrade",
+        "--disable-pip-version-check",
+        "--progress-bar", "off",
+    ] + normalized
+
+    logger.info(f"Installing native package (site-packages): {' '.join(cmd)}")
+    kwargs = get_subprocess_kwargs()
+
+    try:
+        process = _popen_external_subprocess(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            **kwargs,
+        )
+    except OSError as exc:
+        logger.error("Native pip install failed to start: %s", exc)
+        return False
+
+    try:
+        assert process.stdout is not None
+        for raw_line in process.stdout:
+            line = raw_line.rstrip()
+            parsed = _pip_progress_from_output_line(line, install_label)
+            if parsed is not None:
+                progress, message = parsed
+                _emit_progress(progress_callback, 0.2 + (0.75 * progress), message)
+        returncode = process.wait(timeout=600)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=30)
+        return False
+    finally:
+        if process.stdout is not None:
+            process.stdout.close()
+
+    if returncode != 0:
+        logger.error(f"Native pip install failed for {install_label}")
+        return False
+
+    # Ensure site-packages is on sys.path
+    sp = get_managed_python_site_packages()
+    if sp and str(sp) not in sys.path:
+        sys.path.insert(0, str(sp))
+
+    _emit_progress(progress_callback, 1.0, f"Installed {install_label}")
+    logger.info(f"Native package installed: {install_label}")
+    return True
+
+
 # Map pip package names to their actual top-level import names when they differ.
 _PACKAGE_IMPORT_NAMES: dict[str, str] = {
     "protobuf": "google.protobuf",

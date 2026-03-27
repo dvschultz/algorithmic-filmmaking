@@ -104,6 +104,7 @@ class FeatureDeps:
     packages: list[str]
     size_estimate_mb: int  # Rough download size in MB
     repair_packages: list[str] = field(default_factory=list)
+    native_install: bool = False  # Use site-packages install for native extensions (e.g., mlx Metal)
 
 
 # Map feature names to their dependency requirements
@@ -148,6 +149,7 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
         packages=["mlx_vlm"],
         size_estimate_mb=200,
         repair_packages=["mlx_vlm", "transformers", "tokenizers", "sentencepiece", "protobuf"],
+        native_install=True,  # mlx has Metal native extensions that need proper site-packages
     ),
     "describe_local_cpu": FeatureDeps(
         binaries=[],
@@ -311,6 +313,7 @@ def install_for_feature(
         ensure_yt_dlp,
         get_pip_specifier,
         install_packages,
+        install_native_packages,
     )
 
     deps = FEATURE_DEPS.get(name)
@@ -384,7 +387,8 @@ def install_for_feature(
         specifiers = [get_pip_specifier(dep_name) for dep_name in package_batch_names]
         if runtime_repair:
             clear_package_roots(repair_package_names)
-        if not install_packages(specifiers, scaled_callback):
+        installer = install_native_packages if deps.native_install else install_packages
+        if not installer(specifiers, scaled_callback):
             success = False
 
     if success:
