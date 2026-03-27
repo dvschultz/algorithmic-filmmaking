@@ -4,8 +4,6 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-logger = logging.getLogger(__name__)
-
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -20,9 +18,10 @@ from PySide6.QtWidgets import (
     QPushButton,
     QMenu,
     QGraphicsOpacityEffect,
+    QRubberBand,
 )
-from PySide6.QtCore import Qt, Signal, QMimeData, QPoint, QTimer
-from PySide6.QtGui import QPixmap, QDrag, QPainter, QColor, QKeyEvent, QPainterPath
+from PySide6.QtCore import Qt, Signal, QMimeData, QRect, QTimer
+from PySide6.QtGui import QPixmap, QDrag, QPainter, QColor, QKeyEvent
 
 from ui.widgets.range_slider import RangeSlider
 from ui.widgets.source_group_header import SourceGroupHeader
@@ -34,6 +33,8 @@ from core.analysis.shots import get_display_name, SHOT_TYPES
 from core.film_glossary import get_badge_tooltip
 from ui.theme import theme, UISizes, TypeScale, Spacing, Radii
 from ui.gradient_glow import paint_gradient_glow, paint_card_body, RoundedTopLabel
+
+logger = logging.getLogger(__name__)
 
 
 class ColorSwatchBar(QWidget):
@@ -73,6 +74,23 @@ class ColorSwatchBar(QWidget):
             )
 
         painter.end()
+
+
+class _SelectionContainer(QWidget):
+    """Grid container that delegates empty-space marquee events to its browser."""
+
+    def __init__(self, browser: "ClipBrowser"):
+        super().__init__()
+        self._browser = browser
+
+    def mousePressEvent(self, event):
+        self._browser._on_container_mouse_press(event)
+
+    def mouseMoveEvent(self, event):
+        self._browser._on_container_mouse_move(event)
+
+    def mouseReleaseEvent(self, event):
+        self._browser._on_container_mouse_release(event)
 
 
 class ClipThumbnail(QFrame):
@@ -246,7 +264,7 @@ class ClipThumbnail(QFrame):
         if self.disabled:
             self._thumbnail_opacity.setOpacity(0.5)
             self._show_glow = False
-            self.setStyleSheet(f"""
+            self.setStyleSheet("""
                 ClipThumbnail {{
                     background-color: transparent;
                     border: none;
@@ -561,6 +579,10 @@ class ClipBrowser(QWidget):
         # Source grouping state
         self._group_expanded_state: dict[str, bool] = {}  # source_id -> is_expanded
         self._source_headers: dict[str, SourceGroupHeader] = {}  # source_id -> header widget
+        self._marquee_origin = None
+        self._marquee_active = False
+        self._marquee_additive = False
+        self._marquee_base_selection: set[str] = set()
 
         self._setup_ui()
 
@@ -666,14 +688,13 @@ class ClipBrowser(QWidget):
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
         # Container for grid
-        self.container = QWidget()
+        self.container = _SelectionContainer(self)
         self.grid = QGridLayout(self.container)
         self.grid.setSpacing(UISizes.GRID_GUTTER)
         self.grid.setContentsMargins(UISizes.GRID_MARGIN, UISizes.GRID_MARGIN, UISizes.GRID_MARGIN, UISizes.GRID_MARGIN)
         self.grid.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-
-        # Clicking empty space in the grid clears clip selection
-        self.container.mousePressEvent = self._on_container_clicked
+        self._selection_band = QRubberBand(QRubberBand.Rectangle, self.container)
+        self._selection_band.hide()
 
         self.scroll.setWidget(self.container)
         layout.addWidget(self.scroll)
@@ -851,43 +872,30 @@ class ClipBrowser(QWidget):
         Args:
             clip_ids: List of clip IDs to select
         """
-        self.selected_clips = set(clip_ids)
-
-        # Update all thumbnail states
-        for thumb in self.thumbnails:
-            thumb.set_selected(thumb.clip.id in self.selected_clips)
-
-        self._emit_selection_changed()
+        self._set_selected_ids(set(clip_ids))
 
     def select_all(self) -> None:
         """Select all visible clips."""
         # Only select clips that are currently visible (not filtered out) and enabled.
-        self.selected_clips = set(
+        self._set_selected_ids({
             thumb.clip.id
             for thumb in self.thumbnails
             if thumb.isVisible() and not thumb.disabled
-        )
-
-        # Update all thumbnail states
-        for thumb in self.thumbnails:
-            thumb.set_selected(thumb.clip.id in self.selected_clips)
-
-        self._emit_selection_changed()
-
-    def _on_container_clicked(self, event):
-        """Clicking empty grid space deselects all clips."""
-        if event.button() == Qt.LeftButton:
-            self.clear_selection()
+        })
 
     def clear_selection(self) -> None:
         """Clear all selections."""
-        self.selected_clips.clear()
+        self._set_selected_ids(set())
 
-        # Update all thumbnail states
+    def _set_selected_ids(self, clip_ids: set[str], emit: bool = True) -> None:
+        """Apply selection state and refresh thumbnail visuals."""
+        self.selected_clips = set(clip_ids)
+
         for thumb in self.thumbnails:
-            thumb.set_selected(False)
+            thumb.set_selected(thumb.clip.id in self.selected_clips)
 
-        self._emit_selection_changed()
+        if emit:
+            self._emit_selection_changed()
 
     def _emit_selection_changed(self) -> None:
         """Emit selected IDs in stable display order."""
@@ -897,6 +905,82 @@ class ClipBrowser(QWidget):
             if thumb.clip.id in self.selected_clips
         ]
         self.selection_changed.emit(selected_ids)
+
+    def _on_container_mouse_press(self, event) -> None:
+        """Begin tracking an empty-space click or marquee drag."""
+        if event.button() != Qt.LeftButton:
+            event.ignore()
+            return
+
+        self._marquee_origin = event.position().toPoint()
+        self._marquee_active = False
+        self._marquee_additive = bool(event.modifiers() & Qt.ShiftModifier)
+        self._marquee_base_selection = set(self.selected_clips)
+        event.accept()
+
+    def _on_container_mouse_move(self, event) -> None:
+        """Update marquee selection while dragging across empty space."""
+        if self._marquee_origin is None or not (event.buttons() & Qt.LeftButton):
+            event.ignore()
+            return
+
+        current_pos = event.position().toPoint()
+        if not self._marquee_active:
+            distance = (current_pos - self._marquee_origin).manhattanLength()
+            if distance < QApplication.startDragDistance():
+                return
+            self._marquee_active = True
+            self._selection_band.show()
+
+        self._update_marquee(current_pos)
+        event.accept()
+
+    def _on_container_mouse_release(self, event) -> None:
+        """Finish marquee selection or clear selection on empty click."""
+        if event.button() != Qt.LeftButton or self._marquee_origin is None:
+            event.ignore()
+            return
+
+        current_pos = event.position().toPoint()
+        if self._marquee_active:
+            self._update_marquee(current_pos)
+            self._selection_band.hide()
+        else:
+            self.clear_selection()
+
+        self._marquee_origin = None
+        self._marquee_active = False
+        self._marquee_additive = False
+        self._marquee_base_selection.clear()
+        event.accept()
+
+    def _update_marquee(self, current_pos) -> None:
+        """Refresh marquee rectangle and live selection."""
+        if self._marquee_origin is None:
+            return
+
+        rect = QRect(self._marquee_origin, current_pos).normalized()
+        self._selection_band.setGeometry(rect)
+        self._apply_marquee_selection(rect, additive=self._marquee_additive)
+
+    def _apply_marquee_selection(self, rect: QRect, additive: bool) -> None:
+        """Apply replace or additive selection for clips intersecting the rect."""
+        selected_ids = self._clip_ids_in_rect(rect)
+        if additive:
+            selected_ids |= self._marquee_base_selection
+        self._set_selected_ids(selected_ids)
+
+    def _clip_ids_in_rect(self, rect: QRect) -> set[str]:
+        """Return selectable clip IDs whose cards intersect the marquee rect."""
+        return {
+            thumb.clip.id
+            for thumb in self.thumbnails
+            if self._is_marquee_selectable(thumb) and rect.intersects(thumb.geometry())
+        }
+
+    def _is_marquee_selectable(self, thumb: ClipThumbnail) -> bool:
+        """Whether a clip card should respond to marquee selection."""
+        return thumb.isVisible() and not thumb.disabled
 
     def _on_thumbnail_clicked(self, clip: Clip):
         """Handle thumbnail click."""
@@ -980,7 +1064,7 @@ class ClipBrowser(QWidget):
         logger.info(f"ClipBrowser.update_clip_thumbnail: clip_id={clip_id}, path={thumb_path}")
         thumb = self._thumbnail_by_id.get(clip_id)
         if thumb:
-            logger.info(f"  Found thumbnail widget, calling set_thumbnail")
+            logger.info("  Found thumbnail widget, calling set_thumbnail")
             thumb.set_thumbnail(thumb_path)
         else:
             logger.warning(f"  Thumbnail widget not found! _thumbnail_by_id keys: {list(self._thumbnail_by_id.keys())[:5]}...")
