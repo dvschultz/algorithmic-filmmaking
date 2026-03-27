@@ -1241,6 +1241,7 @@ def install_native_packages(
         str(python_bin),
         "-m", "pip", "install",
         "--upgrade",
+        "--no-cache-dir",
         "--disable-pip-version-check",
         "--progress-bar", "off",
     ] + normalized

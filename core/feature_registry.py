@@ -207,6 +207,7 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
         size_estimate_mb=300,
         repair_packages=["insightface", "onnxruntime"],
         needs_compiler=True,  # insightface has Cython C++ extensions
+        native_install=True,  # C++ extensions need proper site-packages, not --target
     ),
     "stem_separation": FeatureDeps(
         binaries=[],
