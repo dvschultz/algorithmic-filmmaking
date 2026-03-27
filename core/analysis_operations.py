@@ -65,6 +65,11 @@ ANALYSIS_OPERATIONS: list[AnalysisOperation] = [
         "Extract face embeddings for person identification",
         "sequential", False,
     ),
+    AnalysisOperation(
+        "custom_query", "Custom Query",
+        "Search clips for specific visual content using a VLM (e.g., 'blue flower')",
+        "cloud", False,
+    ),
 ]
 
 # Lookup by key

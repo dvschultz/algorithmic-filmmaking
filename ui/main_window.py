@@ -90,6 +90,7 @@ from ui.workers.classification_worker import ClassificationWorker
 from ui.workers.object_detection_worker import ObjectDetectionWorker
 from ui.workers.face_detection_worker import FaceDetectionWorker
 from ui.workers.description_worker import DescriptionWorker
+from ui.workers.custom_query_worker import CustomQueryWorker
 from ui.workers.export_worker import ExportBundleWorker
 from core.gui_state import GUIState
 from core.plan_controller import PlanController
@@ -766,6 +767,7 @@ class MainWindow(QMainWindow):
         self.classification_worker: Optional[ClassificationWorker] = None
         self.detection_worker_yolo: Optional[ObjectDetectionWorker] = None
         self.description_worker: Optional[DescriptionWorker] = None
+        self.custom_query_worker: Optional[CustomQueryWorker] = None
         self.youtube_search_worker: Optional[YouTubeSearchWorker] = None
         self.ia_search_worker: Optional[InternetArchiveSearchWorker] = None
         self.bulk_download_worker: Optional[BulkDownloadWorker] = None
@@ -3078,6 +3080,20 @@ class MainWindow(QMainWindow):
     def _on_quick_run_from_tab(self, op_key: str):
         """Handle quick-run dropdown from Analyze tab (single operation, immediate)."""
         clips = self.analyze_tab.get_clips()
+        if not clips:
+            return
+
+        # Custom Query requires a text input before dispatching
+        if op_key == "custom_query":
+            query_text, ok = QInputDialog.getText(
+                self, "Custom Visual Query",
+                "What are you looking for? (e.g., 'blue flower', 'person wearing a hat')"
+            )
+            if ok and query_text.strip():
+                self._custom_query_text = query_text.strip()
+                self._run_analysis_pipeline(clips, [op_key])
+            return
+
         if clips:
             self._run_analysis_pipeline(clips, [op_key])
 
@@ -3214,6 +3230,8 @@ class MainWindow(QMainWindow):
             self._launch_description_worker(clips)
         elif op_key == "cinematography":
             self._launch_cinematography_worker(clips)
+        elif op_key == "custom_query":
+            self._launch_custom_query_worker(clips)
         else:
             logger.warning(f"Unknown analysis operation: {op_key}")
             self._on_analysis_phase_worker_finished(op_key)
@@ -3445,6 +3463,62 @@ class MainWindow(QMainWindow):
         self.description_worker.finished.connect(lambda: setattr(self, 'description_worker', None))
         self.description_worker.start()
 
+    def _launch_custom_query_worker(self, clips: list):
+        """Launch custom query worker."""
+        query = getattr(self, '_custom_query_text', None)
+        if not query:
+            logger.warning("Custom query requested but no query text set")
+            self._on_analysis_phase_worker_finished("custom_query")
+            return
+
+        self._custom_query_finished_handled = False
+        tier = self.settings.description_model_tier
+        sources = self.project.sources_by_id
+        parallelism = 3 if tier == "cloud" else 1
+
+        logger.info(f"Creating CustomQueryWorker for '{query}' on {len(clips)} clips, tier={tier}")
+        self.custom_query_worker = CustomQueryWorker(
+            clips, query=query, sources_by_id=sources,
+            tier=tier, parallelism=parallelism,
+        )
+        self.custom_query_worker.progress.connect(self._on_custom_query_progress)
+        self.custom_query_worker.query_result_ready.connect(self._on_custom_query_ready)
+        self.custom_query_worker.error.connect(self._on_custom_query_error)
+        self.custom_query_worker.analysis_completed.connect(
+            self._on_pipeline_custom_query_finished, Qt.UniqueConnection
+        )
+        self.custom_query_worker.finished.connect(self.custom_query_worker.deleteLater)
+        self.custom_query_worker.finished.connect(lambda: setattr(self, 'custom_query_worker', None))
+        self.custom_query_worker.start()
+
+    @Slot(int, int)
+    def _on_custom_query_progress(self, current: int, total: int):
+        """Handle custom query progress updates."""
+        if total > 0:
+            percent = int(current / total * 100)
+            self.progress_bar.setValue(percent)
+            self.status_bar.showMessage(f"Custom query: {current}/{total} clips...")
+
+    @Slot(str, str, bool, float, str)
+    def _on_custom_query_ready(self, clip_id: str, query: str, match: bool, confidence: float, model: str):
+        """Handle custom query result for a single clip."""
+        clip = self.project.clips_by_id.get(clip_id)
+        if clip:
+            if clip.custom_queries is None:
+                clip.custom_queries = []
+            clip.custom_queries.append({
+                "query": query,
+                "match": match,
+                "confidence": round(confidence, 4),
+                "model": model,
+            })
+            logger.debug(f"Custom query '{query}' for {clip_id}: match={match} ({confidence:.0%})")
+
+    @Slot(str)
+    def _on_custom_query_error(self, error_msg: str):
+        """Handle custom query error."""
+        logger.error(f"Custom query error: {error_msg}")
+
     def _launch_cinematography_worker(self, clips: list):
         """Launch cinematography analysis worker."""
         self._cinematography_finished_handled = False
@@ -3510,6 +3584,10 @@ class MainWindow(QMainWindow):
     @Slot()
     def _on_pipeline_cinematography_finished(self):
         self._on_analysis_phase_worker_finished("cinematography")
+
+    @Slot()
+    def _on_pipeline_custom_query_finished(self):
+        self._on_analysis_phase_worker_finished("custom_query")
 
     def _on_analysis_phase_worker_finished(self, op_key: str):
         """Handle completion of one worker in the analysis pipeline.
