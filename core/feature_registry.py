@@ -160,6 +160,11 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
         packages=[],  # litellm is bundled in core
         size_estimate_mb=0,
     ),
+    "custom_query": FeatureDeps(
+        binaries=[],
+        packages=[],  # reuses describe infrastructure (litellm bundled, local VLM shared)
+        size_estimate_mb=0,
+    ),
     "shot_classify": FeatureDeps(
         binaries=[],
         packages=["torch", "torchvision", "transformers", "einops", "sentencepiece", "protobuf"],
