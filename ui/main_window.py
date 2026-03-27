@@ -768,6 +768,7 @@ class MainWindow(QMainWindow):
         self.detection_worker_yolo: Optional[ObjectDetectionWorker] = None
         self.description_worker: Optional[DescriptionWorker] = None
         self.custom_query_worker: Optional[CustomQueryWorker] = None
+        self._custom_query_text: Optional[str] = None
         self.youtube_search_worker: Optional[YouTubeSearchWorker] = None
         self.ia_search_worker: Optional[InternetArchiveSearchWorker] = None
         self.bulk_download_worker: Optional[BulkDownloadWorker] = None
@@ -3465,11 +3466,14 @@ class MainWindow(QMainWindow):
 
     def _launch_custom_query_worker(self, clips: list):
         """Launch custom query worker."""
-        query = getattr(self, '_custom_query_text', None)
+        query = self._custom_query_text
         if not query:
             logger.warning("Custom query requested but no query text set")
             self._on_analysis_phase_worker_finished("custom_query")
             return
+
+        # Clear immediately to prevent stale reuse
+        self._custom_query_text = None
 
         self._custom_query_finished_handled = False
         tier = self.settings.description_model_tier

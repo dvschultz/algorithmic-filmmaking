@@ -6,11 +6,20 @@ Returns a boolean match with confidence score.
 """
 
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# One-time SSL cert fix for Windows (certifi CA bundle)
+try:
+    import certifi
+    os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+    os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+except ImportError:
+    pass
 
 
 def _build_query_prompt(query: str) -> str:
@@ -49,10 +58,17 @@ def _parse_yes_no_response(response: str) -> tuple[bool, float]:
         match = False
     else:
         # Check if the response contains yes or no anywhere
-        if "yes" in text and "no" not in text:
+        has_yes = "yes" in text
+        has_no = "no" in text
+
+        if has_yes and not has_no:
             match = True
-        elif "no" in text and "yes" not in text:
+        elif has_no and not has_yes:
             match = False
+        elif has_yes and has_no:
+            # Ambiguous: use whichever keyword appears first
+            match = text.find("yes") < text.find("no")
+            logger.info(f"Ambiguous response, using first keyword: match={match}")
         else:
             logger.warning(f"Could not parse yes/no from response: {response[:100]}")
             return False, 0.0
@@ -62,10 +78,37 @@ def _parse_yes_no_response(response: str) -> tuple[bool, float]:
     if pct_match:
         confidence = min(int(pct_match.group(1)), 100) / 100.0
     else:
-        # No explicit percentage — use 1.0 for definitive answers
-        confidence = 1.0 if match else 0.0
+        # No explicit percentage — use 0.9 for definitive answers (high but not absolute)
+        confidence = 0.9 if match else 0.1
 
     return match, confidence
+
+
+def _normalize_cloud_model(model: str) -> str:
+    """Normalize model name for LiteLLM routing."""
+    if "gemini" in model.lower() and not any(model.startswith(p) for p in ["gemini/", "vertex_ai/"]):
+        return f"gemini/{model}"
+    if "claude" in model.lower() and not any(model.startswith(p) for p in ["anthropic/", "bedrock/"]):
+        return f"anthropic/{model}"
+    return model
+
+
+def _resolve_cloud_api_key(model: str) -> Optional[str]:
+    """Resolve the API key for a cloud model."""
+    from core.settings import (
+        get_openai_api_key,
+        get_anthropic_api_key,
+        get_gemini_api_key,
+    )
+
+    lowered = model.lower()
+    if "gpt" in lowered or "openai" in lowered:
+        return get_openai_api_key()
+    if "claude" in lowered or "anthropic" in lowered:
+        return get_anthropic_api_key()
+    if "gemini" in lowered:
+        return get_gemini_api_key()
+    return None
 
 
 def evaluate_custom_query_cloud(
@@ -82,31 +125,12 @@ def evaluate_custom_query_cloud(
         Tuple of (match, confidence, model_name)
     """
     from core.analysis.description import encode_image_base64, _format_cloud_api_error
-    from core.settings import (
-        load_settings,
-        get_openai_api_key,
-        get_anthropic_api_key,
-        get_gemini_api_key,
-    )
+    from core.settings import load_settings
 
     settings = load_settings()
-    model = settings.description_model_cloud
-    original_model = model
-
-    # Normalize model name for LiteLLM
-    if "gemini" in model.lower() and not any(model.startswith(p) for p in ["gemini/", "vertex_ai/"]):
-        model = f"gemini/{model}"
-    elif "claude" in model.lower() and not any(model.startswith(p) for p in ["anthropic/", "bedrock/"]):
-        model = f"anthropic/{model}"
-
-    # Resolve API key
-    api_key = None
-    if "gpt" in model.lower() or "openai" in model.lower():
-        api_key = get_openai_api_key()
-    elif "claude" in model.lower() or "anthropic" in model.lower():
-        api_key = get_anthropic_api_key()
-    elif "gemini" in model.lower():
-        api_key = get_gemini_api_key()
+    original_model = settings.description_model_cloud
+    model = _normalize_cloud_model(original_model)
+    api_key = _resolve_cloud_api_key(model)
 
     if not api_key:
         raise ValueError(
@@ -168,7 +192,6 @@ def evaluate_custom_query_local(
     """
     from core.analysis.description import (
         is_mlx_vlm_available,
-        load_local_vlm,
         describe_frame_local,
     )
 
@@ -205,19 +228,9 @@ def evaluate_custom_query(
     Returns:
         Tuple of (match: bool, confidence: float, model_name: str)
     """
-    # SSL cert fix for Windows
-    import os
-    try:
-        import certifi
-        os.environ.setdefault("SSL_CERT_FILE", certifi.where())
-        os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
-    except ImportError:
-        pass
-
-    from core.settings import load_settings
-
-    settings = load_settings()
-    tier = tier or settings.description_model_tier
+    if tier is None:
+        from core.settings import load_settings
+        tier = load_settings().description_model_tier
 
     # Normalize legacy tier names
     if tier in ("cpu", "gpu"):

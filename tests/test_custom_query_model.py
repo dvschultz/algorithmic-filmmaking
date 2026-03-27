@@ -100,3 +100,27 @@ class TestCustomQueriesSerialization:
         assert len(clip.custom_queries) == 2
         assert clip.custom_queries[0]["query"] == "blue flower"
         assert clip.custom_queries[1]["query"] == "red car"
+
+    def test_from_dict_discards_malformed_custom_queries(self):
+        """Malformed custom_queries (not a list of dicts) are discarded."""
+        data = {
+            "id": "test-8",
+            "source_id": "src-1",
+            "start_frame": 0,
+            "end_frame": 100,
+            "custom_queries": "not a list",
+        }
+        clip = Clip.from_dict(data)
+        assert clip.custom_queries is None
+
+    def test_from_dict_discards_non_dict_entries(self):
+        """custom_queries with non-dict entries are discarded entirely."""
+        data = {
+            "id": "test-9",
+            "source_id": "src-1",
+            "start_frame": 0,
+            "end_frame": 100,
+            "custom_queries": ["not a dict", 42],
+        }
+        clip = Clip.from_dict(data)
+        assert clip.custom_queries is None

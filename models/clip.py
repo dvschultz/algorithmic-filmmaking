@@ -397,6 +397,15 @@ class Clip:
                 for et in data["extracted_texts"]
             ]
 
+        # Parse custom visual query results (validate structure)
+        custom_queries = None
+        if "custom_queries" in data:
+            raw = data["custom_queries"]
+            if isinstance(raw, list) and all(isinstance(q, dict) for q in raw):
+                custom_queries = raw
+            else:
+                logger.warning("Invalid custom_queries format in project file; discarding")
+
         # Parse cinematography analysis
         cinematography = None
         if "cinematography" in data:
@@ -454,7 +463,7 @@ class Clip:
             # OCR extracted text
             extracted_texts=extracted_texts,
             # Custom visual query results
-            custom_queries=data.get("custom_queries"),
+            custom_queries=custom_queries,
             # Rich cinematography analysis
             cinematography=cinematography,
             # Sequencer algorithm cache fields (validated)

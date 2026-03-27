@@ -31,12 +31,12 @@ class TestParseYesNoResponse:
     def test_bare_yes(self):
         match, conf = _parse_yes_no_response("yes")
         assert match is True
-        assert conf == 1.0
+        assert conf == 0.9  # High but not absolute when no explicit percentage
 
     def test_bare_no(self):
         match, conf = _parse_yes_no_response("no")
         assert match is False
-        assert conf == 0.0
+        assert conf == 0.1  # Low but not zero when no explicit percentage
 
     def test_yes_with_dash_confidence(self):
         match, conf = _parse_yes_no_response("YES - I am 90% confident")
@@ -68,8 +68,24 @@ class TestParseYesNoResponse:
         assert match is False
         assert conf == 0.0
 
+    def test_ambiguous_yes_before_no(self):
+        """When both yes and no appear, use whichever comes first."""
+        match, conf = _parse_yes_no_response("Yes, it contains a dog. It is not a cat.")
+        assert match is True
+
+    def test_ambiguous_no_before_yes(self):
+        """When no appears before yes, treat as no match."""
+        match, conf = _parse_yes_no_response("I would say no, but yesterday I might have said yes")
+        assert match is False
+
     def test_malformed_response_returns_false(self):
+        # "not" contains "no" so parser treats as negative with default confidence
         match, conf = _parse_yes_no_response("I'm not sure about that")
+        assert match is False
+        assert conf == 0.1
+
+    def test_truly_unparseable_response(self):
+        match, conf = _parse_yes_no_response("42")
         assert match is False
         assert conf == 0.0
 

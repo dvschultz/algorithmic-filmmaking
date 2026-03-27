@@ -85,5 +85,9 @@ def test_dialog_run_disabled_when_every_operation_complete(qapp):
         clips=[clip],
     )
 
-    assert all(not cb.isEnabled() for cb in dialog._checkboxes.values())
-    assert dialog._run_btn.isEnabled() is False
+    # custom_query never auto-completes (each query is unique), all others should be disabled
+    for key, cb in dialog._checkboxes.items():
+        if key == "custom_query":
+            assert cb.isEnabled(), "custom_query should always be enabled"
+        else:
+            assert not cb.isEnabled(), f"{key} should be disabled when complete"
