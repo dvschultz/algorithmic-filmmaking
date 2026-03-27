@@ -212,6 +212,8 @@ class Clip:
     description_frames: Optional[int] = None  # 1 for single frame, N for temporal
     # OCR extracted text
     extracted_texts: Optional[list[ExtractedText]] = None  # Text extracted from frames
+    # Custom visual query results
+    custom_queries: Optional[list[dict]] = None  # [{"query": str, "match": bool, "confidence": float, "model": str}]
     # Rich cinematography analysis
     cinematography: Optional["CinematographyAnalysis"] = None  # Film language metadata
     # Sequencer algorithm cache fields
@@ -342,6 +344,9 @@ class Clip:
         # OCR extracted text
         if self.extracted_texts:
             data["extracted_texts"] = [et.to_dict() for et in self.extracted_texts]
+        # Custom visual query results
+        if self.custom_queries:
+            data["custom_queries"] = self.custom_queries
         # Rich cinematography analysis
         if self.cinematography:
             data["cinematography"] = self.cinematography.to_dict()
@@ -448,6 +453,8 @@ class Clip:
             description_frames=data.get("description_frames"),
             # OCR extracted text
             extracted_texts=extracted_texts,
+            # Custom visual query results
+            custom_queries=data.get("custom_queries"),
             # Rich cinematography analysis
             cinematography=cinematography,
             # Sequencer algorithm cache fields (validated)
