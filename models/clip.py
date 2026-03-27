@@ -212,6 +212,8 @@ class Clip:
     description_frames: Optional[int] = None  # 1 for single frame, N for temporal
     # OCR extracted text
     extracted_texts: Optional[list[ExtractedText]] = None  # Text extracted from frames
+    # Custom visual query results
+    custom_queries: Optional[list[dict]] = None  # [{"query": str, "match": bool, "confidence": float, "model": str}]
     # Rich cinematography analysis
     cinematography: Optional["CinematographyAnalysis"] = None  # Film language metadata
     # Sequencer algorithm cache fields
@@ -342,6 +344,9 @@ class Clip:
         # OCR extracted text
         if self.extracted_texts:
             data["extracted_texts"] = [et.to_dict() for et in self.extracted_texts]
+        # Custom visual query results
+        if self.custom_queries:
+            data["custom_queries"] = self.custom_queries
         # Rich cinematography analysis
         if self.cinematography:
             data["cinematography"] = self.cinematography.to_dict()
@@ -391,6 +396,15 @@ class Clip:
                 ExtractedText.from_dict(et)
                 for et in data["extracted_texts"]
             ]
+
+        # Parse custom visual query results (validate structure)
+        custom_queries = None
+        if "custom_queries" in data:
+            raw = data["custom_queries"]
+            if isinstance(raw, list) and all(isinstance(q, dict) for q in raw):
+                custom_queries = raw
+            else:
+                logger.warning("Invalid custom_queries format in project file; discarding")
 
         # Parse cinematography analysis
         cinematography = None
@@ -448,6 +462,8 @@ class Clip:
             description_frames=data.get("description_frames"),
             # OCR extracted text
             extracted_texts=extracted_texts,
+            # Custom visual query results
+            custom_queries=custom_queries,
             # Rich cinematography analysis
             cinematography=cinematography,
             # Sequencer algorithm cache fields (validated)

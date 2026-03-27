@@ -229,6 +229,17 @@ class ClipDetailsSidebar(QDockWidget):
         self.person_count_label.setVisible(False)
         content_layout.addWidget(self.person_count_label)
 
+        # Custom Queries section (read-only)
+        self.custom_queries_header = QLabel("Custom Queries")
+        self._apply_section_header_style(self.custom_queries_header)
+        self.custom_queries_header.setVisible(False)
+        content_layout.addWidget(self.custom_queries_header)
+
+        self.custom_queries_label = QLabel("")
+        self.custom_queries_label.setWordWrap(True)
+        self.custom_queries_label.setVisible(False)
+        content_layout.addWidget(self.custom_queries_label)
+
         # Stretch to push content to top
         content_layout.addStretch()
 
@@ -277,6 +288,7 @@ class ClipDetailsSidebar(QDockWidget):
         self._apply_section_header_style(self.transcript_header)
         self._apply_section_header_style(self.object_labels_header)
         self._apply_section_header_style(self.detected_objects_header)
+        self._apply_section_header_style(self.custom_queries_header)
         self._apply_secondary_style(self.metadata_label)
         self._apply_muted_style(self.source_label)
         self._apply_muted_style(self.description_meta_label)
@@ -453,6 +465,22 @@ class ClipDetailsSidebar(QDockWidget):
         else:
             self.person_count_label.setVisible(False)
 
+        # Custom Queries (read-only)
+        if clip.custom_queries:
+            lines = []
+            for q in clip.custom_queries:
+                icon = "\u2713" if q.get("match") else "\u2717"
+                conf = q.get("confidence", 0)
+                model = q.get("model", "")
+                lines.append(f'{icon} "{q.get("query", "")}" ({conf:.0%}, {model})')
+            self.custom_queries_label.setText("\n".join(lines))
+            self.custom_queries_label.setStyleSheet(f"color: {theme().text_primary};")
+            self.custom_queries_header.setVisible(True)
+            self.custom_queries_label.setVisible(True)
+        else:
+            self.custom_queries_header.setVisible(False)
+            self.custom_queries_label.setVisible(False)
+
         # Description (editable)
         if clip.description:
             self.description_edit.setText(clip.description)
@@ -546,6 +574,8 @@ class ClipDetailsSidebar(QDockWidget):
         self.description_edit.setText("")
         self.description_meta_label.setVisible(False)
         self._set_extracted_text_placeholder("Select a single clip to view details")
+        self.custom_queries_header.setVisible(False)
+        self.custom_queries_label.setVisible(False)
 
         # Unblock signals and disable editing
         self._block_editable_signals(False)
