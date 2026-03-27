@@ -191,8 +191,8 @@ def load_classification_model():
                         _SIGLIP_MODEL_NAME,
                         allow_patterns=["*.json", "*.safetensors", "*.txt", "*.model"],
                     )
-                    _processor = AutoProcessor.from_pretrained(local_dir)
-                    _model = AutoModel.from_pretrained(local_dir)
+                    _processor = AutoProcessor.from_pretrained(local_dir, local_files_only=True)
+                    _model = AutoModel.from_pretrained(local_dir, local_files_only=True)
                 else:
                     raise
 

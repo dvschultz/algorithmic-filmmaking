@@ -446,11 +446,12 @@ def _load_moondream_fallback():
                 allow_patterns=["*.json", "*.safetensors", "*.txt", "*.py", "*.model"],
             )
             tokenizer = AutoTokenizer.from_pretrained(
-                local_dir, trust_remote_code=True
+                local_dir, trust_remote_code=True, local_files_only=True,
             )
             model = AutoModelForCausalLM.from_pretrained(
                 local_dir,
                 trust_remote_code=True,
+                local_files_only=True,
                 torch_dtype=torch.float32 if device == "cpu" else torch.float16,
             )
         else:
@@ -616,6 +617,9 @@ def describe_frame(
         RuntimeError: If description generation fails
         ValueError: If tier is unknown or API key is missing
     """
+    if image_path is None:
+        raise ValueError("image_path is required for frame description (thumbnail may not be generated yet)")
+
     settings = load_settings()
     tier = tier or settings.description_model_tier
 
