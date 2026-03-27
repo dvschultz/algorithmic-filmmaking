@@ -43,6 +43,14 @@ class _DummyStatusBar:
         self.messages.append((message, timeout))
 
 
+class _DummyExportButton:
+    def __init__(self):
+        self.enabled = True
+
+    def setEnabled(self, enabled: bool):
+        self.enabled = enabled
+
+
 def _make_window(tmp_path):
     window = SimpleNamespace(
         settings=SimpleNamespace(export_dir=tmp_path),
@@ -141,3 +149,64 @@ def test_export_clip_to_path_logs_failure(tmp_path, source, monkeypatch, caplog)
     assert success is False
     assert "Manual clip export requested" in caplog.text
     assert "Manual clip export failed" in caplog.text
+
+
+def test_sequence_export_rejects_unwritable_output_directory(tmp_path, source, monkeypatch):
+    clip = make_test_clip("c1")
+    clip.source_id = source.id
+    export_button = _DummyExportButton()
+
+    sequence = SimpleNamespace(
+        fps=source.fps,
+        algorithm="dice",
+        music_path=None,
+        get_all_clips=lambda: [clip],
+    )
+    timeline = SimpleNamespace(
+        export_btn=export_button,
+        get_sources_lookup=lambda: {source.id: source},
+        get_clips_lookup=lambda: {clip.id: (clip, source)},
+    )
+    window = _make_window(tmp_path)
+    window.export_worker = None
+    window.current_source = source
+    window.clips = [clip]
+    window.sources_by_id = {source.id: source}
+    window.sequence_tab = SimpleNamespace(get_sequence=lambda: sequence, timeline=timeline)
+    window.render_tab = SimpleNamespace(
+        get_quality_setting=lambda: "medium",
+        get_resolution_setting=lambda: None,
+        get_fps_setting=lambda: source.fps,
+    )
+    window._validate_export_output_path = (
+        lambda output_path: MainWindow._validate_export_output_path(window, output_path)
+    )
+
+    warnings = []
+    monkeypatch.setattr(
+        "ui.main_window.QFileDialog.getSaveFileName",
+        lambda *args, **kwargs: ("/scene_export.mp4", "Video Files (*.mp4)"),
+    )
+    monkeypatch.setattr(
+        "ui.main_window.QMessageBox.warning",
+        lambda *args, **kwargs: warnings.append((args[1], args[2])),
+    )
+    monkeypatch.setattr(
+        "ui.main_window.os.access",
+        lambda path, mode: Path(path) != Path("/"),
+    )
+    monkeypatch.setattr(
+        "ui.main_window.SequenceExportWorker",
+        lambda *args, **kwargs: pytest.fail("sequence export should not start"),
+    )
+
+    MainWindow._on_sequence_export_click(window)
+
+    assert warnings == [
+        (
+            "Export Sequence",
+            "Cannot write to export folder:\n/\n\nChoose a different location.",
+        )
+    ]
+    assert window.progress_bar.ranges == []
+    assert export_button.enabled is True

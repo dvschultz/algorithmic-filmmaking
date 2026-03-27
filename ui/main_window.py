@@ -6039,6 +6039,9 @@ class MainWindow(QMainWindow):
         if not output_path.suffix:
             output_path = output_path.with_suffix(".mp4")
 
+        if not self._validate_export_output_path(output_path):
+            return
+
         logger.info(
             "Manual sequence export requested: output=%s clip_count=%d",
             output_path,
@@ -6199,6 +6202,51 @@ class MainWindow(QMainWindow):
         else:
             # Only show dialog for manual exports
             QMessageBox.critical(self, "Export Error", f"Failed to export sequence: {error}")
+
+    def _validate_export_output_path(self, output_path: Path) -> bool:
+        """Validate that an export destination can be written."""
+        parent = output_path.parent
+
+        if not parent.exists():
+            logger.error(
+                "Manual export rejected: destination folder does not exist: output=%s parent=%s",
+                output_path,
+                parent,
+            )
+            QMessageBox.warning(
+                self,
+                "Export Sequence",
+                f"Export folder does not exist:\n{parent}\n\nChoose a different location.",
+            )
+            return False
+
+        if not parent.is_dir():
+            logger.error(
+                "Manual export rejected: destination parent is not a folder: output=%s parent=%s",
+                output_path,
+                parent,
+            )
+            QMessageBox.warning(
+                self,
+                "Export Sequence",
+                f"Export folder is invalid:\n{parent}\n\nChoose a different location.",
+            )
+            return False
+
+        if not os.access(parent, os.W_OK):
+            logger.error(
+                "Manual export rejected: destination folder is not writable: output=%s parent=%s",
+                output_path,
+                parent,
+            )
+            QMessageBox.warning(
+                self,
+                "Export Sequence",
+                f"Cannot write to export folder:\n{parent}\n\nChoose a different location.",
+            )
+            return False
+
+        return True
 
     def _validate_download_directory(self, download_dir: Path) -> Optional[Path]:
         """Validate download directory and prompt user to fix if invalid.

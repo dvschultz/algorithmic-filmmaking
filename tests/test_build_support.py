@@ -136,6 +136,8 @@ def test_core_requirement_distributions_follow_requirements_file(tmp_path):
     assert "scikit-learn" in distributions
     assert "opencv-python" in distributions
     assert "google-api-python-client" in distributions
+    assert "paddleocr" in distributions
+    assert "rapidfuzz" in distributions
     assert "pyside6" in distributions
 
 
@@ -177,6 +179,10 @@ def test_core_pyinstaller_collect_targets_cover_packaged_runtime_dependencies(tm
     assert "cv2" in targets
     assert "numpy" in targets
     assert "mpv" in targets
+    assert "paddleocr" in targets
+    assert "paddlex" in targets
+    assert "paddle" in targets
+    assert "rapidfuzz" in targets
 
 
 def test_core_pyinstaller_metadata_covers_core_requirements(tmp_path):
@@ -188,6 +194,8 @@ def test_core_pyinstaller_metadata_covers_core_requirements(tmp_path):
     assert "scipy" in metadata
     assert "pillow" in metadata
     assert "opencv-python" in metadata
+    assert "paddleocr" in metadata
+    assert "paddlepaddle" in metadata
 
 
 def test_core_pyinstaller_hiddenimports_include_on_demand_stdlib_dependencies():

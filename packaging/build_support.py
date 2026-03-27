@@ -27,6 +27,8 @@ REQUIREMENT_TO_IMPORT_TARGET = {
     "litellm": "litellm",
     "tenacity": "tenacity",
     "httpx": "httpx",
+    "paddleocr": "paddleocr",
+    "rapidfuzz": "rapidfuzz",
 }
 SUPPLEMENTAL_IMPORT_TARGETS = (
     "google_auth_httplib2",
@@ -34,6 +36,8 @@ SUPPLEMENTAL_IMPORT_TARGETS = (
     "google.oauth2",
     "httplib2",
     "scipy",
+    "paddlex",
+    "paddle",
 )
 SUPPLEMENTAL_METADATA_TARGETS = (
     "google-auth",
@@ -43,6 +47,8 @@ SUPPLEMENTAL_METADATA_TARGETS = (
     "httplib2",
     "uritemplate",
     "scipy",
+    "paddlex",
+    "paddlepaddle",
 )
 SUPPLEMENTAL_HIDDENIMPORTS = (
     # torch.package imports this stdlib module at runtime. The frozen base app
