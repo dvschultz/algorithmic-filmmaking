@@ -1197,6 +1197,17 @@ def install_packages(
     return True
 
 
+# Map pip package names to their actual top-level import names when they differ.
+_PACKAGE_IMPORT_NAMES: dict[str, str] = {
+    "protobuf": "google.protobuf",
+    "pillow": "PIL",
+    "scikit-learn": "sklearn",
+    "pyyaml": "yaml",
+    "opencv-python": "cv2",
+    "opencv-python-headless": "cv2",
+}
+
+
 def is_package_available(module_name: str) -> bool:
     """Check if a Python package is importable (from managed packages or bundled).
 
@@ -1211,7 +1222,8 @@ def is_package_available(module_name: str) -> bool:
     """
     import importlib.util
     _ensure_managed_packages_importable()
-    return importlib.util.find_spec(module_name) is not None
+    import_name = _PACKAGE_IMPORT_NAMES.get(module_name, module_name)
+    return importlib.util.find_spec(import_name) is not None
 
 
 # ---------------------------------------------------------------------------
