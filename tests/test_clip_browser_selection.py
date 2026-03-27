@@ -175,3 +175,19 @@ def test_marquee_selection_skips_disabled_and_hidden_clips(qapp, source, monkeyp
 
     selected_ids = {clip.id for clip in browser.get_selected_clips()}
     assert selected_ids == {"c1"}
+
+
+def test_export_request_forwards_clicked_clip_and_source(qapp, source):
+    from ui.clip_browser import ClipBrowser
+
+    browser = ClipBrowser()
+    clip = make_test_clip("c1")
+    browser.add_clip(clip, source)
+
+    requested = []
+    browser.export_requested.connect(lambda req_clip, req_source: requested.append((req_clip, req_source)))
+
+    thumb = browser._thumbnail_by_id[clip.id]
+    thumb._emit_export_requested()
+
+    assert requested == [(clip, source)]

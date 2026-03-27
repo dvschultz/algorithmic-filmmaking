@@ -100,6 +100,7 @@ class ClipThumbnail(QFrame):
     double_clicked = Signal(object)  # Clip
     drag_started = Signal(object)  # Clip
     view_details_requested = Signal(object, object)  # Clip, Source
+    export_requested = Signal(object, object)  # Clip, Source
 
     def __init__(self, clip: Clip, source: Source, drag_enabled: bool = False):
         super().__init__()
@@ -371,11 +372,7 @@ class ClipThumbnail(QFrame):
 
     def contextMenuEvent(self, event):
         """Show context menu with clip actions."""
-        menu = QMenu(self)
-        view_details_action = menu.addAction("View Details")
-        view_details_action.triggered.connect(
-            lambda: self.view_details_requested.emit(self.clip, self.source)
-        )
+        menu = self._build_context_menu()
         menu.exec_(event.globalPos())
 
     def keyPressEvent(self, event: QKeyEvent):
@@ -388,14 +385,25 @@ class ClipThumbnail(QFrame):
             # Show context menu at widget center
             center = self.rect().center()
             global_pos = self.mapToGlobal(center)
-            menu = QMenu(self)
-            view_details_action = menu.addAction("View Details")
-            view_details_action.triggered.connect(
-                lambda: self.view_details_requested.emit(self.clip, self.source)
-            )
+            menu = self._build_context_menu()
             menu.exec_(global_pos)
         else:
             super().keyPressEvent(event)
+
+    def _build_context_menu(self) -> QMenu:
+        """Build the clip context menu."""
+        menu = QMenu(self)
+        view_details_action = menu.addAction("View Details")
+        view_details_action.triggered.connect(
+            lambda: self.view_details_requested.emit(self.clip, self.source)
+        )
+        export_action = menu.addAction("Export Clip...")
+        export_action.triggered.connect(self._emit_export_requested)
+        return menu
+
+    def _emit_export_requested(self) -> None:
+        """Emit an export request for this clip."""
+        self.export_requested.emit(self.clip, self.source)
 
     def focusInEvent(self, event):
         """Handle focus gained - add visual indicator."""
@@ -543,6 +551,7 @@ class ClipBrowser(QWidget):
     selection_changed = Signal(list)  # list[str] selected clip IDs
     filters_changed = Signal()  # Emitted when any filter changes
     view_details_requested = Signal(object, object)  # Clip, Source - request to show clip details
+    export_requested = Signal(object, object)  # Clip, Source - request to export a single clip
 
     _MIN_COLUMNS = 2
 
@@ -762,6 +771,7 @@ class ClipBrowser(QWidget):
         thumb.double_clicked.connect(self._on_thumbnail_double_clicked)
         thumb.drag_started.connect(self._on_drag_started)
         thumb.view_details_requested.connect(self._on_view_details_requested)
+        thumb.export_requested.connect(self._on_export_requested)
 
         self.thumbnails.append(thumb)
         self._thumbnail_by_id[clip.id] = thumb  # O(1) lookup
@@ -1024,6 +1034,10 @@ class ClipBrowser(QWidget):
     def _on_view_details_requested(self, clip: Clip, source: Source):
         """Handle request to view clip details."""
         self.view_details_requested.emit(clip, source)
+
+    def _on_export_requested(self, clip: Clip, source: Source):
+        """Handle request to export a single clip."""
+        self.export_requested.emit(clip, source)
 
     def get_source_for_clip(self, clip_id: str) -> Optional[Source]:
         """Get the source for a clip by ID."""

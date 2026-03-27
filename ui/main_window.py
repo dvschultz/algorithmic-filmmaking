@@ -75,11 +75,7 @@ from ui.dialogs import IntentionImportDialog, AnalysisPickerDialog
 from core.analysis_dependencies import get_operation_feature_candidates
 from core.analysis_operations import (
     OPERATIONS_BY_KEY,
-    LOCAL_OPS,
-    SEQUENTIAL_OPS,
-    CLOUD_OPS,
     PHASE_ORDER,
-    DEFAULT_SELECTED,
 )
 from ui.workers.base import CancellableWorker
 from ui.workers.cinematography_worker import CinematographyWorker
@@ -1572,6 +1568,7 @@ class MainWindow(QMainWindow):
         self.cut_tab.selection_changed.connect(self._on_cut_selection_changed)
         self.cut_tab.clip_browser.filters_changed.connect(self._on_cut_filters_changed)
         self.cut_tab.clip_browser.view_details_requested.connect(self.show_clip_details)
+        self.cut_tab.clip_browser.export_requested.connect(self._on_clip_export_requested)
 
         # Analyze tab signals
         self.analyze_tab.quick_run_requested.connect(self._on_quick_run_from_tab)
@@ -1581,6 +1578,7 @@ class MainWindow(QMainWindow):
         self.analyze_tab.clips_changed.connect(self._on_analyze_clips_changed)
         self.analyze_tab.clip_browser.filters_changed.connect(self._on_analyze_filters_changed)
         self.analyze_tab.clip_browser.view_details_requested.connect(self.show_clip_details)
+        self.analyze_tab.clip_browser.export_requested.connect(self._on_clip_export_requested)
 
         # Sequence tab signals
         self.sequence_tab.playback_requested.connect(self._on_playback_requested)
@@ -2525,7 +2523,7 @@ class MainWindow(QMainWindow):
         failed = sum(1 for s in plan.steps if s.status == "failed")
         pending = sum(1 for s in plan.steps if s.status == "pending")
 
-        summary = f"**Plan stopped**\n\n"
+        summary = "**Plan stopped**\n\n"
         summary += f"- Completed: {completed}/{len(plan.steps)} steps\n"
         if failed > 0:
             summary += f"- Failed: {failed} step(s)\n"
@@ -3031,13 +3029,13 @@ class MainWindow(QMainWindow):
         """Handle filter change in Cut tab."""
         filters = self.cut_tab.get_active_filters()
         self._gui_state.update_active_filters(filters)
-        logger.debug(f"GUI State updated: Cut tab filters changed")
+        logger.debug("GUI State updated: Cut tab filters changed")
 
     def _on_analyze_filters_changed(self):
         """Handle filter change in Analyze tab."""
         filters = self.analyze_tab.get_active_filters()
         self._gui_state.update_active_filters(filters)
-        logger.debug(f"GUI State updated: Analyze tab filters changed")
+        logger.debug("GUI State updated: Analyze tab filters changed")
 
     def _on_analyze_clips_changed(self, clip_ids: list[str]):
         """Handle clip collection change in Analyze tab."""
@@ -5852,9 +5850,71 @@ class MainWindow(QMainWindow):
         """Update GUI state when frame selection changes."""
         self._gui_state.selected_frame_ids = frame_ids
 
+    def _default_clip_export_filename(
+        self,
+        clip: Clip,
+        source: Source,
+        ordinal: int | None = None,
+    ) -> str:
+        """Build a stable default filename for a clip export."""
+        source_name = self._sanitize_filename(source.file_path.stem)
+        if clip.name:
+            clip_name = self._sanitize_filename(clip.name)
+        else:
+            clip_name = f"scene_{clip.start_frame:06d}_{clip.end_frame:06d}"
+
+        parts = [source_name]
+        if ordinal is not None:
+            parts.append(f"{ordinal:03d}")
+        parts.append(clip_name)
+        return "_".join(parts) + ".mp4"
+
+    def _export_clip_to_path(self, clip: Clip, source: Source, output_path: Path) -> bool:
+        """Export a single clip to an explicit output path."""
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        processor = FFmpegProcessor()
+        return processor.extract_clip(
+            input_path=source.file_path,
+            output_path=output_path,
+            start_seconds=clip.start_time(source.fps),
+            duration_seconds=clip.duration_seconds(source.fps),
+            fps=source.fps,
+        )
+
+    def _on_clip_export_requested(self, clip: Clip, source: Source):
+        """Export the clicked clip only."""
+        default_name = self._default_clip_export_filename(clip, source)
+        default_path = str(self.settings.export_dir / default_name)
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Clip",
+            default_path,
+            "Video Files (*.mp4);;All Files (*)",
+        )
+        if not file_path:
+            return
+
+        output_path = Path(file_path)
+        if not output_path.suffix:
+            output_path = output_path.with_suffix(".mp4")
+
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 0)
+
+        success = self._export_clip_to_path(clip, source, output_path)
+
+        self.progress_bar.setVisible(False)
+        self.progress_bar.setRange(0, 100)
+
+        if success:
+            self.status_bar.showMessage(f"Exported clip to {output_path.name}", 5000)
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(output_path.parent)))
+        else:
+            QMessageBox.critical(self, "Export Error", "Failed to export clip")
+
     def _export_clips(self, clips: list[Clip]):
         """Export clips to a folder."""
-        if not self.current_source:
+        if not clips:
             return
 
         output_dir = QFileDialog.getExistingDirectory(
@@ -5863,29 +5923,22 @@ class MainWindow(QMainWindow):
         if not output_dir:
             return
 
-        from core.ffmpeg import FFmpegProcessor
-        processor = FFmpegProcessor()
-
         output_path = Path(output_dir)
-        source_name = self._sanitize_filename(self.current_source.file_path.stem)
-        fps = self.current_source.fps
 
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, len(clips))
 
         exported = 0
         for i, clip in enumerate(clips):
-            start = clip.start_time(fps)
-            duration = clip.duration_seconds(fps)
-            output_file = output_path / f"{source_name}_scene_{i + 1:03d}.mp4"
+            source = self.sources_by_id.get(clip.source_id)
+            if source is None:
+                self.progress_bar.setValue(i + 1)
+                continue
 
-            success = processor.extract_clip(
-                input_path=self.current_source.file_path,
-                output_path=output_file,
-                start_seconds=start,
-                duration_seconds=duration,
-                fps=fps,
+            output_file = output_path / self._default_clip_export_filename(
+                clip, source, ordinal=i + 1
             )
+            success = self._export_clip_to_path(clip, source, output_file)
             if success:
                 exported += 1
 
@@ -6272,8 +6325,6 @@ class MainWindow(QMainWindow):
         # Add to project and source browser
         if result.success and result.file_path and hasattr(self, 'collect_tab'):
             from pathlib import Path
-            from models.clip import Source
-
             file_path = Path(result.file_path)
 
             # Check if already in project
@@ -6924,7 +6975,10 @@ class MainWindow(QMainWindow):
                 for label, conf in results
             ]
             self.project.update_frame(clip_id, detected_objects=objects)
-            logger.debug(f"Classification for frame {clip_id}: {[l for l, _ in results[:3]]}")
+            logger.debug(
+                f"Classification for frame {clip_id}: "
+                f"{[label for label, _ in results[:3]]}"
+            )
 
     @Slot()
     def _on_agent_classification_finished(self):
@@ -8839,7 +8893,7 @@ class MainWindow(QMainWindow):
             self.cut_tab.update_clip_thumbnail(clip_id, thumb_path_obj)
             self.analyze_tab.update_clip_thumbnail(clip_id, thumb_path_obj)
         else:
-            logger.warning(f"  clip not found in clips_by_id!")
+            logger.warning("  clip not found in clips_by_id!")
 
     def _on_project_thumbnails_finished(self):
         """Handle thumbnails completed during project load (no analysis restart)."""

@@ -64,9 +64,18 @@ Download the latest DMG from [Releases](https://github.com/dvschultz/algorithmic
 
 On first launch, the app downloads FFmpeg and other optional dependencies as needed.
 
+If you plan to use face detection features such as Rose Hobart on a new Mac, install Xcode Command Line Tools first:
+
+```bash
+xcode-select --install
+```
+
 **From source**
 
 ```bash
+# Install Xcode Command Line Tools first if you want face detection features
+xcode-select --install
+
 # Install FFmpeg
 brew install ffmpeg
 
