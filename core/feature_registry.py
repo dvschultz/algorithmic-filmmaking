@@ -105,6 +105,7 @@ class FeatureDeps:
     size_estimate_mb: int  # Rough download size in MB
     repair_packages: list[str] = field(default_factory=list)
     native_install: bool = False  # Use site-packages install for native extensions (e.g., mlx Metal)
+    needs_compiler: bool = False  # Requires C/C++ compiler (Xcode CLT on macOS)
 
 
 # Map feature names to their dependency requirements
@@ -205,6 +206,7 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
         packages=["insightface", "onnxruntime"],
         size_estimate_mb=300,
         repair_packages=["insightface", "onnxruntime"],
+        needs_compiler=True,  # insightface has Cython C++ extensions
     ),
     "stem_separation": FeatureDeps(
         binaries=[],

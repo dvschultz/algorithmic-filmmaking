@@ -258,6 +258,28 @@ class DependencyDownloadDialog(QDialog):
         super().reject()
 
 
+def _is_compiler_available() -> bool:
+    """Check if a C/C++ compiler is available on this system."""
+    import shutil
+    import sys
+    if sys.platform == "darwin":
+        # On macOS, clang++ from Xcode CLT is required for native extensions
+        if shutil.which("clang++") is None:
+            return False
+        # clang++ may exist but Xcode CLT may not be installed (just the shim)
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["xcode-select", "-p"],
+                capture_output=True, timeout=5,
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+    # On Windows/Linux, assume compiler is available (MSVC/gcc usually present)
+    return True
+
+
 def prompt_feature_download(
     feature_name: str,
     parent_widget=None,
@@ -285,6 +307,20 @@ def prompt_feature_download(
     available, missing = check_feature_ready(feature_name)
     if available:
         return True
+
+    # Check if this feature needs a C/C++ compiler and warn early
+    deps = FEATURE_DEPS.get(feature_name)
+    if deps and deps.needs_compiler and not _is_compiler_available():
+        QMessageBox.warning(
+            parent_widget,
+            "Developer Tools Required",
+            "This feature requires a C/C++ compiler to install.\n\n"
+            "On macOS, open Terminal and run:\n"
+            "    xcode-select --install\n\n"
+            "After the install completes (~1.5 GB), restart Scene Ripper "
+            "and try again.",
+        )
+        return False
 
     size_mb = get_feature_size_estimate(feature_name)
     if requires_full_package_repair(feature_name, missing):
