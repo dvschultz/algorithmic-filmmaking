@@ -151,9 +151,28 @@ def load_classification_model():
     with _model_lock:
         if _model is None:
             logger.info("Loading SigLIP 2 model for shot classification...")
+
+            # On Windows, Python doesn't use the system cert store by default.
+            # Point SSL libraries to certifi's CA bundle so HuggingFace Hub downloads work.
+            try:
+                import certifi
+                import os as _os
+                _os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+                _os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+            except ImportError:
+                pass
+
             AutoProcessor, AutoModel = ensure_classification_runtime_available()
 
+            logger.info(
+                "Downloading SigLIP 2 processor from Hugging Face Hub (~10 MB) — "
+                "this may take a moment on first run..."
+            )
             _processor = AutoProcessor.from_pretrained(_SIGLIP_MODEL_NAME)
+            logger.info(
+                "Downloading SigLIP 2 model weights from Hugging Face Hub (~400 MB) — "
+                "this may take several minutes on first run..."
+            )
             _model = AutoModel.from_pretrained(_SIGLIP_MODEL_NAME)
             logger.info("SigLIP 2 model loaded")
 

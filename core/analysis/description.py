@@ -393,6 +393,16 @@ def _load_moondream_fallback():
         model_id = _LOCAL_VLM_FALLBACK
         logger.warning(f"mlx-vlm not available, falling back to {model_id}")
 
+    # On Windows, Python doesn't use the system cert store by default.
+    # Point SSL libraries to certifi's CA bundle so HuggingFace Hub downloads work.
+    try:
+        import certifi
+        import os as _os
+        _os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+        _os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+    except ImportError:
+        pass
+
     logger.info(f"Loading CPU vision model: {model_id} (revision: {MOONDREAM_REVISION})...")
 
     if torch.cuda.is_available():
@@ -404,17 +414,34 @@ def _load_moondream_fallback():
 
     logger.info(f"Using device: {device}")
 
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_id,
-        revision=MOONDREAM_REVISION,
-        trust_remote_code=True
-    )
-    model = AutoModelForCausalLM.from_pretrained(
-        model_id,
-        trust_remote_code=True,
-        revision=MOONDREAM_REVISION,
-        torch_dtype=torch.float32 if device == "cpu" else torch.float16,
-    )
+    def _load_from_pretrained(revision):
+        tok = AutoTokenizer.from_pretrained(
+            model_id,
+            revision=revision,
+            trust_remote_code=True,
+        )
+        mdl = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            trust_remote_code=True,
+            revision=revision,
+            torch_dtype=torch.float32 if device == "cpu" else torch.float16,
+        )
+        return tok, mdl
+
+    try:
+        tokenizer, model = _load_from_pretrained(MOONDREAM_REVISION)
+    except Exception as e:
+        if "additional_chat_templates" in str(e):
+            # transformers>=4.50 + huggingface_hub proactively fetches
+            # additional_chat_templates and doesn't handle 404 gracefully
+            # when a pinned revision is specified. Fall back to main.
+            logger.warning(
+                f"Revision-pinned load failed (additional_chat_templates 404 in "
+                f"huggingface_hub). Retrying without revision pin: {e}"
+            )
+            tokenizer, model = _load_from_pretrained(None)
+        else:
+            raise
     model = model.to(device)
 
     _LOCAL_MODEL = model

@@ -69,6 +69,15 @@ def _load_model():
             cache_dir = _get_model_cache_dir()
             os.environ.setdefault("TORCH_HOME", str(cache_dir))
 
+            # On Windows, Python doesn't use the system cert store by default.
+            # Point SSL libraries to certifi's CA bundle so HTTPS downloads work.
+            try:
+                import certifi
+                os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+                os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+            except ImportError:
+                pass
+
             import torch
 
             models, transforms = ensure_image_classification_runtime_available()
@@ -95,10 +104,16 @@ def _load_model():
                     _labels = [line.strip() for line in f.readlines()]
             else:
                 # Download labels
+                import ssl
                 import urllib.request
                 logger.info("Downloading ImageNet class labels...")
                 try:
-                    with urllib.request.urlopen(IMAGENET_LABELS_URL, timeout=30) as response:
+                    try:
+                        import certifi
+                        _ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+                    except ImportError:
+                        _ssl_ctx = ssl.create_default_context()
+                    with urllib.request.urlopen(IMAGENET_LABELS_URL, timeout=30, context=_ssl_ctx) as response:
                         content = response.read().decode("utf-8")
                         _labels = [line.strip() for line in content.strip().split("\n")]
                         # Cache locally
