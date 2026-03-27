@@ -165,15 +165,37 @@ def load_classification_model():
             AutoProcessor, AutoModel = ensure_classification_runtime_available()
 
             logger.info(
-                "Downloading SigLIP 2 processor from Hugging Face Hub (~10 MB) — "
-                "this may take a moment on first run..."
-            )
-            _processor = AutoProcessor.from_pretrained(_SIGLIP_MODEL_NAME)
-            logger.info(
-                "Downloading SigLIP 2 model weights from Hugging Face Hub (~400 MB) — "
+                "Downloading SigLIP 2 model from Hugging Face Hub (~400 MB) — "
                 "this may take several minutes on first run..."
             )
-            _model = AutoModel.from_pretrained(_SIGLIP_MODEL_NAME)
+
+            def _load_siglip():
+                return (
+                    AutoProcessor.from_pretrained(_SIGLIP_MODEL_NAME),
+                    AutoModel.from_pretrained(_SIGLIP_MODEL_NAME),
+                )
+
+            try:
+                _processor, _model = _load_siglip()
+            except Exception as e:
+                if "additional_chat_templates" in str(e):
+                    # Newer huggingface_hub tries to fetch additional_chat_templates
+                    # from model repos that don't have it, causing a 404.
+                    # Workaround: download files locally first, then load from cache.
+                    logger.warning(
+                        "additional_chat_templates 404 — downloading model files "
+                        "explicitly and loading from local cache"
+                    )
+                    from huggingface_hub import snapshot_download
+                    local_dir = snapshot_download(
+                        _SIGLIP_MODEL_NAME,
+                        allow_patterns=["*.json", "*.safetensors", "*.txt", "*.model"],
+                    )
+                    _processor = AutoProcessor.from_pretrained(local_dir)
+                    _model = AutoModel.from_pretrained(local_dir)
+                else:
+                    raise
+
             logger.info("SigLIP 2 model loaded")
 
     return _model, _processor

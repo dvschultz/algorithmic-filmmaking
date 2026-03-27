@@ -432,14 +432,27 @@ def _load_moondream_fallback():
         tokenizer, model = _load_from_pretrained(MOONDREAM_REVISION)
     except Exception as e:
         if "additional_chat_templates" in str(e):
-            # transformers>=4.50 + huggingface_hub proactively fetches
-            # additional_chat_templates and doesn't handle 404 gracefully
-            # when a pinned revision is specified. Fall back to main.
+            # Newer huggingface_hub tries to fetch additional_chat_templates
+            # from model repos that don't have it, causing a 404.
+            # Workaround: download files locally first, then load from cache.
             logger.warning(
-                f"Revision-pinned load failed (additional_chat_templates 404 in "
-                f"huggingface_hub). Retrying without revision pin: {e}"
+                f"additional_chat_templates 404 — downloading model files "
+                f"explicitly and loading from local cache: {e}"
             )
-            tokenizer, model = _load_from_pretrained(None)
+            from huggingface_hub import snapshot_download
+            local_dir = snapshot_download(
+                model_id,
+                revision=MOONDREAM_REVISION,
+                allow_patterns=["*.json", "*.safetensors", "*.txt", "*.py", "*.model"],
+            )
+            tokenizer = AutoTokenizer.from_pretrained(
+                local_dir, trust_remote_code=True
+            )
+            model = AutoModelForCausalLM.from_pretrained(
+                local_dir,
+                trust_remote_code=True,
+                torch_dtype=torch.float32 if device == "cpu" else torch.float16,
+            )
         else:
             raise
     model = model.to(device)
