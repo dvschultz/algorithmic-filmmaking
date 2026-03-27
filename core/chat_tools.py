@@ -3578,6 +3578,58 @@ def analyze_all_live(
     }
 
 
+@tools.register(
+    description="Run a custom visual query across clips. Evaluates whether each clip's "
+                "thumbnail matches a natural language description (e.g., 'blue flower', "
+                "'person wearing a hat'). Returns True/False with confidence for each clip. "
+                "Uses the configured VLM (cloud or local). Results accumulate on clips.",
+    requires_project=True,
+    modifies_gui_state=True,
+    modifies_project_state=True
+)
+def custom_visual_query(
+    main_window,
+    query: str,
+    clip_ids: Optional[list[str]] = None,
+) -> dict:
+    """Run a custom visual query on clips.
+
+    Args:
+        query: Natural language visual query (e.g., 'blue flower', 'outdoor scene')
+        clip_ids: Optional list of clip IDs to query. If None, queries all clips
+            in the Analyze tab.
+
+    Returns:
+        Dict with _wait_for_worker marker for async execution.
+    """
+    if not query or not query.strip():
+        return {"success": False, "error": "Query text is required"}
+
+    # Resolve clips
+    if clip_ids:
+        valid_ids = [cid for cid in clip_ids if cid in main_window.project.clips_by_id]
+        if not valid_ids:
+            return {"success": False, "error": "No valid clip IDs found"}
+        clips = [main_window.project.clips_by_id[cid] for cid in valid_ids]
+    else:
+        clips = main_window.analyze_tab.get_clips()
+        if not clips:
+            return {
+                "success": False,
+                "error": "No clips in Analyze tab. Send clips to Analyze first."
+            }
+
+    # Store the query text so the worker launch can access it
+    main_window._custom_query_text = query.strip()
+
+    return {
+        "_wait_for_worker": "analyze_all",
+        "clip_ids": [c.id for c in clips],
+        "clip_count": len(clips),
+        "operations": ["custom_query"],
+    }
+
+
 # =============================================================================
 # Sequence/Remix Tools - Generate sorted clip sequences
 # =============================================================================
