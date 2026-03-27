@@ -3081,20 +3081,6 @@ class MainWindow(QMainWindow):
     def _on_quick_run_from_tab(self, op_key: str):
         """Handle quick-run dropdown from Analyze tab (single operation, immediate)."""
         clips = self.analyze_tab.get_clips()
-        if not clips:
-            return
-
-        # Custom Query requires a text input before dispatching
-        if op_key == "custom_query":
-            query_text, ok = QInputDialog.getText(
-                self, "Custom Visual Query",
-                "What are you looking for? (e.g., 'blue flower', 'person wearing a hat')"
-            )
-            if ok and query_text.strip():
-                self._custom_query_text = query_text.strip()
-                self._run_analysis_pipeline(clips, [op_key])
-            return
-
         if clips:
             self._run_analysis_pipeline(clips, [op_key])
 
@@ -3128,6 +3114,20 @@ class MainWindow(QMainWindow):
         """
         if not clips or not operations:
             return
+
+        # Custom Query needs query text — prompt if not already set (e.g., from agent tool)
+        if "custom_query" in operations and not self._custom_query_text:
+            query_text, ok = QInputDialog.getText(
+                self, "Custom Visual Query",
+                "What are you looking for? (e.g., 'blue flower', 'person wearing a hat')"
+            )
+            if ok and query_text.strip():
+                self._custom_query_text = query_text.strip()
+            else:
+                # User cancelled — remove custom_query from operations
+                operations = [op for op in operations if op != "custom_query"]
+                if not operations:
+                    return
 
         # Validate operation keys
         valid_ops = [op for op in operations if op in OPERATIONS_BY_KEY]
