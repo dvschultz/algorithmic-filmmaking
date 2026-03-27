@@ -185,6 +185,7 @@ class DependencyDownloadDialog(QDialog):
 
         self._install_func = install_func
         self._worker: Optional[_DownloadWorker] = None
+        self._log_host = self._resolve_log_host(parent)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(Spacing.MD)
@@ -209,9 +210,26 @@ class DependencyDownloadDialog(QDialog):
         self._button_box = QDialogButtonBox()
         self._download_btn = self._button_box.addButton("Download", QDialogButtonBox.AcceptRole)
         self._cancel_btn = self._button_box.addButton(QDialogButtonBox.Cancel)
+        self._view_logs_btn = None
+        if self._log_host is not None:
+            self._view_logs_btn = self._button_box.addButton("View Logs", QDialogButtonBox.ActionRole)
+            self._view_logs_btn.clicked.connect(self._log_host.show_log_viewer)
         self._download_btn.clicked.connect(self._start_download)
         self._cancel_btn.clicked.connect(self.reject)
         layout.addWidget(self._button_box)
+
+    @staticmethod
+    def _resolve_log_host(parent) -> Optional[QWidget]:
+        """Return the nearest parent widget that can show the global log viewer."""
+        widget = parent
+        while widget is not None:
+            if hasattr(widget, "show_log_viewer"):
+                return widget
+            if hasattr(widget, "parentWidget"):
+                widget = widget.parentWidget()
+            else:
+                widget = None
+        return None
 
     def _start_download(self):
         self._download_btn.setEnabled(False)

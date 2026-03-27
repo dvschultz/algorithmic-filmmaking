@@ -8,8 +8,11 @@ Gemini models support video input natively, providing richer temporal understand
 """
 
 import base64
+import importlib
 import logging
+import os
 import platform
+import sys
 import subprocess
 import tempfile
 import threading
@@ -428,8 +431,42 @@ def _load_moondream_fallback():
         )
         return tok, mdl
 
+    def _load_with_transformers_cache_repair(load_func, context: str):
+        try:
+            return load_func()
+        except Exception as e:
+            if not _is_stale_transformers_module_cache_error(e):
+                raise
+
+            repaired = _clear_stale_transformers_module_cache(e)
+            if repaired:
+                logger.warning(
+                    "%s hit a stale Hugging Face transformers module cache; "
+                    "cleared cached remote-code modules and retrying",
+                    context,
+                )
+            else:
+                logger.warning(
+                    "%s failed with a stale Hugging Face transformers module cache, "
+                    "but no cached module directory could be cleared",
+                    context,
+                )
+
+            try:
+                return load_func()
+            except Exception as retry_error:
+                if _is_stale_transformers_module_cache_error(retry_error):
+                    raise RuntimeError(
+                        "Local CPU description runtime cache is corrupted. "
+                        "Clear the local model cache or reinstall local description dependencies."
+                    ) from retry_error
+                raise
+
     try:
-        tokenizer, model = _load_from_pretrained(MOONDREAM_REVISION)
+        tokenizer, model = _load_with_transformers_cache_repair(
+            lambda: _load_from_pretrained(MOONDREAM_REVISION),
+            "Moondream model load",
+        )
     except Exception as e:
         if "additional_chat_templates" in str(e):
             # Newer huggingface_hub tries to fetch additional_chat_templates
@@ -445,14 +482,19 @@ def _load_moondream_fallback():
                 revision=MOONDREAM_REVISION,
                 allow_patterns=["*.json", "*.safetensors", "*.txt", "*.py", "*.model"],
             )
-            tokenizer = AutoTokenizer.from_pretrained(
-                local_dir, trust_remote_code=True, local_files_only=True,
-            )
-            model = AutoModelForCausalLM.from_pretrained(
-                local_dir,
-                trust_remote_code=True,
-                local_files_only=True,
-                torch_dtype=torch.float32 if device == "cpu" else torch.float16,
+            tokenizer, model = _load_with_transformers_cache_repair(
+                lambda: (
+                    AutoTokenizer.from_pretrained(
+                        local_dir, trust_remote_code=True, local_files_only=True,
+                    ),
+                    AutoModelForCausalLM.from_pretrained(
+                        local_dir,
+                        trust_remote_code=True,
+                        local_files_only=True,
+                        torch_dtype=torch.float32 if device == "cpu" else torch.float16,
+                    ),
+                ),
+                "Moondream local-cache load",
             )
         else:
             raise
@@ -496,6 +538,67 @@ def _describe_with_moondream(model, tokenizer, image_path: Path, prompt: str) ->
     except Exception as e:
         logger.error(f"Moondream inference failed: {e}")
         raise RuntimeError(f"CPU inference failed: {e}") from e
+
+
+def _is_stale_transformers_module_cache_error(error: Exception) -> bool:
+    """Return True when transformers remote-code cache files are missing."""
+    message = str(error).strip()
+    if isinstance(error, FileNotFoundError):
+        return "transformers_modules" in message or "huggingface/modules" in message
+
+    return (
+        "No such file or directory" in message
+        and ("transformers_modules" in message or "huggingface/modules" in message)
+    )
+
+
+def _clear_stale_transformers_module_cache(error: Exception) -> bool:
+    """Clear cached transformers remote-code modules referenced by a stale-file error."""
+    import shutil
+
+    candidate_roots: list[Path] = []
+
+    error_message = str(error)
+    for quote in ("'", '"'):
+        for part in error_message.split(quote):
+            if "transformers_modules" not in part:
+                continue
+            path = Path(part)
+            for parent in [path, *path.parents]:
+                if parent.name == "transformers_modules":
+                    candidate_roots.append(parent)
+                    break
+
+    try:
+        from transformers.dynamic_module_utils import HF_MODULES_CACHE, TRANSFORMERS_DYNAMIC_MODULE_NAME
+
+        candidate_roots.append(Path(HF_MODULES_CACHE) / TRANSFORMERS_DYNAMIC_MODULE_NAME)
+    except Exception:
+        modules_cache = os.environ.get("HF_MODULES_CACHE")
+        if modules_cache:
+            candidate_roots.append(Path(modules_cache) / "transformers_modules")
+
+    cleared_any = False
+    seen: set[Path] = set()
+    for root in candidate_roots:
+        resolved = root.expanduser()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+
+        if not resolved.exists():
+            continue
+
+        shutil.rmtree(resolved, ignore_errors=False)
+        logger.info(f"Cleared stale transformers module cache: {resolved}")
+        cleared_any = True
+
+    for module_name in list(sys.modules):
+        if module_name == "transformers_modules" or module_name.startswith("transformers_modules."):
+            sys.modules.pop(module_name, None)
+
+    importlib.invalidate_caches()
+    return cleared_any
 
 
 # Backward-compatible alias

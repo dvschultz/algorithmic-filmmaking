@@ -73,6 +73,16 @@ class SequenceExporter:
         if not all_clips:
             return False
 
+        logger.info(
+            "Starting sequence export: clips=%d output=%s fps=%.3f resolution=%sx%s music=%s",
+            len(all_clips),
+            config.output_path,
+            config.fps,
+            config.width if config.width is not None else "source",
+            config.height if config.height is not None else "source",
+            config.music_path,
+        )
+
         # Create temp directory for intermediate files
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -149,8 +159,17 @@ class SequenceExporter:
 
                 if success:
                     segment_paths.append(segment_path)
+                else:
+                    logger.error(
+                        "Sequence export segment failed: index=%d segment=%s seq_clip=%s frame_entry=%s",
+                        i,
+                        segment_path,
+                        getattr(seq_clip, "id", None),
+                        getattr(seq_clip, "is_frame_entry", False),
+                    )
 
             if not segment_paths:
+                logger.error("Sequence export aborted: no segments were produced")
                 return False
 
             # Concatenate all segments
@@ -173,6 +192,12 @@ class SequenceExporter:
                 output_path=concat_output,
                 config=config,
             )
+            if not success:
+                logger.error(
+                    "Sequence export concat failed: output=%s segment_count=%d",
+                    concat_output,
+                    len(segment_paths),
+                )
 
             # Mux music audio onto the concatenated video
             if success and concat_output != config.output_path:
@@ -184,9 +209,18 @@ class SequenceExporter:
                     output_path=config.output_path,
                     config=config,
                 )
+                if not success:
+                    logger.warning(
+                        "Sequence export completed without requested music track: output=%s music=%s",
+                        config.output_path,
+                        config.music_path,
+                    )
 
             if progress_callback:
                 progress_callback(1.0, "Export complete!")
+
+            if success:
+                logger.info("Sequence export finished: output=%s", config.output_path)
 
             return success
 
@@ -251,6 +285,15 @@ class SequenceExporter:
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300,
                                 **get_subprocess_kwargs())
+        if result.returncode != 0:
+            logger.error(
+                "Sequence segment export failed: source=%s output=%s start_frame=%s end_frame=%s stderr=%s",
+                source_path,
+                output_path,
+                start_frame,
+                end_frame,
+                (result.stderr or "").strip()[-1000:],
+            )
         return result.returncode == 0
 
     def _export_prerendered_segment(
@@ -293,6 +336,13 @@ class SequenceExporter:
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300,
                                 **get_subprocess_kwargs())
+        if result.returncode != 0:
+            logger.error(
+                "Prerendered segment export failed: input=%s output=%s stderr=%s",
+                prerendered_path,
+                output_path,
+                (result.stderr or "").strip()[-1000:],
+            )
         return result.returncode == 0
 
     def _export_frame_segment(
@@ -348,6 +398,14 @@ class SequenceExporter:
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300,
                                 **get_subprocess_kwargs())
+        if result.returncode != 0:
+            logger.error(
+                "Frame segment export failed: frame=%s output=%s hold=%.3fs stderr=%s",
+                frame_path,
+                output_path,
+                hold_seconds,
+                (result.stderr or "").strip()[-1000:],
+            )
         return result.returncode == 0
 
     def _resolve_sequence_clip_color(
@@ -506,6 +564,13 @@ class SequenceExporter:
 
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=600,
                                     **get_subprocess_kwargs())
+            if result.returncode != 0:
+                logger.error(
+                    "Sequence concat failed: output=%s segment_count=%d stderr=%s",
+                    output_path,
+                    len(segment_paths),
+                    (result.stderr or "").strip()[-1000:],
+                )
             return result.returncode == 0
         finally:
             Path(concat_file).unlink(missing_ok=True)

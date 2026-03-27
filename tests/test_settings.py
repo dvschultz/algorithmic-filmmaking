@@ -24,6 +24,7 @@ from core.settings import (
     _get_config_dir,
     _get_config_path,
     _get_cache_dir,
+    _sync_model_cache_env,
     _get_api_key_from_keyring,
     _apply_env_overrides,
     ENV_YOUTUBE_API_KEY,
@@ -260,6 +261,40 @@ class TestEnvironmentVariables:
             _apply_env_overrides(settings)
             assert settings.export_dir == Path("/env/export")
             assert is_from_environment("export_dir")
+
+
+class TestModelCacheEnvSync:
+    """Tests for Hugging Face / Torch cache environment synchronization."""
+
+    def test_sync_model_cache_env_sets_huggingface_and_torch_paths(self):
+        cache_root = Path("/tmp/scene-ripper-model-cache")
+
+        with patch.dict(os.environ, {}, clear=False):
+            _sync_model_cache_env(cache_root)
+
+            assert os.environ["HF_HOME"] == str(cache_root / "huggingface")
+            assert os.environ["HF_HUB_CACHE"] == str(cache_root / "huggingface")
+            assert os.environ["HF_MODULES_CACHE"] == str(cache_root / "huggingface" / "modules")
+            assert os.environ["TORCH_HOME"] == str(cache_root)
+
+    def test_sync_model_cache_env_updates_imported_transformers_modules(self):
+        cache_root = Path("/tmp/scene-ripper-model-cache")
+        fake_dynamic = MagicMock(HF_MODULES_CACHE="/old/modules")
+        fake_hub = MagicMock(HF_MODULES_CACHE="/old/modules")
+
+        with patch.dict(
+            sys.modules,
+            {
+                "transformers.dynamic_module_utils": fake_dynamic,
+                "transformers.utils.hub": fake_hub,
+            },
+            clear=False,
+        ):
+            _sync_model_cache_env(cache_root)
+
+        expected = str(cache_root / "huggingface" / "modules")
+        assert fake_dynamic.HF_MODULES_CACHE == expected
+        assert fake_hub.HF_MODULES_CACHE == expected
 
     def test_env_sensitivity(self):
         """Test SCENE_RIPPER_SENSITIVITY env var."""

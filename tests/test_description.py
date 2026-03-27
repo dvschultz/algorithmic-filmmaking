@@ -209,6 +209,93 @@ class TestDescriptionAnalysis(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "transformers/tokenizers install is broken"):
                 ensure_local_description_runtime_available()
 
+    @patch("core.analysis.description._clear_stale_transformers_module_cache", return_value=True)
+    @patch("core.analysis.description.load_settings")
+    @patch("core.analysis.description.ensure_local_cpu_description_runtime_available")
+    def test_moondream_loader_retries_after_stale_transformers_module_cache(
+        self,
+        mock_runtime,
+        mock_settings,
+        mock_clear_cache,
+    ):
+        """Moondream load should clear stale transformers remote-code cache and retry once."""
+        from types import SimpleNamespace
+
+        from core.analysis.description import _load_moondream_fallback, unload_model
+
+        fake_torch = SimpleNamespace(
+            cuda=SimpleNamespace(is_available=lambda: False),
+            backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: False)),
+            float32="float32",
+            float16="float16",
+        )
+
+        mock_tokenizer = MagicMock(name="tokenizer")
+        mock_model = MagicMock(name="model")
+        mock_model.to.return_value = mock_model
+
+        missing = FileNotFoundError(
+            "No such file or directory: "
+            "'/tmp/huggingface/modules/transformers_modules/abc123/layers.py'"
+        )
+        AutoTokenizer = MagicMock()
+        AutoTokenizer.from_pretrained.side_effect = [missing, mock_tokenizer]
+        AutoModelForCausalLM = MagicMock()
+        AutoModelForCausalLM.from_pretrained.return_value = mock_model
+
+        mock_runtime.return_value = (AutoModelForCausalLM, AutoTokenizer)
+        mock_settings.return_value = Settings(description_model_local="vikhyatk/moondream2")
+
+        with patch.dict(sys.modules, {"torch": fake_torch}, clear=False):
+            _load_moondream_fallback()
+
+        self.assertEqual(AutoTokenizer.from_pretrained.call_count, 2)
+        AutoModelForCausalLM.from_pretrained.assert_called_once()
+        mock_clear_cache.assert_called_once()
+        unload_model()
+
+    @patch("core.analysis.description._clear_stale_transformers_module_cache", return_value=True)
+    @patch("core.analysis.description.load_settings")
+    @patch("core.analysis.description.ensure_local_cpu_description_runtime_available")
+    def test_moondream_loader_surfaces_actionable_error_when_cache_remains_broken(
+        self,
+        mock_runtime,
+        mock_settings,
+        mock_clear_cache,
+    ):
+        """Repeated stale-cache failures should produce a repair message, not a raw path error."""
+        from types import SimpleNamespace
+
+        from core.analysis.description import _load_moondream_fallback, unload_model
+
+        fake_torch = SimpleNamespace(
+            cuda=SimpleNamespace(is_available=lambda: False),
+            backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: False)),
+            float32="float32",
+            float16="float16",
+        )
+
+        missing = FileNotFoundError(
+            "No such file or directory: "
+            "'/tmp/huggingface/modules/transformers_modules/abc123/layers.py'"
+        )
+        AutoTokenizer = MagicMock()
+        AutoTokenizer.from_pretrained.side_effect = [missing, missing]
+        AutoModelForCausalLM = MagicMock()
+
+        mock_runtime.return_value = (AutoModelForCausalLM, AutoTokenizer)
+        mock_settings.return_value = Settings(description_model_local="vikhyatk/moondream2")
+
+        with patch.dict(sys.modules, {"torch": fake_torch}, clear=False):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Local CPU description runtime cache is corrupted",
+            ):
+                _load_moondream_fallback()
+
+        mock_clear_cache.assert_called_once()
+        unload_model()
+
 class TestFilterClipsSearchDescription(unittest.TestCase):
     """Test filter_clips with search_description parameter."""
 

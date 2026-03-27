@@ -72,6 +72,7 @@ from ui.chat_panel import ChatPanel
 from ui.chat_worker import ChatAgentWorker
 from ui.clip_details_sidebar import ClipDetailsSidebar
 from ui.dialogs import IntentionImportDialog, AnalysisPickerDialog
+from ui.log_viewer import LogViewerWidget, get_in_app_log_bridge
 from core.analysis_dependencies import get_operation_feature_candidates
 from core.analysis_operations import (
     OPERATIONS_BY_KEY,
@@ -660,23 +661,26 @@ class MainWindow(QMainWindow):
 
         from core.feature_registry import check_feature_ready
 
+        preferred_feature = feature_candidates[0]
+        alternate_available = False
         for feature_name in feature_candidates:
             available, _ = check_feature_ready(feature_name)
             if available:
-                if prompt_cache is not None:
-                    prompt_cache[feature_name] = True
-                return True
+                if feature_name == preferred_feature:
+                    if prompt_cache is not None:
+                        prompt_cache[feature_name] = True
+                    return True
+                alternate_available = True
 
-        preferred_feature = feature_candidates[0]
         if prompt_cache is not None and preferred_feature in prompt_cache:
-            return prompt_cache[preferred_feature]
+            return prompt_cache[preferred_feature] or alternate_available
 
         from ui.widgets.dependency_widgets import prompt_feature_download
 
         available = prompt_feature_download(preferred_feature, self)
         if prompt_cache is not None:
             prompt_cache[preferred_feature] = available
-        return available
+        return available or alternate_available
 
     def _filter_available_analysis_operations(
         self,
@@ -729,6 +733,8 @@ class MainWindow(QMainWindow):
         # Load settings
         self.settings = load_settings()
         logger.info(f"Loaded settings: sensitivity={self.settings.default_sensitivity}")
+        self._log_bridge = get_in_app_log_bridge()
+        self._log_bridge.install()
 
         # Apply theme preference from settings
         theme().set_preference(self.settings.theme_preference)
@@ -860,6 +866,9 @@ class MainWindow(QMainWindow):
         # Set up clip details sidebar
         logger.info("Setting up clip details sidebar...")
         self._setup_clip_details_sidebar()
+
+        logger.info("Setting up log viewer...")
+        self._setup_log_dock()
 
         # Playback state (must be after _setup_ui so tabs are initialized)
         logger.info("Setting up playback state...")
@@ -1685,6 +1694,27 @@ class MainWindow(QMainWindow):
         self.clip_details_toggle.setText("Show Clip Details")
         self.clip_details_toggle.setShortcut(QKeySequence("Ctrl+D"))
         self._view_menu.addAction(self.clip_details_toggle)
+
+    def _setup_log_dock(self):
+        """Initialize the global in-app log viewer dock widget."""
+        self.log_viewer = LogViewerWidget(self._log_bridge, self)
+
+        self.log_dock = QDockWidget("Logs", self)
+        self.log_dock.setWidget(self.log_viewer)
+        self.log_dock.setAllowedAreas(Qt.BottomDockWidgetArea | Qt.RightDockWidgetArea)
+        self.addDockWidget(Qt.BottomDockWidgetArea, self.log_dock)
+        self.log_dock.setVisible(False)
+
+        self.log_toggle_action = self.log_dock.toggleViewAction()
+        self.log_toggle_action.setText("Show Logs")
+        self.log_toggle_action.setShortcut(QKeySequence("Ctrl+Shift+L"))
+        self._view_menu.addAction(self.log_toggle_action)
+
+    def show_log_viewer(self):
+        """Reveal and focus the in-app log viewer."""
+        self.log_dock.setVisible(True)
+        self.log_dock.raise_()
+        self.log_dock.activateWindow()
 
     def show_clip_details(self, clip: Clip, source: Source):
         """Show the clip details sidebar for a clip.
@@ -5871,15 +5901,31 @@ class MainWindow(QMainWindow):
 
     def _export_clip_to_path(self, clip: Clip, source: Source, output_path: Path) -> bool:
         """Export a single clip to an explicit output path."""
+        logger.info(
+            "Manual clip export requested: clip=%s source=%s output=%s start_frame=%s end_frame=%s",
+            clip.id,
+            source.file_path,
+            output_path,
+            clip.start_frame,
+            clip.end_frame,
+        )
         output_path.parent.mkdir(parents=True, exist_ok=True)
         processor = FFmpegProcessor()
-        return processor.extract_clip(
+        success = processor.extract_clip(
             input_path=source.file_path,
             output_path=output_path,
             start_seconds=clip.start_time(source.fps),
             duration_seconds=clip.duration_seconds(source.fps),
             fps=source.fps,
         )
+        if not success:
+            logger.error(
+                "Manual clip export failed: clip=%s source=%s output=%s",
+                clip.id,
+                source.file_path,
+                output_path,
+            )
+        return success
 
     def _on_clip_export_requested(self, clip: Clip, source: Source):
         """Export the clicked clip only."""
@@ -5992,6 +6038,12 @@ class MainWindow(QMainWindow):
         output_path = Path(file_path)
         if not output_path.suffix:
             output_path = output_path.with_suffix(".mp4")
+
+        logger.info(
+            "Manual sequence export requested: output=%s clip_count=%d",
+            output_path,
+            len(all_clips),
+        )
 
         # Build sources and clips dictionaries from the timeline's actual content
         # (not from self.current_source which may be different)

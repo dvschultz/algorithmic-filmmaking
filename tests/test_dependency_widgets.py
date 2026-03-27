@@ -87,3 +87,56 @@ def test_analysis_operation_gate_uses_runtime_ready_check(monkeypatch):
     )
 
     assert MainWindow._ensure_analysis_operation_available(Harness(), "shots") is False
+
+
+def test_description_gate_attempts_preferred_install_before_cpu_fallback(monkeypatch):
+    class Harness:
+        def __init__(self):
+            self.settings = SimpleNamespace()
+
+    prompts = []
+
+    monkeypatch.setattr(
+        "ui.main_window.get_operation_feature_candidates",
+        lambda *_args, **_kwargs: ["describe_local", "describe_local_cpu"],
+    )
+
+    def _check_feature_ready(feature_name):
+        if feature_name == "describe_local":
+            return False, ["package:mlx_vlm"]
+        if feature_name == "describe_local_cpu":
+            return True, []
+        raise AssertionError(f"unexpected feature {feature_name}")
+
+    monkeypatch.setattr("core.feature_registry.check_feature_ready", _check_feature_ready)
+    monkeypatch.setattr(
+        "ui.widgets.dependency_widgets.prompt_feature_download",
+        lambda feature_name, *_args, **_kwargs: prompts.append(feature_name) or False,
+    )
+
+    assert MainWindow._ensure_analysis_operation_available(Harness(), "describe") is True
+    assert prompts == ["describe_local"]
+
+
+def test_description_gate_uses_fresh_preferred_install_when_available(monkeypatch):
+    class Harness:
+        def __init__(self):
+            self.settings = SimpleNamespace()
+
+    prompts = []
+
+    monkeypatch.setattr(
+        "ui.main_window.get_operation_feature_candidates",
+        lambda *_args, **_kwargs: ["describe_local", "describe_local_cpu"],
+    )
+    monkeypatch.setattr(
+        "core.feature_registry.check_feature_ready",
+        lambda feature_name: ((feature_name == "describe_local"), []),
+    )
+    monkeypatch.setattr(
+        "ui.widgets.dependency_widgets.prompt_feature_download",
+        lambda feature_name, *_args, **_kwargs: prompts.append(feature_name) or True,
+    )
+
+    assert MainWindow._ensure_analysis_operation_available(Harness(), "describe") is True
+    assert prompts == []

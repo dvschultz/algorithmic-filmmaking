@@ -960,8 +960,23 @@ def _sync_model_cache_env(model_cache_dir: Path) -> None:
 
     Force-sets the env vars so changes made in Settings take effect immediately.
     """
-    os.environ["HF_HUB_CACHE"] = str(model_cache_dir / "huggingface")
+    huggingface_dir = model_cache_dir / "huggingface"
+    modules_cache_dir = huggingface_dir / "modules"
+
+    os.environ["HF_HOME"] = str(huggingface_dir)
+    os.environ["HF_HUB_CACHE"] = str(huggingface_dir)
+    os.environ["HF_MODULES_CACHE"] = str(modules_cache_dir)
     os.environ["TORCH_HOME"] = str(model_cache_dir)
+
+    # Transformers resolves these cache paths at import time. Keep already-imported
+    # modules in sync so runtime changes to Settings take effect immediately.
+    dynamic_module_utils = sys.modules.get("transformers.dynamic_module_utils")
+    if dynamic_module_utils is not None:
+        dynamic_module_utils.HF_MODULES_CACHE = str(modules_cache_dir)
+
+    hub_module = sys.modules.get("transformers.utils.hub")
+    if hub_module is not None:
+        hub_module.HF_MODULES_CACHE = str(modules_cache_dir)
 
 
 def save_settings(settings: Settings) -> bool:

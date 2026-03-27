@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import logging
 
 from models.clip import Source
 from tests.conftest import make_test_clip
@@ -119,3 +120,24 @@ def test_default_clip_export_filename_uses_clip_name_when_present(tmp_path, sour
     filename = MainWindow._default_clip_export_filename(window, clip, source)
 
     assert filename == "video_Hero _Moment_.mp4"
+
+
+def test_export_clip_to_path_logs_failure(tmp_path, source, monkeypatch, caplog):
+    clip = make_test_clip("c1")
+    clip.source_id = source.id
+    output_path = tmp_path / "clip.mp4"
+
+    class _FakeProcessor:
+        def extract_clip(self, **_kwargs):
+            return False
+
+    monkeypatch.setattr("ui.main_window.FFmpegProcessor", lambda: _FakeProcessor())
+
+    window = _make_window(tmp_path)
+
+    with caplog.at_level(logging.INFO):
+        success = MainWindow._export_clip_to_path(window, clip, source, output_path)
+
+    assert success is False
+    assert "Manual clip export requested" in caplog.text
+    assert "Manual clip export failed" in caplog.text

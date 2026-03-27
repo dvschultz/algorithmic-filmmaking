@@ -68,6 +68,15 @@ class FFmpegProcessor:
             True if successful
         """
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        logger.info(
+            "Extracting clip: input=%s output=%s start=%.3fs duration=%.3fs fps=%.3f accurate=%s",
+            input_path,
+            output_path,
+            start_seconds,
+            duration_seconds,
+            fps,
+            accurate,
+        )
 
         # Calculate end time, subtract one frame to exclude first frame of next scene
         frame_duration = 1.0 / fps
@@ -109,6 +118,15 @@ class FFmpegProcessor:
             timeout=300,  # 5 minute timeout for clip extraction
             **get_subprocess_kwargs(),
         )
+
+        if result.returncode != 0:
+            logger.error(
+                "FFmpeg clip extraction failed: input=%s output=%s returncode=%s stderr=%s",
+                input_path,
+                output_path,
+                result.returncode,
+                (result.stderr or "").strip()[-1000:],
+            )
 
         return result.returncode == 0
 
