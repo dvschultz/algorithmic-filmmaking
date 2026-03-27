@@ -63,7 +63,10 @@ def get_operation_feature_candidates(
         tier = description_tier or getattr(settings, "description_model_tier", "local")
         if tier == "local":
             if _is_apple_silicon():
-                return ["describe_local", "describe_local_cpu"]
+                # Only list describe_local (mlx-vlm / Qwen3-VL) — don't fall back to
+                # describe_local_cpu here so the install prompt triggers for mlx-vlm.
+                # Moondream is a poor fit for yes/no visual queries.
+                return ["describe_local"]
             return ["describe_local_cpu"]
         return []
 
