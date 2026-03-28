@@ -397,7 +397,7 @@ class Settings:
     export_fps: str = "original"  # original, 24, 30, 60
 
     # Transcription settings
-    transcription_model: str = "small.en"  # tiny.en, small.en, medium.en, large-v3
+    transcription_model: str = "medium.en"  # tiny.en, small.en, medium.en, large-v3
     transcription_language: str = "en"  # en, auto, or specific language code
     transcription_backend: str = "auto"  # auto, faster-whisper, mlx-whisper, groq
     transcription_cloud_model: str = "whisper-large-v3-turbo"  # Groq cloud model
