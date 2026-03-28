@@ -142,6 +142,24 @@ If environment-specific, document why a test isn't feasible.
 ### Bug Report Format
 Confirm before investigating: (1) **Symptom** — what happens, (2) **Expected** — what should happen, (3) **Success criteria** — how to verify the fix. Ask if unclear.
 
+## Building & Releasing
+
+**Always use GitHub Actions CI for release builds** — never build locally for distribution. Local builds use ad-hoc code signing and skip notarization, so users will get Gatekeeper warnings.
+
+```bash
+# Trigger macOS CI build (proper signing + notarization):
+gh workflow run build-macos.yml -f version=X.Y.Z
+
+# Or push a tag to trigger automatically:
+git tag vX.Y.Z && git push origin vX.Y.Z
+
+# Monitor build:
+gh run list --workflow=build-macos.yml --limit=1
+gh run watch <run-id>
+```
+
+CI handles: Apple Developer code signing, notarization, Sparkle auto-updater appcast, DMG creation, smoke tests, and uploading assets to the GitHub release. The local `packaging/macos/build.sh` script is for development testing only.
+
 ## Common Commands
 
 ```bash
