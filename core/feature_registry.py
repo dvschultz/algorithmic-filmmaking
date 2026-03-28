@@ -174,9 +174,9 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
     ),
     "shot_classify": FeatureDeps(
         binaries=[],
-        packages=["torch", "torchvision", "transformers", "einops", "sentencepiece", "protobuf"],
+        packages=["torch", "torchvision", "transformers", "huggingface_hub", "einops", "sentencepiece", "protobuf"],
         size_estimate_mb=450,
-        repair_packages=["torch", "torchvision", "transformers", "tokenizers", "einops", "sentencepiece", "protobuf"],
+        repair_packages=["torch", "torchvision", "transformers", "huggingface_hub", "tokenizers", "einops", "sentencepiece", "protobuf"],
         native_install=True,  # torch/transformers need proper site-packages to avoid circular imports
     ),
     "image_classify": FeatureDeps(

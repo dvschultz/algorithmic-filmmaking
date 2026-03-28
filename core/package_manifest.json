@@ -10,7 +10,12 @@
     "transformers": {
       "pip_specifier": "transformers>=4.50,<5",
       "size_mb": 100,
-      "depends_on": ["torch", "tokenizers"],
+      "depends_on": ["torch", "tokenizers", "huggingface_hub"],
+      "features": ["shot_classify", "describe_local_cpu"]
+    },
+    "huggingface_hub": {
+      "pip_specifier": "huggingface-hub>=0.34.0,<1.0",
+      "size_mb": 8,
       "features": ["shot_classify", "describe_local_cpu"]
     },
     "tokenizers": {

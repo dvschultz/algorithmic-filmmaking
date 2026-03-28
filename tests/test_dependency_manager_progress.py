@@ -315,6 +315,7 @@ def test_install_for_feature_reinstalls_broken_runtime_even_when_packages_exist(
         "torch>=1.0",
         "torchvision>=1.0",
         "transformers>=1.0",
+        "huggingface_hub>=1.0",
         "tokenizers>=1.0",
         "einops>=1.0",
         "sentencepiece>=1.0",
@@ -338,7 +339,7 @@ def test_install_for_feature_reinstalls_broken_runtime_even_when_packages_exist(
         (
             "shot_classify",
             ["package:sentencepiece", "package:protobuf"],
-            ["torch", "torchvision", "transformers", "tokenizers", "einops", "sentencepiece", "protobuf"],
+            ["torch", "torchvision", "transformers", "huggingface_hub", "tokenizers", "einops", "sentencepiece", "protobuf"],
         ),
         (
             "image_classify",
