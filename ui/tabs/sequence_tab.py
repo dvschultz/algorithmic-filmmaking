@@ -482,6 +482,32 @@ class SequenceTab(BaseTab):
         if self.state_stack.currentIndex() == self.STATE_CONFIRM:
             self._refresh_confirm_estimates()
 
+    def _resolve_selected_clips(self, selected_ids: list[str]) -> list[tuple]:
+        """Resolve selected clip IDs to ``(clip, source)`` tuples.
+
+        Falls back to the tab's authoritative clip/source registries when
+        ``_available_clips`` is empty or only contains a filtered subset.
+        """
+        if not selected_ids:
+            return []
+
+        clip_lookup: dict[str, tuple] = {}
+
+        for clip, source in self._available_clips:
+            if source is not None:
+                clip_lookup[clip.id] = (clip, source)
+
+        for clip in self._clips:
+            source = self._sources.get(clip.source_id)
+            if source is not None:
+                clip_lookup.setdefault(clip.id, (clip, source))
+
+        return [
+            clip_lookup[clip_id]
+            for clip_id in selected_ids
+            if clip_id in clip_lookup
+        ]
+
     # --- Signal handlers ---
 
     @Slot(str)
@@ -521,14 +547,7 @@ class SequenceTab(BaseTab):
             )
             return
 
-        # Get clip objects from our clips_by_id lookup
-        clips = []
-        for cid in selected_ids:
-            # Look up in available clips
-            for clip, source in self._available_clips:
-                if clip.id == cid:
-                    clips.append((clip, source))
-                    break
+        clips = self._resolve_selected_clips(selected_ids)
 
         if not clips:
             QMessageBox.warning(
@@ -1561,13 +1580,7 @@ class SequenceTab(BaseTab):
         if not selected_ids:
             return {"success": False, "error": "No clips selected in Analyze or Cut tab"}
 
-        # Get clip objects
-        clips = []
-        for cid in selected_ids:
-            for clip, source in self._available_clips:
-                if clip.id == cid:
-                    clips.append((clip, source))
-                    break
+        clips = self._resolve_selected_clips(selected_ids)
 
         if not clips:
             return {"success": False, "error": "Selected clips not available for sequencing"}

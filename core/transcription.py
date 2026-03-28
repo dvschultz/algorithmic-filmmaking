@@ -40,6 +40,50 @@ _mlx_model_name = None
 _mlx_whisper_available = None
 _mlx_model_lock = threading.Lock()
 
+
+def _has_audio_stream(path: Path) -> Optional[bool]:
+    """Return whether a media file has an audio stream.
+
+    Returns ``False`` when ffprobe can positively determine that no audio stream
+    exists. Returns ``None`` when probing is unavailable or inconclusive so
+    transcription can continue with the existing backend-specific behavior.
+    """
+    ffprobe_path = find_binary("ffprobe")
+    if ffprobe_path is None:
+        logger.debug("ffprobe not available; skipping audio-stream preflight for %s", path)
+        return None
+
+    cmd = [
+        ffprobe_path,
+        "-v", "error",
+        "-select_streams", "a",
+        "-show_entries", "stream=codec_type",
+        "-of", "csv=p=0",
+        str(path),
+    ]
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            **get_subprocess_kwargs(),
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+        logger.warning("ffprobe audio-stream preflight failed for %s: %s", path, exc)
+        return None
+
+    if result.returncode != 0:
+        logger.warning(
+            "ffprobe audio-stream preflight returned non-zero for %s: %s",
+            path,
+            (result.stderr or "").strip(),
+        )
+        return None
+
+    return bool(result.stdout.strip())
+
 # Available model configurations
 WHISPER_MODELS = {
     "tiny.en": {"size": "39MB", "speed": "~32x", "accuracy": "Basic", "vram": "<1GB"},
@@ -295,6 +339,13 @@ def transcribe_video(
     Returns:
         List of TranscriptSegment objects
     """
+    has_audio = _has_audio_stream(video_path)
+    if has_audio is False:
+        logger.info("Skipping transcription for %s: no audio track found", video_path)
+        if progress_callback:
+            progress_callback(1.0, "No audio track found")
+        return []
+
     resolved = _resolve_backend(backend)
 
     if resolved == "groq":
@@ -423,6 +474,11 @@ def transcribe_clip(
     Returns:
         List of TranscriptSegment objects with times relative to clip start
     """
+    has_audio = _has_audio_stream(source_path)
+    if has_audio is False:
+        logger.info("Skipping clip transcription for %s: no audio track found", source_path)
+        return []
+
     resolved = _resolve_backend(backend)
 
     # Extract audio segment to temp file

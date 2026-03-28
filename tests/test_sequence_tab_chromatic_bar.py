@@ -70,3 +70,35 @@ def test_card_click_chromatic_flow_still_shows_confirm_when_estimates_empty(qapp
     assert tab._current_state == tab.STATE_CONFIRM
     assert tab._pending_algorithm == "color"
     assert len(tab._pending_clips) == 1
+
+
+def test_card_click_resolves_selected_clips_when_available_cache_is_empty(qapp, monkeypatch):
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from models.clip import Clip, Source
+    from ui.tabs.sequence_tab import SequenceTab
+
+    tab = SequenceTab()
+    source = Source(id="src-1", file_path=Path("/tmp/test.mp4"), fps=24.0)
+    clip = Clip(id="clip-1", source_id=source.id, start_frame=0, end_frame=24)
+    tab.set_available_clips([], all_clips=[clip], sources_by_id={source.id: source})
+    tab._gui_state = SimpleNamespace(analyze_selected_ids=[], cut_selected_ids=[clip.id])
+
+    dialog_calls = []
+    warnings = []
+
+    monkeypatch.setattr(
+        tab,
+        "_show_dice_roll_dialog",
+        lambda clips: dialog_calls.append(clips),
+    )
+    monkeypatch.setattr(
+        "ui.tabs.sequence_tab.QMessageBox.warning",
+        lambda *args: warnings.append(args),
+    )
+
+    tab._on_card_clicked("shuffle")
+
+    assert warnings == []
+    assert dialog_calls == [[(clip, source)]]

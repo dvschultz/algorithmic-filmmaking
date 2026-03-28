@@ -167,6 +167,20 @@ class ObjectDetectionWorker(CancellableWorker):
             f"parallelism={self._parallelism}"
         )
 
+        try:
+            from core.analysis.detection import (
+                ensure_default_detection_model_loaded,
+            )
+
+            ensure_default_detection_model_loaded()
+        except Exception as e:
+            error_msg = str(e)
+            self._log_error(error_msg)
+            self.error.emit(error_msg)
+            self.detection_completed.emit()
+            self._log_complete()
+            return
+
         completed = 0
         errors: list[tuple[str, str]] = []
 

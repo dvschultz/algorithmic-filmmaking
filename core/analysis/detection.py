@@ -118,6 +118,11 @@ def _load_yolo(model_size: str = "n"):
     return _model
 
 
+def ensure_default_detection_model_loaded(model_size: str = "n") -> None:
+    """Preload the fixed-vocabulary YOLO model used by object detection."""
+    _load_yolo(model_size)
+
+
 def _load_yoloe(custom_classes: list[str]):
     """Lazy load YOLOE-26 open-vocabulary model (thread-safe).
 

@@ -313,6 +313,9 @@ class TestObjectDetectionWorkerErrors:
         )
 
         with patch(
+            "core.analysis.detection.ensure_default_detection_model_loaded",
+            return_value=None,
+        ), patch(
             "core.analysis.detection.detect_objects",
             side_effect=RuntimeError("yolo weights missing"),
         ):
@@ -328,6 +331,42 @@ class TestObjectDetectionWorkerErrors:
         assert "clip-1" in errors[0]
         assert "clip-2" in errors[0]
         assert "yolo weights missing" in errors[0]
+
+    def test_model_load_failure_emits_single_batch_error(self, thumbnail_path, monkeypatch):
+        from core.errors import ModelDownloadError
+        from ui.workers.object_detection_worker import ObjectDetectionWorker
+
+        clips = [
+            _make_clip_with_thumb("clip-1", thumbnail_path),
+            _make_clip_with_thumb("clip-2", thumbnail_path),
+        ]
+        worker = ObjectDetectionWorker(
+            clips,
+            parallelism=1,
+            skip_existing=False,
+        )
+
+        def _raise_model_load_failure():
+            raise ModelDownloadError("Failed to load YOLO26n model: network down")
+
+        def _process_should_not_run(_task):
+            raise AssertionError("per-clip detection should not run after model preload fails")
+
+        monkeypatch.setattr(
+            "core.analysis.detection.ensure_default_detection_model_loaded",
+            _raise_model_load_failure,
+        )
+        monkeypatch.setattr(worker, "_process_task", _process_should_not_run)
+
+        errors = []
+        completed = []
+        worker.error.connect(errors.append)
+        worker.detection_completed.connect(lambda: completed.append(True))
+
+        worker.run()
+
+        assert completed == [True]
+        assert errors == ["Failed to load YOLO26n model: network down"]
 
 
 # --- TranscriptionWorker ---
