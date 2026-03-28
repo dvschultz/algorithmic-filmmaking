@@ -32,8 +32,9 @@ class TranscriptionTask:
 class TranscriptionWorker(CancellableWorker):
     """Background worker for transcribing clips using faster-whisper.
 
-    Uses ThreadPoolExecutor for parallel processing. Default parallelism is 2
-    because each transcription spawns an FFmpeg subprocess + Whisper inference.
+    Uses ThreadPoolExecutor for parallel processing. faster-whisper and cloud
+    transcription can run concurrently, but local MLX transcription is forced
+    to serial execution because model initialization/inference is not thread-safe.
 
     Signals:
         progress: Emitted with (current, total) during processing
@@ -60,9 +61,17 @@ class TranscriptionWorker(CancellableWorker):
         super().__init__(parent)
         self._model_name = model_name
         self._language = language
-        self._backend = backend
-        self._parallelism = min(max(1, parallelism), 4)
+        self._backend = self._resolve_backend(backend)
+        requested_parallelism = min(max(1, parallelism), 4)
+        self._parallelism = 1 if self._backend == "mlx-whisper" else requested_parallelism
         self._tasks = self._build_tasks(clips, source, skip_existing)
+
+    @staticmethod
+    def _resolve_backend(backend: str) -> str:
+        """Resolve auto backend selection once at worker startup."""
+        from core.transcription import _resolve_backend
+
+        return _resolve_backend(backend)
 
     def _build_tasks(
         self, clips: list, source, skip_existing: bool

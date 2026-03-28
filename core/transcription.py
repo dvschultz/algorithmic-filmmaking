@@ -13,16 +13,22 @@ Backend selection:
 """
 
 import logging
+import os
 import platform
 import subprocess
 import tempfile
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
-from core.binary_resolver import find_binary, get_subprocess_kwargs
+from core.binary_resolver import find_binary, get_subprocess_env, get_subprocess_kwargs
 
 logger = logging.getLogger(__name__)
+
+# Avoid Hugging Face tokenizer thread-pool warnings when FFmpeg subprocesses
+# are spawned after tokenizer initialization.
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 # Lazy load to avoid startup delay
 _model = None
@@ -32,6 +38,7 @@ _faster_whisper_available = None
 _mlx_model = None
 _mlx_model_name = None
 _mlx_whisper_available = None
+_mlx_model_lock = threading.Lock()
 
 # Available model configurations
 WHISPER_MODELS = {
@@ -45,9 +52,9 @@ WHISPER_MODELS = {
 # Model name mapping: faster-whisper name → lightning-whisper-mlx name
 # lightning-whisper-mlx uses slightly different naming conventions
 _MLX_MODEL_MAP = {
-    "tiny.en": "tiny.en",
-    "small.en": "small.en",
-    "medium.en": "medium.en",
+    "tiny.en": "tiny",
+    "small.en": "small",
+    "medium.en": "medium",
     "large-v3": "large-v3",
     "large-v3-turbo": "large-v3",  # PINNED: lightning-whisper-mlx lacks turbo variant; silently maps to large-v3
 }
@@ -247,7 +254,13 @@ def get_mlx_model(model_name: str = "small.en"):
     # Map to mlx model name
     mlx_name = _MLX_MODEL_MAP.get(model_name, model_name)
 
-    if _mlx_model is None or _mlx_model_name != mlx_name:
+    if _mlx_model is not None and _mlx_model_name == mlx_name:
+        return _mlx_model
+
+    with _mlx_model_lock:
+        if _mlx_model is not None and _mlx_model_name == mlx_name:
+            return _mlx_model
+
         LightningWhisperMLX = ensure_mlx_whisper_runtime_available()
 
         logger.info(f"Loading MLX Whisper model: {mlx_name}")
@@ -366,6 +379,7 @@ def _transcribe_video_mlx(
             ],
             capture_output=True,
             check=True,
+            env=get_subprocess_env(),
             **get_subprocess_kwargs(),
         )
 
@@ -432,6 +446,7 @@ def transcribe_clip(
             ],
             capture_output=True,
             check=True,
+            env=get_subprocess_env(),
             **get_subprocess_kwargs(),
         )
 
@@ -561,6 +576,7 @@ def _transcribe_cloud_groq(
                 ],
                 capture_output=True,
                 check=True,
+                env=get_subprocess_env(),
                 **get_subprocess_kwargs(),
             )
             audio_file_path = tmp_path

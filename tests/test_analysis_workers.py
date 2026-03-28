@@ -372,8 +372,33 @@ class TestTranscriptionWorkerTaskBuilding:
     def test_parallelism_clamped(self, source):
         from ui.workers.transcription_worker import TranscriptionWorker
 
-        worker = TranscriptionWorker([], source, parallelism=100)
+        worker = TranscriptionWorker([], source, parallelism=100, backend="faster-whisper")
         assert worker._parallelism == 4  # Max is 4
+
+        worker = TranscriptionWorker([], source, parallelism=0, backend="faster-whisper")
+        assert worker._parallelism == 1  # Min is 1
+
+    def test_mlx_backend_forces_serial_parallelism(self, source, monkeypatch):
+        from ui.workers.transcription_worker import TranscriptionWorker
+
+        monkeypatch.setattr(
+            "ui.workers.transcription_worker.TranscriptionWorker._resolve_backend",
+            staticmethod(lambda _backend: "mlx-whisper"),
+        )
+
+        worker = TranscriptionWorker([], source, parallelism=4, backend="mlx-whisper")
+        assert worker._parallelism == 1
+
+    def test_auto_backend_forces_serial_parallelism_when_mlx_selected(self, source, monkeypatch):
+        from ui.workers.transcription_worker import TranscriptionWorker
+
+        monkeypatch.setattr(
+            "ui.workers.transcription_worker.TranscriptionWorker._resolve_backend",
+            staticmethod(lambda _backend: "mlx-whisper"),
+        )
+
+        worker = TranscriptionWorker([], source, parallelism=4, backend="auto")
+        assert worker._parallelism == 1
 
 
 # --- ClassificationWorker ---

@@ -183,6 +183,14 @@ class TestMlxWhisperBackend:
                 f"{model_name} missing from _MLX_MODEL_MAP"
             )
 
+    def test_mlx_model_map_uses_valid_lightning_whisper_names(self):
+        from core.transcription import _MLX_MODEL_MAP
+
+        assert _MLX_MODEL_MAP["tiny.en"] == "tiny"
+        assert _MLX_MODEL_MAP["small.en"] == "small"
+        assert _MLX_MODEL_MAP["medium.en"] == "medium"
+        assert _MLX_MODEL_MAP["large-v3"] == "large-v3"
+
     def test_is_mlx_whisper_available_function_exists(self):
         from core.transcription import is_mlx_whisper_available
         assert callable(is_mlx_whisper_available)
