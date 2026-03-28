@@ -497,21 +497,41 @@ def _parse_mlx_result(result: dict) -> list[TranscriptSegment]:
     """Convert lightning-whisper-mlx output to TranscriptSegment list.
 
     Args:
-        result: Dict with 'text', 'segments', 'language' keys
+        result: Dict with 'text', 'segments', 'language' keys.
+            Segments are lists of [start_frames, end_frames, text] where
+            frames are mel spectrogram frames (100 frames/second for
+            standard Whisper HOP_LENGTH=160, SAMPLE_RATE=16000).
 
     Returns:
         List of TranscriptSegment objects
     """
+    # Whisper mel frames → seconds: frames / (SAMPLE_RATE / HOP_LENGTH)
+    _FRAMES_PER_SECOND = 100.0  # 16000 / 160
+
     segments_out = []
     for seg in result.get("segments", []):
-        segments_out.append(
-            TranscriptSegment(
-                start_time=seg.get("start", 0.0),
-                end_time=seg.get("end", 0.0),
-                text=seg.get("text", "").strip(),
-                confidence=0.0,  # mlx-whisper doesn't provide logprobs
+        if isinstance(seg, dict):
+            # Older or alternative format: dict with 'start', 'end', 'text' keys
+            segments_out.append(
+                TranscriptSegment(
+                    start_time=seg.get("start", 0.0),
+                    end_time=seg.get("end", 0.0),
+                    text=seg.get("text", "").strip(),
+                    confidence=0.0,
+                )
             )
-        )
+        elif isinstance(seg, (list, tuple)) and len(seg) >= 3:
+            # Current format: [start_frames, end_frames, text]
+            segments_out.append(
+                TranscriptSegment(
+                    start_time=float(seg[0]) / _FRAMES_PER_SECOND,
+                    end_time=float(seg[1]) / _FRAMES_PER_SECOND,
+                    text=str(seg[2]).strip(),
+                    confidence=0.0,
+                )
+            )
+        else:
+            logger.warning(f"Unexpected segment format: {seg!r}")
     return segments_out
 
 
