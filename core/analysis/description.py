@@ -523,9 +523,15 @@ def describe_frame_local(image_path: Path, prompt: str = "Describe this image.")
 def _describe_with_mlx_vlm(model, processor, image_path: str, prompt: str) -> str:
     """Generate description using mlx-vlm."""
     from mlx_vlm import generate
+    from mlx_vlm.prompt_utils import apply_chat_template
 
     try:
-        result = generate(model, processor, prompt, image=image_path, max_tokens=256)
+        formatted_prompt = apply_chat_template(
+            processor, model.config, prompt, num_images=1
+        )
+        result = generate(
+            model, processor, formatted_prompt, image=image_path, max_tokens=256
+        )
         return result.text if hasattr(result, "text") else str(result)
     except Exception as e:
         logger.error(f"mlx-vlm inference failed: {e}")
