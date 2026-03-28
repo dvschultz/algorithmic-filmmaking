@@ -28,6 +28,8 @@ def test_detection_and_face_ops_map_to_their_features():
 
     assert get_operation_feature_candidates("detect_objects", settings) == ["object_detect"]
     assert get_operation_feature_candidates("face_embeddings", settings) == ["face_detect"]
+    assert get_operation_feature_candidates("embeddings", settings) == ["embeddings"]
+    assert get_operation_feature_candidates("boundary_embeddings", settings) == ["embeddings"]
 
 
 def test_text_extraction_only_requires_ocr_in_paddleocr_mode():

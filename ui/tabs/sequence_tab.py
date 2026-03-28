@@ -26,7 +26,9 @@ from ui.theme import theme, Spacing, TypeScale, UISizes
 from ui.workers.sequence_worker import SequenceWorker
 from core.remix import generate_sequence
 from core.cost_estimates import estimate_sequence_cost
-from core.settings import get_llm_api_key, get_replicate_api_key
+from core.analysis_dependencies import get_operation_feature_candidates
+from core.feature_registry import check_feature_ready
+from core.settings import get_llm_api_key, get_replicate_api_key, load_settings
 
 logger = logging.getLogger(__name__)
 
@@ -345,7 +347,7 @@ class SequenceTab(BaseTab):
         self._confirm_algo_label.setText(f"{config['icon']}  {config['label']}")
         self._confirm_clips_label.setText(f"{len(clips)} clips selected")
         self._confirm_cost_panel.set_estimates(estimates)
-        self._update_cloud_api_warning(estimates)
+        self._update_confirm_warnings(estimates)
         is_color = algorithm.lower() == "color"
         self._confirm_chromatic_bar_checkbox.setVisible(is_color)
         if is_color:
@@ -374,19 +376,16 @@ class SequenceTab(BaseTab):
                 f"{len(self._pending_clips)} clips selected — all analysis complete"
             )
 
-        # Check for missing API keys when cloud tier is selected
-        self._update_cloud_api_warning(estimates)
+        self._update_confirm_warnings(estimates)
 
-    def _update_cloud_api_warning(self, estimates: list):
-        """Show a warning if cloud tier is selected but API key is missing."""
+    def _get_cloud_api_warning(self, estimates: list) -> str | None:
+        """Return warning text when cloud tiers are selected without API keys."""
         if not estimates:
-            self._confirm_cost_panel.set_warning(None)
-            return
+            return None
 
         cloud_ops = [e for e in estimates if e.tier == "cloud"]
         if not cloud_ops:
-            self._confirm_cost_panel.set_warning(None)
-            return
+            return None
 
         missing = []
         needs_llm = any(e.operation in ("describe", "extract_text", "cinematography") for e in cloud_ops)
@@ -399,12 +398,55 @@ class SequenceTab(BaseTab):
 
         if missing:
             keys = " and ".join(missing)
-            self._confirm_cost_panel.set_warning(
+            return (
                 f"Cloud tier selected but no {keys} API key configured. "
                 f"Set keys in Settings or switch to Local tier."
             )
-        else:
-            self._confirm_cost_panel.set_warning(None)
+        return None
+
+    def _get_missing_local_dependency_warning(self, estimates: list) -> str | None:
+        """Return warning text when local sequence dependencies are unavailable."""
+        if not estimates:
+            return None
+
+        settings = load_settings()
+        blocked_labels: list[str] = []
+
+        for estimate in estimates:
+            feature_candidates = get_operation_feature_candidates(
+                estimate.operation,
+                settings,
+            )
+            if not feature_candidates:
+                continue
+            if any(check_feature_ready(name)[0] for name in feature_candidates):
+                continue
+            blocked_labels.append(estimate.label)
+
+        if not blocked_labels:
+            return None
+
+        unique_labels = list(dict.fromkeys(blocked_labels))
+        labels = ", ".join(unique_labels)
+        return (
+            f"{labels} require local dependencies that are not installed or are broken. "
+            "Install them in Settings > Dependencies before generating this sequence."
+        )
+
+    def _update_confirm_warnings(self, estimates: list) -> None:
+        """Refresh confirm-view warnings and generate-button enabled state."""
+        warnings: list[str] = []
+
+        cloud_warning = self._get_cloud_api_warning(estimates)
+        if cloud_warning:
+            warnings.append(cloud_warning)
+
+        dependency_warning = self._get_missing_local_dependency_warning(estimates)
+        if dependency_warning:
+            warnings.append(dependency_warning)
+
+        self._confirm_cost_panel.set_warning("\n\n".join(warnings) if warnings else None)
+        self._confirm_generate_btn.setEnabled(dependency_warning is None)
 
     def _on_confirm_tier_changed(self, operation: str, tier: str):
         """Recalculate estimates when user changes a tier dropdown in confirm view."""
@@ -623,9 +665,18 @@ class SequenceTab(BaseTab):
         if self._apply_in_progress:
             logger.warning("Apply already in progress, ignoring")
             return
-        self._apply_in_progress = True
 
         algo_lower = algorithm.lower()
+        estimates = estimate_sequence_cost(
+            algo_lower,
+            [clip for clip, _source in clips],
+        )
+        dependency_warning = self._get_missing_local_dependency_warning(estimates)
+        if dependency_warning:
+            QMessageBox.warning(self, "Missing Dependencies", dependency_warning)
+            return
+
+        self._apply_in_progress = True
 
         # Cancel any previous worker
         if self._sequence_worker is not None:
@@ -1421,6 +1472,15 @@ class SequenceTab(BaseTab):
             clip.shot_type or clip.cinematography
             for clip in self._clips
         )
+        has_embeddings = all(clip.embedding is not None for clip in self._clips)
+        has_boundary_embeddings = all(
+            clip.first_frame_embedding is not None and clip.last_frame_embedding is not None
+            for clip in self._clips
+        )
+        embeddings_available = any(
+            check_feature_ready(name)[0]
+            for name in get_operation_feature_candidates("embeddings", load_settings())
+        )
 
         availability = {
             "color": (has_colors, "Run color analysis first" if not has_colors else ""),
@@ -1431,8 +1491,18 @@ class SequenceTab(BaseTab):
             "sequential": True,
             "shot_type": (has_shot_types, "Run shot type analysis first" if not has_shot_types else ""),
             "proximity": (has_shot_types, "Run shot type or cinematography analysis first" if not has_shot_types else ""),
-            "similarity_chain": True,  # Auto-computed on demand
-            "match_cut": True,  # Auto-computed on demand
+            "similarity_chain": (
+                has_embeddings or embeddings_available,
+                "Install embeddings dependencies in Settings > Dependencies or run embedding analysis first"
+                if not (has_embeddings or embeddings_available)
+                else "",
+            ),
+            "match_cut": (
+                has_boundary_embeddings or embeddings_available,
+                "Install embeddings dependencies in Settings > Dependencies or run embedding analysis first"
+                if not (has_boundary_embeddings or embeddings_available)
+                else "",
+            ),
             "exquisite_corpus": True,  # Always available - dialog handles text extraction
             "storyteller": True,
             "reference_guided": True,  # Dialog handles its own prereqs

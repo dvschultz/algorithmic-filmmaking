@@ -3,6 +3,7 @@
 import os
 
 import pytest
+from core.cost_estimates import OperationEstimate
 
 # SequenceTab contains video widgets; offscreen avoids display-dependent failures in CI/headless.
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -102,3 +103,53 @@ def test_card_click_resolves_selected_clips_when_available_cache_is_empty(qapp, 
 
     assert warnings == []
     assert dialog_calls == [[(clip, source)]]
+
+
+def test_match_cut_card_disabled_when_boundary_embeddings_missing_and_runtime_unavailable(qapp, monkeypatch):
+    from pathlib import Path
+
+    from models.clip import Clip, Source
+    from ui.tabs.sequence_tab import SequenceTab
+
+    tab = SequenceTab()
+    source = Source(id="src-1", file_path=Path("/tmp/test.mp4"), fps=24.0)
+    clip = Clip(id="clip-1", source_id=source.id, start_frame=0, end_frame=24)
+
+    monkeypatch.setattr("ui.tabs.sequence_tab.load_settings", lambda: object())
+    monkeypatch.setattr("ui.tabs.sequence_tab.check_feature_ready", lambda _name: (False, ["package:torch"]))
+
+    tab.set_available_clips([(clip, source)], all_clips=[clip], sources_by_id={source.id: source})
+    tab._update_card_availability()
+
+    assert tab.card_grid._cards["match_cut"].is_enabled() is False
+    assert "Install embeddings dependencies" in tab.card_grid._cards["match_cut"].toolTip()
+
+
+def test_confirm_view_disables_generate_when_sequence_dependencies_missing(qapp, monkeypatch):
+    from pathlib import Path
+
+    from models.clip import Clip, Source
+    from ui.tabs.sequence_tab import SequenceTab
+
+    tab = SequenceTab()
+    source = Source(id="src-1", file_path=Path("/tmp/test.mp4"), fps=24.0)
+    clip = Clip(id="clip-1", source_id=source.id, start_frame=0, end_frame=24)
+    estimates = [
+        OperationEstimate(
+            operation="boundary_embeddings",
+            label="Boundary Embeddings",
+            clips_needing=1,
+            clips_total=1,
+            tier="local",
+            time_seconds=1.5,
+            cost_dollars=0.0,
+        )
+    ]
+
+    monkeypatch.setattr("ui.tabs.sequence_tab.load_settings", lambda: object())
+    monkeypatch.setattr("ui.tabs.sequence_tab.check_feature_ready", lambda _name: (False, ["package:torch"]))
+
+    tab._show_confirm_view("match_cut", [(clip, source)], estimates)
+
+    assert tab._confirm_generate_btn.isEnabled() is False
+    assert "Boundary Embeddings require local dependencies" in tab._confirm_cost_panel._warning_label.text()

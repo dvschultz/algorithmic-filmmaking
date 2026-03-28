@@ -37,6 +37,9 @@ def get_operation_feature_candidates(
     if op_key == "face_embeddings":
         return ["face_detect"]
 
+    if op_key in ("embeddings", "boundary_embeddings"):
+        return ["embeddings"]
+
     if op_key == "extract_text":
         method = text_extraction_method or getattr(settings, "text_extraction_method", "hybrid")
         return ["ocr"] if method == "paddleocr" else []
