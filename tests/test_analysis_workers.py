@@ -526,8 +526,27 @@ class TestDescriptionWorkerTaskBuilding:
     def test_parallelism_clamped(self):
         from ui.workers.description_worker import DescriptionWorker
 
-        worker = DescriptionWorker([], parallelism=100)
+        worker = DescriptionWorker([], tier="cloud", parallelism=100)
         assert worker._parallelism == 5  # Max is 5
+
+        worker = DescriptionWorker([], tier="cloud", parallelism=0)
+        assert worker._parallelism == 1  # Min is 1
+
+    def test_local_tier_forces_serial_parallelism(self):
+        from ui.workers.description_worker import DescriptionWorker
+
+        worker = DescriptionWorker([], tier="local", parallelism=5)
+        assert worker._parallelism == 1
+
+    @patch("ui.workers.description_worker.load_settings")
+    def test_default_local_setting_forces_serial_parallelism(self, mock_load_settings):
+        from core.settings import Settings
+        from ui.workers.description_worker import DescriptionWorker
+
+        mock_load_settings.return_value = Settings(description_model_tier="local")
+
+        worker = DescriptionWorker([], parallelism=5)
+        assert worker._parallelism == 1
 
     def test_skips_clips_without_thumbnail(self, sources_by_id):
         from ui.workers.description_worker import DescriptionWorker

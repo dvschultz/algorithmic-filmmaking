@@ -13,6 +13,7 @@ from typing import Optional
 
 from PySide6.QtCore import Signal
 
+from core.settings import load_settings
 from ui.workers.base import CancellableWorker
 
 logger = logging.getLogger(__name__)
@@ -37,8 +38,9 @@ class DescriptionTask:
 class DescriptionWorker(CancellableWorker):
     """Background worker for generating video descriptions.
 
-    Uses ThreadPoolExecutor for parallel processing. Default parallelism is 3
-    since cloud VLM calls are I/O-bound.
+    Uses ThreadPoolExecutor for parallel processing. Cloud requests can run
+    concurrently, but local VLM inference is forced to serial execution
+    because the underlying runtimes are not thread-safe.
 
     Includes retry logic with exponential backoff for rate-limit (429) errors.
 
@@ -68,12 +70,15 @@ class DescriptionWorker(CancellableWorker):
         parent=None,
     ):
         super().__init__(parent)
-        self._tier = tier
+        self._tier = self._resolve_tier(tier)
         self._prompt = prompt or (
             "Describe this video frame in 3 sentences or less. "
             "Focus on the main subjects, action, and setting."
         )
-        self._parallelism = min(max(1, parallelism), 5)
+        requested_parallelism = min(max(1, parallelism), 5)
+        # Local MLX/Moondream inference shares model state and can crash native
+        # backends if multiple descriptions run at once.
+        self._parallelism = 1 if self._tier == "local" else requested_parallelism
         self.error_count = 0
         self.success_count = 0
         self.last_error = None
@@ -83,6 +88,14 @@ class DescriptionWorker(CancellableWorker):
             )
         else:
             self._tasks = self._build_tasks(clips, sources or {}, skip_existing)
+
+    @staticmethod
+    def _resolve_tier(tier: Optional[str]) -> str:
+        """Normalize the effective description tier."""
+        resolved = tier or load_settings().description_model_tier
+        if resolved in ("cpu", "gpu"):
+            return "local"
+        return resolved
 
     def _build_tasks(
         self, clips: list, sources: dict, skip_existing: bool
