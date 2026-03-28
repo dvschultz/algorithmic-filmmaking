@@ -10,8 +10,8 @@ Use this flow when the packaging workflows are already healthy.
 2. Push `main`.
 3. Create a version tag in `vX.Y.Z` format.
 4. Push the tag.
-5. Wait for the macOS and Windows workflows to finish.
-6. Confirm the GitHub release contains both release assets.
+5. Wait for the macOS, Windows, and Linux workflows to finish.
+6. Confirm the GitHub release contains all release assets.
 
 ```bash
 git checkout main
@@ -27,8 +27,9 @@ gh release view v0.1.1
 
 - macOS: `Scene-Ripper-<version>-arm64.dmg`
 - Windows: `SceneRipper-Setup-<version>.exe`
+- Linux: `Scene_Ripper-<version>-x86_64.AppImage`
 
-The release workflows upload both assets to the GitHub release for the matching tag.
+The release workflows upload all three assets to the GitHub release for the matching tag.
 
 They also generate per-platform update-feed artifacts in workflow artifacts:
 
@@ -48,11 +49,14 @@ These assets are the stable public URLs used by native in-app updates, while the
 
 - [build-macos.yml](../.github/workflows/build-macos.yml)
 - [build-windows.yml](../.github/workflows/build-windows.yml)
+- [linux-build.yml](../.github/workflows/linux-build.yml)
 
-Both workflows run on:
+Release workflows run on:
 
 - tag push matching `v*`
 - manual `workflow_dispatch`
+
+The Linux workflow also runs on `main` pushes and pull requests for continuous validation.
 
 ## Monitoring
 
@@ -101,8 +105,10 @@ From GitHub Actions:
 2. Run workflow on `main` with `version=0.1.1`.
 3. Open `Windows Build`.
 4. Run workflow on `main` with `version=0.1.1`.
+5. Open `Linux Build`.
+6. Run workflow on `main` with `version=0.1.1`.
 
-The macOS workflow can still publish from manual dispatch. The Windows workflow uploads artifacts for inspection but only publishes release assets from tagged runs.
+The macOS workflow can still publish from manual dispatch. The Windows and Linux workflows upload artifacts for inspection but only publish release assets from tagged runs.
 
 ## macOS Signing and Notarization
 
@@ -170,6 +176,7 @@ After tagging:
 
 - macOS workflow succeeds
 - Windows workflow succeeds
-- `gh release view vX.Y.Z` shows both assets
+- Linux workflow succeeds
+- `gh release view vX.Y.Z` shows all three assets
 - `gh release view update-feed` shows refreshed appcast and release-notes assets
 - the tag points to the exact commit used by the successful release builds

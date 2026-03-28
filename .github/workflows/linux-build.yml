@@ -3,6 +3,8 @@ name: Linux Build
 on:
   push:
     branches: [main]
+    tags:
+      - 'v*'
     paths-ignore:
       - '**.md'
       - 'docs/**'
@@ -14,6 +16,9 @@ on:
         description: 'Version number for AppImage'
         required: false
         default: '0.1.0'
+
+permissions:
+  contents: write
 
 jobs:
   test-linux:
@@ -81,6 +86,20 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Determine version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "push" ] && [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version || '0.1.0' }}"
+          else
+            VERSION="dev-${GITHUB_SHA::7}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building version: $VERSION"
+
       - name: Install appimage-builder
         run: |
           pip install appimage-builder
@@ -93,11 +112,12 @@ jobs:
             fakeroot
 
       - name: Build AppImage
+        env:
+          APP_VERSION: ${{ steps.version.outputs.version }}
         run: |
           cd packaging/linux
-          VERSION="${{ github.event.inputs.version || '0.1.0' }}"
+          VERSION="${APP_VERSION}"
           ./build-appimage.sh "$VERSION"
-        continue-on-error: true
 
       - name: Upload AppImage artifact
         uses: actions/upload-artifact@v4
@@ -107,6 +127,19 @@ jobs:
             *.AppImage
             packaging/linux/*.AppImage
           if-no-files-found: warn
+
+      - name: Upload to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RELEASE_TAG="${GITHUB_REF_NAME}"
+
+          gh release view "${RELEASE_TAG}" >/dev/null 2>&1 || \
+            gh release create "${RELEASE_TAG}" --title "${RELEASE_TAG}" --notes ""
+
+          gh release upload "${RELEASE_TAG}" ./*.AppImage --clobber
 
       - name: Upload build logs
         if: failure()
