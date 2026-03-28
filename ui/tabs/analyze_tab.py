@@ -431,6 +431,11 @@ class AnalyzeTab(BaseTab):
             self.clip_browser.update_clip_extracted_text(clip_id, texts)
             self._refresh_quick_run_availability()
 
+    def update_clip_custom_queries(self, clip_id: str, custom_queries: list[dict] | None):
+        """Update custom query results for a clip."""
+        if clip_id in self._clip_ids:
+            self.clip_browser.update_clip_custom_queries(clip_id, custom_queries)
+
     def update_clip_cinematography(self, clip_id: str, cinematography):
         """Update cinematography analysis for a clip.
 

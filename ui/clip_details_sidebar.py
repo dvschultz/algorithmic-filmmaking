@@ -466,20 +466,7 @@ class ClipDetailsSidebar(QDockWidget):
             self.person_count_label.setVisible(False)
 
         # Custom Queries (read-only)
-        if clip.custom_queries:
-            lines = []
-            for q in clip.custom_queries:
-                icon = "\u2713" if q.get("match") else "\u2717"
-                conf = q.get("confidence", 0)
-                model = q.get("model", "")
-                lines.append(f'{icon} "{q.get("query", "")}" ({conf:.0%}, {model})')
-            self.custom_queries_label.setText("\n".join(lines))
-            self.custom_queries_label.setStyleSheet(f"color: {theme().text_primary};")
-            self.custom_queries_header.setVisible(True)
-            self.custom_queries_label.setVisible(True)
-        else:
-            self.custom_queries_header.setVisible(False)
-            self.custom_queries_label.setVisible(False)
+        self._update_custom_queries(clip.custom_queries)
 
         # Description (editable)
         if clip.description:
@@ -621,6 +608,25 @@ class ClipDetailsSidebar(QDockWidget):
         self.detected_objects_label.setText(text)
         self.detected_objects_label.setStyleSheet(f"color: {theme().text_muted}; font-style: italic;")
 
+    def _update_custom_queries(self, custom_queries: Optional[list[dict]]):
+        """Update the custom query section."""
+        if custom_queries:
+            lines = []
+            for query_result in custom_queries:
+                icon = "\u2713" if query_result.get("match") else "\u2717"
+                confidence = query_result.get("confidence", 0)
+                model = query_result.get("model", "")
+                lines.append(
+                    f'{icon} "{query_result.get("query", "")}" ({confidence:.0%}, {model})'
+                )
+            self.custom_queries_label.setText("\n".join(lines))
+            self.custom_queries_label.setStyleSheet(f"color: {theme().text_primary};")
+            self.custom_queries_header.setVisible(True)
+            self.custom_queries_label.setVisible(True)
+        else:
+            self.custom_queries_header.setVisible(False)
+            self.custom_queries_label.setVisible(False)
+
     def _set_extracted_text_placeholder(self, text: str):
         """Set extracted text label to placeholder style.
 
@@ -747,6 +753,16 @@ class ClipDetailsSidebar(QDockWidget):
             self._block_editable_signals(True)
             self.shot_type_dropdown.setValue(shot_type)
             self._block_editable_signals(False)
+
+    def refresh_custom_queries_if_showing(
+        self,
+        clip_id: str,
+        custom_queries: Optional[list[dict]],
+    ):
+        """Refresh just the custom query section if showing the given clip."""
+        if self._clip_ref and self._clip_ref.id == clip_id:
+            logger.debug(f"Refreshing sidebar custom queries for clip: {clip_id}")
+            self._update_custom_queries(custom_queries)
 
     def keyPressEvent(self, event):
         """Handle key press events.

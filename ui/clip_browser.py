@@ -190,10 +190,7 @@ class ClipThumbnail(QFrame):
         # Shot type label
         self.shot_type_label = QLabel()
         self.shot_type_label.setAlignment(Qt.AlignRight)
-        self.shot_type_label.setStyleSheet(
-            f"font-size: {TypeScale.XS}px; color: {theme().text_inverted}; background-color: {theme().shot_type_badge}; "
-            f"border-radius: {Radii.SM}px; padding: {Spacing.XXS}px {Spacing.XS}px;"
-        )
+        self._apply_shot_type_badge_style()
         if clip.shot_type:
             self.shot_type_label.setText(get_display_name(clip.shot_type))
             # Add film language tooltip
@@ -202,6 +199,11 @@ class ClipThumbnail(QFrame):
                 self.shot_type_label.setToolTip(tooltip)
         else:
             self.shot_type_label.setVisible(False)
+
+        self.custom_query_label = QLabel()
+        self.custom_query_label.setAlignment(Qt.AlignRight)
+        info_layout.addWidget(self.custom_query_label)
+        self._update_custom_query_badge()
         info_layout.addWidget(self.shot_type_label)
 
         layout.addLayout(info_layout)
@@ -440,6 +442,7 @@ class ClipThumbnail(QFrame):
             tooltip = get_badge_tooltip(shot_type)
             if tooltip:
                 self.shot_type_label.setToolTip(tooltip)
+            self._apply_shot_type_badge_style()
             self.shot_type_label.setVisible(True)
         else:
             self.shot_type_label.setVisible(False)
@@ -452,6 +455,11 @@ class ClipThumbnail(QFrame):
     def set_extracted_text(self, texts: list | None):
         """Set the extracted text for this clip."""
         self.clip.extracted_texts = texts
+
+    def set_custom_queries(self, custom_queries: list[dict] | None):
+        """Set the custom query results for this clip."""
+        self.clip.custom_queries = custom_queries
+        self._update_custom_query_badge()
 
     def set_cinematography(self, cinematography: CinematographyAnalysis | None):
         """Set the cinematography analysis for this clip."""
@@ -536,10 +544,54 @@ class ClipThumbnail(QFrame):
         self.duration_label.setStyleSheet(f"font-size: {TypeScale.SM}px; color: {theme().text_muted};")
         # Update shot type badge
         if self.clip.shot_type:
-            self.shot_type_label.setStyleSheet(
-                f"font-size: {TypeScale.XS}px; color: {theme().text_inverted}; background-color: {theme().shot_type_badge}; "
-                f"border-radius: {Radii.SM}px; padding: {Spacing.XXS}px {Spacing.XS}px;"
-            )
+            self._apply_shot_type_badge_style()
+        self._update_custom_query_badge()
+
+    def _apply_shot_type_badge_style(self):
+        """Apply the shared shot type badge style."""
+        self.shot_type_label.setStyleSheet(
+            f"font-size: {TypeScale.XS}px; color: {theme().text_inverted}; background-color: {theme().shot_type_badge}; "
+            f"border-radius: {Radii.SM}px; padding: {Spacing.XXS}px {Spacing.XS}px;"
+        )
+
+    def _custom_query_tooltip(self) -> str:
+        """Build a tooltip summary for custom query results."""
+        queries = self.clip.custom_queries or []
+        if not queries:
+            return ""
+
+        lines = ["Custom query results:"]
+        for query_result in queries:
+            marker = "YES" if query_result.get("match") else "NO"
+            confidence = float(query_result.get("confidence", 0.0))
+            model = query_result.get("model", "")
+            query = query_result.get("query", "")
+            suffix = f" ({confidence:.0%}"
+            if model:
+                suffix += f", {model}"
+            suffix += ")"
+            lines.append(f"{marker}: {query}{suffix}")
+        return "\n".join(lines)
+
+    def _update_custom_query_badge(self):
+        """Update the custom query badge based on stored results."""
+        queries = self.clip.custom_queries or []
+        if not queries:
+            self.custom_query_label.setVisible(False)
+            self.custom_query_label.setToolTip("")
+            return
+
+        any_match = any(bool(result.get("match")) for result in queries)
+        background = theme().accent_green if any_match else theme().accent_orange
+        text = "Query Match" if any_match else "Query No Match"
+
+        self.custom_query_label.setText(text)
+        self.custom_query_label.setToolTip(self._custom_query_tooltip())
+        self.custom_query_label.setStyleSheet(
+            f"font-size: {TypeScale.XS}px; color: {theme().text_inverted}; background-color: {background}; "
+            f"border-radius: {Radii.SM}px; padding: {Spacing.XXS}px {Spacing.XS}px;"
+        )
+        self.custom_query_label.setVisible(True)
 
 
 class ClipBrowser(QWidget):
@@ -577,6 +629,7 @@ class ClipBrowser(QWidget):
         self._current_filter = "All"  # Current shot type filter
         self._current_color_filter = "All"  # Current color palette filter
         self._current_search_query = ""  # Current transcript search query
+        self._custom_query_filter = "All"  # "All", "Match", "No Match"
         self._last_column_count = 0  # Track columns to detect changes on resize
 
         # Duration and aspect ratio filters
@@ -671,6 +724,20 @@ class ClipBrowser(QWidget):
         self.search_input.setToolTip("Filter clips by transcript content")
         self.search_input.textChanged.connect(self._on_search_changed)
         header_layout.addWidget(self.search_input)
+
+        header_layout.addSpacing(8)
+
+        custom_query_label = QLabel("Custom:")
+        header_layout.addWidget(custom_query_label)
+
+        self.custom_query_filter_combo = QComboBox()
+        self.custom_query_filter_combo.addItems(["All", "Match", "No Match"])
+        self.custom_query_filter_combo.setFixedWidth(110)
+        self.custom_query_filter_combo.setToolTip("Filter clips by custom query results")
+        self.custom_query_filter_combo.currentTextChanged.connect(
+            self._on_custom_query_filter_changed
+        )
+        header_layout.addWidget(self.custom_query_filter_combo)
 
         header_layout.addSpacing(16)
 
@@ -1067,6 +1134,13 @@ class ClipBrowser(QWidget):
         if thumb:
             thumb.set_extracted_text(texts)
 
+    def update_clip_custom_queries(self, clip_id: str, custom_queries: list[dict] | None):
+        """Update custom query results for a specific clip thumbnail."""
+        thumb = self._thumbnail_by_id.get(clip_id)
+        if thumb:
+            thumb.set_custom_queries(custom_queries)
+            self._rebuild_grid()
+
     def update_clip_cinematography(self, clip_id: str, cinematography):
         """Update the cinematography for a specific clip thumbnail (O(1) lookup)."""
         thumb = self._thumbnail_by_id.get(clip_id)
@@ -1096,6 +1170,7 @@ class ClipBrowser(QWidget):
                 thumb.set_shot_type(clip.shot_type)
                 thumb.set_transcript(clip.transcript)
                 thumb.set_colors(clip.dominant_colors)
+                thumb.set_custom_queries(clip.custom_queries)
                 thumb._update_style()  # Refresh disabled visual state
 
     def _on_filter_changed(self, filter_option: str):
@@ -1113,6 +1188,12 @@ class ClipBrowser(QWidget):
     def _on_search_changed(self, search_text: str):
         """Handle transcript search input change."""
         self._current_search_query = search_text.lower().strip()
+        self._rebuild_grid()
+        self.filters_changed.emit()
+
+    def _on_custom_query_filter_changed(self, filter_option: str):
+        """Handle custom query filter dropdown change."""
+        self._custom_query_filter = filter_option
         self._rebuild_grid()
         self.filters_changed.emit()
 
@@ -1333,6 +1414,16 @@ class ClipBrowser(QWidget):
             if self._current_search_query not in transcript_text:
                 return False
 
+        # Check custom query result filter
+        if self._custom_query_filter != "All":
+            queries = thumb.clip.custom_queries or []
+            if self._custom_query_filter == "Match":
+                if not any(bool(result.get("match")) for result in queries):
+                    return False
+            elif self._custom_query_filter == "No Match":
+                if not queries or any(bool(result.get("match")) for result in queries):
+                    return False
+
         # Check duration filter
         if self._min_duration is not None or self._max_duration is not None:
             duration = thumb.clip.duration_seconds(thumb.source.fps)
@@ -1460,6 +1551,7 @@ class ClipBrowser(QWidget):
         self.filter_combo.blockSignals(True)
         self.color_filter_combo.blockSignals(True)
         self.search_input.blockSignals(True)
+        self.custom_query_filter_combo.blockSignals(True)
         self.duration_slider.blockSignals(True)
         self.aspect_ratio_combo.blockSignals(True)
 
@@ -1467,6 +1559,7 @@ class ClipBrowser(QWidget):
         self._current_filter = "All"
         self._current_color_filter = "All"
         self._current_search_query = ""
+        self._custom_query_filter = "All"
         self._min_duration = None
         self._max_duration = None
         self._aspect_ratio_filter = "All"
@@ -1475,6 +1568,7 @@ class ClipBrowser(QWidget):
         self.filter_combo.setCurrentText("All")
         self.color_filter_combo.setCurrentText("All")
         self.search_input.clear()
+        self.custom_query_filter_combo.setCurrentText("All")
         self.duration_slider.reset()
         self.aspect_ratio_combo.setCurrentText("All")
 
@@ -1482,6 +1576,7 @@ class ClipBrowser(QWidget):
         self.filter_combo.blockSignals(False)
         self.color_filter_combo.blockSignals(False)
         self.search_input.blockSignals(False)
+        self.custom_query_filter_combo.blockSignals(False)
         self.duration_slider.blockSignals(False)
         self.aspect_ratio_combo.blockSignals(False)
 
@@ -1500,6 +1595,7 @@ class ClipBrowser(QWidget):
                 - shot_type: str ('Wide Shot', 'Medium Shot', 'Close-up', 'Extreme CU') or None
                 - color_palette: str ('Warm', 'Cool', 'Neutral', 'Vibrant') or None
                 - search_query: str or None
+                - custom_query: str ('Match', 'No Match') or None
         """
         # Block signals to avoid multiple rebuilds
         self.duration_slider.blockSignals(True)
@@ -1507,6 +1603,7 @@ class ClipBrowser(QWidget):
         self.filter_combo.blockSignals(True)
         self.color_filter_combo.blockSignals(True)
         self.search_input.blockSignals(True)
+        self.custom_query_filter_combo.blockSignals(True)
 
         # Apply duration filter
         if 'min_duration' in filters or 'max_duration' in filters:
@@ -1541,12 +1638,19 @@ class ClipBrowser(QWidget):
             self._current_search_query = value.lower().strip()
             self.search_input.setText(value)
 
+        # Apply custom query filter
+        if 'custom_query' in filters:
+            value = filters['custom_query']
+            self._custom_query_filter = value if value else "All"
+            self.custom_query_filter_combo.setCurrentText(self._custom_query_filter)
+
         # Unblock signals
         self.duration_slider.blockSignals(False)
         self.aspect_ratio_combo.blockSignals(False)
         self.filter_combo.blockSignals(False)
         self.color_filter_combo.blockSignals(False)
         self.search_input.blockSignals(False)
+        self.custom_query_filter_combo.blockSignals(False)
 
         # Rebuild grid and emit signal
         self._rebuild_grid()
@@ -1574,6 +1678,7 @@ class ClipBrowser(QWidget):
             "shot_type": self._current_filter if self._current_filter != "All" else None,
             "color_palette": self._current_color_filter if self._current_color_filter != "All" else None,
             "search_query": self._current_search_query if self._current_search_query else None,
+            "custom_query": self._custom_query_filter if self._custom_query_filter != "All" else None,
             "min_duration": self._min_duration,
             "max_duration": self._max_duration,
             "aspect_ratio": self._aspect_ratio_filter if self._aspect_ratio_filter != "All" else None,
@@ -1589,6 +1694,7 @@ class ClipBrowser(QWidget):
             self._current_filter != "All"
             or self._current_color_filter != "All"
             or bool(self._current_search_query)
+            or self._custom_query_filter != "All"
             or self._min_duration is not None
             or self._max_duration is not None
             or self._aspect_ratio_filter != "All"

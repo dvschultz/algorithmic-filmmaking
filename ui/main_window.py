@@ -3544,6 +3544,16 @@ class MainWindow(QMainWindow):
                 "confidence": round(confidence, 4),
                 "model": model,
             })
+            if hasattr(self, "analyze_tab"):
+                self.analyze_tab.update_clip_custom_queries(clip_id, clip.custom_queries)
+            if hasattr(self, "cut_tab") and hasattr(self.cut_tab, "clip_browser"):
+                self.cut_tab.clip_browser.update_clip_custom_queries(clip_id, clip.custom_queries)
+            if hasattr(self, "clip_details_sidebar"):
+                self.clip_details_sidebar.refresh_custom_queries_if_showing(
+                    clip_id,
+                    clip.custom_queries,
+                )
+            self._mark_dirty()
             logger.debug(f"Custom query '{query}' for {clip_id}: match={match} ({confidence:.0%})")
 
     @Slot(str)
