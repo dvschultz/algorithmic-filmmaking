@@ -525,7 +525,8 @@ def _describe_with_mlx_vlm(model, processor, image_path: str, prompt: str) -> st
     from mlx_vlm import generate
 
     try:
-        return generate(model, processor, image_path, prompt, max_tokens=256)
+        result = generate(model, processor, prompt, image=image_path, max_tokens=256)
+        return result.text if hasattr(result, "text") else str(result)
     except Exception as e:
         logger.error(f"mlx-vlm inference failed: {e}")
         raise RuntimeError(f"Local VLM inference failed: {e}") from e
