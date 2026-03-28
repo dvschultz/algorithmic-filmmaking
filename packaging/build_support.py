@@ -48,7 +48,6 @@ SUPPLEMENTAL_METADATA_TARGETS = (
     "uritemplate",
     "scipy",
     "paddlex",
-    "paddlepaddle",
 )
 SUPPLEMENTAL_HIDDENIMPORTS = (
     # torch.package imports this stdlib module at runtime. The frozen base app

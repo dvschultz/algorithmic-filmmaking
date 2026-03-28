@@ -195,7 +195,6 @@ def test_core_pyinstaller_metadata_covers_core_requirements(tmp_path):
     assert "pillow" in metadata
     assert "opencv-python" in metadata
     assert "paddleocr" in metadata
-    assert "paddlepaddle" in metadata
 
 
 def test_core_pyinstaller_hiddenimports_include_on_demand_stdlib_dependencies():
