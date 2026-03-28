@@ -20,6 +20,7 @@ def _load_module(name: str, relative_path: str):
 build_support = _load_module("scene_ripper_build_support_tests", "packaging/build_support.py")
 collect_macos_sparkle_datas = build_support.collect_macos_sparkle_datas
 collect_macos_ffmpeg_binaries = build_support.collect_macos_ffmpeg_binaries
+collect_macos_model_datas = build_support.collect_macos_model_datas
 collect_windows_ffmpeg_binaries = build_support.collect_windows_ffmpeg_binaries
 collect_windows_winsparkle_binaries = build_support.collect_windows_winsparkle_binaries
 get_core_pyinstaller_collect_targets = build_support.get_core_pyinstaller_collect_targets
@@ -128,6 +129,20 @@ def test_collect_macos_ffmpeg_binaries_collects_staged_runtime(tmp_path):
     assert ("ffprobe", "bin") in bundled
 
 
+def test_collect_macos_model_datas_collects_staged_runtime(tmp_path):
+    """Staged bundled-model assets should be bundled under models/."""
+    runtime_dir = tmp_path / "packaging" / "runtime" / "models" / "macos"
+    (runtime_dir / "huggingface").mkdir(parents=True)
+    (runtime_dir / "huggingface" / "weights.bin").write_text("binary", encoding="utf-8")
+    (runtime_dir / "manifest.json").write_text("{}", encoding="utf-8")
+
+    collected = collect_macos_model_datas(tmp_path)
+
+    bundled = {(Path(src).name, destination.replace("\\", "/")) for src, destination in collected}
+    assert ("manifest.json", "models") in bundled
+    assert ("weights.bin", "models/huggingface") in bundled
+
+
 def test_core_requirement_distributions_follow_requirements_file(tmp_path):
     """Frozen bundle mappings should be derived from requirements-core.txt."""
     distributions = read_core_requirement_distributions(PROJECT_ROOT)
@@ -136,9 +151,10 @@ def test_core_requirement_distributions_follow_requirements_file(tmp_path):
     assert "scikit-learn" in distributions
     assert "opencv-python" in distributions
     assert "google-api-python-client" in distributions
-    assert "paddleocr" in distributions
-    assert "rapidfuzz" in distributions
     assert "pyside6" in distributions
+    # paddleocr and rapidfuzz are optional (on-demand), not core
+    assert "paddleocr" not in distributions
+    assert "rapidfuzz" not in distributions
 
 
 def test_core_requirement_distributions_support_direct_reference_requirements(tmp_path):
@@ -167,6 +183,22 @@ def test_core_requirement_distributions_support_local_wheel_requirements(tmp_pat
     assert distributions == ("litellm",)
 
 
+def test_core_requirement_distributions_follow_nested_requirements_file(tmp_path):
+    """Nested -r includes should contribute their distribution names."""
+    (tmp_path / "requirements-core.txt").write_text(
+        "certifi>=2024.0.0\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "requirements-core-macos.txt").write_text(
+        "-r requirements-core.txt\ntransformers>=4.50,<5\n",
+        encoding="utf-8",
+    )
+
+    distributions = read_core_requirement_distributions(tmp_path, "requirements-core-macos.txt")
+
+    assert distributions == ("certifi", "transformers")
+
+
 def test_core_pyinstaller_collect_targets_cover_packaged_runtime_dependencies(tmp_path):
     """Frozen builds should explicitly collect dynamic-import package trees."""
     targets = get_core_pyinstaller_collect_targets(PROJECT_ROOT)
@@ -179,10 +211,9 @@ def test_core_pyinstaller_collect_targets_cover_packaged_runtime_dependencies(tm
     assert "cv2" in targets
     assert "numpy" in targets
     assert "mpv" in targets
-    assert "paddleocr" in targets
-    assert "paddlex" in targets
-    assert "paddle" in targets
-    assert "rapidfuzz" in targets
+    # paddleocr/rapidfuzz are in requirements-core-macos.txt, not core
+    assert "paddleocr" not in targets
+    assert "rapidfuzz" not in targets
 
 
 def test_core_pyinstaller_metadata_covers_core_requirements(tmp_path):
@@ -194,7 +225,8 @@ def test_core_pyinstaller_metadata_covers_core_requirements(tmp_path):
     assert "scipy" in metadata
     assert "pillow" in metadata
     assert "opencv-python" in metadata
-    assert "paddleocr" in metadata
+    # paddleocr is in requirements-core-macos.txt, not core
+    assert "paddleocr" not in metadata
 
 
 def test_core_pyinstaller_hiddenimports_include_on_demand_stdlib_dependencies():

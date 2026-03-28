@@ -18,6 +18,7 @@ from core.paths import (
     get_log_dir,
     ensure_app_dirs,
 )
+from core.bundled_models import seed_bundled_models
 from core.runtime_smoke import (
     RUNTIME_SMOKE_TARGET_ENV,
     run_runtime_smoke_target,
@@ -59,6 +60,14 @@ def _setup_frozen_environment():
         logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     )
     logging.getLogger().addHandler(file_handler)
+
+    try:
+        from core.settings import load_settings
+
+        settings = load_settings()
+        seed_bundled_models(settings.model_cache_dir)
+    except Exception:
+        logger.exception("Failed to seed bundled models during frozen startup")
 
 
 # Set up logging early

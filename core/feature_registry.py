@@ -157,9 +157,9 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
     ),
     "describe_local_cpu": FeatureDeps(
         binaries=[],
-        packages=["torch", "transformers"],
+        packages=["torch", "transformers", "huggingface_hub"],
         size_estimate_mb=450,
-        repair_packages=["torch", "transformers", "tokenizers"],
+        repair_packages=["torch", "transformers", "tokenizers", "huggingface_hub"],
         native_install=True,  # torch/transformers need proper site-packages
     ),
     "describe_cloud": FeatureDeps(
@@ -223,9 +223,9 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
     ),
     "embeddings": FeatureDeps(
         binaries=[],
-        packages=["torch", "transformers"],
+        packages=["torch", "transformers", "huggingface_hub"],
         size_estimate_mb=450,
-        repair_packages=["torch", "transformers", "tokenizers"],
+        repair_packages=["torch", "transformers", "tokenizers", "huggingface_hub"],
         native_install=True,
     ),
 }

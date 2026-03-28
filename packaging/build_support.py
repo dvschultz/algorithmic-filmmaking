@@ -16,8 +16,19 @@ MACOS_FFMPEG_BINARY_NAMES = ("ffmpeg", "ffprobe")
 REQUIREMENT_TO_IMPORT_TARGET = {
     "certifi": "certifi",
     "click": "click",
+    "demucs-infer": "demucs_infer",
+    "einops": "einops",
+    "faster-whisper": "faster_whisper",
+    "huggingface-hub": "huggingface_hub",
+    "insightface": "insightface",
+    "librosa": "librosa",
+    "lightning-whisper-mlx": "lightning_whisper_mlx",
+    "mlx-vlm": "mlx_vlm",
+    "onnxruntime": "onnxruntime",
     "python-mpv": "mpv",
+    "protobuf": "google.protobuf",
     "scenedetect": "scenedetect",
+    "sentencepiece": "sentencepiece",
     "opencv-python": "cv2",
     "numpy": "numpy",
     "scikit-learn": "sklearn",
@@ -25,7 +36,11 @@ REQUIREMENT_TO_IMPORT_TARGET = {
     "google-api-python-client": "googleapiclient",
     "keyring": "keyring",
     "litellm": "litellm",
+    "torch": "torch",
+    "torchvision": "torchvision",
+    "transformers": "transformers",
     "tenacity": "tenacity",
+    "ultralytics": "ultralytics",
     "httpx": "httpx",
     "paddleocr": "paddleocr",
     "rapidfuzz": "rapidfuzz",
@@ -35,6 +50,7 @@ SUPPLEMENTAL_IMPORT_TARGETS = (
     "google.auth",
     "google.oauth2",
     "httplib2",
+    "mlx",
     "scipy",
     "paddlex",
     "paddle",
@@ -45,6 +61,7 @@ SUPPLEMENTAL_METADATA_TARGETS = (
     "google-api-core",
     "googleapis-common-protos",
     "httplib2",
+    "mlx",
     "uritemplate",
     "scipy",
     "paddlex",
@@ -129,25 +146,58 @@ def _extract_requirement_name(requirement_line: str) -> str:
     return ""
 
 
-def read_core_requirement_distributions(project_root: Path) -> tuple[str, ...]:
-    """Return normalized distribution names from requirements-core.txt."""
-    requirements_file = project_root / "requirements-core.txt"
+def _read_requirement_distributions(
+    requirements_file: Path,
+    *,
+    seen_files: set[Path] | None = None,
+) -> list[str]:
+    """Return normalized distribution names from a requirements file."""
+    resolved_file = requirements_file.resolve()
+    if seen_files is None:
+        seen_files = set()
+    if resolved_file in seen_files:
+        return []
+    seen_files.add(resolved_file)
+
     distributions: list[str] = []
     for raw_line in requirements_file.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
 
+        if line.startswith(("-r ", "--requirement ")):
+            _, include_path = line.split(maxsplit=1)
+            distributions.extend(
+                _read_requirement_distributions(
+                    (requirements_file.parent / include_path).resolve(),
+                    seen_files=seen_files,
+                )
+            )
+            continue
+
         requirement = _extract_requirement_name(line)
         if requirement:
             distributions.append(requirement)
+    return distributions
+
+
+def read_core_requirement_distributions(
+    project_root: Path,
+    requirements_filename: str = "requirements-core.txt",
+) -> tuple[str, ...]:
+    """Return normalized distribution names from a requirements file."""
+    requirements_file = project_root / requirements_filename
+    distributions = _read_requirement_distributions(requirements_file)
     return tuple(distributions)
 
 
-def get_core_pyinstaller_collect_targets(project_root: Path) -> tuple[str, ...]:
+def get_core_pyinstaller_collect_targets(
+    project_root: Path,
+    requirements_filename: str = "requirements-core.txt",
+) -> tuple[str, ...]:
     """Return import-package roots that should be collected for frozen builds."""
     targets: list[str] = []
-    for dist_name in read_core_requirement_distributions(project_root):
+    for dist_name in read_core_requirement_distributions(project_root, requirements_filename):
         if dist_name in PYINSTALLER_HANDLED_REQUIREMENTS:
             continue
         import_target = REQUIREMENT_TO_IMPORT_TARGET.get(dist_name)
@@ -159,11 +209,14 @@ def get_core_pyinstaller_collect_targets(project_root: Path) -> tuple[str, ...]:
     return tuple(dict.fromkeys(targets))
 
 
-def get_core_pyinstaller_metadata(project_root: Path) -> tuple[str, ...]:
+def get_core_pyinstaller_metadata(
+    project_root: Path,
+    requirements_filename: str = "requirements-core.txt",
+) -> tuple[str, ...]:
     """Return distribution metadata names required by frozen desktop apps."""
     metadata = [
         dist_name
-        for dist_name in read_core_requirement_distributions(project_root)
+        for dist_name in read_core_requirement_distributions(project_root, requirements_filename)
         if dist_name not in PYINSTALLER_HANDLED_REQUIREMENTS
     ]
     metadata.extend(SUPPLEMENTAL_METADATA_TARGETS)
@@ -528,6 +581,32 @@ def collect_macos_ffmpeg_binaries(project_root: Path) -> list[tuple[str, str]]:
     if not all(name in bundled_names for name in MACOS_FFMPEG_BINARY_NAMES):
         raise RuntimeError(f"Missing FFmpeg runtime binaries in {runtime_dir}")
     return collected
+
+
+def find_macos_model_runtime_dir(project_root: Path) -> Path | None:
+    """Return the staged macOS bundled-model runtime directory, if available."""
+    env_dir = os.environ.get("SCENE_RIPPER_MODEL_RUNTIME_DIR")
+    candidates = [
+        Path(env_dir) if env_dir else None,
+        project_root / "packaging" / "runtime" / "models" / "macos",
+    ]
+
+    for candidate in candidates:
+        if candidate and candidate.is_dir() and (candidate / "manifest.json").is_file():
+            return candidate
+    return None
+
+
+def collect_macos_model_datas(project_root: Path) -> list[tuple[str, str]]:
+    """Collect staged bundled model assets for the macOS app bundle."""
+    runtime_dir = find_macos_model_runtime_dir(project_root)
+    if runtime_dir is None:
+        raise RuntimeError(
+            "macOS bundled model runtime not found. Stage models in "
+            "packaging/runtime/models/macos or set SCENE_RIPPER_MODEL_RUNTIME_DIR."
+        )
+
+    return _prefix_runtime_destination(_collect_runtime_files(runtime_dir), "models")
 
 
 def collect_macos_sparkle_datas(project_root: Path) -> list[tuple[str, str]]:

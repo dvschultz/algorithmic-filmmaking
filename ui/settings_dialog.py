@@ -64,9 +64,20 @@ from core.settings import (
 )
 from core.llm_client import get_provider_models
 from core.update_models import UpdateChannel
+from core.bundled_models import (
+    get_available_transcription_models,
+    is_frozen_macos_apple_silicon,
+)
 from ui.theme import theme, UISizes
 
 logger = logging.getLogger(__name__)
+
+TRANSCRIPTION_MODEL_LABELS = {
+    "tiny.en": "tiny.en - Fast, basic accuracy (39MB)",
+    "small.en": "small.en - Good balance (244MB)",
+    "medium.en": "medium.en - Better accuracy (769MB)",
+    "large-v3": "large-v3 - Best accuracy (1.5GB)",
+}
 
 # Shared list of VLM models for vision and text extraction
 VLM_MODELS = [
@@ -468,16 +479,21 @@ class SettingsDialog(QDialog):
         model_layout.addWidget(self.whisper_model_lbl)
 
         self.transcription_model_combo = QComboBox()
-        self.transcription_model_combo.addItems([
-            "tiny.en - Fast, basic accuracy (39MB)",
-            "small.en - Good balance (244MB)",
-            "medium.en - Better accuracy (769MB)",
-            "large-v3 - Best accuracy (1.5GB)",
-        ])
-        self.transcription_model_combo.setToolTip(
-            "Larger models are more accurate but slower.\n"
-            "Models are downloaded on first use."
-        )
+        for model_name in get_available_transcription_models():
+            self.transcription_model_combo.addItem(
+                TRANSCRIPTION_MODEL_LABELS[model_name],
+                model_name,
+            )
+        if is_frozen_macos_apple_silicon():
+            self.transcription_model_combo.setToolTip(
+                "The packaged macOS app supports only medium.en for local transcription.\n"
+                "Because it is larger than 1GB, it is downloaded during the first-run setup flow."
+            )
+        else:
+            self.transcription_model_combo.setToolTip(
+                "Larger models are more accurate but slower.\n"
+                "Models are downloaded on first use."
+            )
         model_layout.addWidget(self.transcription_model_combo)
 
         transcription_layout.addLayout(model_layout)
@@ -1648,9 +1664,11 @@ class SettingsDialog(QDialog):
         self.fps_combo.setCurrentIndex(fps_map.get(self.settings.export_fps, 0))
 
         # Transcription
-        model_map = {"tiny.en": 0, "small.en": 1, "medium.en": 2, "large-v3": 3}
+        transcription_index = self.transcription_model_combo.findData(
+            self.settings.transcription_model
+        )
         self.transcription_model_combo.setCurrentIndex(
-            model_map.get(self.settings.transcription_model, 1)
+            transcription_index if transcription_index >= 0 else 0
         )
 
         lang_map = {"en": 0, "auto": 1}
@@ -1825,8 +1843,7 @@ class SettingsDialog(QDialog):
         self.settings.export_fps = fps_values[self.fps_combo.currentIndex()]
 
         # Transcription
-        model_values = ["tiny.en", "small.en", "medium.en", "large-v3"]
-        self.settings.transcription_model = model_values[self.transcription_model_combo.currentIndex()]
+        self.settings.transcription_model = self.transcription_model_combo.currentData()
 
         lang_values = ["en", "auto"]
         self.settings.transcription_language = lang_values[self.transcription_lang_combo.currentIndex()]

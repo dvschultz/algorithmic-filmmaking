@@ -116,12 +116,14 @@ class TestDetectionModelDownloadErrors:
         with pytest.raises(ModelDownloadError, match="YOLO26n"):
             _load_yolo("n")
 
-    @patch("core.analysis.detection.ensure_object_detection_runtime_available")
+    @patch("core.analysis.detection.ensure_yoloe_runtime_available")
     @patch("core.analysis.detection._get_model_cache_dir")
+    @patch("core.analysis.detection._ensure_yoloe_checkpoint_path")
     def test_yoloe_network_failure_raises_model_download_error(
-        self, mock_cache, mock_ensure
+        self, mock_checkpoint, mock_cache, mock_ensure
     ):
         mock_cache.return_value = Path("/tmp/fake_cache")
+        mock_checkpoint.return_value = Path("/tmp/fake_cache/yoloe-26s.pt")
         mock_yolo_cls = MagicMock(side_effect=OSError("Connection refused"))
         mock_ensure.return_value = mock_yolo_cls
 

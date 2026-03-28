@@ -50,6 +50,35 @@ class TestSettingsDefaults:
         settings = Settings()
         assert settings.transcription_model == "medium.en"
 
+    def test_load_settings_clamps_frozen_macos_whisper_to_bundled_model(self, tmp_path):
+        """Frozen macOS builds should clamp persisted local Whisper settings to medium.en."""
+        config_path = tmp_path / "config.json"
+        config_path.write_text(
+            json.dumps(
+                {
+                    "version": "1.0",
+                    "transcription": {
+                        "model": "large-v3",
+                        "backend": "faster-whisper",
+                    },
+                    "vision": {
+                        "model_local": "vikhyatk/moondream2",
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with patch.dict(os.environ, {ENV_CONFIG_PATH: str(config_path)}, clear=False), \
+             patch("core.settings.is_frozen", return_value=True), \
+             patch("core.bundled_models.is_frozen_macos_apple_silicon", return_value=True), \
+             patch("core.settings.sys.platform", "darwin"):
+            settings = load_settings()
+
+        assert settings.transcription_model == "medium.en"
+        assert settings.transcription_backend == "mlx-whisper"
+        assert settings.description_model_local == "mlx-community/Qwen3-VL-4B-Instruct-4bit"
+
     def test_default_export_quality(self):
         """Test default export quality."""
         settings = Settings()

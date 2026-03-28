@@ -93,6 +93,11 @@ from core.plan_controller import PlanController
 from core.intention_workflow import IntentionWorkflowCoordinator, WorkflowState
 from core.app_version import get_app_version, get_release_channel
 from core.update_service import UpdateService
+from core.bundled_models import (
+    download_large_models,
+    get_missing_large_models,
+    is_frozen_macos_apple_silicon,
+)
 
 # Set up logging
 logging.basicConfig(
@@ -898,6 +903,7 @@ class MainWindow(QMainWindow):
         self._manual_update_check = False
         self._update_service = UpdateService(get_app_version(), self.settings)
         self._start_update_check()
+        QTimer.singleShot(0, self._prompt_large_model_setup_if_needed)
 
         logger.info(f"=== MAINWINDOW INIT COMPLETE (instance #{self._instance_id}) ===")
 
@@ -1130,6 +1136,58 @@ class MainWindow(QMainWindow):
             )
             self._dependency_banner.download_requested.connect(self._on_ffmpeg_download_requested)
             layout.addWidget(self._dependency_banner)
+
+    def _prompt_large_model_setup_if_needed(self):
+        """Prompt frozen macOS users to explicitly download oversized local models."""
+        if not is_frozen_macos_apple_silicon():
+            return
+
+        missing = get_missing_large_models(self.settings.model_cache_dir)
+        if not missing:
+            return
+
+        summary = "\n".join(
+            f"• {item['label']} ({item['size']}) — {item['feature']}"
+            for item in missing
+        )
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Information)
+        msg.setWindowTitle("Download Large Local Models")
+        msg.setText(
+            "Scene Ripper keeps local models larger than 1GB out of the app download."
+        )
+        msg.setInformativeText(
+            "To use the related local AI features, download these models now:\n\n"
+            f"{summary}\n\n"
+            "You can continue without them, but those local features will remain unavailable."
+        )
+        download_btn = msg.addButton("Download Now", QMessageBox.AcceptRole)
+        msg.addButton("Later", QMessageBox.RejectRole)
+        msg.exec()
+
+        if msg.clickedButton() is download_btn:
+            self._download_large_models()
+
+    def _download_large_models(self):
+        """Run the explicit first-run large-model download flow."""
+        from ui.widgets.dependency_widgets import DependencyDownloadDialog
+
+        missing = get_missing_large_models(self.settings.model_cache_dir)
+        if not missing:
+            return
+
+        total_size = ", ".join(f"{item['label']} ({item['size']})" for item in missing)
+        dialog = DependencyDownloadDialog(
+            title="Download Large Local Models",
+            message=(
+                "Downloading large local models excluded from the app bundle:\n\n"
+                f"{total_size}"
+            ),
+            install_func=lambda cb: download_large_models(self.settings.model_cache_dir, cb),
+            parent=self,
+        )
+        if dialog.exec() == QDialog.Accepted:
+            self.status_bar.showMessage("Large local models downloaded")
 
     def _on_ffmpeg_download_requested(self, dep_name: str):
         """Handle FFmpeg download request from the dependency banner."""
@@ -1508,6 +1566,13 @@ class MainWindow(QMainWindow):
             lambda: QDesktopServices.openUrl(QUrl(f"{_docs_base}/api-keys.md"))
         )
         help_menu.addAction(api_keys_action)
+
+        prompt_guide_action = QAction("&Prompt Reference", self)
+        prompt_guide_action.setToolTip("Opens the prompt reference documentation on GitHub")
+        prompt_guide_action.triggered.connect(
+            lambda: QDesktopServices.openUrl(QUrl(f"{_docs_base}/prompts.md"))
+        )
+        help_menu.addAction(prompt_guide_action)
 
     def _is_any_worker_running(self) -> bool:
         """Check if any background worker is currently running."""

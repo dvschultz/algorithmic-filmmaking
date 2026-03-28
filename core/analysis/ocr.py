@@ -14,6 +14,8 @@ import threading
 from pathlib import Path
 from typing import Optional, Callable
 
+from core.bundled_models import get_bundled_paddleocr_kwargs
+
 logger = logging.getLogger(__name__)
 
 # Thread-safe PaddleOCR availability check
@@ -70,10 +72,13 @@ def _get_ocr_engine():
             PaddleOCR = ensure_ocr_runtime_available()
             logger.info("Initializing PaddleOCR engine...")
             try:
+                from core.settings import load_settings
+
+                settings = load_settings()
                 _ocr_engine = PaddleOCR(
                     use_angle_cls=True,
                     lang="en",
-                    show_log=False,
+                    **get_bundled_paddleocr_kwargs(settings.model_cache_dir),
                 )
             except Exception as e:
                 from core.errors import ModelDownloadError

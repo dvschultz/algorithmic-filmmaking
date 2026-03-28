@@ -142,6 +142,14 @@ The app uses a 5-tab workflow, though you can skip or revisit tabs as needed:
 4. **Sequence**: Add clips to timeline, use shuffle or Exquisite Corpus mode
 5. **Render**: Export as MP4 or EDL for external editors
 
+## User Guides
+
+- [Sequencer Algorithms](docs/user-guide/sequencers.md)
+- [Local AI Models](docs/user-guide/local-models.md)
+- [API Keys](docs/user-guide/api-keys.md)
+- [Prompt Reference](docs/user-guide/prompts.md)
+- [Reporting Bugs](docs/user-guide/reporting-bugs.md)
+
 ## Features
 
 ### Scene Detection

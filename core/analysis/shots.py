@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 from PIL import Image
+from core.bundled_models import get_missing_large_models, large_model_downloads_allowed
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,8 @@ _model_lock = threading.Lock()
 
 # SigLIP 2 model for zero-shot shot type classification
 _SIGLIP_MODEL_NAME = "google/siglip2-base-patch16-224"
+# PINNED: HuggingFace commit SHA; bump when new release tested
+_SIGLIP_REVISION = "75de2d55ec2d0b4efc50b3e9ad70dba96a7b2fa2"
 
 
 def _import_transformers_auto_components():
@@ -152,6 +155,21 @@ def load_classification_model():
         if _model is None:
             logger.info("Loading SigLIP 2 model for shot classification...")
 
+            from core.settings import load_settings
+
+            settings = load_settings()
+            if (
+                any(
+                    item["id"] == "siglip2_shot_classifier"
+                    for item in get_missing_large_models(settings.model_cache_dir)
+                )
+                and not large_model_downloads_allowed()
+            ):
+                raise RuntimeError(
+                    "SigLIP 2 shot classifier is not downloaded. "
+                    "Use the startup large-model setup flow to download oversized local models."
+                )
+
             # On Windows, Python doesn't use the system cert store by default.
             # Point SSL libraries to certifi's CA bundle so HuggingFace Hub downloads work.
             try:
@@ -164,15 +182,14 @@ def load_classification_model():
 
             AutoProcessor, AutoModel = ensure_classification_runtime_available()
 
-            logger.info(
-                "Downloading SigLIP 2 model from Hugging Face Hub (~400 MB) — "
-                "this may take several minutes on first run..."
-            )
-
             def _load_siglip():
                 return (
-                    AutoProcessor.from_pretrained(_SIGLIP_MODEL_NAME),
-                    AutoModel.from_pretrained(_SIGLIP_MODEL_NAME),
+                    AutoProcessor.from_pretrained(
+                        _SIGLIP_MODEL_NAME, revision=_SIGLIP_REVISION
+                    ),
+                    AutoModel.from_pretrained(
+                        _SIGLIP_MODEL_NAME, revision=_SIGLIP_REVISION
+                    ),
                 )
 
             try:
@@ -189,6 +206,7 @@ def load_classification_model():
                     from huggingface_hub import snapshot_download
                     local_dir = snapshot_download(
                         _SIGLIP_MODEL_NAME,
+                        revision=_SIGLIP_REVISION,
                         allow_patterns=["*.json", "*.safetensors", "*.txt", "*.model"],
                     )
                     _processor = AutoProcessor.from_pretrained(local_dir, local_files_only=True)
@@ -199,6 +217,23 @@ def load_classification_model():
             logger.info("SigLIP 2 model loaded")
 
     return _model, _processor
+
+
+def download_siglip_model() -> Path:
+    """Download and locally validate the managed SigLIP 2 model cache."""
+    AutoProcessor, AutoModel = ensure_classification_runtime_available()
+    from huggingface_hub import snapshot_download
+
+    local_dir = Path(
+        snapshot_download(
+            _SIGLIP_MODEL_NAME,
+            revision=_SIGLIP_REVISION,
+            allow_patterns=["*.json", "*.safetensors", "*.txt", "*.model"],
+        )
+    )
+    AutoProcessor.from_pretrained(local_dir, local_files_only=True)
+    AutoModel.from_pretrained(local_dir, local_files_only=True)
+    return local_dir
 
 
 def is_model_loaded() -> bool:

@@ -52,6 +52,7 @@ binaries = (
     + build_support.collect_macos_ffmpeg_binaries(PROJECT_ROOT)
 )
 sparkle_datas = build_support.collect_macos_sparkle_datas(PROJECT_ROOT)
+model_datas = build_support.collect_macos_model_datas(PROJECT_ROOT)
 
 
 def _unique(items):
@@ -82,13 +83,19 @@ def _collect_module_payload(module_name):
 core_requirement_hiddenimports = []
 core_requirement_datas = []
 core_requirement_binaries = []
-for module_name in build_support.get_core_pyinstaller_collect_targets(PROJECT_ROOT):
+for module_name in build_support.get_core_pyinstaller_collect_targets(
+    PROJECT_ROOT,
+    "requirements-core-macos.txt",
+):
     module_datas, module_binaries, module_hiddenimports = _collect_module_payload(module_name)
     core_requirement_datas.extend(module_datas)
     core_requirement_binaries.extend(module_binaries)
     core_requirement_hiddenimports.extend(module_hiddenimports)
 
-for metadata_name in build_support.get_core_pyinstaller_metadata(PROJECT_ROOT):
+for metadata_name in build_support.get_core_pyinstaller_metadata(
+    PROJECT_ROOT,
+    "requirements-core-macos.txt",
+):
     core_requirement_datas.extend(copy_metadata(metadata_name))
 
 a = Analysis(
@@ -100,7 +107,7 @@ a = Analysis(
         (str(VERSION_FILE), "core"),
         (str(BUILD_VERSION_FILE), "core"),
         (str(UPDATE_CHANNEL_FILE), "core"),
-    ] + sparkle_datas + core_requirement_datas,
+    ] + sparkle_datas + model_datas + core_requirement_datas,
     hiddenimports=_unique([
         # PySide6 modules actually used by the app
         "PySide6.QtWidgets",
@@ -159,19 +166,9 @@ a = Analysis(
         # No longer used (video playback via MPV, not Qt Multimedia)
         "PySide6.QtMultimedia",
         "PySide6.QtMultimediaWidgets",
-        # On-demand packages (downloaded at runtime, not bundled)
-        "torch",
-        "torchvision",
-        "transformers",
-        "ultralytics",
-        "paddleocr",
-        "paddlepaddle",
+        # faster-whisper stays unbundled in the macOS app; local transcription
+        # is constrained to bundled MLX medium.en.
         "faster_whisper",
-        "lightning_whisper_mlx",
-        "mlx_vlm",
-        "mlx",
-        "librosa",
-        "einops",
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,

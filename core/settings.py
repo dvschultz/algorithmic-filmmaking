@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Set
 
+from core.bundled_models import normalize_frozen_macos_settings
 from core.paths import is_frozen, get_app_support_dir
 
 logger = logging.getLogger(__name__)
@@ -947,6 +948,9 @@ def load_settings() -> Settings:
 
     # 3. Apply environment variable overrides (highest priority)
     settings = _apply_env_overrides(settings)
+
+    # 3.5. Clamp persisted/env-configured settings to the frozen bundle contract.
+    settings = normalize_frozen_macos_settings(settings)
 
     # 4. Sync model_cache_dir to env vars so HuggingFace and PyTorch respect it
     _sync_model_cache_env(settings.model_cache_dir)

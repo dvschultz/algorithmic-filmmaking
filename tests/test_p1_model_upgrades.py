@@ -8,6 +8,7 @@ Covers:
 
 import platform
 import sys
+from pathlib import Path
 from types import ModuleType
 from unittest.mock import patch
 import pytest
@@ -109,12 +110,12 @@ class TestSigLIP2Classification:
 
         class _FakeProcessor:
             @staticmethod
-            def from_pretrained(_name):
+            def from_pretrained(_name, **kwargs):
                 return "processor"
 
         class _FakeModel:
             @staticmethod
-            def from_pretrained(_name):
+            def from_pretrained(_name, **kwargs):
                 return "model"
 
         monkeypatch.setattr(
@@ -126,6 +127,35 @@ class TestSigLIP2Classification:
         model, processor = shots.load_classification_model()
         assert model == "model"
         assert processor == "processor"
+
+        shots.unload_model()
+
+    def test_load_classification_model_blocks_implicit_large_downloads_on_frozen_macos(
+        self, monkeypatch
+    ):
+        import core.analysis.shots as shots
+
+        shots.unload_model()
+
+        monkeypatch.setattr(
+            shots,
+            "ensure_classification_runtime_available",
+            lambda: (_ for _ in ()).throw(AssertionError("should not reach runtime import")),
+        )
+        monkeypatch.setattr(
+            shots,
+            "get_missing_large_models",
+            lambda _model_cache_dir: [{"id": "siglip2_shot_classifier"}],
+        )
+        monkeypatch.setattr(shots, "large_model_downloads_allowed", lambda: False)
+
+        class _Settings:
+            model_cache_dir = Path("/tmp/models")
+
+        monkeypatch.setattr("core.settings.load_settings", lambda: _Settings())
+
+        with pytest.raises(RuntimeError, match="SigLIP 2 shot classifier is not downloaded"):
+            shots.load_classification_model()
 
         shots.unload_model()
 

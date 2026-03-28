@@ -36,6 +36,9 @@ PERSON_CLASS_ID = 0
 
 # YOLOE-26 model for open-vocabulary detection
 _YOLOE_MODEL_NAME = "yoloe-26s.pt"
+_YOLOE_MODEL_REPO_ID = "openvision/yoloe26-s-seg"
+_YOLOE_MODEL_FILENAME = "model.pt"
+_YOLOE_MODEL_REVISION = "2639b7b9928583c5371f1b64454b4c73c1f0ecd9"
 
 # Lazy load models
 _model = None
@@ -55,6 +58,17 @@ def ensure_object_detection_runtime_available():
         return YOLO
     except Exception as e:
         raise RuntimeError(f"object detection runtime is incomplete: {e}") from e
+
+
+def ensure_yoloe_runtime_available():
+    """Validate that the YOLOE open-vocabulary runtime imports cleanly."""
+    try:
+        import torch  # noqa: F401
+        from ultralytics.models.yolo.model import YOLOE
+
+        return YOLOE
+    except Exception as e:
+        raise RuntimeError(f"open-vocabulary detection runtime is incomplete: {e}") from e
 
 
 def _get_model_cache_dir() -> Path:
@@ -123,6 +137,19 @@ def ensure_default_detection_model_loaded(model_size: str = "n") -> None:
     _load_yolo(model_size)
 
 
+def _ensure_yoloe_checkpoint_path() -> Path:
+    """Resolve the pinned YOLOE checkpoint into the managed model cache."""
+    from huggingface_hub import hf_hub_download
+
+    return Path(
+        hf_hub_download(
+            repo_id=_YOLOE_MODEL_REPO_ID,
+            filename=_YOLOE_MODEL_FILENAME,
+            revision=_YOLOE_MODEL_REVISION,
+        )
+    )
+
+
 def _load_yoloe(custom_classes: list[str]):
     """Lazy load YOLOE-26 open-vocabulary model (thread-safe).
 
@@ -142,10 +169,10 @@ def _load_yoloe(custom_classes: list[str]):
             cache_dir = _get_model_cache_dir()
             os.environ.setdefault("YOLO_CONFIG_DIR", str(cache_dir))
 
-            YOLO = ensure_object_detection_runtime_available()
+            YOLOE = ensure_yoloe_runtime_available()
 
             try:
-                _ov_model = YOLO(_YOLOE_MODEL_NAME)
+                _ov_model = YOLOE(str(_ensure_yoloe_checkpoint_path()))
             except Exception as e:
                 from core.errors import ModelDownloadError
 

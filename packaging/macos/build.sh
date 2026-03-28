@@ -40,7 +40,6 @@ echo ""
 # -------------------------------------------------------------------
 echo "==> Staging FFmpeg runtime..."
 FFMPEG_RUNTIME_DIR="${PROJECT_ROOT}/packaging/runtime/ffmpeg/macos"
-rm -rf "${FFMPEG_RUNTIME_DIR}"
 mkdir -p "${FFMPEG_RUNTIME_DIR}"
 
 PROJECT_ROOT="$PROJECT_ROOT" python - <<'PY'
@@ -53,14 +52,35 @@ from pathlib import Path
 
 project_root = Path(os.environ["PROJECT_ROOT"])
 runtime_dir = project_root / "packaging" / "runtime" / "ffmpeg" / "macos"
+env_runtime_dir = os.environ.get("SCENE_RIPPER_FFMPEG_DIR", "").strip()
+fallback_runtime_candidates = [
+    Path(env_runtime_dir) if env_runtime_dir else None,
+    project_root / "dist" / "Scene Ripper.app" / "Contents" / "Frameworks" / "bin",
+    project_root / "dist" / "Scene Ripper" / "_internal" / "bin",
+]
 downloads = {
     "ffmpeg": "https://www.osxexperts.net/ffmpeg7arm.zip",
     "ffprobe": "https://www.osxexperts.net/ffprobe7arm.zip",
 }
 
+runtime_dir.mkdir(parents=True, exist_ok=True)
+
+for candidate in fallback_runtime_candidates:
+    if candidate is None or not candidate.is_dir():
+        continue
+    if all((candidate / name).is_file() for name in downloads):
+        for binary_name in downloads:
+            target_path = runtime_dir / binary_name
+            shutil.copy2(candidate / binary_name, target_path)
+            target_path.chmod(0o755)
+        print(f"Reused staged FFmpeg runtime from {candidate}")
+        raise SystemExit(0)
+
 with tempfile.TemporaryDirectory() as temp_dir:
     temp_path = Path(temp_dir)
     for binary_name, url in downloads.items():
+        if (runtime_dir / binary_name).is_file():
+            continue
         archive_path = temp_path / f"{binary_name}.zip"
         urllib.request.urlretrieve(url, archive_path)
         with zipfile.ZipFile(archive_path, "r") as archive:
@@ -76,9 +96,34 @@ PY
 # -------------------------------------------------------------------
 # 1. Install dependencies
 # -------------------------------------------------------------------
-echo "==> Installing core dependencies..."
+echo "==> Installing core + macOS ML dependencies..."
 pip install -r "${PROJECT_ROOT}/requirements-core.txt" --quiet
+pip install \
+    'torch>=2.4,<2.7' \
+    'torchvision>=0.19,<0.22' \
+    'transformers>=4.50,<5' \
+    'huggingface-hub>=0.34.0,<1.0' \
+    'sentencepiece>=0.2.0,<1.0' \
+    'protobuf>=4.25,<6' \
+    'einops>=0.7.0,<1.0' \
+    'ultralytics>=8.4.0,<9' \
+    'insightface>=0.7.3,<1.0' \
+    'onnxruntime>=1.16.0,<2.0' \
+    'librosa>=0.10.0,<1.0' \
+    'demucs-infer>=4.1.0,<5' \
+    'mlx-vlm>=0.1.0,<1.0' \
+    'paddleocr>=3.0.0,<4' \
+    'rapidfuzz>=3.0.0' \
+    --quiet
+# lightning-whisper-mlx must be --no-deps to avoid tiktoken conflict with litellm
+pip install 'lightning-whisper-mlx>=0.0.10,<1.0' --no-deps --quiet
 pip install pyinstaller --quiet
+
+# -------------------------------------------------------------------
+# 1.5. Stage bundled local models
+# -------------------------------------------------------------------
+echo "==> Staging bundled local models..."
+python "${SCRIPT_DIR}/stage_models.py"
 
 # -------------------------------------------------------------------
 # 2. Run PyInstaller
