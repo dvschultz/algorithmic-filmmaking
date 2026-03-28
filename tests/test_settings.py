@@ -48,7 +48,7 @@ class TestSettingsDefaults:
     def test_default_transcription_model(self):
         """Test default transcription model."""
         settings = Settings()
-        assert settings.transcription_model == "small.en"
+        assert settings.transcription_model == "medium.en"
 
     def test_default_export_quality(self):
         """Test default export quality."""
@@ -415,7 +415,7 @@ class TestJSONSettings:
                     settings = load_settings()
                     # Should return defaults
                     assert settings.default_sensitivity == 3.0
-                    assert settings.transcription_model == "small.en"
+                    assert settings.transcription_model == "medium.en"
 
     def test_load_settings_invalid_json(self):
         """Test loading settings with invalid JSON file."""
