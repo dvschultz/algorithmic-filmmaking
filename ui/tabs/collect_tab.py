@@ -8,13 +8,12 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QInputDialog,
-    QLineEdit,
 )
 from PySide6.QtCore import Signal
 
 from .base_tab import BaseTab
 from models.clip import Source
+from ui.dialogs import URLImportDialog
 from ui.source_browser import SourceBrowser
 from ui.youtube_search_panel import YouTubeSearchPanel
 from ui.theme import theme, TypeScale
@@ -27,13 +26,13 @@ class CollectTab(BaseTab):
         videos_added: Emitted when videos are added to library (paths: list[Path])
         analyze_requested: Emitted when analysis is requested (source_ids: list[str])
             If empty list, analyze all unanalyzed sources.
-        download_requested: Emitted when URL download is requested (url: str)
+        download_requested: Emitted when URL download is requested (url: str, resolution: str)
         source_selected: Emitted when a source is selected (source: Source)
     """
 
     videos_added = Signal(list)  # list of Paths
     analyze_requested = Signal(list)  # list of source IDs (empty = all unanalyzed)
-    download_requested = Signal(str)  # URL
+    download_requested = Signal(str, str)  # URL, resolution tier
     source_selected = Signal(object)  # Source
 
     def _setup_ui(self):
@@ -104,15 +103,9 @@ class CollectTab(BaseTab):
 
     def _on_url_click(self):
         """Handle URL import button click."""
-        url, ok = QInputDialog.getText(
-            self,
-            "Import from URL",
-            "Enter YouTube or Vimeo URL:",
-            QLineEdit.Normal,
-            "",
-        )
-        if ok and url.strip():
-            self.download_requested.emit(url.strip())
+        url, resolution = URLImportDialog.get_import_request(self)
+        if url and resolution:
+            self.download_requested.emit(url, resolution)
 
     def _on_source_selected(self, source: Source):
         """Handle source selection in browser."""

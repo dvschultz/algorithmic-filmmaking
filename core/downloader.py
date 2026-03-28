@@ -24,6 +24,20 @@ YTDLP_COOKIE_HELP_URL = (
 DOWNLOAD_ERROR_GENERIC = "generic"
 DOWNLOAD_ERROR_JS_RUNTIME_REQUIRED = "js_runtime_required"
 DOWNLOAD_ERROR_COOKIES_REQUIRED = "cookies_required"
+DOWNLOAD_RESOLUTION_HEIGHTS = {
+    "4k": 2160,
+    "1080p": 1080,
+    "720p": 720,
+    "480p": 480,
+}
+DOWNLOAD_RESOLUTION_OPTIONS = (
+    ("4k", "4K"),
+    ("1080p", "1080p"),
+    ("720p", "720p"),
+    ("480p", "480p"),
+)
+DEFAULT_DOWNLOAD_RESOLUTION = "1080p"
+DOWNLOAD_RESOLUTION_LABELS = dict(DOWNLOAD_RESOLUTION_OPTIONS)
 
 
 def classify_download_error_message(message: str) -> str:
@@ -51,6 +65,41 @@ def _deno_install_hint() -> str:
     if sys.platform == "darwin":
         return "Install Deno: brew install deno"
     return "Install Deno: curl -fsSL https://deno.land/install.sh | sh"
+
+
+def normalize_download_resolution(value: str | None) -> str | None:
+    """Normalize a user-facing download resolution tier."""
+    if value is None:
+        return None
+
+    normalized = value.strip().lower()
+    if not normalized:
+        return None
+
+    if normalized == "2160p":
+        normalized = "4k"
+
+    if normalized not in DOWNLOAD_RESOLUTION_HEIGHTS:
+        raise ValueError(
+            f"Unsupported download resolution '{value}'. "
+            f"Choose one of: {', '.join(label for _, label in DOWNLOAD_RESOLUTION_OPTIONS)}"
+        )
+
+    return normalized
+
+
+def build_download_format_selector(resolution: str | None) -> str:
+    """Build a yt-dlp format selector for the requested resolution tier."""
+    normalized = normalize_download_resolution(resolution)
+    if normalized is None:
+        return "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+
+    max_height = DOWNLOAD_RESOLUTION_HEIGHTS[normalized]
+    capped_best_mp4 = f"bestvideo[height<={max_height}][ext=mp4]+bestaudio[ext=m4a]"
+    capped_best_any = f"bestvideo[height<={max_height}]+bestaudio"
+    capped_merged_mp4 = f"best[height<={max_height}][ext=mp4]"
+    capped_merged_any = f"best[height<={max_height}]"
+    return f"{capped_best_mp4}/{capped_best_any}/{capped_merged_mp4}/{capped_merged_any}"
 
 
 def _format_yt_dlp_error(output_lines: list[str], *, deno_solver_ran: bool = False) -> str:
@@ -303,6 +352,7 @@ class VideoDownloader:
         progress_callback: Optional[Callable[[float, str], None]] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
         max_download_seconds: int = 3600,
+        resolution: Optional[str] = None,
     ) -> DownloadResult:
         """
         Download a video from URL.
@@ -312,6 +362,7 @@ class VideoDownloader:
             progress_callback: Optional callback (progress 0-100, status message)
             cancel_check: Optional callback that returns True to cancel download
             max_download_seconds: Maximum download time before timeout (default 1 hour)
+            resolution: Optional download resolution tier (4k, 1080p, 720p, 480p)
 
         Returns:
             DownloadResult with file path if successful
@@ -337,6 +388,8 @@ class VideoDownloader:
         # Sanitize filename
         safe_title = self._sanitize_filename(title)
         output_template = str(self.download_dir / f"{safe_title}.%(ext)s")
+        normalized_resolution = normalize_download_resolution(resolution)
+        format_selector = build_download_format_selector(normalized_resolution)
 
         # Build download command
         cmd = [
@@ -348,7 +401,7 @@ class VideoDownloader:
             "--max-filesize", "4G",  # Limit file size
             # Enable remote challenge solver for YouTube n-sig challenges (required for 2026+)
             "--remote-components", "ejs:github",
-            "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+            "-f", format_selector,
             "--merge-output-format", "mp4",
             "-o", output_template,
             "--newline",  # Progress on new lines for parsing
@@ -467,6 +520,14 @@ class VideoDownloader:
             logger.error(f"Deno challenge solver ran: {deno_solver_ran}")
 
             error_msg = _format_yt_dlp_error(recent_lines, deno_solver_ran=deno_solver_ran)
+            if (
+                normalized_resolution is not None
+                and any("Requested format is not available" in line for line in recent_lines)
+            ):
+                error_msg = (
+                    f"This video is not available at {DOWNLOAD_RESOLUTION_LABELS[normalized_resolution]}"
+                    " or lower."
+                )
             if error_msg.startswith("Download failed:") and last_error:
                 error_msg = last_error
             return DownloadResult(

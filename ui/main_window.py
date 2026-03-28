@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QStatusBar,
     QInputDialog,
-    QLineEdit,
     QTabWidget,
     QLabel,
     QDockWidget,
@@ -71,7 +70,7 @@ from ui.theme import theme, Spacing
 from ui.chat_panel import ChatPanel
 from ui.chat_worker import ChatAgentWorker
 from ui.clip_details_sidebar import ClipDetailsSidebar
-from ui.dialogs import IntentionImportDialog, AnalysisPickerDialog
+from ui.dialogs import IntentionImportDialog, AnalysisPickerDialog, URLImportDialog
 from ui.log_viewer import LogViewerWidget, get_in_app_log_bridge
 from core.analysis_dependencies import get_operation_feature_candidates
 from core.analysis_operations import (
@@ -272,9 +271,10 @@ class DownloadWorker(CancellableWorker):
     progress = Signal(float, str)  # progress (0-100), status message
     download_completed = Signal(object)  # DownloadResult (renamed from 'finished' to avoid shadowing QThread.finished)
 
-    def __init__(self, url: str):
+    def __init__(self, url: str, resolution: Optional[str] = None):
         super().__init__()
         self.url = url
+        self.resolution = resolution
 
     def run(self):
         try:
@@ -283,6 +283,7 @@ class DownloadWorker(CancellableWorker):
                 self.url,
                 progress_callback=lambda p, m: self.progress.emit(p, m),
                 cancel_check=lambda: self.is_cancelled(),
+                resolution=self.resolution,
             )
             if result.success:
                 self.download_completed.emit(result)
@@ -2902,9 +2903,9 @@ class MainWindow(QMainWindow):
             sequence_length=sequence_length
         )
 
-    def _on_download_requested_from_tab(self, url: str):
+    def _on_download_requested_from_tab(self, url: str, resolution: str):
         """Handle download request from Collect tab."""
-        self._download_video(url)
+        self._download_video(url, resolution=resolution)
 
     def _on_videos_added(self, paths: list[Path]):
         """Handle multiple videos added from Collect tab."""
@@ -4368,17 +4369,11 @@ class MainWindow(QMainWindow):
 
     def _on_import_url_click(self):
         """Handle import URL button click."""
-        url, ok = QInputDialog.getText(
-            self,
-            "Import from URL",
-            "Enter YouTube or Vimeo URL:",
-            QLineEdit.Normal,
-            "",
-        )
-        if ok and url.strip():
-            self._download_video(url.strip())
+        url, resolution = URLImportDialog.get_import_request(self)
+        if url and resolution:
+            self._download_video(url, resolution=resolution)
 
-    def _download_video(self, url: str):
+    def _download_video(self, url: str, resolution: Optional[str] = None):
         """Start downloading a video from URL."""
         if not self._ensure_video_download_available():
             return
@@ -4389,7 +4384,7 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 100)
 
-        self.download_worker = DownloadWorker(url)
+        self.download_worker = DownloadWorker(url, resolution=resolution)
         self.download_worker.progress.connect(self._on_download_progress)
         self.download_worker.download_completed.connect(self._on_download_finished)
         self.download_worker.error.connect(self._on_download_error)
@@ -4413,8 +4408,6 @@ class MainWindow(QMainWindow):
         if result.file_path and result.file_path.exists():
             self._load_video(result.file_path)
             self.status_bar.showMessage(f"Downloaded: {result.title}")
-            # Switch to Analyze tab after successful download
-            self.tab_widget.setCurrentIndex(1)  # Analyze tab
         else:
             QMessageBox.warning(self, "Download Error", "Download completed but file not found")
 

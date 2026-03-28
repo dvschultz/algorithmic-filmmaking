@@ -1,5 +1,6 @@
 """Regression tests for yt-dlp dependency prompts in download flows."""
 
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -90,3 +91,33 @@ def test_video_download_feature_requires_deno_runtime():
 
     assert available is False
     assert missing == ["binary:deno"]
+
+
+def test_single_url_download_completion_stays_on_collect_tab(tmp_path):
+    """Successful URL imports should not navigate away from Collect."""
+    loaded_paths = []
+    status_messages = []
+
+    class _TabWidget:
+        def setCurrentIndex(self, _index):
+            raise AssertionError("should stay on the current tab after URL import")
+
+    harness = SimpleNamespace(
+        _gui_state=SimpleNamespace(clear_processing=lambda *_args: None),
+        progress_bar=SimpleNamespace(setVisible=lambda *_args: None),
+        collect_tab=SimpleNamespace(set_downloading=lambda *_args: None),
+        _load_video=lambda path: loaded_paths.append(path),
+        status_bar=SimpleNamespace(showMessage=lambda message: status_messages.append(message)),
+        tab_widget=_TabWidget(),
+    )
+
+    result = SimpleNamespace(
+        file_path=tmp_path / "downloaded.mp4",
+        title="Downloaded Video",
+    )
+    result.file_path.write_text("ok")
+
+    MainWindow._on_download_finished(harness, result)
+
+    assert loaded_paths == [Path(result.file_path)]
+    assert status_messages == ["Downloaded: Downloaded Video"]

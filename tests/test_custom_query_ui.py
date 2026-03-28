@@ -34,54 +34,67 @@ def source():
     )
 
 
-def test_clip_browser_shows_custom_query_badges_and_filters(qapp, source):
+def test_clip_browser_filters_by_selected_custom_queries_with_and_logic(qapp, source):
     from ui.clip_browser import ClipBrowser
 
     browser = ClipBrowser()
 
-    clip_match = make_test_clip("c1")
-    clip_match.custom_queries = [
-        {"query": "red hat", "match": True, "confidence": 0.92, "model": "qwen3-vl-4b"}
+    clip_both = make_test_clip("c1")
+    clip_both.custom_queries = [
+        {"query": "blue car", "match": False, "confidence": 0.21, "model": "qwen3-vl-4b"},
+        {"query": "blue car", "match": True, "confidence": 0.92, "model": "qwen3-vl-4b"},
+        {"query": "person running", "match": True, "confidence": 0.87, "model": "qwen3-vl-4b"},
     ]
-    clip_no_match = make_test_clip("c2")
-    clip_no_match.custom_queries = [
-        {"query": "red hat", "match": False, "confidence": 0.08, "model": "qwen3-vl-4b"}
+    clip_only_blue = make_test_clip("c2")
+    clip_only_blue.custom_queries = [
+        {"query": "blue car", "match": True, "confidence": 0.83, "model": "qwen3-vl-4b"}
     ]
-    clip_none = make_test_clip("c3")
+    clip_latest_no_match = make_test_clip("c3")
+    clip_latest_no_match.custom_queries = [
+        {"query": "blue car", "match": True, "confidence": 0.88, "model": "qwen3-vl-4b"},
+        {"query": "blue car", "match": False, "confidence": 0.12, "model": "qwen3-vl-4b"},
+    ]
+    clip_none = make_test_clip("c4")
 
-    browser.add_clip(clip_match, source)
-    browser.add_clip(clip_no_match, source)
+    browser.add_clip(clip_both, source)
+    browser.add_clip(clip_only_blue, source)
+    browser.add_clip(clip_latest_no_match, source)
     browser.add_clip(clip_none, source)
     qapp.processEvents()
 
-    match_thumb = browser._thumbnail_by_id["c1"]
-    no_match_thumb = browser._thumbnail_by_id["c2"]
-    none_thumb = browser._thumbnail_by_id["c3"]
+    both_thumb = browser._thumbnail_by_id["c1"]
+    latest_no_match_thumb = browser._thumbnail_by_id["c3"]
+    none_thumb = browser._thumbnail_by_id["c4"]
 
-    assert match_thumb.custom_query_label.text() == "Query Match"
-    assert match_thumb.custom_query_label.isHidden() is False
-    assert "YES: red hat" in match_thumb.custom_query_label.toolTip()
+    assert both_thumb.custom_query_label.text() == "Query Match"
+    assert both_thumb.custom_query_label.isHidden() is False
+    assert "YES: blue car" in both_thumb.custom_query_label.toolTip()
+    assert "YES: person running" in both_thumb.custom_query_label.toolTip()
+    assert "NO: blue car" not in both_thumb.custom_query_label.toolTip()
 
-    assert no_match_thumb.custom_query_label.text() == "Query No Match"
-    assert no_match_thumb.custom_query_label.isHidden() is False
-    assert "NO: red hat" in no_match_thumb.custom_query_label.toolTip()
+    assert latest_no_match_thumb.custom_query_label.text() == "Query No Match"
+    assert latest_no_match_thumb.custom_query_label.isHidden() is False
+    assert "NO: blue car" in latest_no_match_thumb.custom_query_label.toolTip()
+    assert "YES: blue car" not in latest_no_match_thumb.custom_query_label.toolTip()
 
     assert none_thumb.custom_query_label.isHidden() is True
 
-    browser.custom_query_filter_combo.setCurrentText("Match")
-    qapp.processEvents()
-    assert browser.get_visible_clip_count() == 1
-    assert browser.get_active_filters()["custom_query"] == "Match"
+    assert sorted(browser._custom_query_filter_actions) == ["blue car", "person running"]
 
-    browser.custom_query_filter_combo.setCurrentText("No Match")
+    browser._custom_query_filter_actions["blue car"].trigger()
+    qapp.processEvents()
+    assert browser.get_visible_clip_count() == 2
+    assert browser.get_active_filters()["custom_query"] == ["blue car"]
+
+    browser._custom_query_filter_actions["person running"].trigger()
     qapp.processEvents()
     assert browser.get_visible_clip_count() == 1
-    assert browser.get_active_filters()["custom_query"] == "No Match"
+    assert browser.get_active_filters()["custom_query"] == ["blue car", "person running"]
 
     browser.clear_all_filters()
     qapp.processEvents()
     assert browser.get_active_filters()["custom_query"] is None
-    assert browser.get_visible_clip_count() == 3
+    assert browser.get_visible_clip_count() == 4
 
 
 def test_custom_query_ready_updates_tabs_sidebar_and_dirty_state(source):
@@ -138,3 +151,50 @@ def test_custom_query_ready_updates_tabs_sidebar_and_dirty_state(source):
     assert cut_calls == [(clip.id, clip.custom_queries)]
     assert sidebar_calls == [(clip.id, clip.custom_queries)]
     assert dirty_calls == [True]
+
+
+def test_clip_details_sidebar_allows_editing_custom_queries(qapp, source):
+    from ui.clip_details_sidebar import ClipDetailsSidebar
+
+    clip = make_test_clip("c1")
+    clip.custom_queries = [
+        {"query": "blue car", "match": False, "confidence": 0.21, "model": "qwen3-vl-4b"},
+        {"query": "blue car", "match": True, "confidence": 0.92, "model": "qwen3-vl-4b"},
+        {"query": "person running", "match": True, "confidence": 0.87, "model": "qwen3-vl-4b"},
+    ]
+
+    sidebar = ClipDetailsSidebar()
+    sidebar.video_player._setup_player = lambda: None
+    sidebar.video_player._player_ready = True
+    edited_queries = []
+    sidebar.clip_edited.connect(lambda updated_clip: edited_queries.append(updated_clip.custom_queries))
+
+    sidebar.show_clip(clip, source)
+    qapp.processEvents()
+
+    assert sidebar.custom_queries_header.isHidden() is False
+    assert len(sidebar._custom_query_row_widgets) == 2
+
+    sidebar._on_custom_query_match_changed(0, "Match")
+    qapp.processEvents()
+    assert clip.custom_queries == [
+        {"query": "blue car", "match": True, "confidence": 0.92, "model": "qwen3-vl-4b"},
+        {"query": "person running", "match": True, "confidence": 0.87, "model": "qwen3-vl-4b"},
+    ]
+    assert edited_queries[-1] == clip.custom_queries
+
+    sidebar._on_custom_query_changed(0, "red car")
+    qapp.processEvents()
+    assert clip.custom_queries == [
+        {"query": "red car", "match": True, "confidence": 0.92, "model": "qwen3-vl-4b"},
+        {"query": "person running", "match": True, "confidence": 0.87, "model": "qwen3-vl-4b"},
+    ]
+    assert edited_queries[-1] == clip.custom_queries
+
+    sidebar._on_custom_query_removed(1)
+    qapp.processEvents()
+    assert clip.custom_queries == [
+        {"query": "red car", "match": True, "confidence": 0.92, "model": "qwen3-vl-4b"},
+    ]
+    assert len(sidebar._custom_query_row_widgets) == 1
+    assert edited_queries[-1] == clip.custom_queries

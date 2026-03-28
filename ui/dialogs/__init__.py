@@ -10,6 +10,7 @@ from .signature_style_dialog import SignatureStyleDialog
 from .rose_hobart_dialog import RoseHobartDialog
 from .dice_roll_dialog import DiceRollDialog
 from .staccato_dialog import StaccatoDialog
+from .url_import_dialog import URLImportDialog
 
 __all__ = [
     "AnalysisPickerDialog",
@@ -23,4 +24,5 @@ __all__ = [
     "RoseHobartDialog",
     "DiceRollDialog",
     "StaccatoDialog",
+    "URLImportDialog",
 ]

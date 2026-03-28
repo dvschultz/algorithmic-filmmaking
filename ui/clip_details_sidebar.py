@@ -16,10 +16,12 @@ from typing import Optional, TYPE_CHECKING
 
 from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtWidgets import (
+    QComboBox,
     QDockWidget,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QScrollArea,
     QSizePolicy,
     QVBoxLayout,
@@ -38,6 +40,17 @@ if TYPE_CHECKING:
     from core.transcription import TranscriptSegment
 
 logger = logging.getLogger(__name__)
+
+
+def _get_latest_custom_query_results(custom_queries: Optional[list[dict]]) -> list[dict]:
+    """Collapse append-only custom query history to the latest result per query."""
+    latest_results: dict[str, dict] = {}
+    for query_result in custom_queries or []:
+        query = str(query_result.get("query") or "").strip()
+        if not query:
+            continue
+        latest_results[query] = dict(query_result)
+    return list(latest_results.values())
 
 
 class ClipDetailsSidebar(QDockWidget):
@@ -235,10 +248,13 @@ class ClipDetailsSidebar(QDockWidget):
         self.custom_queries_header.setVisible(False)
         content_layout.addWidget(self.custom_queries_header)
 
-        self.custom_queries_label = QLabel("")
-        self.custom_queries_label.setWordWrap(True)
-        self.custom_queries_label.setVisible(False)
-        content_layout.addWidget(self.custom_queries_label)
+        self.custom_queries_container = QWidget()
+        self.custom_queries_layout = QVBoxLayout(self.custom_queries_container)
+        self.custom_queries_layout.setContentsMargins(0, 0, 0, 0)
+        self.custom_queries_layout.setSpacing(8)
+        self.custom_queries_container.setVisible(False)
+        content_layout.addWidget(self.custom_queries_container)
+        self._custom_query_row_widgets: list[QWidget] = []
 
         # Stretch to push content to top
         content_layout.addStretch()
@@ -298,6 +314,7 @@ class ClipDetailsSidebar(QDockWidget):
         # Re-render color swatches with current clip
         if self._clip_ref:
             self._update_colors(self._clip_ref.dominant_colors)
+            self._update_custom_queries(self._clip_ref.custom_queries)
             # Re-render detected objects styling
             if self._clip_ref.detected_objects:
                 self.detected_objects_label.setStyleSheet(f"color: {theme().text_primary};")
@@ -465,7 +482,7 @@ class ClipDetailsSidebar(QDockWidget):
         else:
             self.person_count_label.setVisible(False)
 
-        # Custom Queries (read-only)
+        # Custom Queries (editable query text, read-only result metadata)
         self._update_custom_queries(clip.custom_queries)
 
         # Description (editable)
@@ -561,8 +578,7 @@ class ClipDetailsSidebar(QDockWidget):
         self.description_edit.setText("")
         self.description_meta_label.setVisible(False)
         self._set_extracted_text_placeholder("Select a single clip to view details")
-        self.custom_queries_header.setVisible(False)
-        self.custom_queries_label.setVisible(False)
+        self._update_custom_queries(None)
 
         # Unblock signals and disable editing
         self._block_editable_signals(False)
@@ -585,6 +601,8 @@ class ClipDetailsSidebar(QDockWidget):
         self.transcript_edit.setEnabled(enabled)
         self.object_labels_edit.setEnabled(enabled)
         self.description_edit.setEnabled(enabled)
+        for row_widget in self._custom_query_row_widgets:
+            row_widget.setEnabled(enabled)
         # Note: detected_objects and person_count are always read-only
 
     def _block_editable_signals(self, block: bool):
@@ -610,22 +628,149 @@ class ClipDetailsSidebar(QDockWidget):
 
     def _update_custom_queries(self, custom_queries: Optional[list[dict]]):
         """Update the custom query section."""
-        if custom_queries:
-            lines = []
-            for query_result in custom_queries:
-                icon = "\u2713" if query_result.get("match") else "\u2717"
-                confidence = query_result.get("confidence", 0)
-                model = query_result.get("model", "")
-                lines.append(
-                    f'{icon} "{query_result.get("query", "")}" ({confidence:.0%}, {model})'
-                )
-            self.custom_queries_label.setText("\n".join(lines))
-            self.custom_queries_label.setStyleSheet(f"color: {theme().text_primary};")
-            self.custom_queries_header.setVisible(True)
-            self.custom_queries_label.setVisible(True)
-        else:
+        while self.custom_queries_layout.count():
+            item = self.custom_queries_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self._custom_query_row_widgets = []
+
+        latest_results = _get_latest_custom_query_results(custom_queries)
+        if not latest_results:
             self.custom_queries_header.setVisible(False)
-            self.custom_queries_label.setVisible(False)
+            self.custom_queries_container.setVisible(False)
+            return
+
+        for index, query_result in enumerate(latest_results):
+            row = self._build_custom_query_row(index, query_result)
+            self.custom_queries_layout.addWidget(row)
+            self._custom_query_row_widgets.append(row)
+
+        self.custom_queries_header.setVisible(True)
+        self.custom_queries_container.setVisible(True)
+
+    def _build_custom_query_row(self, index: int, query_result: dict) -> QWidget:
+        """Build a single editable row for a custom query result."""
+        row = QFrame()
+        row.setStyleSheet(
+            f"QFrame {{ background-color: {theme().background_tertiary}; border-radius: 6px; }}"
+        )
+
+        layout = QVBoxLayout(row)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+
+        top_row = QHBoxLayout()
+        top_row.setContentsMargins(0, 0, 0, 0)
+        top_row.setSpacing(8)
+
+        match_combo = QComboBox()
+        match_combo.addItems(["Match", "No Match"])
+        match_combo.setCurrentText("Match" if query_result.get("match") else "No Match")
+        match_combo.setToolTip("Correct whether this custom query matched the clip")
+        match_combo.setStyleSheet(
+            f"""
+            QComboBox {{
+                color: {theme().text_primary};
+                background-color: {theme().background_primary};
+                border: 1px solid {theme().border_focus};
+                border-radius: 4px;
+                padding: 2px 6px;
+                min-width: 88px;
+            }}
+            QComboBox::drop-down {{
+                border: none;
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: {theme().background_primary};
+                color: {theme().text_primary};
+            }}
+            """
+        )
+        match_combo.currentTextChanged.connect(
+            lambda new_value, row_index=index: self._on_custom_query_match_changed(
+                row_index, new_value
+            )
+        )
+        top_row.addWidget(match_combo)
+
+        query_edit = EditableLabel(query_result.get("query", ""), placeholder="Custom query")
+        query_edit.value_changed.connect(
+            lambda new_value, row_index=index: self._on_custom_query_changed(row_index, new_value)
+        )
+        top_row.addWidget(query_edit, 1)
+
+        remove_button = QPushButton("Remove")
+        remove_button.setToolTip("Remove this saved custom query result")
+        remove_button.clicked.connect(
+            lambda _checked=False, row_index=index: self._on_custom_query_removed(row_index)
+        )
+        top_row.addWidget(remove_button)
+
+        layout.addLayout(top_row)
+
+        confidence = float(query_result.get("confidence", 0.0))
+        model = str(query_result.get("model") or "")
+        meta_parts = [f"{confidence:.0%}"]
+        if model:
+            meta_parts.append(model)
+        meta_label = QLabel(" · ".join(meta_parts))
+        self._apply_muted_style(meta_label)
+        layout.addWidget(meta_label)
+
+        return row
+
+    def _on_custom_query_changed(self, row_index: int, new_value: str):
+        """Handle inline edit of a custom query string."""
+        if self._change_in_progress or self._loading or not self._clip_ref:
+            return
+
+        normalized_queries = _get_latest_custom_query_results(self._clip_ref.custom_queries)
+        if row_index >= len(normalized_queries):
+            return
+
+        self._change_in_progress = True
+        new_query = new_value.strip()
+        if new_query:
+            normalized_queries[row_index]["query"] = new_query
+        else:
+            normalized_queries.pop(row_index)
+        self._clip_ref.custom_queries = normalized_queries or None
+        self._update_custom_queries(self._clip_ref.custom_queries)
+        self._emit_clip_edit()
+        self._change_in_progress = False
+
+    def _on_custom_query_removed(self, row_index: int):
+        """Handle removing a saved custom query result."""
+        if self._change_in_progress or self._loading or not self._clip_ref:
+            return
+
+        normalized_queries = _get_latest_custom_query_results(self._clip_ref.custom_queries)
+        if row_index >= len(normalized_queries):
+            return
+
+        self._change_in_progress = True
+        normalized_queries.pop(row_index)
+        self._clip_ref.custom_queries = normalized_queries or None
+        self._update_custom_queries(self._clip_ref.custom_queries)
+        self._emit_clip_edit()
+        self._change_in_progress = False
+
+    def _on_custom_query_match_changed(self, row_index: int, new_value: str):
+        """Handle correcting whether a custom query matched the clip."""
+        if self._change_in_progress or self._loading or not self._clip_ref:
+            return
+
+        normalized_queries = _get_latest_custom_query_results(self._clip_ref.custom_queries)
+        if row_index >= len(normalized_queries):
+            return
+
+        self._change_in_progress = True
+        normalized_queries[row_index]["match"] = new_value == "Match"
+        self._clip_ref.custom_queries = normalized_queries or None
+        self._update_custom_queries(self._clip_ref.custom_queries)
+        self._emit_clip_edit()
+        self._change_in_progress = False
 
     def _set_extracted_text_placeholder(self, text: str):
         """Set extracted text label to placeholder style.
@@ -720,6 +865,7 @@ class ClipDetailsSidebar(QDockWidget):
         self.description_edit.setPlaceholder("Run Describe to analyze...")
         self.description_meta_label.setVisible(False)
         self._set_extracted_text_placeholder("Run Extract Text to analyze...")
+        self._update_custom_queries(None)
 
         self._block_editable_signals(False)
         self._set_editing_enabled(False)

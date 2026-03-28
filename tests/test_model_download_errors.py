@@ -171,16 +171,19 @@ class TestStemSeparationModelDownloadErrors:
         mock_torch.cuda.is_available.return_value = False
         mock_torch.backends.mps.is_available.return_value = False
 
-        # Patch the imports that happen inside separate_stems()
+        # Mock torch + demucs in sys.modules so this works even without torch installed
         with patch.dict(
             "sys.modules",
             {
+                "torch": mock_torch,
+                "torch.backends": mock_torch.backends,
+                "torch.backends.mps": mock_torch.backends.mps,
                 "demucs_infer.pretrained": MagicMock(get_model=mock_get_model),
                 "demucs_infer.apply": MagicMock(),
                 "demucs_infer.audio": MagicMock(),
+                "core.analysis.audio": MagicMock(),
             },
-        ), patch("torch.cuda.is_available", return_value=False), \
-             patch("torch.backends.mps.is_available", return_value=False):
+        ):
             with pytest.raises(ModelDownloadError, match="Demucs"):
                 mod.separate_stems(
                     music_path=Path("/tmp/fake.mp3"),

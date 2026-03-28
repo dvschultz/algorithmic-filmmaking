@@ -202,11 +202,10 @@ def test_sequence_export_rejects_unwritable_output_directory(tmp_path, source, m
 
     MainWindow._on_sequence_export_click(window)
 
-    assert warnings == [
-        (
-            "Export Sequence",
-            "Cannot write to export folder:\n/\n\nChoose a different location.",
-        )
-    ]
+    assert len(warnings) == 1
+    assert warnings[0][0] == "Export Sequence"
+    # Path separator differs on Windows (\) vs Unix (/)
+    root_path = str(Path("/"))
+    assert warnings[0][1] == f"Cannot write to export folder:\n{root_path}\n\nChoose a different location."
     assert window.progress_bar.ranges == []
     assert export_button.enabled is True

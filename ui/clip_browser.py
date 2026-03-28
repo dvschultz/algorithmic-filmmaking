@@ -17,11 +17,12 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QMenu,
+    QToolButton,
     QGraphicsOpacityEffect,
     QRubberBand,
 )
 from PySide6.QtCore import Qt, Signal, QMimeData, QRect, QTimer
-from PySide6.QtGui import QPixmap, QDrag, QPainter, QColor, QKeyEvent
+from PySide6.QtGui import QPixmap, QDrag, QPainter, QColor, QKeyEvent, QAction
 
 from ui.widgets.range_slider import RangeSlider
 from ui.widgets.source_group_header import SourceGroupHeader
@@ -35,6 +36,17 @@ from ui.theme import theme, UISizes, TypeScale, Spacing, Radii
 from ui.gradient_glow import paint_gradient_glow, paint_card_body, RoundedTopLabel
 
 logger = logging.getLogger(__name__)
+
+
+def get_latest_custom_query_results(custom_queries: list[dict] | None) -> dict[str, dict]:
+    """Collapse append-only custom query history to the latest result per query."""
+    latest_results: dict[str, dict] = {}
+    for query_result in custom_queries or []:
+        query = str(query_result.get("query") or "").strip()
+        if not query:
+            continue
+        latest_results[query] = query_result
+    return latest_results
 
 
 class ColorSwatchBar(QWidget):
@@ -556,12 +568,12 @@ class ClipThumbnail(QFrame):
 
     def _custom_query_tooltip(self) -> str:
         """Build a tooltip summary for custom query results."""
-        queries = self.clip.custom_queries or []
-        if not queries:
+        latest_results = get_latest_custom_query_results(self.clip.custom_queries)
+        if not latest_results:
             return ""
 
         lines = ["Custom query results:"]
-        for query_result in queries:
+        for query_result in latest_results.values():
             marker = "YES" if query_result.get("match") else "NO"
             confidence = float(query_result.get("confidence", 0.0))
             model = query_result.get("model", "")
@@ -575,13 +587,13 @@ class ClipThumbnail(QFrame):
 
     def _update_custom_query_badge(self):
         """Update the custom query badge based on stored results."""
-        queries = self.clip.custom_queries or []
-        if not queries:
+        latest_results = get_latest_custom_query_results(self.clip.custom_queries)
+        if not latest_results:
             self.custom_query_label.setVisible(False)
             self.custom_query_label.setToolTip("")
             return
 
-        any_match = any(bool(result.get("match")) for result in queries)
+        any_match = any(bool(result.get("match")) for result in latest_results.values())
         background = theme().accent_green if any_match else theme().accent_orange
         text = "Query Match" if any_match else "Query No Match"
 
@@ -629,7 +641,9 @@ class ClipBrowser(QWidget):
         self._current_filter = "All"  # Current shot type filter
         self._current_color_filter = "All"  # Current color palette filter
         self._current_search_query = ""  # Current transcript search query
-        self._custom_query_filter = "All"  # "All", "Match", "No Match"
+        self._selected_custom_queries: set[str] = set()
+        self._custom_query_filter_actions: dict[str, QAction] = {}
+        self._updating_custom_query_filter_menu = False
         self._last_column_count = 0  # Track columns to detect changes on resize
 
         # Duration and aspect ratio filters
@@ -730,14 +744,15 @@ class ClipBrowser(QWidget):
         custom_query_label = QLabel("Custom:")
         header_layout.addWidget(custom_query_label)
 
-        self.custom_query_filter_combo = QComboBox()
-        self.custom_query_filter_combo.addItems(["All", "Match", "No Match"])
-        self.custom_query_filter_combo.setFixedWidth(110)
-        self.custom_query_filter_combo.setToolTip("Filter clips by custom query results")
-        self.custom_query_filter_combo.currentTextChanged.connect(
-            self._on_custom_query_filter_changed
-        )
-        header_layout.addWidget(self.custom_query_filter_combo)
+        self.custom_query_filter_btn = QToolButton()
+        self.custom_query_filter_btn.setPopupMode(QToolButton.InstantPopup)
+        self.custom_query_filter_btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.custom_query_filter_btn.setMinimumWidth(120)
+        self.custom_query_filter_btn.setToolTip("Filter clips by custom query matches")
+        self.custom_query_filter_menu = QMenu(self.custom_query_filter_btn)
+        self.custom_query_filter_btn.setMenu(self.custom_query_filter_menu)
+        header_layout.addWidget(self.custom_query_filter_btn)
+        self._sync_custom_query_filter_options()
 
         header_layout.addSpacing(16)
 
@@ -844,6 +859,7 @@ class ClipBrowser(QWidget):
         self._thumbnail_by_id[clip.id] = thumb  # O(1) lookup
 
         # Rebuild grid to handle grouping properly
+        self._sync_custom_query_filter_options()
         self._rebuild_grid()
 
         # Update duration range for spinboxes
@@ -866,6 +882,8 @@ class ClipBrowser(QWidget):
         self._source_lookup = {}
         self._source_headers = {}
         self._group_expanded_state = {}
+        self._selected_custom_queries = set()
+        self._sync_custom_query_filter_options()
 
         # Show empty state
         self._show_empty_state()
@@ -903,9 +921,12 @@ class ClipBrowser(QWidget):
         # Replace list in one operation (avoids O(n) list.remove() calls)
         if remove:
             self.thumbnails = keep
+            selection_changed = self._sync_custom_query_filter_options()
             self._rebuild_grid()  # This handles empty state
             if self.selected_clips != selection_before:
                 self._emit_selection_changed()
+            if selection_changed:
+                self.filters_changed.emit()
 
     def remove_clips_by_ids(self, clip_ids: list[str]):
         """Remove specific clips by their IDs."""
@@ -929,9 +950,12 @@ class ClipBrowser(QWidget):
 
         if remove:
             self.thumbnails = keep
+            selection_changed = self._sync_custom_query_filter_options()
             self._rebuild_grid()
             if self.selected_clips != selection_before:
                 self._emit_selection_changed()
+            if selection_changed:
+                self.filters_changed.emit()
 
     def set_drag_enabled(self, enabled: bool):
         """Enable or disable dragging clips to timeline."""
@@ -1139,7 +1163,10 @@ class ClipBrowser(QWidget):
         thumb = self._thumbnail_by_id.get(clip_id)
         if thumb:
             thumb.set_custom_queries(custom_queries)
+            selection_changed = self._sync_custom_query_filter_options()
             self._rebuild_grid()
+            if selection_changed:
+                self.filters_changed.emit()
 
     def update_clip_cinematography(self, clip_id: str, cinematography):
         """Update the cinematography for a specific clip thumbnail (O(1) lookup)."""
@@ -1172,6 +1199,101 @@ class ClipBrowser(QWidget):
                 thumb.set_colors(clip.dominant_colors)
                 thumb.set_custom_queries(clip.custom_queries)
                 thumb._update_style()  # Refresh disabled visual state
+        selection_changed = self._sync_custom_query_filter_options()
+        self._rebuild_grid()
+        if selection_changed:
+            self.filters_changed.emit()
+
+    def _available_custom_query_names(self) -> list[str]:
+        """Return sorted custom query names present across all clips."""
+        names: set[str] = set()
+        for thumb in self.thumbnails:
+            names.update(get_latest_custom_query_results(thumb.clip.custom_queries).keys())
+        return sorted(names, key=str.lower)
+
+    def _refresh_custom_query_filter_button(self):
+        """Update the custom query filter button summary text and tooltip."""
+        selected_queries = sorted(self._selected_custom_queries, key=str.lower)
+        if not selected_queries:
+            self.custom_query_filter_btn.setText("All")
+            self.custom_query_filter_btn.setToolTip("Filter clips by selected custom query matches")
+            return
+
+        if len(selected_queries) == 1:
+            query = selected_queries[0]
+            summary = query if len(query) <= 18 else f"{query[:15]}..."
+            tooltip = f"Showing clips matching: {query}"
+        else:
+            summary = f"{len(selected_queries)} selected"
+            tooltip = "Showing clips matching all selected queries:\n" + "\n".join(
+                f"- {query}" for query in selected_queries
+            )
+
+        self.custom_query_filter_btn.setText(summary)
+        self.custom_query_filter_btn.setToolTip(tooltip)
+
+    def _sync_custom_query_filter_options(self) -> bool:
+        """Rebuild the custom query filter menu and prune stale selections."""
+        available_queries = self._available_custom_query_names()
+        available_set = set(available_queries)
+        selected_before = set(self._selected_custom_queries)
+        self._selected_custom_queries.intersection_update(available_set)
+
+        self._updating_custom_query_filter_menu = True
+        self.custom_query_filter_menu.clear()
+        self._custom_query_filter_actions = {}
+
+        clear_action = self.custom_query_filter_menu.addAction("Clear Selection")
+        clear_action.setEnabled(bool(self._selected_custom_queries))
+        clear_action.triggered.connect(self._clear_custom_query_filter_selection)
+        self.custom_query_filter_menu.addSeparator()
+
+        if available_queries:
+            for query in available_queries:
+                action = self.custom_query_filter_menu.addAction(query)
+                action.setCheckable(True)
+                action.setChecked(query in self._selected_custom_queries)
+                action.toggled.connect(
+                    lambda checked, query_name=query: self._on_custom_query_query_toggled(
+                        query_name, checked
+                    )
+                )
+                self._custom_query_filter_actions[query] = action
+        else:
+            empty_action = self.custom_query_filter_menu.addAction("No queries yet")
+            empty_action.setEnabled(False)
+
+        self._updating_custom_query_filter_menu = False
+        self._refresh_custom_query_filter_button()
+        return selected_before != self._selected_custom_queries
+
+    def _set_selected_custom_queries(self, selected_queries: set[str], emit: bool = True):
+        """Apply the selected custom query names and refresh filtering."""
+        self._selected_custom_queries = {
+            query.strip() for query in selected_queries if query and query.strip()
+        }
+        self._sync_custom_query_filter_options()
+        self._rebuild_grid()
+        if emit:
+            self.filters_changed.emit()
+
+    def _clear_custom_query_filter_selection(self):
+        """Clear all selected custom query filters."""
+        if not self._selected_custom_queries:
+            return
+        self._set_selected_custom_queries(set())
+
+    def _on_custom_query_query_toggled(self, query_name: str, checked: bool):
+        """Handle a custom query checkbox toggle from the filter menu."""
+        if self._updating_custom_query_filter_menu:
+            return
+
+        selected_queries = set(self._selected_custom_queries)
+        if checked:
+            selected_queries.add(query_name)
+        else:
+            selected_queries.discard(query_name)
+        self._set_selected_custom_queries(selected_queries)
 
     def _on_filter_changed(self, filter_option: str):
         """Handle shot type filter dropdown change."""
@@ -1188,12 +1310,6 @@ class ClipBrowser(QWidget):
     def _on_search_changed(self, search_text: str):
         """Handle transcript search input change."""
         self._current_search_query = search_text.lower().strip()
-        self._rebuild_grid()
-        self.filters_changed.emit()
-
-    def _on_custom_query_filter_changed(self, filter_option: str):
-        """Handle custom query filter dropdown change."""
-        self._custom_query_filter = filter_option
         self._rebuild_grid()
         self.filters_changed.emit()
 
@@ -1272,6 +1388,11 @@ class ClipBrowser(QWidget):
     def _do_rebuild_grid(self):
         """Actually rebuild the grid layout with source grouping, current order, and filter."""
         self._rebuild_pending = False
+        try:
+            # Guard against C++ object deleted (deferred timer can fire after widget teardown)
+            self.scroll.viewport()
+        except RuntimeError:
+            return
         self._last_column_count = self._calculate_columns()
 
         # Remove all thumbnails and headers from grid
@@ -1415,13 +1536,11 @@ class ClipBrowser(QWidget):
                 return False
 
         # Check custom query result filter
-        if self._custom_query_filter != "All":
-            queries = thumb.clip.custom_queries or []
-            if self._custom_query_filter == "Match":
-                if not any(bool(result.get("match")) for result in queries):
-                    return False
-            elif self._custom_query_filter == "No Match":
-                if not queries or any(bool(result.get("match")) for result in queries):
+        if self._selected_custom_queries:
+            latest_results = get_latest_custom_query_results(thumb.clip.custom_queries)
+            for query_name in self._selected_custom_queries:
+                query_result = latest_results.get(query_name)
+                if not query_result or not bool(query_result.get("match")):
                     return False
 
         # Check duration filter
@@ -1551,7 +1670,6 @@ class ClipBrowser(QWidget):
         self.filter_combo.blockSignals(True)
         self.color_filter_combo.blockSignals(True)
         self.search_input.blockSignals(True)
-        self.custom_query_filter_combo.blockSignals(True)
         self.duration_slider.blockSignals(True)
         self.aspect_ratio_combo.blockSignals(True)
 
@@ -1559,7 +1677,7 @@ class ClipBrowser(QWidget):
         self._current_filter = "All"
         self._current_color_filter = "All"
         self._current_search_query = ""
-        self._custom_query_filter = "All"
+        self._selected_custom_queries = set()
         self._min_duration = None
         self._max_duration = None
         self._aspect_ratio_filter = "All"
@@ -1568,15 +1686,14 @@ class ClipBrowser(QWidget):
         self.filter_combo.setCurrentText("All")
         self.color_filter_combo.setCurrentText("All")
         self.search_input.clear()
-        self.custom_query_filter_combo.setCurrentText("All")
         self.duration_slider.reset()
         self.aspect_ratio_combo.setCurrentText("All")
+        self._sync_custom_query_filter_options()
 
         # Unblock signals
         self.filter_combo.blockSignals(False)
         self.color_filter_combo.blockSignals(False)
         self.search_input.blockSignals(False)
-        self.custom_query_filter_combo.blockSignals(False)
         self.duration_slider.blockSignals(False)
         self.aspect_ratio_combo.blockSignals(False)
 
@@ -1595,7 +1712,7 @@ class ClipBrowser(QWidget):
                 - shot_type: str ('Wide Shot', 'Medium Shot', 'Close-up', 'Extreme CU') or None
                 - color_palette: str ('Warm', 'Cool', 'Neutral', 'Vibrant') or None
                 - search_query: str or None
-                - custom_query: str ('Match', 'No Match') or None
+                - custom_query: list[str] | tuple[str, ...] | set[str] | str | None
         """
         # Block signals to avoid multiple rebuilds
         self.duration_slider.blockSignals(True)
@@ -1603,7 +1720,6 @@ class ClipBrowser(QWidget):
         self.filter_combo.blockSignals(True)
         self.color_filter_combo.blockSignals(True)
         self.search_input.blockSignals(True)
-        self.custom_query_filter_combo.blockSignals(True)
 
         # Apply duration filter
         if 'min_duration' in filters or 'max_duration' in filters:
@@ -1641,8 +1757,18 @@ class ClipBrowser(QWidget):
         # Apply custom query filter
         if 'custom_query' in filters:
             value = filters['custom_query']
-            self._custom_query_filter = value if value else "All"
-            self.custom_query_filter_combo.setCurrentText(self._custom_query_filter)
+            if value is None:
+                self._selected_custom_queries = set()
+            elif isinstance(value, str):
+                if value in {"All", "Match", "No Match"}:
+                    self._selected_custom_queries = set()
+                else:
+                    self._selected_custom_queries = {value}
+            else:
+                self._selected_custom_queries = {
+                    str(query).strip() for query in value if str(query).strip()
+                }
+            self._sync_custom_query_filter_options()
 
         # Unblock signals
         self.duration_slider.blockSignals(False)
@@ -1650,7 +1776,6 @@ class ClipBrowser(QWidget):
         self.filter_combo.blockSignals(False)
         self.color_filter_combo.blockSignals(False)
         self.search_input.blockSignals(False)
-        self.custom_query_filter_combo.blockSignals(False)
 
         # Rebuild grid and emit signal
         self._rebuild_grid()
@@ -1678,7 +1803,11 @@ class ClipBrowser(QWidget):
             "shot_type": self._current_filter if self._current_filter != "All" else None,
             "color_palette": self._current_color_filter if self._current_color_filter != "All" else None,
             "search_query": self._current_search_query if self._current_search_query else None,
-            "custom_query": self._custom_query_filter if self._custom_query_filter != "All" else None,
+            "custom_query": (
+                sorted(self._selected_custom_queries, key=str.lower)
+                if self._selected_custom_queries
+                else None
+            ),
             "min_duration": self._min_duration,
             "max_duration": self._max_duration,
             "aspect_ratio": self._aspect_ratio_filter if self._aspect_ratio_filter != "All" else None,
@@ -1694,7 +1823,7 @@ class ClipBrowser(QWidget):
             self._current_filter != "All"
             or self._current_color_filter != "All"
             or bool(self._current_search_query)
-            or self._custom_query_filter != "All"
+            or bool(self._selected_custom_queries)
             or self._min_duration is not None
             or self._max_duration is not None
             or self._aspect_ratio_filter != "All"
