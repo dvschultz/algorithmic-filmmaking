@@ -151,7 +151,7 @@ class SequenceExporter:
                             output_path=segment_path,
                             start_frame=seq_clip.in_point,
                             end_frame=seq_clip.out_point,
-                            fps=config.fps,
+                            source_fps=source.fps,
                             config=config,
                             bar_color=bar_color,
                             seq_clip=seq_clip,
@@ -234,14 +234,14 @@ class SequenceExporter:
         output_path: Path,
         start_frame: int,
         end_frame: int,
-        fps: float,
+        source_fps: float,
         config: ExportConfig,
         bar_color: Optional[tuple[int, int, int]] = None,
         seq_clip: Optional[SequenceClip] = None,
     ) -> bool:
         """Export a single segment from a source video."""
-        start_seconds = start_frame / fps
-        duration_seconds = (end_frame - start_frame) / fps
+        start_seconds = start_frame / source_fps
+        duration_seconds = (end_frame - start_frame) / source_fps
 
         # Check reverse safety limit
         apply_reverse = False
@@ -258,6 +258,7 @@ class SequenceExporter:
             config=config, bar_color=bar_color, seq_clip=seq_clip,
             apply_reverse=apply_reverse,
         )
+        normalized_vf = f"{vf},fps={config.fps}" if vf else f"fps={config.fps}"
 
         cmd = [
             self.ffmpeg_path,
@@ -268,10 +269,10 @@ class SequenceExporter:
             "-c:v", config.video_codec,
             "-preset", config.preset,
             "-crf", str(config.crf),
+            "-pix_fmt", "yuv420p",
         ]
 
-        if vf:
-            cmd.extend(["-vf", vf])
+        cmd.extend(["-vf", normalized_vf])
 
         # Audio: apply areverse if reversing video
         if apply_reverse:

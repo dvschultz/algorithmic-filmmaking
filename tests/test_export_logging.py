@@ -40,7 +40,7 @@ def test_extract_clip_logs_ffmpeg_stderr_on_failure(monkeypatch, tmp_path, caplo
 def test_sequence_export_logs_concat_failure(monkeypatch, tmp_path, caplog):
     exporter = SequenceExporter(ffmpeg_path="ffmpeg")
 
-    source = SimpleNamespace(id="src-1", file_path=Path("source.mp4"))
+    source = SimpleNamespace(id="src-1", file_path=Path("source.mp4"), fps=30.0)
     clip = SimpleNamespace(id="clip-1", start_frame=0, end_frame=30, dominant_colors=None)
     seq_clip = SimpleNamespace(
         id="seq-1",

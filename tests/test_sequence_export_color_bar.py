@@ -29,13 +29,14 @@ def test_export_segment_includes_drawbox_filter_when_color_bar_enabled(monkeypat
         output_path=tmp_path / "segment.mp4",
         start_frame=0,
         end_frame=30,
-        fps=30.0,
+        source_fps=30.0,
         config=config,
         bar_color=(255, 0, 0),
     )
 
     assert success is True
     vf = captured["cmd"][captured["cmd"].index("-vf") + 1]
+    assert "fps=30.0" in vf
     assert "drawbox=" in vf
     assert "0xff0000@1.0" in vf
     assert "\\," in vf
@@ -44,9 +45,21 @@ def test_export_segment_includes_drawbox_filter_when_color_bar_enabled(monkeypat
 def test_export_resolves_clip_color_and_falls_back_to_black(monkeypatch, tmp_path):
     exporter = SequenceExporter(ffmpeg_path="ffmpeg")
     bar_colors = []
+    source_fps_values = []
 
-    def fake_export_segment(*, source_path, output_path, start_frame, end_frame, fps, config, bar_color=None, seq_clip=None):
+    def fake_export_segment(
+        *,
+        source_path,
+        output_path,
+        start_frame,
+        end_frame,
+        source_fps,
+        config,
+        bar_color=None,
+        seq_clip=None,
+    ):
         bar_colors.append(bar_color)
+        source_fps_values.append(source_fps)
         return True
 
     def fake_concat_segments(*, segment_paths, output_path, config):
@@ -55,7 +68,7 @@ def test_export_resolves_clip_color_and_falls_back_to_black(monkeypatch, tmp_pat
     monkeypatch.setattr(exporter, "_export_segment", fake_export_segment)
     monkeypatch.setattr(exporter, "_concat_segments", fake_concat_segments)
 
-    source = Source(id="src-1", file_path=Path("src.mp4"), fps=30.0)
+    source = Source(id="src-1", file_path=Path("src.mp4"), fps=24.0)
     clip_a = Clip(
         id="clip-a",
         source_id=source.id,
@@ -103,3 +116,38 @@ def test_export_resolves_clip_color_and_falls_back_to_black(monkeypatch, tmp_pat
 
     assert success is True
     assert bar_colors == [(10, 20, 30), (0, 0, 0)]
+    assert source_fps_values == [24.0, 24.0]
+
+
+def test_export_segment_uses_source_fps_for_trim_and_sequence_fps_for_output(
+    monkeypatch, tmp_path,
+):
+    exporter = SequenceExporter(ffmpeg_path="ffmpeg")
+    captured = {}
+
+    def fake_run(cmd, capture_output, text, timeout, **kwargs):
+        captured["cmd"] = cmd
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("core.sequence_export.subprocess.run", fake_run)
+
+    config = ExportConfig(
+        output_path=tmp_path / "out.mp4",
+        fps=30.0,
+    )
+
+    success = exporter._export_segment(
+        source_path=Path("input.mp4"),
+        output_path=tmp_path / "segment.mp4",
+        start_frame=48,
+        end_frame=96,
+        source_fps=24.0,
+        config=config,
+    )
+
+    assert success is True
+    cmd = captured["cmd"]
+    assert cmd[cmd.index("-ss") + 1] == "2.0"
+    assert cmd[cmd.index("-t") + 1] == "2.0"
+    assert cmd[cmd.index("-vf") + 1] == "fps=30.0"
+    assert cmd[cmd.index("-pix_fmt") + 1] == "yuv420p"
