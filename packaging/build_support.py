@@ -67,6 +67,10 @@ SUPPLEMENTAL_HIDDENIMPORTS = (
     "html.parser",
     "html.entities",
     "_markupbase",
+    # librosa/soundfile depend on aifc and sunau which are deprecated in
+    # Python 3.11 and removed in 3.13. PyInstaller may skip them.
+    "aifc",
+    "sunau",
 )
 PYINSTALLER_HANDLED_REQUIREMENTS = {
     "pyside6",
