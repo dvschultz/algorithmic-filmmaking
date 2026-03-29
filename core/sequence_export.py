@@ -241,7 +241,8 @@ class SequenceExporter:
     ) -> bool:
         """Export a single segment from a source video."""
         start_seconds = start_frame / source_fps
-        duration_seconds = (end_frame - start_frame) / source_fps
+        frame_duration = 1.0 / source_fps
+        duration_seconds = (end_frame - start_frame) / source_fps - frame_duration
 
         # Check reverse safety limit
         apply_reverse = False
@@ -260,12 +261,22 @@ class SequenceExporter:
         )
         normalized_vf = f"{vf},fps={config.fps}" if vf else f"fps={config.fps}"
 
+        # Use audio trim filters for sample-accurate cutting.
+        # -ss before -i does keyframe-based seeking which is fast but
+        # audio packets don't align with video keyframes, causing audio
+        # from adjacent clips to bleed across cut boundaries.
+        # atrim + asetpts ensures exact audio boundaries.
+        af_parts = [f"atrim=0:{duration_seconds}", "asetpts=PTS-STARTPTS"]
+        if apply_reverse:
+            af_parts.append("areverse")
+        af = ",".join(af_parts)
+
         cmd = [
             self.ffmpeg_path,
             "-y",
             "-ss", str(start_seconds),
-            "-t", str(duration_seconds),
             "-i", str(source_path),
+            "-t", str(duration_seconds),
             "-c:v", config.video_codec,
             "-preset", config.preset,
             "-crf", str(config.crf),
@@ -273,10 +284,7 @@ class SequenceExporter:
         ]
 
         cmd.extend(["-vf", normalized_vf])
-
-        # Audio: apply areverse if reversing video
-        if apply_reverse:
-            cmd.extend(["-af", "areverse"])
+        cmd.extend(["-af", af])
 
         cmd.extend([
             "-c:a", config.audio_codec,

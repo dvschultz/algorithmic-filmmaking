@@ -148,6 +148,12 @@ def test_export_segment_uses_source_fps_for_trim_and_sequence_fps_for_output(
     assert success is True
     cmd = captured["cmd"]
     assert cmd[cmd.index("-ss") + 1] == "2.0"
-    assert cmd[cmd.index("-t") + 1] == "2.0"
+    # Duration subtracts one frame (1/24s) to prevent audio bleed at cut boundaries
+    expected_duration = (96 - 48) / 24.0 - 1.0 / 24.0
+    assert cmd[cmd.index("-t") + 1] == str(expected_duration)
     assert cmd[cmd.index("-vf") + 1] == "fps=30.0"
     assert cmd[cmd.index("-pix_fmt") + 1] == "yuv420p"
+    # Audio trim filter for sample-accurate cutting
+    af = cmd[cmd.index("-af") + 1]
+    assert f"atrim=0:{expected_duration}" in af
+    assert "asetpts=PTS-STARTPTS" in af
