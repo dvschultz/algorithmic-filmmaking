@@ -60,6 +60,16 @@ class StaccatoAnalyzeWorker(CancellableWorker):
     def run(self):
         self._log_start()
         try:
+            # Ensure librosa is installed before attempting audio analysis
+            from core.feature_registry import check_feature_ready, install_for_feature
+
+            available, _missing = check_feature_ready("audio_analysis")
+            if not available:
+                self.progress_message.emit("Installing audio analysis dependencies...")
+                if not install_for_feature("audio_analysis"):
+                    self.error.emit("Failed to install audio analysis dependencies (librosa)")
+                    return
+
             audio_path = self._music_path
 
             # If stem separation requested, separate first then use stem audio
