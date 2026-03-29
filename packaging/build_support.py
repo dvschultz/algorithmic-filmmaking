@@ -37,6 +37,7 @@ REQUIREMENT_TO_IMPORT_TARGET = {
     "keyring": "keyring",
     "litellm": "litellm",
     "torch": "torch",
+    "torchaudio": "torchaudio",
     "torchvision": "torchvision",
     "transformers": "transformers",
     "tenacity": "tenacity",

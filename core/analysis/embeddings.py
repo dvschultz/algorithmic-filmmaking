@@ -44,15 +44,37 @@ def _get_model():
         if _model is None:
             logger.info("Loading DINOv2 model for embeddings...")
             from transformers import AutoImageProcessor, AutoModel
+            from core.bundled_models import find_huggingface_snapshot_dir
             from core.errors import ModelDownloadError
+            from core.settings import load_settings
+
+            local_dir = None
+            try:
+                local_dir = find_huggingface_snapshot_dir(
+                    load_settings().model_cache_dir,
+                    _DINOV2_MODEL_NAME,
+                    revision=_DINOV2_REVISION,
+                    required_files=("config.json", "model.safetensors", "preprocessor_config.json"),
+                )
+            except Exception:
+                logger.debug("Could not inspect local DINOv2 snapshot cache", exc_info=True)
 
             try:
-                _processor = AutoImageProcessor.from_pretrained(
-                    _DINOV2_MODEL_NAME, revision=_DINOV2_REVISION
-                )
-                _model = AutoModel.from_pretrained(
-                    _DINOV2_MODEL_NAME, revision=_DINOV2_REVISION
-                )
+                if local_dir is not None:
+                    logger.info("Loading DINOv2 from local snapshot cache: %s", local_dir)
+                    _processor = AutoImageProcessor.from_pretrained(
+                        local_dir, local_files_only=True
+                    )
+                    _model = AutoModel.from_pretrained(
+                        local_dir, local_files_only=True
+                    )
+                else:
+                    _processor = AutoImageProcessor.from_pretrained(
+                        _DINOV2_MODEL_NAME, revision=_DINOV2_REVISION
+                    )
+                    _model = AutoModel.from_pretrained(
+                        _DINOV2_MODEL_NAME, revision=_DINOV2_REVISION
+                    )
             except Exception as e:
                 if "additional_chat_templates" in str(e):
                     # Newer huggingface_hub tries to fetch additional_chat_templates

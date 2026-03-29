@@ -116,17 +116,68 @@ def get_large_model_requirements() -> tuple[dict[str, str], ...]:
     return tuple(dict(item) for item in entry.get("large_models", ()))
 
 
-def _qwen_snapshot_complete(model_cache_dir: Path) -> bool:
-    snapshot_root = (
-        model_cache_dir
-        / "huggingface"
-        / "models--mlx-community--Qwen3-VL-4B-Instruct-4bit"
-        / "snapshots"
+def get_huggingface_repo_cache_dir(model_cache_dir: Path, repo_id: str) -> Path:
+    """Return the managed Hugging Face cache directory for a model repo id."""
+    return model_cache_dir / "huggingface" / f"models--{repo_id.replace('/', '--')}"
+
+
+def find_huggingface_snapshot_dir(
+    model_cache_dir: Path,
+    repo_id: str,
+    revision: str | None = None,
+    required_files: tuple[str, ...] = (),
+) -> Path | None:
+    """Return a locally available Hugging Face snapshot dir when present.
+
+    This prefers the pinned revision directory when provided. The returned path
+    is only considered valid when all required files exist as regular files.
+    """
+    snapshot_root = get_huggingface_repo_cache_dir(model_cache_dir, repo_id) / "snapshots"
+    if not snapshot_root.is_dir():
+        return None
+
+    candidates: list[Path] = []
+    if revision:
+        candidates.append(snapshot_root / revision)
+    candidates.extend(path for path in sorted(snapshot_root.iterdir()) if path.is_dir())
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        if candidate in seen or not candidate.is_dir():
+            continue
+        seen.add(candidate)
+        if all((candidate / relative_path).is_file() for relative_path in required_files):
+            return candidate
+    return None
+
+
+def find_huggingface_snapshot_file(
+    model_cache_dir: Path,
+    repo_id: str,
+    filename: str,
+    revision: str | None = None,
+) -> Path | None:
+    """Return a locally available Hugging Face snapshot file when present."""
+    snapshot_dir = find_huggingface_snapshot_dir(
+        model_cache_dir,
+        repo_id,
+        revision=revision,
+        required_files=(filename,),
     )
-    for snapshot_dir in snapshot_root.glob("*"):
-        if (snapshot_dir / "model.safetensors").is_file():
-            return True
-    return False
+    if snapshot_dir is None:
+        return None
+    return snapshot_dir / filename
+
+
+def _qwen_snapshot_complete(model_cache_dir: Path) -> bool:
+    return (
+        find_huggingface_snapshot_file(
+            model_cache_dir,
+            "mlx-community/Qwen3-VL-4B-Instruct-4bit",
+            "model.safetensors",
+        )
+        is not None
+    )
 
 
 def _whisper_medium_complete(model_cache_dir: Path) -> bool:
@@ -135,22 +186,27 @@ def _whisper_medium_complete(model_cache_dir: Path) -> bool:
 
 
 def _siglip_snapshot_complete(model_cache_dir: Path) -> bool:
-    repo_root = (
-        model_cache_dir
-        / "huggingface"
-        / "models--google--siglip2-base-patch16-224"
+    repo_root = get_huggingface_repo_cache_dir(
+        model_cache_dir,
+        "google/siglip2-base-patch16-224",
     )
     if any(repo_root.rglob("*.incomplete")):
         return False
 
-    snapshot_root = repo_root / "snapshots"
-    for snapshot_dir in snapshot_root.glob("*"):
-        if any(
-            path.is_file() and path.name in {"model.safetensors", "pytorch_model.bin"}
-            for path in snapshot_dir.rglob("*")
-        ):
-            return True
-    return False
+    return (
+        find_huggingface_snapshot_file(
+            model_cache_dir,
+            "google/siglip2-base-patch16-224",
+            "model.safetensors",
+        )
+        is not None
+        or find_huggingface_snapshot_file(
+            model_cache_dir,
+            "google/siglip2-base-patch16-224",
+            "pytorch_model.bin",
+        )
+        is not None
+    )
 
 
 def get_missing_large_models(model_cache_dir: Path) -> list[dict[str, str]]:
@@ -183,9 +239,9 @@ def get_paddleocr_model_dirs(model_cache_dir: Path) -> dict[str, Path]:
     """Return explicit PaddleOCR model directories under the managed cache."""
     base_dir = model_cache_dir / "paddleocr"
     return {
-        "det_model_dir": base_dir / "det",
-        "rec_model_dir": base_dir / "rec",
-        "cls_model_dir": base_dir / "cls",
+        "text_detection_model_dir": base_dir / "text_detection",
+        "text_recognition_model_dir": base_dir / "text_recognition",
+        "textline_orientation_model_dir": base_dir / "textline_orientation",
     }
 
 

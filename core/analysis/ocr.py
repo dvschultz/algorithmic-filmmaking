@@ -76,7 +76,7 @@ def _get_ocr_engine():
 
                 settings = load_settings()
                 _ocr_engine = PaddleOCR(
-                    use_angle_cls=True,
+                    use_textline_orientation=True,
                     lang="en",
                     **get_bundled_paddleocr_kwargs(settings.model_cache_dir),
                 )
@@ -154,7 +154,7 @@ def extract_text_from_frame(
     if _check_paddleocr():
         try:
             ocr = _get_ocr_engine()
-            result = ocr.ocr(str(frame_path), cls=True)
+            result = ocr.ocr(str(frame_path), use_textline_orientation=True)
 
             if result and result[0]:
                 words = []

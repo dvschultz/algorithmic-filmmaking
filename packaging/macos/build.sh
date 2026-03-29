@@ -15,6 +15,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+DEFAULT_EXTERNAL_BUILD_ROOT="/Volumes/Lexar/scene-ripper-build"
 
 APP_VERSION="${APP_VERSION:-0.2.4}"
 CODESIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
@@ -34,6 +35,22 @@ echo "    Project root: ${PROJECT_ROOT}"
 echo "    Sign: ${CODE_SIGN} (identity: ${CODESIGN_IDENTITY})"
 echo "    DMG: ${BUILD_DMG}"
 echo ""
+
+BUILD_ROOT="${SCENE_RIPPER_BUILD_ROOT:-}"
+if [ -z "${BUILD_ROOT}" ] && [ -d "/Volumes/Lexar" ]; then
+    BUILD_ROOT="${DEFAULT_EXTERNAL_BUILD_ROOT}"
+fi
+if [ -z "${BUILD_ROOT}" ]; then
+    BUILD_ROOT="${PROJECT_ROOT}/build"
+fi
+
+MODEL_RUNTIME_DIR="${SCENE_RIPPER_MODEL_RUNTIME_DIR:-${BUILD_ROOT}/runtime/models/macos}"
+PYINSTALLER_WORK_PATH="${BUILD_ROOT}/pyinstaller-work"
+PYINSTALLER_DIST_PATH="${BUILD_ROOT}/dist"
+
+mkdir -p "${BUILD_ROOT}" "${PYINSTALLER_WORK_PATH}" "${PYINSTALLER_DIST_PATH}"
+export SCENE_RIPPER_BUILD_ROOT="${BUILD_ROOT}"
+export SCENE_RIPPER_MODEL_RUNTIME_DIR="${MODEL_RUNTIME_DIR}"
 
 # -------------------------------------------------------------------
 # 0. Stage FFmpeg runtime
@@ -100,6 +117,7 @@ echo "==> Installing core + macOS ML dependencies..."
 pip install -r "${PROJECT_ROOT}/requirements-core.txt" --quiet
 pip install \
     'torch>=2.4,<2.7' \
+    'torchaudio>=2.4,<2.7' \
     'torchvision>=0.19,<0.22' \
     'transformers>=4.50,<5' \
     'huggingface-hub>=0.34.0,<1.0' \
@@ -132,11 +150,11 @@ echo "==> Running PyInstaller..."
 export APP_VERSION
 cd "$PROJECT_ROOT"
 pyinstaller "${SCRIPT_DIR}/scene_ripper.spec" \
-    --distpath "${PROJECT_ROOT}/dist" \
-    --workpath "${PROJECT_ROOT}/build" \
+    --distpath "${PYINSTALLER_DIST_PATH}" \
+    --workpath "${PYINSTALLER_WORK_PATH}" \
     --noconfirm
 
-APP_PATH="${PROJECT_ROOT}/dist/Scene Ripper.app"
+APP_PATH="${PYINSTALLER_DIST_PATH}/Scene Ripper.app"
 
 if [ ! -d "$APP_PATH" ]; then
     echo "ERROR: .app bundle not found at ${APP_PATH}"
@@ -180,7 +198,7 @@ fi
 # -------------------------------------------------------------------
 if [ "$BUILD_DMG" = true ]; then
     DMG_NAME="Scene-Ripper-${APP_VERSION}-arm64.dmg"
-    DMG_PATH="${PROJECT_ROOT}/dist/${DMG_NAME}"
+    DMG_PATH="${PYINSTALLER_DIST_PATH}/${DMG_NAME}"
 
     # Remove old DMG if it exists
     rm -f "$DMG_PATH"
@@ -219,7 +237,7 @@ echo ""
 echo "==> Build complete!"
 echo "    .app: ${APP_PATH}"
 if [ "$BUILD_DMG" = true ]; then
-    echo "    DMG:  ${PROJECT_ROOT}/dist/${DMG_NAME}"
+    echo "    DMG:  ${PYINSTALLER_DIST_PATH}/${DMG_NAME}"
 fi
 echo ""
 echo "To test the .app:"

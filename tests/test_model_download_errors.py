@@ -86,6 +86,32 @@ class TestEmbeddingsModelDownloadErrors:
             second_call = mock_proc_cls.from_pretrained.call_args_list[1]
             assert second_call.kwargs.get("local_files_only") is True
 
+    def test_local_snapshot_cache_is_preferred_when_available(self):
+        """Bundled local snapshot dirs should bypass Hugging Face cache resolution."""
+        mock_proc_cls = MagicMock()
+        mock_proc_cls.from_pretrained.return_value = MagicMock()
+        mock_model_cls = MagicMock()
+        mock_model_cls.from_pretrained.return_value = MagicMock()
+
+        mock_transformers = MagicMock()
+        mock_transformers.AutoImageProcessor = mock_proc_cls
+        mock_transformers.AutoModel = mock_model_cls
+
+        with patch.dict("sys.modules", {"transformers": mock_transformers}):
+            import core.analysis.embeddings as mod
+
+            mod._model = None
+            mod._processor = None
+
+            with patch("core.bundled_models.find_huggingface_snapshot_dir", return_value=Path("/tmp/dinov2")):
+                with patch("core.settings.load_settings") as mock_settings:
+                    mock_settings.return_value.model_cache_dir = Path("/tmp/models")
+                    mod._get_model()
+
+            first_call = mock_proc_cls.from_pretrained.call_args
+            assert first_call.args[0] == Path("/tmp/dinov2")
+            assert first_call.kwargs["local_files_only"] is True
+
 
 class TestDetectionModelDownloadErrors:
     """Tests for YOLO model download error handling."""
@@ -131,6 +157,16 @@ class TestDetectionModelDownloadErrors:
 
         with pytest.raises(ModelDownloadError, match="YOLOE"):
             _load_yoloe(["person", "car"])
+
+    @patch("core.analysis.detection._get_model_cache_dir")
+    @patch("core.bundled_models.find_huggingface_snapshot_file")
+    def test_yoloe_prefers_local_snapshot_checkpoint(self, mock_find_snapshot, mock_cache):
+        mock_cache.return_value = Path("/tmp/fake_cache")
+        mock_find_snapshot.return_value = Path("/tmp/fake_cache/model.pt")
+
+        from core.analysis.detection import _ensure_yoloe_checkpoint_path
+
+        assert _ensure_yoloe_checkpoint_path() == Path("/tmp/fake_cache/model.pt")
 
 
 class TestOCRModelDownloadErrors:

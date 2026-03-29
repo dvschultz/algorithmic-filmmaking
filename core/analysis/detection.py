@@ -139,6 +139,19 @@ def ensure_default_detection_model_loaded(model_size: str = "n") -> None:
 
 def _ensure_yoloe_checkpoint_path() -> Path:
     """Resolve the pinned YOLOE checkpoint into the managed model cache."""
+    from core.bundled_models import find_huggingface_snapshot_file
+    try:
+        local_path = find_huggingface_snapshot_file(
+            _get_model_cache_dir(),
+            _YOLOE_MODEL_REPO_ID,
+            _YOLOE_MODEL_FILENAME,
+            revision=_YOLOE_MODEL_REVISION,
+        )
+        if local_path is not None:
+            return local_path
+    except Exception:
+        logger.debug("Could not inspect local YOLOE snapshot cache", exc_info=True)
+
     from huggingface_hub import hf_hub_download
 
     return Path(

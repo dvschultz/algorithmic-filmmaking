@@ -116,15 +116,17 @@ def test_get_bundled_paddleocr_kwargs_requires_seeded_dirs(tmp_path):
 
     assert bundled_models.get_bundled_paddleocr_kwargs(model_cache_dir) == {}
 
-    for child in ("det", "rec", "cls"):
+    for child in ("text_detection", "text_recognition", "textline_orientation"):
         (model_cache_dir / "paddleocr" / child).mkdir(parents=True, exist_ok=True)
 
     kwargs = bundled_models.get_bundled_paddleocr_kwargs(model_cache_dir)
 
     assert kwargs == {
-        "det_model_dir": str(model_cache_dir / "paddleocr" / "det"),
-        "rec_model_dir": str(model_cache_dir / "paddleocr" / "rec"),
-        "cls_model_dir": str(model_cache_dir / "paddleocr" / "cls"),
+        "text_detection_model_dir": str(model_cache_dir / "paddleocr" / "text_detection"),
+        "text_recognition_model_dir": str(model_cache_dir / "paddleocr" / "text_recognition"),
+        "textline_orientation_model_dir": str(
+            model_cache_dir / "paddleocr" / "textline_orientation"
+        ),
     }
 
 
@@ -167,3 +169,52 @@ def test_get_missing_large_models_clears_when_assets_exist(tmp_path):
     (siglip_dir / "model.safetensors").write_text("weights", encoding="utf-8")
 
     assert bundled_models.get_missing_large_models(model_cache_dir) == []
+
+
+def test_find_huggingface_snapshot_dir_prefers_revision_and_required_files(tmp_path):
+    """Pinned revisions should resolve to a fully materialized local snapshot."""
+    model_cache_dir = tmp_path / "models"
+    target_dir = (
+        model_cache_dir
+        / "huggingface"
+        / "models--facebook--dinov2-base"
+        / "snapshots"
+        / "rev-123"
+    )
+    target_dir.mkdir(parents=True)
+    (target_dir / "config.json").write_text("{}", encoding="utf-8")
+    (target_dir / "model.safetensors").write_text("weights", encoding="utf-8")
+    (target_dir / "preprocessor_config.json").write_text("{}", encoding="utf-8")
+
+    snapshot_dir = bundled_models.find_huggingface_snapshot_dir(
+        model_cache_dir,
+        "facebook/dinov2-base",
+        revision="rev-123",
+        required_files=("config.json", "model.safetensors", "preprocessor_config.json"),
+    )
+
+    assert snapshot_dir == target_dir
+
+
+def test_find_huggingface_snapshot_file_returns_local_model_file(tmp_path):
+    """Snapshot file lookup should return the packaged local file path."""
+    model_cache_dir = tmp_path / "models"
+    target_dir = (
+        model_cache_dir
+        / "huggingface"
+        / "models--openvision--yoloe26-s-seg"
+        / "snapshots"
+        / "rev-456"
+    )
+    target_dir.mkdir(parents=True)
+    checkpoint_path = target_dir / "model.pt"
+    checkpoint_path.write_text("weights", encoding="utf-8")
+
+    resolved = bundled_models.find_huggingface_snapshot_file(
+        model_cache_dir,
+        "openvision/yoloe26-s-seg",
+        "model.pt",
+        revision="rev-456",
+    )
+
+    assert resolved == checkpoint_path

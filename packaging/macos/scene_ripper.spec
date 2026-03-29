@@ -29,9 +29,10 @@ SPARKLE_FEED_URL = os.environ.get("SPARKLE_FEED_URL", "")
 SPARKLE_PUBLIC_ED_KEY = os.environ.get("SPARKLE_PUBLIC_ED_KEY", "")
 SPARKLE_PRIVATE_ED_KEY = os.environ.get("UPDATE_PRIVATE_ED_KEY", "")
 PROJECT_ROOT = Path.cwd()
-VERSION_FILE = PROJECT_ROOT / "build" / "release-metadata" / "app_version.txt"
-BUILD_VERSION_FILE = PROJECT_ROOT / "build" / "release-metadata" / "app_build_version.txt"
-UPDATE_CHANNEL_FILE = PROJECT_ROOT / "build" / "release-metadata" / "app_update_channel.txt"
+BUILD_ROOT = Path(os.environ.get("SCENE_RIPPER_BUILD_ROOT", str(PROJECT_ROOT / "build")))
+VERSION_FILE = BUILD_ROOT / "release-metadata" / "app_version.txt"
+BUILD_VERSION_FILE = BUILD_ROOT / "release-metadata" / "app_build_version.txt"
+UPDATE_CHANNEL_FILE = BUILD_ROOT / "release-metadata" / "app_update_channel.txt"
 VERSION_FILE.parent.mkdir(parents=True, exist_ok=True)
 VERSION_FILE.write_text(VERSION, encoding="utf-8")
 BUILD_VERSION_FILE.write_text(BUILD_VERSION, encoding="utf-8")
