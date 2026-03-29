@@ -100,6 +100,13 @@ def _load_yolo(model_size: str = "n"):
             cache_dir = _get_model_cache_dir()
             os.environ.setdefault("YOLO_CONFIG_DIR", str(cache_dir))
 
+            try:
+                import certifi
+                os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+                os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+            except ImportError:
+                pass
+
             YOLO = ensure_object_detection_runtime_available()
 
             # YOLO26 will download the model to cache on first use (~6MB for nano)

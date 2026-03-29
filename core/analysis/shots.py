@@ -194,7 +194,11 @@ def load_classification_model():
                     _processor = AutoProcessor.from_pretrained(local_dir, local_files_only=True)
                     _model = AutoModel.from_pretrained(local_dir, local_files_only=True)
                 else:
-                    raise
+                    from core.errors import ModelDownloadError
+
+                    raise ModelDownloadError(
+                        f"Failed to load SigLIP 2 model '{_SIGLIP_MODEL_NAME}': {e}"
+                    ) from e
 
             logger.info("SigLIP 2 model loaded")
 

@@ -19,7 +19,7 @@
       "features": ["shot_classify", "describe_local_cpu"]
     },
     "tokenizers": {
-      "pip_specifier": "tokenizers>=0.21,<0.22",
+      "pip_specifier": "tokenizers>=0.21,<0.24",
       "size_mb": 20,
       "features": ["shot_classify", "describe_local", "describe_local_cpu"]
     },

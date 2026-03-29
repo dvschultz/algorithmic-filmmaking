@@ -94,6 +94,14 @@ def separate_stems(
     if progress_cb:
         progress_cb("Loading separation model...")
 
+    try:
+        import certifi
+        import os as _os
+        _os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+        _os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+    except ImportError:
+        pass
+
     # Device detection: prefer CUDA, then MPS (Apple Silicon), then CPU
     if torch.cuda.is_available():
         device = "cuda"

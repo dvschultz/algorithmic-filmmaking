@@ -264,7 +264,7 @@ def test_install_for_feature_batches_missing_packages_and_validates_runtime(monk
     def _on_progress(progress: float, message: str):
         progress_calls.append((progress, message))
 
-    def _fake_install(specifiers: list[str], progress_callback):
+    def _fake_install(specifiers: list[str], progress_callback, **kwargs):
         package_batches.append(specifiers)
         progress_callback(0.0, "Starting batch")
         progress_callback(0.5, "Halfway batch")
@@ -299,7 +299,7 @@ def test_install_for_feature_reinstalls_broken_runtime_even_when_packages_exist(
         if len(validations) == 1:
             raise RuntimeError("Could not import module 'AutoProcessor'")
 
-    def _fake_install(specifiers: list[str], _progress_callback):
+    def _fake_install(specifiers: list[str], _progress_callback, **kwargs):
         package_batches.append(specifiers)
         return True
 
@@ -398,7 +398,7 @@ def test_install_for_feature_repairs_full_runtime_stack_when_only_subset_is_miss
         "core.dependency_manager.clear_package_roots",
         lambda package_names: cleared.append(list(package_names)),
     )
-    fake_installer = lambda specifiers, _progress=None: package_batches.append(list(specifiers)) or True
+    fake_installer = lambda specifiers, _progress=None, **kwargs: package_batches.append(list(specifiers)) or True
     monkeypatch.setattr(
         "core.dependency_manager.install_packages", fake_installer,
     )

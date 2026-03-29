@@ -378,7 +378,14 @@ def _load_qwen3_vlm():
     model_id = settings.description_model_local
 
     logger.info(f"Loading local VLM via mlx-vlm: {model_id}")
-    _LOCAL_MODEL, _LOCAL_PROCESSOR = load(model_id)
+    try:
+        _LOCAL_MODEL, _LOCAL_PROCESSOR = load(model_id)
+    except Exception as e:
+        from core.errors import ModelDownloadError
+
+        raise ModelDownloadError(
+            f"Failed to load local VLM '{model_id}': {e}"
+        ) from e
     logger.info(f"Local VLM loaded: {model_id}")
 
 

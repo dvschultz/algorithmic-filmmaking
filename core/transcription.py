@@ -252,6 +252,14 @@ def get_model(model_name: str = "small.en"):
         raise FasterWhisperNotInstalledError()
 
     if _model is None or _model_name != model_name:
+        try:
+            import certifi
+            import os as _os
+            _os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+            _os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+        except ImportError:
+            pass
+
         WhisperModel = ensure_faster_whisper_runtime_available()
 
         logger.info(f"Loading Whisper model: {model_name}")
@@ -306,6 +314,14 @@ def get_mlx_model(model_name: str = "small.en"):
             return _mlx_model
 
         LightningWhisperMLX = ensure_mlx_whisper_runtime_available()
+
+        try:
+            import certifi
+            import os as _os
+            _os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+            _os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+        except ImportError:
+            pass
 
         logger.info(f"Loading MLX Whisper model: {mlx_name}")
 

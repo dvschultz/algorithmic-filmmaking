@@ -83,7 +83,14 @@ def _load_model():
             models, transforms = ensure_image_classification_runtime_available()
 
             # Use MobileNetV3-Small with ImageNet weights
-            _model = models.mobilenet_v3_small(weights="IMAGENET1K_V1")
+            try:
+                _model = models.mobilenet_v3_small(weights="IMAGENET1K_V1")
+            except Exception as e:
+                from core.errors import ModelDownloadError
+
+                raise ModelDownloadError(
+                    f"Failed to load MobileNetV3 model: {e}"
+                ) from e
             _model.eval()
 
             # Create preprocessing pipeline

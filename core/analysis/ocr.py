@@ -68,6 +68,15 @@ def _get_ocr_engine():
     with _ocr_engine_lock:
         if _ocr_engine is None:
             PaddleOCR = ensure_ocr_runtime_available()
+
+            try:
+                import certifi
+                import os as _os
+                _os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+                _os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+            except ImportError:
+                pass
+
             logger.info("Initializing PaddleOCR engine...")
             try:
                 _ocr_engine = PaddleOCR(

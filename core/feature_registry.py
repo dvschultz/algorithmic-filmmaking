@@ -89,7 +89,11 @@ def _validate_feature_runtime(name: str) -> None:
 
         ensure_mlx_whisper_runtime_available()
     elif name == "embeddings":
-        from transformers import AutoImageProcessor, AutoModel  # noqa: F401
+        try:
+            from transformers.models.auto.image_processing_auto import AutoImageProcessor  # noqa: F401
+            from transformers.models.auto.modeling_auto import AutoModel  # noqa: F401
+        except Exception:
+            from transformers import AutoImageProcessor, AutoModel  # noqa: F401
 
 
 def requires_full_package_repair(name: str, missing: list[str]) -> bool:
@@ -108,6 +112,7 @@ class FeatureDeps:
     size_estimate_mb: int  # Rough download size in MB
     repair_packages: list[str] = field(default_factory=list)
     native_install: bool = False  # Use site-packages install for native extensions (e.g., mlx Metal)
+    no_deps: bool = False  # Install with --no-deps to avoid pulling uncontrolled transitive deps
     needs_compiler: bool = False  # Requires C/C++ compiler (Xcode CLT on macOS)
 
 
@@ -147,6 +152,8 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
         binaries=["ffmpeg"],
         packages=["lightning_whisper_mlx"],
         size_estimate_mb=100,
+        native_install=True,  # mlx has Metal native extensions
+        no_deps=True,  # avoid pulling uncontrolled torch/tiktoken/numba transitive deps
     ),
     "describe_local": FeatureDeps(
         binaries=[],
@@ -220,6 +227,7 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
         binaries=[],
         packages=["torch", "demucs_infer"],
         size_estimate_mb=2000,
+        native_install=True,  # torch has native extensions
     ),
     "embeddings": FeatureDeps(
         binaries=[],
@@ -405,7 +413,7 @@ def install_for_feature(
         if runtime_repair:
             clear_package_roots(repair_package_names)
         installer = install_native_packages if deps.native_install else install_packages
-        if not installer(specifiers, scaled_callback):
+        if not installer(specifiers, scaled_callback, no_deps=deps.no_deps):
             success = False
 
     if success:

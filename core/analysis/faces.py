@@ -78,6 +78,14 @@ def _load_insightface():
 
             import insightface
 
+            try:
+                import certifi
+                import os as _os
+                _os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+                _os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+            except ImportError:
+                pass
+
             FaceAnalysis = ensure_face_detection_runtime_available()
 
             cache_dir = _get_model_cache_dir()
@@ -109,13 +117,22 @@ def _load_insightface():
                         "Failed to load InsightFace with %s, falling back to CPU",
                         providers[0],
                     )
-                    _model = FaceAnalysis(
-                        name="buffalo_l",
-                        root=str(insightface_dir),
-                        providers=["CPUExecutionProvider"],
-                    )
-                    _model.prepare(ctx_id=0, det_size=(640, 640))
+                    try:
+                        _model = FaceAnalysis(
+                            name="buffalo_l",
+                            root=str(insightface_dir),
+                            providers=["CPUExecutionProvider"],
+                        )
+                        _model.prepare(ctx_id=0, det_size=(640, 640))
+                    except Exception as cpu_err:
+                        from core.errors import ModelDownloadError
+
+                        raise ModelDownloadError(
+                            f"Failed to load InsightFace buffalo_l model: {cpu_err}"
+                        ) from cpu_err
                 else:
+                    from core.errors import ModelDownloadError
+
                     raise
 
             logger.info("InsightFace model loaded (providers: %s)", providers)

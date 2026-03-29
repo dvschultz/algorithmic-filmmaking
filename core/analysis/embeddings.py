@@ -45,6 +45,14 @@ def _get_model():
             from core.errors import ModelDownloadError
 
             try:
+                import certifi
+                import os as _os
+                _os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+                _os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+            except ImportError:
+                pass
+
+            try:
                 _processor = AutoImageProcessor.from_pretrained(_DINOV2_MODEL_NAME)
                 _model = AutoModel.from_pretrained(_DINOV2_MODEL_NAME)
             except Exception as e:
