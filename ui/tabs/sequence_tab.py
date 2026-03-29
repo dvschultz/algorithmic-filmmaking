@@ -1096,14 +1096,73 @@ class SequenceTab(BaseTab):
         dialog.exec()
 
     def _apply_staccato_sequence(self, sequence_clips: list, music_path=None):
-        """Apply the sequence from Staccato dialog."""
-        metadata = {}
-        if music_path:
-            metadata["music_path"] = str(music_path)
-        self._apply_dialog_sequence(
-            sequence_clips, "staccato", "Staccato",
-            sequence_metadata=metadata if metadata else None,
-        )
+        """Apply the sequence from Staccato dialog.
+
+        Staccato emits (Clip, Source, slot_duration_seconds) tuples.
+        Each clip is trimmed to fit its beat slot duration so the
+        total sequence matches the music track length.
+        """
+        if not sequence_clips:
+            return
+
+        try:
+            self.timeline.clear_timeline()
+
+            first_clip, first_source = sequence_clips[0][0], sequence_clips[0][1]
+            fps = first_source.fps
+            self.timeline.set_fps(fps)
+            self.video_player.load_video(first_source.file_path)
+
+            current_frame = 0
+            for entry in sequence_clips:
+                clip, source = entry[0], entry[1]
+                slot_duration = entry[2] if len(entry) > 2 else None
+
+                if slot_duration is not None:
+                    # Trim clip to fit the beat slot duration
+                    slot_frames = int(slot_duration * source.fps)
+                    clip_frames = clip.end_frame - clip.start_frame
+                    trimmed_frames = min(slot_frames, clip_frames)
+                    in_point = clip.start_frame
+                    out_point = clip.start_frame + trimmed_frames
+                else:
+                    in_point = clip.start_frame
+                    out_point = clip.end_frame
+                    slot_frames = out_point - in_point
+
+                self.timeline.add_clip(
+                    clip, source, track_index=0, start_frame=current_frame,
+                    in_point=in_point, out_point=out_point,
+                )
+                current_frame += slot_frames
+                self.clip_added.emit(clip, source)
+
+            # Convert (clip, source, duration) back to (clip, source) for preview
+            preview_clips = [(entry[0], entry[1]) for entry in sequence_clips]
+            self.timeline_preview.set_clips(preview_clips, self._sources)
+            self.timeline._on_zoom_fit()
+
+            self.algorithm_dropdown.blockSignals(True)
+            if self.algorithm_dropdown.findText("Staccato") == -1:
+                self.algorithm_dropdown.addItem("Staccato")
+            self.algorithm_dropdown.setCurrentText("Staccato")
+            self.algorithm_dropdown.blockSignals(False)
+
+            self._current_algorithm = "staccato"
+
+            sequence = self.timeline.get_sequence()
+            sequence.algorithm = "staccato"
+            if music_path:
+                sequence.music_path = music_path
+            self._apply_chromatic_bar_to_sequence("staccato")
+            self._update_chromatic_bar_controls("staccato")
+
+            self._set_state(self.STATE_TIMELINE)
+            self._emit_chromatic_bar_setting_changed()
+
+        except Exception as e:
+            logger.error(f"Failed to apply Staccato sequence: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to apply sequence:\n{e}")
 
     def _show_dice_roll_dialog(self, clips: list):
         """Show the Dice Roll dialog for shuffle + optional transforms.

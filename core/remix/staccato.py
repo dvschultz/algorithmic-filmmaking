@@ -287,7 +287,7 @@ def generate_staccato_sequence(
         used_indices.add(best_idx)
 
         clip, source = clips[best_idx]
-        result.append((clip, source))
+        result.append((clip, source, slot.duration))
 
         # Build debug entry
         clip_name = getattr(clip, 'name', None) or getattr(clip, 'id', f'clip_{best_idx}')

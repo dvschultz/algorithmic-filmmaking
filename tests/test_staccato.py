@@ -216,10 +216,12 @@ class TestGenerateStaccatoSequence:
         )
         result = generate_staccato_sequence(clips, analysis, strategy="onsets")
         assert len(result) == 4  # 4 onset slots
-        # Each result is a (Clip, Source) tuple
-        for clip, source in result:
+        # Each result is a (Clip, Source, slot_duration) tuple
+        for entry in result:
+            clip, source, slot_duration = entry
             assert hasattr(clip, 'id')
             assert hasattr(source, 'id')
+            assert slot_duration > 0
 
     def test_empty_clips(self):
         analysis = AudioAnalysis(beat_times=[1.0], onset_times=[1.0])
@@ -246,7 +248,7 @@ class TestGenerateStaccatoSequence:
         result = generate_staccato_sequence(clips, analysis, strategy="onsets")
         assert len(result) == 4
         # All should be the same clip since there's only one
-        assert all(clip.id == "c1" for clip, _ in result)
+        assert all(entry[0].id == "c1" for entry in result)
 
     def test_progress_callback(self):
         clips = [
