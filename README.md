@@ -144,6 +144,7 @@ The app uses a 5-tab workflow, though you can skip or revisit tabs as needed:
 
 ## User Guides
 
+- [Analysis](docs/user-guide/analysis.md)
 - [Sequencer Algorithms](docs/user-guide/sequencers.md)
 - [Local AI Models](docs/user-guide/local-models.md)
 - [API Keys](docs/user-guide/api-keys.md)
