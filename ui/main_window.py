@@ -4953,6 +4953,14 @@ class MainWindow(QMainWindow):
 
     def _on_shot_type_progress(self, current: int, total: int):
         """Handle shot type classification progress."""
+        if current == 0:
+            self.status_bar.showMessage(
+                "Classify Shots: downloading model (first run, ~400 MB)..."
+            )
+        else:
+            self.status_bar.showMessage(
+                f"Classify Shots: processing clip {current}/{total}..."
+            )
         self.progress_bar.setValue(int((current / total) * 100))
 
     def _on_shot_type_ready(self, clip_id: str, shot_type: str, confidence: float):
