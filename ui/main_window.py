@@ -4032,6 +4032,12 @@ class MainWindow(QMainWindow):
     @Slot(int, int, str)
     def _on_text_extraction_progress(self, current: int, total: int, clip_id: str):
         """Handle text extraction progress update."""
+        if current == 0:
+            self.status_bar.showMessage(
+                "Text Extraction: loading OCR model..."
+            )
+        else:
+            self.status_bar.showMessage(f"Extracting text: {current}/{total} clips...")
         self.progress_bar.setValue(int((current / total) * 100))
 
     @Slot(str, list)
@@ -4069,6 +4075,12 @@ class MainWindow(QMainWindow):
     @Slot(int, int, str)
     def _on_cinematography_progress(self, current: int, total: int, clip_id: str):
         """Handle cinematography analysis progress update."""
+        if current == 0:
+            self.status_bar.showMessage(
+                "Rich Analysis: loading model..."
+            )
+        else:
+            self.status_bar.showMessage(f"Analyzing cinematography: {current}/{total} clips...")
         self.progress_bar.setValue(int((current / total) * 100))
 
     @Slot(str, object)
@@ -4987,6 +4999,12 @@ class MainWindow(QMainWindow):
 
     def _on_transcription_progress(self, current: int, total: int):
         """Handle transcription progress."""
+        if current == 0:
+            self.status_bar.showMessage(
+                "Transcribe: downloading Whisper model (first run)..."
+            )
+        else:
+            self.status_bar.showMessage(f"Transcribing: {current}/{total} clips...")
         self.progress_bar.setValue(int((current / total) * 100))
 
     def _on_transcript_ready(self, clip_id: str, segments: list):
@@ -6950,9 +6968,13 @@ class MainWindow(QMainWindow):
     def _on_description_progress(self, current: int, total: int):
         """Handle description generation progress updates."""
         if total > 0:
-            percent = int(current / total * 100)
-            self.progress_bar.setValue(percent)
-            self.status_bar.showMessage(f"Generating descriptions: {current}/{total} clips...")
+            if current == 0:
+                self.status_bar.showMessage(
+                    "Describe: downloading vision model (first run)..."
+                )
+            else:
+                self.status_bar.showMessage(f"Generating descriptions: {current}/{total} clips...")
+            self.progress_bar.setValue(int(current / total * 100))
 
     @Slot(str, str, str)
     def _on_description_ready(self, clip_id: str, description: str, model_name: str):
@@ -7055,9 +7077,13 @@ class MainWindow(QMainWindow):
     def _on_classification_progress(self, current: int, total: int):
         """Handle classification progress updates."""
         if total > 0:
-            percent = int(current / total * 100)
-            self.progress_bar.setValue(percent)
-            self.status_bar.showMessage(f"Classifying content: {current}/{total} clips...")
+            if current == 0:
+                self.status_bar.showMessage(
+                    "Classify Content: loading model..."
+                )
+            else:
+                self.status_bar.showMessage(f"Classifying content: {current}/{total} clips...")
+            self.progress_bar.setValue(int(current / total * 100))
 
     @Slot(str, list)
     def _on_classification_ready(self, clip_id: str, results: list):
@@ -7146,19 +7172,27 @@ class MainWindow(QMainWindow):
     def _on_face_detection_progress(self, current: int, total: int):
         """Handle face detection progress updates."""
         if total > 0:
-            percent = int(current / total * 100)
-            self.progress_bar.setValue(percent)
-            self.status_bar.showMessage(f"Detecting faces: {current}/{total} clips...")
+            if current == 0:
+                self.status_bar.showMessage(
+                    "Face Detection: downloading model (first run, ~300 MB)..."
+                )
+            else:
+                self.status_bar.showMessage(f"Detecting faces: {current}/{total} clips...")
+            self.progress_bar.setValue(int(current / total * 100))
 
     @Slot(int, int)
     def _on_object_detection_progress(self, current: int, total: int):
         """Handle object detection progress updates."""
         if total > 0:
-            percent = int(current / total * 100)
-            self.progress_bar.setValue(percent)
-            detect_all = getattr(self, '_agent_object_detection_all', True)
-            task = "objects" if detect_all else "people"
-            self.status_bar.showMessage(f"Detecting {task}: {current}/{total} clips...")
+            if current == 0:
+                self.status_bar.showMessage(
+                    "Object Detection: downloading YOLO model (first run)..."
+                )
+            else:
+                detect_all = getattr(self, '_agent_object_detection_all', True)
+                task = "objects" if detect_all else "people"
+                self.status_bar.showMessage(f"Detecting {task}: {current}/{total} clips...")
+            self.progress_bar.setValue(int(current / total * 100))
 
     @Slot(str, list, int)
     def _on_objects_ready(self, clip_id: str, detections: list, person_count: int):

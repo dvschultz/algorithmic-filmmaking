@@ -170,8 +170,11 @@ class ObjectDetectionWorker(CancellableWorker):
         try:
             from core.analysis.detection import (
                 ensure_default_detection_model_loaded,
+                is_model_loaded,
             )
 
+            if not is_model_loaded():
+                self.progress.emit(0, total)
             ensure_default_detection_model_loaded()
         except Exception as e:
             error_msg = str(e)

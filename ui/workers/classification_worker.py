@@ -158,6 +158,21 @@ class ClassificationWorker(CancellableWorker):
             f"parallelism={self._parallelism}"
         )
 
+        # Pre-load MobileNetV3 model so user sees download status
+        try:
+            from core.analysis.classification import _load_model
+
+            self.progress.emit(0, total)
+            _load_model()
+        except Exception as e:
+            self.error.emit(f"Failed to load classification model: {e}")
+            self._log_complete()
+            return
+
+        if self.is_cancelled():
+            self._log_cancelled()
+            return
+
         completed = 0
         errors: list[tuple[str, str]] = []
 

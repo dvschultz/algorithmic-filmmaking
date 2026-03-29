@@ -213,6 +213,24 @@ class DescriptionWorker(CancellableWorker):
             f"parallelism={self._parallelism}"
         )
 
+        # Pre-load local VLM model so user sees download status
+        settings = load_settings()
+        if settings.description_model_tier == "local":
+            try:
+                from core.analysis.description import is_model_loaded, _load_local_model
+
+                if not is_model_loaded():
+                    self.progress.emit(0, total)
+                    _load_local_model()
+            except Exception as e:
+                self.error.emit(f"Failed to load local VLM: {e}")
+                self._log_complete()
+                return
+
+        if self.is_cancelled():
+            self._log_cancelled()
+            return
+
         completed = 0
 
         with ThreadPoolExecutor(max_workers=self._parallelism) as executor:
