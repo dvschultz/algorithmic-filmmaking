@@ -292,7 +292,7 @@ class TestBuildVideoFilter:
             config=config, bar_color=None, seq_clip=clip,
             apply_reverse=True,
         )
-        assert result == "scale=1920:1080,hflip,reverse"
+        assert result == "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black,hflip,reverse"
 
     def test_chromatic_bar_after_transforms(self):
         """Chromatic bar filter comes after transforms."""

@@ -73,6 +73,39 @@ class SequenceExporter:
         if not all_clips:
             return False
 
+        # Auto-detect resolution from sources if not explicitly set.
+        # Uses max width and max height across all sources (may come from
+        # different clips) to avoid stretching any content.
+        if config.width is None or config.height is None:
+            max_w, max_h = 0, 0
+            seen_sources: set[str] = set()
+            for seq_clip in all_clips:
+                source_id = getattr(seq_clip, "source_id", None)
+                if source_id and source_id not in seen_sources:
+                    seen_sources.add(source_id)
+                    source = sources.get(source_id)
+                    if source and source.width and source.height:
+                        max_w = max(max_w, source.width)
+                        max_h = max(max_h, source.height)
+            if max_w > 0 and max_h > 0:
+                config = ExportConfig(
+                    output_path=config.output_path,
+                    fps=config.fps,
+                    width=max_w,
+                    height=max_h,
+                    video_codec=config.video_codec,
+                    audio_codec=config.audio_codec,
+                    video_bitrate=config.video_bitrate,
+                    audio_bitrate=config.audio_bitrate,
+                    preset=config.preset,
+                    crf=config.crf,
+                    show_chromatic_color_bar=config.show_chromatic_color_bar,
+                    chromatic_color_bar_height_ratio=config.chromatic_color_bar_height_ratio,
+                    chromatic_color_bar_min_height=config.chromatic_color_bar_min_height,
+                    music_path=config.music_path,
+                )
+                logger.info("Auto-detected export resolution: %dx%d", max_w, max_h)
+
         logger.info(
             "Starting sequence export: clips=%d output=%s fps=%.3f resolution=%sx%s music=%s",
             len(all_clips),
@@ -314,11 +347,16 @@ class SequenceExporter:
     ) -> bool:
         """Export a pre-rendered clip segment.
 
-        Transforms are already baked in. Only applies scale and chromatic bar.
+        Transforms are already baked in. Only applies scale+pad and chromatic bar.
         """
         vf_parts = []
         if config.width and config.height:
-            vf_parts.append(f"scale={config.width}:{config.height}")
+            vf_parts.append(
+                f"scale={config.width}:{config.height}"
+                ":force_original_aspect_ratio=decrease"
+                f",pad={config.width}:{config.height}"
+                ":(ow-iw)/2:(oh-ih)/2:black"
+            )
         chromatic_filter = self._chromatic_bar_filter(config=config, bar_color=bar_color)
         if chromatic_filter:
             vf_parts.append(chromatic_filter)
@@ -374,7 +412,7 @@ class SequenceExporter:
                 f"scale={config.width}:{config.height}"
                 ":force_original_aspect_ratio=decrease"
                 f",pad={config.width}:{config.height}"
-                ":(ow-iw)/2:(oh-ih)/2"
+                ":(ow-iw)/2:(oh-ih)/2:black"
             )
         chromatic_filter = self._chromatic_bar_filter(config=config, bar_color=bar_color)
         if chromatic_filter:
@@ -456,11 +494,17 @@ class SequenceExporter:
     ) -> Optional[str]:
         """Build ffmpeg video filter chain.
 
-        Filter order: scale -> hflip -> vflip -> reverse -> chromatic_bar
+        Filter order: scale+pad -> hflip -> vflip -> reverse -> chromatic_bar
+        Scaling preserves aspect ratio and pads with black to fill the target.
         """
         vf_parts = []
         if config.width and config.height:
-            vf_parts.append(f"scale={config.width}:{config.height}")
+            vf_parts.append(
+                f"scale={config.width}:{config.height}"
+                ":force_original_aspect_ratio=decrease"
+                f",pad={config.width}:{config.height}"
+                ":(ow-iw)/2:(oh-ih)/2:black"
+            )
         if seq_clip and seq_clip.hflip:
             vf_parts.append("hflip")
         if seq_clip and seq_clip.vflip:
