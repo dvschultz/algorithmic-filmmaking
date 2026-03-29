@@ -1113,28 +1113,31 @@ class SequenceTab(BaseTab):
             self.timeline.set_fps(fps)
             self.video_player.load_video(first_source.file_path)
 
-            current_frame = 0
+            # Accumulate timeline position in seconds to avoid per-slot
+            # rounding error (int truncation over 50+ slots adds up).
+            current_time = 0.0
             for entry in sequence_clips:
                 clip, source = entry[0], entry[1]
                 slot_duration = entry[2] if len(entry) > 2 else None
 
                 if slot_duration is not None:
                     # Trim clip to fit the beat slot duration
-                    slot_frames = int(slot_duration * source.fps)
+                    slot_frames_src = round(slot_duration * source.fps)
                     clip_frames = clip.end_frame - clip.start_frame
-                    trimmed_frames = min(slot_frames, clip_frames)
+                    trimmed_frames = min(slot_frames_src, clip_frames)
                     in_point = clip.start_frame
                     out_point = clip.start_frame + trimmed_frames
                 else:
                     in_point = clip.start_frame
                     out_point = clip.end_frame
-                    slot_frames = out_point - in_point
+                    slot_duration = (out_point - in_point) / source.fps
 
+                current_frame = round(current_time * fps)
                 self.timeline.add_clip(
                     clip, source, track_index=0, start_frame=current_frame,
                     in_point=in_point, out_point=out_point,
                 )
-                current_frame += slot_frames
+                current_time += slot_duration
                 self.clip_added.emit(clip, source)
 
             # Convert (clip, source, duration) back to (clip, source) for preview
