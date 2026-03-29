@@ -137,7 +137,7 @@ class TestGeminiCloudShots:
 
     def test_default_cloud_model_constant(self):
         from core.analysis.shots_cloud import _DEFAULT_CLOUD_MODEL
-        assert _DEFAULT_CLOUD_MODEL == "gemini-2.5-flash-lite"
+        assert _DEFAULT_CLOUD_MODEL == "gemini-3.1-flash-lite-preview"
 
     def test_classify_shot_cloud_function_exists(self):
         from core.analysis.shots_cloud import classify_shot_cloud
@@ -145,7 +145,7 @@ class TestGeminiCloudShots:
 
     def test_shot_classifier_cloud_model_setting(self):
         settings = Settings()
-        assert settings.shot_classifier_cloud_model == "gemini-2.5-flash-lite"
+        assert settings.shot_classifier_cloud_model == "gemini-3.1-flash-lite-preview"
 
     def test_cloud_shots_cost_updated(self):
         """Cloud shot classification cost should reflect Gemini pricing (~$0.00026)."""

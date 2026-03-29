@@ -68,15 +68,16 @@ from ui.theme import theme, UISizes
 
 logger = logging.getLogger(__name__)
 
-# Shared list of VLM models for vision and text extraction
+# Shared list of cloud LLM/VLM models for vision, text extraction, and sequencing
 VLM_MODELS = [
-    "gemini-3-flash-preview",
+    "gemini-3.1-flash-lite-preview",
+    "gemini-3.1-pro-preview",
     "gemini-2.5-flash",
-    "gemini-2.5-pro",
-    "gpt-5.2",
-    "gpt-5",
-    "gpt-5-mini",
-    "claude-sonnet-4-5-20250929",
+    "gpt-5.4-mini",
+    "gpt-5.4",
+    "gpt-5.4-nano",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5",
 ]
 
 
