@@ -1116,6 +1116,10 @@ class SequenceTab(BaseTab):
             # Accumulate timeline position in seconds to avoid per-slot
             # rounding error (int truncation over 50+ slots adds up).
             current_time = 0.0
+            logger.info(
+                "Staccato: placing %d clips at timeline fps=%.3f",
+                len(sequence_clips), fps,
+            )
             for entry in sequence_clips:
                 clip, source = entry[0], entry[1]
                 slot_duration = entry[2] if len(entry) > 2 else None
@@ -1137,8 +1141,13 @@ class SequenceTab(BaseTab):
                     clip, source, track_index=0, start_frame=current_frame,
                     in_point=in_point, out_point=out_point,
                 )
-                current_time += slot_duration
                 self.clip_added.emit(clip, source)
+                current_time += slot_duration
+
+            logger.info(
+                "Staccato: total timeline duration=%.2fs (%d clips placed)",
+                current_time, len(sequence_clips),
+            )
 
             # Convert (clip, source, duration) back to (clip, source) for preview
             preview_clips = [(entry[0], entry[1]) for entry in sequence_clips]

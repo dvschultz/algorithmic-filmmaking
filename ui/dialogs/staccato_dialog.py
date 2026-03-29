@@ -733,7 +733,7 @@ class StaccatoDialog(QDialog):
         # Update results summary
         n_slots = len(sequence_data)
         unique_clips = len({
-            getattr(clip, 'id', i) for i, (clip, _) in enumerate(sequence_data)
+            getattr(entry[0], 'id', i) for i, entry in enumerate(sequence_data)
         })
         summary = f"Generated {n_slots} slots using {unique_clips} unique clips."
         if self._debug_info:
