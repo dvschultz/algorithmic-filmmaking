@@ -264,17 +264,27 @@ def generate_staccato_sequence(
         total_clips_available=len(clips),
     )
 
-    # Assign clips to slots
+    # Assign clips to slots, exhausting all clips before repeating
     result = []
     prev_embedding = None
+    used_indices: set[int] = set()
 
     for slot_idx, slot in enumerate(slots):
         if progress_cb:
             progress_cb(slot_idx, len(slots))
 
+        # Filter to unused clips; reset pool when all clips have been used
+        available = [(i, emb) for i, emb in clips_with_embeddings if i not in used_indices]
+        if not available:
+            used_indices.clear()
+            available = clips_with_embeddings
+
+        available_durations = clip_durations
+
         best_idx, cosine_dist, dist_score = _select_clip_for_slot(
-            slot, prev_embedding, clips_with_embeddings, clip_durations,
+            slot, prev_embedding, available, available_durations,
         )
+        used_indices.add(best_idx)
 
         clip, source = clips[best_idx]
         result.append((clip, source))
