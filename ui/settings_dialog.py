@@ -581,6 +581,63 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(vision_group)
 
+        # Rich Analysis (Cinematography) group
+        cine_group = QGroupBox("Rich Analysis (Cinematography)")
+        cine_layout = QVBoxLayout(cine_group)
+
+        # Tier selection
+        cine_tier_layout = QHBoxLayout()
+        cine_tier_label = QLabel("Processing Tier:")
+        cine_tier_label.setFixedWidth(UISizes.FORM_LABEL_WIDTH)
+        cine_tier_layout.addWidget(cine_tier_label)
+        self.cine_tier_combo = QComboBox()
+        self.cine_tier_combo.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
+        self.cine_tier_combo.addItems([
+            "Local - Free, runs on device (Qwen2.5-VL)",
+            "Cloud API - Supports video mode (Gemini/GPT-4o)",
+        ])
+        self.cine_tier_combo.setToolTip(
+            "Local: Frame-only analysis using mlx-vlm. Free, no API key.\n"
+            "Cloud: Can analyze video clips for camera movement detection."
+        )
+        cine_tier_layout.addWidget(self.cine_tier_combo)
+        cine_layout.addLayout(cine_tier_layout)
+
+        # Cloud model
+        cine_cloud_layout = QHBoxLayout()
+        cine_cloud_label = QLabel("Cloud Model:")
+        cine_cloud_label.setFixedWidth(UISizes.FORM_LABEL_WIDTH)
+        cine_cloud_layout.addWidget(cine_cloud_label)
+        self.cine_cloud_combo = QComboBox()
+        self.cine_cloud_combo.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
+        self.cine_cloud_combo.addItems(VLM_MODELS)
+        self.cine_cloud_combo.setToolTip("Cloud VLM for cinematography analysis")
+        cine_cloud_layout.addWidget(self.cine_cloud_combo)
+        cine_layout.addLayout(cine_cloud_layout)
+
+        # Input mode
+        cine_mode_layout = QHBoxLayout()
+        cine_mode_label = QLabel("Input Mode:")
+        cine_mode_label.setFixedWidth(UISizes.FORM_LABEL_WIDTH)
+        cine_mode_layout.addWidget(cine_mode_label)
+        self.cine_input_mode_combo = QComboBox()
+        self.cine_input_mode_combo.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
+        self.cine_input_mode_combo.addItems([
+            "Frame - Single thumbnail (fast, no movement detection)",
+            "Video - Clip segment (detects camera movement, Gemini only)",
+        ])
+        self.cine_input_mode_combo.setToolTip(
+            "Frame: Sends a single thumbnail. Fast and cheap.\n"
+            "Video: Sends the video clip. Detects camera movement.\n"
+            "Video mode only works with Gemini models."
+        )
+        cine_mode_layout.addWidget(self.cine_input_mode_combo)
+        cine_layout.addLayout(cine_mode_layout)
+
+        self.cine_tier_combo.currentIndexChanged.connect(self._on_cine_tier_changed)
+
+        layout.addWidget(cine_group)
+
         # Text Extraction (OCR) group
         text_group = QGroupBox("Text Extraction (OCR)")
         text_layout = QVBoxLayout(text_group)
@@ -622,8 +679,8 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(text_group)
 
-        # Exquisite Corpus (Poetry Generation) group
-        corpus_group = QGroupBox("Exquisite Corpus (Poetry Generation)")
+        # LLM Sequencer (Storyteller + Exquisite Corpus) group
+        corpus_group = QGroupBox("LLM Sequencer (Storyteller / Exquisite Corpus)")
         corpus_layout = QVBoxLayout(corpus_group)
 
         # Model selection
@@ -1498,6 +1555,12 @@ class SettingsDialog(QDialog):
         self.vision_cpu_combo.setEnabled(is_cpu)
         self.vision_cloud_combo.setEnabled(not is_cpu)
 
+    def _on_cine_tier_changed(self, index: int):
+        """Enable/disable Rich Analysis fields based on selected tier."""
+        is_local = (index == 0)
+        self.cine_cloud_combo.setEnabled(not is_local)
+        self.cine_input_mode_combo.setEnabled(not is_local)
+
     def _on_text_method_changed(self, index: int):
         """Enable/disable VLM model based on method."""
         method = self.text_method_combo.currentData()
@@ -1683,6 +1746,14 @@ class SettingsDialog(QDialog):
         # Trigger enable/disable state
         self._on_vision_tier_changed(tier_idx)
 
+        # Rich Analysis (Cinematography)
+        cine_tier_idx = 0 if self.settings.cinematography_tier == "local" else 1
+        self.cine_tier_combo.setCurrentIndex(cine_tier_idx)
+        self._set_combo_text(self.cine_cloud_combo, self.settings.cinematography_model)
+        cine_mode_idx = 0 if self.settings.cinematography_input_mode == "frame" else 1
+        self.cine_input_mode_combo.setCurrentIndex(cine_mode_idx)
+        self._on_cine_tier_changed(cine_tier_idx)
+
         # Text Extraction
         method_map = {"paddleocr": 0, "tesseract": 0, "vlm": 1, "hybrid": 2}
         self.text_method_combo.setCurrentIndex(
@@ -1837,6 +1908,11 @@ class SettingsDialog(QDialog):
         self.settings.description_model_cloud = self.vision_cloud_combo.currentText()
         self.settings.description_temporal_frames = self.vision_frames_spin.value()
         self.settings.description_input_mode = self.input_mode_combo.currentData()
+
+        # Rich Analysis (Cinematography)
+        self.settings.cinematography_tier = "local" if self.cine_tier_combo.currentIndex() == 0 else "cloud"
+        self.settings.cinematography_model = self.cine_cloud_combo.currentText()
+        self.settings.cinematography_input_mode = "frame" if self.cine_input_mode_combo.currentIndex() == 0 else "video"
 
         # Text Extraction
         self.settings.text_extraction_method = self.text_method_combo.currentData()
