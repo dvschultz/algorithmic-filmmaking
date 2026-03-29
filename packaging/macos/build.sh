@@ -62,7 +62,9 @@ mkdir -p "${FFMPEG_RUNTIME_DIR}"
 PROJECT_ROOT="$PROJECT_ROOT" python - <<'PY'
 import shutil
 import tempfile
+import time
 import urllib.request
+import urllib.error
 import zipfile
 import os
 from pathlib import Path
@@ -93,21 +95,45 @@ for candidate in fallback_runtime_candidates:
         print(f"Reused staged FFmpeg runtime from {candidate}")
         raise SystemExit(0)
 
+
+def _download_and_extract(binary_name: str, url: str, temp_path: Path) -> None:
+    archive_path = temp_path / f"{binary_name}.zip"
+    target_path = runtime_dir / binary_name
+
+    for attempt in range(1, 5):
+        archive_path.unlink(missing_ok=True)
+        target_path.unlink(missing_ok=True)
+        try:
+            urllib.request.urlretrieve(url, archive_path)
+            with zipfile.ZipFile(archive_path, "r") as archive:
+                members = [name for name in archive.namelist() if name.endswith(binary_name)]
+                if not members:
+                    raise RuntimeError(f"{binary_name} not found in downloaded archive")
+                extracted = Path(archive.extract(members[0], temp_path))
+                shutil.move(str(extracted), target_path)
+                target_path.chmod(0o755)
+            return
+        except (
+            urllib.error.ContentTooShortError,
+            urllib.error.URLError,
+            zipfile.BadZipFile,
+            OSError,
+            RuntimeError,
+        ) as exc:
+            archive_path.unlink(missing_ok=True)
+            target_path.unlink(missing_ok=True)
+            if attempt == 4:
+                raise
+            delay = attempt * 2
+            print(f"Retrying {binary_name} download after attempt {attempt}/4 failed: {exc}")
+            time.sleep(delay)
+
 with tempfile.TemporaryDirectory() as temp_dir:
     temp_path = Path(temp_dir)
     for binary_name, url in downloads.items():
         if (runtime_dir / binary_name).is_file():
             continue
-        archive_path = temp_path / f"{binary_name}.zip"
-        urllib.request.urlretrieve(url, archive_path)
-        with zipfile.ZipFile(archive_path, "r") as archive:
-            members = [name for name in archive.namelist() if name.endswith(binary_name)]
-            if not members:
-                raise SystemExit(f"{binary_name} not found in downloaded archive")
-            extracted = Path(archive.extract(members[0], temp_path))
-            target_path = runtime_dir / binary_name
-            shutil.move(str(extracted), target_path)
-            target_path.chmod(0o755)
+        _download_and_extract(binary_name, url, temp_path)
 PY
 
 # -------------------------------------------------------------------
