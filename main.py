@@ -94,6 +94,16 @@ from ui.theme import theme
 # MPV requires 'C' locale for numeric parsing (decimal points vs commas).
 locale.setlocale(locale.LC_NUMERIC, 'C')
 
+# Pre-import MLX on the main thread to avoid a crash when worker threads
+# first-import it. MLX initializes Metal resources on first import, and
+# PySide6's Shiboken import hook can enter infinite recursion if MLX is
+# first imported from a QThread background worker.
+if platform.system() == "Darwin" and platform.machine() == "arm64":
+    try:
+        import mlx.core  # noqa: F401
+    except ImportError:
+        pass
+
 
 def _check_mpv_available() -> bool:
     """Check if libmpv is available. Returns True if OK, False if missing."""
