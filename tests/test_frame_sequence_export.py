@@ -156,11 +156,15 @@ class TestEDLExportFrameEntries:
         assert result is True
 
         content = edl_path.read_text()
-        lines = [l for l in content.split("\n") if l.startswith("*")]
+        clip_lines = [l for l in content.split("\n") if l.startswith("* FROM CLIP NAME:")]
         # Two FROM CLIP NAME comments: one for video, one for frame
-        assert len(lines) == 2
-        assert "video.mp4" in lines[0]
-        assert "Frame 42" in lines[1]
+        assert len(clip_lines) == 2
+        assert "video.mp4" in clip_lines[0]
+        assert "Frame 42" in clip_lines[1]
+        # Source file path comment for clip-based entries
+        source_lines = [l for l in content.split("\n") if l.startswith("* SOURCE FILE:")]
+        assert len(source_lines) == 1
+        assert "/test/video.mp4" in source_lines[0]
 
     def test_frame_entry_skipped_without_frames_dict(self, tmp_path):
         """Frame entries are gracefully skipped when no frames dict provided."""

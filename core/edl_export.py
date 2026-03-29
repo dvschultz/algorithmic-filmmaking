@@ -121,20 +121,28 @@ def export_edl(
         rec_out = frames_to_timecode(record_frame + duration_frames, sequence.fps)
         record_frame += duration_frames
 
-        # Edit number and reel
+        # Edit number and reel name
+        # Reel identifies the source file — NLEs use this to match clips to media.
+        # CMX 3600 limits reel names to 8 characters; use stem truncated to fit.
         edit_num = f"{i + 1:03d}"
-        reel = f"{i + 1:03d}"
+        reel = _sanitize_edl_string(
+            Path(clip_name).stem if not seq_clip.is_frame_entry else clip_name
+        )[:8].ljust(8)
 
         # EDL event line
         # Format: EDIT# REEL TRACK TRANS SRC_IN SRC_OUT REC_IN REC_OUT
         event_line = (
-            f"{edit_num}  {reel}      V     C        "
+            f"{edit_num}  {reel} V     C        "
             f"{src_in} {src_out} {rec_in} {rec_out}"
         )
         lines.append(event_line)
 
-        # Source/frame filename comment
+        # Source/frame filename comment — full name for NLEs that read comments
         lines.append(f"* FROM CLIP NAME: {clip_name}")
+        if not seq_clip.is_frame_entry:
+            source = sources.get(seq_clip.source_id)
+            if source and source.file_path:
+                lines.append(f"* SOURCE FILE: {source.file_path}")
         lines.append("")
 
     # Write to file
