@@ -140,6 +140,25 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-core.txt
+          pip install \
+            'torch>=2.4,<2.7' \
+            'torchaudio>=2.4,<2.7' \
+            'torchvision>=0.19,<0.22' \
+            'transformers>=4.50,<5' \
+            'huggingface-hub>=0.34.0,<1.0' \
+            'sentencepiece>=0.2.0,<1.0' \
+            'protobuf>=4.25,<6' \
+            'einops>=0.7.0,<1.0' \
+            'ultralytics>=8.4.0,<9' \
+            'insightface>=0.7.3,<1.0' \
+            'onnxruntime>=1.16.0,<2.0' \
+            'librosa>=0.10.0,<1.0' \
+            'demucs-infer>=4.1.0,<5' \
+            'mlx-vlm>=0.1.0,<1.0' \
+            'paddleocr>=3.0.0,<4' \
+            'rapidfuzz>=3.0.0'
+          # lightning-whisper-mlx must be --no-deps to avoid tiktoken conflict with litellm
+          pip install 'lightning-whisper-mlx>=0.0.10,<1.0' --no-deps
           pip install pyinstaller cryptography
 
       - name: Resolve updater signing metadata
@@ -191,6 +210,12 @@ jobs:
               )
               fh.write(f"UPDATER_ENABLED={'true' if updater_enabled else 'false'}\n")
           PY
+
+      - name: Stage bundled model runtime
+        env:
+          SCENE_RIPPER_MODEL_RUNTIME_DIR: packaging/runtime/models/macos
+        run: |
+          python packaging/macos/stage_models.py
 
       - name: Run PyInstaller
         env:
