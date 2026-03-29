@@ -72,8 +72,15 @@ class StaccatoAnalyzeWorker(CancellableWorker):
 
             audio_path = self._music_path
 
-            # If stem separation requested, separate first then use stem audio
+            # If stem separation requested, ensure deps are installed then separate
             if self._stem_name and self._stems_cache_dir:
+                stem_available, _missing = check_feature_ready("stem_separation")
+                if not stem_available:
+                    self.progress_message.emit("Installing stem separation dependencies...")
+                    if not install_for_feature("stem_separation"):
+                        self.error.emit("Failed to install stem separation dependencies (demucs)")
+                        return
+
                 audio_path = self._get_or_separate_stem()
                 if audio_path is None:
                     return  # cancelled or error already emitted
