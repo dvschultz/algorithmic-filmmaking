@@ -150,9 +150,9 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
     ),
     "transcribe_mlx": FeatureDeps(
         binaries=["ffmpeg"],
-        packages=["lightning_whisper_mlx"],
+        packages=["lightning_whisper_mlx", "tiktoken"],
         size_estimate_mb=300,
-        repair_packages=["lightning_whisper_mlx", "mlx"],
+        repair_packages=["lightning_whisper_mlx", "mlx", "tiktoken"],
         native_install=True,  # mlx has Metal native extensions
     ),
     "describe_local": FeatureDeps(

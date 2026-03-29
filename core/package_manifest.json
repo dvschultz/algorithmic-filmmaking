@@ -93,6 +93,11 @@
       "size_mb": 100,
       "features": ["face_detect"]
     },
+    "tiktoken": {
+      "pip_specifier": "tiktoken>=0.7.0,<0.8",
+      "size_mb": 5,
+      "features": []
+    },
     "demucs_infer": {
       "pip_specifier": "demucs-infer>=4.1.0",
       "size_mb": 200,

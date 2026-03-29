@@ -372,7 +372,7 @@ def test_install_for_feature_reinstalls_broken_runtime_even_when_packages_exist(
         (
             "transcribe_mlx",
             ["package:lightning_whisper_mlx"],
-            ["lightning_whisper_mlx", "mlx"],
+            ["lightning_whisper_mlx", "mlx", "tiktoken"],
         ),
     ],
 )
