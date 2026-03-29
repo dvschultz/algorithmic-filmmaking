@@ -466,19 +466,32 @@ class StaccatoDialog(QDialog):
         """Show/hide stem dropdown and check dependency availability."""
         self._stem_combo.setVisible(checked)
         if checked:
-            # Check if demucs-infer is available
-            from core.feature_registry import check_feature
-            available, missing = check_feature("stem_separation")
+            # Check if demucs-infer is available, offer to install if not
+            from core.feature_registry import check_feature_ready, install_for_feature
+            available, _missing = check_feature_ready("stem_separation")
             if not available:
-                self._stem_checkbox.setChecked(False)
-                QMessageBox.information(
+                reply = QMessageBox.question(
                     self,
                     "Stem Separation",
-                    "Stem separation requires the demucs-infer package.\n\n"
-                    "Install it with: pip install demucs-infer\n\n"
-                    "Then restart the application.",
+                    "Stem separation requires demucs + torch (~2 GB download).\n\n"
+                    "Install now?",
+                    QMessageBox.Yes | QMessageBox.No,
                 )
-                return
+                if reply == QMessageBox.Yes:
+                    self._stem_checkbox.setEnabled(False)
+                    self._info_label.setText("Installing stem separation dependencies...")
+                    QApplication.processEvents()
+                    if install_for_feature("stem_separation"):
+                        self._stem_checkbox.setEnabled(True)
+                        self._info_label.setText("Stem separation ready")
+                    else:
+                        self._stem_checkbox.setChecked(False)
+                        self._stem_checkbox.setEnabled(True)
+                        self._info_label.setText("Failed to install stem separation")
+                        return
+                else:
+                    self._stem_checkbox.setChecked(False)
+                    return
 
         # Re-analyze if we already have a file loaded
         if self._music_path:
