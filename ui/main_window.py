@@ -4892,13 +4892,7 @@ class MainWindow(QMainWindow):
         logger.info(f"_on_thumbnails_finished: total {len(self.clips)} clips from {len(self.sources)} sources")
         self.cut_tab.set_clips(self.clips)
 
-        # Make all clips available for timeline remix (via Sequence tab)
-        # Pass clips for the current source being analyzed
-        current_source_clips = self.clips_by_source.get(self.current_source.id, []) if self.current_source else []
-        if self.current_source and current_source_clips:
-            self.sequence_tab.set_clips_available(current_source_clips, self.current_source)
-
-        # Also refresh with ALL clips from ALL sources to handle multi-source workflows
+        # Refresh sequence tab with ALL clips from ALL sources
         self._refresh_sequence_tab_clips()
 
         # Update Render tab with total clip count from all sources

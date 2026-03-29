@@ -1420,39 +1420,6 @@ class SequenceTab(BaseTab):
             self._sources[source.id] = source
             self.video_player.load_video(source.file_path)
 
-    def set_clips_available(self, clips, source):
-        """Set available clips for the timeline."""
-        self._clips = clips
-        self._current_source = source
-
-        if source:
-            self._sources[source.id] = source
-
-        if clips:
-            # Build (Clip, Source) tuples
-            self._available_clips = [(clip, source) for clip in clips]
-
-            self.timeline.set_fps(source.fps)
-            self.timeline.set_available_clips(clips, source)
-
-            # Update card availability based on clip analysis
-            self._update_card_availability()
-
-            # Ensure video player has the source loaded
-            self.video_player.load_video(source.file_path)
-
-            # Determine state based on timeline content
-            if self._has_clips_on_timeline():
-                self._set_state(self.STATE_TIMELINE)
-            else:
-                self._set_state(self.STATE_CARDS)
-            self._update_chromatic_bar_controls(self._current_algorithm)
-            self._emit_chromatic_bar_setting_changed()
-        else:
-            self._available_clips = []
-            self._set_state(self.STATE_CARDS)
-            self._update_chromatic_bar_controls(None)
-            self._emit_chromatic_bar_setting_changed()
 
     def _has_clips_on_timeline(self) -> bool:
         """Check if there are clips on the timeline."""
