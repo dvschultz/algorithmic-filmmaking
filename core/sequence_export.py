@@ -304,11 +304,21 @@ class SequenceExporter:
             af_parts.append("areverse")
         af = ",".join(af_parts)
 
+        # Use "double -ss" for frame-accurate seeking:
+        # 1. -ss before -i: fast keyframe seek to ~5s before target (avoids
+        #    decoding the entire file from the start)
+        # 2. -ss after -i: precise frame-accurate seek from that keyframe
+        # This prevents frozen-frame clips where keyframe seeking lands on a
+        # single frame and the fps filter repeats it for the entire duration.
+        coarse_seek = max(0, start_seconds - 5.0)
+        precise_seek = start_seconds - coarse_seek
+
         cmd = [
             self.ffmpeg_path,
             "-y",
-            "-ss", str(start_seconds),
+            "-ss", str(coarse_seek),
             "-i", str(source_path),
+            "-ss", str(precise_seek),
             "-t", str(duration_seconds),
             "-c:v", config.video_codec,
             "-preset", config.preset,
