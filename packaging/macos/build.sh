@@ -131,6 +131,7 @@ pip install \
     'demucs-infer>=4.1.0,<5' \
     'mlx-vlm>=0.1.0,<1.0' \
     'paddleocr>=3.0.0,<4' \
+    'paddlepaddle>=3.3.0,<4' \
     'rapidfuzz>=3.0.0' \
     --quiet
 # lightning-whisper-mlx must be --no-deps to avoid tiktoken conflict with litellm

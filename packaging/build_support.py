@@ -25,6 +25,7 @@ REQUIREMENT_TO_IMPORT_TARGET = {
     "lightning-whisper-mlx": "lightning_whisper_mlx",
     "mlx-vlm": "mlx_vlm",
     "onnxruntime": "onnxruntime",
+    "paddlepaddle": "paddle",
     "python-mpv": "mpv",
     "protobuf": "google.protobuf",
     "scenedetect": "scenedetect",
@@ -66,6 +67,7 @@ SUPPLEMENTAL_METADATA_TARGETS = (
     "uritemplate",
     "scipy",
     "paddlex",
+    "paddlepaddle",
 )
 SUPPLEMENTAL_HIDDENIMPORTS = (
     # torch.package imports this stdlib module at runtime. The frozen base app

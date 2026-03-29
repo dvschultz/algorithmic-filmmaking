@@ -190,13 +190,13 @@ def test_core_requirement_distributions_follow_nested_requirements_file(tmp_path
         encoding="utf-8",
     )
     (tmp_path / "requirements-core-macos.txt").write_text(
-        "-r requirements-core.txt\ntransformers>=4.50,<5\ntorchaudio>=2.4,<2.7\n",
+        "-r requirements-core.txt\ntransformers>=4.50,<5\ntorchaudio>=2.4,<2.7\npaddlepaddle>=3.3.0,<4\n",
         encoding="utf-8",
     )
 
     distributions = read_core_requirement_distributions(tmp_path, "requirements-core-macos.txt")
 
-    assert distributions == ("certifi", "transformers", "torchaudio")
+    assert distributions == ("certifi", "transformers", "torchaudio", "paddlepaddle")
 
 
 def test_core_pyinstaller_collect_targets_cover_packaged_runtime_dependencies(tmp_path):
