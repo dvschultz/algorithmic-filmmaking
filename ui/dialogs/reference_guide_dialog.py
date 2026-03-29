@@ -430,6 +430,31 @@ class ReferenceGuideDialog(QDialog):
             QMessageBox.warning(self, "No User Clips", "No clips available from other sources.")
             return
 
+        # Check embedding dependencies if the embedding dimension is active
+        if active.get("embedding", 0) > 0:
+            from core.feature_registry import check_feature_ready, install_for_feature
+
+            available, _missing = check_feature_ready("embeddings")
+            if not available:
+                reply = QMessageBox.question(
+                    self,
+                    "Embeddings Not Available",
+                    "The Embedding dimension requires torch + transformers (~450 MB).\n\n"
+                    "Install now, or continue without visual similarity matching?",
+                    QMessageBox.Yes | QMessageBox.No,
+                )
+                if reply == QMessageBox.Yes:
+                    if not install_for_feature("embeddings"):
+                        QMessageBox.warning(self, "Install Failed", "Could not install embedding dependencies.")
+                        return
+                else:
+                    # Disable embedding dimension and continue
+                    active.pop("embedding", None)
+                    weights["embedding"] = 0.0
+                    if not active:
+                        QMessageBox.warning(self, "No Dimensions", "No active dimensions remaining.")
+                        return
+
         # Show progress
         self.progress_bar.setVisible(True)
         self.progress_label.setVisible(True)
