@@ -86,6 +86,15 @@ if platform.system() == "Darwin":
                 )
             break
 
+# Pre-import torch BEFORE PySide6 to prevent "function '_has_torch_function'
+# already has a docstring" RuntimeError. This conflict occurs when torch's C
+# extension init runs after PySide6's Shiboken import hooks are installed.
+# Importing torch first avoids the hook interference entirely.
+try:
+    import torch  # noqa: F401
+except (ImportError, RuntimeError):
+    pass
+
 from PySide6.QtWidgets import QApplication, QMessageBox
 from ui.main_window import MainWindow
 from ui.theme import theme
