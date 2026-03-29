@@ -329,7 +329,7 @@ def test_install_for_feature_reinstalls_broken_runtime_even_when_packages_exist(
         (
             "describe_local",
             ["package:mlx_vlm"],
-            ["mlx_vlm", "transformers", "tokenizers", "sentencepiece", "protobuf"],
+            ["mlx_vlm", "torch", "torchvision", "transformers", "tokenizers", "sentencepiece", "protobuf"],
         ),
         (
             "describe_local_cpu",

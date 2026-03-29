@@ -157,9 +157,9 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
     ),
     "describe_local": FeatureDeps(
         binaries=[],
-        packages=["mlx_vlm"],
-        size_estimate_mb=200,
-        repair_packages=["mlx_vlm", "transformers", "tokenizers", "sentencepiece", "protobuf"],
+        packages=["mlx_vlm", "torch", "torchvision"],
+        size_estimate_mb=600,
+        repair_packages=["mlx_vlm", "torch", "torchvision", "transformers", "tokenizers", "sentencepiece", "protobuf"],
         native_install=True,  # mlx has Metal native extensions that need proper site-packages
     ),
     "describe_local_cpu": FeatureDeps(
