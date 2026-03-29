@@ -151,20 +151,20 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
     "transcribe_mlx": FeatureDeps(
         binaries=["ffmpeg"],
         packages=["lightning_whisper_mlx"],
-        size_estimate_mb=100,
+        size_estimate_mb=300,
+        repair_packages=["lightning_whisper_mlx", "mlx"],
         native_install=True,  # mlx has Metal native extensions
-        no_deps=True,  # avoid pulling uncontrolled torch/tiktoken/numba transitive deps
     ),
     "describe_local": FeatureDeps(
         binaries=[],
-        packages=["mlx_vlm", "torch", "torchvision"],
-        size_estimate_mb=600,
-        repair_packages=["mlx_vlm", "torch", "torchvision", "transformers", "tokenizers", "sentencepiece", "protobuf"],
+        packages=["mlx_vlm", "transformers", "tokenizers"],
+        size_estimate_mb=400,
+        repair_packages=["mlx_vlm", "transformers", "tokenizers", "sentencepiece", "protobuf"],
         native_install=True,  # mlx has Metal native extensions that need proper site-packages
     ),
     "describe_local_cpu": FeatureDeps(
         binaries=[],
-        packages=["torch", "transformers"],
+        packages=["torch", "transformers", "tokenizers"],
         size_estimate_mb=450,
         repair_packages=["torch", "transformers", "tokenizers"],
         native_install=True,  # torch/transformers need proper site-packages
@@ -181,9 +181,9 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
     ),
     "shot_classify": FeatureDeps(
         binaries=[],
-        packages=["torch", "torchvision", "transformers", "huggingface_hub", "einops", "sentencepiece", "protobuf"],
-        size_estimate_mb=450,
-        repair_packages=["torch", "torchvision", "transformers", "huggingface_hub", "tokenizers", "einops", "sentencepiece", "protobuf"],
+        packages=["torch", "transformers", "huggingface_hub", "sentencepiece", "protobuf"],
+        size_estimate_mb=400,
+        repair_packages=["torch", "transformers", "huggingface_hub", "tokenizers", "sentencepiece", "protobuf"],
         native_install=True,  # torch/transformers need proper site-packages to avoid circular imports
     ),
     "image_classify": FeatureDeps(
@@ -195,7 +195,7 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
     ),
     "object_detect": FeatureDeps(
         binaries=[],
-        packages=["ultralytics"],
+        packages=["torch", "ultralytics"],
         size_estimate_mb=430,
         repair_packages=["torch", "ultralytics"],
         native_install=True,  # ultralytics/torch need proper site-packages
@@ -225,8 +225,9 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
     ),
     "stem_separation": FeatureDeps(
         binaries=[],
-        packages=["torch", "demucs_infer"],
+        packages=["torch", "torchaudio", "demucs_infer", "librosa"],
         size_estimate_mb=2000,
+        repair_packages=["torch", "torchaudio", "demucs_infer", "librosa"],
         native_install=True,  # torch has native extensions
     ),
     "embeddings": FeatureDeps(

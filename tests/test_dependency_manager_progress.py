@@ -313,11 +313,9 @@ def test_install_for_feature_reinstalls_broken_runtime_even_when_packages_exist(
     assert validations == ["shot_classify", "shot_classify"]
     assert package_batches == [[
         "torch>=1.0",
-        "torchvision>=1.0",
         "transformers>=1.0",
         "huggingface_hub>=1.0",
         "tokenizers>=1.0",
-        "einops>=1.0",
         "sentencepiece>=1.0",
         "protobuf>=1.0",
     ]]
@@ -329,7 +327,7 @@ def test_install_for_feature_reinstalls_broken_runtime_even_when_packages_exist(
         (
             "describe_local",
             ["package:mlx_vlm"],
-            ["mlx_vlm", "torch", "torchvision", "transformers", "tokenizers", "sentencepiece", "protobuf"],
+            ["mlx_vlm", "transformers", "tokenizers", "sentencepiece", "protobuf"],
         ),
         (
             "describe_local_cpu",
@@ -339,7 +337,7 @@ def test_install_for_feature_reinstalls_broken_runtime_even_when_packages_exist(
         (
             "shot_classify",
             ["package:sentencepiece", "package:protobuf"],
-            ["torch", "torchvision", "transformers", "huggingface_hub", "tokenizers", "einops", "sentencepiece", "protobuf"],
+            ["torch", "transformers", "huggingface_hub", "tokenizers", "sentencepiece", "protobuf"],
         ),
         (
             "image_classify",
@@ -374,7 +372,7 @@ def test_install_for_feature_reinstalls_broken_runtime_even_when_packages_exist(
         (
             "transcribe_mlx",
             ["package:lightning_whisper_mlx"],
-            ["lightning_whisper_mlx"],
+            ["lightning_whisper_mlx", "mlx"],
         ),
     ],
 )

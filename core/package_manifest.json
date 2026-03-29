@@ -5,7 +5,13 @@
     "torch": {
       "pip_specifier": "torch>=2.4,<2.7",
       "size_mb": 350,
-      "features": ["shot_classify", "image_classify", "describe_local_cpu", "object_detect"]
+      "features": ["shot_classify", "image_classify", "describe_local_cpu", "object_detect", "stem_separation"]
+    },
+    "torchaudio": {
+      "pip_specifier": "torchaudio>=2.4,<2.7",
+      "size_mb": 30,
+      "depends_on": ["torch"],
+      "features": ["stem_separation"]
     },
     "transformers": {
       "pip_specifier": "transformers>=4.50,<5",
