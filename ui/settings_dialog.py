@@ -603,6 +603,25 @@ class SettingsDialog(QDialog):
         cine_tier_layout.addWidget(self.cine_tier_combo)
         cine_layout.addLayout(cine_tier_layout)
 
+        # Local model
+        cine_local_layout = QHBoxLayout()
+        cine_local_label = QLabel("Local Model:")
+        cine_local_label.setFixedWidth(UISizes.FORM_LABEL_WIDTH)
+        cine_local_layout.addWidget(cine_local_label)
+        self.cine_local_combo = QComboBox()
+        self.cine_local_combo.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
+        self.cine_local_combo.addItems([
+            "mlx-community/Qwen2.5-VL-7B-Instruct-4bit",
+            "mlx-community/Qwen3-VL-4B-Instruct-4bit",
+        ])
+        self.cine_local_combo.setEditable(True)
+        self.cine_local_combo.setToolTip(
+            "Qwen2.5-VL-7B: Larger model, better structured analysis (~4 GB)\n"
+            "Qwen3-VL-4B: Same model as Describe, faster and smaller (~2.9 GB)"
+        )
+        cine_local_layout.addWidget(self.cine_local_combo)
+        cine_layout.addLayout(cine_local_layout)
+
         # Cloud model
         cine_cloud_layout = QHBoxLayout()
         cine_cloud_label = QLabel("Cloud Model:")
@@ -1558,6 +1577,7 @@ class SettingsDialog(QDialog):
     def _on_cine_tier_changed(self, index: int):
         """Enable/disable Rich Analysis fields based on selected tier."""
         is_local = (index == 0)
+        self.cine_local_combo.setEnabled(is_local)
         self.cine_cloud_combo.setEnabled(not is_local)
         self.cine_input_mode_combo.setEnabled(not is_local)
 
@@ -1749,6 +1769,7 @@ class SettingsDialog(QDialog):
         # Rich Analysis (Cinematography)
         cine_tier_idx = 0 if self.settings.cinematography_tier == "local" else 1
         self.cine_tier_combo.setCurrentIndex(cine_tier_idx)
+        self._set_combo_text(self.cine_local_combo, self.settings.cinematography_local_model)
         self._set_combo_text(self.cine_cloud_combo, self.settings.cinematography_model)
         cine_mode_idx = 0 if self.settings.cinematography_input_mode == "frame" else 1
         self.cine_input_mode_combo.setCurrentIndex(cine_mode_idx)
@@ -1911,6 +1932,7 @@ class SettingsDialog(QDialog):
 
         # Rich Analysis (Cinematography)
         self.settings.cinematography_tier = "local" if self.cine_tier_combo.currentIndex() == 0 else "cloud"
+        self.settings.cinematography_local_model = self.cine_local_combo.currentText()
         self.settings.cinematography_model = self.cine_cloud_combo.currentText()
         self.settings.cinematography_input_mode = "frame" if self.cine_input_mode_combo.currentIndex() == 0 else "video"
 
