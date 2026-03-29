@@ -36,6 +36,7 @@ _DEMUCS_HTDEMUCS_URL = (
 _PRIMABLE_CACHE_PATHS = (
     Path("huggingface/models--facebook--dinov2-base"),
     Path("huggingface/models--openvision--yoloe26-s-seg"),
+    Path("mobileclip2_b.ts"),
     Path("paddleocr"),
     Path("insightface/models/buffalo_l"),
     Path("hub/checkpoints/mobilenet_v3_small-047dcff4.pth"),

@@ -7,8 +7,11 @@ Supports two detection modes:
 
 import logging
 import os
+import shutil
 import sys
 import threading
+import urllib.request
+from contextlib import closing
 from pathlib import Path
 from typing import Optional
 
@@ -39,6 +42,10 @@ _YOLOE_MODEL_NAME = "yoloe-26s.pt"
 _YOLOE_MODEL_REPO_ID = "openvision/yoloe26-s-seg"
 _YOLOE_MODEL_FILENAME = "model.pt"
 _YOLOE_MODEL_REVISION = "2639b7b9928583c5371f1b64454b4c73c1f0ecd9"
+_YOLOE_TEXT_ENCODER_FILENAME = "mobileclip2_b.ts"
+_YOLOE_TEXT_ENCODER_URL = (
+    "https://github.com/ultralytics/assets/releases/download/v8.4.0/mobileclip2_b.ts"
+)
 
 # Lazy load models
 _model = None
@@ -163,6 +170,26 @@ def _ensure_yoloe_checkpoint_path() -> Path:
     )
 
 
+def _download_model_file(url: str, target_path: Path) -> None:
+    """Download a model artifact directly to a managed cache path."""
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = target_path.with_suffix(f"{target_path.suffix}.tmp")
+    with closing(urllib.request.urlopen(url, timeout=60)) as response, temp_path.open("wb") as handle:
+        shutil.copyfileobj(response, handle)
+    temp_path.replace(target_path)
+
+
+def _ensure_yoloe_text_encoder_path() -> Path:
+    """Resolve the MobileCLIP TorchScript encoder into the managed model cache."""
+    cache_dir = _get_model_cache_dir()
+    target_path = cache_dir / _YOLOE_TEXT_ENCODER_FILENAME
+    if target_path.exists():
+        return target_path
+
+    _download_model_file(_YOLOE_TEXT_ENCODER_URL, target_path)
+    return target_path
+
+
 def _load_yoloe(custom_classes: list[str]):
     """Lazy load YOLOE-26 open-vocabulary model (thread-safe).
 
@@ -181,8 +208,12 @@ def _load_yoloe(custom_classes: list[str]):
 
             cache_dir = _get_model_cache_dir()
             os.environ.setdefault("YOLO_CONFIG_DIR", str(cache_dir))
+            text_encoder_path = _ensure_yoloe_text_encoder_path()
 
             YOLOE = ensure_yoloe_runtime_available()
+            from ultralytics.utils import SETTINGS
+
+            SETTINGS["weights_dir"] = str(text_encoder_path.parent)
 
             try:
                 _ov_model = YOLOE(str(_ensure_yoloe_checkpoint_path()))
