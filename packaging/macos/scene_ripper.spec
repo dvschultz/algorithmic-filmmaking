@@ -85,7 +85,7 @@ core_requirement_datas = []
 core_requirement_binaries = []
 for module_name in build_support.get_core_pyinstaller_collect_targets(
     PROJECT_ROOT,
-    "requirements-core-macos.txt",
+    "requirements-core.txt",
 ):
     module_datas, module_binaries, module_hiddenimports = _collect_module_payload(module_name)
     core_requirement_datas.extend(module_datas)
@@ -94,7 +94,7 @@ for module_name in build_support.get_core_pyinstaller_collect_targets(
 
 for metadata_name in build_support.get_core_pyinstaller_metadata(
     PROJECT_ROOT,
-    "requirements-core-macos.txt",
+    "requirements-core.txt",
 ):
     core_requirement_datas.extend(copy_metadata(metadata_name))
 
