@@ -21,12 +21,6 @@ logger = logging.getLogger(__name__)
 BUSY_RETRY_DELAY_SECONDS = 1.0  # Wait between retries
 BUSY_MAX_WAIT_SECONDS = 30.0    # Maximum total wait time
 
-# Tools that conflict with GUI workers
-CONFLICTING_TOOLS = {
-    "detect_scenes",          # Conflicts with DetectionWorker
-    "download_video",         # Conflicts with DownloadWorker
-}
-
 
 class ToolExecutor:
     """Execute tools safely with error handling and conflict detection."""
@@ -97,7 +91,7 @@ class ToolExecutor:
             )
 
         # Check for conflicting operations with wait-retry
-        if name in CONFLICTING_TOOLS and self.busy_check:
+        if tool.conflicts_with_workers and self.busy_check:
             wait_result = self._wait_for_busy_operation(name)
             if wait_result is not None:
                 return self._error_result(tool_call_id, name, wait_result)
@@ -107,19 +101,6 @@ class ToolExecutor:
             return self._error_result(
                 tool_call_id, name,
                 "This tool requires an active project. Please open or create a project first."
-            )
-
-        # Check project naming requirement for state-modifying tools
-        # Agent must name the project before making significant changes
-        if (tool.modifies_project_state
-            and self.project
-            and name not in ("set_project_name", "new_project", "load_project", "save_project")
-            and self.project.metadata.name == "Untitled Project"):
-            return self._error_result(
-                tool_call_id, name,
-                "Project must be named before making changes. "
-                "Ask the user what they'd like to name this project, "
-                "then use set_project_name to set it."
             )
 
         # Inject project if needed

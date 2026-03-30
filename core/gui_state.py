@@ -11,7 +11,7 @@ This state is passed to the agent's system prompt for context.
 
 from dataclasses import dataclass, field
 from threading import Lock
-from typing import Optional, TYPE_CHECKING, Union
+from typing import Any, Optional, TYPE_CHECKING, Union
 
 if TYPE_CHECKING:
     from models.plan import Plan
@@ -96,8 +96,11 @@ class GUIState:
     # Thread safety lock (not included in repr/compare/hash)
     _lock: Lock = field(default_factory=Lock, repr=False, compare=False)
 
-    def to_context_string(self) -> str:
+    def to_context_string(self, project: Any = None) -> str:
         """Generate context string for agent system prompt.
+
+        Args:
+            project: Optional Project instance for resolving source filenames.
 
         Returns:
             Human-readable string describing current GUI state,
@@ -172,7 +175,17 @@ class GUIState:
                 lines.append(f"SELECTED_FRAME_IDS: [{ids_str}]")
 
             if self.selected_source_id:
-                lines.append(f"ACTIVE SOURCE: {self.selected_source_id[:8]}...")
+                source_label = self.selected_source_id
+                if project:
+                    sources_by_id = getattr(project, "sources_by_id", {})
+                    source_obj = sources_by_id.get(self.selected_source_id)
+                    if source_obj:
+                        filename = getattr(source_obj, "filename", None) or getattr(
+                            getattr(source_obj, "file_path", None), "name", None
+                        )
+                        if filename:
+                            source_label = f"{self.selected_source_id} ({filename})"
+                lines.append(f"ACTIVE SOURCE: {source_label}")
 
             # Active filters
             if self.active_filters:

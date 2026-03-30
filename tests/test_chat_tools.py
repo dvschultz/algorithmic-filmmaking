@@ -723,8 +723,8 @@ class TestToolExecutor:
         assert "json" in result["error"].lower()
 
     def test_executor_busy_check_integration(self):
-        """Test ToolExecutor respects busy_check callback."""
-        from core.tool_executor import ToolExecutor, CONFLICTING_TOOLS
+        """Test ToolExecutor respects busy_check callback for tools with conflicts_with_workers."""
+        from core.tool_executor import ToolExecutor
         from unittest.mock import MagicMock
 
         # Mock busy check that returns True (busy)
@@ -735,7 +735,7 @@ class TestToolExecutor:
             busy_check=busy_check
         )
 
-        # detect_scenes is in CONFLICTING_TOOLS
+        # detect_scenes has conflicts_with_workers=True
         result = executor.execute({
             "id": "call_123",
             "type": "function",

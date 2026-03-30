@@ -722,6 +722,43 @@ Available tools:
                 parts = [f"{k}: {v}/{total_clips}" for k, v in analysis_counts.items()]
                 analysis_lines = f"\n- Analysis Coverage: {', '.join(parts)}"
 
+            # Build analysis distribution summaries
+            distribution_lines = ""
+            if total_clips > 0:
+                dist_parts = []
+
+                # Shot type distribution
+                shot_counts: dict[str, int] = {}
+                for c in self.project.clips:
+                    if c.shot_type:
+                        shot_counts[c.shot_type] = shot_counts.get(c.shot_type, 0) + 1
+                if shot_counts:
+                    sorted_shots = sorted(shot_counts.items(), key=lambda x: x[1], reverse=True)
+                    shot_strs = [f"{name}: {cnt}" for name, cnt in sorted_shots]
+                    dist_parts.append(f"  Shot types: {', '.join(shot_strs)}")
+
+                # Top 5 most common object labels
+                object_counts: dict[str, int] = {}
+                for c in self.project.clips:
+                    if c.object_labels:
+                        for label in c.object_labels:
+                            object_counts[label] = object_counts.get(label, 0) + 1
+                if object_counts:
+                    top_objects = sorted(object_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+                    obj_strs = [f"{name}: {cnt}" for name, cnt in top_objects]
+                    dist_parts.append(f"  Top objects: {', '.join(obj_strs)}")
+
+                # Clips with transcripts
+                clips_with_transcripts = sum(
+                    1 for c in self.project.clips
+                    if c.transcript
+                )
+                if clips_with_transcripts:
+                    dist_parts.append(f"  Clips with transcripts: {clips_with_transcripts}/{total_clips}")
+
+                if dist_parts:
+                    distribution_lines = "\n- Analysis Distributions:\n" + "\n".join(dist_parts)
+
             prompt += f"""
 
 CURRENT PROJECT STATE:
@@ -730,7 +767,7 @@ CURRENT PROJECT STATE:
 - Sources ({len(self.project.sources)} video(s)):
 {chr(10).join(sources_info) if sources_info else "  (none)"}
 - Total Clips: {total_clips}
-- Sequence Length: {seq_length} clips{analysis_lines}
+- Sequence Length: {seq_length} clips{analysis_lines}{distribution_lines}
 
 You can reference existing clips by their IDs and build on this project.
 """

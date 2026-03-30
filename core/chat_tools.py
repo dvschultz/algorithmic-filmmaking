@@ -170,6 +170,7 @@ class ToolDefinition:
     requires_project: bool = True
     modifies_gui_state: bool = False
     modifies_project_state: bool = False
+    conflicts_with_workers: bool = False
 
 
 def _python_type_to_json_schema(python_type: type) -> dict:
@@ -225,7 +226,8 @@ class ToolRegistry:
         description: str,
         requires_project: bool = True,
         modifies_gui_state: bool = False,
-        modifies_project_state: bool = False
+        modifies_project_state: bool = False,
+        conflicts_with_workers: bool = False
     ):
         """Decorator to register a tool function.
 
@@ -236,6 +238,8 @@ class ToolRegistry:
                 (GUI state tools should use core functions, not CLI)
             modifies_project_state: Whether this tool modifies project data
                 (triggers auto-save after successful execution)
+            conflicts_with_workers: Whether this tool conflicts with running
+                GUI workers (e.g., DetectionWorker, DownloadWorker)
 
         Returns:
             Decorator function
@@ -249,7 +253,8 @@ class ToolRegistry:
                 parameters=schema,
                 requires_project=requires_project,
                 modifies_gui_state=modifies_gui_state,
-                modifies_project_state=modifies_project_state
+                modifies_project_state=modifies_project_state,
+                conflicts_with_workers=conflicts_with_workers
             )
             self._tools[tool.name] = tool
             return func
@@ -441,6 +446,39 @@ def get_project_state(project) -> dict:
         "clip_count": len(project.clips),
         "sequence_length": len(project.sequence.tracks[0].clips) if project.sequence else 0,
         "is_dirty": project.is_dirty
+    }
+
+
+@tools.register(
+    description="List all video sources in the project with their metadata",
+    requires_project=True,
+    modifies_gui_state=False,
+    modifies_project_state=False
+)
+def list_sources(project) -> dict:
+    """List all video sources in the project.
+
+    Returns:
+        Dict with success status and list of sources with metadata
+    """
+    sources = []
+    for s in project.sources:
+        clip_count = len(project.clips_by_source.get(s.id, []))
+        sources.append({
+            "id": s.id,
+            "filename": s.file_path.name if s.file_path else "Unknown",
+            "duration": s.duration_seconds,
+            "fps": s.fps,
+            "width": s.width,
+            "height": s.height,
+            "clip_count": clip_count,
+            "analyzed": s.analyzed,
+        })
+
+    return {
+        "success": True,
+        "sources": sources,
+        "count": len(sources),
     }
 
 
@@ -808,6 +846,46 @@ def list_clips(
     if limit is not None and total_matching > len(results):
         result["total_matching"] = total_matching
     return result
+
+
+@tools.register(
+    description="Get the full cinematography analysis for a single clip. Returns all fields from "
+                "the CinematographyAnalysis including shot size, camera angle, movement, composition, "
+                "lighting, and emotional properties. Requires the clip to have been analyzed with "
+                "the cinematography analyzer.",
+    requires_project=True,
+    modifies_gui_state=False,
+    modifies_project_state=False
+)
+def get_clip_cinematography(project, clip_id: str) -> dict:
+    """Get the full CinematographyAnalysis for a single clip.
+
+    Args:
+        clip_id: ID of the clip to read cinematography data from
+
+    Returns:
+        Dict with success status and all cinematography fields
+    """
+    clip = project.clips_by_id.get(clip_id)
+    if clip is None:
+        return {
+            "success": False,
+            "error": f"Clip '{clip_id}' not found. Use list_clips to see available clips."
+        }
+
+    cinematography = getattr(clip, 'cinematography', None)
+    if cinematography is None:
+        return {
+            "success": False,
+            "error": f"Clip '{clip_id}' has no cinematography analysis. "
+                     "Run cinematography analysis first via the Analyze tab."
+        }
+
+    return {
+        "success": True,
+        "clip_id": clip_id,
+        "cinematography": cinematography.to_dict(),
+    }
 
 
 @tools.register(
@@ -1211,6 +1289,111 @@ def get_sequence_state(project) -> dict:
         "total_duration_frames": sequence.duration_frames,
         "total_duration_seconds": round(sequence.duration_seconds, 2),
         "clip_count": len(clips_data)
+    }
+
+
+@tools.register(
+    description="Update sequence-level metadata such as name, fps, music path, or allow_repeats. "
+                "Does not affect the clips in the sequence.",
+    requires_project=True,
+    modifies_gui_state=True,
+    modifies_project_state=True
+)
+def update_sequence(
+    project,
+    name: Optional[str] = None,
+    fps: Optional[float] = None,
+    music_path: Optional[str] = None,
+    allow_repeats: Optional[bool] = None,
+) -> dict:
+    """Update sequence-level metadata.
+
+    Args:
+        name: New sequence name
+        fps: New sequence frame rate
+        music_path: Path to music file for the sequence
+        allow_repeats: Whether to allow repeated clips in the sequence
+
+    Returns:
+        Dict with success status and updated fields
+    """
+    if project.sequence is None:
+        return {"success": False, "error": "No sequence exists. Use create_sequence first."}
+
+    updated_fields = {}
+
+    if name is not None:
+        project.sequence.name = name
+        updated_fields["name"] = name
+
+    if fps is not None:
+        if fps <= 0:
+            return {"success": False, "error": f"fps must be > 0, got {fps}"}
+        project.sequence.fps = fps
+        updated_fields["fps"] = fps
+
+    if music_path is not None:
+        is_valid, err_msg, validated_path = _validate_path(music_path, must_exist=True)
+        if not is_valid:
+            return {"success": False, "error": err_msg}
+        project.sequence.music_path = str(validated_path)
+        updated_fields["music_path"] = str(validated_path)
+
+    if allow_repeats is not None:
+        project.sequence.allow_repeats = allow_repeats
+        updated_fields["allow_repeats"] = allow_repeats
+
+    if not updated_fields:
+        return {"success": False, "error": "No fields provided to update"}
+
+    project.mark_dirty()
+    project._notify_observers("sequence_changed", [])
+
+    return {
+        "success": True,
+        "message": f"Updated sequence: {', '.join(updated_fields.keys())}",
+        "updated_fields": updated_fields,
+    }
+
+
+@tools.register(
+    description="Create a new empty sequence, replacing any existing one. "
+                "Optionally set a name and frame rate.",
+    requires_project=True,
+    modifies_gui_state=True,
+    modifies_project_state=True
+)
+def create_sequence(
+    project,
+    name: Optional[str] = None,
+    fps: Optional[float] = None,
+) -> dict:
+    """Create a new empty sequence.
+
+    Args:
+        name: Sequence name (defaults to project name)
+        fps: Frame rate (defaults to first source FPS or 30.0)
+
+    Returns:
+        Dict with success status and sequence info
+    """
+    from models.sequence import Sequence
+
+    seq_name = name or project.metadata.name or "Untitled Sequence"
+    seq_fps = fps or (project.sources[0].fps if project.sources else 30.0)
+
+    if seq_fps <= 0:
+        return {"success": False, "error": f"fps must be > 0, got {seq_fps}"}
+
+    project.sequence = Sequence(name=seq_name, fps=seq_fps)
+    project.mark_dirty()
+    project._notify_observers("sequence_changed", [])
+
+    return {
+        "success": True,
+        "message": f"Created empty sequence '{seq_name}' at {seq_fps} fps",
+        "name": seq_name,
+        "fps": seq_fps,
     }
 
 
@@ -2776,7 +2959,8 @@ def get_project_summary(project) -> dict:
     description="Detect scenes in a video file and add clips to the project. Creates clips from detected scene boundaries. Returns the clip count and clip IDs.",
     requires_project=True,
     modifies_gui_state=True,
-    modifies_project_state=True
+    modifies_project_state=True,
+    conflicts_with_workers=True
 )
 def detect_scenes(
     project,
@@ -2984,9 +3168,70 @@ def search_youtube(
 
 
 @tools.register(
+    description="Search the Internet Archive for videos matching a query. "
+                "Returns video titles, identifiers, durations, and URLs. "
+                "No API key required. Results include movies, feature films, "
+                "short films, and animation.",
+    requires_project=False,
+    modifies_gui_state=False,
+    modifies_project_state=False
+)
+def search_internet_archive(
+    query: str,
+    max_results: int = 10,
+) -> dict:
+    """Search Internet Archive for videos.
+
+    Args:
+        query: Search term
+        max_results: Maximum number of results (default 10, max 50)
+
+    Returns:
+        Dict with success status and list of matching videos
+    """
+    from core.internet_archive_api import InternetArchiveClient, InternetArchiveError
+
+    if not query.strip():
+        return {"success": False, "error": "Query cannot be empty"}
+
+    try:
+        client = InternetArchiveClient()
+        results = client.search(query, max_results=min(max_results, 50))
+
+        videos = []
+        for video in results:
+            videos.append({
+                "identifier": video.identifier,
+                "title": video.title,
+                "description": video.description,
+                "creator": video.creator,
+                "date": video.date,
+                "duration": video.duration_str,
+                "duration_seconds": video.duration_seconds,
+                "url": video.item_url,
+                "download_url": video.download_url,
+                "thumbnail_url": video.thumbnail_url,
+            })
+
+        return {
+            "success": True,
+            "query": query,
+            "results": videos,
+            "count": len(videos),
+        }
+
+    except InternetArchiveError as e:
+        return {"success": False, "error": f"Internet Archive search failed: {e}"}
+    except Exception as e:
+        logger.exception("Internet Archive search failed")
+        return {"success": False, "error": f"Search failed: {e}"}
+
+
+@tools.register(
     description="Download a video from YouTube or Vimeo URL. Returns the downloaded file path. Uses the default download directory from settings unless output_dir is specified.",
     requires_project=False,
-    modifies_gui_state=False
+    modifies_gui_state=False,
+    conflicts_with_workers=True
 )
 def download_video(url: str, output_dir: Optional[str] = None) -> dict:
     """Download video using the Python API."""
@@ -4879,6 +5124,126 @@ def align_sequence_to_audio(
             "success": False,
             "error": f"Alignment analysis failed: {str(e)}"
         }
+
+
+@tools.register(
+    description="Generate a Staccato beat-driven sequence that assigns clips to beat intervals "
+                "from a music track. Onset strength at each cut determines visual contrast "
+                "between consecutive clips (measured by DINOv2 embedding distance). "
+                "Requires an audio file and clips with embeddings. "
+                "Strategies: 'beats' (every beat), 'downbeats' (strong beats only), "
+                "'onsets' (transient hits).",
+    requires_project=True,
+    modifies_gui_state=True,
+    modifies_project_state=True
+)
+def generate_staccato(
+    project,
+    main_window,
+    audio_path: str,
+    strategy: str = "beats",
+    clip_ids: Optional[list[str]] = None,
+) -> dict:
+    """Generate a Staccato beat-driven sequence.
+
+    Args:
+        audio_path: Path to music file (MP3, WAV, FLAC)
+        strategy: Beat strategy - 'beats', 'downbeats', or 'onsets'
+        clip_ids: Optional list of clip IDs to use (defaults to all enabled clips)
+
+    Returns:
+        Dict with success status, clip count, and slot count
+    """
+    from pathlib import Path
+    from core.analysis.audio import analyze_music_file
+    from core.remix.staccato import generate_staccato_sequence
+
+    # Validate strategy
+    valid_strategies = ("beats", "downbeats", "onsets")
+    if strategy not in valid_strategies:
+        return {
+            "success": False,
+            "error": f"Invalid strategy '{strategy}'. Use: {', '.join(valid_strategies)}"
+        }
+
+    # Validate audio path
+    is_valid, err_msg, validated_path = _validate_path(audio_path, must_exist=True)
+    if not is_valid:
+        return {"success": False, "error": err_msg}
+
+    # Analyze audio
+    try:
+        audio_analysis = analyze_music_file(validated_path)
+    except FileNotFoundError:
+        return {"success": False, "error": f"Audio file not found: {audio_path}"}
+    except Exception as e:
+        return {"success": False, "error": f"Audio analysis failed: {e}"}
+
+    if main_window is None or not hasattr(main_window, 'sequence_tab'):
+        return {"success": False, "error": "Main window not available"}
+
+    # Build clip list
+    if clip_ids:
+        clips = []
+        for cid in clip_ids:
+            clip = project.clips_by_id.get(cid)
+            if clip is None:
+                return {
+                    "success": False,
+                    "error": f"Clip '{cid}' not found. Use list_clips to see available clips."
+                }
+            if clip.disabled:
+                continue
+            source = project.sources_by_id.get(clip.source_id)
+            if source:
+                clips.append((clip, source))
+    else:
+        clips = []
+        for clip in project.clips:
+            if clip.disabled:
+                continue
+            source = project.sources_by_id.get(clip.source_id)
+            if source:
+                clips.append((clip, source))
+
+    if not clips:
+        return {"success": False, "error": "No clips available for sequencing"}
+
+    # Generate the staccato sequence
+    try:
+        result = generate_staccato_sequence(
+            clips=clips,
+            audio_analysis=audio_analysis,
+            strategy=strategy,
+        )
+    except Exception as e:
+        return {"success": False, "error": f"Staccato generation failed: {e}"}
+
+    if not result:
+        return {
+            "success": False,
+            "error": "No sequence generated. Check that the audio has detectable beats."
+        }
+
+    # Apply to the sequence tab
+    sequence_clips = list(result)
+    main_window.sequence_tab._apply_staccato_sequence(
+        sequence_clips, str(validated_path)
+    )
+
+    return {
+        "success": True,
+        "clip_count": len(sequence_clips),
+        "slot_count": result.debug.total_slots if result.debug else len(sequence_clips),
+        "strategy": strategy,
+        "audio_file": str(validated_path),
+        "tempo_bpm": round(audio_analysis.tempo_bpm, 1),
+        "message": (
+            f"Generated Staccato sequence: {len(sequence_clips)} clips "
+            f"across {result.debug.total_slots if result.debug else len(sequence_clips)} "
+            f"beat slots at {audio_analysis.tempo_bpm:.1f} BPM"
+        ),
+    }
 
 
 # =============================================================================

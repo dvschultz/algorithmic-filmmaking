@@ -1969,7 +1969,7 @@ class MainWindow(QMainWindow):
             messages=messages,
             project=self.project,
             busy_check=check_busy,
-            gui_state_context=self._gui_state.to_context_string(),
+            gui_state_context=self._gui_state.to_context_string(project=self.project),
         )
         # Clear last error after it's been consumed by the agent context
         self._gui_state.clear_last_error()
