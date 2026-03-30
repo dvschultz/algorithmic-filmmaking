@@ -53,7 +53,6 @@ binaries = (
     + build_support.collect_macos_ffmpeg_binaries(PROJECT_ROOT)
 )
 sparkle_datas = build_support.collect_macos_sparkle_datas(PROJECT_ROOT)
-model_datas = build_support.collect_macos_model_datas(PROJECT_ROOT)
 
 
 def _unique(items):
@@ -108,7 +107,7 @@ a = Analysis(
         (str(VERSION_FILE), "core"),
         (str(BUILD_VERSION_FILE), "core"),
         (str(UPDATE_CHANNEL_FILE), "core"),
-    ] + sparkle_datas + model_datas + core_requirement_datas,
+    ] + sparkle_datas + core_requirement_datas,
     hiddenimports=_unique([
         # PySide6 modules actually used by the app
         "PySide6.QtWidgets",
