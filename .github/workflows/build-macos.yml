@@ -238,12 +238,6 @@ jobs:
               fh.write(f"UPDATER_ENABLED={'true' if updater_enabled else 'false'}\n")
           PY
 
-      - name: Stage bundled model runtime
-        env:
-          SCENE_RIPPER_MODEL_RUNTIME_DIR: packaging/runtime/models/macos
-        run: |
-          python packaging/macos/stage_models.py
-
       - name: Run PyInstaller
         env:
           APP_VERSION: ${{ steps.version.outputs.version }}

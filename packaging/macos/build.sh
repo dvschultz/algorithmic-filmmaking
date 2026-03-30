@@ -165,12 +165,6 @@ pip install 'lightning-whisper-mlx>=0.0.10,<1.0' --no-deps --quiet
 pip install pyinstaller --quiet
 
 # -------------------------------------------------------------------
-# 1.5. Stage bundled local models
-# -------------------------------------------------------------------
-echo "==> Staging bundled local models..."
-python "${SCRIPT_DIR}/stage_models.py"
-
-# -------------------------------------------------------------------
 # 2. Run PyInstaller
 # -------------------------------------------------------------------
 echo "==> Running PyInstaller..."
