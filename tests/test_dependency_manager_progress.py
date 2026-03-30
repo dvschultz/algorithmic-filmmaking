@@ -264,7 +264,7 @@ def test_install_for_feature_batches_missing_packages_and_validates_runtime(monk
     def _on_progress(progress: float, message: str):
         progress_calls.append((progress, message))
 
-    def _fake_install(specifiers: list[str], progress_callback):
+    def _fake_install(specifiers: list[str], progress_callback, **kwargs):
         package_batches.append(specifiers)
         progress_callback(0.0, "Starting batch")
         progress_callback(0.5, "Halfway batch")
@@ -284,7 +284,7 @@ def test_install_for_feature_batches_missing_packages_and_validates_runtime(monk
     )
 
     assert install_for_feature("describe_local_cpu", _on_progress) is True
-    assert package_batches == [["torch>=1.0", "transformers>=1.0", "tokenizers>=1.0", "huggingface_hub>=1.0"]]
+    assert package_batches == [["torch>=1.0", "torchvision>=1.0", "transformers>=1.0", "tokenizers>=1.0"]]
     assert validated == ["describe_local_cpu"]
     assert [round(progress, 2) for progress, _ in progress_calls] == [0.0, 0.5, 1.0]
 
@@ -299,7 +299,7 @@ def test_install_for_feature_reinstalls_broken_runtime_even_when_packages_exist(
         if len(validations) == 1:
             raise RuntimeError("Could not import module 'AutoProcessor'")
 
-    def _fake_install(specifiers: list[str], _progress_callback):
+    def _fake_install(specifiers: list[str], _progress_callback, **kwargs):
         package_batches.append(specifiers)
         return True
 
@@ -313,11 +313,9 @@ def test_install_for_feature_reinstalls_broken_runtime_even_when_packages_exist(
     assert validations == ["shot_classify", "shot_classify"]
     assert package_batches == [[
         "torch>=1.0",
-        "torchvision>=1.0",
         "transformers>=1.0",
         "huggingface_hub>=1.0",
         "tokenizers>=1.0",
-        "einops>=1.0",
         "sentencepiece>=1.0",
         "protobuf>=1.0",
     ]]
@@ -329,17 +327,17 @@ def test_install_for_feature_reinstalls_broken_runtime_even_when_packages_exist(
         (
             "describe_local",
             ["package:mlx_vlm"],
-            ["mlx_vlm", "transformers", "tokenizers", "sentencepiece", "protobuf"],
+            ["mlx_vlm", "torch", "torchvision", "transformers", "tokenizers", "sentencepiece", "protobuf"],
         ),
         (
             "describe_local_cpu",
             ["package:transformers"],
-            ["torch", "transformers", "tokenizers", "huggingface_hub"],
+            ["torch", "torchvision", "transformers", "tokenizers"],
         ),
         (
             "shot_classify",
             ["package:sentencepiece", "package:protobuf"],
-            ["torch", "torchvision", "transformers", "huggingface_hub", "tokenizers", "einops", "sentencepiece", "protobuf"],
+            ["torch", "transformers", "huggingface_hub", "tokenizers", "sentencepiece", "protobuf"],
         ),
         (
             "image_classify",
@@ -374,7 +372,7 @@ def test_install_for_feature_reinstalls_broken_runtime_even_when_packages_exist(
         (
             "transcribe_mlx",
             ["package:lightning_whisper_mlx"],
-            ["lightning_whisper_mlx"],
+            ["lightning_whisper_mlx", "mlx", "tiktoken"],
         ),
     ],
 )
@@ -398,7 +396,7 @@ def test_install_for_feature_repairs_full_runtime_stack_when_only_subset_is_miss
         "core.dependency_manager.clear_package_roots",
         lambda package_names: cleared.append(list(package_names)),
     )
-    fake_installer = lambda specifiers, _progress=None: package_batches.append(list(specifiers)) or True
+    fake_installer = lambda specifiers, _progress=None, **kwargs: package_batches.append(list(specifiers)) or True
     monkeypatch.setattr(
         "core.dependency_manager.install_packages", fake_installer,
     )

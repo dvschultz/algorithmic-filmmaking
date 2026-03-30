@@ -60,10 +60,27 @@ class StaccatoAnalyzeWorker(CancellableWorker):
     def run(self):
         self._log_start()
         try:
+            # Ensure librosa is installed before attempting audio analysis
+            from core.feature_registry import check_feature_ready, install_for_feature
+
+            available, _missing = check_feature_ready("audio_analysis")
+            if not available:
+                self.progress_message.emit("Installing audio analysis dependencies...")
+                if not install_for_feature("audio_analysis"):
+                    self.error.emit("Failed to install audio analysis dependencies (librosa)")
+                    return
+
             audio_path = self._music_path
 
-            # If stem separation requested, separate first then use stem audio
+            # If stem separation requested, ensure deps are installed then separate
             if self._stem_name and self._stems_cache_dir:
+                stem_available, _missing = check_feature_ready("stem_separation")
+                if not stem_available:
+                    self.progress_message.emit("Installing stem separation dependencies...")
+                    if not install_for_feature("stem_separation"):
+                        self.error.emit("Failed to install stem separation dependencies (demucs)")
+                        return
+
                 audio_path = self._get_or_separate_stem()
                 if audio_path is None:
                     return  # cancelled or error already emitted
@@ -456,19 +473,32 @@ class StaccatoDialog(QDialog):
         """Show/hide stem dropdown and check dependency availability."""
         self._stem_combo.setVisible(checked)
         if checked:
-            # Check if demucs-infer is available
-            from core.feature_registry import check_feature
-            available, missing = check_feature("stem_separation")
+            # Check if demucs-infer is available, offer to install if not
+            from core.feature_registry import check_feature_ready, install_for_feature
+            available, _missing = check_feature_ready("stem_separation")
             if not available:
-                self._stem_checkbox.setChecked(False)
-                QMessageBox.information(
+                reply = QMessageBox.question(
                     self,
                     "Stem Separation",
-                    "Stem separation requires the demucs-infer package.\n\n"
-                    "Install it with: pip install demucs-infer\n\n"
-                    "Then restart the application.",
+                    "Stem separation requires demucs + torch (~2 GB download).\n\n"
+                    "Install now?",
+                    QMessageBox.Yes | QMessageBox.No,
                 )
-                return
+                if reply == QMessageBox.Yes:
+                    self._stem_checkbox.setEnabled(False)
+                    self._info_label.setText("Installing stem separation dependencies...")
+                    QApplication.processEvents()
+                    if install_for_feature("stem_separation"):
+                        self._stem_checkbox.setEnabled(True)
+                        self._info_label.setText("Stem separation ready")
+                    else:
+                        self._stem_checkbox.setChecked(False)
+                        self._stem_checkbox.setEnabled(True)
+                        self._info_label.setText("Failed to install stem separation")
+                        return
+                else:
+                    self._stem_checkbox.setChecked(False)
+                    return
 
         # Re-analyze if we already have a file loaded
         if self._music_path:
@@ -703,7 +733,7 @@ class StaccatoDialog(QDialog):
         # Update results summary
         n_slots = len(sequence_data)
         unique_clips = len({
-            getattr(clip, 'id', i) for i, (clip, _) in enumerate(sequence_data)
+            getattr(entry[0], 'id', i) for i, entry in enumerate(sequence_data)
         })
         summary = f"Generated {n_slots} slots using {unique_clips} unique clips."
         if self._debug_info:

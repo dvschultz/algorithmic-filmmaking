@@ -181,6 +181,24 @@ class ShotTypeWorker(CancellableWorker):
             f"parallelism={self._parallelism}"
         )
 
+        # Pre-load the classification model so the user sees a download message
+        # instead of "processing N clips" while the model downloads (~400 MB).
+        try:
+            from core.analysis.shots import load_classification_model, is_model_loaded
+
+            if not is_model_loaded():
+                self.progress.emit(0, total)
+                logger.info("Downloading shot classification model (first run)...")
+                load_classification_model()
+        except Exception as e:
+            self.error.emit(f"Failed to load shot classification model: {e}")
+            self._log_complete()
+            return
+
+        if self.is_cancelled():
+            self._log_cancelled()
+            return
+
         completed = 0
         errors: list[tuple[str, str]] = []
 

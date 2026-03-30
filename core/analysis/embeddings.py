@@ -27,8 +27,6 @@ _model_lock = threading.Lock()
 
 # DINOv2 ViT-B/14 — self-supervised vision transformer (768-dim embeddings)
 _DINOV2_MODEL_NAME = "facebook/dinov2-base"
-# PINNED: HuggingFace commit SHA; bump when new release tested
-_DINOV2_REVISION = "f9e44c814b77203eaa57a6bdbbd535f21ede1415"
 _EMBEDDING_DIM = 768
 _EMBEDDING_MODEL_TAG = "dinov2-vit-b-14"  # Tag stored on Clip.embedding_model
 
@@ -44,37 +42,19 @@ def _get_model():
         if _model is None:
             logger.info("Loading DINOv2 model for embeddings...")
             from transformers import AutoImageProcessor, AutoModel
-            from core.bundled_models import find_huggingface_snapshot_dir
             from core.errors import ModelDownloadError
-            from core.settings import load_settings
-
-            local_dir = None
-            try:
-                local_dir = find_huggingface_snapshot_dir(
-                    load_settings().model_cache_dir,
-                    _DINOV2_MODEL_NAME,
-                    revision=_DINOV2_REVISION,
-                    required_files=("config.json", "model.safetensors", "preprocessor_config.json"),
-                )
-            except Exception:
-                logger.debug("Could not inspect local DINOv2 snapshot cache", exc_info=True)
 
             try:
-                if local_dir is not None:
-                    logger.info("Loading DINOv2 from local snapshot cache: %s", local_dir)
-                    _processor = AutoImageProcessor.from_pretrained(
-                        local_dir, local_files_only=True
-                    )
-                    _model = AutoModel.from_pretrained(
-                        local_dir, local_files_only=True
-                    )
-                else:
-                    _processor = AutoImageProcessor.from_pretrained(
-                        _DINOV2_MODEL_NAME, revision=_DINOV2_REVISION
-                    )
-                    _model = AutoModel.from_pretrained(
-                        _DINOV2_MODEL_NAME, revision=_DINOV2_REVISION
-                    )
+                import certifi
+                import os as _os
+                _os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+                _os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+            except ImportError:
+                pass
+
+            try:
+                _processor = AutoImageProcessor.from_pretrained(_DINOV2_MODEL_NAME)
+                _model = AutoModel.from_pretrained(_DINOV2_MODEL_NAME)
             except Exception as e:
                 if "additional_chat_templates" in str(e):
                     # Newer huggingface_hub tries to fetch additional_chat_templates
@@ -88,7 +68,6 @@ def _get_model():
 
                     local_dir = snapshot_download(
                         _DINOV2_MODEL_NAME,
-                        revision=_DINOV2_REVISION,
                         allow_patterns=["*.json", "*.safetensors", "*.txt", "*.bin"],
                     )
                     _processor = AutoImageProcessor.from_pretrained(

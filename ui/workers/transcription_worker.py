@@ -141,6 +141,25 @@ class TranscriptionWorker(CancellableWorker):
             f"parallelism={self._parallelism}"
         )
 
+        # Pre-load Whisper model so user sees download status
+        if self._backend != "groq":
+            try:
+                from core.transcription import get_model, get_mlx_model, is_mlx_whisper_available
+
+                self.progress.emit(0, total)
+                if self._backend in ("auto", "mlx-whisper") and is_mlx_whisper_available():
+                    get_mlx_model(self._model_name)
+                else:
+                    get_model(self._model_name)
+            except Exception as e:
+                self.error.emit(f"Failed to load Whisper model: {e}")
+                self._log_complete()
+                return
+
+            if self.is_cancelled():
+                self._log_cancelled()
+                return
+
         completed = 0
 
         with ThreadPoolExecutor(max_workers=self._parallelism) as executor:

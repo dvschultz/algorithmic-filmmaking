@@ -147,7 +147,11 @@ def test_export_segment_uses_source_fps_for_trim_and_sequence_fps_for_output(
 
     assert success is True
     cmd = captured["cmd"]
-    assert cmd[cmd.index("-ss") + 1] == "2.0"
+    # Double -ss: coarse seek (max(0, 2.0-5.0)=0.0) before -i, precise (2.0) after -i
+    ss_indices = [i for i, v in enumerate(cmd) if v == "-ss"]
+    assert len(ss_indices) == 2
+    assert cmd[ss_indices[0] + 1] == "0"  # coarse seek
+    assert cmd[ss_indices[1] + 1] == "2.0"  # precise seek
     # Duration subtracts one frame (1/24s) to prevent audio bleed at cut boundaries
     expected_duration = (96 - 48) / 24.0 - 1.0 / 24.0
     assert cmd[cmd.index("-t") + 1] == str(expected_duration)

@@ -89,7 +89,11 @@ def _validate_feature_runtime(name: str) -> None:
 
         ensure_mlx_whisper_runtime_available()
     elif name == "embeddings":
-        from transformers import AutoImageProcessor, AutoModel  # noqa: F401
+        try:
+            from transformers.models.auto.image_processing_auto import AutoImageProcessor  # noqa: F401
+            from transformers.models.auto.modeling_auto import AutoModel  # noqa: F401
+        except Exception:
+            from transformers import AutoImageProcessor, AutoModel  # noqa: F401
 
 
 def requires_full_package_repair(name: str, missing: list[str]) -> bool:
@@ -108,6 +112,7 @@ class FeatureDeps:
     size_estimate_mb: int  # Rough download size in MB
     repair_packages: list[str] = field(default_factory=list)
     native_install: bool = False  # Use site-packages install for native extensions (e.g., mlx Metal)
+    no_deps: bool = False  # Install with --no-deps to avoid pulling uncontrolled transitive deps
     needs_compiler: bool = False  # Requires C/C++ compiler (Xcode CLT on macOS)
 
 
@@ -145,21 +150,23 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
     ),
     "transcribe_mlx": FeatureDeps(
         binaries=["ffmpeg"],
-        packages=["lightning_whisper_mlx"],
-        size_estimate_mb=100,
+        packages=["lightning_whisper_mlx", "tiktoken"],
+        size_estimate_mb=300,
+        repair_packages=["lightning_whisper_mlx", "mlx", "tiktoken"],
+        native_install=True,  # mlx has Metal native extensions
     ),
     "describe_local": FeatureDeps(
         binaries=[],
-        packages=["mlx_vlm"],
-        size_estimate_mb=200,
-        repair_packages=["mlx_vlm", "transformers", "tokenizers", "sentencepiece", "protobuf"],
+        packages=["mlx_vlm", "torch", "torchvision", "transformers", "tokenizers"],
+        size_estimate_mb=600,
+        repair_packages=["mlx_vlm", "torch", "torchvision", "transformers", "tokenizers", "sentencepiece", "protobuf"],
         native_install=True,  # mlx has Metal native extensions that need proper site-packages
     ),
     "describe_local_cpu": FeatureDeps(
         binaries=[],
-        packages=["torch", "transformers", "huggingface_hub"],
-        size_estimate_mb=450,
-        repair_packages=["torch", "transformers", "tokenizers", "huggingface_hub"],
+        packages=["torch", "torchvision", "transformers", "tokenizers"],
+        size_estimate_mb=500,
+        repair_packages=["torch", "torchvision", "transformers", "tokenizers"],
         native_install=True,  # torch/transformers need proper site-packages
     ),
     "describe_cloud": FeatureDeps(
@@ -174,9 +181,9 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
     ),
     "shot_classify": FeatureDeps(
         binaries=[],
-        packages=["torch", "torchvision", "transformers", "huggingface_hub", "einops", "sentencepiece", "protobuf"],
-        size_estimate_mb=450,
-        repair_packages=["torch", "torchvision", "transformers", "huggingface_hub", "tokenizers", "einops", "sentencepiece", "protobuf"],
+        packages=["torch", "transformers", "huggingface_hub", "sentencepiece", "protobuf"],
+        size_estimate_mb=400,
+        repair_packages=["torch", "transformers", "huggingface_hub", "tokenizers", "sentencepiece", "protobuf"],
         native_install=True,  # torch/transformers need proper site-packages to avoid circular imports
     ),
     "image_classify": FeatureDeps(
@@ -188,7 +195,7 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
     ),
     "object_detect": FeatureDeps(
         binaries=[],
-        packages=["ultralytics"],
+        packages=["torch", "ultralytics"],
         size_estimate_mb=430,
         repair_packages=["torch", "ultralytics"],
         native_install=True,  # ultralytics/torch need proper site-packages
@@ -218,14 +225,16 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
     ),
     "stem_separation": FeatureDeps(
         binaries=[],
-        packages=["torch", "demucs_infer"],
+        packages=["torch", "torchaudio", "demucs_infer", "librosa"],
         size_estimate_mb=2000,
+        repair_packages=["torch", "torchaudio", "demucs_infer", "librosa"],
+        native_install=True,  # torch has native extensions
     ),
     "embeddings": FeatureDeps(
         binaries=[],
-        packages=["torch", "transformers", "huggingface_hub"],
+        packages=["torch", "transformers"],
         size_estimate_mb=450,
-        repair_packages=["torch", "transformers", "tokenizers", "huggingface_hub"],
+        repair_packages=["torch", "transformers", "tokenizers"],
         native_install=True,
     ),
 }
@@ -405,7 +414,7 @@ def install_for_feature(
         if runtime_repair:
             clear_package_roots(repair_package_names)
         installer = install_native_packages if deps.native_install else install_packages
-        if not installer(specifiers, scaled_callback):
+        if not installer(specifiers, scaled_callback, no_deps=deps.no_deps):
             success = False
 
     if success:

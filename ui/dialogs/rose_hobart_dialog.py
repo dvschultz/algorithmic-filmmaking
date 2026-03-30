@@ -75,6 +75,16 @@ class RoseHobartWorker(CancellableWorker):
         """Run face matching pipeline."""
         self._log_start()
         try:
+            # Ensure InsightFace is installed before attempting face detection
+            from core.feature_registry import check_feature_ready, install_for_feature
+
+            available, _missing = check_feature_ready("face_detect")
+            if not available:
+                self.progress_message.emit("Installing face detection dependencies...")
+                if not install_for_feature("face_detect"):
+                    self.error.emit("Failed to install face detection dependencies (insightface)")
+                    return
+
             from core.analysis.faces import (
                 average_embeddings,
                 compare_faces,

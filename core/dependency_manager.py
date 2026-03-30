@@ -1082,6 +1082,8 @@ def install_package(
 def install_packages(
     specifiers: list[str],
     progress_callback: ProgressCallback = None,
+    *,
+    no_deps: bool = False,
 ) -> bool:
     """Install Python packages into the managed packages directory.
 
@@ -1123,7 +1125,10 @@ def install_packages(
             "--no-user",
             "--disable-pip-version-check",
             "--progress-bar", "off",
-        ] + normalized_specifiers
+        ]
+        if no_deps:
+            cmd.append("--no-deps")
+        cmd.extend(normalized_specifiers)
 
         logger.info(f"Installing package: {' '.join(cmd)}")
         kwargs = get_subprocess_kwargs()
@@ -1220,6 +1225,8 @@ def get_managed_python_site_packages() -> Path | None:
 def install_native_packages(
     specifiers: list[str],
     progress_callback: ProgressCallback = None,
+    *,
+    no_deps: bool = False,
 ) -> bool:
     """Install packages with native extensions into the standalone Python's site-packages.
 
@@ -1244,7 +1251,10 @@ def install_native_packages(
         "--no-cache-dir",
         "--disable-pip-version-check",
         "--progress-bar", "off",
-    ] + normalized
+    ]
+    if no_deps:
+        cmd.append("--no-deps")
+    cmd.extend(normalized)
 
     logger.info(f"Installing native package (site-packages): {' '.join(cmd)}")
     kwargs = get_subprocess_kwargs()
@@ -1287,6 +1297,18 @@ def install_native_packages(
     sp = get_managed_python_site_packages()
     if sp and str(sp) not in sys.path:
         sys.path.insert(0, str(sp))
+
+    # Invalidate import caches so the freshly installed packages are discoverable.
+    # Without this, a previously failed import attempt stays cached in sys.modules
+    # and the new package remains invisible until restart.
+    importlib.invalidate_caches()
+    for spec in normalized:
+        # Extract bare package name from specifier (e.g., "torch>=2.4,<2.7" -> "torch")
+        pkg_name = re.split(r"[><=!~\[]", spec, maxsplit=1)[0].strip()
+        import_name = _PACKAGE_IMPORT_NAMES.get(pkg_name, pkg_name).replace("-", "_")
+        for key in list(sys.modules):
+            if key == import_name or key.startswith(f"{import_name}."):
+                del sys.modules[key]
 
     _emit_progress(progress_callback, 1.0, f"Installed {install_label}")
     logger.info(f"Native package installed: {install_label}")

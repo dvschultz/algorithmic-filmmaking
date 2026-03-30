@@ -218,6 +218,8 @@ class TimelineWidget(QWidget):
         source: Source,
         track_index: int = 0,
         start_frame: int = None,
+        in_point: int = None,
+        out_point: int = None,
     ):
         """
         Add a clip to the timeline.
@@ -227,6 +229,8 @@ class TimelineWidget(QWidget):
             source: The Source video containing the clip
             track_index: Which track to add to (default 0)
             start_frame: Where to place on timeline (default: end of track)
+            in_point: Source in-point frame (default: clip.start_frame)
+            out_point: Source out-point frame (default: clip.end_frame)
         """
         # Store reference
         self._source_lookup[source.id] = source
@@ -253,8 +257,8 @@ class TimelineWidget(QWidget):
             source_clip_id=clip.id,
             source_id=source.id,
             start_frame=start_frame,
-            in_point=clip.start_frame,
-            out_point=clip.end_frame,
+            in_point=in_point if in_point is not None else clip.start_frame,
+            out_point=out_point if out_point is not None else clip.end_frame,
             thumbnail_path=thumb_path,
         )
 

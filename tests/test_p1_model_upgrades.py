@@ -8,7 +8,6 @@ Covers:
 
 import platform
 import sys
-from pathlib import Path
 from types import ModuleType
 from unittest.mock import patch
 import pytest
@@ -110,12 +109,12 @@ class TestSigLIP2Classification:
 
         class _FakeProcessor:
             @staticmethod
-            def from_pretrained(_name, **kwargs):
+            def from_pretrained(_name):
                 return "processor"
 
         class _FakeModel:
             @staticmethod
-            def from_pretrained(_name, **kwargs):
+            def from_pretrained(_name):
                 return "model"
 
         monkeypatch.setattr(
@@ -130,35 +129,6 @@ class TestSigLIP2Classification:
 
         shots.unload_model()
 
-    def test_load_classification_model_blocks_implicit_large_downloads_on_frozen_macos(
-        self, monkeypatch
-    ):
-        import core.analysis.shots as shots
-
-        shots.unload_model()
-
-        monkeypatch.setattr(
-            shots,
-            "ensure_classification_runtime_available",
-            lambda: (_ for _ in ()).throw(AssertionError("should not reach runtime import")),
-        )
-        monkeypatch.setattr(
-            shots,
-            "get_missing_large_models",
-            lambda _model_cache_dir: [{"id": "siglip2_shot_classifier"}],
-        )
-        monkeypatch.setattr(shots, "large_model_downloads_allowed", lambda: False)
-
-        class _Settings:
-            model_cache_dir = Path("/tmp/models")
-
-        monkeypatch.setattr("core.settings.load_settings", lambda: _Settings())
-
-        with pytest.raises(RuntimeError, match="SigLIP 2 shot classifier is not downloaded"):
-            shots.load_classification_model()
-
-        shots.unload_model()
-
 
 # --- P1.2: Gemini Flash Lite cloud shot classification ---
 
@@ -167,7 +137,7 @@ class TestGeminiCloudShots:
 
     def test_default_cloud_model_constant(self):
         from core.analysis.shots_cloud import _DEFAULT_CLOUD_MODEL
-        assert _DEFAULT_CLOUD_MODEL == "gemini-2.5-flash-lite"
+        assert _DEFAULT_CLOUD_MODEL == "gemini-3.1-flash-lite-preview"
 
     def test_classify_shot_cloud_function_exists(self):
         from core.analysis.shots_cloud import classify_shot_cloud
@@ -175,7 +145,7 @@ class TestGeminiCloudShots:
 
     def test_shot_classifier_cloud_model_setting(self):
         settings = Settings()
-        assert settings.shot_classifier_cloud_model == "gemini-2.5-flash-lite"
+        assert settings.shot_classifier_cloud_model == "gemini-3.1-flash-lite-preview"
 
     def test_cloud_shots_cost_updated(self):
         """Cloud shot classification cost should reflect Gemini pricing (~$0.00026)."""

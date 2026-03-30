@@ -22,7 +22,6 @@ from typing import Optional, Literal
 
 from PIL import Image
 
-from core.bundled_models import get_missing_large_models, large_model_downloads_allowed
 from core.binary_resolver import find_binary
 from core.settings import load_settings
 
@@ -38,8 +37,6 @@ _LOCAL_PROCESSOR = None
 # Local VLM model
 # PINNED: mlx-community quantized model; verify availability before updating
 _LOCAL_VLM_NAME = "mlx-community/Qwen3-VL-4B-Instruct-4bit"
-# PINNED: HuggingFace commit SHA; bump when new release tested
-_QWEN3_VL_REVISION = "2fd8dacbdb8f1e54b8c005f081ec5bf79c56376b"
 _LOCAL_VLM_FALLBACK = "vikhyatk/moondream2"  # Fallback for non-Apple-Silicon
 # PINNED: Git revision (tag) on vikhyatk/moondream2; bump when new release tested
 MOONDREAM_REVISION = "2025-06-21"
@@ -379,18 +376,16 @@ def _load_qwen3_vlm():
 
     settings = load_settings()
     model_id = settings.description_model_local
-    if (
-        any(item["id"] == "qwen3_vl_4b" for item in get_missing_large_models(settings.model_cache_dir))
-        and not large_model_downloads_allowed()
-    ):
-        raise RuntimeError(
-            "Qwen3-VL 4B is not downloaded. Use the startup large-model setup flow to "
-            "download oversized local models."
-        )
 
-    revision = _QWEN3_VL_REVISION if model_id == _LOCAL_VLM_NAME else None
     logger.info(f"Loading local VLM via mlx-vlm: {model_id}")
-    _LOCAL_MODEL, _LOCAL_PROCESSOR = load(model_id, revision=revision)
+    try:
+        _LOCAL_MODEL, _LOCAL_PROCESSOR = load(model_id)
+    except Exception as e:
+        from core.errors import ModelDownloadError
+
+        raise ModelDownloadError(
+            f"Failed to load local VLM '{model_id}': {e}"
+        ) from e
     logger.info(f"Local VLM loaded: {model_id}")
 
 

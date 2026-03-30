@@ -21,7 +21,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 # PINNED: Gemini model version; must exist in Gemini API
-_DEFAULT_CLOUD_MODEL = "gemini-2.5-flash-lite"
+_DEFAULT_CLOUD_MODEL = "gemini-3.1-flash-lite-preview"
 
 # Shot type display names
 SHOT_TYPE_DISPLAY = {

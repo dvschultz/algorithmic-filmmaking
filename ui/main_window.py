@@ -93,11 +93,6 @@ from core.plan_controller import PlanController
 from core.intention_workflow import IntentionWorkflowCoordinator, WorkflowState
 from core.app_version import get_app_version, get_release_channel
 from core.update_service import UpdateService
-from core.bundled_models import (
-    download_large_models,
-    get_missing_large_models,
-    is_frozen_macos_apple_silicon,
-)
 
 # Set up logging
 logging.basicConfig(
@@ -903,7 +898,6 @@ class MainWindow(QMainWindow):
         self._manual_update_check = False
         self._update_service = UpdateService(get_app_version(), self.settings)
         self._start_update_check()
-        QTimer.singleShot(0, self._prompt_large_model_setup_if_needed)
 
         logger.info(f"=== MAINWINDOW INIT COMPLETE (instance #{self._instance_id}) ===")
 
@@ -1136,58 +1130,6 @@ class MainWindow(QMainWindow):
             )
             self._dependency_banner.download_requested.connect(self._on_ffmpeg_download_requested)
             layout.addWidget(self._dependency_banner)
-
-    def _prompt_large_model_setup_if_needed(self):
-        """Prompt frozen macOS users to explicitly download oversized local models."""
-        if not is_frozen_macos_apple_silicon():
-            return
-
-        missing = get_missing_large_models(self.settings.model_cache_dir)
-        if not missing:
-            return
-
-        summary = "\n".join(
-            f"• {item['label']} ({item['size']}) — {item['feature']}"
-            for item in missing
-        )
-        msg = QMessageBox(self)
-        msg.setIcon(QMessageBox.Information)
-        msg.setWindowTitle("Download Large Local Models")
-        msg.setText(
-            "Scene Ripper keeps local models larger than 1GB out of the app download."
-        )
-        msg.setInformativeText(
-            "To use the related local AI features, download these models now:\n\n"
-            f"{summary}\n\n"
-            "You can continue without them, but those local features will remain unavailable."
-        )
-        download_btn = msg.addButton("Download Now", QMessageBox.AcceptRole)
-        msg.addButton("Later", QMessageBox.RejectRole)
-        msg.exec()
-
-        if msg.clickedButton() is download_btn:
-            self._download_large_models()
-
-    def _download_large_models(self):
-        """Run the explicit first-run large-model download flow."""
-        from ui.widgets.dependency_widgets import DependencyDownloadDialog
-
-        missing = get_missing_large_models(self.settings.model_cache_dir)
-        if not missing:
-            return
-
-        total_size = ", ".join(f"{item['label']} ({item['size']})" for item in missing)
-        dialog = DependencyDownloadDialog(
-            title="Download Large Local Models",
-            message=(
-                "Downloading large local models excluded from the app bundle:\n\n"
-                f"{total_size}"
-            ),
-            install_func=lambda cb: download_large_models(self.settings.model_cache_dir, cb),
-            parent=self,
-        )
-        if dialog.exec() == QDialog.Accepted:
-            self.status_bar.showMessage("Large local models downloaded")
 
     def _on_ffmpeg_download_requested(self, dep_name: str):
         """Handle FFmpeg download request from the dependency banner."""
@@ -1566,13 +1508,6 @@ class MainWindow(QMainWindow):
             lambda: QDesktopServices.openUrl(QUrl(f"{_docs_base}/api-keys.md"))
         )
         help_menu.addAction(api_keys_action)
-
-        prompt_guide_action = QAction("&Prompt Reference", self)
-        prompt_guide_action.setToolTip("Opens the prompt reference documentation on GitHub")
-        prompt_guide_action.triggered.connect(
-            lambda: QDesktopServices.openUrl(QUrl(f"{_docs_base}/prompts.md"))
-        )
-        help_menu.addAction(prompt_guide_action)
 
     def _is_any_worker_running(self) -> bool:
         """Check if any background worker is currently running."""
@@ -4097,6 +4032,12 @@ class MainWindow(QMainWindow):
     @Slot(int, int, str)
     def _on_text_extraction_progress(self, current: int, total: int, clip_id: str):
         """Handle text extraction progress update."""
+        if current == 0:
+            self.status_bar.showMessage(
+                "Text Extraction: loading OCR model..."
+            )
+        else:
+            self.status_bar.showMessage(f"Extracting text: {current}/{total} clips...")
         self.progress_bar.setValue(int((current / total) * 100))
 
     @Slot(str, list)
@@ -4134,6 +4075,12 @@ class MainWindow(QMainWindow):
     @Slot(int, int, str)
     def _on_cinematography_progress(self, current: int, total: int, clip_id: str):
         """Handle cinematography analysis progress update."""
+        if current == 0:
+            self.status_bar.showMessage(
+                "Rich Analysis: loading model..."
+            )
+        else:
+            self.status_bar.showMessage(f"Analyzing cinematography: {current}/{total} clips...")
         self.progress_bar.setValue(int((current / total) * 100))
 
     @Slot(str, object)
@@ -4957,13 +4904,7 @@ class MainWindow(QMainWindow):
         logger.info(f"_on_thumbnails_finished: total {len(self.clips)} clips from {len(self.sources)} sources")
         self.cut_tab.set_clips(self.clips)
 
-        # Make all clips available for timeline remix (via Sequence tab)
-        # Pass clips for the current source being analyzed
-        current_source_clips = self.clips_by_source.get(self.current_source.id, []) if self.current_source else []
-        if self.current_source and current_source_clips:
-            self.sequence_tab.set_clips_available(current_source_clips, self.current_source)
-
-        # Also refresh with ALL clips from ALL sources to handle multi-source workflows
+        # Refresh sequence tab with ALL clips from ALL sources
         self._refresh_sequence_tab_clips()
 
         # Update Render tab with total clip count from all sources
@@ -5024,6 +4965,14 @@ class MainWindow(QMainWindow):
 
     def _on_shot_type_progress(self, current: int, total: int):
         """Handle shot type classification progress."""
+        if current == 0:
+            self.status_bar.showMessage(
+                "Classify Shots: downloading model (first run, ~400 MB)..."
+            )
+        else:
+            self.status_bar.showMessage(
+                f"Classify Shots: processing clip {current}/{total}..."
+            )
         self.progress_bar.setValue(int((current / total) * 100))
 
     def _on_shot_type_ready(self, clip_id: str, shot_type: str, confidence: float):
@@ -5050,6 +4999,12 @@ class MainWindow(QMainWindow):
 
     def _on_transcription_progress(self, current: int, total: int):
         """Handle transcription progress."""
+        if current == 0:
+            self.status_bar.showMessage(
+                "Transcribe: downloading Whisper model (first run)..."
+            )
+        else:
+            self.status_bar.showMessage(f"Transcribing: {current}/{total} clips...")
         self.progress_bar.setValue(int((current / total) * 100))
 
     def _on_transcript_ready(self, clip_id: str, segments: list):
@@ -7013,9 +6968,13 @@ class MainWindow(QMainWindow):
     def _on_description_progress(self, current: int, total: int):
         """Handle description generation progress updates."""
         if total > 0:
-            percent = int(current / total * 100)
-            self.progress_bar.setValue(percent)
-            self.status_bar.showMessage(f"Generating descriptions: {current}/{total} clips...")
+            if current == 0:
+                self.status_bar.showMessage(
+                    "Describe: downloading vision model (first run)..."
+                )
+            else:
+                self.status_bar.showMessage(f"Generating descriptions: {current}/{total} clips...")
+            self.progress_bar.setValue(int(current / total * 100))
 
     @Slot(str, str, str)
     def _on_description_ready(self, clip_id: str, description: str, model_name: str):
@@ -7118,9 +7077,13 @@ class MainWindow(QMainWindow):
     def _on_classification_progress(self, current: int, total: int):
         """Handle classification progress updates."""
         if total > 0:
-            percent = int(current / total * 100)
-            self.progress_bar.setValue(percent)
-            self.status_bar.showMessage(f"Classifying content: {current}/{total} clips...")
+            if current == 0:
+                self.status_bar.showMessage(
+                    "Classify Content: loading model..."
+                )
+            else:
+                self.status_bar.showMessage(f"Classifying content: {current}/{total} clips...")
+            self.progress_bar.setValue(int(current / total * 100))
 
     @Slot(str, list)
     def _on_classification_ready(self, clip_id: str, results: list):
@@ -7209,19 +7172,27 @@ class MainWindow(QMainWindow):
     def _on_face_detection_progress(self, current: int, total: int):
         """Handle face detection progress updates."""
         if total > 0:
-            percent = int(current / total * 100)
-            self.progress_bar.setValue(percent)
-            self.status_bar.showMessage(f"Detecting faces: {current}/{total} clips...")
+            if current == 0:
+                self.status_bar.showMessage(
+                    "Face Detection: downloading model (first run, ~300 MB)..."
+                )
+            else:
+                self.status_bar.showMessage(f"Detecting faces: {current}/{total} clips...")
+            self.progress_bar.setValue(int(current / total * 100))
 
     @Slot(int, int)
     def _on_object_detection_progress(self, current: int, total: int):
         """Handle object detection progress updates."""
         if total > 0:
-            percent = int(current / total * 100)
-            self.progress_bar.setValue(percent)
-            detect_all = getattr(self, '_agent_object_detection_all', True)
-            task = "objects" if detect_all else "people"
-            self.status_bar.showMessage(f"Detecting {task}: {current}/{total} clips...")
+            if current == 0:
+                self.status_bar.showMessage(
+                    "Object Detection: downloading YOLO model (first run)..."
+                )
+            else:
+                detect_all = getattr(self, '_agent_object_detection_all', True)
+                task = "objects" if detect_all else "people"
+                self.status_bar.showMessage(f"Detecting {task}: {current}/{total} clips...")
+            self.progress_bar.setValue(int(current / total * 100))
 
     @Slot(str, list, int)
     def _on_objects_ready(self, clip_id: str, detections: list, person_count: int):

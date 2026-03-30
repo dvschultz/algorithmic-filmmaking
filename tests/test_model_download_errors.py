@@ -1,6 +1,5 @@
 """Tests for model download error handling across analysis modules."""
 
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from pathlib import Path
 
@@ -87,32 +86,6 @@ class TestEmbeddingsModelDownloadErrors:
             second_call = mock_proc_cls.from_pretrained.call_args_list[1]
             assert second_call.kwargs.get("local_files_only") is True
 
-    def test_local_snapshot_cache_is_preferred_when_available(self):
-        """Bundled local snapshot dirs should bypass Hugging Face cache resolution."""
-        mock_proc_cls = MagicMock()
-        mock_proc_cls.from_pretrained.return_value = MagicMock()
-        mock_model_cls = MagicMock()
-        mock_model_cls.from_pretrained.return_value = MagicMock()
-
-        mock_transformers = MagicMock()
-        mock_transformers.AutoImageProcessor = mock_proc_cls
-        mock_transformers.AutoModel = mock_model_cls
-
-        with patch.dict("sys.modules", {"transformers": mock_transformers}):
-            import core.analysis.embeddings as mod
-
-            mod._model = None
-            mod._processor = None
-
-            with patch("core.bundled_models.find_huggingface_snapshot_dir", return_value=Path("/tmp/dinov2")):
-                with patch("core.settings.load_settings") as mock_settings:
-                    mock_settings.return_value.model_cache_dir = Path("/tmp/models")
-                    mod._get_model()
-
-            first_call = mock_proc_cls.from_pretrained.call_args
-            assert first_call.args[0] == Path("/tmp/dinov2")
-            assert first_call.kwargs["local_files_only"] is True
-
 
 class TestDetectionModelDownloadErrors:
     """Tests for YOLO model download error handling."""
@@ -122,14 +95,12 @@ class TestDetectionModelDownloadErrors:
 
         mod._model = None
         mod._ov_model = None
-        mod._ov_model_classes = None
 
     def teardown_method(self):
         import core.analysis.detection as mod
 
         mod._model = None
         mod._ov_model = None
-        mod._ov_model_classes = None
 
     @patch("core.analysis.detection.ensure_object_detection_runtime_available")
     @patch("core.analysis.detection._get_model_cache_dir")
@@ -145,95 +116,19 @@ class TestDetectionModelDownloadErrors:
         with pytest.raises(ModelDownloadError, match="YOLO26n"):
             _load_yolo("n")
 
-    @patch("core.analysis.detection.ensure_yoloe_runtime_available")
-    @patch("core.analysis.detection._ensure_yoloe_text_encoder_path")
+    @patch("core.analysis.detection.ensure_object_detection_runtime_available")
     @patch("core.analysis.detection._get_model_cache_dir")
-    @patch("core.analysis.detection._ensure_yoloe_checkpoint_path")
     def test_yoloe_network_failure_raises_model_download_error(
-        self, mock_checkpoint, mock_cache, mock_text_encoder, mock_ensure
+        self, mock_cache, mock_ensure
     ):
         mock_cache.return_value = Path("/tmp/fake_cache")
-        mock_checkpoint.return_value = Path("/tmp/fake_cache/yoloe-26s.pt")
-        mock_text_encoder.return_value = Path("/tmp/fake_cache/mobileclip2_b.ts")
         mock_yolo_cls = MagicMock(side_effect=OSError("Connection refused"))
         mock_ensure.return_value = mock_yolo_cls
-        ultralytics_utils = SimpleNamespace(SETTINGS={})
-        ultralytics_pkg = SimpleNamespace(utils=ultralytics_utils)
 
         from core.analysis.detection import _load_yoloe
 
-        with patch.dict(
-            "sys.modules",
-            {
-                "ultralytics": ultralytics_pkg,
-                "ultralytics.utils": ultralytics_utils,
-            },
-        ):
-            with pytest.raises(ModelDownloadError, match="YOLOE"):
-                _load_yoloe(["person", "car"])
-
-    @patch("core.analysis.detection._get_model_cache_dir")
-    @patch("core.bundled_models.find_huggingface_snapshot_file")
-    def test_yoloe_prefers_local_snapshot_checkpoint(self, mock_find_snapshot, mock_cache):
-        mock_cache.return_value = Path("/tmp/fake_cache")
-        mock_find_snapshot.return_value = Path("/tmp/fake_cache/model.pt")
-
-        from core.analysis.detection import _ensure_yoloe_checkpoint_path
-
-        assert _ensure_yoloe_checkpoint_path() == Path("/tmp/fake_cache/model.pt")
-
-    @patch("core.analysis.detection._download_model_file")
-    @patch("core.analysis.detection._get_model_cache_dir")
-    def test_yoloe_text_encoder_downloads_into_managed_cache(self, mock_cache, mock_download, tmp_path):
-        cache_dir = tmp_path / "models"
-        mock_cache.return_value = cache_dir
-
-        def _write_file(url: str, target_path: Path):
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-            target_path.write_text("weights", encoding="utf-8")
-
-        mock_download.side_effect = _write_file
-
-        from core.analysis.detection import _ensure_yoloe_text_encoder_path
-
-        assert _ensure_yoloe_text_encoder_path() == cache_dir / "mobileclip2_b.ts"
-        mock_download.assert_called_once()
-
-    @patch("core.analysis.detection.ensure_yoloe_runtime_available")
-    @patch("core.analysis.detection._ensure_yoloe_text_encoder_path")
-    @patch("core.analysis.detection._ensure_yoloe_checkpoint_path")
-    @patch("core.analysis.detection._get_model_cache_dir")
-    def test_yoloe_sets_ultralytics_weights_dir_to_managed_cache(
-        self,
-        mock_cache,
-        mock_checkpoint,
-        mock_text_encoder,
-        mock_ensure,
-        tmp_path,
-    ):
-        cache_dir = tmp_path / "models"
-        mock_cache.return_value = cache_dir
-        mock_checkpoint.return_value = cache_dir / "model.pt"
-        mock_text_encoder.return_value = cache_dir / "mobileclip2_b.ts"
-
-        mock_model = MagicMock()
-        mock_ensure.return_value = MagicMock(return_value=mock_model)
-        ultralytics_utils = SimpleNamespace(SETTINGS={})
-        ultralytics_pkg = SimpleNamespace(utils=ultralytics_utils)
-
-        with patch.dict(
-            "sys.modules",
-            {
-                "ultralytics": ultralytics_pkg,
-                "ultralytics.utils": ultralytics_utils,
-            },
-        ):
-            from core.analysis.detection import _load_yoloe
-
-            _load_yoloe(["person"])
-
-        assert ultralytics_utils.SETTINGS["weights_dir"] == str(cache_dir)
-        mock_model.set_classes.assert_called_once_with(["person"])
+        with pytest.raises(ModelDownloadError, match="YOLOE"):
+            _load_yoloe(["person", "car"])
 
 
 class TestOCRModelDownloadErrors:

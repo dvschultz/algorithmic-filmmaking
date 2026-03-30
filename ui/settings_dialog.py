@@ -64,30 +64,20 @@ from core.settings import (
 )
 from core.llm_client import get_provider_models
 from core.update_models import UpdateChannel
-from core.bundled_models import (
-    get_available_transcription_models,
-    is_frozen_macos_apple_silicon,
-)
 from ui.theme import theme, UISizes
 
 logger = logging.getLogger(__name__)
 
-TRANSCRIPTION_MODEL_LABELS = {
-    "tiny.en": "tiny.en - Fast, basic accuracy (39MB)",
-    "small.en": "small.en - Good balance (244MB)",
-    "medium.en": "medium.en - Better accuracy (769MB)",
-    "large-v3": "large-v3 - Best accuracy (1.5GB)",
-}
-
-# Shared list of VLM models for vision and text extraction
+# Shared list of cloud LLM/VLM models for vision, text extraction, and sequencing
 VLM_MODELS = [
-    "gemini-3-flash-preview",
+    "gemini-3.1-flash-lite-preview",
+    "gemini-3.1-pro-preview",
     "gemini-2.5-flash",
-    "gemini-2.5-pro",
-    "gpt-5.2",
-    "gpt-5",
-    "gpt-5-mini",
-    "claude-sonnet-4-5-20250929",
+    "gpt-5.4-mini",
+    "gpt-5.4",
+    "gpt-5.4-nano",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5",
 ]
 
 
@@ -479,21 +469,16 @@ class SettingsDialog(QDialog):
         model_layout.addWidget(self.whisper_model_lbl)
 
         self.transcription_model_combo = QComboBox()
-        for model_name in get_available_transcription_models():
-            self.transcription_model_combo.addItem(
-                TRANSCRIPTION_MODEL_LABELS[model_name],
-                model_name,
-            )
-        if is_frozen_macos_apple_silicon():
-            self.transcription_model_combo.setToolTip(
-                "The packaged macOS app supports only medium.en for local transcription.\n"
-                "Because it is larger than 1GB, it is downloaded during the first-run setup flow."
-            )
-        else:
-            self.transcription_model_combo.setToolTip(
-                "Larger models are more accurate but slower.\n"
-                "Models are downloaded on first use."
-            )
+        self.transcription_model_combo.addItems([
+            "tiny.en - Fast, basic accuracy (39MB)",
+            "small.en - Good balance (244MB)",
+            "medium.en - Better accuracy (769MB)",
+            "large-v3 - Best accuracy (1.5GB)",
+        ])
+        self.transcription_model_combo.setToolTip(
+            "Larger models are more accurate but slower.\n"
+            "Models are downloaded on first use."
+        )
         model_layout.addWidget(self.transcription_model_combo)
 
         transcription_layout.addLayout(model_layout)
@@ -597,6 +582,82 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(vision_group)
 
+        # Rich Analysis (Cinematography) group
+        cine_group = QGroupBox("Rich Analysis (Cinematography)")
+        cine_layout = QVBoxLayout(cine_group)
+
+        # Tier selection
+        cine_tier_layout = QHBoxLayout()
+        cine_tier_label = QLabel("Processing Tier:")
+        cine_tier_label.setFixedWidth(UISizes.FORM_LABEL_WIDTH)
+        cine_tier_layout.addWidget(cine_tier_label)
+        self.cine_tier_combo = QComboBox()
+        self.cine_tier_combo.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
+        self.cine_tier_combo.addItems([
+            "Local - Free, runs on device (Qwen2.5-VL)",
+            "Cloud API - Supports video mode (Gemini/GPT-4o)",
+        ])
+        self.cine_tier_combo.setToolTip(
+            "Local: Frame-only analysis using mlx-vlm. Free, no API key.\n"
+            "Cloud: Can analyze video clips for camera movement detection."
+        )
+        cine_tier_layout.addWidget(self.cine_tier_combo)
+        cine_layout.addLayout(cine_tier_layout)
+
+        # Local model
+        cine_local_layout = QHBoxLayout()
+        cine_local_label = QLabel("Local Model:")
+        cine_local_label.setFixedWidth(UISizes.FORM_LABEL_WIDTH)
+        cine_local_layout.addWidget(cine_local_label)
+        self.cine_local_combo = QComboBox()
+        self.cine_local_combo.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
+        self.cine_local_combo.addItems([
+            "mlx-community/Qwen2.5-VL-7B-Instruct-4bit",
+            "mlx-community/Qwen3-VL-4B-Instruct-4bit",
+        ])
+        self.cine_local_combo.setEditable(True)
+        self.cine_local_combo.setToolTip(
+            "Qwen2.5-VL-7B: Larger model, better structured analysis (~4 GB)\n"
+            "Qwen3-VL-4B: Same model as Describe, faster and smaller (~2.9 GB)"
+        )
+        cine_local_layout.addWidget(self.cine_local_combo)
+        cine_layout.addLayout(cine_local_layout)
+
+        # Cloud model
+        cine_cloud_layout = QHBoxLayout()
+        cine_cloud_label = QLabel("Cloud Model:")
+        cine_cloud_label.setFixedWidth(UISizes.FORM_LABEL_WIDTH)
+        cine_cloud_layout.addWidget(cine_cloud_label)
+        self.cine_cloud_combo = QComboBox()
+        self.cine_cloud_combo.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
+        self.cine_cloud_combo.addItems(VLM_MODELS)
+        self.cine_cloud_combo.setToolTip("Cloud VLM for cinematography analysis")
+        cine_cloud_layout.addWidget(self.cine_cloud_combo)
+        cine_layout.addLayout(cine_cloud_layout)
+
+        # Input mode
+        cine_mode_layout = QHBoxLayout()
+        cine_mode_label = QLabel("Input Mode:")
+        cine_mode_label.setFixedWidth(UISizes.FORM_LABEL_WIDTH)
+        cine_mode_layout.addWidget(cine_mode_label)
+        self.cine_input_mode_combo = QComboBox()
+        self.cine_input_mode_combo.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
+        self.cine_input_mode_combo.addItems([
+            "Frame - Single thumbnail (fast, no movement detection)",
+            "Video - Clip segment (detects camera movement, Gemini only)",
+        ])
+        self.cine_input_mode_combo.setToolTip(
+            "Frame: Sends a single thumbnail. Fast and cheap.\n"
+            "Video: Sends the video clip. Detects camera movement.\n"
+            "Video mode only works with Gemini models."
+        )
+        cine_mode_layout.addWidget(self.cine_input_mode_combo)
+        cine_layout.addLayout(cine_mode_layout)
+
+        self.cine_tier_combo.currentIndexChanged.connect(self._on_cine_tier_changed)
+
+        layout.addWidget(cine_group)
+
         # Text Extraction (OCR) group
         text_group = QGroupBox("Text Extraction (OCR)")
         text_layout = QVBoxLayout(text_group)
@@ -638,8 +699,8 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(text_group)
 
-        # Exquisite Corpus (Poetry Generation) group
-        corpus_group = QGroupBox("Exquisite Corpus (Poetry Generation)")
+        # LLM Sequencer (Storyteller + Exquisite Corpus) group
+        corpus_group = QGroupBox("LLM Sequencer (Storyteller / Exquisite Corpus)")
         corpus_layout = QVBoxLayout(corpus_group)
 
         # Model selection
@@ -1514,6 +1575,13 @@ class SettingsDialog(QDialog):
         self.vision_cpu_combo.setEnabled(is_cpu)
         self.vision_cloud_combo.setEnabled(not is_cpu)
 
+    def _on_cine_tier_changed(self, index: int):
+        """Enable/disable Rich Analysis fields based on selected tier."""
+        is_local = (index == 0)
+        self.cine_local_combo.setEnabled(is_local)
+        self.cine_cloud_combo.setEnabled(not is_local)
+        self.cine_input_mode_combo.setEnabled(not is_local)
+
     def _on_text_method_changed(self, index: int):
         """Enable/disable VLM model based on method."""
         method = self.text_method_combo.currentData()
@@ -1664,11 +1732,9 @@ class SettingsDialog(QDialog):
         self.fps_combo.setCurrentIndex(fps_map.get(self.settings.export_fps, 0))
 
         # Transcription
-        transcription_index = self.transcription_model_combo.findData(
-            self.settings.transcription_model
-        )
+        model_map = {"tiny.en": 0, "small.en": 1, "medium.en": 2, "large-v3": 3}
         self.transcription_model_combo.setCurrentIndex(
-            transcription_index if transcription_index >= 0 else 0
+            model_map.get(self.settings.transcription_model, 1)
         )
 
         lang_map = {"en": 0, "auto": 1}
@@ -1700,6 +1766,15 @@ class SettingsDialog(QDialog):
 
         # Trigger enable/disable state
         self._on_vision_tier_changed(tier_idx)
+
+        # Rich Analysis (Cinematography)
+        cine_tier_idx = 0 if self.settings.cinematography_tier == "local" else 1
+        self.cine_tier_combo.setCurrentIndex(cine_tier_idx)
+        self._set_combo_text(self.cine_local_combo, self.settings.cinematography_local_model)
+        self._set_combo_text(self.cine_cloud_combo, self.settings.cinematography_model)
+        cine_mode_idx = 0 if self.settings.cinematography_input_mode == "frame" else 1
+        self.cine_input_mode_combo.setCurrentIndex(cine_mode_idx)
+        self._on_cine_tier_changed(cine_tier_idx)
 
         # Text Extraction
         method_map = {"paddleocr": 0, "tesseract": 0, "vlm": 1, "hybrid": 2}
@@ -1843,7 +1918,8 @@ class SettingsDialog(QDialog):
         self.settings.export_fps = fps_values[self.fps_combo.currentIndex()]
 
         # Transcription
-        self.settings.transcription_model = self.transcription_model_combo.currentData()
+        model_values = ["tiny.en", "small.en", "medium.en", "large-v3"]
+        self.settings.transcription_model = model_values[self.transcription_model_combo.currentIndex()]
 
         lang_values = ["en", "auto"]
         self.settings.transcription_language = lang_values[self.transcription_lang_combo.currentIndex()]
@@ -1854,6 +1930,12 @@ class SettingsDialog(QDialog):
         self.settings.description_model_cloud = self.vision_cloud_combo.currentText()
         self.settings.description_temporal_frames = self.vision_frames_spin.value()
         self.settings.description_input_mode = self.input_mode_combo.currentData()
+
+        # Rich Analysis (Cinematography)
+        self.settings.cinematography_tier = "local" if self.cine_tier_combo.currentIndex() == 0 else "cloud"
+        self.settings.cinematography_local_model = self.cine_local_combo.currentText()
+        self.settings.cinematography_model = self.cine_cloud_combo.currentText()
+        self.settings.cinematography_input_mode = "frame" if self.cine_input_mode_combo.currentIndex() == 0 else "video"
 
         # Text Extraction
         self.settings.text_extraction_method = self.text_method_combo.currentData()

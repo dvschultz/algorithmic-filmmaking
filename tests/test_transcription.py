@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-from core import bundled_models
 from core.transcription import transcribe_clip, transcribe_video
 
 
@@ -42,29 +41,3 @@ def test_transcribe_video_skips_video_without_audio(monkeypatch):
 
     assert result == []
     assert progress == [(1.0, "No audio track found")]
-
-
-def test_transcribe_video_clamps_frozen_macos_local_request(monkeypatch):
-    """Frozen macOS local transcription should use bundled medium.en via MLX."""
-    recorded = {}
-
-    monkeypatch.setattr(bundled_models, "is_frozen_macos_apple_silicon", lambda: True)
-    monkeypatch.setattr("core.transcription._has_audio_stream", lambda _path: True)
-    monkeypatch.setattr("core.transcription._resolve_backend", lambda backend: backend)
-    monkeypatch.setattr(
-        "core.transcription._transcribe_video_mlx",
-        lambda _video_path, model_name, language, _progress: recorded.update(
-            model_name=model_name,
-            language=language,
-        ) or [],
-    )
-
-    result = transcribe_video(
-        Path("/tmp/video.mp4"),
-        model_name="small.en",
-        backend="faster-whisper",
-        language="en",
-    )
-
-    assert result == []
-    assert recorded == {"model_name": "medium.en", "language": "en"}

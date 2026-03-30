@@ -44,19 +44,19 @@ class TestGemini3FlashDefaults:
 
     def test_description_model_cloud_default(self):
         settings = Settings()
-        assert settings.description_model_cloud == "gemini-3-flash-preview"
+        assert settings.description_model_cloud == "gemini-3.1-flash-lite-preview"
 
     def test_text_extraction_vlm_model_default(self):
         settings = Settings()
-        assert settings.text_extraction_vlm_model == "gemini-3-flash-preview"
+        assert settings.text_extraction_vlm_model == "gemini-3.1-flash-lite-preview"
 
     def test_exquisite_corpus_model_default(self):
         settings = Settings()
-        assert settings.exquisite_corpus_model == "gemini-3-flash-preview"
+        assert settings.exquisite_corpus_model == "gemini-3.1-flash-lite-preview"
 
     def test_cinematography_model_default(self):
         settings = Settings()
-        assert settings.cinematography_model == "gemini-3-flash-preview"
+        assert settings.cinematography_model == "gemini-3.1-flash-lite-preview"
 
     def test_chat_gemini_model_unchanged(self):
         """The chat LLM Gemini default should NOT change (separate concern)."""

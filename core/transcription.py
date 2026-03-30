@@ -22,12 +22,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
-from core.bundled_models import (
-    get_missing_large_models,
-    large_model_downloads_allowed,
-    mlx_model_working_directory,
-    normalize_frozen_macos_transcription_request,
-)
 from core.binary_resolver import find_binary, get_subprocess_env, get_subprocess_kwargs
 
 logger = logging.getLogger(__name__)
@@ -258,6 +252,14 @@ def get_model(model_name: str = "small.en"):
         raise FasterWhisperNotInstalledError()
 
     if _model is None or _model_name != model_name:
+        try:
+            import certifi
+            import os as _os
+            _os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+            _os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+        except ImportError:
+            pass
+
         WhisperModel = ensure_faster_whisper_runtime_available()
 
         logger.info(f"Loading Whisper model: {model_name}")
@@ -312,23 +314,19 @@ def get_mlx_model(model_name: str = "small.en"):
             return _mlx_model
 
         LightningWhisperMLX = ensure_mlx_whisper_runtime_available()
-        from core.settings import load_settings
 
-        settings = load_settings()
-        if (
-            any(item["id"] == "whisper_medium" for item in get_missing_large_models(settings.model_cache_dir))
-            and not large_model_downloads_allowed()
-        ):
-            raise RuntimeError(
-                "Whisper medium.en is not downloaded. Use the startup large-model setup flow to "
-                "download oversized local models."
-            )
+        try:
+            import certifi
+            import os as _os
+            _os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+            _os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+        except ImportError:
+            pass
 
         logger.info(f"Loading MLX Whisper model: {mlx_name}")
 
         try:
-            with mlx_model_working_directory(settings.model_cache_dir):
-                _mlx_model = LightningWhisperMLX(model=mlx_name, batch_size=12)
+            _mlx_model = LightningWhisperMLX(model=mlx_name, batch_size=12)
             _mlx_model_name = mlx_name
             logger.info(f"MLX Whisper model loaded: {mlx_name}")
         except Exception as e:
@@ -364,7 +362,6 @@ def transcribe_video(
             progress_callback(1.0, "No audio track found")
         return []
 
-    model_name, backend = normalize_frozen_macos_transcription_request(model_name, backend)
     resolved = _resolve_backend(backend)
 
     if resolved == "groq":
@@ -426,9 +423,6 @@ def _transcribe_video_mlx(
 
     mlx-whisper requires audio input, so we extract audio via FFmpeg first.
     """
-    from core.settings import load_settings
-
-    settings = load_settings()
     mlx_model = get_mlx_model(model_name)
 
     if progress_callback:
@@ -459,8 +453,7 @@ def _transcribe_video_mlx(
         if progress_callback:
             progress_callback(0.3, "Transcribing with MLX Whisper...")
 
-        with mlx_model_working_directory(settings.model_cache_dir):
-            result = mlx_model.transcribe(audio_path=str(tmp_path))
+        result = mlx_model.transcribe(audio_path=str(tmp_path))
 
         if progress_callback:
             progress_callback(0.8, "Processing segments...")
@@ -502,7 +495,6 @@ def transcribe_clip(
         logger.info("Skipping clip transcription for %s: no audio track found", source_path)
         return []
 
-    model_name, backend = normalize_frozen_macos_transcription_request(model_name, backend)
     resolved = _resolve_backend(backend)
 
     # Extract audio segment to temp file

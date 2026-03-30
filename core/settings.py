@@ -18,7 +18,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Set
 
-from core.bundled_models import normalize_frozen_macos_settings
 from core.paths import is_frozen, get_app_support_dir
 
 logger = logging.getLogger(__name__)
@@ -440,18 +439,18 @@ class Settings:
     description_model_local: str = "mlx-community/Qwen3-VL-4B-Instruct-4bit"
     description_model_cpu: str = "vikhyatk/moondream2"  # Legacy — kept for backward compat
     description_model_gpu: str = "llava-hf/llava-onevision-qwen2-7b-ov-hf"  # Legacy
-    description_model_cloud: str = "gemini-3-flash-preview"
+    description_model_cloud: str = "gemini-3.1-flash-lite-preview"
     description_temporal_frames: int = 4
     description_input_mode: str = "frame"  # "frame" = single frame, "video" = video clip (Gemini only)
 
     # Text Extraction (OCR) Settings
     text_extraction_method: str = "hybrid"  # paddleocr, vlm, hybrid
-    text_extraction_vlm_model: str = "gemini-3-flash-preview"
+    text_extraction_vlm_model: str = "gemini-3.1-flash-lite-preview"
     text_detection_enabled: bool = True  # Deprecated: PaddleOCR handles detection internally
     text_detection_confidence: float = 0.5  # Deprecated: PaddleOCR has its own thresholds
 
     # Exquisite Corpus (Poetry Generation) Settings
-    exquisite_corpus_model: str = "gemini-3-flash-preview"  # Model for poem generation
+    exquisite_corpus_model: str = "gemini-3.1-flash-lite-preview"  # Model for poem/narrative generation
     exquisite_corpus_temperature: float = 0.8  # Creativity level (0.0-1.0)
 
     # Object Detection Settings
@@ -462,7 +461,7 @@ class Settings:
 
     # Shot Classification Settings
     shot_classifier_tier: str = "cpu"  # cpu, cloud
-    shot_classifier_cloud_model: str = "gemini-2.5-flash-lite"  # Cloud VLM model for shot classification
+    shot_classifier_cloud_model: str = "gemini-3.1-flash-lite-preview"  # Cloud VLM model for shot classification
     shot_classifier_replicate_model: str = "dvschultz/shot-type-classifier"  # Legacy VideoMAE model
 
     # Analysis Picker - remembered selection
@@ -478,7 +477,7 @@ class Settings:
 
     # Rich Cinematography Analysis Settings
     cinematography_input_mode: str = "frame"  # "frame" = single keyframe, "video" = video clip (Gemini only)
-    cinematography_model: str = "gemini-3-flash-preview"  # VLM model for rich analysis (cloud tier)
+    cinematography_model: str = "gemini-3.1-flash-lite-preview"  # VLM model for rich analysis (cloud tier)
     cinematography_tier: str = "cloud"  # "cloud" (Gemini/OpenAI), "local" (mlx-vlm)
     cinematography_local_model: str = "mlx-community/Qwen2.5-VL-7B-Instruct-4bit"  # Local VLM for cinematography
     cinematography_batch_parallelism: int = 2  # Number of concurrent VLM requests (1-5)
@@ -948,9 +947,6 @@ def load_settings() -> Settings:
 
     # 3. Apply environment variable overrides (highest priority)
     settings = _apply_env_overrides(settings)
-
-    # 3.5. Clamp persisted/env-configured settings to the frozen bundle contract.
-    settings = normalize_frozen_macos_settings(settings)
 
     # 4. Sync model_cache_dir to env vars so HuggingFace and PyTorch respect it
     _sync_model_cache_env(settings.model_cache_dir)

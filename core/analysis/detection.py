@@ -7,11 +7,8 @@ Supports two detection modes:
 
 import logging
 import os
-import shutil
 import sys
 import threading
-import urllib.request
-from contextlib import closing
 from pathlib import Path
 from typing import Optional
 
@@ -39,13 +36,6 @@ PERSON_CLASS_ID = 0
 
 # YOLOE-26 model for open-vocabulary detection
 _YOLOE_MODEL_NAME = "yoloe-26s.pt"
-_YOLOE_MODEL_REPO_ID = "openvision/yoloe26-s-seg"
-_YOLOE_MODEL_FILENAME = "model.pt"
-_YOLOE_MODEL_REVISION = "2639b7b9928583c5371f1b64454b4c73c1f0ecd9"
-_YOLOE_TEXT_ENCODER_FILENAME = "mobileclip2_b.ts"
-_YOLOE_TEXT_ENCODER_URL = (
-    "https://github.com/ultralytics/assets/releases/download/v8.4.0/mobileclip2_b.ts"
-)
 
 # Lazy load models
 _model = None
@@ -65,17 +55,6 @@ def ensure_object_detection_runtime_available():
         return YOLO
     except Exception as e:
         raise RuntimeError(f"object detection runtime is incomplete: {e}") from e
-
-
-def ensure_yoloe_runtime_available():
-    """Validate that the YOLOE open-vocabulary runtime imports cleanly."""
-    try:
-        import torch  # noqa: F401
-        from ultralytics.models.yolo.model import YOLOE
-
-        return YOLOE
-    except Exception as e:
-        raise RuntimeError(f"open-vocabulary detection runtime is incomplete: {e}") from e
 
 
 def _get_model_cache_dir() -> Path:
@@ -121,6 +100,13 @@ def _load_yolo(model_size: str = "n"):
             cache_dir = _get_model_cache_dir()
             os.environ.setdefault("YOLO_CONFIG_DIR", str(cache_dir))
 
+            try:
+                import certifi
+                os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+                os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+            except ImportError:
+                pass
+
             YOLO = ensure_object_detection_runtime_available()
 
             # YOLO26 will download the model to cache on first use (~6MB for nano)
@@ -144,52 +130,6 @@ def ensure_default_detection_model_loaded(model_size: str = "n") -> None:
     _load_yolo(model_size)
 
 
-def _ensure_yoloe_checkpoint_path() -> Path:
-    """Resolve the pinned YOLOE checkpoint into the managed model cache."""
-    from core.bundled_models import find_huggingface_snapshot_file
-    try:
-        local_path = find_huggingface_snapshot_file(
-            _get_model_cache_dir(),
-            _YOLOE_MODEL_REPO_ID,
-            _YOLOE_MODEL_FILENAME,
-            revision=_YOLOE_MODEL_REVISION,
-        )
-        if local_path is not None:
-            return local_path
-    except Exception:
-        logger.debug("Could not inspect local YOLOE snapshot cache", exc_info=True)
-
-    from huggingface_hub import hf_hub_download
-
-    return Path(
-        hf_hub_download(
-            repo_id=_YOLOE_MODEL_REPO_ID,
-            filename=_YOLOE_MODEL_FILENAME,
-            revision=_YOLOE_MODEL_REVISION,
-        )
-    )
-
-
-def _download_model_file(url: str, target_path: Path) -> None:
-    """Download a model artifact directly to a managed cache path."""
-    target_path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = target_path.with_suffix(f"{target_path.suffix}.tmp")
-    with closing(urllib.request.urlopen(url, timeout=60)) as response, temp_path.open("wb") as handle:
-        shutil.copyfileobj(response, handle)
-    temp_path.replace(target_path)
-
-
-def _ensure_yoloe_text_encoder_path() -> Path:
-    """Resolve the MobileCLIP TorchScript encoder into the managed model cache."""
-    cache_dir = _get_model_cache_dir()
-    target_path = cache_dir / _YOLOE_TEXT_ENCODER_FILENAME
-    if target_path.exists():
-        return target_path
-
-    _download_model_file(_YOLOE_TEXT_ENCODER_URL, target_path)
-    return target_path
-
-
 def _load_yoloe(custom_classes: list[str]):
     """Lazy load YOLOE-26 open-vocabulary model (thread-safe).
 
@@ -208,15 +148,11 @@ def _load_yoloe(custom_classes: list[str]):
 
             cache_dir = _get_model_cache_dir()
             os.environ.setdefault("YOLO_CONFIG_DIR", str(cache_dir))
-            text_encoder_path = _ensure_yoloe_text_encoder_path()
 
-            YOLOE = ensure_yoloe_runtime_available()
-            from ultralytics.utils import SETTINGS
-
-            SETTINGS["weights_dir"] = str(text_encoder_path.parent)
+            YOLO = ensure_object_detection_runtime_available()
 
             try:
-                _ov_model = YOLOE(str(_ensure_yoloe_checkpoint_path()))
+                _ov_model = YOLO(_YOLOE_MODEL_NAME)
             except Exception as e:
                 from core.errors import ModelDownloadError
 

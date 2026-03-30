@@ -18,7 +18,6 @@ from core.paths import (
     get_log_dir,
     ensure_app_dirs,
 )
-from core.bundled_models import seed_bundled_models
 from core.runtime_smoke import (
     RUNTIME_SMOKE_TARGET_ENV,
     run_runtime_smoke_target,
@@ -61,14 +60,6 @@ def _setup_frozen_environment():
     )
     logging.getLogger().addHandler(file_handler)
 
-    try:
-        from core.settings import load_settings
-
-        settings = load_settings()
-        seed_bundled_models(settings.model_cache_dir)
-    except Exception:
-        logger.exception("Failed to seed bundled models during frozen startup")
-
 
 # Set up logging early
 logging.basicConfig(
@@ -95,6 +86,15 @@ if platform.system() == "Darwin":
                 )
             break
 
+# Pre-import torch BEFORE PySide6 to prevent "function '_has_torch_function'
+# already has a docstring" RuntimeError. This conflict occurs when torch's C
+# extension init runs after PySide6's Shiboken import hooks are installed.
+# Importing torch first avoids the hook interference entirely.
+try:
+    import torch  # noqa: F401
+except (ImportError, RuntimeError):
+    pass
+
 from PySide6.QtWidgets import QApplication, QMessageBox
 from ui.main_window import MainWindow
 from ui.theme import theme
@@ -102,6 +102,16 @@ from ui.theme import theme
 # Fix LC_NUMERIC before any MPV usage — PySide6 may override this on import.
 # MPV requires 'C' locale for numeric parsing (decimal points vs commas).
 locale.setlocale(locale.LC_NUMERIC, 'C')
+
+# Pre-import MLX on the main thread to avoid a crash when worker threads
+# first-import it. MLX initializes Metal resources on first import, and
+# PySide6's Shiboken import hook can enter infinite recursion if MLX is
+# first imported from a QThread background worker.
+if platform.system() == "Darwin" and platform.machine() == "arm64":
+    try:
+        import mlx.core  # noqa: F401
+    except ImportError:
+        pass
 
 
 def _check_mpv_available() -> bool:

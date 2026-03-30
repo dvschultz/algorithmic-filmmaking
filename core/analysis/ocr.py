@@ -14,8 +14,6 @@ import threading
 from pathlib import Path
 from typing import Optional, Callable
 
-from core.bundled_models import get_bundled_paddleocr_kwargs
-
 logger = logging.getLogger(__name__)
 
 # Thread-safe PaddleOCR availability check
@@ -70,15 +68,21 @@ def _get_ocr_engine():
     with _ocr_engine_lock:
         if _ocr_engine is None:
             PaddleOCR = ensure_ocr_runtime_available()
+
+            try:
+                import certifi
+                import os as _os
+                _os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+                _os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+            except ImportError:
+                pass
+
             logger.info("Initializing PaddleOCR engine...")
             try:
-                from core.settings import load_settings
-
-                settings = load_settings()
                 _ocr_engine = PaddleOCR(
-                    use_textline_orientation=True,
+                    use_angle_cls=True,
                     lang="en",
-                    **get_bundled_paddleocr_kwargs(settings.model_cache_dir),
+                    show_log=False,
                 )
             except Exception as e:
                 from core.errors import ModelDownloadError
@@ -154,7 +158,7 @@ def extract_text_from_frame(
     if _check_paddleocr():
         try:
             ocr = _get_ocr_engine()
-            result = ocr.ocr(str(frame_path), use_textline_orientation=True)
+            result = ocr.ocr(str(frame_path), cls=True)
 
             if result and result[0]:
                 words = []

@@ -75,6 +75,22 @@ class FaceDetectionWorker(CancellableWorker):
 
         logger.info(f"Starting face detection: {total} clips")
 
+        # Pre-load InsightFace model so user sees download status
+        try:
+            from core.analysis.faces import is_model_loaded, _load_insightface
+
+            if not is_model_loaded():
+                self.progress.emit(0, total)
+                _load_insightface()
+        except Exception as e:
+            self.error.emit(f"Failed to load face detection model: {e}")
+            self._log_complete()
+            return
+
+        if self.is_cancelled():
+            self._log_cancelled()
+            return
+
         # Group by source to minimize repeated file opens
         clips_to_process.sort(key=lambda cs: cs[1].file_path.name)
 
