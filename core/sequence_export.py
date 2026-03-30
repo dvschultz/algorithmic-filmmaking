@@ -88,22 +88,8 @@ class SequenceExporter:
                         max_w = max(max_w, source.width)
                         max_h = max(max_h, source.height)
             if max_w > 0 and max_h > 0:
-                config = ExportConfig(
-                    output_path=config.output_path,
-                    fps=config.fps,
-                    width=max_w,
-                    height=max_h,
-                    video_codec=config.video_codec,
-                    audio_codec=config.audio_codec,
-                    video_bitrate=config.video_bitrate,
-                    audio_bitrate=config.audio_bitrate,
-                    preset=config.preset,
-                    crf=config.crf,
-                    show_chromatic_color_bar=config.show_chromatic_color_bar,
-                    chromatic_color_bar_height_ratio=config.chromatic_color_bar_height_ratio,
-                    chromatic_color_bar_min_height=config.chromatic_color_bar_min_height,
-                    music_path=config.music_path,
-                )
+                config.width = max_w
+                config.height = max_h
                 logger.info("Auto-detected export resolution: %dx%d", max_w, max_h)
 
         logger.info(
@@ -194,12 +180,12 @@ class SequenceExporter:
                     segment_paths.append(segment_path)
                 else:
                     logger.error(
-                        "Sequence export segment failed: index=%d segment=%s seq_clip=%s frame_entry=%s",
+                        "Sequence export aborted: segment %d failed (seq_clip=%s, frame_entry=%s)",
                         i,
-                        segment_path,
                         getattr(seq_clip, "id", None),
                         getattr(seq_clip, "is_frame_entry", False),
                     )
+                    return False
 
             if not segment_paths:
                 logger.error("Sequence export aborted: no segments were produced")
@@ -357,7 +343,8 @@ class SequenceExporter:
     ) -> bool:
         """Export a pre-rendered clip segment.
 
-        Transforms are already baked in. Only applies scale+pad and chromatic bar.
+        Transforms are already baked in. Always re-encodes with fps normalization
+        to ensure consistent stream parameters across all segments for concat.
         """
         vf_parts = []
         if config.width and config.height:
@@ -370,24 +357,21 @@ class SequenceExporter:
         chromatic_filter = self._chromatic_bar_filter(config=config, bar_color=bar_color)
         if chromatic_filter:
             vf_parts.append(chromatic_filter)
+        # Always normalize FPS so concat -c copy works with consistent streams
+        vf_parts.append(f"fps={config.fps}")
 
         cmd = [
             self.ffmpeg_path,
             "-y",
             "-i", str(prerendered_path),
+            "-c:v", config.video_codec,
+            "-preset", config.preset,
+            "-crf", str(config.crf),
+            "-pix_fmt", "yuv420p",
+            "-vf", ",".join(vf_parts),
+            "-c:a", config.audio_codec,
+            "-b:a", config.audio_bitrate,
         ]
-
-        if vf_parts:
-            cmd.extend([
-                "-c:v", config.video_codec,
-                "-preset", config.preset,
-                "-crf", str(config.crf),
-                "-vf", ",".join(vf_parts),
-                "-c:a", config.audio_codec,
-                "-b:a", config.audio_bitrate,
-            ])
-        else:
-            cmd.extend(["-c:v", "copy", "-c:a", "copy"])
 
         cmd.append(str(output_path))
 

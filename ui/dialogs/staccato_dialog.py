@@ -473,30 +473,21 @@ class StaccatoDialog(QDialog):
         """Show/hide stem dropdown and check dependency availability."""
         self._stem_combo.setVisible(checked)
         if checked:
-            # Check if demucs-infer is available, offer to install if not
-            from core.feature_registry import check_feature_ready, install_for_feature
+            # Check if demucs-infer is available — the worker thread will
+            # install on demand if needed, but warn the user upfront about
+            # the download size so they can opt out before waiting.
+            from core.feature_registry import check_feature_ready
             available, _missing = check_feature_ready("stem_separation")
             if not available:
                 reply = QMessageBox.question(
                     self,
                     "Stem Separation",
                     "Stem separation requires demucs + torch (~2 GB download).\n\n"
-                    "Install now?",
+                    "Dependencies will be installed automatically when you "
+                    "generate the sequence. Continue?",
                     QMessageBox.Yes | QMessageBox.No,
                 )
-                if reply == QMessageBox.Yes:
-                    self._stem_checkbox.setEnabled(False)
-                    self._info_label.setText("Installing stem separation dependencies...")
-                    QApplication.processEvents()
-                    if install_for_feature("stem_separation"):
-                        self._stem_checkbox.setEnabled(True)
-                        self._info_label.setText("Stem separation ready")
-                    else:
-                        self._stem_checkbox.setChecked(False)
-                        self._stem_checkbox.setEnabled(True)
-                        self._info_label.setText("Failed to install stem separation")
-                        return
-                else:
+                if reply != QMessageBox.Yes:
                     self._stem_checkbox.setChecked(False)
                     return
 

@@ -279,10 +279,11 @@ def generate_staccato_sequence(
             used_indices.clear()
             available = clips_with_embeddings
 
-        available_durations = clip_durations
-
+        # clip_durations is indexed by original clip index (same as the `i`
+        # in each (i, emb) tuple), so we pass the full list — _select_clip_for_slot
+        # looks up durations by original index, not by position in `available`.
         best_idx, cosine_dist, dist_score = _select_clip_for_slot(
-            slot, prev_embedding, available, available_durations,
+            slot, prev_embedding, available, clip_durations,
         )
         used_indices.add(best_idx)
 
