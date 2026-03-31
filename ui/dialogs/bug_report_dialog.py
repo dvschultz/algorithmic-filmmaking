@@ -5,7 +5,7 @@ import sys
 import urllib.parse
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QDialog,
@@ -24,14 +24,18 @@ from ui.theme import theme, Spacing, TypeScale
 
 _BUG_EMAIL = "dvsmethid+algofilm@gmail.com"
 _MAX_LOG_LINES_GITHUB = 50  # GitHub URL body limit ~8KB
-_MAX_LOG_LINES_EMAIL = 30
 
 
 def _get_system_info() -> str:
     """Collect system info for bug reports."""
+    if platform.system() == "Darwin":
+        os_ver = platform.mac_ver()[0] or platform.release()
+        os_str = f"macOS {os_ver} ({platform.machine()})"
+    else:
+        os_str = f"{platform.system()} {platform.release()} ({platform.machine()})"
     lines = [
         f"App Version: {get_app_version()}",
-        f"OS: {platform.system()} {platform.version()} ({platform.machine()})",
+        f"OS: {os_str}",
         f"Python: {sys.version.split()[0]}",
     ]
     return "\n".join(lines)
@@ -166,19 +170,21 @@ class BugReportDialog(QDialog):
             "labels": "bug",
         })
 
-        url = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/issues/new?{params}"
+        def _github_url(t, b):
+            p = urllib.parse.urlencode({"title": t, "body": b, "labels": "bug"})
+            return f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/issues/new?{p}"
 
-        # GitHub URLs have a ~8KB limit. If too long, truncate logs.
+        url = _github_url(title, body)
+
+        # GitHub URLs have a ~8KB limit. Progressively truncate.
         if len(url) > 8000:
             body = self._build_body(include_logs=True, max_lines=20)
-            params = urllib.parse.urlencode({
-                "title": title,
-                "body": body,
-                "labels": "bug",
-            })
-            url = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/issues/new?{params}"
+            url = _github_url(title, body)
+        if len(url) > 8000:
+            body = self._build_body(include_logs=False)
+            url = _github_url(title, body)
 
-        QDesktopServices.openUrl(url)
+        QDesktopServices.openUrl(QUrl(url))
         self.accept()
 
     def _submit_gmail(self):
@@ -200,7 +206,7 @@ class BugReportDialog(QDialog):
         })
 
         gmail_url = f"https://mail.google.com/mail/?{params}"
-        QDesktopServices.openUrl(gmail_url)
+        QDesktopServices.openUrl(QUrl(gmail_url))
 
         # Open log directory in Finder so user can drag the file
         self._open_log_in_finder()
@@ -221,7 +227,7 @@ class BugReportDialog(QDialog):
             f"?subject={urllib.parse.quote(subject)}"
             f"&body={urllib.parse.quote(body)}"
         )
-        QDesktopServices.openUrl(mailto_url)
+        QDesktopServices.openUrl(QUrl(mailto_url))
 
         # Open log directory in Finder
         self._open_log_in_finder()
@@ -231,5 +237,4 @@ class BugReportDialog(QDialog):
         """Open the log file's directory in the system file manager."""
         log_path = _get_log_path()
         if log_path.exists():
-            from PySide6.QtCore import QUrl
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(log_path.parent)))
