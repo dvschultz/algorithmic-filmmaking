@@ -1220,6 +1220,13 @@ class MainWindow(QMainWindow):
             self.check_for_updates_action.setEnabled(False)
         self._update_check_worker.start()
 
+    def _on_report_bug(self) -> None:
+        """Show the bug report dialog."""
+        from ui.dialogs.bug_report_dialog import BugReportDialog
+
+        dialog = BugReportDialog(parent=self)
+        dialog.exec()
+
     def _on_manual_check_for_updates(self) -> None:
         """Run an explicit user-triggered update check."""
         from core.paths import is_frozen
@@ -1490,6 +1497,13 @@ class MainWindow(QMainWindow):
         self.check_for_updates_action = QAction("Check for &Updates...", self)
         self.check_for_updates_action.triggered.connect(self._on_manual_check_for_updates)
         help_menu.addAction(self.check_for_updates_action)
+
+        help_menu.addSeparator()
+
+        report_bug_action = QAction("Report &Bug...", self)
+        report_bug_action.setToolTip("Submit a bug report via GitHub, Gmail, or email")
+        report_bug_action.triggered.connect(self._on_report_bug)
+        help_menu.addAction(report_bug_action)
 
         help_menu.addSeparator()
 
