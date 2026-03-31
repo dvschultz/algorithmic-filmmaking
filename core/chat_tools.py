@@ -142,6 +142,7 @@ TOOL_TIMEOUTS = {
     "describe_content_live": 600,   # 10 minutes for descriptions
     "transcribe_clips": 1200,       # 20 minutes
     "export_sequence": 600,    # 10 minutes
+    "export_bundle": 1800,     # 30 minutes (copies video files)
 }
 
 # Default timeout for tools not in TOOL_TIMEOUTS
@@ -171,6 +172,7 @@ class ToolDefinition:
     modifies_gui_state: bool = False
     modifies_project_state: bool = False
     conflicts_with_workers: bool = False
+    emits_gui_sync: bool = False  # Tool results trigger GUI sync signals (e.g., populating search results)
 
 
 def _python_type_to_json_schema(python_type: type) -> dict:
@@ -227,7 +229,8 @@ class ToolRegistry:
         requires_project: bool = True,
         modifies_gui_state: bool = False,
         modifies_project_state: bool = False,
-        conflicts_with_workers: bool = False
+        conflicts_with_workers: bool = False,
+        emits_gui_sync: bool = False
     ):
         """Decorator to register a tool function.
 
@@ -240,6 +243,8 @@ class ToolRegistry:
                 (triggers auto-save after successful execution)
             conflicts_with_workers: Whether this tool conflicts with running
                 GUI workers (e.g., DetectionWorker, DownloadWorker)
+            emits_gui_sync: Whether tool results trigger GUI sync signals
+                (e.g., populating search results or import panels)
 
         Returns:
             Decorator function
@@ -254,7 +259,8 @@ class ToolRegistry:
                 requires_project=requires_project,
                 modifies_gui_state=modifies_gui_state,
                 modifies_project_state=modifies_project_state,
-                conflicts_with_workers=conflicts_with_workers
+                conflicts_with_workers=conflicts_with_workers,
+                emits_gui_sync=emits_gui_sync
             )
             self._tools[tool.name] = tool
             return func
@@ -2008,7 +2014,7 @@ def remove_source(
                 "Supports updating: color_profile ('color', 'grayscale', 'sepia'), "
                 "fps (float), analyzed (bool).",
     requires_project=True,
-    modifies_gui_state=False
+    modifies_gui_state=True
 )
 def update_source(
     project,
@@ -2374,6 +2380,10 @@ def set_project_name(main_window, project, name: str) -> dict:
     old_name = project.metadata.name
     project.metadata.name = clean_name
     project.mark_dirty()
+
+    # Refresh the window title to reflect the new project name
+    if hasattr(main_window, '_update_window_title'):
+        main_window._update_window_title()
 
     # Auto-save the project if it hasn't been saved yet
     # This enables future auto-saves (which require project.path to be set)
@@ -3064,7 +3074,8 @@ Optional filters (require fetching metadata from each video, which is slower):
 - resolution: "any", "4k", "1080p", "720p", or "480p" (minimum resolution)
 - max_size: "any", "100mb", "500mb", or "1gb" (maximum file size)""",
     requires_project=False,
-    modifies_gui_state=False
+    modifies_gui_state=False,
+    emits_gui_sync=True
 )
 def search_youtube(
     query: str,
@@ -3231,7 +3242,8 @@ def search_internet_archive(
     description="Download a video from YouTube or Vimeo URL. Returns the downloaded file path. Uses the default download directory from settings unless output_dir is specified.",
     requires_project=False,
     modifies_gui_state=False,
-    conflicts_with_workers=True
+    conflicts_with_workers=True,
+    emits_gui_sync=True
 )
 def download_video(url: str, output_dir: Optional[str] = None) -> dict:
     """Download video using the Python API."""
@@ -6441,3 +6453,266 @@ def export_clips(
         "exported_files": exported_files[:10],  # First 10 for brevity
         "message": f"Exported {exported}/{len(clips_to_export)} clips to {out_path}",
     }
+
+
+@tools.register(
+    description="Export the current project as a self-contained bundle folder. "
+                "The bundle includes the project file, thumbnails, and optionally "
+                "the source video files. Use lightweight=True to skip copying video "
+                "files (project file + thumbnails only). "
+                "Runs in background - may take significant time for large projects.",
+    requires_project=True,
+    modifies_gui_state=True,
+    modifies_project_state=False
+)
+def export_bundle(
+    main_window,
+    project,
+    output_path: Optional[str] = None,
+    lightweight: bool = False,
+) -> dict:
+    """Export the project as a self-contained bundle folder.
+
+    Args:
+        output_path: Destination directory path (optional, defaults to export_dir)
+        lightweight: If True, skip copying source video files (default False)
+
+    Returns:
+        Dict with _wait_for_worker marker for async execution
+    """
+    # Determine output path
+    if output_path:
+        valid, error, validated_path = _validate_path(output_path)
+        if not valid:
+            return {"success": False, "error": f"Invalid output path: {error}"}
+        dest_dir = validated_path
+    else:
+        settings = load_settings()
+        project_name = project.metadata.name or "project_bundle"
+        dest_dir = settings.export_dir / f"{project_name}_bundle"
+
+    # Ensure parent directory exists
+    dest_dir.parent.mkdir(parents=True, exist_ok=True)
+
+    # Remove existing destination if present (agent skips confirmation dialog)
+    if dest_dir.exists():
+        import shutil
+        shutil.rmtree(dest_dir)
+
+    if main_window is None:
+        return {"success": False, "error": "Main window not available for bundle export"}
+
+    # Check if bundle export is already running
+    if getattr(main_window, 'export_bundle_worker', None) and main_window.export_bundle_worker.isRunning():
+        return {"success": False, "error": "Bundle export already in progress"}
+
+    include_videos = not lightweight
+
+    # Start async export via worker
+    started = main_window.start_agent_export_bundle(dest_dir, include_videos)
+    if not started:
+        return {"success": False, "error": "Failed to start bundle export worker"}
+
+    # Return marker that tells GUI handler to wait for worker completion
+    return {
+        "_wait_for_worker": "export_bundle",
+        "output_path": str(dest_dir),
+        "include_videos": include_videos,
+    }
+
+
+@tools.register(
+    description="Update cinematography analysis fields on a single clip. "
+                "Only specified fields are updated; unspecified fields remain unchanged. "
+                "If the clip has no existing cinematography analysis, a new one is created "
+                "with default values before applying the updates. "
+                "Valid shot_size values: ELS, VLS, LS, MLS, MS, MCU, CU, BCU, ECU, Insert. "
+                "Valid camera_angle values: low_angle, eye_level, high_angle, dutch_angle, birds_eye, worms_eye. "
+                "Valid camera_movement values: static, pan, tilt, track, handheld, crane, arc, n/a. "
+                "Valid lighting_style values: high_key, low_key, natural, dramatic.",
+    requires_project=True,
+    modifies_gui_state=True,
+    modifies_project_state=True
+)
+def update_clip_cinematography(
+    project,
+    clip_id: str,
+    shot_size: Optional[str] = None,
+    camera_angle: Optional[str] = None,
+    angle_effect: Optional[str] = None,
+    camera_movement: Optional[str] = None,
+    movement_direction: Optional[str] = None,
+    dutch_tilt: Optional[str] = None,
+    camera_position: Optional[str] = None,
+    subject_position: Optional[str] = None,
+    headroom: Optional[str] = None,
+    lead_room: Optional[str] = None,
+    balance: Optional[str] = None,
+    subject_count: Optional[str] = None,
+    subject_type: Optional[str] = None,
+    focus_type: Optional[str] = None,
+    background_type: Optional[str] = None,
+    estimated_lens_type: Optional[str] = None,
+    lighting_style: Optional[str] = None,
+    lighting_direction: Optional[str] = None,
+    light_quality: Optional[str] = None,
+    color_temperature: Optional[str] = None,
+    emotional_intensity: Optional[str] = None,
+    suggested_pacing: Optional[str] = None,
+) -> dict:
+    """Update cinematography analysis fields on a clip.
+
+    Args:
+        clip_id: ID of the clip to update
+        shot_size: Shot size (ELS, VLS, LS, MLS, MS, MCU, CU, BCU, ECU, Insert)
+        camera_angle: Camera angle (low_angle, eye_level, high_angle, dutch_angle, birds_eye, worms_eye)
+        angle_effect: Angle narrative effect (power, neutral, vulnerability, disorientation, omniscience, extreme_power)
+        camera_movement: Camera movement type (static, pan, tilt, track, handheld, crane, arc, n/a)
+        movement_direction: Movement direction (left, right, up, down, forward, backward, clockwise, counterclockwise)
+        dutch_tilt: Horizon tilt (none, slight, moderate, extreme, unknown)
+        camera_position: Camera position relative to subject (frontal, three_quarter, profile, back, unknown)
+        subject_position: Subject position in frame (left_third, center, right_third, distributed)
+        headroom: Headroom spacing (tight, normal, excessive, n/a)
+        lead_room: Lead room spacing (tight, normal, excessive, n/a)
+        balance: Visual balance (balanced, left_heavy, right_heavy, symmetrical)
+        subject_count: Subject count (empty, single, two_shot, group)
+        subject_type: Subject type (person, object, landscape, text, mixed)
+        focus_type: Focus type (deep, shallow, rack_focus)
+        background_type: Background type (blurred, sharp, cluttered, plain)
+        estimated_lens_type: Lens type (wide, normal, telephoto, unknown)
+        lighting_style: Lighting style (high_key, low_key, natural, dramatic)
+        lighting_direction: Lighting direction (front, three_quarter, side, back, below)
+        light_quality: Light quality (hard, soft, mixed, unknown)
+        color_temperature: Color temperature (warm, neutral, cool, unknown)
+        emotional_intensity: Emotional intensity (low, medium, high)
+        suggested_pacing: Suggested pacing (fast, medium, slow)
+
+    Returns:
+        Dict with success status and updated fields
+    """
+    from models.cinematography import (
+        CinematographyAnalysis,
+        SHOT_SIZES, CAMERA_ANGLES, ANGLE_EFFECTS, CAMERA_MOVEMENTS,
+        MOVEMENT_DIRECTIONS, DUTCH_TILT_VALUES, CAMERA_POSITION_VALUES,
+        SUBJECT_POSITIONS, SPACING_VALUES, BALANCE_VALUES,
+        SUBJECT_COUNTS, SUBJECT_TYPES, FOCUS_TYPES, BACKGROUND_TYPES,
+        LENS_TYPE_VALUES, LIGHTING_STYLES, LIGHTING_DIRECTIONS,
+        LIGHT_QUALITY_VALUES, COLOR_TEMPERATURE_VALUES,
+        INTENSITY_LEVELS, PACING_VALUES,
+    )
+
+    clip = project.clips_by_id.get(clip_id)
+    if clip is None:
+        return {"success": False, "error": f"Clip not found: {clip_id}"}
+
+    # Validation map: field_name -> (value, valid_values_list)
+    validations = {
+        "shot_size": (shot_size, SHOT_SIZES),
+        "camera_angle": (camera_angle, CAMERA_ANGLES),
+        "angle_effect": (angle_effect, ANGLE_EFFECTS),
+        "camera_movement": (camera_movement, CAMERA_MOVEMENTS),
+        "movement_direction": (movement_direction, MOVEMENT_DIRECTIONS),
+        "dutch_tilt": (dutch_tilt, DUTCH_TILT_VALUES),
+        "camera_position": (camera_position, CAMERA_POSITION_VALUES),
+        "subject_position": (subject_position, SUBJECT_POSITIONS),
+        "headroom": (headroom, SPACING_VALUES),
+        "lead_room": (lead_room, SPACING_VALUES),
+        "balance": (balance, BALANCE_VALUES),
+        "subject_count": (subject_count, SUBJECT_COUNTS),
+        "subject_type": (subject_type, SUBJECT_TYPES),
+        "focus_type": (focus_type, FOCUS_TYPES),
+        "background_type": (background_type, BACKGROUND_TYPES),
+        "estimated_lens_type": (estimated_lens_type, LENS_TYPE_VALUES),
+        "lighting_style": (lighting_style, LIGHTING_STYLES),
+        "lighting_direction": (lighting_direction, LIGHTING_DIRECTIONS),
+        "light_quality": (light_quality, LIGHT_QUALITY_VALUES),
+        "color_temperature": (color_temperature, COLOR_TEMPERATURE_VALUES),
+        "emotional_intensity": (emotional_intensity, INTENSITY_LEVELS),
+        "suggested_pacing": (suggested_pacing, PACING_VALUES),
+    }
+
+    # Validate all provided fields
+    for field_name, (value, valid_list) in validations.items():
+        if value is not None and value not in valid_list:
+            return {
+                "success": False,
+                "error": f"Invalid {field_name} '{value}'. Valid values: {', '.join(valid_list)}"
+            }
+
+    # Create cinematography object if it doesn't exist
+    if clip.cinematography is None:
+        clip.cinematography = CinematographyAnalysis()
+
+    # Apply updates
+    updated_fields = []
+    for field_name, (value, _) in validations.items():
+        if value is not None:
+            setattr(clip.cinematography, field_name, value)
+            updated_fields.append(field_name)
+
+    if updated_fields:
+        project.update_clips([clip])
+
+    return {
+        "success": True,
+        "clip_id": clip_id,
+        "updated_fields": updated_fields,
+        "message": f"Updated cinematography: {', '.join(updated_fields)}" if updated_fields else "No fields updated"
+    }
+
+
+@tools.register(
+    description="Clear (remove) cinematography analysis from one or more clips. "
+                "Sets each clip's cinematography field to None.",
+    requires_project=True,
+    modifies_gui_state=True,
+    modifies_project_state=True
+)
+def clear_clip_cinematography(
+    project,
+    clip_ids: list[str],
+) -> dict:
+    """Clear cinematography analysis from clips.
+
+    Args:
+        clip_ids: List of clip IDs to clear cinematography from
+
+    Returns:
+        Dict with success status and count of cleared clips
+    """
+    if not clip_ids:
+        return {"success": False, "error": "No clip IDs provided"}
+
+    cleared = []
+    not_found = []
+    already_clear = []
+
+    for clip_id in clip_ids:
+        clip = project.clips_by_id.get(clip_id)
+        if clip is None:
+            not_found.append(clip_id)
+            continue
+        if clip.cinematography is None:
+            already_clear.append(clip_id)
+            continue
+        clip.cinematography = None
+        cleared.append(clip_id)
+
+    # Update all modified clips at once
+    if cleared:
+        modified_clips = [project.clips_by_id[cid] for cid in cleared]
+        project.update_clips(modified_clips)
+
+    result = {
+        "success": True,
+        "cleared_count": len(cleared),
+        "cleared_ids": cleared,
+        "message": f"Cleared cinematography from {len(cleared)} clip(s)"
+    }
+
+    if not_found:
+        result["not_found"] = not_found
+    if already_clear:
+        result["already_clear"] = already_clear
+
+    return result

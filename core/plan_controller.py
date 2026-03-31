@@ -19,12 +19,20 @@ _NO_PLAN_ERROR = (
     "After the user confirms the plan widget, then call start_plan_execution."
 )
 
-# Keywords that indicate a plan will modify/use a project
+# Keywords that indicate a plan will modify or use a project.  When any of
+# these appear in the combined step descriptions, the controller treats the
+# plan as project-scoped and may prompt the user to name an untitled project
+# before presenting the plan.
 _PROJECT_KEYWORDS = [
     "download", "detect", "scene", "clip", "sequence", "export",
     "analyze", "transcribe", "shuffle", "randomize", "import",
     "add to", "render", "save",
 ]
+
+# Hard limit on how many steps a single plan may contain.  Enforced in
+# PlanController.present() and surfaced to the LLM via the system prompt
+# so it can avoid generating plans that will be rejected.
+MAX_PLAN_STEPS = 20
 
 
 class PlanController:
@@ -56,10 +64,10 @@ class PlanController:
         if not steps:
             return {"success": False, "error": "No steps provided for the plan"}
 
-        if len(steps) > 20:
+        if len(steps) > MAX_PLAN_STEPS:
             return {
                 "success": False,
-                "error": f"Plan has {len(steps)} steps, maximum is 20. Please break into smaller plans."
+                "error": f"Plan has {len(steps)} steps, maximum is {MAX_PLAN_STEPS}. Please break into smaller plans."
             }
 
         # Check if plan involves project work and project is unnamed

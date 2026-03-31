@@ -830,6 +830,7 @@ class MainWindow(QMainWindow):
         self._pending_agent_description = False
         self._pending_agent_analyze_all = False
         self._pending_agent_export = False
+        self._pending_agent_export_bundle = False
         self._pending_agent_download = False
         self._agent_color_clips: list = []
         self._agent_shot_clips: list = []
@@ -1669,6 +1670,7 @@ class MainWindow(QMainWindow):
         self.chat_panel.provider_changed.connect(self._on_chat_provider_changed)
         self.chat_panel.clear_requested.connect(self._on_chat_clear)
         self.chat_panel.export_requested.connect(self._on_chat_export)
+        self.chat_panel.status_requested.connect(self._on_chat_status)
 
         # Connect plan signals
         self.chat_panel.plan_confirmed.connect(self._on_plan_confirmed)
@@ -2230,6 +2232,8 @@ class MainWindow(QMainWindow):
             # Actually switch the tab in the UI
             tab_name = args.get("tab_name", "")
             tab_names = ["collect", "cut", "analyze", "frames", "sequence", "render"]
+            tab_aliases = {"generate": "sequence"}
+            tab_name = tab_aliases.get(tab_name, tab_name)
             if tab_name in tab_names:
                 index = tab_names.index(tab_name)
                 self.tab_widget.setCurrentIndex(index)
@@ -2793,6 +2797,24 @@ class MainWindow(QMainWindow):
         logger.info("Clearing chat history")
         self._chat_history.clear()
         self._last_user_message = ""
+
+    def _on_chat_status(self):
+        """Handle /status slash command - display project summary in chat."""
+        from core.chat_tools import get_project_summary
+
+        if not self.project:
+            self.chat_panel.add_assistant_message(
+                "No project loaded. Import a video to get started."
+            )
+            return
+
+        result = get_project_summary(self.project)
+        if result.get("success"):
+            self.chat_panel.add_assistant_message(result["summary"])
+        else:
+            self.chat_panel.add_assistant_message(
+                "Could not retrieve project status."
+            )
 
     def _on_chat_export(self):
         """Handle chat export request - show export dialog and save files."""
@@ -6169,6 +6191,38 @@ class MainWindow(QMainWindow):
         self.export_worker.start()
         return True
 
+    def start_agent_export_bundle(self, dest_dir: Path, include_videos: bool = True) -> bool:
+        """Start a bundle export triggered by agent.
+
+        Args:
+            dest_dir: Destination directory for the bundle
+            include_videos: Whether to include source video files
+
+        Returns:
+            True if export started, False if already in progress
+        """
+        # Check if bundle export already running
+        if self.export_bundle_worker and self.export_bundle_worker.isRunning():
+            return False
+
+        # Mark that agent is waiting
+        self._pending_agent_export_bundle = True
+
+        # Start background export
+        self.status_bar.showMessage("Exporting project bundle...")
+
+        self.export_bundle_worker = ExportBundleWorker(
+            project=self.project,
+            dest_dir=dest_dir,
+            include_videos=include_videos,
+            parent=self,
+        )
+        self.export_bundle_worker.progress.connect(self._on_export_bundle_progress)
+        self.export_bundle_worker.export_completed.connect(self._on_export_bundle_finished)
+        self.export_bundle_worker.error.connect(self._on_export_bundle_error)
+        self.export_bundle_worker.start()
+        return True
+
     def _on_sequence_export_progress(self, progress: float, message: str):
         """Handle sequence export progress update."""
         self.progress_bar.setValue(int(progress * 100))
@@ -6519,6 +6573,11 @@ class MainWindow(QMainWindow):
 
         elif wait_type == "export":
             # Export worker is started by the tool itself via start_agent_export
+            # Just return True since the worker is already running
+            return True
+
+        elif wait_type == "export_bundle":
+            # Bundle export worker is started by the tool itself via start_agent_export_bundle
             # Just return True since the worker is already running
             return True
 
@@ -8450,20 +8509,56 @@ class MainWindow(QMainWindow):
 
         self.status_bar.showMessage(f"Bundle exported to {result.dest_dir.name}", 5000)
 
-        QMessageBox.information(self, "Export Project Bundle", msg)
+        # If agent was waiting for bundle export, send result back
+        if self._pending_agent_export_bundle and self._chat_worker:
+            self._pending_agent_export_bundle = False
+            agent_result = {
+                "tool_call_id": self._pending_agent_tool_call_id,
+                "name": self._pending_agent_tool_name,
+                "success": True,
+                "result": {
+                    "success": True,
+                    "output_path": str(result.dest_dir),
+                    "sources_copied": result.sources_copied,
+                    "clips_exported": result.clips_exported,
+                    "frames_copied": result.frames_copied,
+                    "message": msg,
+                }
+            }
+            self._pending_agent_tool_call_id = None
+            self._pending_agent_tool_name = None
+            self._chat_worker.set_gui_tool_result(agent_result)
+            logger.info(f"Sent bundle export result to agent: {result.dest_dir}")
+        else:
+            QMessageBox.information(self, "Export Project Bundle", msg)
 
-        # Open containing folder
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(result.dest_dir.parent)))
+            # Open containing folder
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(result.dest_dir.parent)))
 
     def _on_export_bundle_error(self, error_msg: str):
         """Handle bundle export error."""
         self.export_bundle_worker = None
         self.status_bar.showMessage("Bundle export failed", 5000)
-        QMessageBox.warning(
-            self,
-            "Export Project Bundle",
-            f"Export failed:\n{error_msg}",
-        )
+
+        # If agent was waiting for bundle export, send error result
+        if self._pending_agent_export_bundle and self._chat_worker:
+            self._pending_agent_export_bundle = False
+            agent_result = {
+                "tool_call_id": self._pending_agent_tool_call_id,
+                "name": self._pending_agent_tool_name,
+                "success": False,
+                "error": error_msg
+            }
+            self._pending_agent_tool_call_id = None
+            self._pending_agent_tool_name = None
+            self._chat_worker.set_gui_tool_result(agent_result)
+            logger.info(f"Sent bundle export error to agent: {error_msg}")
+        else:
+            QMessageBox.warning(
+                self,
+                "Export Project Bundle",
+                f"Export failed:\n{error_msg}",
+            )
 
     # ==================== Project Save/Load ====================
 

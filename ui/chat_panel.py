@@ -58,6 +58,7 @@ class ChatPanel(QWidget):
     provider_changed = Signal(str)  # Provider selection changed
     clear_requested = Signal()  # Clear chat history requested
     export_requested = Signal()  # Export chat history requested
+    status_requested = Signal()  # /status slash command
 
     # Plan-related signals
     plan_confirmed = Signal(object)  # Emits Plan object when confirmed
@@ -323,6 +324,12 @@ class ChatPanel(QWidget):
         if command == "/help":
             help_text = (
                 "**Agent Capabilities**\n\n"
+                "**Slash Commands**\n"
+                "- `/help` - Show this help message\n"
+                "- `/status` - Show project status (sources, clips, analysis coverage)\n"
+                "- `/detect` - Detect scenes in all unanalyzed videos\n"
+                "- `/analyze` - Run all available analysis on all clips\n"
+                "- `/export` - Export the current sequence as MP4\n\n"
                 "**Import & Sources**\n"
                 "- `search_youtube` - Search for videos on YouTube\n"
                 "- `download_video` - Download a video from URL\n"
@@ -365,6 +372,26 @@ class ChatPanel(QWidget):
                 "Type a natural language request to get started!"
             )
             self.add_assistant_message(help_text)
+            return True
+
+        if command == "/status":
+            self.status_requested.emit()
+            return True
+
+        if command == "/detect":
+            # Inject a pre-written prompt as if the user typed it
+            self._set_streaming_state(True)
+            self.message_sent.emit("Detect scenes in all unanalyzed videos")
+            return True
+
+        if command == "/analyze":
+            self._set_streaming_state(True)
+            self.message_sent.emit("Run all available analysis on all clips")
+            return True
+
+        if command == "/export":
+            self._set_streaming_state(True)
+            self.message_sent.emit("Export the current sequence as MP4")
             return True
 
         # Unknown slash command - pass through to LLM

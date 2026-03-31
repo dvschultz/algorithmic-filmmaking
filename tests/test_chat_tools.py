@@ -1223,3 +1223,332 @@ class TestPendingActionTracking:
         state.clear_pending_action()
 
         assert state.pending_action is None
+
+
+class TestExportBundle:
+    """Tests for export_bundle tool."""
+
+    def test_export_bundle_no_main_window(self):
+        """Test export_bundle returns error when main_window is None."""
+        from core.chat_tools import export_bundle
+
+        project = _create_chat_test_project()
+        result = export_bundle(None, project)
+
+        assert result["success"] is False
+        assert "Main window" in result["error"]
+
+    def test_export_bundle_already_running(self):
+        """Test export_bundle returns error when already in progress."""
+        from core.chat_tools import export_bundle
+
+        project = _create_chat_test_project()
+        main_window = Mock()
+        worker = Mock()
+        worker.isRunning.return_value = True
+        main_window.export_bundle_worker = worker
+
+        result = export_bundle(main_window, project)
+
+        assert result["success"] is False
+        assert "already in progress" in result["error"]
+
+    def test_export_bundle_starts_worker(self, tmp_path):
+        """Test export_bundle starts the worker and returns wait marker."""
+        from core.chat_tools import export_bundle
+
+        project = _create_chat_test_project()
+        main_window = Mock()
+        main_window.export_bundle_worker = None
+        main_window.start_agent_export_bundle.return_value = True
+
+        dest = str(tmp_path / "test_bundle")
+        result = export_bundle(main_window, project, output_path=dest)
+
+        assert "_wait_for_worker" in result
+        assert result["_wait_for_worker"] == "export_bundle"
+        assert result["include_videos"] is True
+        main_window.start_agent_export_bundle.assert_called_once_with(
+            tmp_path / "test_bundle", True
+        )
+
+    def test_export_bundle_lightweight(self, tmp_path):
+        """Test export_bundle with lightweight=True skips videos."""
+        from core.chat_tools import export_bundle
+
+        project = _create_chat_test_project()
+        main_window = Mock()
+        main_window.export_bundle_worker = None
+        main_window.start_agent_export_bundle.return_value = True
+
+        dest = str(tmp_path / "test_bundle")
+        result = export_bundle(main_window, project, output_path=dest, lightweight=True)
+
+        assert "_wait_for_worker" in result
+        assert result["include_videos"] is False
+        main_window.start_agent_export_bundle.assert_called_once_with(
+            tmp_path / "test_bundle", False
+        )
+
+    def test_export_bundle_worker_fails_to_start(self, tmp_path):
+        """Test export_bundle returns error when worker fails to start."""
+        from core.chat_tools import export_bundle
+
+        project = _create_chat_test_project()
+        main_window = Mock()
+        main_window.export_bundle_worker = None
+        main_window.start_agent_export_bundle.return_value = False
+
+        dest = str(tmp_path / "test_bundle")
+        result = export_bundle(main_window, project, output_path=dest)
+
+        assert result["success"] is False
+        assert "Failed to start" in result["error"]
+
+
+class TestUpdateClipCinematography:
+    """Tests for update_clip_cinematography tool."""
+
+    def test_update_creates_cinematography_if_none(self):
+        """Test update creates a new CinematographyAnalysis if clip has none."""
+        from core.chat_tools import update_clip_cinematography
+
+        project = _create_chat_test_project()
+        project.add_clips([make_test_clip("clip-1")])
+        clip = project.clips_by_id["clip-1"]
+        assert clip.cinematography is None
+
+        result = update_clip_cinematography(
+            project, clip_id="clip-1", shot_size="CU"
+        )
+
+        assert result["success"] is True
+        assert "shot_size" in result["updated_fields"]
+        assert clip.cinematography is not None
+        assert clip.cinematography.shot_size == "CU"
+
+    def test_update_modifies_existing_cinematography(self):
+        """Test update modifies existing cinematography fields."""
+        from core.chat_tools import update_clip_cinematography
+        from models.cinematography import CinematographyAnalysis
+
+        project = _create_chat_test_project()
+        project.add_clips([make_test_clip("clip-1")])
+        clip = project.clips_by_id["clip-1"]
+        clip.cinematography = CinematographyAnalysis(
+            shot_size="MS", camera_angle="eye_level"
+        )
+
+        result = update_clip_cinematography(
+            project,
+            clip_id="clip-1",
+            shot_size="ECU",
+            camera_angle="low_angle",
+            lighting_style="dramatic",
+        )
+
+        assert result["success"] is True
+        assert set(result["updated_fields"]) == {"shot_size", "camera_angle", "lighting_style"}
+        assert clip.cinematography.shot_size == "ECU"
+        assert clip.cinematography.camera_angle == "low_angle"
+        assert clip.cinematography.lighting_style == "dramatic"
+
+    def test_update_preserves_unmodified_fields(self):
+        """Test that unspecified fields retain their values."""
+        from core.chat_tools import update_clip_cinematography
+        from models.cinematography import CinematographyAnalysis
+
+        project = _create_chat_test_project()
+        project.add_clips([make_test_clip("clip-1")])
+        clip = project.clips_by_id["clip-1"]
+        clip.cinematography = CinematographyAnalysis(
+            shot_size="LS", camera_angle="high_angle", lighting_style="low_key"
+        )
+
+        result = update_clip_cinematography(
+            project, clip_id="clip-1", shot_size="CU"
+        )
+
+        assert result["success"] is True
+        assert clip.cinematography.shot_size == "CU"
+        # These should be unchanged
+        assert clip.cinematography.camera_angle == "high_angle"
+        assert clip.cinematography.lighting_style == "low_key"
+
+    def test_update_invalid_shot_size(self):
+        """Test update rejects invalid shot_size values."""
+        from core.chat_tools import update_clip_cinematography
+
+        project = _create_chat_test_project()
+        project.add_clips([make_test_clip("clip-1")])
+
+        result = update_clip_cinematography(
+            project, clip_id="clip-1", shot_size="INVALID"
+        )
+
+        assert result["success"] is False
+        assert "Invalid shot_size" in result["error"]
+
+    def test_update_invalid_camera_angle(self):
+        """Test update rejects invalid camera_angle values."""
+        from core.chat_tools import update_clip_cinematography
+
+        project = _create_chat_test_project()
+        project.add_clips([make_test_clip("clip-1")])
+
+        result = update_clip_cinematography(
+            project, clip_id="clip-1", camera_angle="upside_down"
+        )
+
+        assert result["success"] is False
+        assert "Invalid camera_angle" in result["error"]
+
+    def test_update_clip_not_found(self):
+        """Test update returns error for non-existent clip."""
+        from core.chat_tools import update_clip_cinematography
+
+        project = _create_chat_test_project()
+
+        result = update_clip_cinematography(
+            project, clip_id="nonexistent", shot_size="CU"
+        )
+
+        assert result["success"] is False
+        assert "not found" in result["error"]
+
+    def test_update_no_fields_provided(self):
+        """Test update with no fields returns success with empty updated_fields."""
+        from core.chat_tools import update_clip_cinematography
+
+        project = _create_chat_test_project()
+        project.add_clips([make_test_clip("clip-1")])
+
+        result = update_clip_cinematography(project, clip_id="clip-1")
+
+        assert result["success"] is True
+        assert result["updated_fields"] == []
+
+    def test_update_all_field_categories(self):
+        """Test that all cinematography field categories can be set."""
+        from core.chat_tools import update_clip_cinematography
+
+        project = _create_chat_test_project()
+        project.add_clips([make_test_clip("clip-1")])
+
+        result = update_clip_cinematography(
+            project,
+            clip_id="clip-1",
+            shot_size="ELS",
+            camera_angle="birds_eye",
+            angle_effect="omniscience",
+            camera_movement="crane",
+            movement_direction="up",
+            dutch_tilt="moderate",
+            camera_position="profile",
+            subject_position="left_third",
+            headroom="tight",
+            lead_room="excessive",
+            balance="left_heavy",
+            subject_count="two_shot",
+            subject_type="person",
+            focus_type="shallow",
+            background_type="blurred",
+            estimated_lens_type="telephoto",
+            lighting_style="low_key",
+            lighting_direction="side",
+            light_quality="hard",
+            color_temperature="warm",
+            emotional_intensity="high",
+            suggested_pacing="fast",
+        )
+
+        assert result["success"] is True
+        assert len(result["updated_fields"]) == 22
+        clip = project.clips_by_id["clip-1"]
+        assert clip.cinematography.shot_size == "ELS"
+        assert clip.cinematography.camera_movement == "crane"
+        assert clip.cinematography.dutch_tilt == "moderate"
+        assert clip.cinematography.color_temperature == "warm"
+
+
+class TestClearClipCinematography:
+    """Tests for clear_clip_cinematography tool."""
+
+    def test_clear_removes_cinematography(self):
+        """Test clearing cinematography sets it to None."""
+        from core.chat_tools import clear_clip_cinematography
+        from models.cinematography import CinematographyAnalysis
+
+        project = _create_chat_test_project()
+        project.add_clips([make_test_clip("clip-1")])
+        clip = project.clips_by_id["clip-1"]
+        clip.cinematography = CinematographyAnalysis(shot_size="CU")
+
+        result = clear_clip_cinematography(project, clip_ids=["clip-1"])
+
+        assert result["success"] is True
+        assert result["cleared_count"] == 1
+        assert "clip-1" in result["cleared_ids"]
+        assert clip.cinematography is None
+
+    def test_clear_multiple_clips(self):
+        """Test clearing cinematography from multiple clips."""
+        from core.chat_tools import clear_clip_cinematography
+        from models.cinematography import CinematographyAnalysis
+
+        project = _create_chat_test_project()
+        project.add_clips([
+            make_test_clip("clip-1"),
+            make_test_clip("clip-2"),
+            make_test_clip("clip-3"),
+        ])
+        project.clips_by_id["clip-1"].cinematography = CinematographyAnalysis()
+        project.clips_by_id["clip-2"].cinematography = CinematographyAnalysis()
+
+        result = clear_clip_cinematography(
+            project, clip_ids=["clip-1", "clip-2", "clip-3"]
+        )
+
+        assert result["success"] is True
+        assert result["cleared_count"] == 2
+        assert "clip-3" in result["already_clear"]
+        assert project.clips_by_id["clip-1"].cinematography is None
+        assert project.clips_by_id["clip-2"].cinematography is None
+
+    def test_clear_clip_not_found(self):
+        """Test clearing non-existent clip reports it as not found."""
+        from core.chat_tools import clear_clip_cinematography
+
+        project = _create_chat_test_project()
+
+        result = clear_clip_cinematography(
+            project, clip_ids=["nonexistent"]
+        )
+
+        assert result["success"] is True
+        assert result["cleared_count"] == 0
+        assert "nonexistent" in result["not_found"]
+
+    def test_clear_already_clear(self):
+        """Test clearing a clip that already has no cinematography."""
+        from core.chat_tools import clear_clip_cinematography
+
+        project = _create_chat_test_project()
+        project.add_clips([make_test_clip("clip-1")])
+
+        result = clear_clip_cinematography(project, clip_ids=["clip-1"])
+
+        assert result["success"] is True
+        assert result["cleared_count"] == 0
+        assert "clip-1" in result["already_clear"]
+
+    def test_clear_empty_list(self):
+        """Test clearing with empty list returns error."""
+        from core.chat_tools import clear_clip_cinematography
+
+        project = _create_chat_test_project()
+
+        result = clear_clip_cinematography(project, clip_ids=[])
+
+        assert result["success"] is False
+        assert "No clip IDs" in result["error"]

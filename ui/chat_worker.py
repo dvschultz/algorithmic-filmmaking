@@ -22,6 +22,12 @@ from core.chat_tools import get_tool_timeout, tools as tool_registry
 from core.llm_client import LLMClient, ProviderConfig, check_ollama_health
 from core.tool_executor import ToolExecutor
 
+# Maximum iterations for the agent tool loop. Prevents infinite loops when the
+# LLM repeatedly calls tools without converging on a final response.  Set high
+# enough to allow complex multi-step workflows (e.g., downloading and processing
+# many videos) but low enough to catch genuine infinite loops.
+AGENT_MAX_ITERATIONS = 25
+
 logger = logging.getLogger(__name__)
 
 
@@ -234,11 +240,10 @@ class ChatAgentWorker(QThread):
         system_prompt = self._build_system_prompt()
         full_messages = [{"role": "system", "content": system_prompt}] + self.messages
 
-        max_iterations = 25  # Prevent infinite tool loops (increased for complex multi-step workflows)
         iteration = 0
         tool_history = []  # Track tool interactions for history
 
-        while iteration < max_iterations and not self._stop_requested:
+        while iteration < AGENT_MAX_ITERATIONS and not self._stop_requested:
             iteration += 1
 
             try:
@@ -361,7 +366,7 @@ class ChatAgentWorker(QThread):
                 self.error.emit(error_msg)
                 return
 
-        if iteration >= max_iterations:
+        if iteration >= AGENT_MAX_ITERATIONS:
             self.error.emit("Maximum tool iterations reached. The agent may be stuck in a loop.")
         elif self._stop_requested:
             self.complete.emit("*Cancelled*", tool_history)
@@ -641,6 +646,8 @@ Example step descriptions (human-readable, not tool names):
 - "Export the clips as individual files"
 
 PLANNING CONSTRAINTS:
+Plans may not exceed 20 steps. If a workflow needs more, break it into multiple plans.
+
 When creating plans, follow these tool dependency rules:
 
 1. SEARCH → DOWNLOAD RULE: After a "search" step (search_youtube), you MUST include
@@ -700,8 +707,23 @@ Available tools:
                 sources_info.append(f"  - {s.file_path.name} ({s.duration_seconds:.1f}s, {clip_count} clips, {status})")
 
             seq_length = 0
+            seq_duration_seconds = 0.0
+            seq_shot_types_line = ""
             if self.project.sequence and self.project.sequence.tracks:
                 seq_length = len(self.project.sequence.tracks[0].clips)
+                seq_duration_seconds = self.project.sequence.duration_seconds
+                # Summarise per-clip shot types in the sequence
+                seq_shot_counts: dict[str, int] = {}
+                clips_by_id = self.project.clips_by_id
+                for track in self.project.sequence.tracks:
+                    for sc in track.clips:
+                        src_clip = clips_by_id.get(sc.source_clip_id)
+                        if src_clip and src_clip.shot_type:
+                            seq_shot_counts[src_clip.shot_type] = seq_shot_counts.get(src_clip.shot_type, 0) + 1
+                if seq_shot_counts:
+                    sorted_seq_shots = sorted(seq_shot_counts.items(), key=lambda x: x[1], reverse=True)
+                    seq_shot_strs = [f"{name}: {cnt}" for name, cnt in sorted_seq_shots]
+                    seq_shot_types_line = f"\n  Sequence shot types: {', '.join(seq_shot_strs)}"
 
             # Compute analysis metadata counts
             total_clips = len(self.project.clips)
@@ -767,7 +789,11 @@ CURRENT PROJECT STATE:
 - Sources ({len(self.project.sources)} video(s)):
 {chr(10).join(sources_info) if sources_info else "  (none)"}
 - Total Clips: {total_clips}
-- Sequence Length: {seq_length} clips{analysis_lines}{distribution_lines}
+- Sequence Length: {seq_length} clips ({seq_duration_seconds:.1f}s){seq_shot_types_line}{analysis_lines}{distribution_lines}
+- ACTIVE SETTINGS:
+  Export quality: {settings.export_quality}
+  Transcription model: {settings.transcription_model}
+  Description model tier: {settings.description_model_tier}
 
 You can reference existing clips by their IDs and build on this project.
 """
@@ -795,8 +821,9 @@ CURRENT GUI STATE:
             args: Tool arguments
             result: Tool execution result
         """
-        # Only process tools we care about syncing
-        if tool_name not in ("search_youtube", "download_video"):
+        # Only process tools whose definition has emits_gui_sync=True
+        tool_def = tool_registry.get(tool_name)
+        if not tool_def or not tool_def.emits_gui_sync:
             return
 
         if not result.get("success", False):
