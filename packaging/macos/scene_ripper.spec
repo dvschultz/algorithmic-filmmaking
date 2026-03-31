@@ -166,9 +166,24 @@ a = Analysis(
         # No longer used (video playback via MPV, not Qt Multimedia)
         "PySide6.QtMultimedia",
         "PySide6.QtMultimediaWidgets",
-        # faster-whisper stays unbundled in the macOS app; local transcription
-        # is constrained to bundled MLX medium.en.
+        # On-demand packages (downloaded at runtime, not bundled).
+        # Excluding these prevents unsigned binaries from leaking into the
+        # app bundle (e.g., torch/bin/protoc) which Apple notarization rejects.
+        "torch",
+        "torchvision",
+        "torchaudio",
+        "transformers",
+        "ultralytics",
         "faster_whisper",
+        "lightning_whisper_mlx",
+        "mlx_vlm",
+        "mlx",
+        "librosa",
+        "demucs_infer",
+        "insightface",
+        "onnxruntime",
+        "paddleocr",
+        "paddlepaddle",
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
