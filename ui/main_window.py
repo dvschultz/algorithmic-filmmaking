@@ -1496,19 +1496,25 @@ class MainWindow(QMainWindow):
         from core.update_checker import _GITHUB_OWNER, _GITHUB_REPO
         _docs_base = f"https://github.com/{_GITHUB_OWNER}/{_GITHUB_REPO}/blob/main/docs/user-guide"
 
-        sequencer_guide_action = QAction("&Sequencer Guide", self)
-        sequencer_guide_action.setToolTip("Opens sequencer algorithm documentation on GitHub")
-        sequencer_guide_action.triggered.connect(
-            lambda: QDesktopServices.openUrl(QUrl(f"{_docs_base}/sequencers.md"))
-        )
-        help_menu.addAction(sequencer_guide_action)
-
-        api_keys_action = QAction("&API Keys Guide", self)
-        api_keys_action.setToolTip("Opens API key setup documentation on GitHub")
-        api_keys_action.triggered.connect(
-            lambda: QDesktopServices.openUrl(QUrl(f"{_docs_base}/api-keys.md"))
-        )
-        help_menu.addAction(api_keys_action)
+        _help_docs = [
+            ("&Chat Agent Guide", "agent.md", "What the chat agent can do"),
+            ("Agent &Tools Reference", "agent-tools.md", "All 103 agent tools with examples"),
+            ("&Analysis Guide", "analysis.md", "How each analysis type works"),
+            ("&Sequencer Guide", "sequencers.md", "Sequencer algorithm documentation"),
+            ("&Local AI Models", "local-models.md", "Local models used for analysis"),
+            ("API &Keys Guide", "api-keys.md", "API key setup for cloud features"),
+            ("&Prompt Reference", "prompts.md", "System prompts used by analysis"),
+            ("&Reporting Bugs", "reporting-bugs.md", "How to report issues"),
+        ]
+        for label, filename, tooltip in _help_docs:
+            action = QAction(label, self)
+            action.setToolTip(tooltip)
+            action.triggered.connect(
+                lambda checked=False, f=filename: QDesktopServices.openUrl(
+                    QUrl(f"{_docs_base}/{f}")
+                )
+            )
+            help_menu.addAction(action)
 
     def _is_any_worker_running(self) -> bool:
         """Check if any background worker is currently running."""
