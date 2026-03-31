@@ -106,6 +106,7 @@ The Scene Ripper chat agent has access to 103 tools organized by category. You d
 | `generate_reference_guided` | Match clips to a reference edit | "Match my clips to the reference video's structure" |
 | `list_sorting_algorithms` | See available algorithms | "What sequencing algorithms can I use?" |
 | `get_available_dimensions` | See matching dimensions | "What dimensions are available for reference matching?" |
+| `get_remix_state` | Get current sequence tab state | "What algorithm is currently active?" |
 
 **Available algorithms for `generate_remix`:**
 
