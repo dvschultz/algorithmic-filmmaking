@@ -69,6 +69,7 @@ class GUIState:
     # Sequence state
     sequence_ids: list[str] = field(default_factory=list)
     sequence_shot_filter: Optional[str] = None
+    sequence_gaze_filter: Optional[str] = None
 
     # Plan state
     current_plan: Optional["Plan"] = None
@@ -145,6 +146,9 @@ class GUIState:
 
             if self.sequence_shot_filter:
                 lines.append(f"SEQUENCE SHOT FILTER: {self.sequence_shot_filter}")
+
+            if self.sequence_gaze_filter:
+                lines.append(f"SEQUENCE GAZE FILTER: {self.sequence_gaze_filter}")
 
             if self.selected_clip_ids:
                 lines.append(f"SELECTED CLIPS: {len(self.selected_clip_ids)}")
@@ -425,6 +429,7 @@ class GUIState:
             # Sequence state
             self.sequence_ids = []
             self.sequence_shot_filter = None
+            self.sequence_gaze_filter = None
 
             # Frame state
             self.selected_frame_ids = []

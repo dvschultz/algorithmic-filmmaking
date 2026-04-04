@@ -703,7 +703,7 @@ def filter_clips(
         if source and source.height > 0:
             clip_aspect_ratio = round(source.width / source.height, 3)
 
-        results.append({
+        clip_data = {
             "id": clip.id,
             "source_id": clip.source_id,
             "source_name": source.file_path.name if source else "Unknown",
@@ -717,7 +717,14 @@ def filter_clips(
             "width": source.width if source else None,
             "height": source.height if source else None,
             "aspect_ratio": clip_aspect_ratio,
-        })
+        }
+        if getattr(clip, 'gaze_yaw', None) is not None:
+            clip_data["gaze_yaw"] = round(clip.gaze_yaw, 2)
+        if getattr(clip, 'gaze_pitch', None) is not None:
+            clip_data["gaze_pitch"] = round(clip.gaze_pitch, 2)
+        if getattr(clip, 'gaze_category', None) is not None:
+            clip_data["gaze_category"] = clip.gaze_category
+        results.append(clip_data)
 
     return results
 
@@ -794,7 +801,7 @@ def list_clips(
         fps = source.fps if source else 30.0
         duration = (clip.end_frame - clip.start_frame) / fps
 
-        results.append({
+        clip_data = {
             "id": clip.id,
             "source_id": clip.source_id,
             "source_name": source.file_path.name if source else "Unknown",
@@ -812,7 +819,14 @@ def list_clips(
             "tags": getattr(clip, 'tags', []),
             "has_face_embeddings": clip.face_embeddings is not None and len(clip.face_embeddings) > 0,
             "face_count": len(clip.face_embeddings) if clip.face_embeddings else 0,
-        })
+        }
+        if getattr(clip, 'gaze_yaw', None) is not None:
+            clip_data["gaze_yaw"] = round(clip.gaze_yaw, 2)
+        if getattr(clip, 'gaze_pitch', None) is not None:
+            clip_data["gaze_pitch"] = round(clip.gaze_pitch, 2)
+        if getattr(clip, 'gaze_category', None) is not None:
+            clip_data["gaze_category"] = clip.gaze_category
+        results.append(clip_data)
 
     # Check if detection is in progress when no clips found
     if not results and main_window is not None:
@@ -1225,6 +1239,52 @@ def set_sequence_shot_filter(
             "message": (
                 f"Showing {filtered_count} clips"
                 + (f" of type '{shot_type}'" if shot_type else " (all types)")
+            ),
+        },
+    }
+
+
+@tools.register(
+    description=(
+        "Filter the sequence tab to show only clips with a specific gaze direction. "
+        "Valid gaze categories: 'at_camera', 'looking_left', 'looking_right', "
+        "'looking_up', 'looking_down'. "
+        "Use gaze_category=None to show all clips (remove filter)."
+    ),
+    requires_project=True,
+    modifies_gui_state=True,
+)
+def set_sequence_gaze_filter(
+    project,
+    gui_state,
+    main_window,
+    gaze_category: Optional[str] = None,
+) -> dict:
+    """Set the gaze direction filter for the sequence tab."""
+    valid_categories = [
+        "at_camera", "looking_left", "looking_right",
+        "looking_up", "looking_down",
+    ]
+
+    if gaze_category and gaze_category not in valid_categories:
+        return {
+            "success": False,
+            "error": f"Invalid gaze category '{gaze_category}'. Valid categories: {valid_categories}",
+        }
+
+    sequence_tab = main_window.sequence_tab
+    filtered_count = sequence_tab.apply_gaze_filter(gaze_category)
+
+    gui_state.sequence_gaze_filter = gaze_category
+
+    return {
+        "success": True,
+        "result": {
+            "gaze_category": gaze_category or "all",
+            "clip_count": filtered_count,
+            "message": (
+                f"Showing {filtered_count} clips"
+                + (f" with gaze '{gaze_category}'" if gaze_category else " (all gaze directions)")
             ),
         },
     }
@@ -2920,10 +2980,12 @@ def get_project_summary(project) -> dict:
         with_transcript = sum(1 for c in project.clips if c.transcript)
         with_tags = sum(1 for c in project.clips if c.tags)
         with_notes = sum(1 for c in project.clips if c.notes)
+        with_gaze = sum(1 for c in project.clips if c.gaze_category is not None)
 
         lines.append(f"- **Color analyzed**: {with_colors}/{len(project.clips)}")
         lines.append(f"- **Shot classified**: {with_shots}/{len(project.clips)}")
         lines.append(f"- **Transcribed**: {with_transcript}/{len(project.clips)}")
+        lines.append(f"- **Gaze analyzed**: {with_gaze}/{len(project.clips)}")
         lines.append(f"- **Tagged**: {with_tags}/{len(project.clips)}")
         lines.append(f"- **With notes**: {with_notes}/{len(project.clips)}")
 
@@ -3887,6 +3949,51 @@ def custom_visual_query(
     }
 
 
+@tools.register(
+    description="Detect gaze direction (where subjects are looking) for selected clips "
+                "using MediaPipe Face Mesh iris tracking. Produces yaw/pitch angles and "
+                "categorical labels (at_camera, looking_left, looking_right, looking_up, "
+                "looking_down).",
+    requires_project=True,
+    modifies_gui_state=True,
+    modifies_project_state=True
+)
+def analyze_gaze(
+    main_window,
+    clip_ids: Optional[list[str]] = None,
+) -> dict:
+    """Run gaze direction analysis on clips.
+
+    Args:
+        clip_ids: List of clip IDs to analyze. If None, analyzes all clips
+            in the Analyze tab.
+
+    Returns:
+        Dict with _wait_for_worker marker for async execution.
+    """
+    # Resolve clips
+    if clip_ids:
+        valid_ids = [cid for cid in clip_ids if cid in main_window.project.clips_by_id]
+        if not valid_ids:
+            return {"success": False, "error": "No valid clip IDs found"}
+    else:
+        clips = main_window.analyze_tab.get_clips()
+        if not clips:
+            return {
+                "success": False,
+                "error": "No clips in Analyze tab. Send clips to Analyze first."
+            }
+        valid_ids = [c.id for c in clips]
+
+    # Return marker — GUI layer handles tab switch, clip loading, and pipeline start
+    return {
+        "_wait_for_worker": "analyze_all",
+        "clip_ids": valid_ids,
+        "clip_count": len(valid_ids),
+        "operations": ["gaze"],
+    }
+
+
 # =============================================================================
 # Sequence/Remix Tools - Generate sorted clip sequences
 # =============================================================================
@@ -3918,6 +4025,7 @@ def list_sorting_algorithms(project) -> dict:
     has_text = any(clip.extracted_texts for clip in clips) if clips else False
     has_descriptions = any(clip.description for clip in clips) if clips else False
     has_face_embeddings = any(clip.face_embeddings for clip in clips) if clips else False
+    has_gaze = any(clip.gaze_category is not None for clip in clips) if clips else False
 
     algorithms = [
         {
@@ -4047,6 +4155,24 @@ def list_sorting_algorithms(project) -> dict:
                 {"name": "sampling_interval", "type": "number", "description": "Seconds between frame samples (0.25-5.0, default 1.0)"},
             ]
         },
+        {
+            "key": "gaze_sort",
+            "name": "Gaze Sort",
+            "description": "Arrange clips by gaze direction",
+            "available": has_gaze,
+            "reason": None if has_gaze else "Run gaze analysis on clips first",
+            "parameters": [
+                {"name": "direction", "type": "string", "options": ["left_to_right", "right_to_left"], "default": "left_to_right"}
+            ]
+        },
+        {
+            "key": "gaze_consistency",
+            "name": "Gaze Consistency",
+            "description": "Group clips by matching gaze direction",
+            "available": has_gaze,
+            "reason": None if has_gaze else "Run gaze analysis on clips first",
+            "parameters": []
+        },
     ]
 
     return {
@@ -4065,7 +4191,8 @@ def list_sorting_algorithms(project) -> dict:
     description="Generate a sequence using a sorting algorithm and apply it to the timeline. "
                 "Available algorithms: color, duration, brightness, volume, "
                 "shuffle, sequential, shot_type, proximity, similarity_chain, match_cut, "
-                "exquisite_corpus, storyteller. Use list_sorting_algorithms to check availability.",
+                "exquisite_corpus, storyteller, gaze_sort, gaze_consistency. "
+                "Use list_sorting_algorithms to check availability.",
     requires_project=True,
     modifies_gui_state=True
 )
@@ -4103,6 +4230,7 @@ def generate_remix(
         "color", "duration", "brightness", "volume",
         "shuffle", "sequential", "shot_type", "proximity",
         "similarity_chain", "match_cut", "exquisite_corpus", "storyteller",
+        "gaze_sort", "gaze_consistency",
     ]
     if algorithm not in valid_algorithms:
         return {

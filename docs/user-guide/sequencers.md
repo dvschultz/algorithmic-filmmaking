@@ -1,6 +1,6 @@
 # Sequencer Algorithms
 
-Scene Ripper includes 16 sequencer algorithms that arrange your clips into a sequence. Each algorithm uses a different creative logic to determine the order.
+Scene Ripper includes 19 sequencer algorithms that arrange your clips into a sequence. Each algorithm uses a different creative logic to determine the order.
 
 To use a sequencer, go to the **Sequence** tab, select an algorithm from the dropdown, and click **Generate**. Some algorithms require that you run specific analysis on your clips first (in the **Analyze** tab). Others open a dialog where you configure additional options before generating.
 
@@ -90,6 +90,31 @@ Glide from distant vistas to intimate close-ups.
 |-----------|-------------|
 | Far to Close | Start with wide/establishing shots and move to close-ups |
 | Close to Far | Start with close-ups and pull back to wide shots |
+
+### Gaze Sort
+
+Arrange clips by where subjects are looking, from left to right or up to down.
+
+**Required analysis:** Gaze direction
+
+**Direction options:**
+
+| Direction | Description |
+|-----------|-------------|
+| Left to Right | Start with subjects looking left and progress to subjects looking right |
+| Right to Left | The reverse: right-looking clips first |
+| Up to Down | Start with subjects looking up and progress to subjects looking down |
+| Down to Up | The reverse: down-looking clips first |
+
+Clips without gaze data (no face detected) are appended at the end of the sequence.
+
+### Gaze Consistency
+
+Group clips where subjects are looking in the same direction. All "looking left" clips are grouped together, then all "looking right", and so on — largest groups first.
+
+**Required analysis:** Gaze direction
+
+Within each group, clips are sorted by their actual gaze angle. Clips without gaze data are appended at the end.
 
 ---
 
@@ -224,3 +249,25 @@ Isolate clips featuring a specific person. Named after Joseph Cornell's 1936 fou
 3. Choose how to order matched clips: Original, Duration, Color, Brightness, Confidence, or Random
 4. Set a frame sample interval (how often to check for faces within each clip)
 5. Click **Generate** to scan all clips for the matching face and build a sequence from the results
+
+### Eyes Without a Face
+
+Sequence clips based on where subjects are looking. Named after the Billy Idol song and the Georges Franju film. Opens a dialog with three modes.
+
+**Required analysis:** Gaze direction
+
+**Dialog modes:**
+
+| Mode | What it does |
+|------|-------------|
+| **Eyeline Match** | Pair clips with complementary gaze directions for shot-reverse-shot patterns. If person A looks left, the next clip shows person B looking right. Tolerance slider controls how strict the matching is (5°-30°). |
+| **Filter** | Keep only clips where subjects look in a specific direction (at camera, left, right, up, or down). Non-matching clips are appended at the end. |
+| **Rotation** | Sweep through a range of gaze angles, creating a progressive rotation effect. Select the axis (horizontal or vertical), set a start and end angle, and choose ascending or descending direction. |
+
+**Dialog workflow:**
+1. Select a mode from the dropdown at the top
+2. Configure the mode-specific parameters (tolerance, category, or angle range)
+3. Click **Generate** to build the sequence
+4. Results appear on the timeline
+
+Clips without gaze data are always appended at the end of the sequence.

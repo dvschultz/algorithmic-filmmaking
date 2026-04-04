@@ -381,6 +381,27 @@ left, right, up, down, forward, backward, clockwise, counterclockwise
 
 ---
 
+## Gaze Direction
+
+Estimates where subjects are looking in each clip using MediaPipe Face Mesh iris tracking. Detects the iris position relative to eye corners and converts it to angular gaze direction.
+
+The detector samples one frame per second through each clip and uses a dominant-category approach: each frame is categorized independently, then the most frequent category across all frames becomes the clip's gaze label. This prevents a brief glance from overriding the primary gaze direction.
+
+**Produces:**
+- Gaze yaw angle (horizontal, in degrees — positive = looking right)
+- Gaze pitch angle (vertical, in degrees — positive = looking down)
+- Categorical label: at camera, looking left, looking right, looking up, or looking down
+
+**Required first:** Scene detection (source video must exist)
+**Runs:** Locally (MediaPipe, no API key needed). Downloads a ~4 MB model on first use.
+**Speed:** Moderate (processes sequentially)
+
+**Used by:** Gaze Sort, Gaze Consistency, and Eyes Without a Face sequencer algorithms. Also available as a filter in the Sequence tab.
+
+> **Note:** Gaze estimation works best when the subject's face is relatively frontal. Reliability decreases for strongly turned heads (beyond ~30° from center). When both horizontal and vertical gaze exceed their thresholds, horizontal gaze takes priority for categorization.
+
+---
+
 ## Face Detection
 
 Detects faces in your clips and generates a unique embedding for each face. These embeddings allow the app to recognize the same person across different clips.
@@ -429,6 +450,6 @@ If you're running all analyses, the app handles ordering automatically when usin
 3. **Transcription** — if your clips have speech
 4. **Describe** — adds searchable text descriptions
 5. **Rich Analysis** — most expensive but richest metadata
-6. **Object Detection, Face Detection, Text Extraction** — as needed for your project
+6. **Object Detection, Face Detection, Gaze Direction, Text Extraction** — as needed for your project
 
 You don't need to run every analysis. Start with what your project needs. Colors and Shot Classification cover most sequencer requirements. Add Describe if you want to search clips by content. Add Rich Analysis if you need detailed cinematography metadata.

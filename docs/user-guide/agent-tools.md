@@ -1,6 +1,6 @@
 # Agent Tools Reference
 
-The Scene Ripper chat agent has access to 103 tools organized by category. You don't need to call these by name — just describe what you want in natural language and the agent will use the right tool. This reference is for understanding what's possible.
+The Scene Ripper chat agent has access to 106 tools organized by category. You don't need to call these by name — just describe what you want in natural language and the agent will use the right tool. This reference is for understanding what's possible.
 
 > Type `/help` in the chat panel to see a condensed version of this list.
 
@@ -79,6 +79,7 @@ The Scene Ripper chat agent has access to 103 tools organized by category. You d
 | `get_clip_cinematography` | Get full cinematography analysis | "Show me the cinematography for clip 5" |
 | `update_clip_cinematography` | Manually edit cinematography data | "Change the shot size to ECU" |
 | `clear_clip_cinematography` | Remove cinematography analysis | "Clear the cinematography data for these clips" |
+| `analyze_gaze` | Detect gaze direction using iris tracking | "Run gaze analysis on all clips" |
 
 ---
 
@@ -122,6 +123,8 @@ The Scene Ripper chat agent has access to 103 tools organized by category. You d
 | `similarity_chain` | Human Centipede | "Chain clips by visual similarity" |
 | `match_cut` | Match Cut | "Create match cuts between clips" |
 | `sequential` | Time Capsule | "Keep clips in original order" |
+| `gaze_sort` | Gaze Sort | "Sort clips by gaze direction, left to right" |
+| `gaze_consistency` | Gaze Consistency | "Group clips by gaze direction" |
 | `exquisite_corpus` | Exquisite Corpus | "Create a poem from the on-screen text" |
 | `storyteller` | Storyteller | "Tell a story with these clips" |
 
@@ -137,6 +140,7 @@ The Scene Ripper chat agent has access to 103 tools organized by category. You d
 | `sort_sequence` | Sort the sequence | "Sort the timeline by duration" |
 | `update_sequence_clip` | Edit a clip on the timeline | "Trim the first clip to 2 seconds" |
 | `set_sequence_shot_filter` | Filter sequence by shot type | "Show only close-ups in the sequence" |
+| `set_sequence_gaze_filter` | Filter sequence by gaze direction | "Show only clips looking left" |
 | `create_sequence` | Create a new empty sequence | "Create a new sequence at 24fps" |
 | `update_sequence` | Update sequence settings | "Set the sequence FPS to 30" |
 
