@@ -223,6 +223,10 @@ class Clip:
     first_frame_embedding: Optional[list[float]] = None  # First frame embedding
     last_frame_embedding: Optional[list[float]] = None  # Last frame embedding
     embedding_model: Optional[str] = None  # Model that generated embeddings (e.g., "clip-vit-b-32", "dinov2-vit-b-14")
+    # Gaze direction analysis fields
+    gaze_yaw: Optional[float] = None  # Horizontal gaze angle in degrees (positive = right)
+    gaze_pitch: Optional[float] = None  # Vertical gaze angle in degrees (positive = down)
+    gaze_category: Optional[str] = None  # "at_camera", "looking_left", "looking_right", "looking_up", "looking_down"
     disabled: bool = False  # Excluded from sequence/export when True
 
     @property
@@ -363,6 +367,13 @@ class Clip:
             data["last_frame_embedding"] = self.last_frame_embedding
         if self.embedding_model is not None:
             data["embedding_model"] = self.embedding_model
+        # Gaze direction analysis fields
+        if self.gaze_yaw is not None:
+            data["gaze_yaw"] = round(self.gaze_yaw, 2)
+        if self.gaze_pitch is not None:
+            data["gaze_pitch"] = round(self.gaze_pitch, 2)
+        if self.gaze_category is not None:
+            data["gaze_category"] = self.gaze_category
         if self.disabled:
             data["disabled"] = True
         return data
@@ -473,5 +484,9 @@ class Clip:
             first_frame_embedding=_validate_embedding(data.get("first_frame_embedding"), "first_frame_embedding"),
             last_frame_embedding=_validate_embedding(data.get("last_frame_embedding"), "last_frame_embedding"),
             embedding_model=data.get("embedding_model"),
+            # Gaze direction analysis fields (validated)
+            gaze_yaw=_validate_optional_float(data.get("gaze_yaw"), "gaze_yaw"),
+            gaze_pitch=_validate_optional_float(data.get("gaze_pitch"), "gaze_pitch"),
+            gaze_category=data.get("gaze_category"),
             disabled=data.get("disabled", False),
         )
