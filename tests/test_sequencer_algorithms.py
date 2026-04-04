@@ -659,3 +659,182 @@ class TestClipDeserializationValidation:
         clip = Clip.from_dict(data)
         assert clip.average_brightness == 1.0
         assert isinstance(clip.average_brightness, float)
+
+
+# -- Gaze Sort Algorithm -------------------------------------------------------
+
+class TestGazeSortAlgorithm:
+    """Gaze Sort: arrange clips by gaze direction."""
+
+    def test_left_to_right_sorts_by_ascending_yaw(self):
+        from core.remix import generate_sequence
+        source = _make_source()
+        clips = [
+            (_make_clip("right", gaze_yaw=25.0, gaze_pitch=0.0, gaze_category="looking_right"), source),
+            (_make_clip("left", gaze_yaw=-20.0, gaze_pitch=0.0, gaze_category="looking_left"), source),
+            (_make_clip("center", gaze_yaw=2.0, gaze_pitch=0.0, gaze_category="at_camera"), source),
+        ]
+        result = generate_sequence("gaze_sort", clips, 3, direction="left_to_right")
+        ids = [c.id for c, _ in result]
+        assert ids == ["left", "center", "right"]
+
+    def test_right_to_left_sorts_by_descending_yaw(self):
+        from core.remix import generate_sequence
+        source = _make_source()
+        clips = [
+            (_make_clip("left", gaze_yaw=-20.0, gaze_pitch=0.0, gaze_category="looking_left"), source),
+            (_make_clip("right", gaze_yaw=25.0, gaze_pitch=0.0, gaze_category="looking_right"), source),
+            (_make_clip("center", gaze_yaw=2.0, gaze_pitch=0.0, gaze_category="at_camera"), source),
+        ]
+        result = generate_sequence("gaze_sort", clips, 3, direction="right_to_left")
+        ids = [c.id for c, _ in result]
+        assert ids == ["right", "center", "left"]
+
+    def test_up_to_down_sorts_by_ascending_pitch(self):
+        from core.remix import generate_sequence
+        source = _make_source()
+        clips = [
+            (_make_clip("down", gaze_yaw=0.0, gaze_pitch=15.0, gaze_category="looking_down"), source),
+            (_make_clip("up", gaze_yaw=0.0, gaze_pitch=-18.0, gaze_category="looking_up"), source),
+            (_make_clip("center", gaze_yaw=0.0, gaze_pitch=1.0, gaze_category="at_camera"), source),
+        ]
+        result = generate_sequence("gaze_sort", clips, 3, direction="up_to_down")
+        ids = [c.id for c, _ in result]
+        assert ids == ["up", "center", "down"]
+
+    def test_down_to_up_sorts_by_descending_pitch(self):
+        from core.remix import generate_sequence
+        source = _make_source()
+        clips = [
+            (_make_clip("up", gaze_yaw=0.0, gaze_pitch=-18.0, gaze_category="looking_up"), source),
+            (_make_clip("down", gaze_yaw=0.0, gaze_pitch=15.0, gaze_category="looking_down"), source),
+        ]
+        result = generate_sequence("gaze_sort", clips, 2, direction="down_to_up")
+        ids = [c.id for c, _ in result]
+        assert ids == ["down", "up"]
+
+    def test_clips_without_gaze_appended_at_end(self):
+        """Clips without gaze data are appended after sorted clips."""
+        from core.remix import generate_sequence
+        source = _make_source()
+        clips = [
+            (_make_clip("no_gaze"), source),
+            (_make_clip("right", gaze_yaw=25.0, gaze_pitch=0.0, gaze_category="looking_right"), source),
+            (_make_clip("left", gaze_yaw=-20.0, gaze_pitch=0.0, gaze_category="looking_left"), source),
+        ]
+        result = generate_sequence("gaze_sort", clips, 3, direction="left_to_right")
+        ids = [c.id for c, _ in result]
+        assert ids == ["left", "right", "no_gaze"]
+
+    def test_no_clips_have_gaze_returns_original_order(self):
+        """When no clips have gaze data, return original order."""
+        from core.remix import generate_sequence
+        source = _make_source()
+        clips = [
+            (_make_clip("a"), source),
+            (_make_clip("b"), source),
+            (_make_clip("c"), source),
+        ]
+        result = generate_sequence("gaze_sort", clips, 3, direction="left_to_right")
+        ids = [c.id for c, _ in result]
+        assert ids == ["a", "b", "c"]
+
+    def test_default_direction_is_left_to_right(self):
+        from core.remix import generate_sequence
+        source = _make_source()
+        clips = [
+            (_make_clip("right", gaze_yaw=25.0, gaze_pitch=0.0, gaze_category="looking_right"), source),
+            (_make_clip("left", gaze_yaw=-20.0, gaze_pitch=0.0, gaze_category="looking_left"), source),
+        ]
+        result = generate_sequence("gaze_sort", clips, 2)
+        ids = [c.id for c, _ in result]
+        assert ids == ["left", "right"]
+
+
+# -- Gaze Consistency Algorithm ------------------------------------------------
+
+class TestGazeConsistencyAlgorithm:
+    """Gaze Consistency: group clips by matching gaze direction."""
+
+    def test_groups_by_category_largest_first(self):
+        from core.remix import generate_sequence
+        source = _make_source()
+        clips = [
+            (_make_clip("r1", gaze_yaw=20.0, gaze_pitch=0.0, gaze_category="looking_right"), source),
+            (_make_clip("l1", gaze_yaw=-15.0, gaze_pitch=0.0, gaze_category="looking_left"), source),
+            (_make_clip("r2", gaze_yaw=30.0, gaze_pitch=0.0, gaze_category="looking_right"), source),
+            (_make_clip("l2", gaze_yaw=-25.0, gaze_pitch=0.0, gaze_category="looking_left"), source),
+            (_make_clip("r3", gaze_yaw=10.0, gaze_pitch=0.0, gaze_category="looking_right"), source),
+        ]
+        result = generate_sequence("gaze_consistency", clips, 5)
+        ids = [c.id for c, _ in result]
+        # 3 right clips come first (largest group), then 2 left clips
+        assert ids[:3] == ["r3", "r1", "r2"]  # sorted by ascending yaw within group
+        assert ids[3:] == ["l2", "l1"]  # sorted by ascending yaw within group
+
+    def test_within_group_sorted_by_relevant_angle(self):
+        """Left/right categories sort by yaw, up/down by pitch."""
+        from core.remix import generate_sequence
+        source = _make_source()
+        clips = [
+            (_make_clip("d1", gaze_yaw=0.0, gaze_pitch=20.0, gaze_category="looking_down"), source),
+            (_make_clip("d2", gaze_yaw=0.0, gaze_pitch=10.0, gaze_category="looking_down"), source),
+            (_make_clip("u1", gaze_yaw=0.0, gaze_pitch=-15.0, gaze_category="looking_up"), source),
+        ]
+        result = generate_sequence("gaze_consistency", clips, 3)
+        ids = [c.id for c, _ in result]
+        # 2 down clips (largest group) sorted by ascending pitch, then 1 up clip
+        assert ids == ["d2", "d1", "u1"]
+
+    def test_clips_without_gaze_appended_at_end(self):
+        from core.remix import generate_sequence
+        source = _make_source()
+        clips = [
+            (_make_clip("no_gaze"), source),
+            (_make_clip("r1", gaze_yaw=20.0, gaze_pitch=0.0, gaze_category="looking_right"), source),
+        ]
+        result = generate_sequence("gaze_consistency", clips, 2)
+        ids = [c.id for c, _ in result]
+        assert ids == ["r1", "no_gaze"]
+
+    def test_no_clips_have_gaze_returns_original_order(self):
+        from core.remix import generate_sequence
+        source = _make_source()
+        clips = [
+            (_make_clip("a"), source),
+            (_make_clip("b"), source),
+        ]
+        result = generate_sequence("gaze_consistency", clips, 2)
+        ids = [c.id for c, _ in result]
+        assert ids == ["a", "b"]
+
+    def test_all_same_category_stable_order_by_angle(self):
+        """When all clips share a category, order by angle within that category."""
+        from core.remix import generate_sequence
+        source = _make_source()
+        clips = [
+            (_make_clip("c", gaze_yaw=5.0, gaze_pitch=0.0, gaze_category="at_camera"), source),
+            (_make_clip("a", gaze_yaw=-3.0, gaze_pitch=0.0, gaze_category="at_camera"), source),
+            (_make_clip("b", gaze_yaw=1.0, gaze_pitch=0.0, gaze_category="at_camera"), source),
+        ]
+        result = generate_sequence("gaze_consistency", clips, 3)
+        ids = [c.id for c, _ in result]
+        # All at_camera, sorted by ascending yaw
+        assert ids == ["a", "b", "c"]
+
+    def test_mixed_with_and_without_gaze(self):
+        """Gaze clips sorted by category, no-gaze clips appended."""
+        from core.remix import generate_sequence
+        source = _make_source()
+        clips = [
+            (_make_clip("no1"), source),
+            (_make_clip("r1", gaze_yaw=10.0, gaze_pitch=0.0, gaze_category="looking_right"), source),
+            (_make_clip("no2"), source),
+            (_make_clip("l1", gaze_yaw=-10.0, gaze_pitch=0.0, gaze_category="looking_left"), source),
+        ]
+        result = generate_sequence("gaze_consistency", clips, 4)
+        ids = [c.id for c, _ in result]
+        # Both categories have 1 clip each (equal size, sorted by first-encountered)
+        # no-gaze clips at end
+        assert ids[-2:] == ["no1", "no2"]
+        assert set(ids[:2]) == {"r1", "l1"}

@@ -37,6 +37,16 @@ from ui.algorithm_config import ALGORITHM_CONFIG, get_algorithm_config, get_algo
 # Reverse lookup: display label -> algorithm key
 _LABEL_TO_KEY = {cfg["label"]: key for key, cfg in ALGORITHM_CONFIG.items()}
 
+# Gaze category filter options: (display_label, internal_key_or_None)
+GAZE_FILTER_OPTIONS: list[tuple[str, str | None]] = [
+    ("All Gaze", None),
+    ("At Camera", "at_camera"),
+    ("Looking Left", "looking_left"),
+    ("Looking Right", "looking_right"),
+    ("Looking Up", "looking_up"),
+    ("Looking Down", "looking_down"),
+]
+
 
 def get_algorithm_key(label: str) -> str:
     """Get the algorithm key from a display label.
@@ -222,6 +232,7 @@ class SequenceTab(BaseTab):
             "shuffle", "sequential", "duration", "color",
             "brightness", "volume", "shot_type", "proximity",
             "similarity_chain", "match_cut",
+            "gaze_sort", "gaze_consistency",
         ]
         self.algorithm_dropdown.addItems([get_algorithm_label(k) for k in _dropdown_keys])
         self.algorithm_dropdown.setMinimumWidth(140)
@@ -246,10 +257,24 @@ class SequenceTab(BaseTab):
         self.chromatic_bar_checkbox.toggled.connect(self._on_chromatic_bar_toggled)
         layout.addWidget(self.chromatic_bar_checkbox)
 
-        # Initially hide direction controls
+        # Gaze filter dropdown
+        self.gaze_filter_label = QLabel("Gaze:")
+        self.gaze_filter_label.setStyleSheet(f"color: {theme().text_secondary}; border: none; margin-left: {Spacing.LG}px;")
+        layout.addWidget(self.gaze_filter_label)
+
+        self.gaze_filter_dropdown = QComboBox()
+        self.gaze_filter_dropdown.setMinimumWidth(140)
+        for display_label, _internal_key in GAZE_FILTER_OPTIONS:
+            self.gaze_filter_dropdown.addItem(display_label)
+        self.gaze_filter_dropdown.currentIndexChanged.connect(self._on_gaze_filter_changed)
+        layout.addWidget(self.gaze_filter_dropdown)
+
+        # Initially hide direction controls and gaze filter
         self.direction_label.hide()
         self.direction_dropdown.hide()
         self.chromatic_bar_checkbox.hide()
+        self.gaze_filter_label.hide()
+        self.gaze_filter_dropdown.hide()
 
         layout.addStretch()
 
@@ -624,6 +649,9 @@ class SequenceTab(BaseTab):
                 return
             if algorithm == "staccato":
                 self._show_staccato_dialog(clips)
+                return
+            if algorithm == "eyes_without_a_face":
+                self._show_eyes_without_a_face_dialog(clips)
                 return
 
         # Compute cost estimates for this algorithm
@@ -1176,6 +1204,25 @@ class SequenceTab(BaseTab):
             logger.error(f"Failed to apply Staccato sequence: {e}")
             QMessageBox.critical(self, "Error", f"Failed to apply sequence:\n{e}")
 
+    def _show_eyes_without_a_face_dialog(self, clips: list):
+        """Show the Eyes Without a Face dialog for gaze-based sequencing.
+
+        Args:
+            clips: List of (Clip, Source) tuples to process
+        """
+        from ui.dialogs.eyes_without_a_face_dialog import EyesWithoutAFaceDialog
+
+        dialog = EyesWithoutAFaceDialog(clips=clips, parent=self)
+        dialog.sequence_ready.connect(self._apply_eyes_without_a_face_sequence)
+        dialog.exec()
+
+    @Slot(list)
+    def _apply_eyes_without_a_face_sequence(self, sequence_clips: list):
+        """Apply the sequence from Eyes Without a Face dialog."""
+        self._apply_dialog_sequence(
+            sequence_clips, "eyes_without_a_face", "Eyes Without a Face",
+        )
+
     def _show_dice_roll_dialog(self, clips: list):
         """Show the Dice Roll dialog for shuffle + optional transforms.
 
@@ -1257,6 +1304,12 @@ class SequenceTab(BaseTab):
         "brightness": [("Bright to Dark", "bright_to_dark"), ("Dark to Bright", "dark_to_bright")],
         "volume": [("Quiet to Loud", "quiet_to_loud"), ("Loud to Quiet", "loud_to_quiet")],
         "proximity": [("Far to Close", "far_to_close"), ("Close to Far", "close_to_far")],
+        "gaze_sort": [
+            ("Left to Right", "left_to_right"),
+            ("Right to Left", "right_to_left"),
+            ("Up to Down", "up_to_down"),
+            ("Down to Up", "down_to_up"),
+        ],
     }
 
     def _update_direction_dropdown(self, algorithm: str, selected_direction: str | None = None):
@@ -1505,6 +1558,9 @@ class SequenceTab(BaseTab):
         # Check if any clips have dominant colors
         has_colors = any(clip.dominant_colors for clip in self._clips)
 
+        # Check if any clips have gaze data
+        has_gaze = any(clip.gaze_category is not None for clip in self._clips)
+
         # Check if any clips have shot types or cinematography
         has_shot_types = any(
             clip.shot_type or clip.cinematography
@@ -1545,9 +1601,20 @@ class SequenceTab(BaseTab):
             "storyteller": True,
             "reference_guided": True,  # Dialog handles its own prereqs
             "signature_style": True,  # Dialog handles its own prereqs
+            "gaze_sort": (has_gaze, "Run gaze analysis first" if not has_gaze else ""),
+            "gaze_consistency": (has_gaze, "Run gaze analysis first" if not has_gaze else ""),
+            "eyes_without_a_face": (has_gaze, "Run gaze analysis first" if not has_gaze else ""),
         }
 
         self.card_grid.set_algorithm_availability(availability)
+
+        # Show/hide gaze filter dropdown based on whether any clips have gaze data
+        if has_gaze:
+            self.gaze_filter_label.show()
+            self.gaze_filter_dropdown.show()
+        else:
+            self.gaze_filter_label.hide()
+            self.gaze_filter_dropdown.hide()
 
     def _reset_card_availability(self):
         """Reset all cards to enabled state (for fresh project/intention flow)."""
@@ -1612,7 +1679,7 @@ class SequenceTab(BaseTab):
         valid_algorithms = list(ALGORITHM_CONFIG.keys())
         if algorithm.lower() in valid_algorithms:
             # If in timeline state, use the dropdown to regenerate (except dialog-based)
-            dialog_algorithms = ("exquisite_corpus", "storyteller", "reference_guided")
+            dialog_algorithms = tuple(k for k, v in ALGORITHM_CONFIG.items() if v.get("is_dialog"))
             if self._current_state == self.STATE_TIMELINE and algorithm.lower() not in dialog_algorithms:
                 self.algorithm_dropdown.setCurrentText(get_algorithm_label(algorithm))
             else:
@@ -1652,6 +1719,47 @@ class SequenceTab(BaseTab):
                 1 for clip, source in self._available_clips
                 if clip.shot_type == shot_type
             )
+
+    def apply_gaze_filter(self, gaze_category: str | None) -> int:
+        """Filter the current sequence/clips by gaze category.
+
+        Args:
+            gaze_category: Gaze category to filter by (e.g. 'at_camera'),
+                or None to show all clips (no filter).
+
+        Returns:
+            Number of clips matching the filter.
+        """
+        if self._current_state == self.STATE_TIMELINE:
+            seq = self.timeline.sequence
+            if not seq or not seq.tracks:
+                return 0
+            all_seq_clips = seq.get_all_clips()
+            if not gaze_category:
+                return len(all_seq_clips)
+            matching = 0
+            for sc in all_seq_clips:
+                for clip, source in self._available_clips:
+                    if clip.id == sc.source_clip_id and clip.gaze_category == gaze_category:
+                        matching += 1
+                        break
+            return matching
+        else:
+            if not gaze_category:
+                return len(self._available_clips)
+            return sum(
+                1 for clip, source in self._available_clips
+                if clip.gaze_category == gaze_category
+            )
+
+    @Slot(int)
+    def _on_gaze_filter_changed(self, index: int):
+        """Handle gaze filter dropdown selection change."""
+        if index < 0 or index >= len(GAZE_FILTER_OPTIONS):
+            return
+        _display_label, gaze_category = GAZE_FILTER_OPTIONS[index]
+        count = self.apply_gaze_filter(gaze_category)
+        logger.debug(f"Gaze filter '{gaze_category}': {count} clips match")
 
     def generate_and_apply(
         self,

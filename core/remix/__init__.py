@@ -319,6 +319,82 @@ def generate_sequence(
         _auto_compute_boundary_embeddings(clips_to_use)
         return match_cut_chain(clips_to_use, start_clip_id=None)
 
+    elif algorithm == "gaze_sort":
+        gaze_direction = direction or "left_to_right"
+
+        # Split clips into with/without gaze data (like color algorithm)
+        with_gaze = []
+        without_gaze = []
+        for clip, source in clips_to_use:
+            if clip.gaze_yaw is not None:
+                with_gaze.append((clip, source))
+            else:
+                without_gaze.append((clip, source))
+
+        if not with_gaze:
+            logger.warning("No clips with gaze data for Gaze Sort")
+            return clips_to_use
+
+        if gaze_direction == "left_to_right":
+            sorted_clips = sorted(with_gaze, key=lambda item: item[0].gaze_yaw)
+        elif gaze_direction == "right_to_left":
+            sorted_clips = sorted(with_gaze, key=lambda item: -item[0].gaze_yaw)
+        elif gaze_direction == "up_to_down":
+            sorted_clips = sorted(
+                with_gaze,
+                key=lambda item: item[0].gaze_pitch if item[0].gaze_pitch is not None else 0.0,
+            )
+        elif gaze_direction == "down_to_up":
+            sorted_clips = sorted(
+                with_gaze,
+                key=lambda item: -(item[0].gaze_pitch if item[0].gaze_pitch is not None else 0.0),
+            )
+        else:
+            sorted_clips = sorted(with_gaze, key=lambda item: item[0].gaze_yaw)
+
+        if without_gaze:
+            logger.info(f"Gaze Sort: {len(without_gaze)} clips lack gaze data (appended at end)")
+        return sorted_clips + without_gaze
+
+    elif algorithm == "gaze_consistency":
+        # Group clips by gaze_category, largest group first
+        with_gaze = []
+        without_gaze = []
+        for clip, source in clips_to_use:
+            if clip.gaze_category is not None:
+                with_gaze.append((clip, source))
+            else:
+                without_gaze.append((clip, source))
+
+        if not with_gaze:
+            logger.warning("No clips with gaze data for Gaze Consistency")
+            return clips_to_use
+
+        # Group by category
+        groups: dict[str, list[tuple]] = {}
+        for clip, source in with_gaze:
+            cat = clip.gaze_category
+            if cat not in groups:
+                groups[cat] = []
+            groups[cat].append((clip, source))
+
+        # Sort groups by count (largest first)
+        sorted_groups = sorted(groups.items(), key=lambda g: -len(g[1]))
+
+        # Within each group, sort by the relevant angle
+        result = []
+        for category, group_clips in sorted_groups:
+            if category in ("looking_left", "looking_right", "at_camera"):
+                group_clips.sort(key=lambda item: item[0].gaze_yaw if item[0].gaze_yaw is not None else 0.0)
+            else:
+                # looking_up, looking_down
+                group_clips.sort(key=lambda item: item[0].gaze_pitch if item[0].gaze_pitch is not None else 0.0)
+            result.extend(group_clips)
+
+        if without_gaze:
+            logger.info(f"Gaze Consistency: {len(without_gaze)} clips lack gaze data (appended at end)")
+        return result + without_gaze
+
     else:
         # Sequential - use original order
         return clips_to_use
