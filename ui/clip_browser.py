@@ -475,24 +475,13 @@ class ClipThumbnail(QFrame):
         Args:
             category: Gaze category string (e.g. 'looking_left') or None to hide.
         """
-        _GAZE_LABELS = {
-            "at_camera": "C",
-            "looking_left": "\u2190",
-            "looking_right": "\u2192",
-            "looking_up": "\u2191",
-            "looking_down": "\u2193",
-        }
-        _GAZE_TOOLTIPS = {
-            "at_camera": "Gaze: At Camera",
-            "looking_left": "Gaze: Looking Left",
-            "looking_right": "Gaze: Looking Right",
-            "looking_up": "Gaze: Looking Up",
-            "looking_down": "Gaze: Looking Down",
-        }
+        from core.analysis.gaze import GAZE_CATEGORY_SHORT, GAZE_CATEGORY_DISPLAY
+
         self.clip.gaze_category = category
         if category:
-            self.gaze_label.setText(_GAZE_LABELS.get(category, "?"))
-            self.gaze_label.setToolTip(_GAZE_TOOLTIPS.get(category, f"Gaze: {category}"))
+            self.gaze_label.setText(GAZE_CATEGORY_SHORT.get(category, "?"))
+            display = GAZE_CATEGORY_DISPLAY.get(category, category)
+            self.gaze_label.setToolTip(f"Gaze: {display}")
             self._apply_gaze_badge_style()
             self.gaze_label.setVisible(True)
         else:

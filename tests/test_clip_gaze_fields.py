@@ -154,8 +154,8 @@ class TestGazeDeserialization:
         assert clip.gaze_pitch == -5.0
         assert isinstance(clip.gaze_pitch, float)
 
-    def test_from_dict_unexpected_category_accepted(self):
-        """Unexpected gaze_category values should be accepted (no enum validation)."""
+    def test_from_dict_unexpected_category_discarded(self):
+        """Invalid gaze_category values should be discarded (validated against known set)."""
         data = {
             "source_id": "s1",
             "start_frame": 0,
@@ -163,7 +163,7 @@ class TestGazeDeserialization:
             "gaze_category": "looking_diagonal_upper_left",
         }
         clip = Clip.from_dict(data)
-        assert clip.gaze_category == "looking_diagonal_upper_left"
+        assert clip.gaze_category is None  # invalid category discarded
 
 
 class TestGazeRoundTrip:

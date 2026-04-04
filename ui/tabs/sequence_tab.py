@@ -38,14 +38,11 @@ from ui.algorithm_config import ALGORITHM_CONFIG, get_algorithm_config, get_algo
 _LABEL_TO_KEY = {cfg["label"]: key for key, cfg in ALGORITHM_CONFIG.items()}
 
 # Gaze category filter options: (display_label, internal_key_or_None)
+from core.analysis.gaze import GAZE_CATEGORY_DISPLAY
+
 GAZE_FILTER_OPTIONS: list[tuple[str, str | None]] = [
     ("All Gaze", None),
-    ("At Camera", "at_camera"),
-    ("Looking Left", "looking_left"),
-    ("Looking Right", "looking_right"),
-    ("Looking Up", "looking_up"),
-    ("Looking Down", "looking_down"),
-]
+] + [(display, key) for key, display in GAZE_CATEGORY_DISPLAY.items()]
 
 
 def get_algorithm_key(label: str) -> str:
@@ -1754,12 +1751,26 @@ class SequenceTab(BaseTab):
 
     @Slot(int)
     def _on_gaze_filter_changed(self, index: int):
-        """Handle gaze filter dropdown selection change."""
+        """Handle gaze filter dropdown selection change.
+
+        Updates card visibility in the sorting grid to show only clips
+        matching the selected gaze category.
+        """
         if index < 0 or index >= len(GAZE_FILTER_OPTIONS):
             return
         _display_label, gaze_category = GAZE_FILTER_OPTIONS[index]
         count = self.apply_gaze_filter(gaze_category)
-        logger.debug(f"Gaze filter '{gaze_category}': {count} clips match")
+        logger.debug("Gaze filter %r: %d clips match", gaze_category, count)
+
+        # Update card grid visibility when in cards state
+        if self._current_state == self.STATE_CARDS and hasattr(self, '_sorting_card_grid'):
+            total = len(self._available_clips)
+            if gaze_category is None:
+                self._sorting_card_grid.setToolTip("")
+            else:
+                self._sorting_card_grid.setToolTip(
+                    f"Gaze filter active: {count}/{total} clips match '{_display_label}'"
+                )
 
     def generate_and_apply(
         self,

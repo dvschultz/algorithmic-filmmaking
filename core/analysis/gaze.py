@@ -38,6 +38,23 @@ GAZE_PITCH_THRESHOLD = 8.0  # degrees for up/down (tighter: vertical is noisier)
 MAX_YAW_ANGLE = 30.0   # reliable yaw estimation range
 MAX_PITCH_ANGLE = 20.0  # reliable pitch estimation range
 
+# Canonical gaze category values and display names (single source of truth)
+GAZE_CATEGORIES = ("at_camera", "looking_left", "looking_right", "looking_up", "looking_down")
+GAZE_CATEGORY_DISPLAY = {
+    "at_camera": "At Camera",
+    "looking_left": "Looking Left",
+    "looking_right": "Looking Right",
+    "looking_up": "Looking Up",
+    "looking_down": "Looking Down",
+}
+GAZE_CATEGORY_SHORT = {
+    "at_camera": "C",
+    "looking_left": "\u2190",
+    "looking_right": "\u2192",
+    "looking_up": "\u2191",
+    "looking_down": "\u2193",
+}
+
 # MediaPipe Face Mesh iris landmark indices (refine_landmarks=True required)
 LEFT_IRIS = [468, 469, 470, 471, 472]
 RIGHT_IRIS = [473, 474, 475, 476, 477]
@@ -333,6 +350,9 @@ def extract_gaze_from_frame(
         - category: one of "at_camera", "looking_left", "looking_right",
           "looking_up", "looking_down"
     """
+    if mp is None:
+        raise RuntimeError("mediapipe is not installed")
+
     # Convert BGR to RGB for MediaPipe
     frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
 

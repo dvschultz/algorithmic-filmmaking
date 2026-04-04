@@ -29,14 +29,10 @@ from ui.workers.base import CancellableWorker
 
 logger = logging.getLogger(__name__)
 
-# Gaze category display names -> internal keys
-_CATEGORY_DISPLAY_TO_KEY = {
-    "At Camera": "at_camera",
-    "Looking Left": "looking_left",
-    "Looking Right": "looking_right",
-    "Looking Up": "looking_up",
-    "Looking Down": "looking_down",
-}
+from core.analysis.gaze import GAZE_CATEGORY_DISPLAY
+
+# Gaze category display names -> internal keys (derived from centralized constants)
+_CATEGORY_DISPLAY_TO_KEY = {v: k for k, v in GAZE_CATEGORY_DISPLAY.items()}
 
 
 class _EyesWorker(CancellableWorker):

@@ -807,16 +807,10 @@ class ClipDetailsSidebar(QDockWidget):
         Args:
             clip: The clip whose gaze data to display
         """
-        _GAZE_DISPLAY_NAMES = {
-            "at_camera": "At Camera",
-            "looking_left": "Looking Left",
-            "looking_right": "Looking Right",
-            "looking_up": "Looking Up",
-            "looking_down": "Looking Down",
-        }
+        from core.analysis.gaze import GAZE_CATEGORY_DISPLAY
 
         if clip.gaze_category:
-            display_name = _GAZE_DISPLAY_NAMES.get(clip.gaze_category, clip.gaze_category)
+            display_name = GAZE_CATEGORY_DISPLAY.get(clip.gaze_category, clip.gaze_category)
             lines = [f"Category: {display_name}"]
             if clip.gaze_yaw is not None:
                 lines.append(f"Yaw: {clip.gaze_yaw:.1f}\u00b0")

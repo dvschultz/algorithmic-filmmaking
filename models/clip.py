@@ -175,6 +175,19 @@ def _validate_optional_float(value, field_name: str) -> Optional[float]:
     return None
 
 
+_VALID_GAZE_CATEGORIES = {"at_camera", "looking_left", "looking_right", "looking_up", "looking_down"}
+
+
+def _validate_gaze_category(value) -> Optional[str]:
+    """Validate that a deserialized gaze category is a known value or None."""
+    if value is None:
+        return None
+    if isinstance(value, str) and value in _VALID_GAZE_CATEGORIES:
+        return value
+    logger.warning("Invalid gaze_category: %r, discarding", value)
+    return None
+
+
 def _validate_embedding(value, field_name: str) -> Optional[list[float]]:
     """Validate that a deserialized embedding has a supported dimension."""
     if value is None:
@@ -487,6 +500,6 @@ class Clip:
             # Gaze direction analysis fields (validated)
             gaze_yaw=_validate_optional_float(data.get("gaze_yaw"), "gaze_yaw"),
             gaze_pitch=_validate_optional_float(data.get("gaze_pitch"), "gaze_pitch"),
-            gaze_category=data.get("gaze_category"),
+            gaze_category=_validate_gaze_category(data.get("gaze_category")),
             disabled=data.get("disabled", False),
         )

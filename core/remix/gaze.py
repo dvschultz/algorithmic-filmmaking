@@ -6,16 +6,18 @@ Three modes:
 - Gaze Rotation: arrange clips in monotonically progressing angle order
 """
 
+from __future__ import annotations
+
 import logging
-from typing import Any, List, Optional, Tuple
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
 def eyeline_match(
-    clips_with_sources: List[Tuple[Any, Any]],
+    clips_with_sources: list[tuple[Any, Any]],
     tolerance: float = 20.0,
-) -> List[Tuple[Any, Any]]:
+) -> list[tuple[Any, Any]]:
     """Pair clips with approximately negated yaw for eyeline matching.
 
     Simulates shot/reverse-shot: a clip looking left (-yaw) is paired with
@@ -92,9 +94,9 @@ def eyeline_match(
 
 
 def gaze_filter(
-    clips_with_sources: List[Tuple[Any, Any]],
+    clips_with_sources: list[tuple[Any, Any]],
     category: str,
-) -> List[Tuple[Any, Any]]:
+) -> list[tuple[Any, Any]]:
     """Filter clips by gaze category.
 
     Args:
@@ -122,12 +124,12 @@ def gaze_filter(
 
 
 def gaze_rotation(
-    clips_with_sources: List[Tuple[Any, Any]],
+    clips_with_sources: list[tuple[Any, Any]],
     axis: str = "yaw",
     range_start: float = -30.0,
     range_end: float = 30.0,
     ascending: bool = True,
-) -> List[Tuple[Any, Any]]:
+) -> list[tuple[Any, Any]]:
     """Arrange clips in monotonically progressing angle order.
 
     Selects clips whose angle falls within the specified range and sorts

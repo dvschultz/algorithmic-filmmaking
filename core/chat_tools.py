@@ -1261,15 +1261,12 @@ def set_sequence_gaze_filter(
     gaze_category: Optional[str] = None,
 ) -> dict:
     """Set the gaze direction filter for the sequence tab."""
-    valid_categories = [
-        "at_camera", "looking_left", "looking_right",
-        "looking_up", "looking_down",
-    ]
+    from core.analysis.gaze import GAZE_CATEGORIES
 
-    if gaze_category and gaze_category not in valid_categories:
+    if gaze_category and gaze_category not in GAZE_CATEGORIES:
         return {
             "success": False,
-            "error": f"Invalid gaze category '{gaze_category}'. Valid categories: {valid_categories}",
+            "error": f"Invalid gaze category '{gaze_category}'. Valid categories: {list(GAZE_CATEGORIES)}",
         }
 
     sequence_tab = main_window.sequence_tab

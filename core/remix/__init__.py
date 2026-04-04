@@ -353,7 +353,7 @@ def generate_sequence(
             sorted_clips = sorted(with_gaze, key=lambda item: item[0].gaze_yaw)
 
         if without_gaze:
-            logger.info(f"Gaze Sort: {len(without_gaze)} clips lack gaze data (appended at end)")
+            logger.info("Gaze Sort: %d clips lack gaze data (appended at end)", len(without_gaze))
         return sorted_clips + without_gaze
 
     elif algorithm == "gaze_consistency":
@@ -392,7 +392,7 @@ def generate_sequence(
             result.extend(group_clips)
 
         if without_gaze:
-            logger.info(f"Gaze Consistency: {len(without_gaze)} clips lack gaze data (appended at end)")
+            logger.info("Gaze Consistency: %d clips lack gaze data (appended at end)", len(without_gaze))
         return result + without_gaze
 
     else:
