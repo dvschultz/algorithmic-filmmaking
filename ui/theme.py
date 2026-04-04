@@ -151,6 +151,7 @@ class ThemeColors:
     badge_analyzed_text: str     # Text on "Analyzed" badge (dark for contrast on green)
     badge_not_analyzed: str      # "Not Analyzed" badge
     shot_type_badge: str         # Shot type label background
+    gaze_badge: str              # Gaze direction badge background
     surface_highlight: str       # Highlighted surface (env override indicator)
 
     # Chat/Plan widget colors (semantic)
@@ -256,6 +257,7 @@ DARK_THEME = ThemeColors(
     badge_analyzed_text="#0d0f14",  # Dark text on green (9.45:1)
     badge_not_analyzed="#5e6880",   # Lightened for visibility on card_bg (3.18:1)
     shot_type_badge="#2a3045",
+    gaze_badge="#4a3060",
     surface_highlight="#1c2545",
 
     # Chat
@@ -330,6 +332,7 @@ LIGHT_THEME = ThemeColors(
     badge_analyzed_text="#1a1d28",  # Dark text on green (5.36:1)
     badge_not_analyzed="#6d7384",   # Darkened for visibility on card_bg (4.23:1)
     shot_type_badge="#525a72",
+    gaze_badge="#7e57c2",
     surface_highlight="#e4e8f0",
 
     # Chat/Plan widget colors

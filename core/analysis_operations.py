@@ -66,6 +66,11 @@ ANALYSIS_OPERATIONS: list[AnalysisOperation] = [
         "sequential", False,
     ),
     AnalysisOperation(
+        "gaze", "Detect Gaze",
+        "Estimate gaze direction using iris landmarks",
+        "sequential", False,
+    ),
+    AnalysisOperation(
         "custom_query", "Custom Query",
         "Search clips for specific visual content using a VLM (e.g., 'blue flower')",
         "cloud", False,

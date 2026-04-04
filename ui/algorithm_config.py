@@ -124,6 +124,28 @@ ALGORITHM_CONFIG = {
         "required_analysis": ["embeddings"],
         "is_dialog": True,
     },
+    "gaze_sort": {
+        "icon": "\U0001f441",
+        "label": "Gaze Sort",
+        "description": "Arrange clips by gaze direction",
+        "allow_duplicates": False,
+        "required_analysis": ["gaze"],
+    },
+    "gaze_consistency": {
+        "icon": "\U0001f440",
+        "label": "Gaze Consistency",
+        "description": "Group clips by matching gaze direction",
+        "allow_duplicates": False,
+        "required_analysis": ["gaze"],
+    },
+    "eyes_without_a_face": {
+        "icon": "\U0001f441\ufe0f\u200d\U0001f5e8\ufe0f",
+        "label": "Eyes Without a Face",
+        "description": "Eyeline matching, gaze filtering, and rotation sequencing",
+        "allow_duplicates": False,
+        "required_analysis": ["gaze"],
+        "is_dialog": True,
+    },
 }
 
 

@@ -181,6 +181,18 @@ class ClipDetailsSidebar(QDockWidget):
         self.shot_type_dropdown.value_changed.connect(self._on_shot_type_changed)
         content_layout.addWidget(self.shot_type_dropdown)
 
+        # Gaze section (read-only)
+        self.gaze_header = QLabel("Gaze Direction")
+        self._apply_section_header_style(self.gaze_header)
+        self.gaze_header.setVisible(False)
+        content_layout.addWidget(self.gaze_header)
+
+        self.gaze_info_label = QLabel("")
+        self.gaze_info_label.setWordWrap(True)
+        self._apply_secondary_style(self.gaze_info_label)
+        self.gaze_info_label.setVisible(False)
+        content_layout.addWidget(self.gaze_info_label)
+
         # Description section (EDITABLE)
         self.description_header = QLabel("Description")
         self._apply_section_header_style(self.description_header)
@@ -299,6 +311,7 @@ class ClipDetailsSidebar(QDockWidget):
         self._apply_section_header_style(self.metadata_header)
         self._apply_section_header_style(self.colors_header)
         self._apply_section_header_style(self.shot_type_header)
+        self._apply_section_header_style(self.gaze_header)
         self._apply_section_header_style(self.description_header)
         self._apply_section_header_style(self.extracted_text_header)
         self._apply_section_header_style(self.transcript_header)
@@ -311,8 +324,9 @@ class ClipDetailsSidebar(QDockWidget):
         self._apply_muted_style(self.extracted_text_meta_label)
         self._apply_muted_style(self.person_count_label)
 
-        # Re-render color swatches with current clip
+        # Re-render data-driven sections with current clip
         if self._clip_ref:
+            self._update_gaze(self._clip_ref)
             self._update_colors(self._clip_ref.dominant_colors)
             self._update_custom_queries(self._clip_ref.custom_queries)
             # Re-render detected objects styling
@@ -450,6 +464,9 @@ class ClipDetailsSidebar(QDockWidget):
         # Shot type (editable)
         self.shot_type_dropdown.setValue(clip.shot_type)
 
+        # Gaze (read-only)
+        self._update_gaze(clip)
+
         # Colors (read-only)
         self._update_colors(clip.dominant_colors)
 
@@ -566,6 +583,8 @@ class ClipDetailsSidebar(QDockWidget):
 
         # Clear other fields
         self.shot_type_dropdown.setValue(None)
+        self.gaze_header.setVisible(False)
+        self.gaze_info_label.setVisible(False)
         self._update_colors(None)
         self.transcript_edit.setSegments(None)
 
@@ -782,6 +801,29 @@ class ClipDetailsSidebar(QDockWidget):
         self.extracted_text_label.setStyleSheet(f"color: {theme().text_muted}; font-style: italic;")
         self.extracted_text_meta_label.setVisible(False)
 
+    def _update_gaze(self, clip: Clip):
+        """Update the gaze direction display.
+
+        Args:
+            clip: The clip whose gaze data to display
+        """
+        from core.analysis.gaze import GAZE_CATEGORY_DISPLAY
+
+        if clip.gaze_category:
+            display_name = GAZE_CATEGORY_DISPLAY.get(clip.gaze_category, clip.gaze_category)
+            lines = [f"Category: {display_name}"]
+            if clip.gaze_yaw is not None:
+                lines.append(f"Yaw: {clip.gaze_yaw:.1f}\u00b0")
+            if clip.gaze_pitch is not None:
+                lines.append(f"Pitch: {clip.gaze_pitch:.1f}\u00b0")
+            self.gaze_info_label.setText("\n".join(lines))
+            self.gaze_info_label.setStyleSheet(f"color: {theme().text_primary};")
+            self.gaze_header.setVisible(True)
+            self.gaze_info_label.setVisible(True)
+        else:
+            self.gaze_header.setVisible(False)
+            self.gaze_info_label.setVisible(False)
+
     def _update_colors(self, colors: Optional[list[tuple[int, int, int]]]):
         """Update the color swatches display.
 
@@ -854,6 +896,8 @@ class ClipDetailsSidebar(QDockWidget):
         self.metadata_label.setText("")
         self._update_colors(None)
         self.shot_type_dropdown.setValue(None)
+        self.gaze_header.setVisible(False)
+        self.gaze_info_label.setVisible(False)
         self.transcript_edit.setSegments(None)
 
         # Clear analysis fields
@@ -899,6 +943,18 @@ class ClipDetailsSidebar(QDockWidget):
             self._block_editable_signals(True)
             self.shot_type_dropdown.setValue(shot_type)
             self._block_editable_signals(False)
+
+    def refresh_gaze_if_showing(self, clip_id: str):
+        """Refresh the gaze direction display if showing the given clip.
+
+        Lightweight refresh for gaze analysis completion.
+
+        Args:
+            clip_id: ID of the clip that was updated
+        """
+        if self._clip_ref and self._clip_ref.id == clip_id:
+            logger.debug(f"Refreshing sidebar gaze for clip: {clip_id}")
+            self._update_gaze(self._clip_ref)
 
     def refresh_custom_queries_if_showing(
         self,

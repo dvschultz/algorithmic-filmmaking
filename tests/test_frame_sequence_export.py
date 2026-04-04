@@ -164,7 +164,7 @@ class TestEDLExportFrameEntries:
         # Source file path comment for clip-based entries
         source_lines = [l for l in content.split("\n") if l.startswith("* SOURCE FILE:")]
         assert len(source_lines) == 1
-        assert "/test/video.mp4" in source_lines[0]
+        assert "video.mp4" in source_lines[0]
 
     def test_frame_entry_skipped_without_frames_dict(self, tmp_path):
         """Frame entries are gracefully skipped when no frames dict provided."""

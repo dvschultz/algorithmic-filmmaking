@@ -1552,3 +1552,291 @@ class TestClearClipCinematography:
 
         assert result["success"] is False
         assert "No clip IDs" in result["error"]
+
+
+class TestAnalyzeGazeTool:
+    """Tests for analyze_gaze agent tool."""
+
+    def test_analyze_gaze_in_tool_registry(self):
+        """Test that analyze_gaze is registered in the tool registry."""
+        from core.chat_tools import tools as registry
+
+        tool = registry.get("analyze_gaze")
+        assert tool is not None
+        assert "gaze" in tool.description.lower()
+        assert tool.requires_project is True
+
+    def test_analyze_gaze_openai_format(self):
+        """Test that analyze_gaze appears in OpenAI tool format."""
+        from core.chat_tools import tools as registry
+
+        openai_tools = registry.to_openai_format()
+        tool_names = [t["function"]["name"] for t in openai_tools]
+        assert "analyze_gaze" in tool_names
+
+
+class TestGazeDataInClipListings:
+    """Tests for gaze data inclusion in clip listing tools."""
+
+    def test_list_clips_includes_gaze_when_present(self):
+        """Test that list_clips includes gaze fields for analyzed clips."""
+        from core.chat_tools import list_clips
+
+        project = _create_chat_test_project()
+        clip = Clip(
+            id="clip-1",
+            source_id="src-1",
+            start_frame=0,
+            end_frame=90,
+            gaze_yaw=5.3,
+            gaze_pitch=-2.1,
+            gaze_category="at_camera",
+        )
+        project.add_clips([clip])
+
+        result = list_clips(main_window=None, project=project)
+
+        assert result["success"] is True
+        clip_data = result["clips"][0]
+        assert clip_data["gaze_yaw"] == 5.3
+        assert clip_data["gaze_pitch"] == -2.1
+        assert clip_data["gaze_category"] == "at_camera"
+
+    def test_list_clips_omits_gaze_when_absent(self):
+        """Test that list_clips omits gaze fields when clips have no gaze data."""
+        from core.chat_tools import list_clips
+
+        project = _create_chat_test_project()
+        clip = Clip(
+            id="clip-1",
+            source_id="src-1",
+            start_frame=0,
+            end_frame=90,
+        )
+        project.add_clips([clip])
+
+        result = list_clips(main_window=None, project=project)
+
+        assert result["success"] is True
+        clip_data = result["clips"][0]
+        assert "gaze_yaw" not in clip_data
+        assert "gaze_pitch" not in clip_data
+        assert "gaze_category" not in clip_data
+
+    def test_filter_clips_includes_gaze_when_present(self):
+        """Test that filter_clips includes gaze fields for analyzed clips."""
+        from core.chat_tools import filter_clips
+
+        project = _create_chat_test_project()
+        clip = Clip(
+            id="clip-1",
+            source_id="src-1",
+            start_frame=0,
+            end_frame=90,
+            gaze_yaw=-15.7,
+            gaze_pitch=3.0,
+            gaze_category="looking_left",
+        )
+        project.add_clips([clip])
+
+        result = filter_clips(project)
+
+        assert len(result) == 1
+        assert result[0]["gaze_yaw"] == -15.7
+        assert result[0]["gaze_pitch"] == 3.0
+        assert result[0]["gaze_category"] == "looking_left"
+
+    def test_filter_clips_omits_gaze_when_absent(self):
+        """Test that filter_clips omits gaze fields when clips have no gaze data."""
+        from core.chat_tools import filter_clips
+
+        project = _create_chat_test_project()
+        clip = Clip(
+            id="clip-1",
+            source_id="src-1",
+            start_frame=0,
+            end_frame=90,
+        )
+        project.add_clips([clip])
+
+        result = filter_clips(project)
+
+        assert len(result) == 1
+        assert "gaze_yaw" not in result[0]
+        assert "gaze_pitch" not in result[0]
+        assert "gaze_category" not in result[0]
+
+
+class TestGazeAlgorithmsInAgentTools:
+    """Tests for gaze algorithms in sorting/remix agent tools."""
+
+    def test_list_sorting_algorithms_includes_gaze_sort(self):
+        """Test that gaze_sort appears in list_sorting_algorithms."""
+        from core.chat_tools import list_sorting_algorithms
+
+        project = _create_chat_test_project()
+        clip = Clip(
+            id="clip-1",
+            source_id="src-1",
+            start_frame=0,
+            end_frame=90,
+            gaze_category="at_camera",
+        )
+        project.add_clips([clip])
+
+        result = list_sorting_algorithms(project)
+
+        algo_keys = [a["key"] for a in result["algorithms"]]
+        assert "gaze_sort" in algo_keys
+        assert "gaze_consistency" in algo_keys
+
+    def test_list_sorting_algorithms_gaze_unavailable_without_analysis(self):
+        """Test that gaze algorithms show as unavailable without gaze data."""
+        from core.chat_tools import list_sorting_algorithms
+
+        project = _create_chat_test_project()
+        clip = Clip(
+            id="clip-1",
+            source_id="src-1",
+            start_frame=0,
+            end_frame=90,
+        )
+        project.add_clips([clip])
+
+        result = list_sorting_algorithms(project)
+
+        gaze_algos = [a for a in result["algorithms"] if a["key"] in ("gaze_sort", "gaze_consistency")]
+        for algo in gaze_algos:
+            assert algo["available"] is False
+            assert "gaze" in algo["reason"].lower()
+
+    def test_generate_remix_accepts_gaze_sort(self):
+        """Test that generate_remix accepts gaze_sort as a valid algorithm."""
+        from core.chat_tools import generate_remix
+
+        project = _create_chat_test_project()
+        clip = Clip(
+            id="clip-1",
+            source_id="src-1",
+            start_frame=0,
+            end_frame=90,
+            gaze_category="at_camera",
+            gaze_yaw=0.0,
+            gaze_pitch=0.0,
+        )
+        project.add_clips([clip])
+
+        # Mock main_window with sequence_tab
+        main_window = Mock()
+        main_window.sequence_tab.generate_and_apply.return_value = {
+            "success": True,
+            "clip_count": 1,
+            "algorithm": "gaze_sort",
+        }
+
+        result = generate_remix(project, main_window, algorithm="gaze_sort", clip_count=1)
+
+        assert result["success"] is True
+        main_window.sequence_tab.generate_and_apply.assert_called_once()
+
+    def test_generate_remix_rejects_invalid_algorithm(self):
+        """Test that generate_remix rejects unknown algorithm names."""
+        from core.chat_tools import generate_remix
+
+        project = _create_chat_test_project()
+        main_window = Mock()
+
+        result = generate_remix(project, main_window, algorithm="nonexistent")
+
+        assert result["success"] is False
+        assert "Invalid algorithm" in result["error"]
+
+
+class TestGazeFilterTool:
+    """Tests for set_sequence_gaze_filter agent tool."""
+
+    def test_gaze_filter_tool_registered(self):
+        """Test that set_sequence_gaze_filter is in the tool registry."""
+        from core.chat_tools import tools as registry
+
+        tool = registry.get("set_sequence_gaze_filter")
+        assert tool is not None
+        assert "gaze" in tool.description.lower()
+
+    def test_gaze_filter_rejects_invalid_category(self):
+        """Test that invalid gaze categories are rejected."""
+        from core.chat_tools import set_sequence_gaze_filter
+
+        project = _create_chat_test_project()
+        gui_state = Mock()
+        main_window = Mock()
+
+        result = set_sequence_gaze_filter(
+            project, gui_state, main_window, gaze_category="invalid_direction"
+        )
+
+        assert result["success"] is False
+        assert "Invalid gaze category" in result["error"]
+
+
+class TestGUIStateGazeFilter:
+    """Tests for gaze filter state in GUIState."""
+
+    def test_gaze_filter_in_context_string(self):
+        """Test that gaze filter appears in context string when set."""
+        from core.gui_state import GUIState
+
+        state = GUIState()
+        state.sequence_gaze_filter = "at_camera"
+
+        context = state.to_context_string()
+        assert "SEQUENCE GAZE FILTER: at_camera" in context
+
+    def test_gaze_filter_not_in_context_when_none(self):
+        """Test that gaze filter does not appear in context string when not set."""
+        from core.gui_state import GUIState
+
+        state = GUIState()
+        assert state.sequence_gaze_filter is None
+
+        context = state.to_context_string()
+        assert "GAZE FILTER" not in context
+
+    def test_clear_resets_gaze_filter(self):
+        """Test that clear() resets the gaze filter."""
+        from core.gui_state import GUIState
+
+        state = GUIState()
+        state.sequence_gaze_filter = "looking_left"
+        state.clear()
+
+        assert state.sequence_gaze_filter is None
+
+
+class TestProjectSummaryGazeCount:
+    """Tests for gaze analysis count in project summary."""
+
+    def test_project_summary_includes_gaze_count(self):
+        """Test that get_project_summary includes gaze analysis count."""
+        from core.chat_tools import get_project_summary
+
+        project = _create_chat_test_project()
+        project.add_clips([
+            Clip(
+                id="clip-1",
+                source_id="src-1",
+                start_frame=0,
+                end_frame=90,
+                gaze_category="at_camera",
+            ),
+            Clip(
+                id="clip-2",
+                source_id="src-1",
+                start_frame=90,
+                end_frame=180,
+            ),
+        ])
+
+        result = get_project_summary(project)
+
+        assert "Gaze analyzed**: 1/2" in result["summary"]

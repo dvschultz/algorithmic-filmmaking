@@ -212,10 +212,20 @@ class ClipThumbnail(QFrame):
         else:
             self.shot_type_label.setVisible(False)
 
+        # Gaze direction label
+        self.gaze_label = QLabel()
+        self.gaze_label.setAlignment(Qt.AlignRight)
+        self._apply_gaze_badge_style()
+        if clip.gaze_category:
+            self.set_gaze(clip.gaze_category)
+        else:
+            self.gaze_label.setVisible(False)
+
         self.custom_query_label = QLabel()
         self.custom_query_label.setAlignment(Qt.AlignRight)
         info_layout.addWidget(self.custom_query_label)
         self._update_custom_query_badge()
+        info_layout.addWidget(self.gaze_label)
         info_layout.addWidget(self.shot_type_label)
 
         layout.addLayout(info_layout)
@@ -459,6 +469,24 @@ class ClipThumbnail(QFrame):
         else:
             self.shot_type_label.setVisible(False)
 
+    def set_gaze(self, category: str | None):
+        """Set the gaze direction category for this clip.
+
+        Args:
+            category: Gaze category string (e.g. 'looking_left') or None to hide.
+        """
+        from core.analysis.gaze import GAZE_CATEGORY_SHORT, GAZE_CATEGORY_DISPLAY
+
+        self.clip.gaze_category = category
+        if category:
+            self.gaze_label.setText(GAZE_CATEGORY_SHORT.get(category, "?"))
+            display = GAZE_CATEGORY_DISPLAY.get(category, category)
+            self.gaze_label.setToolTip(f"Gaze: {display}")
+            self._apply_gaze_badge_style()
+            self.gaze_label.setVisible(True)
+        else:
+            self.gaze_label.setVisible(False)
+
     def set_transcript(self, segments: list | None):
         """Set the transcript segments for this clip."""
         self.clip.transcript = segments
@@ -557,12 +585,22 @@ class ClipThumbnail(QFrame):
         # Update shot type badge
         if self.clip.shot_type:
             self._apply_shot_type_badge_style()
+        # Update gaze badge
+        if self.clip.gaze_category:
+            self._apply_gaze_badge_style()
         self._update_custom_query_badge()
 
     def _apply_shot_type_badge_style(self):
         """Apply the shared shot type badge style."""
         self.shot_type_label.setStyleSheet(
             f"font-size: {TypeScale.XS}px; color: {theme().text_inverted}; background-color: {theme().shot_type_badge}; "
+            f"border-radius: {Radii.SM}px; padding: {Spacing.XXS}px {Spacing.XS}px;"
+        )
+
+    def _apply_gaze_badge_style(self):
+        """Apply the gaze direction badge style."""
+        self.gaze_label.setStyleSheet(
+            f"font-size: {TypeScale.XS}px; color: {theme().text_inverted}; background-color: {theme().gaze_badge}; "
             f"border-radius: {Radii.SM}px; padding: {Spacing.XXS}px {Spacing.XS}px;"
         )
 
@@ -1174,6 +1212,12 @@ class ClipBrowser(QWidget):
         if thumb:
             thumb.set_cinematography(cinematography)
 
+    def update_clip_gaze(self, clip_id: str, category: str | None):
+        """Update the gaze direction badge for a specific clip thumbnail (O(1) lookup)."""
+        thumb = self._thumbnail_by_id.get(clip_id)
+        if thumb:
+            thumb.set_gaze(category)
+
     def update_clip_thumbnail(self, clip_id: str, thumb_path: Path):
         """Update the thumbnail image for a specific clip (O(1) lookup)."""
         logger.info(f"ClipBrowser.update_clip_thumbnail: clip_id={clip_id}, path={thumb_path}")
@@ -1195,6 +1239,7 @@ class ClipBrowser(QWidget):
             if thumb:
                 # Always update all editable fields to reflect changes
                 thumb.set_shot_type(clip.shot_type)
+                thumb.set_gaze(clip.gaze_category)
                 thumb.set_transcript(clip.transcript)
                 thumb.set_colors(clip.dominant_colors)
                 thumb.set_custom_queries(clip.custom_queries)

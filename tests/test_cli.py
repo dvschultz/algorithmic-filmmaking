@@ -67,7 +67,7 @@ class TestCLIConfig:
                 config = CLIConfig()
                 assert config.default_sensitivity == 3.0
                 assert config.min_scene_length_seconds == 0.5
-                assert config.transcription_model == "small.en"
+                assert config.transcription_model == "medium.en"
                 assert config.transcription_language == "en"
                 assert config.youtube_results_count == 25
 

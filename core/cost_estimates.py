@@ -36,6 +36,7 @@ TIME_PER_CLIP: dict[str, dict[str, float]] = {
     "transcribe": {"local": 0.4, "cloud": 0.3},  # local: mlx-whisper; cloud: Groq API
     "cinematography": {"local": 3.0, "cloud": 1.0},  # local: mlx-vlm 7B; cloud: Gemini
     "face_embeddings": {"local": 2.0},  # ~2s per clip (30 frames x ~50ms each + overhead)
+    "gaze": {"local": 1.5},
 }
 
 # Per-clip dollar costs (cloud tiers only)
@@ -69,6 +70,7 @@ OPERATION_LABELS: dict[str, str] = {
     "transcribe": "Transcribe",
     "cinematography": "Rich Analysis",
     "face_embeddings": "Detect Faces",
+    "gaze": "Detect Gaze",
 }
 
 # Map operation key to a function that checks if a clip has that metadata
@@ -84,6 +86,7 @@ METADATA_CHECKS: dict[str, callable] = {
     "transcribe": lambda clip: bool(clip.transcript),
     "cinematography": lambda clip: bool(clip.cinematography),
     "face_embeddings": lambda clip: bool(clip.face_embeddings),
+    "gaze": lambda clip: clip.gaze_category is not None,
 }
 
 # Default parallelism by operation (used when no settings provided)

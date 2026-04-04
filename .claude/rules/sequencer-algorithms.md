@@ -28,6 +28,8 @@ Source of truth: `ui/algorithm_config.py`. Dialog-based algorithms have `is_dial
 | `signature_style` | Signature Style | colors | yes |
 | `rose_hobart` | Rose Hobart | — | yes |
 | `staccato` | Staccato | embeddings | yes |
+| `gaze_sort` | Gaze Sort | gaze | |
+| `gaze_consistency` | Gaze Consistency | gaze | |
 
 Algorithm implementations: `core/remix/` (one module per algorithm).
 Dialog UIs: `ui/dialogs/` (one file per dialog algorithm).

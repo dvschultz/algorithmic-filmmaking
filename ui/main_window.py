@@ -85,6 +85,7 @@ from ui.workers.transcription_worker import TranscriptionWorker
 from ui.workers.classification_worker import ClassificationWorker
 from ui.workers.object_detection_worker import ObjectDetectionWorker
 from ui.workers.face_detection_worker import FaceDetectionWorker
+from ui.workers.gaze_worker import GazeAnalysisWorker
 from ui.workers.description_worker import DescriptionWorker
 from ui.workers.custom_query_worker import CustomQueryWorker
 from ui.workers.export_worker import ExportBundleWorker
@@ -801,6 +802,7 @@ class MainWindow(QMainWindow):
         self._transcription_finished_handled = False
         self._text_extraction_finished_handled = False
         self._cinematography_finished_handled = False
+        self._gaze_finished_handled = False
 
         # Suppression flag: prevents _on_clips_added from starting its own ThumbnailWorker
         # when _on_detection_finished is managing the full detection→thumbnail pipeline
@@ -818,6 +820,7 @@ class MainWindow(QMainWindow):
         self._analysis_phase_remaining: int = 0  # Concurrent worker counter
         self._analysis_completed_ops: list[str] = []  # Ops finished so far
         self._analysis_pending_phases: list[str] = []  # Phases still to run
+        self._analysis_sequential_queue: list[str] = []  # Queue for sequential ops
         self._transcription_source_queue: list = []  # Queue for multi-source transcription
 
         # Agent tool waiting state - tracks when agent is waiting for worker completion
@@ -1047,6 +1050,7 @@ class MainWindow(QMainWindow):
             (getattr(self, 'youtube_search_worker', None), "YouTubeSearch"),
             (getattr(self, 'ia_search_worker', None), "InternetArchiveSearch"),
             (getattr(self, 'export_worker', None), "Export"),
+            (getattr(self, '_gaze_worker', None), "Gaze"),
         ]
 
         for worker, name in workers_to_stop:
@@ -3218,6 +3222,7 @@ class MainWindow(QMainWindow):
         self._analysis_completed_ops = []
         self._analysis_current_phase = ""
         self._analysis_phase_remaining = 0
+        self._analysis_sequential_queue = []
 
         # Build phase queue: only phases that have selected operations
         self._analysis_pending_phases = [
@@ -3263,7 +3268,8 @@ class MainWindow(QMainWindow):
         elif phase == "sequential":
             # Sequential ops run one at a time (e.g., transcription is memory-heavy)
             self._analysis_phase_remaining = len(phase_ops)
-            # Start first sequential op
+            # Store ordered queue; pop first and launch it
+            self._analysis_sequential_queue = list(phase_ops[1:])
             self._launch_analysis_worker(phase_ops[0], clips)
         elif phase == "cloud":
             # Cloud ops run concurrently (I/O-bound API calls)
@@ -3304,6 +3310,8 @@ class MainWindow(QMainWindow):
             self._launch_cinematography_worker(clips)
         elif op_key == "custom_query":
             self._launch_custom_query_worker(clips)
+        elif op_key == "gaze":
+            self._launch_gaze_worker(clips)
         else:
             logger.warning(f"Unknown analysis operation: {op_key}")
             self._on_analysis_phase_worker_finished(op_key)
@@ -3387,6 +3395,24 @@ class MainWindow(QMainWindow):
         self.face_detection_worker.finished.connect(self.face_detection_worker.deleteLater)
         self.face_detection_worker.finished.connect(lambda: setattr(self, 'face_detection_worker', None))
         self.face_detection_worker.start()
+
+    def _launch_gaze_worker(self, clips: list):
+        """Launch gaze direction analysis worker."""
+        self._gaze_finished_handled = False
+        sources_by_id = {s.id: s for s in self.sources}
+        logger.info(f"Creating GazeAnalysisWorker (pipeline) for {len(clips)} clips...")
+        self._gaze_worker = GazeAnalysisWorker(
+            clips, sources_by_id=sources_by_id,
+        )
+        self._gaze_worker.progress.connect(self._on_gaze_progress)
+        self._gaze_worker.gaze_ready.connect(self._on_gaze_ready)
+        self._gaze_worker.detection_completed.connect(
+            self._on_pipeline_gaze_finished, Qt.UniqueConnection
+        )
+        self._gaze_worker.error.connect(self._on_gaze_error)
+        self._gaze_worker.finished.connect(self._gaze_worker.deleteLater)
+        self._gaze_worker.finished.connect(lambda: setattr(self, '_gaze_worker', None))
+        self._gaze_worker.start()
 
     def _launch_text_extraction_worker(self, clips: list):
         """Launch text extraction worker."""
@@ -3659,6 +3685,19 @@ class MainWindow(QMainWindow):
         self._on_analysis_phase_worker_finished("face_embeddings")
 
     @Slot()
+    def _on_pipeline_gaze_finished(self):
+        if self._gaze_finished_handled:
+            return
+        self._gaze_finished_handled = True
+        self._on_analysis_phase_worker_finished("gaze")
+
+    @Slot(str)
+    def _on_gaze_error(self, msg):
+        """Handle gaze analysis errors — log and ensure pipeline advances."""
+        logger.error("Gaze analysis error: %s", msg)
+        self.statusBar().showMessage(f"Gaze analysis failed: {msg}", 5000)
+
+    @Slot()
     def _on_pipeline_extract_text_finished(self):
         self._on_analysis_phase_worker_finished("extract_text")
 
@@ -3678,7 +3717,8 @@ class MainWindow(QMainWindow):
         """Handle completion of one worker in the analysis pipeline.
 
         Decrements phase counter and advances to next phase when all workers
-        in the current phase are done.
+        in the current phase are done. For sequential phases, launches the
+        next queued operation before checking phase completion.
         """
         self._analysis_completed_ops.append(op_key)
         self._analysis_phase_remaining -= 1
@@ -3686,6 +3726,16 @@ class MainWindow(QMainWindow):
             f"=== PIPELINE: {op_key} finished "
             f"({self._analysis_phase_remaining} remaining in phase '{self._analysis_current_phase}') ==="
         )
+
+        # For sequential phase, launch the next queued op if any remain
+        if (
+            self._analysis_current_phase == "sequential"
+            and self._analysis_sequential_queue
+        ):
+            next_op = self._analysis_sequential_queue.pop(0)
+            logger.info(f"PIPELINE: launching next sequential op '{next_op}'")
+            self._launch_analysis_worker(next_op, self._analysis_clips)
+            return
 
         if self._analysis_phase_remaining <= 0:
             self._start_next_analysis_phase()
@@ -7260,6 +7310,32 @@ class MainWindow(QMainWindow):
             self.progress_bar.setValue(int(current / total * 100))
 
     @Slot(int, int)
+    def _on_gaze_progress(self, current: int, total: int):
+        """Handle gaze analysis progress updates."""
+        if total > 0:
+            if current == 0:
+                self.status_bar.showMessage(
+                    "Gaze Detection: loading MediaPipe model..."
+                )
+            else:
+                self.status_bar.showMessage(f"Detecting gaze: {current}/{total} clips...")
+            self.progress_bar.setValue(int(current / total * 100))
+
+    @Slot(str, float, float, str)
+    def _on_gaze_ready(self, clip_id: str, yaw: float, pitch: float, category: str):
+        """Handle gaze analysis complete for a clip."""
+        clip = self.clips_by_id.get(clip_id)
+        if clip:
+            # Update both tabs' clip browsers
+            self.cut_tab.update_clip_gaze(clip_id, category)
+            self.analyze_tab.update_clip_gaze(clip_id, category)
+            # Refresh sidebar if it's showing this clip
+            if hasattr(self, 'clip_details_sidebar'):
+                self.clip_details_sidebar.refresh_gaze_if_showing(clip_id)
+            self._mark_dirty()
+            logger.debug(f"Clip {clip_id}: gaze={category} (yaw={yaw:.1f}, pitch={pitch:.1f})")
+
+    @Slot(int, int)
     def _on_object_detection_progress(self, current: int, total: int):
         """Handle object detection progress updates."""
         if total > 0:
@@ -8901,6 +8977,8 @@ class MainWindow(QMainWindow):
                 self.cut_tab.update_clip_colors(clip.id, clip.dominant_colors)
             if clip.shot_type:
                 self.cut_tab.update_clip_shot_type(clip.id, clip.shot_type)
+            if clip.gaze_category:
+                self.cut_tab.update_clip_gaze(clip.id, clip.gaze_category)
             if clip.transcript:
                 self.cut_tab.update_clip_transcript(clip.id, clip.transcript)
 
@@ -9059,6 +9137,8 @@ class MainWindow(QMainWindow):
                     self.cut_tab.update_clip_colors(clip.id, clip.dominant_colors)
                 if clip.shot_type:
                     self.cut_tab.update_clip_shot_type(clip.id, clip.shot_type)
+                if clip.gaze_category:
+                    self.cut_tab.update_clip_gaze(clip.id, clip.gaze_category)
                 if clip.transcript:
                     self.cut_tab.update_clip_transcript(clip.id, clip.transcript)
 
@@ -9214,6 +9294,7 @@ class MainWindow(QMainWindow):
             ("transcription", self.transcription_worker),
             ("classification", self.classification_worker),
             ("object_detection", self.detection_worker_yolo),
+            ("gaze", getattr(self, '_gaze_worker', None)),
         ]
 
         for name, worker in workers:
