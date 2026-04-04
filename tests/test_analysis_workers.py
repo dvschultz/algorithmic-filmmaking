@@ -216,6 +216,11 @@ class TestShotTypeWorkerErrors:
             "core.analysis.shots.classify_shot_type_tiered",
             _raise_for_all,
         )
+        # Patch model pre-loading so it doesn't fail on CI (no torch/GPU)
+        monkeypatch.setattr(
+            "core.analysis.shots.is_model_loaded",
+            lambda: True,
+        )
 
         errors = []
         completed = []
@@ -283,6 +288,9 @@ class TestClassificationWorkerErrors:
         with patch(
             "core.analysis.classification.classify_frame",
             side_effect=RuntimeError("torch import failed"),
+        ), patch(
+            "core.analysis.classification._load_model",
+            return_value=None,
         ):
             errors = []
             completed = []

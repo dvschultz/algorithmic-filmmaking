@@ -37,6 +37,9 @@ def get_operation_feature_candidates(
     if op_key == "face_embeddings":
         return ["face_detect"]
 
+    if op_key == "gaze":
+        return ["gaze_detect"]
+
     if op_key in ("embeddings", "boundary_embeddings"):
         return ["embeddings"]
 

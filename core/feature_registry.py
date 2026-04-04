@@ -23,6 +23,7 @@ _FULL_PACKAGE_REPAIR_FEATURES = {
     "image_classify",
     "object_detect",
     "face_detect",
+    "gaze_detect",
     "shot_classify",
     "transcribe",
     "transcribe_mlx",
@@ -88,6 +89,10 @@ def _validate_feature_runtime(name: str) -> None:
         from core.transcription import ensure_mlx_whisper_runtime_available
 
         ensure_mlx_whisper_runtime_available()
+    elif name == "gaze_detect":
+        from core.analysis.gaze import ensure_gaze_runtime_available
+
+        ensure_gaze_runtime_available()
     elif name == "embeddings":
         try:
             from transformers.models.auto.image_processing_auto import AutoImageProcessor  # noqa: F401
@@ -229,6 +234,12 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
         size_estimate_mb=2000,
         repair_packages=["torch", "torchaudio", "demucs_infer", "librosa"],
         native_install=True,  # torch has native extensions
+    ),
+    "gaze_detect": FeatureDeps(
+        binaries=[],
+        packages=["mediapipe"],
+        size_estimate_mb=50,
+        repair_packages=["mediapipe"],
     ),
     "embeddings": FeatureDeps(
         binaries=[],

@@ -26,6 +26,8 @@ def operation_is_complete_for_clip(op_key: str, clip) -> bool:
         return clip.cinematography is not None
     if op_key == "face_embeddings":
         return clip.face_embeddings is not None
+    if op_key == "gaze":
+        return clip.gaze_category is not None
     if op_key == "custom_query":
         # Each custom query is unique — never auto-skip, always allow rerun
         return False
