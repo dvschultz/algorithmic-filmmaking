@@ -1050,6 +1050,7 @@ class MainWindow(QMainWindow):
             (getattr(self, 'youtube_search_worker', None), "YouTubeSearch"),
             (getattr(self, 'ia_search_worker', None), "InternetArchiveSearch"),
             (getattr(self, 'export_worker', None), "Export"),
+            (getattr(self, '_gaze_worker', None), "Gaze"),
         ]
 
         for worker, name in workers_to_stop:
@@ -3408,9 +3409,7 @@ class MainWindow(QMainWindow):
         self._gaze_worker.detection_completed.connect(
             self._on_pipeline_gaze_finished, Qt.UniqueConnection
         )
-        self._gaze_worker.error.connect(
-            lambda msg: logger.error(f"Gaze analysis error: {msg}")
-        )
+        self._gaze_worker.error.connect(self._on_gaze_error)
         self._gaze_worker.finished.connect(self._gaze_worker.deleteLater)
         self._gaze_worker.finished.connect(lambda: setattr(self, '_gaze_worker', None))
         self._gaze_worker.start()
@@ -3690,9 +3689,13 @@ class MainWindow(QMainWindow):
         if self._gaze_finished_handled:
             return
         self._gaze_finished_handled = True
-        from core.analysis.gaze import unload_model
-        unload_model()
         self._on_analysis_phase_worker_finished("gaze")
+
+    @Slot(str)
+    def _on_gaze_error(self, msg):
+        """Handle gaze analysis errors — log and ensure pipeline advances."""
+        logger.error("Gaze analysis error: %s", msg)
+        self.statusBar().showMessage(f"Gaze analysis failed: {msg}", 5000)
 
     @Slot()
     def _on_pipeline_extract_text_finished(self):
@@ -9291,6 +9294,7 @@ class MainWindow(QMainWindow):
             ("transcription", self.transcription_worker),
             ("classification", self.classification_worker),
             ("object_detection", self.detection_worker_yolo),
+            ("gaze", getattr(self, '_gaze_worker', None)),
         ]
 
         for name, worker in workers:

@@ -42,7 +42,7 @@ def eyeline_match(
         return list(clips_with_sources)
 
     # Sort by absolute yaw so we try to pair the most extreme angles first
-    with_gaze.sort(key=lambda item: abs(item[0].gaze_yaw))
+    with_gaze.sort(key=lambda item: abs(item[0].gaze_yaw), reverse=True)
 
     used = set()
     pairs = []

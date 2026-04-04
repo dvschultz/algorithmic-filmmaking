@@ -4162,7 +4162,7 @@ def list_sorting_algorithms(project) -> dict:
             "available": has_gaze,
             "reason": None if has_gaze else "Run gaze analysis on clips first",
             "parameters": [
-                {"name": "direction", "type": "string", "options": ["left_to_right", "right_to_left"], "default": "left_to_right"}
+                {"name": "direction", "type": "string", "options": ["left_to_right", "right_to_left", "up_to_down", "down_to_up"], "default": "left_to_right"}
             ]
         },
         {

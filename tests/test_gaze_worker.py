@@ -367,5 +367,5 @@ class TestGazeWorkerExceptionHandling:
         assert len(errors) == 1
         assert "Failed to load gaze detection model" in errors[0]
         assert "mediapipe not installed" in errors[0]
-        # No detection_completed since we returned early after error
-        assert completed == []
+        # detection_completed still emits so pipeline never stalls
+        assert completed == [True]

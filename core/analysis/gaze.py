@@ -92,7 +92,15 @@ def _get_model_path() -> str:
             "face_landmarker/face_landmarker/float16/1/face_landmarker.task"
         )
         logger.info("Downloading MediaPipe FaceLandmarker model...")
-        urllib.request.urlretrieve(url, model_path)
+        tmp_path = model_path + ".tmp"
+        try:
+            urllib.request.urlretrieve(url, tmp_path)
+            os.replace(tmp_path, model_path)
+        except Exception:
+            # Clean up partial download so next attempt retries
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            raise
         logger.info("Downloaded FaceLandmarker model to %s", model_path)
 
     return model_path

@@ -76,57 +76,63 @@ class GazeAnalysisWorker(CancellableWorker):
         logger.info(f"Starting gaze analysis: {total} clips")
 
         # Pre-load MediaPipe FaceMesh model
+        model_loaded = False
         try:
             from core.analysis.gaze import is_model_loaded, _load_face_mesh
 
             if not is_model_loaded():
                 self.progress.emit(0, total)
                 _load_face_mesh()
+            model_loaded = True
         except Exception as e:
             self.error.emit(f"Failed to load gaze detection model: {e}")
+            self.detection_completed.emit()
             self._log_complete()
             return
 
-        if self.is_cancelled():
-            self._log_cancelled()
-            return
-
-        # Sort by source_id to minimize repeated file opens
-        clips_to_process.sort(key=lambda cs: cs[1].file_path.name)
-
-        from core.analysis.gaze import extract_gaze_from_clip
-
-        for i, (clip, source) in enumerate(clips_to_process):
+        try:
             if self.is_cancelled():
                 self._log_cancelled()
-                break
+                return
 
-            try:
-                result = extract_gaze_from_clip(
-                    source_path=str(source.file_path),
-                    start_frame=clip.start_frame,
-                    end_frame=clip.end_frame,
-                    fps=source.fps,
-                    sample_interval=self._sample_interval,
-                )
-                if result is not None:
-                    # Mutate in-place (partial results persist on cancel)
-                    clip.gaze_yaw = result["gaze_yaw"]
-                    clip.gaze_pitch = result["gaze_pitch"]
-                    clip.gaze_category = result["gaze_category"]
-                    self.gaze_ready.emit(
-                        clip.id,
-                        result["gaze_yaw"],
-                        result["gaze_pitch"],
-                        result["gaze_category"],
+            # Sort by source_id to minimize repeated file opens
+            clips_to_process.sort(key=lambda cs: cs[1].file_path.name)
+
+            from core.analysis.gaze import extract_gaze_from_clip
+
+            for i, (clip, source) in enumerate(clips_to_process):
+                if self.is_cancelled():
+                    self._log_cancelled()
+                    break
+
+                try:
+                    result = extract_gaze_from_clip(
+                        source_path=str(source.file_path),
+                        start_frame=clip.start_frame,
+                        end_frame=clip.end_frame,
+                        fps=source.fps,
+                        sample_interval=self._sample_interval,
                     )
-                # If result is None: no face found, skip emission
-            except Exception as e:
-                logger.warning(f"Gaze analysis failed for clip {clip.id}: {e}")
+                    if result is not None:
+                        # Mutate in-place (partial results persist on cancel)
+                        clip.gaze_yaw = result["gaze_yaw"]
+                        clip.gaze_pitch = result["gaze_pitch"]
+                        clip.gaze_category = result["gaze_category"]
+                        self.gaze_ready.emit(
+                            clip.id,
+                            result["gaze_yaw"],
+                            result["gaze_pitch"],
+                            result["gaze_category"],
+                        )
+                    # If result is None: no face found, skip emission
+                except Exception as e:
+                    logger.warning("Gaze analysis failed for clip %s: %s", clip.id, e)
 
-            self.progress.emit(i + 1, total)
-
-        from core.analysis.gaze import unload_model
-        unload_model()
-        self.detection_completed.emit()
-        self._log_complete()
+                self.progress.emit(i + 1, total)
+        finally:
+            # Always unload model and emit completion so pipeline never stalls
+            if model_loaded:
+                from core.analysis.gaze import unload_model
+                unload_model()
+            self.detection_completed.emit()
+            self._log_complete()
