@@ -227,6 +227,12 @@ __marimo__/
 # YOLO model weights (download from ultralytics)
 *.pt
 
+# ML model files (downloaded on demand)
+*.ts
+
+# FFmpeg runtime binaries (local only)
+packaging/runtime/
+
 # Test clips and media
 test_clips/
 
