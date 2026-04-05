@@ -1,4 +1,8 @@
-"""Grid of sorting algorithm cards for the Sequence tab."""
+"""Grid of sorting algorithm cards for the Sequence tab.
+
+Displays 19 sorting algorithms as clickable cards, filterable by category
+via a pill bar.
+"""
 
 from PySide6.QtWidgets import QWidget, QGridLayout, QVBoxLayout, QLabel
 from PySide6.QtCore import Signal, Qt
@@ -6,20 +10,23 @@ from PySide6.QtGui import QFont, QMouseEvent
 
 from ui.theme import theme, Spacing, TypeScale
 from ui.widgets.sorting_card import SortingCard
+from ui.widgets.category_pill_bar import CategoryPillBar
 from ui.algorithm_config import ALGORITHM_CONFIG
 
 
 class SortingCardGrid(QWidget):
-    """Grid of sorting algorithm cards.
+    """Grid of sorting algorithm cards with category filtering.
 
-    Displays available sorting algorithms as clickable cards in a 2x2 grid.
-    Emits signal when an algorithm is selected.
+    Displays available sorting algorithms as clickable cards in a 4-column
+    grid.  A pill bar above the grid lets users filter by category.
 
     Signals:
         algorithm_selected: Emitted with algorithm key when a card is clicked
+        category_changed: Emitted with category name when the user switches
     """
 
     algorithm_selected = Signal(str)  # algorithm key
+    category_changed = Signal(str)  # category name
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -47,65 +54,101 @@ class SortingCardGrid(QWidget):
         main_layout.addWidget(header)
         self._header = header
 
-        # Subheader
-        subheader = QLabel("Select how you want to arrange your clips")
-        subheader.setAlignment(Qt.AlignCenter)
-        subheader.setStyleSheet(f"color: {theme().text_secondary}; margin-bottom: {Spacing.XL}px;")
-        main_layout.addWidget(subheader)
-        self._subheader = subheader
+        # Category pill bar (replaces the old subheader)
+        self._pill_bar = CategoryPillBar()
+        self._pill_bar.category_changed.connect(self._on_category_changed)
+        main_layout.addWidget(self._pill_bar)
 
         main_layout.addStretch()
 
         # Grid container (centered)
-        grid_container = QWidget()
-        grid_layout = QGridLayout(grid_container)
-        grid_layout.setSpacing(Spacing.XL)
-        grid_layout.setContentsMargins(0, 0, 0, 0)
+        self._grid_container = QWidget()
+        self._grid_layout = QGridLayout(self._grid_container)
+        self._grid_layout.setSpacing(Spacing.XL)
+        self._grid_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Create cards in grid layout (14 algorithms, 4 columns)
-        # Row 0: basic sorting
-        # Row 1: color/brightness/volume/shot
-        # Row 2: analysis + similarity
-        # Row 3: text/narrative
-        positions = [
-            ("shuffle", 0, 0),
-            ("sequential", 0, 1),
-            ("duration", 0, 2),
-            ("color", 0, 3),
-            ("brightness", 1, 0),
-            ("volume", 1, 1),
-            ("shot_type", 1, 2),
-            ("proximity", 1, 3),
-            ("similarity_chain", 2, 0),
-            ("match_cut", 2, 1),
-            ("exquisite_corpus", 2, 2),
-            ("storyteller", 2, 3),
-            ("reference_guided", 3, 0),
-            ("signature_style", 3, 1),
-            ("rose_hobart", 3, 2),
-            ("staccato", 3, 3),
-            ("gaze_sort", 4, 0),
-            ("gaze_consistency", 4, 1),
-            ("eyes_without_a_face", 4, 2),
+        # Master position order — defines canonical card ordering
+        self._positions = [
+            "shuffle", "sequential", "duration", "color",
+            "brightness", "volume", "shot_type", "proximity",
+            "similarity_chain", "match_cut", "exquisite_corpus", "storyteller",
+            "reference_guided", "signature_style", "rose_hobart", "staccato",
+            "gaze_sort", "gaze_consistency", "eyes_without_a_face",
         ]
 
-        for key, row, col in positions:
+        # Create all cards (but don't add to layout yet)
+        for key in self._positions:
             cfg = ALGORITHM_CONFIG[key]
             icon, title, description = cfg["icon"], cfg["label"], cfg["description"]
             card = SortingCard(key, icon, title, description)
             card.clicked.connect(self._on_card_clicked)
-            grid_layout.addWidget(card, row, col, Qt.AlignCenter)
             self._cards[key] = card
 
         # Let clicks on empty grid space propagate to this widget
-        grid_container.mousePressEvent = lambda e: e.ignore()
+        self._grid_container.mousePressEvent = lambda e: e.ignore()
 
         # Center the grid
         center_layout = QVBoxLayout()
-        center_layout.addWidget(grid_container, 0, Qt.AlignCenter)
+        center_layout.addWidget(self._grid_container, 0, Qt.AlignCenter)
         main_layout.addLayout(center_layout)
 
         main_layout.addStretch()
+
+        # Initial grid build shows all cards
+        self._rebuild_grid("All")
+
+    # ── Category filtering ──────────────────────────────────────────
+
+    def _on_category_changed(self, category: str):
+        """Handle pill bar category change from user interaction."""
+        self._rebuild_grid(category)
+        self.category_changed.emit(category)
+
+    def _rebuild_grid(self, category: str):
+        """Clear and rebuild the grid layout for the given category.
+
+        Cards are persistent objects reused across rebuilds — never
+        call deleteLater() on them.
+        """
+        # Determine visible keys
+        if category == "All":
+            visible_keys = set(self._positions)
+        else:
+            cat_lower = category.lower()
+            visible_keys = {
+                key for key in self._positions
+                if cat_lower in ALGORITHM_CONFIG[key].get("categories", [])
+            }
+
+        # Clear selection if the selected card is not in the new set
+        if self._selected_key and self._selected_key not in visible_keys:
+            self.clear_selection()
+
+        # Drain the layout without destroying widgets
+        while self._grid_layout.count():
+            self._grid_layout.takeAt(0)
+
+        # Re-add visible cards in sequential 4-column positions
+        i = 0
+        for key in self._positions:
+            card = self._cards[key]
+            if key in visible_keys:
+                card.setVisible(True)
+                self._grid_layout.addWidget(card, i // 6, i % 6, Qt.AlignCenter)
+                i += 1
+            else:
+                card.setVisible(False)
+
+    def set_category(self, category: str):
+        """Programmatically set the active category.
+
+        Delegates to the pill bar (which does not emit on programmatic set)
+        and rebuilds the grid.
+        """
+        self._pill_bar.set_category(category)
+        self._rebuild_grid(category)
+
+    # ── Card interaction ────────────────────────────────────────────
 
     def _on_card_clicked(self, key: str):
         """Handle card click."""
@@ -123,11 +166,8 @@ class SortingCardGrid(QWidget):
     def set_algorithm_availability(self, available: dict[str, bool | tuple[bool, str]]):
         """Enable/disable cards based on clip analysis state.
 
-        Args:
-            available: Dict mapping algorithm key to either:
-                - bool: True if available, False otherwise
-                - tuple[bool, str]: (available, reason) where reason explains
-                  why the algorithm is unavailable
+        Updates ALL cards regardless of current category filter so that
+        switching categories always shows correct enabled/disabled state.
         """
         for key, status in available.items():
             if key in self._cards:
@@ -156,4 +196,3 @@ class SortingCardGrid(QWidget):
     def _refresh_theme(self):
         """Refresh styles when theme changes."""
         self._header.setStyleSheet(f"color: {theme().text_primary}; margin-bottom: {Spacing.LG}px;")
-        self._subheader.setStyleSheet(f"color: {theme().text_secondary}; margin-bottom: {Spacing.XL}px;")

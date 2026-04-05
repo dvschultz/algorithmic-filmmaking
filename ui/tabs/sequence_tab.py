@@ -28,7 +28,7 @@ from core.remix import generate_sequence
 from core.cost_estimates import estimate_sequence_cost
 from core.analysis_dependencies import get_operation_feature_candidates
 from core.feature_registry import check_feature_ready
-from core.settings import get_llm_api_key, get_replicate_api_key, load_settings
+from core.settings import get_llm_api_key, get_replicate_api_key, load_settings, save_settings
 
 logger = logging.getLogger(__name__)
 
@@ -157,7 +157,12 @@ class SequenceTab(BaseTab):
 
         self.card_grid = SortingCardGrid()
         self.card_grid.algorithm_selected.connect(self._on_card_clicked)
+        self.card_grid.category_changed.connect(self._on_category_changed)
         layout.addWidget(self.card_grid)
+
+        # Restore persisted category (set_category does not emit, so no save loop)
+        settings = load_settings()
+        self.card_grid.set_category(settings.sequence_selected_category)
 
         return container
 
@@ -575,6 +580,12 @@ class SequenceTab(BaseTab):
     # --- Signal handlers ---
 
     @Slot(str)
+    def _on_category_changed(self, category: str):
+        """Persist selected category to settings."""
+        settings = load_settings()
+        settings.sequence_selected_category = category
+        save_settings(settings)
+
     def _on_card_clicked(self, algorithm: str):
         """Handle card click - generate sequence from selected clips.
 

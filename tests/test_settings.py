@@ -597,3 +597,70 @@ class TestDownloadDirectoryValidation:
         env_copy.pop(ENV_DOWNLOAD_DIR, None)
         with patch.dict(os.environ, env_copy, clear=True):
             assert is_download_dir_from_env() is False
+
+
+class TestSequenceSelectedCategory:
+    """Tests for sequence_selected_category persistence."""
+
+    def test_default_sequence_selected_category(self):
+        """Default value is 'All' on a fresh Settings instance."""
+        settings = Settings()
+        assert settings.sequence_selected_category == "All"
+
+    def test_round_trip_sequence_selected_category(self):
+        """Round-trip: set to 'Audio', save to JSON, load from JSON, value is 'Audio'."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.json"
+
+            with patch("core.settings._get_config_path", return_value=config_path):
+                with patch("core.settings._get_api_key_from_keyring", return_value=""):
+                    with patch("core.settings._set_api_key_in_keyring", return_value=True):
+                        settings = Settings()
+                        settings.sequence_selected_category = "Audio"
+                        assert save_settings(settings) is True
+
+                        loaded = load_settings()
+                        assert loaded.sequence_selected_category == "Audio"
+
+    def test_missing_sequence_section_falls_back_to_all(self):
+        """Loading with missing 'sequence' section falls back to 'All'."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.json"
+            # Write JSON without a "sequence" section
+            data = {"version": "1.0", "detection": {"default_sensitivity": 3.0}}
+            config_path.write_text(json.dumps(data))
+
+            with patch("core.settings._get_config_path", return_value=config_path):
+                with patch("core.settings._get_api_key_from_keyring", return_value=""):
+                    loaded = load_settings()
+                    assert loaded.sequence_selected_category == "All"
+
+    def test_unrecognized_category_falls_back_to_all(self):
+        """Loading with unrecognized category value falls back to 'All'."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.json"
+            data = {
+                "version": "1.0",
+                "sequence": {"selected_category": "deleted_category"},
+            }
+            config_path.write_text(json.dumps(data))
+
+            with patch("core.settings._get_config_path", return_value=config_path):
+                with patch("core.settings._get_api_key_from_keyring", return_value=""):
+                    loaded = load_settings()
+                    assert loaded.sequence_selected_category == "All"
+
+    def test_non_string_category_falls_back_to_all(self):
+        """Loading with non-string category value falls back to 'All'."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.json"
+            data = {
+                "version": "1.0",
+                "sequence": {"selected_category": 42},
+            }
+            config_path.write_text(json.dumps(data))
+
+            with patch("core.settings._get_config_path", return_value=config_path):
+                with patch("core.settings._get_api_key_from_keyring", return_value=""):
+                    loaded = load_settings()
+                    assert loaded.sequence_selected_category == "All"

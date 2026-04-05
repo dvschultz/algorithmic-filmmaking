@@ -469,6 +469,9 @@ class Settings:
         default_factory=lambda: ["colors", "shots", "transcribe"]
     )
 
+    # Sequence tab - remembered category filter
+    sequence_selected_category: str = "All"
+
     # Analysis Parallelism Settings
     color_analysis_parallelism: int = 4  # 1-8, I/O-bound image loading
     description_parallelism: int = 3  # 1-5, cloud API I/O-bound
@@ -812,6 +815,13 @@ def _load_from_json(config_path: Path, settings: Settings) -> Settings:
         if "batch_parallelism" in cinematography:
             settings.cinematography_batch_parallelism = int(cinematography["batch_parallelism"])
 
+    # Sequence tab section
+    if sequence := data.get("sequence"):
+        val = sequence.get("selected_category")
+        from ui.algorithm_config import CATEGORY_ORDER
+        if isinstance(val, str) and val in CATEGORY_ORDER:
+            settings.sequence_selected_category = val
+
     return settings
 
 
@@ -919,6 +929,9 @@ def _settings_to_json(settings: Settings) -> dict:
             "tier": settings.cinematography_tier,
             "local_model": settings.cinematography_local_model,
             "batch_parallelism": settings.cinematography_batch_parallelism,
+        },
+        "sequence": {
+            "selected_category": settings.sequence_selected_category,
         },
     }
 
