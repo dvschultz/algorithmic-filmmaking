@@ -37,6 +37,7 @@ cli/                 (15 files)  # Click CLI with detect, analyze, transcribe, y
 scene_ripper_mcp/    (3 files)   # MCP server for external agent access
 tests/               (56 files)  # 1153 tests
 docs/user-guide/                 # End-user documentation
+docs/solutions/                  # Documented solutions (bugs, best practices), YAML frontmatter (module, tags, problem_type)
 ```
 
 ## Running the App

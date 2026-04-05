@@ -4,6 +4,8 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
+
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -30,6 +32,7 @@ from ui.widgets.source_group_header import SourceGroupHeader
 from models.clip import Clip, Source
 from models.cinematography import CinematographyAnalysis
 from core.analysis.color import get_primary_hue, classify_color_palette, get_palette_display_name, COLOR_PALETTES
+from core.analysis.gaze import GAZE_CATEGORY_DISPLAY
 from core.analysis.shots import get_display_name, SHOT_TYPES
 from core.film_glossary import get_badge_tooltip
 from ui.theme import theme, UISizes, TypeScale, Spacing, Radii
@@ -113,6 +116,7 @@ class ClipThumbnail(QFrame):
     drag_started = Signal(object)  # Clip
     view_details_requested = Signal(object, object)  # Clip, Source
     export_requested = Signal(object, object)  # Clip, Source
+    find_similar_requested = Signal(object)  # Clip
 
     def __init__(self, clip: Clip, source: Source, drag_enabled: bool = False):
         super().__init__()
@@ -423,6 +427,10 @@ class ClipThumbnail(QFrame):
         )
         export_action = menu.addAction("Export Clip...")
         export_action.triggered.connect(self._emit_export_requested)
+        find_similar_action = menu.addAction("Find Similar")
+        find_similar_action.triggered.connect(
+            lambda: self.find_similar_requested.emit(self.clip)
+        )
         return menu
 
     def _emit_export_requested(self) -> None:
@@ -690,6 +698,17 @@ class ClipBrowser(QWidget):
         self._aspect_ratio_filter: str = "All"  # "All", "16:9", "4:3", "9:16"
         self._filter_panel_visible = False
 
+        # Gaze, object, description, and brightness filters
+        self._gaze_filter: str = "All Gaze"
+        self._object_search: str = ""
+        self._description_search: str = ""
+        self._min_brightness: Optional[float] = None
+        self._max_brightness: Optional[float] = None
+
+        # Similarity mode state
+        self._similarity_anchor_id: Optional[str] = None
+        self._similarity_scores: dict[str, float] = {}
+
         # Source grouping state
         self._group_expanded_state: dict[str, bool] = {}  # source_id -> is_expanded
         self._source_headers: dict[str, SourceGroupHeader] = {}  # source_id -> header widget
@@ -892,12 +911,14 @@ class ClipBrowser(QWidget):
         thumb.drag_started.connect(self._on_drag_started)
         thumb.view_details_requested.connect(self._on_view_details_requested)
         thumb.export_requested.connect(self._on_export_requested)
+        thumb.find_similar_requested.connect(self._activate_similarity)
 
         self.thumbnails.append(thumb)
         self._thumbnail_by_id[clip.id] = thumb  # O(1) lookup
 
         # Rebuild grid to handle grouping properly
         self._sync_custom_query_filter_options()
+        self._update_filter_availability()
         self._rebuild_grid()
 
         # Update duration range for spinboxes
@@ -1485,6 +1506,14 @@ class ClipBrowser(QWidget):
             # Calculate counts for this group
             total_count = len(source_thumbs)
             visible_thumbs = [t for t in source_thumbs if self._matches_filter(t)]
+
+            # Sort by similarity score when similarity mode is active
+            if self._similarity_anchor_id is not None:
+                visible_thumbs.sort(
+                    key=lambda t: self._similarity_scores.get(t.clip.id, 0.0),
+                    reverse=True,
+                )
+
             visible_count = len(visible_thumbs)
             selected_count = sum(
                 1 for t in source_thumbs if t.clip.id in self.selected_clips
@@ -1557,6 +1586,11 @@ class ClipBrowser(QWidget):
 
     def _matches_filter(self, thumb: ClipThumbnail) -> bool:
         """Check if a thumbnail matches all filters (AND logic)."""
+        # Check similarity mode — exclude clips without valid embeddings
+        if self._similarity_anchor_id is not None:
+            if thumb.clip.id not in self._similarity_scores:
+                return False
+
         # Check shot type filter
         if self._current_filter != "All":
             shot_type = thumb.clip.shot_type
@@ -1608,6 +1642,42 @@ class ClipBrowser(QWidget):
                 if not (min_ratio <= aspect <= max_ratio):
                     return False
 
+        # Check gaze direction filter
+        if self._gaze_filter != "All Gaze":
+            # Reverse-map display label to internal key
+            internal_key = None
+            for key, display in GAZE_CATEGORY_DISPLAY.items():
+                if display == self._gaze_filter:
+                    internal_key = key
+                    break
+            if not thumb.clip.gaze_category:
+                return False
+            if thumb.clip.gaze_category != internal_key:
+                return False
+
+        # Check object search filter
+        if self._object_search:
+            query = self._object_search.lower()
+            labels_text = " ".join(thumb.clip.object_labels or []).lower()
+            detected_text = " ".join(
+                d.get("label", "") for d in (thumb.clip.detected_objects or [])
+            ).lower()
+            if query not in labels_text and query not in detected_text:
+                return False
+
+        # Check description search filter
+        if self._description_search:
+            if self._description_search.lower() not in (thumb.clip.description or "").lower():
+                return False
+
+        # Check brightness range filter
+        if self._min_brightness is not None:
+            if thumb.clip.average_brightness is None or thumb.clip.average_brightness < self._min_brightness:
+                return False
+        if self._max_brightness is not None:
+            if thumb.clip.average_brightness is None or thumb.clip.average_brightness > self._max_brightness:
+                return False
+
         return True
 
     def _create_filter_panel(self) -> QFrame:
@@ -1644,11 +1714,70 @@ class ClipBrowser(QWidget):
 
         layout.addSpacing(16)
 
+        # Gaze direction filter
+        self._gaze_label = QLabel("Gaze:")
+        layout.addWidget(self._gaze_label)
+        self.gaze_combo = QComboBox()
+        gaze_options = ["All Gaze"] + list(GAZE_CATEGORY_DISPLAY.values())
+        self.gaze_combo.addItems(gaze_options)
+        self.gaze_combo.setFixedWidth(110)
+        self.gaze_combo.currentTextChanged.connect(self._on_gaze_filter_changed)
+        layout.addWidget(self.gaze_combo)
+
+        layout.addSpacing(16)
+
+        # Object search
+        self._object_label = QLabel("Object:")
+        layout.addWidget(self._object_label)
+        self.object_search_input = QLineEdit()
+        self.object_search_input.setPlaceholderText("Search objects...")
+        self.object_search_input.setFixedWidth(120)
+        self.object_search_input.setToolTip("Filter clips by detected object labels")
+        self.object_search_input.textChanged.connect(self._on_object_search_changed)
+        layout.addWidget(self.object_search_input)
+
+        layout.addSpacing(16)
+
+        # Description search
+        self._description_label = QLabel("Description:")
+        layout.addWidget(self._description_label)
+        self.description_search_input = QLineEdit()
+        self.description_search_input.setPlaceholderText("Search descriptions...")
+        self.description_search_input.setFixedWidth(140)
+        self.description_search_input.setToolTip("Filter clips by description text")
+        self.description_search_input.textChanged.connect(self._on_description_search_changed)
+        layout.addWidget(self.description_search_input)
+
+        layout.addSpacing(16)
+
+        # Brightness range slider
+        self._brightness_label = QLabel("Brightness:")
+        brightness_label = self._brightness_label
+        layout.addWidget(brightness_label)
+
+        self.brightness_slider = RangeSlider()
+        self.brightness_slider.set_suffix("")
+        self.brightness_slider.set_range(0.0, 1.0)
+        self.brightness_slider.set_values(0.0, 1.0)
+        self.brightness_slider.setMinimumWidth(200)
+        self.brightness_slider.setMaximumWidth(350)
+        self.brightness_slider.range_changed.connect(self._on_brightness_slider_changed)
+        layout.addWidget(self.brightness_slider)
+
+        layout.addSpacing(16)
+
         # Clear filters button
         self.clear_filters_btn = QPushButton("Clear Filters")
         self.clear_filters_btn.setToolTip("Reset all filters to show all clips")
         self.clear_filters_btn.clicked.connect(self.clear_all_filters)
         layout.addWidget(self.clear_filters_btn)
+
+        # Clear Similarity button (hidden by default, shown when similarity mode is active)
+        self._clear_similarity_btn = QPushButton("Clear Similarity")
+        self._clear_similarity_btn.setToolTip("Exit similarity mode and restore normal sort order")
+        self._clear_similarity_btn.clicked.connect(self._clear_similarity)
+        self._clear_similarity_btn.setVisible(False)
+        layout.addWidget(self._clear_similarity_btn)
 
         layout.addStretch()
 
@@ -1709,6 +1838,82 @@ class ClipBrowser(QWidget):
         self._rebuild_grid()
         self.filters_changed.emit()
 
+    def _on_gaze_filter_changed(self, value: str):
+        """Handle gaze direction filter dropdown change."""
+        self._gaze_filter = value
+        self._rebuild_grid()
+        self.filters_changed.emit()
+
+    def _on_object_search_changed(self, text: str):
+        """Handle object search input change."""
+        self._object_search = text.strip()
+        self._rebuild_grid()
+        self.filters_changed.emit()
+
+    def _on_description_search_changed(self, text: str):
+        """Handle description search input change."""
+        self._description_search = text.strip()
+        self._rebuild_grid()
+        self.filters_changed.emit()
+
+    def _on_brightness_slider_changed(self, min_val: float, max_val: float):
+        """Handle brightness slider changes."""
+        # Get the data range from the slider
+        data_min = self.brightness_slider._data_min
+        data_max = self.brightness_slider._data_max
+
+        # Only apply filter if values differ from full range
+        at_min = abs(min_val - data_min) < 0.005
+        at_max = abs(max_val - data_max) < 0.005
+
+        if at_min and at_max:
+            self._min_brightness = None
+            self._max_brightness = None
+        else:
+            self._min_brightness = min_val if not at_min else None
+            self._max_brightness = max_val if not at_max else None
+
+        self._rebuild_grid()
+        self.filters_changed.emit()
+
+    def _activate_similarity(self, clip: Clip):
+        """Activate similarity mode: rank all clips by embedding similarity to the anchor.
+
+        Args:
+            clip: The anchor clip to compare against.
+        """
+        # Validate anchor clip has a valid embedding
+        if clip.embedding is None or np.linalg.norm(clip.embedding) == 0:
+            logger.warning(
+                "Cannot activate similarity: clip %s has no valid embedding", clip.id
+            )
+            return
+
+        anchor = np.array(clip.embedding)
+        scores: dict[str, float] = {}
+
+        for thumb in self.thumbnails:
+            if thumb.clip.embedding is not None and np.linalg.norm(thumb.clip.embedding) > 0:
+                score = float(np.dot(anchor, np.array(thumb.clip.embedding)))
+                scores[thumb.clip.id] = score
+
+        self._similarity_anchor_id = clip.id
+        self._similarity_scores = scores
+        self._clear_similarity_btn.setVisible(True)
+
+        # Show the filter panel so the user can see the "Clear Similarity" button
+        if not self._filter_panel_visible:
+            self._toggle_filter_panel(True)
+
+        self._rebuild_grid()
+
+    def _clear_similarity(self):
+        """Exit similarity mode and restore normal sort order."""
+        self._similarity_anchor_id = None
+        self._similarity_scores = {}
+        self._clear_similarity_btn.setVisible(False)
+        self._rebuild_grid()
+
     def clear_all_filters(self):
         """Reset all filters to show all clips."""
         # Block signals to prevent multiple rebuilds
@@ -1717,6 +1922,10 @@ class ClipBrowser(QWidget):
         self.search_input.blockSignals(True)
         self.duration_slider.blockSignals(True)
         self.aspect_ratio_combo.blockSignals(True)
+        self.gaze_combo.blockSignals(True)
+        self.object_search_input.blockSignals(True)
+        self.description_search_input.blockSignals(True)
+        self.brightness_slider.blockSignals(True)
 
         # Reset all filter values
         self._current_filter = "All"
@@ -1726,6 +1935,16 @@ class ClipBrowser(QWidget):
         self._min_duration = None
         self._max_duration = None
         self._aspect_ratio_filter = "All"
+        self._gaze_filter = "All Gaze"
+        self._object_search = ""
+        self._description_search = ""
+        self._min_brightness = None
+        self._max_brightness = None
+
+        # Reset similarity mode
+        self._similarity_anchor_id = None
+        self._similarity_scores = {}
+        self._clear_similarity_btn.setVisible(False)
 
         # Reset UI controls
         self.filter_combo.setCurrentText("All")
@@ -1733,6 +1952,10 @@ class ClipBrowser(QWidget):
         self.search_input.clear()
         self.duration_slider.reset()
         self.aspect_ratio_combo.setCurrentText("All")
+        self.gaze_combo.setCurrentText("All Gaze")
+        self.object_search_input.clear()
+        self.description_search_input.clear()
+        self.brightness_slider.reset()
         self._sync_custom_query_filter_options()
 
         # Unblock signals
@@ -1741,6 +1964,10 @@ class ClipBrowser(QWidget):
         self.search_input.blockSignals(False)
         self.duration_slider.blockSignals(False)
         self.aspect_ratio_combo.blockSignals(False)
+        self.gaze_combo.blockSignals(False)
+        self.object_search_input.blockSignals(False)
+        self.description_search_input.blockSignals(False)
+        self.brightness_slider.blockSignals(False)
 
         # Rebuild once
         self._rebuild_grid()
@@ -1758,6 +1985,11 @@ class ClipBrowser(QWidget):
                 - color_palette: str ('Warm', 'Cool', 'Neutral', 'Vibrant') or None
                 - search_query: str or None
                 - custom_query: list[str] | tuple[str, ...] | set[str] | str | None
+                - gaze: str (display label from GAZE_CATEGORY_DISPLAY) or None
+                - object_search: str or None
+                - description_search: str or None
+                - min_brightness: float or None
+                - max_brightness: float or None
         """
         # Block signals to avoid multiple rebuilds
         self.duration_slider.blockSignals(True)
@@ -1765,6 +1997,10 @@ class ClipBrowser(QWidget):
         self.filter_combo.blockSignals(True)
         self.color_filter_combo.blockSignals(True)
         self.search_input.blockSignals(True)
+        self.gaze_combo.blockSignals(True)
+        self.object_search_input.blockSignals(True)
+        self.description_search_input.blockSignals(True)
+        self.brightness_slider.blockSignals(True)
 
         # Apply duration filter
         if 'min_duration' in filters or 'max_duration' in filters:
@@ -1815,12 +2051,43 @@ class ClipBrowser(QWidget):
                 }
             self._sync_custom_query_filter_options()
 
+        # Apply gaze filter
+        if 'gaze' in filters:
+            value = filters['gaze']
+            self._gaze_filter = value if value else "All Gaze"
+            self.gaze_combo.setCurrentText(self._gaze_filter)
+
+        # Apply object search filter
+        if 'object_search' in filters:
+            value = filters['object_search'] or ""
+            self._object_search = value.strip()
+            self.object_search_input.setText(value)
+
+        # Apply description search filter
+        if 'description_search' in filters:
+            value = filters['description_search'] or ""
+            self._description_search = value.strip()
+            self.description_search_input.setText(value)
+
+        # Apply brightness filter
+        if 'min_brightness' in filters or 'max_brightness' in filters:
+            self._min_brightness = filters.get('min_brightness')
+            self._max_brightness = filters.get('max_brightness')
+            data_min, data_max = self.brightness_slider.get_data_range()
+            new_min = self._min_brightness if self._min_brightness is not None else data_min
+            new_max = self._max_brightness if self._max_brightness is not None else data_max
+            self.brightness_slider.set_values(new_min, new_max)
+
         # Unblock signals
         self.duration_slider.blockSignals(False)
         self.aspect_ratio_combo.blockSignals(False)
         self.filter_combo.blockSignals(False)
         self.color_filter_combo.blockSignals(False)
         self.search_input.blockSignals(False)
+        self.gaze_combo.blockSignals(False)
+        self.object_search_input.blockSignals(False)
+        self.description_search_input.blockSignals(False)
+        self.brightness_slider.blockSignals(False)
 
         # Rebuild grid and emit signal
         self._rebuild_grid()
@@ -1856,6 +2123,12 @@ class ClipBrowser(QWidget):
             "min_duration": self._min_duration,
             "max_duration": self._max_duration,
             "aspect_ratio": self._aspect_ratio_filter if self._aspect_ratio_filter != "All" else None,
+            "gaze": self._gaze_filter if self._gaze_filter != "All Gaze" else None,
+            "object_search": self._object_search if self._object_search else None,
+            "description_search": self._description_search if self._description_search else None,
+            "min_brightness": self._min_brightness,
+            "max_brightness": self._max_brightness,
+            "similarity_anchor": self._similarity_anchor_id,
         }
 
     def has_active_filters(self) -> bool:
@@ -1872,6 +2145,57 @@ class ClipBrowser(QWidget):
             or self._min_duration is not None
             or self._max_duration is not None
             or self._aspect_ratio_filter != "All"
+            or self._gaze_filter != "All Gaze"
+            or bool(self._object_search)
+            or bool(self._description_search)
+            or self._min_brightness is not None
+            or self._max_brightness is not None
+            or self._similarity_anchor_id is not None
+        )
+
+    def _update_filter_availability(self):
+        """Enable/disable analysis-dependent filter controls based on clip data.
+
+        A filter is enabled if ANY clip has the relevant field populated.
+        """
+        has_gaze = any(t.clip.gaze_category for t in self.thumbnails)
+        has_objects = any(
+            t.clip.object_labels or t.clip.detected_objects for t in self.thumbnails
+        )
+        has_descriptions = any(t.clip.description for t in self.thumbnails)
+        has_brightness = any(
+            t.clip.average_brightness is not None for t in self.thumbnails
+        )
+
+        # Gaze filter
+        self._gaze_label.setEnabled(has_gaze)
+        self.gaze_combo.setEnabled(has_gaze)
+        self.gaze_combo.setToolTip(
+            "" if has_gaze else "Requires gaze analysis — run it in the Analyze tab"
+        )
+
+        # Object filter
+        self._object_label.setEnabled(has_objects)
+        self.object_search_input.setEnabled(has_objects)
+        self.object_search_input.setToolTip(
+            "Filter clips by detected object labels" if has_objects
+            else "Requires object detection — run it in the Analyze tab"
+        )
+
+        # Description filter
+        self._description_label.setEnabled(has_descriptions)
+        self.description_search_input.setEnabled(has_descriptions)
+        self.description_search_input.setToolTip(
+            "Filter clips by description text" if has_descriptions
+            else "Requires clip descriptions — run Describe in the Analyze tab"
+        )
+
+        # Brightness filter
+        self._brightness_label.setEnabled(has_brightness)
+        self.brightness_slider.setEnabled(has_brightness)
+        self.brightness_slider.setToolTip(
+            "" if has_brightness
+            else "Requires brightness analysis — run Extract Colors in the Analyze tab"
         )
 
     def get_visible_clip_count(self) -> int:
