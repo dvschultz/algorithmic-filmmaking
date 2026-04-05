@@ -584,7 +584,23 @@ ASPECT_RATIO_RANGES = {
 
 
 @tools.register(
-    description="Filter clips by criteria. Returns matching clips with their metadata. Available filters: shot_type, has_speech, min_duration, max_duration, aspect_ratio, search_query, has_object (e.g., 'dog', 'car'), min_people, max_people, search_description.",
+    description=(
+        "Filter clips by criteria. Returns matching clips with their metadata. "
+        "Available filters: shot_type, has_speech, min_duration, max_duration, "
+        "aspect_ratio, search_query, has_object (case-insensitive substring, e.g., 'car' matches 'racecar'), "
+        "min_people, max_people, search_description, has_faces, "
+        "gaze_category (e.g., 'at_camera', 'looking_left'), "
+        "min_brightness/max_brightness (0.0-1.0), "
+        "search_ocr_text (substring in OCR text), "
+        "min_volume/max_volume (dB, typically -60 to 0), "
+        "search_tags (substring in tags), search_notes (substring in notes), "
+        "cinematography_shot_size, cinematography_camera_angle, "
+        "cinematography_camera_movement, cinematography_lighting_style, "
+        "cinematography_subject_count, cinematography_emotional_intensity, "
+        "cinematography_suggested_pacing (exact match on cinematography fields), "
+        "similar_to_clip_id (rank results by DINOv2 embedding similarity to given clip). "
+        "All filters combine with AND logic."
+    ),
     requires_project=True,
     modifies_gui_state=False
 )
@@ -601,6 +617,22 @@ def filter_clips(
     max_people: Optional[int] = None,
     search_description: Optional[str] = None,
     has_faces: Optional[bool] = None,
+    gaze_category: Optional[str] = None,
+    min_brightness: Optional[float] = None,
+    max_brightness: Optional[float] = None,
+    search_ocr_text: Optional[str] = None,
+    min_volume: Optional[float] = None,
+    max_volume: Optional[float] = None,
+    search_tags: Optional[str] = None,
+    search_notes: Optional[str] = None,
+    cinematography_shot_size: Optional[str] = None,
+    cinematography_camera_angle: Optional[str] = None,
+    cinematography_camera_movement: Optional[str] = None,
+    cinematography_lighting_style: Optional[str] = None,
+    cinematography_subject_count: Optional[str] = None,
+    cinematography_emotional_intensity: Optional[str] = None,
+    cinematography_suggested_pacing: Optional[str] = None,
+    similar_to_clip_id: Optional[str] = None,
 ) -> list[dict]:
     """Filter clips by various criteria including content analysis.
 
@@ -612,14 +644,45 @@ def filter_clips(
         max_duration: Maximum duration in seconds
         aspect_ratio: Filter by aspect ratio ('16:9', '4:3', '9:16')
         search_query: Search text in transcripts
-        has_object: Filter by object label (e.g., 'dog', 'car', 'person')
+        has_object: Filter by object label substring (e.g., 'car' matches 'car' and 'racecar')
         min_people: Minimum number of people detected
         max_people: Maximum number of people detected
         search_description: Search text in visual descriptions
+        has_faces: Filter by whether clip has detected faces
+        gaze_category: Filter by gaze direction (e.g., 'at_camera', 'looking_left')
+        min_brightness: Minimum average brightness (0.0-1.0)
+        max_brightness: Maximum average brightness (0.0-1.0)
+        search_ocr_text: Search text in OCR extracted text (case-insensitive substring)
+        min_volume: Minimum RMS volume in dB
+        max_volume: Maximum RMS volume in dB
+        search_tags: Search text in clip tags (case-insensitive substring)
+        search_notes: Search text in clip notes (case-insensitive substring)
+        cinematography_shot_size: Filter by cinematography shot size (e.g., 'CU', 'MS')
+        cinematography_camera_angle: Filter by camera angle (e.g., 'eye_level', 'low_angle')
+        cinematography_camera_movement: Filter by camera movement (e.g., 'static', 'pan')
+        cinematography_lighting_style: Filter by lighting style (e.g., 'dramatic', 'natural')
+        cinematography_subject_count: Filter by subject count (e.g., 'single', 'group')
+        cinematography_emotional_intensity: Filter by emotional intensity (e.g., 'low', 'high')
+        cinematography_suggested_pacing: Filter by suggested pacing (e.g., 'fast', 'slow')
+        similar_to_clip_id: Rank results by embedding similarity to this clip
 
     Returns:
         List of matching clips with metadata
     """
+    import numpy as np
+
+    # If similar_to_clip_id is specified, look up the anchor clip and validate
+    anchor_embedding = None
+    if similar_to_clip_id:
+        anchor_clip = project.clips_by_id.get(similar_to_clip_id)
+        if not anchor_clip:
+            return []  # Invalid anchor clip ID — return empty
+        emb = anchor_clip.embedding
+        if emb is not None:
+            anchor_arr = np.array(emb, dtype=np.float64)
+            if np.linalg.norm(anchor_arr) > 0:
+                anchor_embedding = anchor_arr
+
     results = []
 
     for clip in project.clips:
@@ -671,13 +734,14 @@ def filter_clips(
             if search_description.lower() not in description.lower():
                 continue
 
-        # Apply has_object filter (checks both object_labels and detected_objects)
+        # Apply has_object filter (case-insensitive substring across both label sources)
         if has_object is not None:
             object_labels = getattr(clip, 'object_labels', None) or []
             detected_objects = getattr(clip, 'detected_objects', None) or []
             detected_labels = [d.get("label", "") for d in detected_objects]
-            all_labels = set(label.lower() for label in object_labels + detected_labels)
-            if has_object.lower() not in all_labels:
+            all_labels = object_labels + detected_labels
+            search_lower = has_object.lower()
+            if not any(search_lower in label.lower() for label in all_labels):
                 continue
 
         # Apply min_people filter
@@ -698,10 +762,103 @@ def filter_clips(
             if clip_has_faces != has_faces:
                 continue
 
+        # Apply gaze_category filter
+        if gaze_category and getattr(clip, 'gaze_category', None) != gaze_category:
+            continue
+
+        # Apply brightness range filters
+        if min_brightness is not None:
+            brightness = getattr(clip, 'average_brightness', None)
+            if brightness is None or brightness < min_brightness:
+                continue
+        if max_brightness is not None:
+            brightness = getattr(clip, 'average_brightness', None)
+            if brightness is None or brightness > max_brightness:
+                continue
+
+        # Apply volume range filters
+        if min_volume is not None:
+            volume = getattr(clip, 'rms_volume', None)
+            if volume is None or volume < min_volume:
+                continue
+        if max_volume is not None:
+            volume = getattr(clip, 'rms_volume', None)
+            if volume is None or volume > max_volume:
+                continue
+
+        # Apply OCR text search filter
+        if search_ocr_text:
+            combined = clip.combined_text
+            if not combined:
+                continue
+            if search_ocr_text.lower() not in combined.lower():
+                continue
+
+        # Apply tags search filter
+        if search_tags:
+            clip_tags = getattr(clip, 'tags', None) or []
+            if not clip_tags:
+                continue
+            tags_text = " ".join(clip_tags)
+            if search_tags.lower() not in tags_text.lower():
+                continue
+
+        # Apply notes search filter
+        if search_notes:
+            clip_notes = getattr(clip, 'notes', None) or ""
+            if not clip_notes:
+                continue
+            if search_notes.lower() not in clip_notes.lower():
+                continue
+
+        # Apply cinematography field filters
+        if cinematography_shot_size:
+            cine = getattr(clip, 'cinematography', None)
+            if not cine or cine.shot_size != cinematography_shot_size:
+                continue
+        if cinematography_camera_angle:
+            cine = getattr(clip, 'cinematography', None)
+            if not cine or cine.camera_angle != cinematography_camera_angle:
+                continue
+        if cinematography_camera_movement:
+            cine = getattr(clip, 'cinematography', None)
+            if not cine or cine.camera_movement != cinematography_camera_movement:
+                continue
+        if cinematography_lighting_style:
+            cine = getattr(clip, 'cinematography', None)
+            if not cine or cine.lighting_style != cinematography_lighting_style:
+                continue
+        if cinematography_subject_count:
+            cine = getattr(clip, 'cinematography', None)
+            if not cine or cine.subject_count != cinematography_subject_count:
+                continue
+        if cinematography_emotional_intensity:
+            cine = getattr(clip, 'cinematography', None)
+            if not cine or cine.emotional_intensity != cinematography_emotional_intensity:
+                continue
+        if cinematography_suggested_pacing:
+            cine = getattr(clip, 'cinematography', None)
+            if not cine or cine.suggested_pacing != cinematography_suggested_pacing:
+                continue
+
         # Calculate aspect ratio for output
         clip_aspect_ratio = None
         if source and source.height > 0:
             clip_aspect_ratio = round(source.width / source.height, 3)
+
+        # Build cinematography summary dict
+        cine_data = None
+        cine = getattr(clip, 'cinematography', None)
+        if cine:
+            cine_data = {
+                "shot_size": cine.shot_size,
+                "camera_angle": cine.camera_angle,
+                "camera_movement": cine.camera_movement,
+                "lighting_style": cine.lighting_style,
+                "subject_count": cine.subject_count,
+                "emotional_intensity": cine.emotional_intensity,
+                "suggested_pacing": cine.suggested_pacing,
+            }
 
         clip_data = {
             "id": clip.id,
@@ -717,6 +874,12 @@ def filter_clips(
             "width": source.width if source else None,
             "height": source.height if source else None,
             "aspect_ratio": clip_aspect_ratio,
+            "average_brightness": clip.average_brightness,
+            "rms_volume": clip.rms_volume,
+            "tags": clip.tags or [],
+            "notes": clip.notes or "",
+            "extracted_text": clip.combined_text,
+            "cinematography": cine_data,
         }
         if getattr(clip, 'gaze_yaw', None) is not None:
             clip_data["gaze_yaw"] = round(clip.gaze_yaw, 2)
@@ -725,6 +888,25 @@ def filter_clips(
         if getattr(clip, 'gaze_category', None) is not None:
             clip_data["gaze_category"] = clip.gaze_category
         results.append(clip_data)
+
+    # If similar_to_clip_id is active, rank results by embedding similarity
+    if similar_to_clip_id and anchor_embedding is not None:
+        scored_results = []
+        for clip_data in results:
+            clip_obj = project.clips_by_id.get(clip_data["id"])
+            emb = clip_obj.embedding if clip_obj else None
+            if emb is not None:
+                clip_arr = np.array(emb, dtype=np.float64)
+                norm = np.linalg.norm(clip_arr)
+                if norm > 0:
+                    score = float(np.dot(anchor_embedding, clip_arr))
+                    clip_data["similarity_score"] = round(score, 4)
+                    scored_results.append(clip_data)
+                # Skip clips with zero-vector embeddings
+            # Skip clips without embeddings
+        # Sort by similarity descending
+        scored_results.sort(key=lambda d: d.get("similarity_score", 0.0), reverse=True)
+        return scored_results
 
     return results
 
