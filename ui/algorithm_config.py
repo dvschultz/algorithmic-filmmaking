@@ -1,8 +1,10 @@
 """Algorithm configuration — single source of truth for all sequencer algorithms.
 
 Used by sequence_tab.py (labels, descriptions, allow_duplicates) and
-sorting_card_grid.py (icons, labels, descriptions).
+sorting_card_grid.py (icons, labels, descriptions, categories).
 """
+
+CATEGORY_ORDER = ["All", "Arrange", "Find", "Connect", "Audio", "Text"]
 
 ALGORITHM_CONFIG = {
     "color": {
@@ -11,6 +13,7 @@ ALGORITHM_CONFIG = {
         "description": "Arrange clips along a color gradient or cycle through the spectrum",
         "allow_duplicates": False,
         "required_analysis": ["colors"],
+        "categories": ["arrange"],
     },
     "duration": {
         "icon": "\u23f1\ufe0f",
@@ -18,6 +21,7 @@ ALGORITHM_CONFIG = {
         "description": "Order clips from shortest to longest (or reverse)",
         "allow_duplicates": False,
         "required_analysis": [],
+        "categories": ["arrange"],
     },
     "brightness": {
         "icon": "\U0001f317",
@@ -25,6 +29,7 @@ ALGORITHM_CONFIG = {
         "description": "Arrange clips from light to shadow, or shadow to light",
         "allow_duplicates": False,
         "required_analysis": ["brightness"],
+        "categories": ["arrange"],
     },
     "volume": {
         "icon": "\U0001f50a",
@@ -32,6 +37,7 @@ ALGORITHM_CONFIG = {
         "description": "Build from silence to thunder, or thunder to silence",
         "allow_duplicates": False,
         "required_analysis": ["volume"],
+        "categories": ["arrange", "audio"],
     },
     "shuffle": {
         "icon": "\U0001f3b2",
@@ -40,6 +46,7 @@ ALGORITHM_CONFIG = {
         "allow_duplicates": False,
         "required_analysis": [],
         "is_dialog": True,
+        "categories": ["arrange"],
     },
     "sequential": {
         "icon": "\U0001f4cb",
@@ -47,6 +54,7 @@ ALGORITHM_CONFIG = {
         "description": "Keep clips in their original order",
         "allow_duplicates": False,
         "required_analysis": [],
+        "categories": ["arrange"],
     },
     "shot_type": {
         "icon": "\U0001f3ac",
@@ -54,6 +62,7 @@ ALGORITHM_CONFIG = {
         "description": "Arrange clips by camera shot scale",
         "allow_duplicates": False,
         "required_analysis": ["shots"],
+        "categories": ["arrange"],
     },
     "proximity": {
         "icon": "\U0001f52d",
@@ -61,6 +70,7 @@ ALGORITHM_CONFIG = {
         "description": "Glide from distant vistas to intimate close-ups",
         "allow_duplicates": False,
         "required_analysis": ["shots"],
+        "categories": ["arrange"],
     },
     "similarity_chain": {
         "icon": "\U0001f517",
@@ -68,6 +78,7 @@ ALGORITHM_CONFIG = {
         "description": "Chain clips together by visual similarity",
         "allow_duplicates": False,
         "required_analysis": ["embeddings"],
+        "categories": ["connect"],
     },
     "match_cut": {
         "icon": "\u2702\ufe0f",
@@ -75,6 +86,7 @@ ALGORITHM_CONFIG = {
         "description": "Find hidden connections between clips at cut points",
         "allow_duplicates": False,
         "required_analysis": ["boundary_embeddings"],
+        "categories": ["connect"],
     },
     "exquisite_corpus": {
         "icon": "\U0001f4dd",
@@ -83,6 +95,7 @@ ALGORITHM_CONFIG = {
         "allow_duplicates": True,
         "required_analysis": ["extract_text"],
         "is_dialog": True,
+        "categories": ["text"],
     },
     "storyteller": {
         "icon": "\U0001f4d6",
@@ -91,6 +104,7 @@ ALGORITHM_CONFIG = {
         "allow_duplicates": False,
         "required_analysis": ["describe"],
         "is_dialog": True,
+        "categories": ["text"],
     },
     "reference_guided": {
         "icon": "\U0001f3af",
@@ -99,6 +113,7 @@ ALGORITHM_CONFIG = {
         "allow_duplicates": True,
         "required_analysis": [],  # Dynamic — depends on selected dimensions
         "is_dialog": True,
+        "categories": ["connect", "audio"],
     },
     "signature_style": {
         "icon": "\u270d\ufe0f",
@@ -107,6 +122,7 @@ ALGORITHM_CONFIG = {
         "allow_duplicates": True,
         "required_analysis": ["colors"],
         "is_dialog": True,
+        "categories": ["connect"],
     },
     "rose_hobart": {
         "icon": "\U0001f464",
@@ -115,6 +131,7 @@ ALGORITHM_CONFIG = {
         "allow_duplicates": False,
         "required_analysis": [],
         "is_dialog": True,
+        "categories": ["find"],
     },
     "staccato": {
         "icon": "\U0001f3b5",
@@ -123,6 +140,7 @@ ALGORITHM_CONFIG = {
         "allow_duplicates": True,
         "required_analysis": ["embeddings"],
         "is_dialog": True,
+        "categories": ["audio"],
     },
     "gaze_sort": {
         "icon": "\U0001f441",
@@ -130,6 +148,7 @@ ALGORITHM_CONFIG = {
         "description": "Arrange clips by gaze direction",
         "allow_duplicates": False,
         "required_analysis": ["gaze"],
+        "categories": ["arrange", "find"],
     },
     "gaze_consistency": {
         "icon": "\U0001f440",
@@ -137,6 +156,7 @@ ALGORITHM_CONFIG = {
         "description": "Group clips by matching gaze direction",
         "allow_duplicates": False,
         "required_analysis": ["gaze"],
+        "categories": ["find"],
     },
     "eyes_without_a_face": {
         "icon": "\U0001f441\ufe0f\u200d\U0001f5e8\ufe0f",
@@ -145,6 +165,7 @@ ALGORITHM_CONFIG = {
         "allow_duplicates": False,
         "required_analysis": ["gaze"],
         "is_dialog": True,
+        "categories": ["find", "connect"],
     },
 }
 
