@@ -73,6 +73,7 @@ chmod +x AppDir/AppRun
 # Build AppImage using appimage-builder
 echo "Building AppImage with appimage-builder..."
 export VERSION="$VERSION"
+export APPDIR="$PROJECT_ROOT/AppDir"
 appimage-builder --recipe "$SCRIPT_DIR/AppImageBuilder.yml" --skip-test
 
 # Rename output
