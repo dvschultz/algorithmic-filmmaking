@@ -134,7 +134,7 @@ class SortingCardGrid(QWidget):
             card = self._cards[key]
             if key in visible_keys:
                 card.setVisible(True)
-                self._grid_layout.addWidget(card, i // 4, i % 4, Qt.AlignCenter)
+                self._grid_layout.addWidget(card, i // 6, i % 6, Qt.AlignCenter)
                 i += 1
             else:
                 card.setVisible(False)
