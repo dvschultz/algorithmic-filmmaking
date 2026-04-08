@@ -12,6 +12,86 @@ from typing import AsyncIterator, Optional
 
 logger = logging.getLogger(__name__)
 
+_litellm_encoding_patched = False
+
+
+def patch_litellm_encoding():
+    """Pre-cache a fallback encoding so litellm never tries to load tiktoken.
+
+    In frozen (PyInstaller) builds tiktoken's native extension may be missing or
+    incomplete.  LiteLLM only uses the encoding for approximate token-count
+    logging, so a simple word-split estimator is an acceptable substitute.
+
+    Safe to call multiple times — the patch is applied at most once.
+
+    NOTE: Tested against litellm==1.82.6.  The patch targets internal cache
+    variables (_default_encoding, _encoding_cache) that may change in future
+    releases — re-verify after upgrading litellm.
+    """
+    global _litellm_encoding_patched
+    if _litellm_encoding_patched:
+        return
+    _litellm_encoding_patched = True
+
+    try:
+        import litellm  # noqa: F401 — must be importable (bundled in app)
+    except ImportError:
+        return
+
+    # If tiktoken works fine, nothing to patch.
+    try:
+        import tiktoken
+        tiktoken.get_encoding("cl100k_base")
+        return
+    except (ImportError, ModuleNotFoundError, OSError, AttributeError) as exc:
+        logger.debug("tiktoken unavailable, will use fallback encoding: %s", exc)
+
+    class _FallbackEncoding:
+        """Minimal stand-in for tiktoken.Encoding used by litellm for token counts."""
+
+        name = "cl100k_base"
+
+        @staticmethod
+        def encode(text, *, disallowed_special=(), allowed_special="all"):  # noqa: ARG004
+            # ~1 token per 4 chars is a reasonable approximation for cl100k.
+            # Return a range (supports len/iter) to avoid allocating a list.
+            return range(max(1, len(text) // 4))
+
+    fallback = _FallbackEncoding()
+
+    # Inject into litellm's lazy-import caches so _get_encoding() finds it
+    # without ever importing tiktoken.
+    import sys
+
+    # Layer 1: _lazy_imports cache (used by _get_default_encoding)
+    import litellm._lazy_imports as _lazy
+    _lazy._default_encoding = fallback
+
+    # Layer 2: main.py module caches (used by _get_encoding and __getattr__)
+    import litellm.main as _main
+    _main._encoding_cache = fallback
+    _main.__dict__["encoding"] = fallback
+
+    # Layer 3: top-level litellm module dict (used by litellm.encoding)
+    litellm_mod = sys.modules.get("litellm")
+    if litellm_mod is not None:
+        litellm_mod.__dict__["encoding"] = fallback
+
+    # Layer 4: default_encoding module (token_counter.py does a direct top-level
+    # ``from litellm.litellm_core_utils.default_encoding import encoding``).
+    # Pre-populate sys.modules so that import never executes the real module
+    # body (which would try to load tiktoken and crash).
+    import types
+    de_key = "litellm.litellm_core_utils.default_encoding"
+    de_mod = sys.modules.get(de_key)
+    if de_mod is None:
+        de_mod = types.ModuleType(de_key)
+        de_mod.__package__ = "litellm.litellm_core_utils"
+        sys.modules[de_key] = de_mod
+    de_mod.encoding = fallback
+
+    logger.info("Patched litellm encoding with fallback (tiktoken unavailable)")
+
 
 class ProviderType(Enum):
     """Supported LLM providers."""

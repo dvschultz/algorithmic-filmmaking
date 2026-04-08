@@ -48,6 +48,12 @@ def _setup_frozen_environment():
         # Overlay dirs are yielded before the base dir, so newer repairs win.
         sys.path.append(packages_str)
 
+    # Patch litellm's tiktoken encoding before any LLM calls. In frozen builds
+    # tiktoken's native extension may be incomplete; the patch injects a
+    # lightweight fallback so litellm.completion() works without tiktoken.
+    from core.llm_client import patch_litellm_encoding
+    patch_litellm_encoding()
+
     # Set up file logging for frozen app (users can't see console output)
     log_dir = get_log_dir()
     log_dir.mkdir(parents=True, exist_ok=True)
