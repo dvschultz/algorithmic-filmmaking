@@ -43,7 +43,7 @@ def patch_litellm_encoding():
         import tiktoken
         tiktoken.get_encoding("cl100k_base")
         return
-    except (ImportError, ModuleNotFoundError, OSError, AttributeError) as exc:
+    except (ImportError, ModuleNotFoundError, OSError, AttributeError, ValueError) as exc:
         logger.debug("tiktoken unavailable, will use fallback encoding: %s", exc)
 
     class _FallbackEncoding:
