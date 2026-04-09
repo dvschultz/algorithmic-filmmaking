@@ -27,16 +27,9 @@ from core.analysis_operations import (
 class AnalysisPickerDialog(QDialog):
     """Modal dialog for selecting analysis operations to run.
 
-    Shows all 8 operations grouped by execution phase (local, sequential, cloud)
-    with checkboxes. Remembers last selection via settings.
+    Shows operations with checkboxes. Cloud-capable operations are marked
+    with a cloud icon (☁). Remembers last selection via settings.
     """
-
-    # Phase display metadata
-    _PHASE_LABELS = {
-        "local": "Local Analysis (parallel)",
-        "sequential": "Sequential",
-        "cloud": "Cloud API (parallel)",
-    }
 
     _PHASE_KEYS = {
         "local": LOCAL_OPS,
@@ -98,27 +91,25 @@ class AnalysisPickerDialog(QDialog):
         scope.setStyleSheet(f"color: gray; margin-bottom: {Spacing.SM}px;")
         layout.addWidget(scope)
 
-        # Phase groups
+        # Operation checkboxes grouped by phase with separator lines
+        _CLOUD_ICON = " \u2601"  # Unicode cloud (☁)
+        first_phase = True
         for phase in PHASE_ORDER:
             keys = self._PHASE_KEYS.get(phase, [])
             if not keys:
                 continue
 
-            # Separator line
-            line = QFrame()
-            line.setFrameShape(QFrame.HLine)
-            line.setFrameShadow(QFrame.Sunken)
-            layout.addWidget(line)
+            if not first_phase:
+                line = QFrame()
+                line.setFrameShape(QFrame.HLine)
+                line.setFrameShadow(QFrame.Sunken)
+                layout.addWidget(line)
+            first_phase = False
 
-            # Phase label
-            phase_label = QLabel(self._PHASE_LABELS.get(phase, phase))
-            phase_label.setStyleSheet(f"font-weight: bold; color: gray; font-size: {TypeScale.SM}px;")
-            layout.addWidget(phase_label)
-
-            # Checkboxes for operations in this phase
             for key in keys:
                 op = OPERATIONS_BY_KEY[key]
-                cb = QCheckBox(op.label)
+                label = op.label + _CLOUD_ICON if op.cloud_capable else op.label
+                cb = QCheckBox(label)
                 if key in self._disabled_ops:
                     cb.setToolTip(
                         f"{op.tooltip}\n\nAlready analyzed for all clips in this selection."

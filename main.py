@@ -191,7 +191,6 @@ def main():
         )
 
     app = QApplication(sys.argv)
-    app.aboutToQuit.connect(release_single_instance_lock)
     app.setApplicationName("Scene Ripper")
     app.setApplicationVersion(get_app_version())
     app.setOrganizationName("Algorithmic Filmmaking")
@@ -214,7 +213,9 @@ def main():
         # Keep the process alive after successful startup so CI can validate
         # launch completion without exercising native teardown paths.
         QTimer.singleShot(300000, app.quit)
-        return app.exec()
+        exit_code = app.exec()
+        release_single_instance_lock()
+        return exit_code
 
     # Apply theme (uses saved preference from settings loaded in MainWindow)
     logger.info("Applying initial theme...")
@@ -224,7 +225,13 @@ def main():
     window.show()
 
     logger.info("Starting event loop...")
-    return app.exec()
+    exit_code = app.exec()
+    # Release the single-instance lock AFTER the event loop exits, not during
+    # aboutToQuit. Releasing early creates a race: macOS can relaunch the app
+    # (Dock click, Finder double-click) before the process fully terminates,
+    # and the new instance passes the lock check because the file is already gone.
+    release_single_instance_lock()
+    return exit_code
 
 
 if __name__ == "__main__":

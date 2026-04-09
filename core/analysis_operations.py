@@ -16,9 +16,10 @@ class AnalysisOperation:
     tooltip: str  # One-line description for tooltips
     phase: str  # Execution phase: "local" | "sequential" | "cloud"
     default_enabled: bool  # Pre-checked by default in picker
+    cloud_capable: bool = False  # True if the operation can use a cloud API
 
 
-# All 8 operations in display order
+# All operations in display order
 ANALYSIS_OPERATIONS: list[AnalysisOperation] = [
     AnalysisOperation(
         "colors", "Extract Colors",
@@ -28,7 +29,7 @@ ANALYSIS_OPERATIONS: list[AnalysisOperation] = [
     AnalysisOperation(
         "shots", "Classify Shots",
         "Classify shot types (close-up, medium, wide, etc.)",
-        "local", True,
+        "local", True, cloud_capable=True,
     ),
     AnalysisOperation(
         "classify", "Classify Content",
@@ -43,22 +44,22 @@ ANALYSIS_OPERATIONS: list[AnalysisOperation] = [
     AnalysisOperation(
         "extract_text", "Extract Text",
         "Extract visible text from frames using OCR (titles, labels, captions)",
-        "local", False,
+        "local", False, cloud_capable=True,
     ),
     AnalysisOperation(
         "transcribe", "Transcribe",
         "Transcribe speech in clips using Whisper",
-        "sequential", True,
+        "sequential", True, cloud_capable=True,
     ),
     AnalysisOperation(
         "describe", "Describe",
         "Generate AI descriptions of frame content using a vision model",
-        "cloud", False,
+        "cloud", False, cloud_capable=True,
     ),
     AnalysisOperation(
         "cinematography", "Rich Analysis",
         "Comprehensive film language analysis (shot size, camera angle, movement, lighting)",
-        "cloud", False,
+        "cloud", False, cloud_capable=True,
     ),
     AnalysisOperation(
         "face_embeddings", "Detect Faces",
@@ -73,7 +74,7 @@ ANALYSIS_OPERATIONS: list[AnalysisOperation] = [
     AnalysisOperation(
         "custom_query", "Custom Query",
         "Search clips for specific visual content using a VLM (e.g., 'blue flower')",
-        "cloud", False,
+        "cloud", False, cloud_capable=True,
     ),
 ]
 
