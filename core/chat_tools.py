@@ -604,6 +604,18 @@ ASPECT_RATIO_RANGES = {
     requires_project=True,
     modifies_gui_state=False
 )
+
+
+def _append_gaze_fields(clip, clip_data: dict) -> None:
+    """Append gaze fields to clip_data dict if present on the clip."""
+    if clip.gaze_yaw is not None:
+        clip_data["gaze_yaw"] = round(clip.gaze_yaw, 2)
+    if clip.gaze_pitch is not None:
+        clip_data["gaze_pitch"] = round(clip.gaze_pitch, 2)
+    if clip.gaze_category is not None:
+        clip_data["gaze_category"] = clip.gaze_category
+
+
 def filter_clips(
     project,
     shot_type: Optional[str] = None,
@@ -881,13 +893,16 @@ def filter_clips(
             "extracted_text": clip.combined_text,
             "cinematography": cine_data,
         }
-        if getattr(clip, 'gaze_yaw', None) is not None:
-            clip_data["gaze_yaw"] = round(clip.gaze_yaw, 2)
-        if getattr(clip, 'gaze_pitch', None) is not None:
-            clip_data["gaze_pitch"] = round(clip.gaze_pitch, 2)
-        if getattr(clip, 'gaze_category', None) is not None:
-            clip_data["gaze_category"] = clip.gaze_category
+        _append_gaze_fields(clip, clip_data)
         results.append(clip_data)
+
+    # If similar_to_clip_id was requested but anchor has no valid embedding, report it
+    if similar_to_clip_id and anchor_embedding is None:
+        return {
+            "success": False,
+            "error": f"Anchor clip '{similar_to_clip_id}' has no valid embedding. "
+                     "Run embedding analysis first (analyze_clips with 'embeddings')."
+        }
 
     # If similar_to_clip_id is active, rank results by embedding similarity
     if similar_to_clip_id and anchor_embedding is not None:
@@ -1005,12 +1020,7 @@ def list_clips(
             "has_face_embeddings": clip.face_embeddings is not None and len(clip.face_embeddings) > 0,
             "face_count": len(clip.face_embeddings) if clip.face_embeddings else 0,
         }
-        if getattr(clip, 'gaze_yaw', None) is not None:
-            clip_data["gaze_yaw"] = round(clip.gaze_yaw, 2)
-        if getattr(clip, 'gaze_pitch', None) is not None:
-            clip_data["gaze_pitch"] = round(clip.gaze_pitch, 2)
-        if getattr(clip, 'gaze_category', None) is not None:
-            clip_data["gaze_category"] = clip.gaze_category
+        _append_gaze_fields(clip, clip_data)
         results.append(clip_data)
 
     # Check if detection is in progress when no clips found
@@ -1708,7 +1718,8 @@ def navigate_to_tab(tab_name: str, gui_state=None) -> dict:
 
 @tools.register(
     description="Apply filters to the clip browser in the active tab (Cut or Analyze). "
-                "Filters clips by duration range, aspect ratio, shot type, color palette, and/or transcript search. "
+                "Filters clips by duration range, aspect ratio, shot type, color palette, "
+                "transcript search, gaze direction, object labels, and/or description text. "
                 "Use clear_all=True to reset all filters.",
     requires_project=True,
     modifies_gui_state=True
@@ -1721,6 +1732,9 @@ def apply_filters(
     shot_type: Optional[str] = None,
     color_palette: Optional[str] = None,
     search_query: Optional[str] = None,
+    gaze: Optional[str] = None,
+    object_search: Optional[str] = None,
+    description_search: Optional[str] = None,
     clear_all: bool = False,
 ) -> dict:
     """Apply filters to the clip browser in the active tab.
@@ -1732,6 +1746,10 @@ def apply_filters(
         shot_type: Filter by shot type ('Wide Shot', 'Medium Shot', 'Close-up', 'Extreme CU', or None)
         color_palette: Filter by color palette ('Warm', 'Cool', 'Neutral', 'Vibrant', or None)
         search_query: Filter by transcript text (case-insensitive substring search)
+        gaze: Filter by gaze direction ('at_camera', 'looking_left', 'looking_right',
+              'looking_up', 'looking_down', or None)
+        object_search: Filter by detected object labels (case-insensitive substring)
+        description_search: Filter by clip description text (case-insensitive substring)
         clear_all: If True, clears all filters instead of applying new ones
 
     Returns:
@@ -1796,6 +1814,12 @@ def apply_filters(
         filters['color_palette'] = color_palette
     if search_query is not None:
         filters['search_query'] = search_query
+    if gaze is not None:
+        filters['gaze'] = gaze
+    if object_search is not None:
+        filters['object_search'] = object_search
+    if description_search is not None:
+        filters['description_search'] = description_search
 
     # Apply filters via public API
     clip_browser.apply_filters(filters)
@@ -4470,6 +4494,114 @@ def generate_remix(
     )
 
     return result
+
+
+@tools.register(
+    description="Generate an Eyes Without a Face sequence using gaze-based algorithms. "
+                "Three modes: 'eyeline_match' (shot/reverse-shot pairing by negated yaw), "
+                "'gaze_filter' (keep clips matching a gaze category), "
+                "'gaze_rotation' (arrange clips in monotonic angle progression). "
+                "Requires gaze analysis. Use analyze_clips with 'gaze' first.",
+    requires_project=True,
+    modifies_gui_state=True
+)
+def generate_eyes_without_a_face(
+    project,
+    main_window,
+    mode: str = "eyeline_match",
+    tolerance: float = 20.0,
+    category: Optional[str] = None,
+    axis: str = "yaw",
+    range_start: float = -30.0,
+    range_end: float = 30.0,
+    ascending: bool = True,
+) -> dict:
+    """Generate an Eyes Without a Face gaze-based sequence.
+
+    Args:
+        mode: 'eyeline_match', 'gaze_filter', or 'gaze_rotation'
+        tolerance: For eyeline_match — max abs(yaw_a + yaw_b) to pair (default 20.0)
+        category: For gaze_filter — gaze category to keep ('at_camera', 'looking_left',
+                  'looking_right', 'looking_up', 'looking_down')
+        axis: For gaze_rotation — 'yaw' or 'pitch' (default 'yaw')
+        range_start: For gaze_rotation — minimum angle in degrees (default -30.0)
+        range_end: For gaze_rotation — maximum angle in degrees (default 30.0)
+        ascending: For gaze_rotation — True for ascending angle order
+
+    Returns:
+        Dict with success status and applied clip info
+    """
+    valid_modes = ("eyeline_match", "gaze_filter", "gaze_rotation")
+    if mode not in valid_modes:
+        return {
+            "success": False,
+            "error": f"Invalid mode '{mode}'. Valid options: {', '.join(valid_modes)}"
+        }
+
+    if mode == "gaze_filter" and not category:
+        return {
+            "success": False,
+            "error": "category is required for gaze_filter mode "
+                     "(e.g. 'at_camera', 'looking_left', 'looking_right')"
+        }
+
+    valid_categories = ("at_camera", "looking_left", "looking_right", "looking_up", "looking_down")
+    if category and category not in valid_categories:
+        return {
+            "success": False,
+            "error": f"Invalid category '{category}'. Valid: {', '.join(valid_categories)}"
+        }
+
+    if main_window is None or not hasattr(main_window, 'sequence_tab'):
+        return {"success": False, "error": "Main window not available"}
+
+    # Get selected clips
+    gui_state = main_window._gui_state
+    selected_ids = []
+    if gui_state:
+        selected_ids = gui_state.analyze_selected_ids or gui_state.cut_selected_ids or []
+
+    if not selected_ids:
+        return {"success": False, "error": "No clips selected in Analyze or Cut tab"}
+
+    seq_tab = main_window.sequence_tab
+    clips = seq_tab._resolve_selected_clips(selected_ids)
+    if not clips:
+        return {"success": False, "error": "Selected clips not available for sequencing"}
+
+    has_gaze = any(clip.gaze_category is not None for clip, _ in clips)
+    if not has_gaze:
+        return {"success": False, "error": "No clips have gaze data. Run gaze analysis first."}
+
+    from core.remix.gaze import eyeline_match, gaze_filter, gaze_rotation
+
+    try:
+        if mode == "eyeline_match":
+            sorted_clips = eyeline_match(clips, tolerance=tolerance)
+        elif mode == "gaze_filter":
+            sorted_clips = gaze_filter(clips, category=category)
+        else:
+            sorted_clips = gaze_rotation(
+                clips, axis=axis, range_start=range_start,
+                range_end=range_end, ascending=ascending,
+            )
+
+        seq_tab.timeline.clear_timeline()
+        current_frame = 0
+        for clip, source in sorted_clips:
+            seq_tab.timeline.add_clip(clip, source, track_index=0, start_frame=current_frame)
+            current_frame += clip.duration_frames
+        seq_tab.timeline._on_zoom_fit()
+        seq_tab._set_state(seq_tab.STATE_TIMELINE)
+
+        return {
+            "success": True,
+            "algorithm": f"eyes_without_a_face ({mode})",
+            "clip_count": len(sorted_clips),
+            "mode": mode,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 @tools.register(

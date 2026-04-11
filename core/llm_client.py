@@ -312,6 +312,7 @@ class LLMClient:
             "messages": cached_messages,
             "stream": True,
             "temperature": self.config.temperature,
+            "timeout": 120,  # Prevent indefinite hangs on slow/unresponsive providers
         }
 
         if self.config.api_key:
@@ -357,6 +358,7 @@ class LLMClient:
             "messages": cached_messages,
             "stream": False,
             "temperature": self.config.temperature,
+            "timeout": 120,  # Prevent indefinite hangs on slow/unresponsive providers
         }
 
         if self.config.api_key:
@@ -409,12 +411,22 @@ class FallbackLLMClient:
         last_error = None
 
         for config in providers:
+            chunks_yielded = False
             try:
                 client = LLMClient(config)
                 async for chunk in client.stream_chat(messages, tools):
+                    chunks_yielded = True
                     yield chunk
                 return  # Success, exit
             except Exception as e:
+                if chunks_yielded:
+                    # Don't fall back after partial stream — the caller already
+                    # has partial content, switching providers would splice an
+                    # unrelated response into the same stream
+                    logger.error(
+                        f"Provider {config.provider.value} failed mid-stream: {e}"
+                    )
+                    raise
                 logger.warning(
                     f"Provider {config.provider.value} failed: {e}, "
                     f"trying next fallback..."

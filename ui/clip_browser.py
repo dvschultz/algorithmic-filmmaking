@@ -921,7 +921,9 @@ class ClipBrowser(QWidget):
 
         # Rebuild grid to handle grouping properly
         self._sync_custom_query_filter_options()
-        self._update_filter_availability()
+        # O(1) incremental filter availability (only enables, never disables)
+        # Full _update_filter_availability() scan deferred to remove_clips_* paths
+        self._incremental_filter_enable(clip)
         self._rebuild_grid()
 
         # Update duration range for spinboxes
@@ -963,6 +965,12 @@ class ClipBrowser(QWidget):
             else:
                 keep.append(thumb)
 
+        # Clear similarity mode if the anchor clip is being removed
+        if self._similarity_anchor_id and any(
+            t.clip.id == self._similarity_anchor_id for t in remove
+        ):
+            self._clear_similarity()
+
         # Clean up removed widgets
         for thumb in remove:
             self.grid.removeWidget(thumb)
@@ -994,6 +1002,10 @@ class ClipBrowser(QWidget):
         """Remove specific clips by their IDs."""
         ids_to_remove = set(clip_ids)
         selection_before = set(self.selected_clips)
+
+        # Clear similarity mode if the anchor clip is being removed
+        if self._similarity_anchor_id and self._similarity_anchor_id in ids_to_remove:
+            self._clear_similarity()
 
         keep = []
         remove = []
@@ -1889,17 +1901,31 @@ class ClipBrowser(QWidget):
             )
             return
 
-        anchor = np.array(clip.embedding)
+        anchor = np.array(clip.embedding, dtype=np.float32)
+        anchor_dim = anchor.shape[0]
         scores: dict[str, float] = {}
 
+        # Batch-vectorize: stack valid embeddings into a matrix for a single matmul
+        valid_ids: list[str] = []
+        valid_embs: list[list] = []
         for thumb in self.thumbnails:
-            if thumb.clip.embedding is not None and np.linalg.norm(thumb.clip.embedding) > 0:
-                clip_emb = np.array(thumb.clip.embedding)
-                # Skip clips with different embedding dimensions (e.g. CLIP 512 vs DINOv2 768)
-                if clip_emb.shape != anchor.shape:
-                    continue
-                score = float(np.dot(anchor, clip_emb))
-                scores[thumb.clip.id] = score
+            emb = thumb.clip.embedding
+            if emb is not None and len(emb) == anchor_dim:
+                valid_ids.append(thumb.clip.id)
+                valid_embs.append(emb)
+
+        if valid_embs:
+            matrix = np.array(valid_embs, dtype=np.float32)  # (N, D)
+            norms = np.linalg.norm(matrix, axis=1)
+            # Mask out zero-vector embeddings
+            nonzero = norms > 0
+            if nonzero.any():
+                dot_scores = matrix[nonzero] @ anchor  # single matmul
+                for clip_id, score in zip(
+                    (cid for cid, nz in zip(valid_ids, nonzero) if nz),
+                    dot_scores,
+                ):
+                    scores[clip_id] = float(score)
 
         self._similarity_anchor_id = clip.id
         self._similarity_scores = scores
@@ -2167,6 +2193,29 @@ class ClipBrowser(QWidget):
             or self._max_brightness is not None
             or self._similarity_anchor_id is not None
         )
+
+    def _incremental_filter_enable(self, clip) -> None:
+        """Enable filter controls based on a single clip's data (O(1)).
+
+        Called from add_clip to avoid O(n) scan on every addition.
+        Only enables controls — never disables (use _update_filter_availability for that).
+        """
+        if clip.gaze_category:
+            self._gaze_label.setEnabled(True)
+            self.gaze_combo.setEnabled(True)
+            self.gaze_combo.setToolTip("")
+        if clip.object_labels or clip.detected_objects:
+            self._object_label.setEnabled(True)
+            self.object_search_input.setEnabled(True)
+            self.object_search_input.setToolTip("Filter clips by detected object labels")
+        if clip.description:
+            self._description_label.setEnabled(True)
+            self.description_search_input.setEnabled(True)
+            self.description_search_input.setToolTip("Filter clips by description text")
+        if clip.average_brightness is not None:
+            self._brightness_label.setEnabled(True)
+            self.brightness_slider.setEnabled(True)
+            self.brightness_slider.setToolTip("")
 
     def _update_filter_availability(self):
         """Enable/disable analysis-dependent filter controls based on clip data.

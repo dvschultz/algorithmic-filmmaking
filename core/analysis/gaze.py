@@ -462,6 +462,11 @@ def extract_gaze_from_clip(
         img_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         img_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
+        if img_w == 0 or img_h == 0:
+            logger.warning("Video reports zero dimensions (%dx%d): %s", img_w, img_h, source_path)
+            cap.release()
+            return None
+
         for frame_pos in sample_positions:
             cap.set(cv2.CAP_PROP_POS_FRAMES, frame_pos)
             ret, frame = cap.read()
