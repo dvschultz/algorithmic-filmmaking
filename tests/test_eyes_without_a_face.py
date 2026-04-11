@@ -239,3 +239,13 @@ class TestGazeRotation:
         result = gaze_rotation(clips, axis="yaw", range_start=-30.0, range_end=30.0)
         assert len(result) == 1
         assert result[0][0].id == "a"
+
+    def test_all_without_gaze_returns_original_list(self):
+        """When no clips have gaze data, returns all clips unchanged."""
+        clips = [_make_pair("a"), _make_pair("b"), _make_pair("c")]
+        result = gaze_rotation(
+            clips, axis="yaw", range_start=-30.0, range_end=30.0, ascending=True,
+        )
+        assert len(result) == 3
+        ids = [clip.id for clip, _ in result]
+        assert ids == ["a", "b", "c"]

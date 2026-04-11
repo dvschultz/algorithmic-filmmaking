@@ -23,19 +23,19 @@ Video scene detection, analysis, and algorithmic editing application with 16 seq
 ```
 main.py                          # GUI entry point
 pyproject.toml                   # Metadata, CLI + MCP entry points
-ui/                  (19 files)  # Main window, chat, player, browser, theme
+ui/                  (20 files)  # Main window, chat, player, browser, theme
   tabs/              (8 tabs)    # collect, cut, analyze, frames, sequence, generate, render
-  dialogs/           (12 files)  # Algorithm-specific config dialogs
-  workers/           (14 files)  # QThread workers (base.py = CancellableWorker)
-  widgets/           (16 files)  # Cards, grids, timeline preview, empty states
+  dialogs/           (15 files)  # Algorithm-specific config dialogs
+  workers/           (16 files)  # QThread workers (base.py = CancellableWorker)
+  widgets/           (17 files)  # Cards, grids, timeline preview, empty states
   timeline/          (7 files)   # Timeline widget, tracks, clips, playhead
-core/                (34 files)  # Business logic, FFmpeg, settings, project, LLM
-  analysis/          (15 files)  # Color, shots, brightness, volume, embeddings, OCR, faces, cinematography
-  remix/             (14 files)  # Sequencer algorithms (one file per algorithm)
+core/                (43 files)  # Business logic, FFmpeg, settings, project, LLM
+  analysis/          (17 files)  # Color, shots, brightness, volume, embeddings, OCR, faces, cinematography, gaze
+  remix/             (16 files)  # Sequencer algorithms (one file per algorithm)
 models/              (7 files)   # Source, Clip, Frame, SequenceClip, Sequence, CinematographyAnalysis, Plan
 cli/                 (15 files)  # Click CLI with detect, analyze, transcribe, youtube, export commands
 scene_ripper_mcp/    (3 files)   # MCP server for external agent access
-tests/               (56 files)  # 1153 tests
+tests/              (101 files)  # 1760 tests
 docs/user-guide/                 # End-user documentation
 docs/solutions/                  # Documented solutions (bugs, best practices), YAML frontmatter (module, tags, problem_type)
 ```

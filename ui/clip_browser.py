@@ -33,6 +33,9 @@ from models.clip import Clip, Source
 from models.cinematography import CinematographyAnalysis
 from core.analysis.color import get_primary_hue, classify_color_palette, get_palette_display_name, COLOR_PALETTES
 from core.analysis.gaze import GAZE_CATEGORY_DISPLAY
+
+# Reverse map: display label -> internal key (built once at module load)
+_GAZE_DISPLAY_TO_KEY = {v: k for k, v in GAZE_CATEGORY_DISPLAY.items()}
 from core.analysis.shots import get_display_name, SHOT_TYPES
 from core.film_glossary import get_badge_tooltip
 from ui.theme import theme, UISizes, TypeScale, Spacing, Radii
@@ -699,7 +702,7 @@ class ClipBrowser(QWidget):
         self._filter_panel_visible = False
 
         # Gaze, object, description, and brightness filters
-        self._gaze_filter: str = "All Gaze"
+        self._gaze_filter: Optional[str] = None  # None = all, or internal key e.g. "at_camera"
         self._object_search: str = ""
         self._description_search: str = ""
         self._min_brightness: Optional[float] = None
@@ -1238,6 +1241,8 @@ class ClipBrowser(QWidget):
         thumb = self._thumbnail_by_id.get(clip_id)
         if thumb:
             thumb.set_gaze(category)
+            self._update_filter_availability()
+            self._rebuild_grid()
 
     def update_clip_thumbnail(self, clip_id: str, thumb_path: Path):
         """Update the thumbnail image for a specific clip (O(1) lookup)."""
@@ -1643,16 +1648,10 @@ class ClipBrowser(QWidget):
                     return False
 
         # Check gaze direction filter
-        if self._gaze_filter != "All Gaze":
-            # Reverse-map display label to internal key
-            internal_key = None
-            for key, display in GAZE_CATEGORY_DISPLAY.items():
-                if display == self._gaze_filter:
-                    internal_key = key
-                    break
+        if self._gaze_filter is not None:
             if not thumb.clip.gaze_category:
                 return False
-            if thumb.clip.gaze_category != internal_key:
+            if thumb.clip.gaze_category != self._gaze_filter:
                 return False
 
         # Check object search filter
@@ -1840,7 +1839,8 @@ class ClipBrowser(QWidget):
 
     def _on_gaze_filter_changed(self, value: str):
         """Handle gaze direction filter dropdown change."""
-        self._gaze_filter = value
+        # Translate display label to internal key at the combo boundary
+        self._gaze_filter = _GAZE_DISPLAY_TO_KEY.get(value)  # None for "All Gaze"
         self._rebuild_grid()
         self.filters_changed.emit()
 
@@ -1894,7 +1894,11 @@ class ClipBrowser(QWidget):
 
         for thumb in self.thumbnails:
             if thumb.clip.embedding is not None and np.linalg.norm(thumb.clip.embedding) > 0:
-                score = float(np.dot(anchor, np.array(thumb.clip.embedding)))
+                clip_emb = np.array(thumb.clip.embedding)
+                # Skip clips with different embedding dimensions (e.g. CLIP 512 vs DINOv2 768)
+                if clip_emb.shape != anchor.shape:
+                    continue
+                score = float(np.dot(anchor, clip_emb))
                 scores[thumb.clip.id] = score
 
         self._similarity_anchor_id = clip.id
@@ -1935,7 +1939,7 @@ class ClipBrowser(QWidget):
         self._min_duration = None
         self._max_duration = None
         self._aspect_ratio_filter = "All"
-        self._gaze_filter = "All Gaze"
+        self._gaze_filter = None
         self._object_search = ""
         self._description_search = ""
         self._min_brightness = None
@@ -1985,7 +1989,7 @@ class ClipBrowser(QWidget):
                 - color_palette: str ('Warm', 'Cool', 'Neutral', 'Vibrant') or None
                 - search_query: str or None
                 - custom_query: list[str] | tuple[str, ...] | set[str] | str | None
-                - gaze: str (display label from GAZE_CATEGORY_DISPLAY) or None
+                - gaze: str (internal key like 'at_camera' or display label like 'At Camera') or None
                 - object_search: str or None
                 - description_search: str or None
                 - min_brightness: float or None
@@ -2051,11 +2055,22 @@ class ClipBrowser(QWidget):
                 }
             self._sync_custom_query_filter_options()
 
-        # Apply gaze filter
+        # Apply gaze filter — accepts internal key or display label
         if 'gaze' in filters:
             value = filters['gaze']
-            self._gaze_filter = value if value else "All Gaze"
-            self.gaze_combo.setCurrentText(self._gaze_filter)
+            if not value:
+                self._gaze_filter = None
+            elif value in GAZE_CATEGORY_DISPLAY:
+                # Internal key (e.g. "at_camera")
+                self._gaze_filter = value
+            elif value in _GAZE_DISPLAY_TO_KEY:
+                # Display label (e.g. "At Camera")
+                self._gaze_filter = _GAZE_DISPLAY_TO_KEY[value]
+            else:
+                self._gaze_filter = None
+            # Sync combo box to display label
+            display = GAZE_CATEGORY_DISPLAY.get(self._gaze_filter, "All Gaze")
+            self.gaze_combo.setCurrentText(display)
 
         # Apply object search filter
         if 'object_search' in filters:
@@ -2123,7 +2138,7 @@ class ClipBrowser(QWidget):
             "min_duration": self._min_duration,
             "max_duration": self._max_duration,
             "aspect_ratio": self._aspect_ratio_filter if self._aspect_ratio_filter != "All" else None,
-            "gaze": self._gaze_filter if self._gaze_filter != "All Gaze" else None,
+            "gaze": self._gaze_filter,
             "object_search": self._object_search if self._object_search else None,
             "description_search": self._description_search if self._description_search else None,
             "min_brightness": self._min_brightness,
@@ -2145,7 +2160,7 @@ class ClipBrowser(QWidget):
             or self._min_duration is not None
             or self._max_duration is not None
             or self._aspect_ratio_filter != "All"
-            or self._gaze_filter != "All Gaze"
+            or self._gaze_filter is not None
             or bool(self._object_search)
             or bool(self._description_search)
             or self._min_brightness is not None

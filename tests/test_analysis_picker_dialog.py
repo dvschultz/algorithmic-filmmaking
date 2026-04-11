@@ -75,7 +75,7 @@ def test_dialog_run_disabled_when_every_operation_complete(qapp):
     clip.extracted_texts = [object()]
     clip.cinematography = object()
     clip.face_embeddings = [{"bbox": [0, 0, 50, 50], "embedding": [0.1] * 512, "confidence": 0.9}]
-    clip.gaze_category = "center"
+    clip.gaze_category = "at_camera"
     clip.custom_queries = [{"query": "test", "match": True, "confidence": 0.9, "model": "test"}]
 
     settings = _Settings(selected=["colors", "shots", "transcribe"])

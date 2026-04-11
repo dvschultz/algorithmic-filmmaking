@@ -838,3 +838,56 @@ class TestGazeConsistencyAlgorithm:
         # no-gaze clips at end
         assert ids[-2:] == ["no1", "no2"]
         assert set(ids[:2]) == {"r1", "l1"}
+
+    def test_gaze_consistency_groups_by_category_largest_first(self):
+        """gaze_consistency groups clips by category with the largest group first."""
+        from core.remix import generate_sequence
+        source = _make_source()
+        clips = [
+            (_make_clip("r1", gaze_yaw=10.0, gaze_category="looking_right"), source),
+            (_make_clip("l1", gaze_yaw=-20.0, gaze_category="looking_left"), source),
+            (_make_clip("l2", gaze_yaw=-10.0, gaze_category="looking_left"), source),
+            (_make_clip("r2", gaze_yaw=5.0, gaze_category="looking_right"), source),
+            (_make_clip("l3", gaze_yaw=-5.0, gaze_category="looking_left"), source),
+        ]
+        result = generate_sequence("gaze_consistency", clips, 5)
+        ids = [c.id for c, _ in result]
+        # looking_left has 3 clips (largest group), so they come first
+        assert ids[:3] == ["l1", "l2", "l3"]  # sorted by yaw ascending
+        # looking_right has 2 clips
+        assert ids[3:] == ["r2", "r1"]  # sorted by yaw ascending (5.0, 10.0)
+
+    def test_gaze_consistency_without_gaze_appended(self):
+        """Clips without gaze data are appended at the end."""
+        from core.remix import generate_sequence
+        source = _make_source()
+        clips = [
+            (_make_clip("no_gaze"), source),
+            (_make_clip("a1", gaze_yaw=5.0, gaze_category="at_camera"), source),
+        ]
+        result = generate_sequence("gaze_consistency", clips, 2)
+        ids = [c.id for c, _ in result]
+        assert ids == ["a1", "no_gaze"]
+
+    def test_gaze_consistency_intra_group_sort(self):
+        """Within a category group, clips are sorted by the relevant angle."""
+        from core.remix import generate_sequence
+        source = _make_source()
+        clips = [
+            (_make_clip("u1", gaze_pitch=-15.0, gaze_category="looking_up"), source),
+            (_make_clip("u2", gaze_pitch=-5.0, gaze_category="looking_up"), source),
+            (_make_clip("u3", gaze_pitch=-25.0, gaze_category="looking_up"), source),
+        ]
+        result = generate_sequence("gaze_consistency", clips, 3)
+        pitches = [c.gaze_pitch for c, _ in result]
+        assert pitches == [-25.0, -15.0, -5.0]  # sorted ascending by pitch
+
+    def test_gaze_sort_invalid_direction_raises(self):
+        """gaze_sort raises ValueError for unrecognized direction strings."""
+        from core.remix import generate_sequence
+        source = _make_source()
+        clips = [
+            (_make_clip("a", gaze_yaw=5.0, gaze_category="at_camera"), source),
+        ]
+        with pytest.raises(ValueError, match="Unknown gaze_sort direction"):
+            generate_sequence("gaze_sort", clips, 1, direction="bad_value")

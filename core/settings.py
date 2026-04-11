@@ -818,8 +818,10 @@ def _load_from_json(config_path: Path, settings: Settings) -> Settings:
     # Sequence tab section
     if sequence := data.get("sequence"):
         val = sequence.get("selected_category")
-        from ui.algorithm_config import CATEGORY_ORDER
-        if isinstance(val, str) and val in CATEGORY_ORDER:
+        # Valid categories inlined to avoid importing ui/ from core/ (headless safety).
+        # Source of truth: ui/algorithm_config.py:CATEGORY_ORDER
+        _VALID_CATEGORIES = {"All", "Arrange", "Find", "Connect", "Audio", "Text"}
+        if isinstance(val, str) and val in _VALID_CATEGORIES:
             settings.sequence_selected_category = val
 
     return settings

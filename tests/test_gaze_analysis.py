@@ -434,7 +434,7 @@ class TestExtractGazeFromFrame:
 class TestExtractGazeFromClip:
     """Test clip-level gaze extraction with mocked dependencies."""
 
-    @patch("core.analysis.gaze._load_face_mesh")
+    @patch("core.analysis.gaze.load_face_mesh")
     @patch("core.analysis.gaze.cv2")
     def test_invalid_video_returns_none(self, mock_cv2, mock_load):
         from core.analysis.gaze import extract_gaze_from_clip
@@ -446,7 +446,7 @@ class TestExtractGazeFromClip:
         result = extract_gaze_from_clip("/nonexistent.mp4", 0, 90, 30.0)
         assert result is None
 
-    @patch("core.analysis.gaze._load_face_mesh")
+    @patch("core.analysis.gaze.load_face_mesh")
     @patch("core.analysis.gaze.cv2")
     def test_zero_duration_returns_none(self, mock_cv2, mock_load):
         from core.analysis.gaze import extract_gaze_from_clip
@@ -454,7 +454,7 @@ class TestExtractGazeFromClip:
         result = extract_gaze_from_clip("/video.mp4", 100, 100, 30.0)
         assert result is None
 
-    @patch("core.analysis.gaze._load_face_mesh")
+    @patch("core.analysis.gaze.load_face_mesh")
     @patch("core.analysis.gaze.cv2")
     def test_negative_duration_returns_none(self, mock_cv2, mock_load):
         from core.analysis.gaze import extract_gaze_from_clip
@@ -463,7 +463,7 @@ class TestExtractGazeFromClip:
         assert result is None
 
     @patch("core.analysis.gaze.extract_gaze_from_frame")
-    @patch("core.analysis.gaze._load_face_mesh")
+    @patch("core.analysis.gaze.load_face_mesh")
     @patch("core.analysis.gaze.cv2")
     def test_all_frames_no_face_returns_none(
         self, mock_cv2, mock_load, mock_extract_frame
@@ -485,7 +485,7 @@ class TestExtractGazeFromClip:
         assert result is None
 
     @patch("core.analysis.gaze.extract_gaze_from_frame")
-    @patch("core.analysis.gaze._load_face_mesh")
+    @patch("core.analysis.gaze.load_face_mesh")
     @patch("core.analysis.gaze.cv2")
     def test_dominant_category_with_consistent_frames(
         self, mock_cv2, mock_load, mock_extract_frame
@@ -519,7 +519,7 @@ class TestExtractGazeFromClip:
         assert result["gaze_pitch"] == 0.0
 
     @patch("core.analysis.gaze.extract_gaze_from_frame")
-    @patch("core.analysis.gaze._load_face_mesh")
+    @patch("core.analysis.gaze.load_face_mesh")
     @patch("core.analysis.gaze.cv2")
     def test_short_clip_samples_midpoint(
         self, mock_cv2, mock_load, mock_extract_frame
@@ -549,7 +549,7 @@ class TestExtractGazeFromClip:
         assert 107 in frame_positions
 
     @patch("core.analysis.gaze.extract_gaze_from_frame")
-    @patch("core.analysis.gaze._load_face_mesh")
+    @patch("core.analysis.gaze.load_face_mesh")
     @patch("core.analysis.gaze.cv2")
     def test_result_dict_keys(self, mock_cv2, mock_load, mock_extract_frame):
         from core.analysis.gaze import extract_gaze_from_clip
@@ -576,7 +576,7 @@ class TestExtractGazeFromClip:
         assert isinstance(result["gaze_category"], str)
 
     @patch("core.analysis.gaze.extract_gaze_from_frame")
-    @patch("core.analysis.gaze._load_face_mesh")
+    @patch("core.analysis.gaze.load_face_mesh")
     @patch("core.analysis.gaze.cv2")
     def test_read_failure_frames_skipped(
         self, mock_cv2, mock_load, mock_extract_frame
@@ -608,7 +608,7 @@ class TestExtractGazeFromClip:
         assert mock_extract_frame.call_count == 2
 
     @patch("core.analysis.gaze.extract_gaze_from_frame")
-    @patch("core.analysis.gaze._load_face_mesh")
+    @patch("core.analysis.gaze.load_face_mesh")
     @patch("core.analysis.gaze.cv2")
     def test_video_cap_released_on_success(
         self, mock_cv2, mock_load, mock_extract_frame
@@ -631,7 +631,7 @@ class TestExtractGazeFromClip:
         mock_cap.release.assert_called_once()
 
     @patch("core.analysis.gaze.extract_gaze_from_frame")
-    @patch("core.analysis.gaze._load_face_mesh")
+    @patch("core.analysis.gaze.load_face_mesh")
     @patch("core.analysis.gaze.cv2")
     def test_video_cap_released_on_exception(
         self, mock_cv2, mock_load, mock_extract_frame

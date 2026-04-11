@@ -111,7 +111,16 @@ def _get_model_path() -> str:
         logger.info("Downloading MediaPipe FaceLandmarker model...")
         tmp_path = model_path + ".tmp"
         try:
-            urllib.request.urlretrieve(url, tmp_path)
+            # Use urlopen with a 60-second timeout instead of urlretrieve
+            # to prevent indefinite hangs when the network is slow/unreachable
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=60) as resp, \
+                 open(tmp_path, "wb") as out:
+                while True:
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    out.write(chunk)
             os.replace(tmp_path, model_path)
         except Exception:
             # Clean up partial download so next attempt retries
@@ -123,7 +132,7 @@ def _get_model_path() -> str:
     return model_path
 
 
-def _load_face_mesh():
+def load_face_mesh():
     """Lazy load MediaPipe FaceLandmarker model (thread-safe).
 
     Uses the Tasks API (mp.tasks.vision.FaceLandmarker) which replaced
@@ -173,8 +182,8 @@ def unload_model():
         if _model is not None:
             try:
                 _model.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Failed to close MediaPipe model cleanly: %s", e)
             _model = None
 
     logger.info("MediaPipe FaceMesh (gaze) unloaded")
@@ -358,6 +367,7 @@ def extract_gaze_from_frame(
 
     # Use mediapipe Image wrapper for the Tasks API
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
+    del frame_rgb  # Free the RGB copy before detect() — MediaPipe copies internally
     results = landmarker.detect(mp_image)
 
     if not results.face_landmarks:
@@ -422,7 +432,7 @@ def extract_gaze_from_clip(
         - "gaze_category": str — most frequent category across sampled frames
         Returns None if no faces were detected in any sampled frame.
     """
-    face_mesh = _load_face_mesh()
+    face_mesh = load_face_mesh()
 
     duration_frames = end_frame - start_frame
     if duration_frames <= 0:

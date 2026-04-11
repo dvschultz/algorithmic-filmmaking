@@ -897,6 +897,9 @@ def filter_clips(
             emb = clip_obj.embedding if clip_obj else None
             if emb is not None:
                 clip_arr = np.array(emb, dtype=np.float64)
+                # Skip clips with different embedding dimensions (e.g. CLIP 512 vs DINOv2 768)
+                if clip_arr.shape != anchor_embedding.shape:
+                    continue
                 norm = np.linalg.norm(clip_arr)
                 if norm > 0:
                     score = float(np.dot(anchor_embedding, clip_arr))

@@ -322,11 +322,11 @@ def generate_sequence(
     elif algorithm == "gaze_sort":
         gaze_direction = direction or "left_to_right"
 
-        # Split clips into with/without gaze data (like color algorithm)
+        # Split clips into with/without gaze data (consistent with gaze_consistency)
         with_gaze = []
         without_gaze = []
         for clip, source in clips_to_use:
-            if clip.gaze_yaw is not None:
+            if clip.gaze_category is not None:
                 with_gaze.append((clip, source))
             else:
                 without_gaze.append((clip, source))
@@ -350,7 +350,7 @@ def generate_sequence(
                 key=lambda item: -(item[0].gaze_pitch if item[0].gaze_pitch is not None else 0.0),
             )
         else:
-            sorted_clips = sorted(with_gaze, key=lambda item: item[0].gaze_yaw)
+            raise ValueError(f"Unknown gaze_sort direction: {gaze_direction!r}")
 
         if without_gaze:
             logger.info("Gaze Sort: %d clips lack gaze data (appended at end)", len(without_gaze))

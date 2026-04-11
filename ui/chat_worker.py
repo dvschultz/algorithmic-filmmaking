@@ -731,7 +731,8 @@ Available tools:
             if total_clips > 0:
                 for field_name in ("shot_type", "dominant_colors", "description",
                                    "transcript", "detected_objects", "person_count",
-                                   "extracted_texts", "cinematography", "face_embeddings"):
+                                   "extracted_texts", "cinematography", "face_embeddings",
+                                   "gaze_category"):
                     count = sum(
                         1 for c in self.project.clips
                         if getattr(c, field_name, None) is not None

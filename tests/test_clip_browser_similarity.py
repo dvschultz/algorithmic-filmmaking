@@ -244,7 +244,7 @@ class TestClearSimilarity:
         self.browser.add_clip(c3, self.source)
 
         # Activate gaze filter
-        self.browser._gaze_filter = "At Camera"
+        self.browser._gaze_filter = "at_camera"
         # Activate similarity
         self.browser._activate_similarity(c1)
 
@@ -252,7 +252,7 @@ class TestClearSimilarity:
         self.browser._clear_similarity()
 
         # Gaze filter should still be active
-        assert self.browser._gaze_filter == "At Camera"
+        assert self.browser._gaze_filter == "at_camera"
         # Only clips with at_camera gaze should be visible (c1, c3)
         visible_count = self.browser.get_visible_clip_count()
         assert visible_count == 2
@@ -277,7 +277,7 @@ class TestSimilarityWithFilters:
         self.browser.add_clip(c4, self.source)
 
         # Activate gaze filter first
-        self.browser._gaze_filter = "At Camera"
+        self.browser._gaze_filter = "at_camera"
         # Activate similarity
         self.browser._activate_similarity(c1)
 

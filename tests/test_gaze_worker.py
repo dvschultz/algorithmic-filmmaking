@@ -46,7 +46,7 @@ class TestGazeWorkerProcessing:
         }
 
         with patch("core.analysis.gaze.is_model_loaded", return_value=True), \
-             patch("core.analysis.gaze._load_face_mesh"), \
+             patch("core.analysis.gaze.load_face_mesh"), \
              patch("core.analysis.gaze.extract_gaze_from_clip", return_value=mock_result), \
              patch("core.analysis.gaze.unload_model"):
 
@@ -81,7 +81,7 @@ class TestGazeWorkerProcessing:
         clip = make_test_clip("c1", start_frame=0, end_frame=90)
 
         with patch("core.analysis.gaze.is_model_loaded", return_value=True), \
-             patch("core.analysis.gaze._load_face_mesh"), \
+             patch("core.analysis.gaze.load_face_mesh"), \
              patch("core.analysis.gaze.extract_gaze_from_clip", return_value=None), \
              patch("core.analysis.gaze.unload_model"):
 
@@ -125,7 +125,7 @@ class TestGazeWorkerProgress:
         }
 
         with patch("core.analysis.gaze.is_model_loaded", return_value=True), \
-             patch("core.analysis.gaze._load_face_mesh"), \
+             patch("core.analysis.gaze.load_face_mesh"), \
              patch("core.analysis.gaze.extract_gaze_from_clip", return_value=mock_result), \
              patch("core.analysis.gaze.unload_model"):
 
@@ -162,7 +162,7 @@ class TestGazeWorkerSkipExisting:
         }
 
         with patch("core.analysis.gaze.is_model_loaded", return_value=True), \
-             patch("core.analysis.gaze._load_face_mesh"), \
+             patch("core.analysis.gaze.load_face_mesh"), \
              patch("core.analysis.gaze.extract_gaze_from_clip", return_value=mock_result) as mock_extract, \
              patch("core.analysis.gaze.unload_model"):
 
@@ -189,7 +189,7 @@ class TestGazeWorkerSkipExisting:
         }
 
         with patch("core.analysis.gaze.is_model_loaded", return_value=True), \
-             patch("core.analysis.gaze._load_face_mesh"), \
+             patch("core.analysis.gaze.load_face_mesh"), \
              patch("core.analysis.gaze.extract_gaze_from_clip", return_value=mock_result) as mock_extract, \
              patch("core.analysis.gaze.unload_model"):
 
@@ -249,7 +249,7 @@ class TestGazeWorkerMissingSource:
         }
 
         with patch("core.analysis.gaze.is_model_loaded", return_value=True), \
-             patch("core.analysis.gaze._load_face_mesh"), \
+             patch("core.analysis.gaze.load_face_mesh"), \
              patch("core.analysis.gaze.extract_gaze_from_clip", return_value=mock_result) as mock_extract, \
              patch("core.analysis.gaze.unload_model"):
 
@@ -320,7 +320,7 @@ class TestGazeWorkerExceptionHandling:
             return mock_result
 
         with patch("core.analysis.gaze.is_model_loaded", return_value=True), \
-             patch("core.analysis.gaze._load_face_mesh"), \
+             patch("core.analysis.gaze.load_face_mesh"), \
              patch("core.analysis.gaze.extract_gaze_from_clip", side_effect=extract_side_effect), \
              patch("core.analysis.gaze.unload_model"):
 
@@ -352,7 +352,7 @@ class TestGazeWorkerExceptionHandling:
         clip = make_test_clip("c1")
 
         with patch("core.analysis.gaze.is_model_loaded", return_value=False), \
-             patch("core.analysis.gaze._load_face_mesh", side_effect=RuntimeError("mediapipe not installed")), \
+             patch("core.analysis.gaze.load_face_mesh", side_effect=RuntimeError("mediapipe not installed")), \
              patch("core.analysis.gaze.unload_model"):
 
             errors = []

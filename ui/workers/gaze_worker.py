@@ -78,11 +78,11 @@ class GazeAnalysisWorker(CancellableWorker):
         # Pre-load MediaPipe FaceMesh model
         model_loaded = False
         try:
-            from core.analysis.gaze import is_model_loaded, _load_face_mesh
+            from core.analysis.gaze import is_model_loaded, load_face_mesh
 
             if not is_model_loaded():
                 self.progress.emit(0, total)
-                _load_face_mesh()
+                load_face_mesh()
             model_loaded = True
         except Exception as e:
             self.error.emit(f"Failed to load gaze detection model: {e}")

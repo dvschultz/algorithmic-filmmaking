@@ -56,7 +56,7 @@ class TestGazeFilter:
         self.source = _make_source()
 
     def test_all_gaze_shows_all_clips(self):
-        """All clips visible when gaze filter is 'All Gaze'."""
+        """All clips visible when gaze filter is None (all)."""
         c1 = _make_clip("c1", gaze_category="at_camera")
         c2 = _make_clip("c2", gaze_category="looking_left")
         c3 = _make_clip("c3", gaze_category=None)
@@ -64,7 +64,7 @@ class TestGazeFilter:
         self.browser.add_clip(c2, self.source)
         self.browser.add_clip(c3, self.source)
 
-        assert self.browser._gaze_filter == "All Gaze"
+        assert self.browser._gaze_filter is None
         assert self.browser.get_visible_clip_count() == 3
 
     def test_filter_at_camera(self):
@@ -76,7 +76,7 @@ class TestGazeFilter:
         self.browser.add_clip(c2, self.source)
         self.browser.add_clip(c3, self.source)
 
-        self.browser._gaze_filter = "At Camera"
+        self.browser._gaze_filter = "at_camera"
         count = sum(1 for t in self.browser.thumbnails if self.browser._matches_filter(t))
         assert count == 1
 
@@ -85,7 +85,7 @@ class TestGazeFilter:
         c1 = _make_clip("c1", gaze_category=None)
         self.browser.add_clip(c1, self.source)
 
-        self.browser._gaze_filter = "Looking Left"
+        self.browser._gaze_filter = "looking_left"
         count = sum(1 for t in self.browser.thumbnails if self.browser._matches_filter(t))
         assert count == 0
 
@@ -302,7 +302,7 @@ class TestCombinedFilters:
         self.browser.add_clip(c2, self.source)
         self.browser.add_clip(c3, self.source)
 
-        self.browser._gaze_filter = "At Camera"
+        self.browser._gaze_filter = "at_camera"
         self.browser._min_brightness = 0.5
         count = sum(1 for t in self.browser.thumbnails if self.browser._matches_filter(t))
         assert count == 1
@@ -331,9 +331,9 @@ class TestClearAllFilters:
 
     def test_clear_resets_gaze(self):
         """clear_all_filters resets gaze filter."""
-        self.browser._gaze_filter = "At Camera"
+        self.browser._gaze_filter = "at_camera"
         self.browser.clear_all_filters()
-        assert self.browser._gaze_filter == "All Gaze"
+        assert self.browser._gaze_filter is None
         assert self.browser.gaze_combo.currentText() == "All Gaze"
 
     def test_clear_resets_object_search(self):
@@ -367,7 +367,7 @@ class TestClearAllFilters:
         self.browser.add_clip(c1, self.source)
         self.browser.add_clip(c2, self.source)
 
-        self.browser._gaze_filter = "At Camera"
+        self.browser._gaze_filter = "at_camera"
         self.browser._min_brightness = 0.5
         self.browser.clear_all_filters()
         assert self.browser.get_visible_clip_count() == 2
@@ -390,9 +390,9 @@ class TestGetActiveFilters:
 
     def test_gaze_active(self):
         """Gaze filter reported when active."""
-        self.browser._gaze_filter = "At Camera"
+        self.browser._gaze_filter = "at_camera"
         filters = self.browser.get_active_filters()
-        assert filters["gaze"] == "At Camera"
+        assert filters["gaze"] == "at_camera"
 
     def test_object_search_active(self):
         """Object search reported when active."""
@@ -421,10 +421,16 @@ class TestApplyFilters:
     def setup_method(self):
         self.browser = ClipBrowser()
 
-    def test_apply_gaze(self):
-        """apply_filters sets gaze filter."""
+    def test_apply_gaze_display_label(self):
+        """apply_filters accepts display label and stores internal key."""
         self.browser.apply_filters({"gaze": "At Camera"})
-        assert self.browser._gaze_filter == "At Camera"
+        assert self.browser._gaze_filter == "at_camera"
+        assert self.browser.gaze_combo.currentText() == "At Camera"
+
+    def test_apply_gaze_internal_key(self):
+        """apply_filters accepts internal key directly."""
+        self.browser.apply_filters({"gaze": "at_camera"})
+        assert self.browser._gaze_filter == "at_camera"
         assert self.browser.gaze_combo.currentText() == "At Camera"
 
     def test_apply_object_search(self):
@@ -447,9 +453,9 @@ class TestApplyFilters:
 
     def test_apply_none_resets_gaze(self):
         """apply_filters with None resets gaze."""
-        self.browser._gaze_filter = "At Camera"
+        self.browser._gaze_filter = "at_camera"
         self.browser.apply_filters({"gaze": None})
-        assert self.browser._gaze_filter == "All Gaze"
+        assert self.browser._gaze_filter is None
 
     def test_apply_none_resets_object_search(self):
         """apply_filters with None resets object search."""
@@ -476,7 +482,7 @@ class TestHasActiveFilters:
 
     def test_gaze_active(self):
         """has_active_filters detects gaze filter."""
-        self.browser._gaze_filter = "At Camera"
+        self.browser._gaze_filter = "at_camera"
         assert self.browser.has_active_filters()
 
     def test_object_search_active(self):
