@@ -19,16 +19,6 @@ _NO_PLAN_ERROR = (
     "After the user confirms the plan widget, then call start_plan_execution."
 )
 
-# Keywords that indicate a plan will modify or use a project.  When any of
-# these appear in the combined step descriptions, the controller treats the
-# plan as project-scoped and may prompt the user to name an untitled project
-# before presenting the plan.
-_PROJECT_KEYWORDS = [
-    "download", "detect", "scene", "clip", "sequence", "export",
-    "analyze", "transcribe", "shuffle", "randomize", "import",
-    "add to", "render", "save",
-]
-
 # Hard limit on how many steps a single plan may contain.  Enforced in
 # PlanController.present() and surfaced to the LLM via the system prompt
 # so it can avoid generating plans that will be rejected.
@@ -70,29 +60,10 @@ class PlanController:
                 "error": f"Plan has {len(steps)} steps, maximum is {MAX_PLAN_STEPS}. Please break into smaller plans."
             }
 
-        # Check if plan involves project work and project is unnamed
-        steps_text = " ".join(steps).lower()
-        involves_project = any(kw in steps_text for kw in _PROJECT_KEYWORDS)
-
-        if involves_project and project is not None:
-            if project.metadata.name == "Untitled Project":
-                self._gui_state.set_pending_action(
-                    NameProjectThenPlanAction(
-                        pending_steps=steps,
-                        pending_summary=summary,
-                    )
-                )
-                return {
-                    "success": True,
-                    "action_required": "name_project",
-                    "instruction": (
-                        "STOP. Do not call any tools. Ask the user directly: "
-                        "'What would you like to name this project?' "
-                        "Wait for their response. Then call set_project_name with "
-                        "the name they provide, and present_plan again with the same steps."
-                    ),
-                    "pending_plan": {"steps": steps, "summary": summary},
-                }
+        # Project naming gate is now handled entirely by the system prompt
+        # (IMPORTANT BEHAVIOR RULES rule 6). The previous _PROJECT_KEYWORDS
+        # keyword scan was a fragile redundant enforcement removed in favor
+        # of letting the LLM decide when to ask for a project name.
 
         # Create the plan
         plan = Plan.from_steps(steps, summary)

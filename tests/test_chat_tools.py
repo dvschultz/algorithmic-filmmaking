@@ -1143,49 +1143,29 @@ class TestPendingActionTracking:
         main_window.project = Project.new(name="Untitled Project")
         return main_window
 
-    def test_present_plan_stores_pending_action_for_unnamed_project(self):
-        """Test that present_plan stores pending action when project is unnamed."""
+    def test_present_plan_creates_plan_for_unnamed_project(self):
+        """present_plan no longer blocks on unnamed projects — the system prompt handles naming."""
         from core.chat_tools import present_plan
-        from core.gui_state import NameProjectThenPlanAction
 
         main_window = self._create_mock_main_window_with_project()
 
         steps = ["Download videos", "Run detection", "Export"]
         result = present_plan(main_window, steps, "Test workflow")
 
-        # Should return action_required
-        assert result["success"] is True
-        assert result["action_required"] == "name_project"
+        # Plan should be created directly (no keyword-scan gate)
+        assert "plan_id" in result or "action_required" not in result
 
-        # Should store pending action in GUI state
-        pending = main_window._gui_state.pending_action
-        assert pending is not None
-        assert isinstance(pending, NameProjectThenPlanAction)
-        assert pending.pending_steps == steps
-
-    def test_set_project_name_includes_next_action_when_pending(self):
-        """Test that set_project_name reminds agent to call present_plan."""
-        from core.chat_tools import present_plan, set_project_name
+    def test_set_project_name_returns_needs_save(self):
+        """set_project_name returns needs_save flag for unsaved projects."""
+        from core.chat_tools import set_project_name
 
         main_window = self._create_mock_main_window_with_project()
 
-        # First, present_plan with unnamed project
-        # Steps must contain project keywords (download, detect, etc.) to trigger the check
-        steps = ["Download videos", "Detect scenes"]
-        present_plan(main_window, steps, "Test plan")
-
-        # Now set the project name
         result = set_project_name(main_window, main_window.project, "My Project")
 
         assert result["success"] is True
         assert result["new_name"] == "My Project"
-        # Should include pending plan data
-        assert "pending_plan" in result
-        assert result["pending_plan"]["steps"] == ["Download videos", "Detect scenes"]
-        assert result["pending_plan"]["summary"] == "Test plan"
-
-        # Pending action should be cleared
-        assert main_window._gui_state.pending_action is None
+        assert "needs_save" in result
 
     def test_gui_state_context_shows_pending_action(self):
         """Test that GUI state context string includes pending action."""

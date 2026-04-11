@@ -513,6 +513,8 @@ class ChatAgentWorker(QThread):
 
         prompt = f"""You are an AI assistant for Scene Ripper, a video scene detection and editing tool.
 
+When this is the first message in a new conversation, briefly introduce yourself and what you can help with (1-2 sentences), then answer the user's question. Do not repeat the introduction on subsequent messages.
+
 DEFAULT PATHS (from user settings):
 - Download directory: {settings.download_dir}
 - Export directory: {settings.export_dir}
@@ -744,6 +746,33 @@ Available tools:
             if analysis_counts:
                 parts = [f"{k}: {v}/{total_clips}" for k, v in analysis_counts.items()]
                 analysis_lines = f"\n- Analysis Coverage: {', '.join(parts)}"
+
+            # Pre-compute which sequencer algorithms are available based on analysis data
+            algo_availability = {
+                "color": analysis_counts.get("dominant_colors", 0) > 0,
+                "brightness": analysis_counts.get("average_brightness", 0) > 0
+                              if "average_brightness" not in analysis_counts
+                              else any(c.average_brightness is not None for c in self.project.clips),
+                "volume": any(c.rms_volume is not None for c in self.project.clips),
+                "shot_type": analysis_counts.get("shot_type", 0) > 0,
+                "proximity": analysis_counts.get("shot_type", 0) > 0,
+                "similarity_chain": any(c.embedding for c in self.project.clips),
+                "match_cut": any(c.first_frame_embedding for c in self.project.clips),
+                "gaze_sort": analysis_counts.get("gaze_category", 0) > 0,
+                "gaze_consistency": analysis_counts.get("gaze_category", 0) > 0,
+                "eyes_without_a_face": analysis_counts.get("gaze_category", 0) > 0,
+            }
+            # These always work (no analysis required)
+            for a in ("duration", "shuffle", "sequential", "exquisite_corpus",
+                      "storyteller", "reference_guided", "signature_style",
+                      "rose_hobart", "staccato"):
+                algo_availability[a] = True
+            available_algos = [k for k, v in algo_availability.items() if v]
+            unavailable_algos = [k for k, v in algo_availability.items() if not v]
+            if available_algos:
+                analysis_lines += f"\n- Available algorithms: {', '.join(available_algos)}"
+            if unavailable_algos:
+                analysis_lines += f"\n- Unavailable (need analysis): {', '.join(unavailable_algos)}"
 
             # Build analysis distribution summaries
             distribution_lines = ""

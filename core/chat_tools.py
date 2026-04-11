@@ -1019,6 +1019,7 @@ def list_clips(
             "tags": getattr(clip, 'tags', []),
             "has_face_embeddings": clip.face_embeddings is not None and len(clip.face_embeddings) > 0,
             "face_count": len(clip.face_embeddings) if clip.face_embeddings else 0,
+            "custom_queries": clip.custom_queries if clip.custom_queries else None,
         }
         _append_gaze_fields(clip, clip_data)
         results.append(clip_data)
@@ -2626,7 +2627,10 @@ def export_dataset(
     modifies_project_state=True
 )
 def set_project_name(main_window, project, name: str) -> dict:
-    """Set the project name and auto-save."""
+    """Set the project name.
+
+    This only renames the project. Call save_project separately to persist.
+    """
     import re
 
     if not name or not name.strip():
@@ -2651,70 +2655,13 @@ def set_project_name(main_window, project, name: str) -> dict:
     if hasattr(main_window, '_update_window_title'):
         main_window._update_window_title()
 
-    # Auto-save the project if it hasn't been saved yet
-    # This enables future auto-saves (which require project.path to be set)
-    save_path = None
-    save_error = None
-    if not project.path:
-        settings = load_settings()
-        export_dir = settings.export_dir
-
-        # Validate export directory is writable before attempting save
-        try:
-            export_dir.mkdir(parents=True, exist_ok=True)
-            # Test write access
-            test_file = export_dir / ".write_test"
-            test_file.touch()
-            test_file.unlink()
-        except PermissionError:
-            save_error = (
-                f"Cannot save project: No write access to export directory '{export_dir}'. "
-                "Please update your export directory in Settings > Directories, or ensure the "
-                "external drive is mounted and writable."
-            )
-        except OSError as e:
-            save_error = (
-                f"Cannot save project: Export directory '{export_dir}' is not accessible ({e}). "
-                "Please check the path in Settings > Directories."
-            )
-
-        if not save_error:
-            save_path = export_dir / f"{clean_name}.sceneripper"
-            try:
-                project.save(path=save_path)
-                logger.info(f"Auto-saved new project to {save_path}")
-            except Exception as e:
-                logger.error(f"Failed to auto-save project: {e}")
-                save_error = f"Failed to save project: {e}"
-                save_path = None
-
-    result = {
+    return {
         "success": True,
         "old_name": old_name,
         "new_name": project.metadata.name,
-        "message": f"Project renamed to '{project.metadata.name}'"
+        "message": f"Project renamed to '{project.metadata.name}'",
+        "needs_save": not bool(project.path),
     }
-
-    if save_path:
-        result["saved_to"] = str(save_path)
-        result["message"] += f" and saved to {save_path.name}"
-    elif save_error:
-        # Naming succeeded but saving failed - include warning
-        result["warning"] = save_error
-        result["message"] += f". Warning: {save_error}"
-
-    # Check for pending action that requires follow-up after naming
-    if hasattr(main_window, '_gui_state') and main_window._gui_state.pending_action:
-        pending = main_window._gui_state.pending_action
-        if isinstance(pending, NameProjectThenPlanAction):
-            result["pending_plan"] = {
-                "steps": pending.pending_steps,
-                "summary": pending.pending_summary
-            }
-            # Clear the pending action
-            main_window._gui_state.clear_pending_action()
-
-    return result
 
 
 @tools.register(
@@ -3294,31 +3241,20 @@ def detect_scenes(
             # Add new source using proper Project method (invalidates caches, notifies observers)
             project.add_source(source)
 
-        # Secondary fallback: ensure at least one clip exists (belt and suspenders)
-        # This handles edge cases where scene_detect might be bypassed or return empty
-        is_fallback = False
         if not clips:
-            from models.clip import Clip
-            total_frames = source.total_frames
-            clips = [Clip(
-                source_id=source.id,
-                start_frame=0,
-                end_frame=total_frames,
-            )]
-            is_fallback = True
-
-        # Check if the single clip is a full-video fallback
-        if len(clips) == 1 and clips[0].start_frame == 0 and clips[0].end_frame == source.total_frames:
-            is_fallback = True
+            return {
+                "success": True,
+                "clips_detected": 0,
+                "source_id": source.id,
+                "source_name": video.name,
+                "message": f"No scene cuts detected in {video.name}. "
+                           "Try a lower sensitivity value, or the video may be a single continuous shot."
+            }
 
         # Add clips using proper Project method (invalidates caches, notifies observers)
         project.add_clips(clips)
 
-        # Build informative message
-        if is_fallback:
-            message = f"No scene cuts detected in {video.name} - created single clip spanning full video"
-        else:
-            message = f"Detected {len(clips)} scenes in {video.name} and added to project"
+        message = f"Detected {len(clips)} scenes in {video.name} and added to project"
 
         return {
             "success": True,
@@ -3727,6 +3663,67 @@ def select_source(main_window, source_id: str) -> dict:
     modifies_gui_state=True,
     modifies_project_state=True
 )
+
+
+@tools.register(
+    description="Import all video files from a folder. Scans the directory for supported "
+                "video formats (.mp4, .mkv, .avi, .mov, .webm) and imports each one.",
+    requires_project=True,
+    modifies_gui_state=True,
+    modifies_project_state=True
+)
+def import_folder(project, main_window, folder_path: str) -> dict:
+    """Import all video files from a folder.
+
+    Args:
+        folder_path: Path to the folder to scan for video files
+
+    Returns:
+        Dict with success status, imported count, and file list
+    """
+    from pathlib import Path
+
+    folder = Path(folder_path)
+    if not folder.is_dir():
+        return {"success": False, "error": f"Not a directory: {folder_path}"}
+
+    video_extensions = {".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v", ".flv", ".wmv"}
+    video_files = sorted(
+        f for f in folder.iterdir()
+        if f.is_file() and f.suffix.lower() in video_extensions
+    )
+
+    if not video_files:
+        return {"success": False, "error": f"No video files found in {folder_path}"}
+
+    imported = []
+    skipped = []
+    for vf in video_files:
+        # Check if already imported
+        existing = next(
+            (s for s in project.sources if Path(s.file_path).resolve() == vf.resolve()),
+            None
+        )
+        if existing:
+            skipped.append(vf.name)
+            continue
+
+        from core.scene_detect import load_source
+        source = load_source(str(vf))
+        if source:
+            project.add_source(source)
+            imported.append(vf.name)
+
+    return {
+        "success": True,
+        "imported_count": len(imported),
+        "imported_files": imported,
+        "skipped_count": len(skipped),
+        "skipped_files": skipped,
+        "total_sources": len(project.sources),
+    }
+
+
 def detect_scenes_live(
     main_window,
     source_id: str,
@@ -4633,6 +4630,251 @@ def get_available_dimensions(project, main_window) -> dict:
         "available_dimensions": sorted(available),
         "clip_count": len(clip_objects),
     }
+
+
+@tools.register(
+    description="Generate an Exquisite Corpus poem-sequence from clips with extracted text. "
+                "Requires text extraction analysis. The LLM arranges on-screen text fragments "
+                "into a poem following the specified mood, length, and form.",
+    requires_project=True,
+    modifies_gui_state=True
+)
+def generate_exquisite_corpus(
+    project,
+    main_window,
+    mood: str = "dreamy and contemplative",
+    length: str = "medium",
+    form: str = "free_verse",
+) -> dict:
+    """Generate an Exquisite Corpus poem-sequence.
+
+    Args:
+        mood: Description of the desired mood/vibe for the poem
+        length: Target length — 'short' (up to 11 lines), 'medium' (12-25), 'long' (26+)
+        form: Poetic form — 'free_verse', 'couplets', 'haiku_chain', 'concrete',
+              'found_poem', 'cut_up', 'erasure'
+
+    Returns:
+        Dict with success status and poem details
+    """
+    gui_state = main_window._gui_state if main_window else None
+    selected_ids = []
+    if gui_state:
+        selected_ids = gui_state.analyze_selected_ids or gui_state.cut_selected_ids or []
+
+    if not selected_ids:
+        return {"success": False, "error": "No clips selected. Select clips with extracted text first."}
+
+    clips_with_text = []
+    for cid in selected_ids:
+        clip = project.clips_by_id.get(cid)
+        if clip and clip.combined_text:
+            clips_with_text.append((clip, clip.combined_text))
+
+    if not clips_with_text:
+        return {"success": False, "error": "No selected clips have extracted text. Run text extraction first."}
+
+    from core.remix.exquisite_corpus import generate_poem
+    try:
+        poem_lines = generate_poem(clips_with_text, mood, length=length, form=form)
+        if not poem_lines:
+            return {"success": False, "error": "LLM could not generate a poem from the available text."}
+
+        # Apply poem order to timeline
+        seq_tab = main_window.sequence_tab
+        seq_tab.timeline.clear_timeline()
+        current_frame = 0
+        applied = 0
+        for line in poem_lines:
+            clip = line.clip
+            source = project.sources_by_id.get(clip.source_id)
+            if source:
+                seq_tab.timeline.add_clip(clip, source, track_index=0, start_frame=current_frame)
+                current_frame += clip.duration_frames
+                applied += 1
+        seq_tab.timeline._on_zoom_fit()
+        seq_tab._set_state(seq_tab.STATE_TIMELINE)
+
+        return {
+            "success": True,
+            "algorithm": "exquisite_corpus",
+            "clip_count": applied,
+            "poem_lines": len(poem_lines),
+            "mood": mood,
+            "form": form,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@tools.register(
+    description="Generate a Storyteller narrative-driven sequence from clips with descriptions. "
+                "Requires description analysis. The LLM selects and orders clips to create "
+                "a coherent story following the specified narrative structure.",
+    requires_project=True,
+    modifies_gui_state=True
+)
+def generate_storyteller(
+    project,
+    main_window,
+    theme: Optional[str] = None,
+    structure: str = "auto",
+    target_duration_minutes: Optional[int] = None,
+) -> dict:
+    """Generate a Storyteller narrative sequence.
+
+    Args:
+        theme: Optional theme or topic for the narrative (e.g. 'journey', 'conflict')
+        structure: Narrative structure — 'three_act', 'chronological', 'thematic', 'auto'
+        target_duration_minutes: Target total duration in minutes (None = use all clips)
+
+    Returns:
+        Dict with success status and narrative details
+    """
+    gui_state = main_window._gui_state if main_window else None
+    selected_ids = []
+    if gui_state:
+        selected_ids = gui_state.analyze_selected_ids or gui_state.cut_selected_ids or []
+
+    if not selected_ids:
+        return {"success": False, "error": "No clips selected. Select clips with descriptions first."}
+
+    clips_with_desc = []
+    for cid in selected_ids:
+        clip = project.clips_by_id.get(cid)
+        if clip and clip.description:
+            source = project.sources_by_id.get(clip.source_id)
+            if source:
+                clips_with_desc.append((clip, clip.description))
+
+    if not clips_with_desc:
+        return {"success": False, "error": "No selected clips have descriptions. Run Describe analysis first."}
+
+    from core.remix.storyteller import generate_narrative
+    try:
+        narrative_lines = generate_narrative(
+            clips_with_desc,
+            target_duration_minutes=target_duration_minutes,
+            narrative_structure=structure,
+            theme=theme,
+        )
+        if not narrative_lines:
+            return {"success": False, "error": "LLM could not generate a narrative from the available clips."}
+
+        # Apply narrative order to timeline
+        seq_tab = main_window.sequence_tab
+        seq_tab.timeline.clear_timeline()
+        current_frame = 0
+        applied = 0
+        for line in narrative_lines:
+            clip = line.clip
+            source = project.sources_by_id.get(clip.source_id)
+            if source:
+                seq_tab.timeline.add_clip(clip, source, track_index=0, start_frame=current_frame)
+                current_frame += clip.duration_frames
+                applied += 1
+        seq_tab.timeline._on_zoom_fit()
+        seq_tab._set_state(seq_tab.STATE_TIMELINE)
+
+        return {
+            "success": True,
+            "algorithm": "storyteller",
+            "clip_count": applied,
+            "structure": structure,
+            "theme": theme,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@tools.register(
+    description="Generate a Signature Style sequence from a reference image. "
+                "Samples color and pacing from the image, then matches clips to create "
+                "a sequence that follows the image's visual structure. "
+                "In parametric mode, samples the image directly. In VLM mode, uses a "
+                "vision model to interpret the image's style.",
+    requires_project=True,
+    modifies_gui_state=True
+)
+def generate_signature_style(
+    project,
+    main_window,
+    reference_image_path: str,
+    mode: str = "parametric",
+    sample_count: int = 64,
+) -> dict:
+    """Generate a Signature Style sequence from a reference image.
+
+    Args:
+        reference_image_path: Path to the reference image (can be an extracted frame)
+        mode: 'parametric' (sample colors directly) or 'vlm' (use vision model)
+        sample_count: Number of samples along the image width (8-128, default 64)
+
+    Returns:
+        Dict with success status and sequence details
+    """
+    from pathlib import Path
+
+    image_path = Path(reference_image_path)
+    if not image_path.is_file():
+        return {"success": False, "error": f"Reference image not found: {reference_image_path}"}
+
+    if mode not in ("parametric", "vlm"):
+        return {"success": False, "error": f"Invalid mode '{mode}'. Use 'parametric' or 'vlm'."}
+
+    sample_count = max(8, min(128, sample_count))
+
+    gui_state = main_window._gui_state if main_window else None
+    selected_ids = []
+    if gui_state:
+        selected_ids = gui_state.analyze_selected_ids or gui_state.cut_selected_ids or []
+
+    if not selected_ids:
+        return {"success": False, "error": "No clips selected for sequencing."}
+
+    clip_pairs = []
+    for cid in selected_ids:
+        clip = project.clips_by_id.get(cid)
+        if clip:
+            source = project.sources_by_id.get(clip.source_id)
+            if source:
+                clip_pairs.append((clip, source))
+
+    if not clip_pairs:
+        return {"success": False, "error": "No valid clips found for sequencing."}
+
+    try:
+        from PIL import Image
+        image = Image.open(image_path).convert("RGB")
+
+        from core.remix.signature_style import (
+            sample_drawing_parametric, match_clips_to_segments,
+            build_sequence_from_matches,
+        )
+
+        segments = sample_drawing_parametric(image, sample_count=sample_count)
+        matches = match_clips_to_segments(segments, clip_pairs)
+        sequence = build_sequence_from_matches(matches)
+
+        # Apply to timeline
+        seq_tab = main_window.sequence_tab
+        seq_tab.timeline.clear_timeline()
+        current_frame = 0
+        for clip, source, in_pt, out_pt in sequence:
+            seq_tab.timeline.add_clip(clip, source, track_index=0, start_frame=current_frame)
+            current_frame += (out_pt - in_pt)
+        seq_tab.timeline._on_zoom_fit()
+        seq_tab._set_state(seq_tab.STATE_TIMELINE)
+
+        return {
+            "success": True,
+            "algorithm": f"signature_style ({mode})",
+            "clip_count": len(sequence),
+            "sample_count": sample_count,
+            "reference_image": str(image_path),
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 @tools.register(
@@ -6387,6 +6629,41 @@ def delete_clips(project, clip_ids: list[str], force: bool = False) -> dict:
     }
 
 
+@tools.register(
+    description="Clear all custom visual query results from specified clips. "
+                "Use when re-running queries with a new model or clearing stale results.",
+    requires_project=True,
+    modifies_project_state=True
+)
+def clear_custom_queries(project, clip_ids: Optional[list[str]] = None) -> dict:
+    """Clear custom query results from clips.
+
+    Args:
+        clip_ids: List of clip IDs to clear. If None, clears all clips.
+
+    Returns:
+        Dict with success status and count of cleared clips
+    """
+    clips = project.clips if clip_ids is None else [
+        project.clips_by_id[cid] for cid in clip_ids if cid in project.clips_by_id
+    ]
+
+    cleared = 0
+    for clip in clips:
+        if clip.custom_queries:
+            clip.custom_queries = []
+            cleared += 1
+
+    if cleared > 0:
+        project.mark_dirty()
+
+    return {
+        "success": True,
+        "cleared_count": cleared,
+        "total_checked": len(clips),
+    }
+
+
 # =============================================================================
 # Video Playback Tools - Control the video player
 # =============================================================================
@@ -7158,3 +7435,49 @@ def clear_clip_cinematography(
         result["already_clear"] = already_clear
 
     return result
+
+
+@tools.register(
+    description="Undo the last undoable action. Returns the name of the action undone, "
+                "or reports if there is nothing to undo.",
+    requires_project=False,
+    modifies_gui_state=True
+)
+def undo(main_window) -> dict:
+    """Undo the last action.
+
+    Returns:
+        Dict with success status and the undone action name
+    """
+    if not hasattr(main_window, 'undo_stack'):
+        return {"success": False, "error": "Undo not available"}
+
+    if not main_window.undo_stack.canUndo():
+        return {"success": False, "error": "Nothing to undo"}
+
+    action_text = main_window.undo_stack.undoText()
+    main_window.undo_stack.undo()
+    return {"success": True, "undone": action_text or "last action"}
+
+
+@tools.register(
+    description="Redo the last undone action. Returns the name of the action redone, "
+                "or reports if there is nothing to redo.",
+    requires_project=False,
+    modifies_gui_state=True
+)
+def redo(main_window) -> dict:
+    """Redo the last undone action.
+
+    Returns:
+        Dict with success status and the redone action name
+    """
+    if not hasattr(main_window, 'undo_stack'):
+        return {"success": False, "error": "Redo not available"}
+
+    if not main_window.undo_stack.canRedo():
+        return {"success": False, "error": "Nothing to redo"}
+
+    action_text = main_window.undo_stack.redoText()
+    main_window.undo_stack.redo()
+    return {"success": True, "redone": action_text or "last action"}
