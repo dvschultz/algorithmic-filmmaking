@@ -109,7 +109,7 @@ jobs:
 
       - name: Install appimage-builder
         run: |
-          pip install appimage-builder
+          pip install 'packaging<22' appimage-builder
           # Install additional tools for AppImage creation
           sudo apt-get update
           sudo apt-get install -y \
