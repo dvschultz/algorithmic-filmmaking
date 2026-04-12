@@ -74,7 +74,11 @@ chmod +x AppDir/AppRun
 echo "Building AppImage with appimage-builder..."
 export VERSION="$VERSION"
 export APPDIR="$PROJECT_ROOT/AppDir"
-appimage-builder --recipe "$SCRIPT_DIR/AppImageBuilder.yml" --skip-test
+
+# Inject version into recipe (appimage-builder !ENV tag is unreliable)
+RECIPE="$PROJECT_ROOT/AppImageBuilder-resolved.yml"
+sed "s/\!ENV \${VERSION:-0.1.0}/$VERSION/g" "$SCRIPT_DIR/AppImageBuilder.yml" > "$RECIPE"
+appimage-builder --recipe "$RECIPE" --skip-test
 
 # Rename output
 mv Scene_Ripper-*.AppImage "Scene_Ripper-${VERSION}-x86_64.AppImage" 2>/dev/null || true
