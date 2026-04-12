@@ -106,10 +106,6 @@ jobs:
         run: |
           # Ubuntu jammy signing keys rotate; ensure the runner has the latest
           sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 871920D1991BC93C || true
-          # Also update the trusted keyring for appimage-builder's internal apt-get
-          sudo mkdir -p /etc/apt/trusted.gpg.d
-          sudo gpg --no-default-keyring --keyring /etc/apt/trusted.gpg.d/ubuntu-archive.gpg \
-            --keyserver keyserver.ubuntu.com --recv-keys 871920D1991BC93C 2>/dev/null || true
 
       - name: Install appimage-builder
         run: |
