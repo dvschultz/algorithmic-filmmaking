@@ -204,20 +204,23 @@ class TestEndToEndPersistence:
 class TestCardAvailability:
     def test_free_association_appears_in_availability_mapping(self, qapp):
         """The card grid uses a hand-maintained dict — ensure free_association
-        is registered so the card is visible."""
+        is registered so the card is visible. Stubs feature-registry probes
+        so the test doesn't depend on transformers/other optional packages."""
         from ui.tabs.sequence_tab import SequenceTab
 
         tab = SequenceTab()
-        # Give it some clips so the availability update runs meaningfully
         source = _make_source()
         clip = _make_clip("c1")
         tab._clips = [clip]
 
-        # Capture the dict passed to set_algorithm_availability
         captured = {}
         tab.card_grid.set_algorithm_availability = (
             lambda d: captured.update(d) or None
         )
-        tab._update_card_availability()
+
+        with patch(
+            "ui.tabs.sequence_tab.check_feature_ready", return_value=(True, [])
+        ):
+            tab._update_card_availability()
 
         assert "free_association" in captured
