@@ -72,7 +72,8 @@ class SortingCardGrid(QWidget):
             "shuffle", "sequential", "duration", "color",
             "brightness", "volume", "shot_type", "proximity",
             "similarity_chain", "match_cut", "exquisite_corpus", "storyteller",
-            "reference_guided", "signature_style", "rose_hobart", "staccato",
+            "free_association", "reference_guided", "signature_style",
+            "rose_hobart", "staccato",
             "gaze_sort", "gaze_consistency", "eyes_without_a_face",
         ]
 

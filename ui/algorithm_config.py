@@ -106,6 +106,15 @@ ALGORITHM_CONFIG = {
         "is_dialog": True,
         "categories": ["text"],
     },
+    "free_association": {
+        "icon": "\U0001f4ad",  # thought balloon
+        "label": "Free Association",
+        "description": "Build a sequence one clip at a time with an LLM collaborator",
+        "allow_duplicates": False,
+        "required_analysis": ["describe"],
+        "is_dialog": True,
+        "categories": ["connect", "text"],
+    },
     "reference_guided": {
         "icon": "\U0001f3af",
         "label": "Reference Guide",

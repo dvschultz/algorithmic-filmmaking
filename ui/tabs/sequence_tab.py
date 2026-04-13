@@ -21,7 +21,7 @@ from .base_tab import BaseTab
 from ui.video_player import VideoPlayer
 from ui.timeline import TimelineWidget
 from ui.widgets import SortingCardGrid, TimelinePreview, CostEstimatePanel
-from ui.dialogs import ExquisiteCorpusDialog, StorytellerDialog, MissingDescriptionsDialog, ReferenceGuideDialog, SignatureStyleDialog, RoseHobartDialog, DiceRollDialog
+from ui.dialogs import ExquisiteCorpusDialog, StorytellerDialog, MissingDescriptionsDialog, ReferenceGuideDialog, SignatureStyleDialog, RoseHobartDialog, DiceRollDialog, FreeAssociationDialog
 from ui.theme import theme, Spacing, TypeScale, UISizes
 from ui.workers.sequence_worker import SequenceWorker
 from core.remix import generate_sequence
@@ -661,6 +661,9 @@ class SequenceTab(BaseTab):
             if algorithm == "eyes_without_a_face":
                 self._show_eyes_without_a_face_dialog(clips)
                 return
+            if algorithm == "free_association":
+                self._show_free_association_dialog(clips)
+                return
 
         # Compute cost estimates for this algorithm
         clip_objects = [clip for clip, source in clips]
@@ -983,6 +986,94 @@ class SequenceTab(BaseTab):
     def _apply_storyteller_sequence(self, sequence_clips: list):
         """Apply the sequence from Storyteller dialog."""
         self._apply_dialog_sequence(sequence_clips, "storyteller", "Storyteller")
+
+    def _show_free_association_dialog(self, clips: list):
+        """Show the Free Association dialog for step-by-step LLM sequencing.
+
+        Args:
+            clips: List of (Clip, Source) tuples to process
+        """
+        sources_by_id = {source.id: source for clip, source in clips}
+        clip_objects = [clip for clip, source in clips]
+
+        clips_with_desc = [c for c in clip_objects if c.description]
+        if not clips_with_desc:
+            QMessageBox.warning(
+                self,
+                "No Descriptions",
+                "None of the selected clips have descriptions.\n\n"
+                "Run description analysis in the Analyze tab first, "
+                "then return to build a Free Association sequence.",
+            )
+            return
+
+        dialog = FreeAssociationDialog(
+            clips=clips_with_desc,
+            sources_by_id=sources_by_id,
+            project=None,
+            parent=self,
+        )
+        dialog.sequence_ready.connect(self._apply_free_association_sequence)
+        dialog.exec()
+
+    @Slot(list)
+    def _apply_free_association_sequence(self, payload: list):
+        """Apply the sequence from the Free Association dialog.
+
+        The payload is a list of (Clip, Source, Optional[str]) triples — the
+        third element is the LLM-generated rationale for that transition
+        (None for the user-selected first clip). This differs from the
+        generic _apply_dialog_sequence path because that path's timeline
+        pipeline reconstructs SequenceClip internally with no mechanism
+        to thread a rationale parameter through.
+
+        Args:
+            payload: List of (Clip, Source, Optional[str]) tuples in order.
+        """
+        if not payload:
+            logger.warning("No clips in Free Association sequence")
+            return
+
+        # Strip rationales to feed the standard apply path that already
+        # handles timeline clearing, clip addition, fps/video setup, etc.
+        sequence_clips = [(clip, source) for clip, source, _ in payload]
+        try:
+            self._apply_dialog_sequence(
+                sequence_clips, "free_association", "Free Association"
+            )
+        except Exception:
+            logger.exception("Failed to apply Free Association sequence")
+            return
+
+        # Now thread rationales onto the SequenceClips the timeline just
+        # created. Match by (source_clip_id, start_frame) which is unique
+        # for the clips we just placed sequentially in this apply call.
+        sequence = self.timeline.get_sequence()
+        existing_clips = {
+            (sc.source_clip_id, sc.start_frame): sc for sc in sequence.get_all_clips()
+        }
+
+        current_frame = 0
+        attached = 0
+        for clip, _source, rationale in payload:
+            if rationale is not None:
+                key = (clip.id, current_frame)
+                seq_clip = existing_clips.get(key)
+                if seq_clip is not None:
+                    seq_clip.rationale = rationale
+                    attached += 1
+                else:
+                    logger.warning(
+                        "Could not find SequenceClip for (%s, %s) to attach rationale",
+                        clip.id,
+                        current_frame,
+                    )
+            current_frame += clip.duration_frames
+
+        logger.info(
+            "Attached %d rationale(s) to Free Association sequence",
+            attached,
+        )
 
     def _show_reference_guide_dialog(self, clips: list):
         """Show the Reference Guide dialog for reference-guided remixing.
@@ -1607,6 +1698,7 @@ class SequenceTab(BaseTab):
             ),
             "exquisite_corpus": True,  # Always available - dialog handles text extraction
             "storyteller": True,
+            "free_association": True,  # Dialog handles its own prereqs
             "reference_guided": True,  # Dialog handles its own prereqs
             "signature_style": True,  # Dialog handles its own prereqs
             "gaze_sort": (has_gaze, "Run gaze analysis first" if not has_gaze else ""),
