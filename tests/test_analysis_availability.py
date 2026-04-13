@@ -44,3 +44,16 @@ def test_extract_text_empty_list_still_counts_as_needing_analysis():
 
     disabled = compute_disabled_operations([clip], ["extract_text"])
     assert disabled == set()
+
+
+def test_embeddings_completeness_matches_embedding_field():
+    clip_with = make_test_clip("with")
+    clip_with.embedding = [0.1] * 768
+    clip_without = make_test_clip("without")
+    clip_without.embedding = None
+
+    assert compute_disabled_operations([clip_with], ["embeddings"]) == {"embeddings"}
+    assert compute_disabled_operations([clip_without], ["embeddings"]) == set()
+    assert compute_disabled_operations(
+        [clip_with, clip_without], ["embeddings"]
+    ) == set()

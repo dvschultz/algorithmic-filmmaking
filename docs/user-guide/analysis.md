@@ -422,6 +422,24 @@ The detector samples one frame per second through each clip, so it catches faces
 
 ---
 
+## Generate Embeddings
+
+Extracts a 768-dimensional DINOv2 visual feature vector from each clip's thumbnail. Embeddings capture what each clip "looks like" in a way that lets algorithms compare clips by visual similarity rather than by discrete metadata like shot type or color.
+
+**Produces:**
+- A 768-dim embedding vector on each clip (`embedding`)
+- The model tag (`dinov2-vit-b-14`) so you can tell which version generated the vector
+
+**Required first:** Scene detection with thumbnails (the default). Clips without thumbnails are skipped.
+**Runs:** Locally (DINOv2 via transformers, no API key needed). Downloads ~450 MB of model files on first use.
+**Speed:** Moderate (processes in batches on GPU if available, otherwise CPU).
+
+**Used by:** Human Centipede (similarity chaining), Staccato, Reference Guide (when the embedding dimension is active), and Free Association (for local candidate shortlisting).
+
+> **Tip:** If you haven't run this explicitly and try to use a sequencer that needs embeddings, the app will auto-compute them as a side effect of running the sequencer. Running Generate Embeddings up front is faster when you plan to use multiple embedding-based sequencers on the same clips.
+
+---
+
 ## Custom Query
 
 Ask a yes/no question about each clip and get a boolean answer with confidence. Useful for filtering clips by arbitrary criteria that other analyses don't cover.
