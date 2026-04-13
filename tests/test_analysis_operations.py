@@ -17,9 +17,9 @@ from core.analysis_operations import (
 class TestAnalysisOperationRegistry:
     """Tests for the operation registry."""
 
-    def test_registry_has_11_operations(self):
-        """All 11 operations are registered."""
-        assert len(ANALYSIS_OPERATIONS) == 11
+    def test_registry_has_12_operations(self):
+        """All 12 operations are registered."""
+        assert len(ANALYSIS_OPERATIONS) == 12
 
     def test_operations_by_key_matches(self):
         """OPERATIONS_BY_KEY has an entry for every operation."""
@@ -82,3 +82,30 @@ class TestAnalysisOperationRegistry:
             assert op.label, f"Operation missing label: {op}"
             assert op.tooltip, f"Operation missing tooltip: {op}"
             assert op.phase in PHASE_ORDER, f"Invalid phase '{op.phase}' for {op.key}"
+
+
+class TestEmbeddingsOperation:
+    """Tests for the 'embeddings' operation specifically."""
+
+    def test_embeddings_is_registered(self):
+        assert "embeddings" in OPERATIONS_BY_KEY
+
+    def test_embeddings_is_sequential_phase(self):
+        op = OPERATIONS_BY_KEY["embeddings"]
+        assert op.phase == "sequential"
+        assert "embeddings" in SEQUENTIAL_OPS
+
+    def test_embeddings_is_opt_in(self):
+        op = OPERATIONS_BY_KEY["embeddings"]
+        assert op.default_enabled is False
+        assert "embeddings" not in DEFAULT_SELECTED
+
+    def test_embeddings_has_user_facing_label(self):
+        op = OPERATIONS_BY_KEY["embeddings"]
+        assert op.label == "Generate Embeddings"
+        assert op.tooltip  # non-empty
+
+    def test_embeddings_is_not_cloud_capable(self):
+        """DINOv2 runs locally only."""
+        op = OPERATIONS_BY_KEY["embeddings"]
+        assert op.cloud_capable is False
