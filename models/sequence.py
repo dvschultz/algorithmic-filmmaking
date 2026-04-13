@@ -30,6 +30,7 @@ class SequenceClip:
     vflip: bool = False  # Random vertical flip
     reverse: bool = False  # Random reverse playback
     prerendered_path: Optional[str] = None  # Path to pre-rendered clip with baked transforms
+    rationale: Optional[str] = None  # LLM-generated rationale for why this clip follows the previous (Free Association sequencer)
 
     @property
     def is_frame_entry(self) -> bool:
@@ -89,6 +90,8 @@ class SequenceClip:
                     data["prerendered_path"] = self.prerendered_path
             else:
                 data["prerendered_path"] = self.prerendered_path
+        if self.rationale is not None:
+            data["rationale"] = self.rationale
         return data
 
     @classmethod
@@ -120,6 +123,7 @@ class SequenceClip:
             vflip=data.get("vflip", False),
             reverse=data.get("reverse", False),
             prerendered_path=prerendered,
+            rationale=data.get("rationale"),
         )
 
 
