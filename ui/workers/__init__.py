@@ -5,6 +5,7 @@ from .cinematography_worker import CinematographyWorker
 from .classification_worker import ClassificationWorker
 from .color_worker import ColorAnalysisWorker
 from .description_worker import DescriptionWorker
+from .embedding_worker import EmbeddingAnalysisWorker
 from .frame_extraction_worker import FrameExtractionWorker
 from .gaze_worker import GazeAnalysisWorker
 from .object_detection_worker import ObjectDetectionWorker
@@ -19,6 +20,7 @@ __all__ = [
     "ClassificationWorker",
     "ColorAnalysisWorker",
     "DescriptionWorker",
+    "EmbeddingAnalysisWorker",
     "FrameExtractionWorker",
     "GazeAnalysisWorker",
     "ObjectDetectionWorker",
