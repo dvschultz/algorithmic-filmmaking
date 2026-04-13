@@ -110,8 +110,8 @@ def test_free_association_registered_in_algorithm_config():
     config = get_algorithm_config("free_association")
     assert config["label"] == "Free Association"
     assert config["is_dialog"] is True
-    assert config["required_analysis"] == ["describe"]
-    # embeddings is NOT required — the core module falls back to random
-    # sampling when embeddings are missing, so gating on them would contradict
-    # graceful degradation
-    assert "embeddings" not in config["required_analysis"]
+    # Both analyses are declared so the cost gate prompts the user to run
+    # them before sequencing. The core module still gracefully falls back
+    # to random sampling if embeddings happen to be missing — the
+    # declaration is UX scaffolding, not a hard dependency.
+    assert set(config["required_analysis"]) == {"describe", "embeddings"}
