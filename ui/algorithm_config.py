@@ -111,7 +111,10 @@ ALGORITHM_CONFIG = {
         "label": "Free Association",
         "description": "Build a sequence one clip at a time with an LLM collaborator",
         "allow_duplicates": False,
-        "required_analysis": ["describe"],
+        # Embeddings power the local candidate shortlist — without them the
+        # sequencer falls back to random sampling, which degrades proposal
+        # quality. Declaring them here prompts the user via the cost gate.
+        "required_analysis": ["describe", "embeddings"],
         "is_dialog": True,
         "categories": ["connect", "text"],
     },
