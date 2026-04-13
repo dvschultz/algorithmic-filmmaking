@@ -86,6 +86,7 @@ from ui.workers.classification_worker import ClassificationWorker
 from ui.workers.object_detection_worker import ObjectDetectionWorker
 from ui.workers.face_detection_worker import FaceDetectionWorker
 from ui.workers.gaze_worker import GazeAnalysisWorker
+from ui.workers.embedding_worker import EmbeddingAnalysisWorker
 from ui.workers.description_worker import DescriptionWorker
 from ui.workers.custom_query_worker import CustomQueryWorker
 from ui.workers.export_worker import ExportBundleWorker
@@ -3312,6 +3313,8 @@ class MainWindow(QMainWindow):
             self._launch_custom_query_worker(clips)
         elif op_key == "gaze":
             self._launch_gaze_worker(clips)
+        elif op_key == "embeddings":
+            self._launch_embeddings_worker(clips)
         else:
             logger.warning(f"Unknown analysis operation: {op_key}")
             self._on_analysis_phase_worker_finished(op_key)
@@ -3413,6 +3416,27 @@ class MainWindow(QMainWindow):
         self._gaze_worker.finished.connect(self._gaze_worker.deleteLater)
         self._gaze_worker.finished.connect(lambda: setattr(self, '_gaze_worker', None))
         self._gaze_worker.start()
+
+    def _launch_embeddings_worker(self, clips: list):
+        """Launch DINOv2 embedding extraction worker.
+
+        The pipeline has already filtered this operation via
+        _filter_available_analysis_operations (which calls check_feature_ready
+        for torch+transformers), so no additional dependency guard is needed
+        here — if the user declined install, this launcher is never reached.
+        """
+        self._embeddings_finished_handled = False
+        logger.info(f"Creating EmbeddingAnalysisWorker (pipeline) for {len(clips)} clips...")
+        self._embeddings_worker = EmbeddingAnalysisWorker(clips)
+        self._embeddings_worker.progress.connect(self._on_embeddings_progress)
+        self._embeddings_worker.embedding_ready.connect(self._on_embedding_ready)
+        self._embeddings_worker.analysis_completed.connect(
+            self._on_pipeline_embeddings_finished, Qt.UniqueConnection
+        )
+        self._embeddings_worker.error.connect(self._on_embeddings_error)
+        self._embeddings_worker.finished.connect(self._embeddings_worker.deleteLater)
+        self._embeddings_worker.finished.connect(lambda: setattr(self, '_embeddings_worker', None))
+        self._embeddings_worker.start()
 
     def _launch_text_extraction_worker(self, clips: list):
         """Launch text extraction worker."""
@@ -7334,6 +7358,40 @@ class MainWindow(QMainWindow):
                 self.clip_details_sidebar.refresh_gaze_if_showing(clip_id)
             self._mark_dirty()
             logger.debug(f"Clip {clip_id}: gaze={category} (yaw={yaw:.1f}, pitch={pitch:.1f})")
+
+    @Slot(int, int)
+    def _on_embeddings_progress(self, current: int, total: int):
+        """Handle embedding extraction progress updates."""
+        if total > 0:
+            if current == 0:
+                self.status_bar.showMessage(
+                    "Generating Embeddings: loading DINOv2 model (first run, ~450 MB)..."
+                )
+            else:
+                self.status_bar.showMessage(f"Generating embeddings: {current}/{total} clips...")
+            self.progress_bar.setValue(int(current / total * 100))
+
+    @Slot(str)
+    def _on_embedding_ready(self, clip_id: str):
+        """Handle embedding attached to a clip. No per-clip UI indicator yet."""
+        clip = self.clips_by_id.get(clip_id)
+        if clip:
+            self._mark_dirty()
+            logger.debug(f"Clip {clip_id}: embedding populated")
+
+    @Slot()
+    def _on_pipeline_embeddings_finished(self):
+        """Advance the pipeline once embeddings analysis completes."""
+        if self._embeddings_finished_handled:
+            return
+        self._embeddings_finished_handled = True
+        self._on_analysis_phase_worker_finished("embeddings")
+
+    @Slot(str)
+    def _on_embeddings_error(self, msg: str):
+        """Handle embedding analysis errors — log and ensure pipeline advances."""
+        logger.error("Embedding analysis error: %s", msg)
+        self.statusBar().showMessage(f"Embedding analysis failed: {msg}", 5000)
 
     @Slot(int, int)
     def _on_object_detection_progress(self, current: int, total: int):
