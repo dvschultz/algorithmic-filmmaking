@@ -699,8 +699,8 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(text_group)
 
-        # LLM Sequencer (Storyteller + Exquisite Corpus) group
-        corpus_group = QGroupBox("LLM Sequencer (Storyteller / Exquisite Corpus)")
+        # LLM Sequencer (Storyteller + Exquisite Corpus + Free Association) group
+        corpus_group = QGroupBox("LLM Sequencer (Storyteller / Exquisite Corpus / Free Association)")
         corpus_layout = QVBoxLayout(corpus_group)
 
         # Model selection
