@@ -151,7 +151,8 @@ class TestDeleteClipsTool:
         project._caches = {}
         project._observers = []
 
-        # Set up sequence
+        # Multi-sequence support: set up sequences list before using property
+        from models.sequence import Sequence
         if sequence_clip_ids:
             seq = MagicMock()
             track = MagicMock()
@@ -159,9 +160,11 @@ class TestDeleteClipsTool:
                 MagicMock(source_clip_id=cid) for cid in sequence_clip_ids
             ]
             seq.tracks = [track]
-            project.sequence = seq
+            project.sequences = [seq]
+            project.active_sequence_index = 0
         else:
-            project.sequence = None
+            project.sequences = [Sequence()]
+            project.active_sequence_index = 0
 
         return project
 
@@ -230,6 +233,7 @@ class TestProjectRemoveClips:
 
     def test_remove_clips_returns_removed(self):
         from core.project import Project
+        from models.sequence import Sequence
 
         project = Project.__new__(Project)
         project._sources = []
@@ -238,7 +242,8 @@ class TestProjectRemoveClips:
         project._dirty = False
         project._caches = {}
         project._observers = []
-        project.sequence = None
+        project.sequences = [Sequence()]
+        project.active_sequence_index = 0
 
         removed = project.remove_clips(["c1", "c3"])
 
@@ -249,6 +254,7 @@ class TestProjectRemoveClips:
 
     def test_remove_clips_nonexistent_returns_empty(self):
         from core.project import Project
+        from models.sequence import Sequence
 
         project = Project.__new__(Project)
         project._sources = []
@@ -257,7 +263,8 @@ class TestProjectRemoveClips:
         project._dirty = False
         project._caches = {}
         project._observers = []
-        project.sequence = None
+        project.sequences = [Sequence()]
+        project.active_sequence_index = 0
 
         removed = project.remove_clips(["nonexistent"])
 

@@ -30,7 +30,7 @@ def _make_source(tmp_path: Path, name: str = "video.mp4", size: int = 1024) -> S
         fps=30.0,
         width=1920,
         height=1080,
-        analyzed=True,
+        cut=True,
     )
 
 

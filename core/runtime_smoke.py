@@ -82,7 +82,7 @@ def _run_project_smoke() -> None:
             fps=24.0,
             width=96,
             height=72,
-            analyzed=True,
+            cut=True,
         )
         project.add_source(source)
 

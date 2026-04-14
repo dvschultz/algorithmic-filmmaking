@@ -148,7 +148,7 @@ class TestProjectPipeline:
                 fps=30.0,
                 width=1920,
                 height=1080,
-                analyzed=True,
+                cut=True,
             )
             project.add_source(source)
 
@@ -244,7 +244,7 @@ class TestExportPipeline:
                 fps=30.0,
                 width=1920,
                 height=1080,
-                analyzed=True,
+                cut=True,
             )
             project.add_source(source)
 

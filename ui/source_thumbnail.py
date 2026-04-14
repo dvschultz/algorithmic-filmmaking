@@ -4,8 +4,10 @@ from pathlib import Path
 
 from PySide6.QtWidgets import (
     QFrame,
+    QHBoxLayout,
     QVBoxLayout,
     QLabel,
+    QWidget,
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap, QKeyEvent
@@ -67,11 +69,10 @@ class SourceThumbnail(QFrame):
         layout.addWidget(self.filename_label)
 
         # Status badges (CUT / ANALYZED)
-        from PySide6.QtWidgets import QHBoxLayout as HBox
         badge_container = QWidget()
         badge_container.setFixedHeight(20)
         badge_container.setStyleSheet("background: transparent; border: none;")
-        badge_layout = HBox(badge_container)
+        badge_layout = QHBoxLayout(badge_container)
         badge_layout.setContentsMargins(0, 0, 0, 0)
         badge_layout.setSpacing(4)
 
