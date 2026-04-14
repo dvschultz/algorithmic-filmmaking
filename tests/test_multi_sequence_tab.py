@@ -84,6 +84,64 @@ class TestSequenceDropdownSync:
         assert p.sequence.get_all_clips()[0].source_clip_id == "clip-1"
 
 
+# --- Unit 5: New Sequence + Delete ---
+
+
+class TestNewSequence:
+    """New Sequence button creates a new empty sequence."""
+
+    def test_new_sequence_creates_blank(self, project_with_clips):
+        p = project_with_clips
+        initial_count = len(p.sequences)
+        p.add_sequence(Sequence(name="Untitled Sequence"))
+        assert len(p.sequences) == initial_count + 1
+        assert p.sequences[-1].name == "Untitled Sequence"
+        assert len(p.sequences[-1].get_all_clips()) == 0
+
+
+class TestDeleteSequence:
+    """Delete sequence with R2 invariant and R7 confirmation rules."""
+
+    def test_delete_empty_sequence(self, project_with_clips):
+        """Empty sequence (0 clips) can be deleted."""
+        p = project_with_clips
+        # Make an empty third sequence
+        p.add_sequence(Sequence(name="Empty"))
+        assert len(p.sequences) == 3
+        p.remove_sequence(2)
+        assert len(p.sequences) == 2
+
+    def test_delete_populated_sequence(self, project_with_clips):
+        """Populated sequence can be deleted (confirmation tested at UI level)."""
+        p = project_with_clips
+        # Chromatics (index 1) has 1 clip
+        assert len(p.sequences[1].get_all_clips()) == 1
+        p.remove_sequence(1)
+        assert len(p.sequences) == 1
+
+    def test_delete_active_switches_to_zero(self, project_with_clips):
+        p = project_with_clips
+        p.set_active_sequence(1)
+        p.remove_sequence(1)
+        assert p.active_sequence_index == 0
+
+    def test_delete_only_sequence_creates_empty(self):
+        """R2: deleting the only sequence auto-creates a fresh empty one."""
+        p = Project.new()
+        assert len(p.sequences) == 1
+        p.remove_sequence(0)
+        assert len(p.sequences) == 1
+        assert len(p.sequence.get_all_clips()) == 0
+
+    def test_delete_non_active_preserves_view(self, project_with_clips):
+        p = project_with_clips
+        # Active is 0, delete non-active index 1
+        p.set_active_sequence(0)
+        p.remove_sequence(1)
+        assert p.active_sequence_index == 0
+        assert len(p.sequences) == 1
+
+
 class TestDirtyTracking:
     """Dirty flag behavior for multi-sequence switching."""
 

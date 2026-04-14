@@ -14,6 +14,8 @@ from PySide6.QtWidgets import (
     QLabel,
     QCheckBox,
     QMessageBox,
+    QMenu,
+    QInputDialog,
 )
 from PySide6.QtCore import Signal, Qt, Slot
 
@@ -302,10 +304,11 @@ class SequenceTab(BaseTab):
 
         layout.addStretch()
 
-        self.clear_btn = QPushButton("Clear Sequence")
-        self.clear_btn.setToolTip("Clear timeline and return to card selection")
-        self.clear_btn.clicked.connect(self._on_clear_clicked)
-        layout.addWidget(self.clear_btn)
+        self.new_seq_btn = QPushButton("New Sequence")
+        self.new_seq_btn.setToolTip("Create a new empty sequence")
+        self.new_seq_btn.setMinimumHeight(UISizes.BUTTON_MIN_HEIGHT)
+        self.new_seq_btn.clicked.connect(self._on_new_sequence_clicked)
+        layout.addWidget(self.new_seq_btn)
 
         return header
 
@@ -1556,14 +1559,16 @@ class SequenceTab(BaseTab):
             self._apply_algorithm(algorithm, clips, direction=direction)
 
     @Slot()
-    def _on_clear_clicked(self):
-        """Clear sequence and return to cards."""
+    def _on_new_sequence_clicked(self):
+        """Create a new empty sequence and switch to it."""
+        self._create_and_activate_sequence("manual", display_label="Untitled Sequence")
         self.timeline.clear_timeline()
         self.timeline_preview.clear()
         self._current_algorithm = None
         self.set_chromatic_color_bar_enabled(False, emit_signal=False)
         self._update_chromatic_bar_controls(None)
         self._emit_chromatic_bar_setting_changed()
+        self._algorithm_running = False
         self._set_state(self.STATE_CARDS)
 
     def clear(self):
@@ -1749,8 +1754,66 @@ class SequenceTab(BaseTab):
 
     def _on_sequence_context_menu(self, pos):
         """Show context menu on sequence dropdown (Rename, Delete)."""
-        # Will be fully implemented in Units 5 and 6
-        pass
+        if not self._project or not self._project.sequences:
+            return
+
+        index = self.sequence_dropdown.currentIndex()
+        if index < 0 or index >= len(self._project.sequences):
+            return
+
+        seq = self._project.sequences[index]
+        menu = QMenu(self)
+
+        rename_action = menu.addAction(f"Rename \"{seq.name}\"...")
+        menu.addSeparator()
+        delete_action = menu.addAction(f"Delete \"{seq.name}\"")
+
+        action = menu.exec(self.sequence_dropdown.mapToGlobal(pos))
+
+        if action == rename_action:
+            self._on_rename_sequence(index)
+        elif action == delete_action:
+            self._on_delete_sequence(index)
+
+    def _on_delete_sequence(self, index: int):
+        """Delete a sequence by index. Confirm if populated (R7)."""
+        if not self._project or index < 0 or index >= len(self._project.sequences):
+            return
+
+        seq = self._project.sequences[index]
+        clip_count = len(seq.get_all_clips())
+
+        # Confirm for populated sequences (R7)
+        if clip_count > 0:
+            result = QMessageBox.question(
+                self,
+                "Delete Sequence",
+                f"Delete \"{seq.name}\"? This cannot be undone.\n({clip_count} clips)",
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if result != QMessageBox.Yes:
+                return
+
+        was_active = (index == self._project.active_sequence_index)
+        self._project.remove_sequence(index)
+        self._sync_sequence_dropdown()
+
+        # If deleted the active sequence, load the new active one
+        if was_active:
+            self._load_active_sequence()
+
+    def _on_rename_sequence(self, index: int):
+        """Rename a sequence via input dialog (R9)."""
+        if not self._project or index < 0 or index >= len(self._project.sequences):
+            return
+
+        seq = self._project.sequences[index]
+        new_name, ok = QInputDialog.getText(
+            self, "Rename Sequence", "Name:", text=seq.name
+        )
+        if ok and new_name.strip():
+            seq.name = new_name.strip()
+            self._sync_sequence_dropdown()
 
     def _is_chromatic_flow_algorithm(self, algorithm: Optional[str]) -> bool:
         """Whether the algorithm uses Chromatics (color-based sorting)."""
@@ -2347,11 +2410,13 @@ class SequenceTab(BaseTab):
     def clear_sequence(self) -> dict:
         """Clear the sequence (for agent tools).
 
+        Creates a new empty sequence (matching the "New Sequence" button).
+
         Returns:
             Dict with success status
         """
-        self._on_clear_clicked()
-        return {"success": True, "message": "Sequence cleared"}
+        self._on_new_sequence_clicked()
+        return {"success": True, "message": "New empty sequence created"}
 
     def apply_intention_workflow_result(
         self,
