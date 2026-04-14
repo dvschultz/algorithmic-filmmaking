@@ -145,11 +145,51 @@ class SequenceTab(BaseTab):
         self._set_state(self.STATE_CARDS)
 
     def _create_cards_view(self) -> QWidget:
-        """Create the cards view with empty-sequence guidance."""
+        """Create the cards view with sequence selector and algorithm grid."""
         container = QWidget()
         layout = QVBoxLayout(container)
-        layout.setContentsMargins(Spacing.XL, Spacing.XL, Spacing.XL, Spacing.XL)
-        layout.setSpacing(Spacing.MD)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # Sequence selector bar (always visible at top of cards view)
+        cards_header = QWidget()
+        cards_header.setStyleSheet(f"""
+            QWidget {{
+                background-color: {theme().background_secondary};
+                border-bottom: 1px solid {theme().border_primary};
+            }}
+        """)
+        cards_header_layout = QHBoxLayout(cards_header)
+        cards_header_layout.setContentsMargins(12, 8, 12, 8)
+
+        cards_seq_label = QLabel("Sequence:")
+        cards_seq_label.setStyleSheet(f"color: {theme().text_secondary}; border: none;")
+        cards_header_layout.addWidget(cards_seq_label)
+
+        self.cards_sequence_dropdown = QComboBox()
+        self.cards_sequence_dropdown.setMinimumWidth(UISizes.COMBO_BOX_MIN_WIDTH)
+        self.cards_sequence_dropdown.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
+        self.cards_sequence_dropdown.currentIndexChanged.connect(self._on_sequence_switched)
+        self.cards_sequence_dropdown.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.cards_sequence_dropdown.customContextMenuRequested.connect(
+            self._on_cards_sequence_context_menu
+        )
+        cards_header_layout.addWidget(self.cards_sequence_dropdown)
+
+        cards_header_layout.addStretch()
+
+        cards_new_btn = QPushButton("New Sequence")
+        cards_new_btn.setMinimumHeight(UISizes.BUTTON_MIN_HEIGHT)
+        cards_new_btn.clicked.connect(self._on_new_sequence_clicked)
+        cards_header_layout.addWidget(cards_new_btn)
+
+        layout.addWidget(cards_header)
+
+        # Card grid content area
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(Spacing.XL, Spacing.XL, Spacing.XL, Spacing.XL)
+        content_layout.setSpacing(Spacing.MD)
 
         self.cards_hint_label = QLabel(
             "Timeline is empty. Select clips in Analyze or Cut, or choose a sequencer below to build one."
@@ -158,16 +198,18 @@ class SequenceTab(BaseTab):
         self.cards_hint_label.setStyleSheet(
             f"color: {theme().text_muted}; font-size: {TypeScale.SM}px;"
         )
-        layout.addWidget(self.cards_hint_label)
+        content_layout.addWidget(self.cards_hint_label)
 
         self.card_grid = SortingCardGrid()
         self.card_grid.algorithm_selected.connect(self._on_card_clicked)
         self.card_grid.category_changed.connect(self._on_category_changed)
-        layout.addWidget(self.card_grid)
+        content_layout.addWidget(self.card_grid)
 
         # Restore persisted category (set_category does not emit, so no save loop)
         settings = load_settings()
         self.card_grid.set_category(settings.sequence_selected_category)
+
+        layout.addWidget(content)
 
         return container
 
@@ -1699,15 +1741,16 @@ class SequenceTab(BaseTab):
         return new_seq
 
     def _sync_sequence_dropdown(self):
-        """Rebuild dropdown items from project.sequences. Blocks signals."""
+        """Rebuild both dropdown widgets from project.sequences. Blocks signals."""
         if not self._project:
             return
-        self.sequence_dropdown.blockSignals(True)
-        self.sequence_dropdown.clear()
-        for seq in self._project.sequences:
-            self.sequence_dropdown.addItem(seq.name)
-        self.sequence_dropdown.setCurrentIndex(self._project.active_sequence_index)
-        self.sequence_dropdown.blockSignals(False)
+        for dropdown in (self.sequence_dropdown, self.cards_sequence_dropdown):
+            dropdown.blockSignals(True)
+            dropdown.clear()
+            for seq in self._project.sequences:
+                dropdown.addItem(seq.name)
+            dropdown.setCurrentIndex(self._project.active_sequence_index)
+            dropdown.blockSignals(False)
 
     def _on_sequence_switched(self, new_index: int):
         """Handle user selecting a different sequence in the dropdown."""
@@ -1782,12 +1825,20 @@ class SequenceTab(BaseTab):
         if not self._algorithm_running:
             self._sequence_dirty = True
 
+    def _on_cards_sequence_context_menu(self, pos):
+        """Context menu for the cards-view sequence dropdown."""
+        self._show_sequence_context_menu(self.cards_sequence_dropdown, pos)
+
     def _on_sequence_context_menu(self, pos):
-        """Show context menu on sequence dropdown (Rename, Delete)."""
+        """Context menu for the timeline-view sequence dropdown."""
+        self._show_sequence_context_menu(self.sequence_dropdown, pos)
+
+    def _show_sequence_context_menu(self, dropdown: QComboBox, pos):
+        """Show context menu on a sequence dropdown (Rename, Delete)."""
         if not self._project or not self._project.sequences:
             return
 
-        index = self.sequence_dropdown.currentIndex()
+        index = dropdown.currentIndex()
         if index < 0 or index >= len(self._project.sequences):
             return
 
@@ -1798,7 +1849,7 @@ class SequenceTab(BaseTab):
         menu.addSeparator()
         delete_action = menu.addAction(f"Delete \"{seq.name}\"")
 
-        action = menu.exec(self.sequence_dropdown.mapToGlobal(pos))
+        action = menu.exec(dropdown.mapToGlobal(pos))
 
         if action == rename_action:
             self._on_rename_sequence(index)
