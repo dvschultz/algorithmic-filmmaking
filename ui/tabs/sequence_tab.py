@@ -1543,16 +1543,17 @@ class SequenceTab(BaseTab):
             return
 
         # R3a: Prompt user — replace current sequence or create new?
-        result = QMessageBox.question(
-            self,
-            "Re-run Algorithm",
-            "Replace the current sequence or create a new one?",
-            QMessageBox.StandardButton(
-                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel
-            ),
-        )
-        # Yes = Replace, No = Create New, Cancel = abort
-        if result == QMessageBox.Cancel:
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Re-run Algorithm")
+        msg.setText("Replace the current sequence or create a new one?")
+        replace_btn = msg.addButton("Replace", QMessageBox.YesRole)
+        create_btn = msg.addButton("Create New", QMessageBox.NoRole)
+        cancel_btn = msg.addButton("Cancel", QMessageBox.RejectRole)
+        msg.setDefaultButton(create_btn)
+        msg.exec()
+
+        clicked = msg.clickedButton()
+        if clicked == cancel_btn:
             return
 
         # Gather clips from timeline
@@ -1569,19 +1570,14 @@ class SequenceTab(BaseTab):
         if not clips:
             return
 
-        if result == QMessageBox.Yes:
-            # Replace: run in-place (no new sequence created — _apply_algorithm
-            # will call _on_sequence_ready which creates a new sequence anyway,
-            # but we want to overwrite the current one, so we remove it first)
-            direction = self._get_current_direction()
-            # Remove current sequence from the list so the algo run creates fresh at same position
-            # This is simpler than bypassing _create_and_activate_sequence
+        direction = self._get_current_direction()
+        if clicked == replace_btn:
+            # Replace: remove current sequence, then run algorithm (which creates a new one)
             if self._project and len(self._project.sequences) > 1:
                 self._project.remove_sequence(self._project.active_sequence_index)
             self._apply_algorithm(algorithm, clips, direction=direction)
         else:
             # Create New: just run the algorithm (it auto-creates a new sequence)
-            direction = self._get_current_direction()
             self._apply_algorithm(algorithm, clips, direction=direction)
 
     @Slot()
