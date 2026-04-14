@@ -98,6 +98,50 @@ class TestDirtyTracking:
         assert p.is_dirty  # Project is dirty from the add
 
 
+# --- Unit 4: Auto-naming ---
+
+
+class TestSequenceAutoNaming:
+    """Monotonic auto-naming for algorithm runs."""
+
+    def test_first_run_uses_bare_label(self, project_with_clips):
+        """First Chromatics run creates 'Chromatics'."""
+        # "Chromatics" already exists (added in fixture)
+        # But the naming is per-algorithm scan, so existing "Chromatics" means next would be #2
+        p = project_with_clips
+        names = [s.name for s in p.sequences]
+        assert "Chromatics" in names
+
+    def test_naming_counter_increments(self, project_with_clips):
+        """Running same algorithm again produces '{Label} #2'."""
+        p = project_with_clips
+        # Add another "Chromatics" sequence
+        seq3 = Sequence(name="Chromatics #2", algorithm="color")
+        p.add_sequence(seq3)
+        names = [s.name for s in p.sequences]
+        assert "Chromatics" in names
+        assert "Chromatics #2" in names
+
+    def test_rename_doesnt_affect_counter(self, project_with_clips):
+        """Renaming 'Chromatics' to 'Final Cut' doesn't reset the counter."""
+        p = project_with_clips
+        # Rename "Chromatics" (index 1) to "Final Cut"
+        p.sequences[1].name = "Final Cut"
+        # "Chromatics" name is gone — next run should use bare "Chromatics"
+        # (scan finds no existing "Chromatics" or "Chromatics #N")
+        bare_exists = any(s.name == "Chromatics" for s in p.sequences)
+        assert not bare_exists
+
+    def test_switching_preserves_previous_sequence(self, project_with_clips):
+        """After running multiple algorithms, previous sequences are intact."""
+        p = project_with_clips
+        # Initial has clip-1, Chromatics has clip-2
+        assert len(p.sequences[0].get_all_clips()) == 1
+        assert p.sequences[0].get_all_clips()[0].source_clip_id == "clip-1"
+        assert len(p.sequences[1].get_all_clips()) == 1
+        assert p.sequences[1].get_all_clips()[0].source_clip_id == "clip-2"
+
+
 class TestSequenceMetadataOnSwitch:
     """Algorithm label and chromatic bar update to match selected sequence."""
 

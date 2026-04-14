@@ -770,7 +770,8 @@ class SequenceTab(BaseTab):
         algo_lower = algorithm.lower()
 
         try:
-            # Clear and populate timeline
+            # Create a new sequence for this algorithm run
+            self._create_and_activate_sequence(algo_lower)
             self.timeline.clear_timeline()
 
             current_frame = 0
@@ -815,6 +816,7 @@ class SequenceTab(BaseTab):
             QMessageBox.critical(self, "Error", f"Failed to generate sequence: {e}")
 
         finally:
+            self._algorithm_running = False
             self._apply_in_progress = False
             self._sequence_worker = None
 
@@ -871,6 +873,8 @@ class SequenceTab(BaseTab):
             return
 
         try:
+            # Create a new sequence for this dialog algorithm
+            self._create_and_activate_sequence(algorithm_key)
             self.timeline.clear_timeline()
 
             first_clip, first_source = sequence_clips[0]
@@ -912,6 +916,9 @@ class SequenceTab(BaseTab):
         except Exception as e:
             logger.error(f"Error applying {display_label} sequence: {e}")
             QMessageBox.critical(self, "Error", f"Failed to apply sequence: {e}")
+
+        finally:
+            self._algorithm_running = False
 
     @Slot(list)
     def _apply_exquisite_corpus_sequence(self, sequence_clips: list):
@@ -1154,6 +1161,7 @@ class SequenceTab(BaseTab):
         try:
             from models.sequence import SequenceClip
 
+            self._create_and_activate_sequence("signature_style")
             self.timeline.clear_timeline()
 
             first_clip, first_source, _, _ = sequence_data[0]
@@ -1205,6 +1213,9 @@ class SequenceTab(BaseTab):
             logger.error(f"Error applying Signature Style sequence: {e}")
             QMessageBox.critical(self, "Error", f"Failed to apply sequence: {e}")
 
+        finally:
+            self._algorithm_running = False
+
     def _show_rose_hobart_dialog(self, clips: list):
         """Show the Rose Hobart dialog for face-filter sequencing.
 
@@ -1255,6 +1266,7 @@ class SequenceTab(BaseTab):
             return
 
         try:
+            self._create_and_activate_sequence("staccato")
             self.timeline.clear_timeline()
 
             first_clip, first_source = sequence_clips[0][0], sequence_clips[0][1]
@@ -1325,6 +1337,9 @@ class SequenceTab(BaseTab):
             logger.error(f"Failed to apply Staccato sequence: {e}")
             QMessageBox.critical(self, "Error", f"Failed to apply sequence:\n{e}")
 
+        finally:
+            self._algorithm_running = False
+
     def _show_eyes_without_a_face_dialog(self, clips: list):
         """Show the Eyes Without a Face dialog for gaze-based sequencing.
 
@@ -1367,6 +1382,7 @@ class SequenceTab(BaseTab):
             return
 
         try:
+            self._create_and_activate_sequence("shuffle")
             self.timeline.clear_timeline()
 
             first_clip, first_source, _ = sequence_data[0]
@@ -1416,6 +1432,9 @@ class SequenceTab(BaseTab):
         except Exception as e:
             logger.error(f"Error applying Dice Roll sequence: {e}")
             QMessageBox.critical(self, "Error", f"Failed to apply sequence: {e}")
+
+        finally:
+            self._algorithm_running = False
 
     # Direction options per algorithm: list of (display_label, internal_key).
     # First entry is the default. Algorithms not listed have no direction.
@@ -1573,6 +1592,76 @@ class SequenceTab(BaseTab):
         self._project = project
         self._sequence_dirty = False
         self._sync_sequence_dropdown()
+
+    def _generate_sequence_name(self, algorithm_key: str) -> str:
+        """Generate a monotonic auto-name for a new sequence.
+
+        First run of an algorithm uses the display label alone (e.g., "Chromatics").
+        Subsequent runs use "{Label} #{N}" where N is max_existing + 1.
+        """
+        display_label = get_algorithm_label(algorithm_key)
+        if not self._project:
+            return display_label
+
+        # Scan existing names for the highest N matching "{Label} #{N}"
+        max_n = 0
+        bare_exists = False
+        for seq in self._project.sequences:
+            if seq.name == display_label:
+                bare_exists = True
+            elif seq.name.startswith(f"{display_label} #"):
+                try:
+                    n = int(seq.name[len(display_label) + 2:])
+                    max_n = max(max_n, n)
+                except ValueError:
+                    pass
+
+        if not bare_exists and max_n == 0:
+            return display_label
+        return f"{display_label} #{max(max_n + 1, 2)}"
+
+    def _create_and_activate_sequence(
+        self, algorithm_key: str, display_label: Optional[str] = None
+    ) -> "Sequence":
+        """Create a new sequence, append it to the project, activate it, and update the dropdown.
+
+        This is the shared entry point for all apply handlers. After this call,
+        the timeline is cleared and ready for the handler to populate with clips.
+
+        Args:
+            algorithm_key: Internal algorithm key (e.g., "color", "storyteller")
+            display_label: Optional custom name. If None, auto-generated.
+
+        Returns:
+            The new Sequence (already set as active on the project).
+        """
+        from models.sequence import Sequence as SeqModel
+
+        if not self._project:
+            return SeqModel()
+
+        # Persist the departing sequence (no dirty prompt — callers handle that)
+        self._persist_current_sequence()
+
+        # Generate name
+        if display_label is None:
+            name = self._generate_sequence_name(algorithm_key)
+        else:
+            name = display_label
+
+        # Create and add
+        new_seq = SeqModel(name=name, algorithm=algorithm_key)
+        self._project.add_sequence(new_seq)
+        self._project.set_active_sequence(len(self._project.sequences) - 1)
+
+        # Update dropdown
+        self._sync_sequence_dropdown()
+
+        # Set guard flag so timeline changes don't trigger dirty
+        self._algorithm_running = True
+        self._sequence_dirty = False
+
+        return new_seq
 
     def _sync_sequence_dropdown(self):
         """Rebuild dropdown items from project.sequences. Blocks signals."""
@@ -2048,7 +2137,8 @@ class SequenceTab(BaseTab):
                 no_color_handling=no_color_handling,
             )
 
-            # Clear and apply to timeline
+            # Create new sequence and apply to timeline
+            self._create_and_activate_sequence(algorithm.lower())
             self.timeline.clear_timeline()
 
             current_frame = 0
@@ -2135,6 +2225,9 @@ class SequenceTab(BaseTab):
             logger.error(f"Error in generate_and_apply: {e}")
             return {"success": False, "error": str(e)}
 
+        finally:
+            self._algorithm_running = False
+
     def generate_reference_guided(
         self,
         reference_source_id: str,
@@ -2191,7 +2284,8 @@ class SequenceTab(BaseTab):
                     "error": "No clips could be matched. Try different weights or enable allow_repeats."
                 }
 
-            # Apply to timeline
+            # Create new sequence and apply to timeline
+            self._create_and_activate_sequence("reference_guided")
             self.timeline.clear_timeline()
 
             first_clip, first_source = matched[0]
@@ -2247,6 +2341,9 @@ class SequenceTab(BaseTab):
             logger.error(f"Error in generate_reference_guided: {e}")
             return {"success": False, "error": str(e)}
 
+        finally:
+            self._algorithm_running = False
+
     def clear_sequence(self) -> dict:
         """Clear the sequence (for agent tools).
 
@@ -2297,7 +2394,8 @@ class SequenceTab(BaseTab):
                 seed=seed,
             )
 
-            # Clear and populate timeline
+            # Create new sequence and populate timeline
+            self._create_and_activate_sequence(algorithm.lower())
             self.timeline.clear_timeline()
 
             # Set FPS from first source
@@ -2351,6 +2449,9 @@ class SequenceTab(BaseTab):
         except Exception as e:
             logger.error(f"Error applying intention workflow result: {e}")
             return {"success": False, "error": str(e)}
+
+        finally:
+            self._algorithm_running = False
 
     def on_tab_activated(self):
         """Called when this tab becomes visible."""
