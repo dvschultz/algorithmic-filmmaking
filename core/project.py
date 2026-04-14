@@ -19,7 +19,7 @@ from models.sequence import Sequence
 logger = logging.getLogger(__name__)
 
 # Current project file schema version
-SCHEMA_VERSION = "1.3"
+SCHEMA_VERSION = "1.4"
 
 
 class ProjectError(Exception):
@@ -75,7 +75,9 @@ class ProjectMetadata:
 
 
 def _prepare_prerendered_clips(
-    sequence: Sequence, base_path: Path
+    sequence: Sequence,
+    base_path: Path,
+    additional_sequences: Optional[list[Sequence]] = None,
 ) -> dict[str, str]:
     """Copy/link pre-rendered clip files into the project's transformed_clips/ folder.
 
@@ -88,13 +90,26 @@ def _prepare_prerendered_clips(
 
     If a destination filename already exists with different content, a numeric
     suffix is appended to avoid silent overwrites (e.g. ``name_2.mp4``).
+
+    Args:
+        sequence: The primary sequence (typically the active one).
+        base_path: Project directory for relative path resolution.
+        additional_sequences: Extra sequences to include in the prerender map.
     """
     dest_dir = base_path / "transformed_clips"
     mapping: dict[str, str] = {}  # original_path -> project_local_path
 
-    for clip in sequence.get_all_clips():
+    # Collect clips from all sequences
+    all_clips = list(sequence.get_all_clips())
+    if additional_sequences:
+        for seq in additional_sequences:
+            all_clips.extend(seq.get_all_clips())
+
+    for clip in all_clips:
         if not clip.prerendered_path:
             continue
+        if clip.prerendered_path in mapping:
+            continue  # Already processed (shared across sequences)
         src = Path(clip.prerendered_path)
         if not src.exists():
             continue
@@ -158,6 +173,7 @@ def save_project(
     metadata: Optional[ProjectMetadata] = None,
     progress_callback: Optional[Callable[[float, str], None]] = None,
     frames: Optional[list[Frame]] = None,
+    extra_data: Optional[dict] = None,
 ) -> bool:
     """Save project to JSON file with relative paths.
 
@@ -170,6 +186,8 @@ def save_project(
         metadata: Optional ProjectMetadata (created if not provided)
         progress_callback: Optional callback(progress, message)
         frames: Optional list of Frame objects
+        extra_data: Optional dict merged into project_data (used by Project.save()
+            to write multi-sequence data). Existing callers don't need to pass this.
 
     Returns:
         True if save succeeded, False otherwise
@@ -210,7 +228,12 @@ def save_project(
 
     prerender_map: dict[str, str] = {}
     if sequence:
-        prerender_map = _prepare_prerendered_clips(sequence, base_path)
+        # When called from Project.save(), extra_data may contain Sequence objects
+        # for non-active sequences that also need prerendered clips processed.
+        additional_seqs = extra_data.get("_additional_sequences") if extra_data else None
+        prerender_map = _prepare_prerendered_clips(
+            sequence, base_path, additional_sequences=additional_seqs
+        )
 
     # Serialize sequence — temporarily swap prerendered paths to project-local
     # copies so that to_dict() writes the correct relative paths, then restore
@@ -244,6 +267,29 @@ def save_project(
     # Add UI state
     if ui_state:
         project_data["ui_state"] = ui_state
+
+    # Multi-sequence persistence
+    if extra_data:
+        # Project.save() provides the full sequences list + active index.
+        # Strip internal-only keys before merging into the JSON output.
+        write_data = {k: v for k, v in extra_data.items() if not k.startswith("_")}
+        project_data.update(write_data)
+    elif filepath.exists():
+        # MCP/CLI path: caller didn't pass extra_data but the file already has
+        # a "sequences" key. Read-modify-write: replace only the active entry
+        # so non-active sequences are preserved.
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+            if isinstance(existing.get("sequences"), list):
+                active_idx = existing.get("active_sequence_index", 0)
+                seq_list = existing["sequences"]
+                if 0 <= active_idx < len(seq_list):
+                    seq_list[active_idx] = project_data.get("sequence")
+                    project_data["sequences"] = seq_list
+                    project_data["active_sequence_index"] = active_idx
+        except (json.JSONDecodeError, OSError, IOError):
+            pass  # Can't read existing file — just write what we have
 
     # Write to file atomically (write temp, then rename)
     if progress_callback:
@@ -319,6 +365,16 @@ def _validate_project_structure(data: dict) -> list[str]:
         seq = data["sequence"]
         if seq is not None and not isinstance(seq, dict):
             errors.append("Field 'sequence' must be an object or null")
+
+    # Sequences (v1.4+) must be a list of dicts if present
+    if "sequences" in data:
+        seqs = data["sequences"]
+        if not isinstance(seqs, list):
+            errors.append("Field 'sequences' must be a list")
+        else:
+            for i, seq in enumerate(seqs):
+                if not isinstance(seq, (dict, type(None))):
+                    errors.append(f"sequences[{i}] must be an object or null")
 
     # Validate source entries have required fields
     for i, source in enumerate(data.get("sources", [])):
@@ -459,11 +515,18 @@ def load_project(
     if progress_callback:
         progress_callback(0.7, "Loading sequence...")
 
-    # Load sequence
+    # Load sequence (use "sequences" key if present for v1.4+, else "sequence")
     sequence = None
-    if data.get("sequence"):
+    if isinstance(data.get("sequences"), list) and data["sequences"]:
+        active_idx = data.get("active_sequence_index", 0)
+        active_idx = min(active_idx, len(data["sequences"]) - 1)
+        seq_data = data["sequences"][active_idx]
+        if seq_data:
+            sequence = Sequence.from_dict(seq_data, base_path=base_path)
+    elif data.get("sequence"):
         sequence = Sequence.from_dict(data["sequence"], base_path=base_path)
 
+    if sequence:
         # Validate SequenceClip references - remove clips that reference missing sources/clips
         valid_clip_ids = {clip.id for clip in clips}
         valid_source_ids = set(sources_by_id.keys())
@@ -1178,6 +1241,24 @@ class Project:
         if save_path is None:
             raise ValueError("No path specified for save")
 
+        # Build serialized sequences list for extra_data
+        base_path = save_path.parent
+        sequences_data = [
+            s.to_dict(base_path=base_path) if s else None
+            for s in self.sequences
+        ]
+        # Pass non-active sequences so prerendered clips from all sequences
+        # get copied into the project folder
+        non_active = [
+            s for i, s in enumerate(self.sequences)
+            if i != self.active_sequence_index and s
+        ]
+        extra_data = {
+            "sequences": sequences_data,
+            "active_sequence_index": self.active_sequence_index,
+            "_additional_sequences": non_active,  # consumed by _prepare_prerendered_clips
+        }
+
         success = save_project(
             filepath=save_path,
             sources=self._sources,
@@ -1187,6 +1268,7 @@ class Project:
             metadata=self.metadata,
             progress_callback=progress_callback,
             frames=self._frames,
+            extra_data=extra_data,
         )
 
         if success:
@@ -1217,21 +1299,55 @@ class Project:
             ProjectLoadError: If the project file cannot be loaded
             MissingSourceError: If a source video is missing
         """
+        # First, read the raw JSON to extract multi-sequence data (if present)
+        # before load_project() processes it into the standard 6-tuple.
+        sequences_list = None
+        active_idx = 0
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                raw_data = json.load(f)
+            if isinstance(raw_data.get("sequences"), list) and raw_data["sequences"]:
+                base_path = path.parent
+                active_idx = raw_data.get("active_sequence_index", 0)
+                active_idx = min(active_idx, len(raw_data["sequences"]) - 1)
+                sequences_list = []
+                for seq_data in raw_data["sequences"]:
+                    if seq_data:
+                        sequences_list.append(
+                            Sequence.from_dict(seq_data, base_path=base_path)
+                        )
+                    else:
+                        sequences_list.append(Sequence())
+        except (json.JSONDecodeError, OSError, IOError):
+            pass  # Will be handled by load_project() below
+
         sources, clips, sequence, metadata, ui_state, frames = load_project(
             filepath=path,
             missing_source_callback=missing_source_callback,
             progress_callback=progress_callback,
         )
 
-        project = cls(
-            path=path,
-            metadata=metadata,
-            sources=sources,
-            clips=clips,
-            sequence=sequence,
-            ui_state=ui_state,
-            frames=frames,
-        )
+        if sequences_list:
+            project = cls(
+                path=path,
+                metadata=metadata,
+                sources=sources,
+                clips=clips,
+                sequences=sequences_list,
+                active_sequence_index=active_idx,
+                ui_state=ui_state,
+                frames=frames,
+            )
+        else:
+            project = cls(
+                path=path,
+                metadata=metadata,
+                sources=sources,
+                clips=clips,
+                sequence=sequence,
+                ui_state=ui_state,
+                frames=frames,
+            )
         project._dirty = False
         return project
 
