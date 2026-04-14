@@ -1097,8 +1097,9 @@ class MainWindow(QMainWindow):
         # Set up Frames tab project reference
         self.frames_tab.set_project(self.project)
 
-        # Set up Sequence tab GUI state reference
+        # Set up Sequence tab GUI state and project references
         self.sequence_tab.set_gui_state(self._gui_state)
+        self.sequence_tab.set_project(self.project)
 
         layout.addWidget(self.tab_widget)
 
@@ -8926,8 +8927,8 @@ class MainWindow(QMainWindow):
         """Save project to the specified file."""
         self.status_bar.showMessage("Saving project...")
 
-        # Get sequence from timeline and update project
-        self.project.sequence = self.sequence_tab.timeline.get_sequence()
+        # Persist current timeline state to the project's active sequence
+        self.sequence_tab._persist_current_sequence()
 
         # Get UI state and update project
         self.project.ui_state = {
@@ -9040,7 +9041,8 @@ class MainWindow(QMainWindow):
             if clip.transcript:
                 self.cut_tab.update_clip_transcript(clip.id, clip.transcript)
 
-        # Restore sequence UI and timeline state
+        # Set project reference on sequence tab and restore timeline state
+        self.sequence_tab.set_project(self.project)
         self._refresh_timeline_from_project()
 
         # Restore UI state
@@ -9099,6 +9101,7 @@ class MainWindow(QMainWindow):
         self.analyze_tab.clear_clips()
         self.frames_tab.frame_browser.clear()
         self.sequence_tab.clear()  # Clear all state including _clips and _available_clips
+        self.sequence_tab.set_project(self.project)  # Re-sync dropdown after clear
         self.render_tab.clear()  # Clear render tab state
 
         # Clear progress bar
@@ -9200,7 +9203,8 @@ class MainWindow(QMainWindow):
                 if clip.transcript:
                     self.cut_tab.update_clip_transcript(clip.id, clip.transcript)
 
-        # Restore sequence UI and timeline state
+        # Set project reference on sequence tab and restore timeline state
+        self.sequence_tab.set_project(self.project)
         self._refresh_timeline_from_project()
 
         # Restore UI state

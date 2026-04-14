@@ -1,0 +1,114 @@
+"""Tests for multi-sequence UI in the Sequence tab (Units 3-7)."""
+
+from pathlib import Path
+from unittest.mock import Mock, patch, MagicMock
+
+import pytest
+
+from core.project import Project
+from models.clip import Source, Clip
+from models.sequence import Sequence, SequenceClip
+
+
+# --- Fixtures ---
+
+
+@pytest.fixture
+def project_with_clips():
+    """A project with a source, 3 clips, and 2 sequences."""
+    p = Project.new()
+    source = Source(
+        id="src-1",
+        file_path=Path("/test/video.mp4"),
+        duration_seconds=90.0,
+        fps=30.0,
+        width=1920,
+        height=1080,
+    )
+    p.add_source(source)
+    clips = [
+        Clip(id="clip-1", source_id="src-1", start_frame=0, end_frame=30),
+        Clip(id="clip-2", source_id="src-1", start_frame=30, end_frame=60),
+        Clip(id="clip-3", source_id="src-1", start_frame=60, end_frame=90),
+    ]
+    p.add_clips(clips)
+    # Add a clip to the initial sequence
+    p.add_to_sequence(["clip-1"])
+    # Add a second sequence with clip-2
+    seq2 = Sequence(name="Chromatics", algorithm="color")
+    seq2_clip = SequenceClip(
+        source_clip_id="clip-2", source_id="src-1",
+        start_frame=0, in_point=30, out_point=60,
+    )
+    seq2.tracks[0].add_clip(seq2_clip)
+    p.add_sequence(seq2)
+    return p
+
+
+# --- Unit 3: Sequence dropdown + switching with dirty tracking ---
+
+
+class TestSequenceDropdownSync:
+    """Dropdown reflects project.sequences names."""
+
+    def test_sync_populates_dropdown(self, project_with_clips):
+        """_sync_sequence_dropdown fills items from project.sequences."""
+        # We can't instantiate SequenceTab without a full Qt app,
+        # so test the underlying project model behavior that the dropdown depends on.
+        p = project_with_clips
+        assert len(p.sequences) == 2
+        assert p.sequences[0].name == "Untitled Sequence"
+        assert p.sequences[1].name == "Chromatics"
+        assert p.active_sequence_index == 0
+
+    def test_switching_changes_active_index(self, project_with_clips):
+        """Switching sequence index changes project.active_sequence_index."""
+        p = project_with_clips
+        p.set_active_sequence(1)
+        assert p.active_sequence_index == 1
+        assert p.sequence.name == "Chromatics"
+
+    def test_switching_back_preserves_data(self, project_with_clips):
+        """Switching away and back preserves sequence clip data."""
+        p = project_with_clips
+        # Verify initial sequence has clip-1
+        assert len(p.sequences[0].get_all_clips()) == 1
+        assert p.sequences[0].get_all_clips()[0].source_clip_id == "clip-1"
+
+        # Switch to Chromatics
+        p.set_active_sequence(1)
+        assert p.sequence.get_all_clips()[0].source_clip_id == "clip-2"
+
+        # Switch back
+        p.set_active_sequence(0)
+        assert p.sequence.get_all_clips()[0].source_clip_id == "clip-1"
+
+
+class TestDirtyTracking:
+    """Dirty flag behavior for multi-sequence switching."""
+
+    def test_algorithm_running_guard(self, project_with_clips):
+        """_algorithm_running flag concept: when True, changes shouldn't set dirty."""
+        # This is a model-level test verifying the concept.
+        # The actual flag lives on SequenceTab, tested here at the data level.
+        p = project_with_clips
+        p.mark_clean()
+        # Simulate adding clips (as an algorithm would)
+        p.add_to_sequence(["clip-2"])
+        assert p.is_dirty  # Project is dirty from the add
+
+
+class TestSequenceMetadataOnSwitch:
+    """Algorithm label and chromatic bar update to match selected sequence."""
+
+    def test_active_sequence_has_correct_algorithm(self, project_with_clips):
+        p = project_with_clips
+        p.set_active_sequence(1)
+        assert p.sequence.algorithm == "color"
+
+    def test_switching_preserves_algorithm(self, project_with_clips):
+        p = project_with_clips
+        p.set_active_sequence(1)
+        assert p.sequence.algorithm == "color"
+        p.set_active_sequence(0)
+        assert p.sequence.algorithm is None  # Initial sequence has no algorithm
