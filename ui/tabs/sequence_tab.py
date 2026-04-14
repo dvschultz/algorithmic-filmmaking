@@ -1536,17 +1536,29 @@ class SequenceTab(BaseTab):
         self.timeline.sequence_changed.emit()
 
     def _regenerate_sequence(self, algorithm: str):
-        """Regenerate the sequence with current timeline clips."""
+        """Regenerate the sequence with current timeline clips (R3a prompt)."""
         # Use clips currently on timeline
         sequence = self.timeline.get_sequence()
         if not sequence.tracks or not sequence.tracks[0].clips:
+            return
+
+        # R3a: Prompt user — replace current sequence or create new?
+        result = QMessageBox.question(
+            self,
+            "Re-run Algorithm",
+            "Replace the current sequence or create a new one?",
+            QMessageBox.StandardButton(
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel
+            ),
+        )
+        # Yes = Replace, No = Create New, Cancel = abort
+        if result == QMessageBox.Cancel:
             return
 
         # Gather clips from timeline
         clips = []
         for seq_clip in sequence.tracks[0].clips:
             source_clip_id = seq_clip.source_clip_id
-            source_id = seq_clip.source_id
 
             # Look up in available clips
             for clip, source in self._available_clips:
@@ -1554,7 +1566,21 @@ class SequenceTab(BaseTab):
                     clips.append((clip, source))
                     break
 
-        if clips:
+        if not clips:
+            return
+
+        if result == QMessageBox.Yes:
+            # Replace: run in-place (no new sequence created — _apply_algorithm
+            # will call _on_sequence_ready which creates a new sequence anyway,
+            # but we want to overwrite the current one, so we remove it first)
+            direction = self._get_current_direction()
+            # Remove current sequence from the list so the algo run creates fresh at same position
+            # This is simpler than bypassing _create_and_activate_sequence
+            if self._project and len(self._project.sequences) > 1:
+                self._project.remove_sequence(self._project.active_sequence_index)
+            self._apply_algorithm(algorithm, clips, direction=direction)
+        else:
+            # Create New: just run the algorithm (it auto-creates a new sequence)
             direction = self._get_current_direction()
             self._apply_algorithm(algorithm, clips, direction=direction)
 

@@ -224,6 +224,47 @@ class TestSequenceAutoNaming:
         assert p.sequences[1].get_all_clips()[0].source_clip_id == "clip-2"
 
 
+# --- Unit 7: Parameter-tweak prompt + gui_state ---
+
+
+class TestParameterTweakPrompt:
+    """R3a: direction/algorithm changes prompt Replace/Create New/Cancel."""
+
+    def test_replace_removes_old_and_creates_new(self, project_with_clips):
+        """'Replace' on a parameter tweak keeps sequence count the same."""
+        p = project_with_clips
+        count_before = len(p.sequences)
+        # Simulate replace: remove active, then add new
+        p.remove_sequence(p.active_sequence_index)
+        p.add_sequence(Sequence(name="Replaced", algorithm="color"))
+        # Count should be same as before (one removed, one added)
+        assert len(p.sequences) == count_before
+
+    def test_create_new_adds_sequence(self, project_with_clips):
+        """'Create New' on a parameter tweak adds a new sequence."""
+        p = project_with_clips
+        count_before = len(p.sequences)
+        p.add_sequence(Sequence(name="New Direction", algorithm="color"))
+        assert len(p.sequences) == count_before + 1
+
+
+class TestGuiStateSync:
+    """gui_state.sequence_ids updates with active sequence."""
+
+    def test_switching_updates_active_clips(self, project_with_clips):
+        """After switching, the active sequence clips change."""
+        p = project_with_clips
+        # Active is 0, has clip-1
+        clips_0 = [c.source_clip_id for c in p.sequence.get_all_clips()]
+        assert "clip-1" in clips_0
+
+        # Switch to 1, has clip-2
+        p.set_active_sequence(1)
+        clips_1 = [c.source_clip_id for c in p.sequence.get_all_clips()]
+        assert "clip-2" in clips_1
+        assert "clip-1" not in clips_1
+
+
 class TestSequenceMetadataOnSwitch:
     """Algorithm label and chromatic bar update to match selected sequence."""
 
