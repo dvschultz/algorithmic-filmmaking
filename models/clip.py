@@ -69,9 +69,20 @@ class Source:
     fps: float = 30.0
     width: int = 0
     height: int = 0
-    analyzed: bool = False  # Has this source been analyzed for scenes?
+    cut: bool = False  # Has this source had scenes detected?
+    has_analysis: bool = False  # Has any analysis been run on this source's clips?
     thumbnail_path: Optional[Path] = None  # Thumbnail for library grid
     color_profile: Optional[str] = None  # "grayscale", "sepia", "mixed", "color"
+
+    @property
+    def analyzed(self) -> bool:
+        """Backward-compatible property: True if source has been cut."""
+        return self.cut
+
+    @analyzed.setter
+    def analyzed(self, value: bool) -> None:
+        """Backward-compatible setter: maps to cut."""
+        self.cut = value
 
     @property
     def filename(self) -> str:
@@ -104,7 +115,8 @@ class Source:
             "fps": self.fps,
             "width": self.width,
             "height": self.height,
-            "analyzed": self.analyzed,
+            "cut": self.cut,
+            "has_analysis": self.has_analysis,
         }
         if self.color_profile is not None:
             data["color_profile"] = self.color_profile
@@ -159,7 +171,8 @@ class Source:
             fps=data.get("fps", 30.0),
             width=data.get("width", 0),
             height=data.get("height", 0),
-            analyzed=data.get("analyzed", False),
+            cut=data.get("cut", data.get("analyzed", False)),  # backward compat: old "analyzed" → cut
+            has_analysis=data.get("has_analysis", False),
             thumbnail_path=None,  # Regenerate on load
             color_profile=data.get("color_profile"),
         )

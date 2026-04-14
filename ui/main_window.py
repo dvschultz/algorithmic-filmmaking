@@ -3786,6 +3786,17 @@ class MainWindow(QMainWindow):
                 f"Analysis complete - {clip_count} clips ({', '.join(completed)})"
             )
 
+        # Mark affected sources as having analysis data
+        analyzed_source_ids = set()
+        for clip in clips:
+            if clip.source_id:
+                analyzed_source_ids.add(clip.source_id)
+        for source_id in analyzed_source_ids:
+            source = self.project.sources_by_id.get(source_id)
+            if source:
+                source.has_analysis = True
+            self.collect_tab.update_source_has_analysis(source_id, True)
+
         # Save project
         if self.project.path:
             self.project.save()

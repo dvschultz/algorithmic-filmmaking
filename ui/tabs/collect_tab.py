@@ -173,8 +173,17 @@ class CollectTab(BaseTab):
         self.source_browser.update_source_thumbnail(source_id, thumb_path)
 
     def update_source_analyzed(self, source_id: str, analyzed: bool = True):
-        """Mark a source as analyzed."""
-        self.source_browser.update_source_analyzed(source_id, analyzed)
+        """Backward-compat: mark a source as cut."""
+        self.update_source_cut(source_id, analyzed)
+
+    def update_source_cut(self, source_id: str, cut: bool = True):
+        """Mark a source as cut (scenes detected)."""
+        self.source_browser.update_source_cut(source_id, cut)
+        self._update_ui_state()
+
+    def update_source_has_analysis(self, source_id: str, has_analysis: bool = True):
+        """Mark a source as having analysis data."""
+        self.source_browser.update_source_has_analysis(source_id, has_analysis)
         self._update_ui_state()
 
     def set_downloading(self, is_downloading: bool):

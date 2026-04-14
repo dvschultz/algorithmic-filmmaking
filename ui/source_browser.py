@@ -280,8 +280,8 @@ class SourceBrowser(QWidget):
         return list(self._sources_by_id.values())
 
     def get_unanalyzed_sources(self) -> list[Source]:
-        """Get all sources that haven't been analyzed."""
-        return [s for s in self._sources_by_id.values() if not s.analyzed]
+        """Get all sources that haven't been cut (scene detected)."""
+        return [s for s in self._sources_by_id.values() if not s.cut]
 
     def update_source_thumbnail(self, source_id: str, thumb_path: Path):
         """Update the thumbnail for a specific source."""
@@ -291,13 +291,27 @@ class SourceBrowser(QWidget):
                 break
 
     def update_source_analyzed(self, source_id: str, analyzed: bool = True):
-        """Update the analyzed status for a specific source."""
+        """Backward-compat: mark source as cut."""
+        self.update_source_cut(source_id, analyzed)
+
+    def update_source_cut(self, source_id: str, cut: bool = True):
+        """Update the cut (scene detected) status for a specific source."""
         source = self._sources_by_id.get(source_id)
         if source:
-            source.analyzed = analyzed
+            source.cut = cut
         for thumb in self.thumbnails:
             if thumb.source.id == source_id:
-                thumb.set_analyzed(analyzed)
+                thumb.set_cut(cut)
+                break
+
+    def update_source_has_analysis(self, source_id: str, has_analysis: bool = True):
+        """Update the analysis status for a specific source."""
+        source = self._sources_by_id.get(source_id)
+        if source:
+            source.has_analysis = has_analysis
+        for thumb in self.thumbnails:
+            if thumb.source.id == source_id:
+                thumb.set_has_analysis(has_analysis)
                 break
 
     def _on_thumbnail_clicked(self, source: Source):
