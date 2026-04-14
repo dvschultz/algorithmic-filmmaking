@@ -533,6 +533,8 @@ class Project:
         sequence: Optional[Sequence] = None,
         ui_state: Optional[dict] = None,
         frames: Optional[list[Frame]] = None,
+        sequences: Optional[list[Sequence]] = None,
+        active_sequence_index: int = 0,
     ):
         """Initialize a Project.
 
@@ -541,20 +543,111 @@ class Project:
             metadata: Project metadata
             sources: List of source videos
             clips: List of detected clips
-            sequence: Timeline sequence
+            sequence: Legacy single-sequence parameter (used when sequences is None)
             ui_state: Optional UI state dict
             frames: List of extracted/imported frames
+            sequences: List of all sequences (takes precedence over sequence)
+            active_sequence_index: Index of the active sequence in the list
         """
         self.path = path
         self.metadata = metadata or ProjectMetadata()
         self._sources = sources or []
         self._clips = clips or []
         self._frames: list[Frame] = frames or []
-        self.sequence = sequence
         self.ui_state = ui_state or {}
+
+        # Multi-sequence storage: sequences list + active index
+        if sequences is not None:
+            self.sequences = sequences
+        elif sequence is not None:
+            self.sequences = [sequence]
+        else:
+            self.sequences = [Sequence()]
+        self.active_sequence_index = min(active_sequence_index, max(0, len(self.sequences) - 1))
 
         self._dirty: bool = False
         self._observers: list[Callable[[str, Any], None]] = []
+
+    # --- Sequence compatibility property ---
+
+    @property
+    def sequence(self) -> Optional[Sequence]:
+        """Active sequence (compatibility property).
+
+        Returns the active sequence from the sequences list. Setter replaces
+        the active entry. Assigning None substitutes a fresh empty Sequence
+        to preserve the at-least-one invariant (R2).
+        """
+        if not self.sequences:
+            return None
+        return self.sequences[self.active_sequence_index]
+
+    @sequence.setter
+    def sequence(self, value: Optional[Sequence]) -> None:
+        if value is None:
+            value = Sequence()
+        if not self.sequences:
+            self.sequences = [value]
+            self.active_sequence_index = 0
+        else:
+            self.sequences[self.active_sequence_index] = value
+
+    # --- Multi-sequence management ---
+
+    def add_sequence(self, sequence: Sequence) -> None:
+        """Append a sequence to the project.
+
+        Args:
+            sequence: The Sequence to add
+        """
+        self.sequences.append(sequence)
+        self._dirty = True
+        self._notify_observers("sequences_changed", self.sequences)
+
+    def remove_sequence(self, index: int) -> None:
+        """Remove a sequence by index. Enforces at-least-one invariant (R2).
+
+        If removing the last sequence, a fresh empty one is auto-created.
+        If removing a sequence before the active index, the active index is
+        decremented. If removing the active sequence, active switches to 0.
+
+        Args:
+            index: Index of the sequence to remove
+        """
+        if index < 0 or index >= len(self.sequences):
+            logger.warning(f"Cannot remove sequence at index {index}: out of range")
+            return
+
+        self.sequences.pop(index)
+
+        if not self.sequences:
+            # R2 invariant: always at least one sequence
+            self.sequences.append(Sequence())
+            self.active_sequence_index = 0
+        elif index == self.active_sequence_index:
+            # Removed the active sequence — fall back to 0 (R8)
+            self.active_sequence_index = 0
+        elif index < self.active_sequence_index:
+            # Removed before active — adjust index to keep pointing at same sequence
+            self.active_sequence_index -= 1
+
+        self._dirty = True
+        self._notify_observers("sequences_changed", self.sequences)
+        self._notify_observers("active_sequence_changed", self.active_sequence_index)
+
+    def set_active_sequence(self, index: int) -> None:
+        """Switch the active sequence.
+
+        Args:
+            index: Index of the sequence to activate
+
+        Raises:
+            IndexError: If index is out of range
+        """
+        if index < 0 or index >= len(self.sequences):
+            raise IndexError(f"Sequence index {index} out of range (0-{len(self.sequences) - 1})")
+        self.active_sequence_index = index
+        self._notify_observers("active_sequence_changed", self.active_sequence_index)
 
     # --- Data access (read-only lists) ---
 
@@ -1152,14 +1245,15 @@ class Project:
         Returns:
             New empty Project instance
         """
-        return cls(metadata=ProjectMetadata(name=name))
+        return cls(metadata=ProjectMetadata(name=name), sequences=[Sequence()])
 
     def clear(self) -> None:
         """Clear all project data (for 'New Project')."""
         self._sources = []
         self._clips = []
         self._frames = []
-        self.sequence = None
+        self.sequences = [Sequence()]
+        self.active_sequence_index = 0
         self.ui_state = {}
         self.path = None
         self.metadata = ProjectMetadata()
