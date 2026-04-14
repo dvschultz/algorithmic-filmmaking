@@ -159,6 +159,30 @@ class TestDirtyTracking:
 # --- Unit 4: Auto-naming ---
 
 
+# --- Unit 6: Rename sequence ---
+
+
+class TestRenameSequence:
+    """Sequence rename via context menu (R9)."""
+
+    def test_rename_updates_name(self, project_with_clips):
+        p = project_with_clips
+        p.sequences[1].name = "Final Cut"
+        assert p.sequences[1].name == "Final Cut"
+
+    def test_rename_preserves_data(self, project_with_clips):
+        p = project_with_clips
+        clips_before = len(p.sequences[1].get_all_clips())
+        p.sequences[1].name = "Renamed"
+        assert len(p.sequences[1].get_all_clips()) == clips_before
+
+    def test_duplicate_names_allowed(self, project_with_clips):
+        """R9: duplicate names are permitted."""
+        p = project_with_clips
+        p.sequences[1].name = p.sequences[0].name
+        assert p.sequences[0].name == p.sequences[1].name
+
+
 class TestSequenceAutoNaming:
     """Monotonic auto-naming for algorithm runs."""
 
