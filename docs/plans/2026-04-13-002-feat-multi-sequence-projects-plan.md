@@ -1,7 +1,7 @@
 ---
 title: "feat: Multi-sequence project support"
 type: feat
-status: active
+status: completed
 date: 2026-04-13
 deepened: 2026-04-14
 origin: docs/brainstorms/2026-04-13-multi-sequence-projects-requirements.md
@@ -140,7 +140,7 @@ Units 6-7: Rename, parameter-tweak prompt, main_window sync, gui_state updates.
 
 ### Phase 1: Data Layer
 
-- [ ] **Unit 1: Project model — sequences list + compatibility property**
+- [x] **Unit 1: Project model — sequences list + compatibility property**
 
   **Goal:** Change `Project.sequence: Optional[Sequence]` to `Project.sequences: list[Sequence]` with `active_sequence_index: int`. Add a compatibility `sequence` property. Enforce the R2 invariant.
 
@@ -186,7 +186,7 @@ Units 6-7: Rename, parameter-tweak prompt, main_window sync, gui_state updates.
   - All existing project tests pass unmodified (the compatibility property is transparent)
   - New multi-sequence operations work correctly with observer notifications
 
-- [ ] **Unit 2: Save/load pipeline — schema 1.4 + backward compatibility**
+- [x] **Unit 2: Save/load pipeline — schema 1.4 + backward compatibility**
 
   **Goal:** Update `save_project()` / `load_project()` / `_validate_project_structure()` / `_prepare_prerendered_clips()` to handle `sequences: list[Sequence]` and backward-compatible loading of old single-sequence files.
 
@@ -233,7 +233,7 @@ Units 6-7: Rename, parameter-tweak prompt, main_window sync, gui_state updates.
 
 ### Phase 2: Sequence Tab Core
 
-- [ ] **Unit 3: Sequence dropdown + switching with dirty tracking**
+- [x] **Unit 3: Sequence dropdown + switching with dirty tracking**
 
   **Goal:** Add a QComboBox to the Sequence tab header (leftmost position) that shows all sequence names and lets the user switch. Implement edit-persistence on switch with dirty tracking.
 
@@ -273,7 +273,7 @@ Units 6-7: Rename, parameter-tweak prompt, main_window sync, gui_state updates.
   - User can switch between sequences without data loss
   - The dirty-prompt only fires when the user has manually edited the timeline
 
-- [ ] **Unit 4: Refactor apply handlers to create-and-activate pattern**
+- [x] **Unit 4: Refactor apply handlers to create-and-activate pattern**
 
   **Goal:** Extract a shared `_create_and_activate_sequence(algorithm_key, display_label)` method and wire all 16+ apply handlers through it. Includes monotonic auto-naming.
 
@@ -310,7 +310,7 @@ Units 6-7: Rename, parameter-tweak prompt, main_window sync, gui_state updates.
   - The naming counter is monotonic and predictable
   - All 16+ handlers use the shared create-and-activate path
 
-- [ ] **Unit 5: New Sequence button + Delete sequence**
+- [x] **Unit 5: New Sequence button + Delete sequence**
 
   **Goal:** Replace the "Clear Sequence" button with "New Sequence" (R4) and add delete functionality (R7, R8) via the dropdown's context menu.
 
@@ -347,7 +347,7 @@ Units 6-7: Rename, parameter-tweak prompt, main_window sync, gui_state updates.
 
 ### Phase 3: Polish
 
-- [ ] **Unit 6: Rename sequence**
+- [x] **Unit 6: Rename sequence**
 
   **Goal:** Let users rename sequences via the dropdown's context menu.
 
@@ -374,7 +374,7 @@ Units 6-7: Rename, parameter-tweak prompt, main_window sync, gui_state updates.
   **Verification:**
   - Renamed sequence persists through save/load
 
-- [ ] **Unit 7: Parameter-tweak prompt + main_window sync + gui_state**
+- [x] **Unit 7: Parameter-tweak prompt + main_window sync + gui_state**
 
   **Goal:** Implement R3a (prompt on parameter tweaks) and update peripheral systems that reference the active sequence.
 
