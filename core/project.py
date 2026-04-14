@@ -270,10 +270,27 @@ def save_project(
 
     # Multi-sequence persistence
     if extra_data:
-        # Project.save() provides the full sequences list + active index.
-        # Strip internal-only keys before merging into the JSON output.
-        write_data = {k: v for k, v in extra_data.items() if not k.startswith("_")}
-        project_data.update(write_data)
+        # Project.save() passes raw Sequence objects via _all_sequences.
+        # Serialize them HERE (after the prerender swap) so all sequences
+        # get correct project-relative prerendered_path values.
+        all_seqs = extra_data.get("_all_sequences")
+        active_idx = extra_data.get("active_sequence_index", 0)
+        if all_seqs is not None:
+            sequences_data = []
+            for i, s in enumerate(all_seqs):
+                if i == active_idx:
+                    # Use the already-serialized active sequence (has correct prerender paths)
+                    sequences_data.append(project_data.get("sequence"))
+                elif s:
+                    sequences_data.append(s.to_dict(base_path=base_path))
+                else:
+                    sequences_data.append(None)
+            project_data["sequences"] = sequences_data
+            project_data["active_sequence_index"] = active_idx
+        else:
+            # Fallback: strip internal keys and merge directly
+            write_data = {k: v for k, v in extra_data.items() if not k.startswith("_")}
+            project_data.update(write_data)
     elif filepath.exists():
         # MCP/CLI path: caller didn't pass extra_data but the file already has
         # a "sequences" key. Read-modify-write: replace only the active entry
@@ -1241,20 +1258,14 @@ class Project:
         if save_path is None:
             raise ValueError("No path specified for save")
 
-        # Build serialized sequences list for extra_data
-        base_path = save_path.parent
-        sequences_data = [
-            s.to_dict(base_path=base_path) if s else None
-            for s in self.sequences
-        ]
-        # Pass non-active sequences so prerendered clips from all sequences
-        # get copied into the project folder
+        # Pass raw Sequence objects so save_project() can serialize them AFTER
+        # the prerender-path swap (ensures project-relative paths in all sequences).
         non_active = [
             s for i, s in enumerate(self.sequences)
             if i != self.active_sequence_index and s
         ]
         extra_data = {
-            "sequences": sequences_data,
+            "_all_sequences": list(self.sequences),  # raw objects, serialized post-swap
             "active_sequence_index": self.active_sequence_index,
             "_additional_sequences": non_active,  # consumed by _prepare_prerendered_clips
         }
@@ -1326,6 +1337,26 @@ class Project:
             missing_source_callback=missing_source_callback,
             progress_callback=progress_callback,
         )
+
+        # Validate non-active sequences: remove clips referencing missing sources/clips
+        if sequences_list:
+            valid_clip_ids = {clip.id for clip in clips}
+            valid_source_ids = {s.id for s in sources}
+            for i, seq in enumerate(sequences_list):
+                if i == active_idx:
+                    continue  # Active sequence already validated by load_project()
+                for track in seq.tracks:
+                    invalid = [
+                        sc for sc in track.clips
+                        if (sc.source_id and sc.source_id not in valid_source_ids)
+                        or (sc.source_clip_id and sc.source_clip_id not in valid_clip_ids)
+                    ]
+                    for sc in invalid:
+                        logger.warning(
+                            f"Removing sequence clip {sc.id} from non-active sequence "
+                            f"'{seq.name}': dangling reference"
+                        )
+                        track.clips.remove(sc)
 
         if sequences_list:
             project = cls(

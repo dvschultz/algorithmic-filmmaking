@@ -1644,15 +1644,16 @@ def create_sequence(
     if seq_fps <= 0:
         return {"success": False, "error": f"fps must be > 0, got {seq_fps}"}
 
-    project.sequence = Sequence(name=seq_name, fps=seq_fps)
-    project.mark_dirty()
-    project._notify_observers("sequence_changed", [])
+    new_seq = Sequence(name=seq_name, fps=seq_fps)
+    project.add_sequence(new_seq)
+    project.set_active_sequence(len(project.sequences) - 1)
 
     return {
         "success": True,
-        "message": f"Created empty sequence '{seq_name}' at {seq_fps} fps",
+        "message": f"Created sequence '{seq_name}' at {seq_fps} fps (now active)",
         "name": seq_name,
         "fps": seq_fps,
+        "sequence_index": project.active_sequence_index,
     }
 
 

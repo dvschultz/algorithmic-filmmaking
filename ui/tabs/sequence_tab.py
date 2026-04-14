@@ -111,6 +111,7 @@ class SequenceTab(BaseTab):
         self._sequence_worker: Optional[SequenceWorker] = None
         self._algorithm_running = False  # Prevents dirty flag during algo runs
         self._sequence_dirty = False  # Set on manual user edits (drag, remove)
+        self._replace_sequence_index = None  # Deferred removal for Replace flow
 
         # Confirm state: pending algorithm and clips for generation
         self._pending_algorithm: Optional[str] = None
@@ -856,7 +857,19 @@ class SequenceTab(BaseTab):
             # Notify that clip metadata may have been mutated by auto-compute
             self.clips_data_changed.emit([clip for clip, _ in sorted_clips])
 
+            # If this was a Replace operation, remove the old sequence now that the new one succeeded
+            replace_idx = getattr(self, "_replace_sequence_index", None)
+            if replace_idx is not None and self._project:
+                # The old sequence's index may have shifted because we appended a new one.
+                # The new sequence is at the end; the old one is still at replace_idx
+                # (if it wasn't reused by the empty-sequence optimization).
+                if replace_idx < len(self._project.sequences) and replace_idx != self._project.active_sequence_index:
+                    self._project.remove_sequence(replace_idx)
+                    self._sync_sequence_dropdown()
+                self._replace_sequence_index = None
+
         except Exception as e:
+            self._replace_sequence_index = None
             logger.error(f"Error populating timeline: {e}")
             QMessageBox.critical(self, "Error", f"Failed to generate sequence: {e}")
 
@@ -1614,12 +1627,13 @@ class SequenceTab(BaseTab):
 
         direction = self._get_current_direction()
         if clicked == replace_btn:
-            # Replace: remove current sequence, then run algorithm (which creates a new one)
-            if self._project and len(self._project.sequences) > 1:
-                self._project.remove_sequence(self._project.active_sequence_index)
+            # Replace: mark the current sequence for removal AFTER the worker succeeds.
+            # Don't remove now — if the worker fails, we'd lose the original permanently.
+            self._replace_sequence_index = self._project.active_sequence_index if self._project else None
             self._apply_algorithm(algorithm, clips, direction=direction)
         else:
             # Create New: just run the algorithm (it auto-creates a new sequence)
+            self._replace_sequence_index = None
             self._apply_algorithm(algorithm, clips, direction=direction)
 
     @Slot()
@@ -1769,10 +1783,11 @@ class SequenceTab(BaseTab):
                 QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
             )
             if result == QMessageBox.Cancel:
-                # Revert dropdown to current index
-                self.sequence_dropdown.blockSignals(True)
-                self.sequence_dropdown.setCurrentIndex(self._project.active_sequence_index)
-                self.sequence_dropdown.blockSignals(False)
+                # Revert BOTH dropdowns to current index
+                for dd in (self.sequence_dropdown, self.cards_sequence_dropdown):
+                    dd.blockSignals(True)
+                    dd.setCurrentIndex(self._project.active_sequence_index)
+                    dd.blockSignals(False)
                 return
             elif result == QMessageBox.Discard:
                 should_persist = False
