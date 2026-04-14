@@ -1676,10 +1676,18 @@ class SequenceTab(BaseTab):
         else:
             name = display_label
 
-        # Create and add
-        new_seq = SeqModel(name=name, algorithm=algorithm_key)
-        self._project.add_sequence(new_seq)
-        self._project.set_active_sequence(len(self._project.sequences) - 1)
+        # If the current sequence is empty (0 clips), reuse it instead of
+        # creating a new one alongside it — avoids orphan "Untitled Sequence"
+        current_seq = self._project.sequence
+        if current_seq and len(current_seq.get_all_clips()) == 0:
+            current_seq.name = name
+            current_seq.algorithm = algorithm_key
+            new_seq = current_seq
+        else:
+            # Create and add a new sequence
+            new_seq = SeqModel(name=name, algorithm=algorithm_key)
+            self._project.add_sequence(new_seq)
+            self._project.set_active_sequence(len(self._project.sequences) - 1)
 
         # Update dropdown
         self._sync_sequence_dropdown()
