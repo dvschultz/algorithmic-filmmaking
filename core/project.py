@@ -729,6 +729,24 @@ class Project:
         self.active_sequence_index = index
         self._notify_observers("active_sequence_changed", self.active_sequence_index)
 
+    def source_in_sequences(self, source_id: str) -> list[str]:
+        """Return names of sequences that contain clips from the given source.
+
+        Used as a guard before deleting a source — deletion should be blocked
+        when the source's clips are in use.
+
+        Args:
+            source_id: The source ID to check
+
+        Returns:
+            List of sequence names containing clips from this source (empty if none)
+        """
+        names = []
+        for seq in self.sequences:
+            if any(sc.source_id == source_id for sc in seq.get_all_clips()):
+                names.append(seq.name)
+        return names
+
     # --- Data access (read-only lists) ---
 
     @property

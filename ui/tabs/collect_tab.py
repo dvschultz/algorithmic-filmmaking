@@ -34,6 +34,7 @@ class CollectTab(BaseTab):
     analyze_requested = Signal(list)  # list of source IDs (empty = all unanalyzed)
     download_requested = Signal(str, str)  # URL, resolution tier
     source_selected = Signal(object)  # Source
+    delete_sources_requested = Signal(list)  # list of source IDs
 
     def _setup_ui(self):
         """Set up the Collect tab UI."""
@@ -54,6 +55,7 @@ class CollectTab(BaseTab):
         self.source_browser.source_selected.connect(self._on_source_selected)
         self.source_browser.source_double_clicked.connect(self._on_source_double_clicked)
         self.source_browser.files_dropped.connect(self._on_files_dropped)
+        self.source_browser.delete_sources_requested.connect(self.delete_sources_requested)
         layout.addWidget(self.source_browser, 1)  # Stretch factor 1
 
     def _create_toolbar(self) -> QHBoxLayout:

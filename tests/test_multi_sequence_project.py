@@ -528,6 +528,58 @@ class TestMCPReadModifyWrite:
             result = json.load(f)
         assert "sequences" not in result
 
+class TestSourceInSequences:
+    """Project.source_in_sequences() guards source deletion."""
+
+    def test_source_not_in_any_sequence(self, project_with_clips):
+        """Source with no clips in sequences returns empty list."""
+        p = project_with_clips
+        # clip-3 is not in any sequence
+        assert p.source_in_sequences("src-nonexistent") == []
+
+    def test_source_in_one_sequence(self, saved_project_with_sequences):
+        """Source with clips in 1 sequence returns that sequence name."""
+        project_path, _ = saved_project_with_sequences
+        loaded = Project.load(project_path)
+        # src-1 has clips in all sequences
+        names = loaded.source_in_sequences("src-1")
+        assert len(names) >= 1
+
+    def test_source_in_multiple_sequences(self):
+        """Source with clips in 2 sequences returns both names."""
+        p = Project.new()
+        source = Source(
+            id="src-1", file_path=Path("/test/video.mp4"),
+            duration_seconds=60.0, fps=30.0, width=1920, height=1080,
+        )
+        p.add_source(source)
+        p.add_clips([Clip(id="clip-1", source_id="src-1", start_frame=0, end_frame=30)])
+
+        # Add clip to initial sequence
+        p.add_to_sequence(["clip-1"])
+        p.sequences[0].name = "Sequence A"
+
+        # Add same source's clip to a second sequence
+        seq2 = Sequence(name="Sequence B")
+        sc = SequenceClip(source_clip_id="clip-1", source_id="src-1", start_frame=0, in_point=0, out_point=30)
+        seq2.tracks[0].add_clip(sc)
+        p.add_sequence(seq2)
+
+        names = p.source_in_sequences("src-1")
+        assert "Sequence A" in names
+        assert "Sequence B" in names
+
+    def test_empty_sequences_return_empty(self):
+        """Sequences with no clips don't match."""
+        p = Project.new()
+        assert p.source_in_sequences("anything") == []
+
+    def test_source_not_in_project(self):
+        """Unknown source returns empty list (no crash)."""
+        p = Project.new()
+        assert p.source_in_sequences("nonexistent") == []
+
+
     def test_load_project_signature_unchanged(self):
         """load_project() still returns a 6-tuple with single Optional[Sequence]."""
         with tempfile.TemporaryDirectory() as tmpdir:

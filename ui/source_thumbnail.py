@@ -5,6 +5,7 @@ from pathlib import Path
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
+    QMenu,
     QVBoxLayout,
     QLabel,
     QWidget,
@@ -22,6 +23,7 @@ class SourceThumbnail(QFrame):
 
     clicked = Signal(object)  # Source
     double_clicked = Signal(object)  # Source
+    delete_requested = Signal(object)  # Source
 
     def __init__(self, source: Source):
         super().__init__()
@@ -201,10 +203,29 @@ class SourceThumbnail(QFrame):
     def mouseDoubleClickEvent(self, event):
         self.double_clicked.emit(self.source)
 
+    def contextMenuEvent(self, event):
+        """Show context menu with delete option."""
+        menu = QMenu(self)
+        delete_action = menu.addAction(f"Delete \"{self.source.filename}\"")
+        action = menu.exec_(event.globalPos())
+        if action == delete_action:
+            self.delete_requested.emit(self.source)
+
     def keyPressEvent(self, event: QKeyEvent):
         """Handle keyboard events for accessibility."""
         if event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
             self.clicked.emit(self.source)
+        elif event.key() == Qt.Key_Delete or event.key() == Qt.Key_Backspace:
+            self.delete_requested.emit(self.source)
+        elif event.key() == Qt.Key_Menu or (
+            event.key() == Qt.Key_F10 and event.modifiers() & Qt.ShiftModifier
+        ):
+            center = self.rect().center()
+            menu = QMenu(self)
+            delete_action = menu.addAction(f"Delete \"{self.source.filename}\"")
+            action = menu.exec_(self.mapToGlobal(center))
+            if action == delete_action:
+                self.delete_requested.emit(self.source)
         else:
             super().keyPressEvent(event)
 

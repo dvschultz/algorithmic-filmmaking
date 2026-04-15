@@ -1590,6 +1590,7 @@ class MainWindow(QMainWindow):
         self.collect_tab.analyze_requested.connect(self._on_analyze_requested)
         self.collect_tab.source_selected.connect(self._on_source_selected)
         self.collect_tab.download_requested.connect(self._on_download_requested_from_tab)
+        self.collect_tab.delete_sources_requested.connect(self._on_delete_sources_requested)
 
         # Video search panel signals (YouTube and Internet Archive)
         self.collect_tab.youtube_search_panel.search_requested.connect(
@@ -1893,6 +1894,75 @@ class MainWindow(QMainWindow):
         # Refresh Analyze tab lookups (cached properties may have been invalidated)
         if hasattr(self, 'analyze_tab'):
             self.analyze_tab.set_lookups(self.clips_by_id, self.sources_by_id)
+
+    def _on_delete_sources_requested(self, source_ids: list[str]):
+        """Handle delete request from Collect tab. Guards against sequence usage."""
+        if not source_ids:
+            return
+
+        deletable = []
+        blocked = {}  # source_id -> list of sequence names
+
+        for source_id in source_ids:
+            seq_names = self.project.source_in_sequences(source_id)
+            if seq_names:
+                source = self.project.sources_by_id.get(source_id)
+                name = source.filename if source else source_id
+                blocked[name] = seq_names
+            else:
+                deletable.append(source_id)
+
+        # Show error for blocked sources
+        if blocked:
+            lines = []
+            for name, seqs in blocked.items():
+                lines.append(f"  {name}: used in {', '.join(seqs)}")
+            QMessageBox.warning(
+                self,
+                "Cannot Delete",
+                f"The following sources have clips in sequences:\n"
+                + "\n".join(lines)
+                + "\n\nDelete those sequences first.",
+            )
+
+        if not deletable:
+            return
+
+        # Count clips for confirmation message
+        total_clips = sum(
+            len([c for c in self.project.clips if c.source_id == sid])
+            for sid in deletable
+        )
+        source_names = []
+        for sid in deletable:
+            source = self.project.sources_by_id.get(sid)
+            source_names.append(source.filename if source else sid)
+
+        if len(deletable) == 1:
+            msg = f"Delete \"{source_names[0]}\" and its {total_clips} clips?\nThis cannot be undone."
+        else:
+            msg = f"Delete {len(deletable)} sources and {total_clips} clips?\nThis cannot be undone."
+
+        result = QMessageBox.question(
+            self, "Delete Sources", msg,
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if result != QMessageBox.Yes:
+            return
+
+        # Perform deletion
+        for source_id in deletable:
+            self.project.remove_source(source_id)
+            self.collect_tab.remove_source(source_id)
+
+        # Refresh lookups
+        if hasattr(self, "analyze_tab"):
+            self.analyze_tab.set_lookups(self.clips_by_id, self.sources_by_id)
+
+        self._update_window_title()
+        self.status_bar.showMessage(
+            f"Deleted {len(deletable)} source(s) and {total_clips} clips"
+        )
 
     @Slot(list)
     def _on_clips_removed(self, clips: list):

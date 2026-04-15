@@ -177,6 +177,7 @@ class SourceBrowser(QWidget):
     source_selected = Signal(object)  # Source
     source_double_clicked = Signal(object)  # Source
     files_dropped = Signal(list)  # List of Paths from add card
+    delete_sources_requested = Signal(list)  # List of source IDs to delete
 
     COLUMNS = 4
 
@@ -233,6 +234,7 @@ class SourceBrowser(QWidget):
         thumb = SourceThumbnail(source)
         thumb.clicked.connect(self._on_thumbnail_clicked)
         thumb.double_clicked.connect(self._on_thumbnail_double_clicked)
+        thumb.delete_requested.connect(self._on_thumbnail_delete_requested)
 
         self.thumbnails.append(thumb)
 
@@ -327,6 +329,15 @@ class SourceBrowser(QWidget):
             thumb.set_selected(thumb.source.id in self.selected_source_ids)
 
         self.source_selected.emit(source)
+
+    def _on_thumbnail_delete_requested(self, source: Source):
+        """Handle delete request — include all selected sources if this one is selected."""
+        if source.id in self.selected_source_ids and len(self.selected_source_ids) > 1:
+            # Multi-select: delete all selected sources
+            self.delete_sources_requested.emit(list(self.selected_source_ids))
+        else:
+            # Single source
+            self.delete_sources_requested.emit([source.id])
 
     def select_all(self) -> None:
         """Select all sources."""
