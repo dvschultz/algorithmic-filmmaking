@@ -130,6 +130,12 @@ class AnalyzeTab(BaseTab):
 
         controls.addStretch()
 
+        # Selection count label
+        self.selection_label = QLabel("")
+        controls.addWidget(self.selection_label)
+
+        controls.addSpacing(10)
+
         # Glossary button
         self.glossary_btn = QPushButton("?")
         self.glossary_btn.setToolTip("Open Film Language Glossary")
@@ -230,8 +236,13 @@ class AnalyzeTab(BaseTab):
         self._update_selection_ui()
 
     def _update_selection_ui(self):
-        """Update selection state and notify parent."""
+        """Update selection count label and notify parent."""
         selected = self.clip_browser.get_selected_clips()
+        count = len(selected)
+        if count > 0:
+            self.selection_label.setText(f"{count} selected")
+        else:
+            self.selection_label.setText("")
         self.selection_changed.emit([c.id for c in selected])
 
     def _on_clip_double_clicked(self, clip):
