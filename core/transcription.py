@@ -12,6 +12,7 @@ Backend selection:
 - "groq": force cloud transcription via Groq API
 """
 
+import contextlib
 import logging
 import os
 import platform
@@ -39,6 +40,36 @@ _mlx_model = None
 _mlx_model_name = None
 _mlx_whisper_available = None
 _mlx_model_lock = threading.Lock()
+
+
+def _mlx_workdir() -> Path:
+    """Writable parent directory for lightning-whisper-mlx's ``./mlx_models/`` cache.
+
+    The library hardcodes a relative path, so the process CWD must be a
+    writable directory at both load and transcribe time. In frozen macOS
+    builds CWD defaults to ``/`` (read-only), so we redirect to the model
+    cache dir under Application Support.
+    """
+    from core.settings import load_settings
+    workdir = load_settings().model_cache_dir / "mlx_whisper"
+    workdir.mkdir(parents=True, exist_ok=True)
+    return workdir
+
+
+@contextlib.contextmanager
+def _chdir_for_mlx():
+    """Temporarily chdir to the MLX workdir so ``./mlx_models/`` resolves to a writable path."""
+    previous = os.getcwd()
+    try:
+        os.chdir(_mlx_workdir())
+        yield
+    finally:
+        try:
+            os.chdir(previous)
+        except OSError:
+            # Previous CWD may have disappeared (e.g., temp dir cleanup);
+            # fall back to the workdir rather than leaking CWD errors.
+            os.chdir(_mlx_workdir())
 
 
 def _has_audio_stream(path: Path) -> Optional[bool]:
@@ -326,7 +357,11 @@ def get_mlx_model(model_name: str = "small.en"):
         logger.info(f"Loading MLX Whisper model: {mlx_name}")
 
         try:
-            _mlx_model = LightningWhisperMLX(model=mlx_name, batch_size=12)
+            # lightning-whisper-mlx reads/writes ``./mlx_models/`` relative to
+            # CWD — chdir into a writable dir so downloads don't fail with
+            # "Read-only file system" when the frozen app is launched from /.
+            with _chdir_for_mlx():
+                _mlx_model = LightningWhisperMLX(model=mlx_name, batch_size=12)
             _mlx_model_name = mlx_name
             logger.info(f"MLX Whisper model loaded: {mlx_name}")
         except Exception as e:
@@ -453,7 +488,9 @@ def _transcribe_video_mlx(
         if progress_callback:
             progress_callback(0.3, "Transcribing with MLX Whisper...")
 
-        result = mlx_model.transcribe(audio_path=str(tmp_path))
+        # MLX transcribe also resolves ``./mlx_models/<name>`` relative to CWD.
+        with _chdir_for_mlx():
+            result = mlx_model.transcribe(audio_path=str(tmp_path))
 
         if progress_callback:
             progress_callback(0.8, "Processing segments...")
@@ -532,7 +569,8 @@ def transcribe_clip(
 
         if resolved == "mlx-whisper":
             mlx_model = get_mlx_model(model_name)
-            result = mlx_model.transcribe(audio_path=str(tmp_path))
+            with _chdir_for_mlx():
+                result = mlx_model.transcribe(audio_path=str(tmp_path))
             return _parse_mlx_result(result)
 
         # faster-whisper backend
