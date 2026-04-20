@@ -1,10 +1,44 @@
 # Sequencer Algorithms
 
-Scene Ripper includes 19 sequencer algorithms that arrange your clips into a sequence. Each algorithm uses a different creative logic to determine the order.
+Scene Ripper includes 20 sequencer algorithms that arrange your clips into a sequence. Each algorithm uses a different creative logic to determine the order.
 
 To use a sequencer, go to the **Sequence** tab, select an algorithm from the dropdown, and click **Generate**. Some algorithms require that you run specific analysis on your clips first (in the **Analyze** tab). Others open a dialog where you configure additional options before generating.
 
 > Some algorithms (like Storyteller and Exquisite Corpus) require a cloud API key. See the [API Keys Guide](api-keys.md) for setup instructions.
+
+---
+
+## Managing Multiple Sequences
+
+A project holds any number of named sequences — run 20 different algorithms and keep every result side by side for comparison. Every algorithm run creates a new sequence instead of overwriting the previous one.
+
+### Sequence dropdown
+
+The leftmost dropdown in the Sequence tab header (and in the card view) shows all sequences in the project. Click a name to switch. The timeline, algorithm dropdown, and chromatic bar checkbox all update to reflect the selected sequence.
+
+### New Sequence button
+
+Click **New Sequence** to create a blank "Untitled Sequence" and switch to it. When the current sequence is empty, running an algorithm reuses it (rename + populate) instead of creating a second empty entry — avoiding orphan sequences.
+
+### Unsaved-edits prompt
+
+If you manually drag or remove clips on the timeline and then switch sequences, Scene Ripper shows a **Save / Discard / Cancel** dialog so you don't lose edits. Algorithm runs don't trigger this prompt — they're always clean by design.
+
+### Re-run prompt (parameter tweaks)
+
+Changing the algorithm or direction dropdown on a populated sequence shows a **Replace / Create New / Cancel** dialog:
+
+| Choice | Effect |
+|--------|--------|
+| **Replace** | The current sequence is overwritten with the new algorithm result |
+| **Create New** | The new algorithm run adds a new sequence alongside the current one |
+| **Cancel** | No change |
+
+### Rename and delete
+
+Right-click the sequence dropdown to open a context menu with **Rename…** and **Delete** options. Deleting an empty sequence is immediate; deleting a populated one asks for confirmation. You can't delete the last sequence — Scene Ripper always keeps at least one (a fresh empty "Untitled Sequence" is auto-created if you try).
+
+Duplicate names are allowed; auto-naming uses a monotonic counter per algorithm (Chromatics, Chromatics #2, Chromatics #3, …).
 
 ---
 
@@ -271,3 +305,20 @@ Sequence clips based on where subjects are looking. Named after the Billy Idol s
 4. Results appear on the timeline
 
 Clips without gaze data are always appended at the end of the sequence.
+
+### Free Association
+
+Build a sequence one clip at a time with an LLM collaborator. The algorithm opens a dialog where you interactively accept, reject, or swap each proposed next clip, with a rationale from the LLM explaining each transition.
+
+**Required analysis:** Describe, Embeddings
+
+**Dialog workflow:**
+
+1. Pick a starting clip (the LLM won't choose the first one)
+2. The dialog proposes the next clip with a short rationale (why it pairs well with the current tail of the sequence)
+3. Choose: **Accept** (add to sequence), **Reject** (ask for a different proposal), **Swap** (see alternatives), or **Stop** (finish)
+4. Repeat until you're satisfied or the pool is exhausted
+
+Embeddings power a local candidate shortlist so the LLM only sees the most similar clips at each step — this keeps prompts small and responses fast. Without embeddings the algorithm falls back to random sampling, which degrades proposal quality. Each accepted transition is saved as a rationale on the resulting SequenceClip, visible in exported SRTs.
+
+Requires a cloud LLM API key.
