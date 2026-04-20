@@ -2,13 +2,17 @@
 
 Used by sequence_tab.py (labels, descriptions, allow_duplicates) and
 sorting_card_grid.py (icons, labels, descriptions, categories).
+
+Icons are currently empty strings. Rendering emoji glyphs via QLabel on
+macOS can hit a CoreText sbix→ImageIO crash (EXC_BAD_ACCESS at 0xbad4007
+inside CopyEmojiImage); SVG icons will replace this field in a later pass.
 """
 
 CATEGORY_ORDER = ["All", "Arrange", "Find", "Connect", "Audio", "Text"]
 
 ALGORITHM_CONFIG = {
     "color": {
-        "icon": "\U0001f3a8",
+        "icon": "",
         "label": "Chromatics",
         "description": "Arrange clips along a color gradient or cycle through the spectrum",
         "allow_duplicates": False,
@@ -16,7 +20,7 @@ ALGORITHM_CONFIG = {
         "categories": ["arrange"],
     },
     "duration": {
-        "icon": "\u23f1\ufe0f",
+        "icon": "",
         "label": "Tempo Shift",
         "description": "Order clips from shortest to longest (or reverse)",
         "allow_duplicates": False,
@@ -24,7 +28,7 @@ ALGORITHM_CONFIG = {
         "categories": ["arrange"],
     },
     "brightness": {
-        "icon": "\U0001f317",
+        "icon": "",
         "label": "Into the Dark",
         "description": "Arrange clips from light to shadow, or shadow to light",
         "allow_duplicates": False,
@@ -32,7 +36,7 @@ ALGORITHM_CONFIG = {
         "categories": ["arrange"],
     },
     "volume": {
-        "icon": "\U0001f50a",
+        "icon": "",
         "label": "Crescendo",
         "description": "Build from silence to thunder, or thunder to silence",
         "allow_duplicates": False,
@@ -40,7 +44,7 @@ ALGORITHM_CONFIG = {
         "categories": ["arrange", "audio"],
     },
     "shuffle": {
-        "icon": "\U0001f3b2",
+        "icon": "",
         "label": "Hatchet Job",
         "description": "Randomly shuffle clips into a new order",
         "allow_duplicates": False,
@@ -49,7 +53,7 @@ ALGORITHM_CONFIG = {
         "categories": ["arrange"],
     },
     "sequential": {
-        "icon": "\U0001f4cb",
+        "icon": "",
         "label": "Time Capsule",
         "description": "Keep clips in their original order",
         "allow_duplicates": False,
@@ -57,7 +61,7 @@ ALGORITHM_CONFIG = {
         "categories": ["arrange"],
     },
     "shot_type": {
-        "icon": "\U0001f3ac",
+        "icon": "",
         "label": "Focal Ladder",
         "description": "Arrange clips by camera shot scale",
         "allow_duplicates": False,
@@ -65,7 +69,7 @@ ALGORITHM_CONFIG = {
         "categories": ["arrange"],
     },
     "proximity": {
-        "icon": "\U0001f52d",
+        "icon": "",
         "label": "Up Close and Personal",
         "description": "Glide from distant vistas to intimate close-ups",
         "allow_duplicates": False,
@@ -73,7 +77,7 @@ ALGORITHM_CONFIG = {
         "categories": ["arrange"],
     },
     "similarity_chain": {
-        "icon": "\U0001f517",
+        "icon": "",
         "label": "Human Centipede",
         "description": "Chain clips together by visual similarity",
         "allow_duplicates": False,
@@ -81,7 +85,7 @@ ALGORITHM_CONFIG = {
         "categories": ["connect"],
     },
     "match_cut": {
-        "icon": "\u2702\ufe0f",
+        "icon": "",
         "label": "Match Cut",
         "description": "Find hidden connections between clips at cut points",
         "allow_duplicates": False,
@@ -89,7 +93,7 @@ ALGORITHM_CONFIG = {
         "categories": ["connect"],
     },
     "exquisite_corpus": {
-        "icon": "\U0001f4dd",
+        "icon": "",
         "label": "Exquisite Corpus",
         "description": "Generate a poem from on-screen text",
         "allow_duplicates": True,
@@ -98,7 +102,7 @@ ALGORITHM_CONFIG = {
         "categories": ["text"],
     },
     "storyteller": {
-        "icon": "\U0001f4d6",
+        "icon": "",
         "label": "Storyteller",
         "description": "Create a narrative from clip descriptions",
         "allow_duplicates": False,
@@ -107,7 +111,7 @@ ALGORITHM_CONFIG = {
         "categories": ["text"],
     },
     "free_association": {
-        "icon": "\U0001f4ad",  # thought balloon
+        "icon": "",
         "label": "Free Association",
         "description": "Build a sequence one clip at a time with an LLM collaborator",
         "allow_duplicates": False,
@@ -119,7 +123,7 @@ ALGORITHM_CONFIG = {
         "categories": ["connect", "text"],
     },
     "reference_guided": {
-        "icon": "\U0001f3af",
+        "icon": "",
         "label": "Reference Guide",
         "description": "Match your clips to a reference video's structure",
         "allow_duplicates": True,
@@ -128,7 +132,7 @@ ALGORITHM_CONFIG = {
         "categories": ["connect", "audio"],
     },
     "signature_style": {
-        "icon": "\u270d\ufe0f",
+        "icon": "",
         "label": "Signature Style",
         "description": "Interpret a drawing as an editing guide",
         "allow_duplicates": True,
@@ -137,7 +141,7 @@ ALGORITHM_CONFIG = {
         "categories": ["connect"],
     },
     "rose_hobart": {
-        "icon": "\U0001f464",
+        "icon": "",
         "label": "Rose Hobart",
         "description": "Isolate clips featuring a specific person",
         "allow_duplicates": False,
@@ -146,7 +150,7 @@ ALGORITHM_CONFIG = {
         "categories": ["find"],
     },
     "staccato": {
-        "icon": "\U0001f3b5",
+        "icon": "",
         "label": "Staccato",
         "description": "Cut clips to the rhythm of a music track",
         "allow_duplicates": True,
@@ -155,7 +159,7 @@ ALGORITHM_CONFIG = {
         "categories": ["audio"],
     },
     "gaze_sort": {
-        "icon": "\U0001f441",
+        "icon": "",
         "label": "Gaze Sort",
         "description": "Arrange clips by gaze direction",
         "allow_duplicates": False,
@@ -163,7 +167,7 @@ ALGORITHM_CONFIG = {
         "categories": ["arrange", "find"],
     },
     "gaze_consistency": {
-        "icon": "\U0001f440",
+        "icon": "",
         "label": "Gaze Consistency",
         "description": "Group clips by matching gaze direction",
         "allow_duplicates": False,
@@ -171,7 +175,7 @@ ALGORITHM_CONFIG = {
         "categories": ["find"],
     },
     "eyes_without_a_face": {
-        "icon": "\U0001f441\ufe0f\u200d\U0001f5e8\ufe0f",
+        "icon": "",
         "label": "Eyes Without a Face",
         "description": "Eyeline matching, gaze filtering, and rotation sequencing",
         "allow_duplicates": False,
