@@ -1745,6 +1745,12 @@ class SequenceTab(BaseTab):
             self._project.add_sequence(new_seq)
             self._project.set_active_sequence(len(self._project.sequences) - 1)
 
+        # Sync the timeline's scene to point at the new active sequence.
+        # Without this, timeline.get_sequence() keeps returning the previous
+        # sequence object, and the next _persist_current_sequence() call
+        # overwrites the new slot with the old object (duplicate reference).
+        self.timeline.scene.set_sequence(new_seq)
+
         # Update dropdown
         self._sync_sequence_dropdown()
 
