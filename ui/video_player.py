@@ -537,6 +537,8 @@ class VideoPlayer(QWidget):
             hr_seek='yes',
             input_default_bindings=False,
             input_vo_keyboard=False,
+            input_media_keys=False,  # macOS: skips Remote Command Center init; avoids AppHub.getIcon() crash
+            audio_display='no',      # disables album-art / Now Playing integration path
             osc=False,
             log_handler=self._mpv_log_handler,
         )
