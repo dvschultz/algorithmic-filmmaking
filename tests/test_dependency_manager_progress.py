@@ -282,6 +282,12 @@ def test_install_for_feature_batches_missing_packages_and_validates_runtime(monk
         "core.feature_registry._validate_feature_runtime",
         lambda name: validated.append(name),
     )
+    # Exercise the full reinstall batch — the in-process-loaded-packages filter
+    # is tested separately.
+    monkeypatch.setattr(
+        "core.feature_registry._filter_already_loaded_packages",
+        lambda names: list(names),
+    )
 
     assert install_for_feature("describe_local_cpu", _on_progress) is True
     assert package_batches == [["torch>=1.0", "torchvision>=1.0", "transformers>=1.0", "tokenizers>=1.0"]]
@@ -308,6 +314,10 @@ def test_install_for_feature_reinstalls_broken_runtime_even_when_packages_exist(
     monkeypatch.setattr("core.dependency_manager.get_pip_specifier", lambda name: f"{name}>=1.0")
     monkeypatch.setattr("core.dependency_manager.install_packages", _fake_install)
     monkeypatch.setattr("core.dependency_manager.install_native_packages", _fake_install)
+    monkeypatch.setattr(
+        "core.feature_registry._filter_already_loaded_packages",
+        lambda names: list(names),
+    )
 
     assert install_for_feature("shot_classify") is True
     assert validations == ["shot_classify", "shot_classify"]
@@ -403,6 +413,10 @@ def test_install_for_feature_repairs_full_runtime_stack_when_only_subset_is_miss
     monkeypatch.setattr(
         "core.dependency_manager.install_native_packages", fake_installer,
     )
+    monkeypatch.setattr(
+        "core.feature_registry._filter_already_loaded_packages",
+        lambda names: list(names),
+    )
 
     assert install_for_feature(feature_name) is True
     assert cleared == [expected_packages]
@@ -427,3 +441,48 @@ def test_install_for_feature_repairs_full_runtime_stack_when_only_subset_is_miss
 def test_runtime_validated_analysis_features_force_full_repair(feature_name):
     """Runtime-validated analysis features should prefer a full repair install."""
     assert requires_full_package_repair(feature_name, ["package:anything"]) is True
+
+
+def test_filter_already_loaded_packages_skips_loaded_c_extensions(monkeypatch):
+    """Packages whose top-level module is in sys.modules are filtered out."""
+    from core.feature_registry import _filter_already_loaded_packages
+
+    # Simulate torch loaded, ultralytics not loaded
+    fake_modules = {"torch": object()}
+    monkeypatch.setattr("core.feature_registry.sys.modules", fake_modules)
+
+    result = _filter_already_loaded_packages(["torch", "ultralytics"])
+    assert result == ["ultralytics"]
+
+
+def test_filter_already_loaded_packages_strips_version_specifiers(monkeypatch):
+    """Filter handles pip-style version constraints on the package name."""
+    from core.feature_registry import _filter_already_loaded_packages
+
+    fake_modules = {"torch": object()}
+    monkeypatch.setattr("core.feature_registry.sys.modules", fake_modules)
+
+    result = _filter_already_loaded_packages(["torch>=2.4,<2.7", "ultralytics>=8.4.0"])
+    assert result == ["ultralytics>=8.4.0"]
+
+
+def test_filter_already_loaded_packages_ignores_safe_packages(monkeypatch):
+    """Packages not on the unsafe list are never filtered even if loaded."""
+    from core.feature_registry import _filter_already_loaded_packages
+
+    # "certifi" is loaded but not on the unsafe-to-reload list
+    fake_modules = {"certifi": object()}
+    monkeypatch.setattr("core.feature_registry.sys.modules", fake_modules)
+
+    result = _filter_already_loaded_packages(["certifi"])
+    assert result == ["certifi"]
+
+
+def test_filter_already_loaded_packages_with_none_loaded(monkeypatch):
+    """With no unsafe packages loaded, the full list passes through."""
+    from core.feature_registry import _filter_already_loaded_packages
+
+    monkeypatch.setattr("core.feature_registry.sys.modules", {})
+
+    result = _filter_already_loaded_packages(["torch", "ultralytics"])
+    assert result == ["torch", "ultralytics"]

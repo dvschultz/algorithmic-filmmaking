@@ -63,13 +63,17 @@ class SortingCard(QFrame):
         layout.setContentsMargins(Spacing.LG, Spacing.LG, Spacing.LG, Spacing.LG)
         layout.setSpacing(Spacing.SM)
 
-        # Icon
-        self.icon_label = QLabel(self._icon)
-        icon_font = QFont()
-        icon_font.setPointSize(TypeScale.XXXL)
-        self.icon_label.setFont(icon_font)
-        self.icon_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.icon_label)
+        # Icon — skipped when empty. Rendering emoji glyphs via QLabel on
+        # macOS can hit a CoreText sbix→ImageIO crash (EXC_BAD_ACCESS at
+        # 0xbad4007 inside CopyEmojiImage); keeping the icon slot empty until
+        # we ship proper SVG icons avoids that path.
+        self.icon_label = QLabel(self._icon) if self._icon else None
+        if self.icon_label is not None:
+            icon_font = QFont()
+            icon_font.setPointSize(TypeScale.XXXL)
+            self.icon_label.setFont(icon_font)
+            self.icon_label.setAlignment(Qt.AlignCenter)
+            layout.addWidget(self.icon_label)
 
         # Title
         self.title_label = QLabel(self._title)
@@ -167,7 +171,8 @@ class SortingCard(QFrame):
 
         sec_color = theme().text_muted if not self._enabled else theme().text_secondary
 
-        self.icon_label.setStyleSheet(f"color: {color}; background: transparent;")
+        if self.icon_label is not None:
+            self.icon_label.setStyleSheet(f"color: {color}; background: transparent;")
         self.title_label.setStyleSheet(f"color: {color}; background: transparent;")
         self.desc_label.setStyleSheet(f"color: {sec_color}; background: transparent;")
 

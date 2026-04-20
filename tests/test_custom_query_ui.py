@@ -66,18 +66,21 @@ def test_clip_browser_filters_by_selected_custom_queries_with_and_logic(qapp, so
     latest_no_match_thumb = browser._thumbnail_by_id["c3"]
     none_thumb = browser._thumbnail_by_id["c4"]
 
-    assert both_thumb.custom_query_label.text() == "Query Match"
-    assert both_thumb.custom_query_label.isHidden() is False
-    assert "YES: blue car" in both_thumb.custom_query_label.toolTip()
-    assert "YES: person running" in both_thumb.custom_query_label.toolTip()
-    assert "NO: blue car" not in both_thumb.custom_query_label.toolTip()
+    # Clip with two matching queries shows two separate badges, one per query
+    assert both_thumb.custom_query_container.isHidden() is False
+    both_labels = sorted(badge.text() for badge in both_thumb._custom_query_badges)
+    assert both_labels == ["blue car", "person running"]
+    assert "YES: blue car" in both_thumb.custom_query_container.toolTip()
+    assert "YES: person running" in both_thumb.custom_query_container.toolTip()
+    # Tooltip retains non-match history even when hidden from badges
+    assert "NO: blue car" not in both_thumb.custom_query_container.toolTip()
 
-    assert latest_no_match_thumb.custom_query_label.text() == "Query No Match"
-    assert latest_no_match_thumb.custom_query_label.isHidden() is False
-    assert "NO: blue car" in latest_no_match_thumb.custom_query_label.toolTip()
-    assert "YES: blue car" not in latest_no_match_thumb.custom_query_label.toolTip()
+    # Clip whose latest result is a no-match shows no badge and hides the container
+    assert latest_no_match_thumb.custom_query_container.isHidden() is True
+    assert latest_no_match_thumb._custom_query_badges == []
 
-    assert none_thumb.custom_query_label.isHidden() is True
+    # Clip with no custom queries hides the container
+    assert none_thumb.custom_query_container.isHidden() is True
 
     assert sorted(browser._custom_query_filter_actions) == ["blue car", "person running"]
 
@@ -151,6 +154,66 @@ def test_custom_query_ready_updates_tabs_sidebar_and_dirty_state(source):
     assert cut_calls == [(clip.id, clip.custom_queries)]
     assert sidebar_calls == [(clip.id, clip.custom_queries)]
     assert dirty_calls == [True]
+
+
+def test_clip_thumbnail_custom_query_badges_edge_cases(qapp, source):
+    """Badge container hides on non-matches and cleanly re-renders on updates."""
+    from ui.clip_browser import ClipBrowser
+
+    browser = ClipBrowser()
+
+    # Missing match key → treated as no-match, container hidden
+    clip_missing = make_test_clip("c-missing")
+    clip_missing.custom_queries = [
+        {"query": "blue car", "confidence": 0.5, "model": "qwen3-vl-4b"},
+    ]
+
+    # Empty queries list → container hidden
+    clip_empty = make_test_clip("c-empty")
+    clip_empty.custom_queries = []
+
+    browser.add_clip(clip_missing, source)
+    browser.add_clip(clip_empty, source)
+    qapp.processEvents()
+
+    missing_thumb = browser._thumbnail_by_id["c-missing"]
+    empty_thumb = browser._thumbnail_by_id["c-empty"]
+
+    assert missing_thumb.custom_query_container.isHidden() is True
+    assert missing_thumb._custom_query_badges == []
+    assert empty_thumb.custom_query_container.isHidden() is True
+
+    # Repeat-update scenario: updating a thumbnail's custom_queries should not
+    # leak badge widgets across re-renders. Start with two matches, then
+    # reduce to one, and verify the badge count tracks the match count.
+    clip = make_test_clip("c-repeat")
+    clip.custom_queries = [
+        {"query": "dog", "match": True, "confidence": 0.9, "model": "m"},
+        {"query": "cat", "match": True, "confidence": 0.85, "model": "m"},
+    ]
+    browser.add_clip(clip, source)
+    qapp.processEvents()
+
+    thumb = browser._thumbnail_by_id["c-repeat"]
+    assert len(thumb._custom_query_badges) == 2
+
+    # Reduce to one matching query and re-update
+    clip.custom_queries = [
+        {"query": "dog", "match": True, "confidence": 0.9, "model": "m"},
+    ]
+    thumb._update_custom_query_badge()
+    qapp.processEvents()
+    assert len(thumb._custom_query_badges) == 1
+    assert thumb._custom_query_badges[0].text() == "dog"
+
+    # Reduce to zero — container should hide
+    clip.custom_queries = [
+        {"query": "dog", "match": False, "confidence": 0.1, "model": "m"},
+    ]
+    thumb._update_custom_query_badge()
+    qapp.processEvents()
+    assert thumb._custom_query_badges == []
+    assert thumb.custom_query_container.isHidden() is True
 
 
 def test_clip_details_sidebar_allows_editing_custom_queries(qapp, source):

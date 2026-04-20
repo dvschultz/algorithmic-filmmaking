@@ -439,7 +439,7 @@ class SequenceTab(BaseTab):
             estimates: List of OperationEstimate from cost engine
         """
         config = get_algorithm_config(algorithm)
-        self._confirm_algo_label.setText(f"{config['icon']}  {config['label']}")
+        self._confirm_algo_label.setText(config['label'])
         self._confirm_clips_label.setText(f"{len(clips)} clips selected")
         self._confirm_cost_panel.set_estimates(estimates)
         self._update_confirm_warnings(estimates)
