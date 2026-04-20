@@ -228,9 +228,15 @@ class ClipThumbnail(QFrame):
         else:
             self.gaze_label.setVisible(False)
 
-        self.custom_query_label = QLabel()
-        self.custom_query_label.setAlignment(Qt.AlignRight)
-        info_layout.addWidget(self.custom_query_label)
+        # Container for one badge per matching custom query (flows right-aligned)
+        self.custom_query_container = QWidget()
+        self.custom_query_container.setStyleSheet("background: transparent; border: none;")
+        custom_query_layout = QHBoxLayout(self.custom_query_container)
+        custom_query_layout.setContentsMargins(0, 0, 0, 0)
+        custom_query_layout.setSpacing(Spacing.XXS)
+        custom_query_layout.addStretch()
+        self._custom_query_badges: list[QLabel] = []
+        info_layout.addWidget(self.custom_query_container)
         self._update_custom_query_badge()
         info_layout.addWidget(self.gaze_label)
         info_layout.addWidget(self.shot_type_label)
@@ -635,24 +641,46 @@ class ClipThumbnail(QFrame):
         return "\n".join(lines)
 
     def _update_custom_query_badge(self):
-        """Update the custom query badge based on stored results."""
+        """Render one badge per matching custom query; hide the container when none match."""
+        # Clear existing badge widgets to avoid leaks on repeated updates.
+        for badge in self._custom_query_badges:
+            badge.deleteLater()
+        self._custom_query_badges = []
+
         latest_results = get_latest_custom_query_results(self.clip.custom_queries)
-        if not latest_results:
-            self.custom_query_label.setVisible(False)
-            self.custom_query_label.setToolTip("")
+        matching = [
+            result for result in latest_results.values()
+            if bool(result.get("match"))
+        ]
+
+        if not matching:
+            self.custom_query_container.setVisible(False)
+            self.custom_query_container.setToolTip("")
             return
 
-        any_match = any(bool(result.get("match")) for result in latest_results.values())
-        background = theme().accent_green if any_match else theme().accent_orange
-        text = "Query Match" if any_match else "Query No Match"
-
-        self.custom_query_label.setText(text)
-        self.custom_query_label.setToolTip(self._custom_query_tooltip())
-        self.custom_query_label.setStyleSheet(
-            f"font-size: {TypeScale.XS}px; color: {theme().text_inverted}; background-color: {background}; "
-            f"border-radius: {Radii.SM}px; padding: {Spacing.XXS}px {Spacing.XS}px;"
+        # Style matches Collect-tab CUT/ANALYZED badges (ui/source_thumbnail.py).
+        badge_style = (
+            f"font-size: {TypeScale.XS}px; "
+            f"color: {theme().badge_analyzed_text}; "
+            f"background-color: {theme().badge_analyzed}; "
+            f"border-radius: {Radii.SM}px; "
+            f"padding: {Spacing.XXS}px {Spacing.SM}px;"
         )
-        self.custom_query_label.setVisible(True)
+        tooltip = self._custom_query_tooltip()
+        layout = self.custom_query_container.layout()
+        for result in matching:
+            query = str(result.get("query") or "").strip()
+            if not query:
+                continue
+            badge = QLabel(query)
+            badge.setAlignment(Qt.AlignCenter)
+            badge.setStyleSheet(badge_style)
+            badge.setToolTip(tooltip)
+            layout.addWidget(badge)
+            self._custom_query_badges.append(badge)
+
+        self.custom_query_container.setToolTip(tooltip)
+        self.custom_query_container.setVisible(bool(self._custom_query_badges))
 
 
 class ClipBrowser(QWidget):
