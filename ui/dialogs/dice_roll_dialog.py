@@ -113,6 +113,22 @@ class DiceRollWorker(CancellableWorker):
                 self._log_cancelled()
                 return
 
+            # Detect total prerender failure: if transforms were requested but
+            # every clip came back without a prerendered_path, something is wrong
+            # (commonly: project folder is on a disconnected drive).
+            expected_prerender_count = sum(
+                1 for sc in temp_seq_clips if sc.hflip or sc.vflip or sc.reverse
+            )
+            actual_prerender_count = sum(
+                1 for _, _, path in rendered if path is not None
+            )
+            if expected_prerender_count > 0 and actual_prerender_count == 0:
+                raise RuntimeError(
+                    f"Pre-rendering failed for all {expected_prerender_count} clips "
+                    f"with transforms. Check that the project folder is accessible "
+                    f"(disconnected external drive?). See logs for details."
+                )
+
             # Build result with transform info and prerendered paths
             result = []
             for (clip, source, prerendered_path), sc in zip(rendered, temp_seq_clips):
