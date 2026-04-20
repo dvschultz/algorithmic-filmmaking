@@ -34,6 +34,7 @@ class CollectTab(BaseTab):
     analyze_requested = Signal(list)  # list of source IDs (empty = all unanalyzed)
     download_requested = Signal(str, str)  # URL, resolution tier
     source_selected = Signal(object)  # Source
+    delete_sources_requested = Signal(list)  # list of source IDs
 
     def _setup_ui(self):
         """Set up the Collect tab UI."""
@@ -54,6 +55,7 @@ class CollectTab(BaseTab):
         self.source_browser.source_selected.connect(self._on_source_selected)
         self.source_browser.source_double_clicked.connect(self._on_source_double_clicked)
         self.source_browser.files_dropped.connect(self._on_files_dropped)
+        self.source_browser.delete_sources_requested.connect(self.delete_sources_requested)
         layout.addWidget(self.source_browser, 1)  # Stretch factor 1
 
     def _create_toolbar(self) -> QHBoxLayout:
@@ -173,8 +175,17 @@ class CollectTab(BaseTab):
         self.source_browser.update_source_thumbnail(source_id, thumb_path)
 
     def update_source_analyzed(self, source_id: str, analyzed: bool = True):
-        """Mark a source as analyzed."""
-        self.source_browser.update_source_analyzed(source_id, analyzed)
+        """Backward-compat: mark a source as cut."""
+        self.update_source_cut(source_id, analyzed)
+
+    def update_source_cut(self, source_id: str, cut: bool = True):
+        """Mark a source as cut (scenes detected)."""
+        self.source_browser.update_source_cut(source_id, cut)
+        self._update_ui_state()
+
+    def update_source_has_analysis(self, source_id: str, has_analysis: bool = True):
+        """Mark a source as having analysis data."""
+        self.source_browser.update_source_has_analysis(source_id, has_analysis)
         self._update_ui_state()
 
     def set_downloading(self, is_downloading: bool):

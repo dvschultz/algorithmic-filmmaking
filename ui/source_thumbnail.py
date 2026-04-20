@@ -4,8 +4,11 @@ from pathlib import Path
 
 from PySide6.QtWidgets import (
     QFrame,
+    QHBoxLayout,
+    QMenu,
     QVBoxLayout,
     QLabel,
+    QWidget,
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap, QKeyEvent
@@ -20,6 +23,7 @@ class SourceThumbnail(QFrame):
 
     clicked = Signal(object)  # Source
     double_clicked = Signal(object)  # Source
+    delete_requested = Signal(object)  # Source
 
     def __init__(self, source: Source):
         super().__init__()
@@ -66,12 +70,25 @@ class SourceThumbnail(QFrame):
         self.filename_label.setToolTip(source.filename)
         layout.addWidget(self.filename_label)
 
-        # Analyzed badge
-        self.badge_label = QLabel()
-        self.badge_label.setAlignment(Qt.AlignCenter)
-        self.badge_label.setFixedHeight(16)
+        # Status badges (CUT / ANALYZED)
+        badge_container = QWidget()
+        badge_container.setFixedHeight(20)
+        badge_container.setStyleSheet("background: transparent; border: none;")
+        badge_layout = QHBoxLayout(badge_container)
+        badge_layout.setContentsMargins(0, 0, 0, 0)
+        badge_layout.setSpacing(4)
+
+        self.cut_badge = QLabel()
+        self.cut_badge.setAlignment(Qt.AlignCenter)
+        badge_layout.addWidget(self.cut_badge)
+
+        self.analyzed_badge = QLabel()
+        self.analyzed_badge.setAlignment(Qt.AlignCenter)
+        badge_layout.addWidget(self.analyzed_badge)
+
+        badge_layout.addStretch()
         self._update_badge()
-        layout.addWidget(self.badge_label)
+        layout.addWidget(badge_container)
 
         self._update_style()
 
@@ -96,24 +113,45 @@ class SourceThumbnail(QFrame):
         self._load_thumbnail(path)
 
     def set_analyzed(self, analyzed: bool):
-        """Update the analyzed status."""
-        self.source.analyzed = analyzed
+        """Backward-compat: mark source as cut."""
+        self.source.cut = analyzed
+        self._update_badge()
+
+    def set_cut(self, cut: bool):
+        """Update the cut status."""
+        self.source.cut = cut
+        self._update_badge()
+
+    def set_has_analysis(self, has_analysis: bool):
+        """Update the analysis status."""
+        self.source.has_analysis = has_analysis
         self._update_badge()
 
     def _update_badge(self):
-        """Update the analyzed badge display."""
-        if self.source.analyzed:
-            self.badge_label.setText("Analyzed")
-            self.badge_label.setStyleSheet(
-                f"font-size: {TypeScale.XS}px; color: {theme().badge_analyzed_text}; background-color: {theme().badge_analyzed}; "
-                f"border-radius: {Radii.SM}px; padding: {Spacing.XXS}px {Spacing.SM}px;"
+        """Update the CUT and ANALYZED badge display."""
+        badge_style = (
+            f"font-size: {TypeScale.XS}px; border-radius: {Radii.SM}px; "
+            f"padding: {Spacing.XXS}px {Spacing.SM}px;"
+        )
+        if self.source.cut:
+            self.cut_badge.setText("CUT")
+            self.cut_badge.setStyleSheet(
+                f"{badge_style} color: {theme().badge_analyzed_text}; "
+                f"background-color: {theme().badge_analyzed};"
             )
+            self.cut_badge.show()
         else:
-            self.badge_label.setText("Not Analyzed")
-            self.badge_label.setStyleSheet(
-                f"font-size: {TypeScale.XS}px; color: {theme().text_inverted}; background-color: {theme().badge_not_analyzed}; "
-                f"border-radius: {Radii.SM}px; padding: {Spacing.XXS}px {Spacing.SM}px;"
+            self.cut_badge.hide()
+
+        if self.source.has_analysis:
+            self.analyzed_badge.setText("ANALYZED")
+            self.analyzed_badge.setStyleSheet(
+                f"{badge_style} color: {theme().badge_analyzed_text}; "
+                f"background-color: {theme().badge_analyzed};"
             )
+            self.analyzed_badge.show()
+        else:
+            self.analyzed_badge.hide()
 
     def set_selected(self, selected: bool):
         """Set selection state."""
@@ -165,10 +203,29 @@ class SourceThumbnail(QFrame):
     def mouseDoubleClickEvent(self, event):
         self.double_clicked.emit(self.source)
 
+    def contextMenuEvent(self, event):
+        """Show context menu with delete option."""
+        menu = QMenu(self)
+        delete_action = menu.addAction(f"Delete \"{self.source.filename}\"")
+        action = menu.exec_(event.globalPos())
+        if action == delete_action:
+            self.delete_requested.emit(self.source)
+
     def keyPressEvent(self, event: QKeyEvent):
         """Handle keyboard events for accessibility."""
         if event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
             self.clicked.emit(self.source)
+        elif event.key() == Qt.Key_Delete or event.key() == Qt.Key_Backspace:
+            self.delete_requested.emit(self.source)
+        elif event.key() == Qt.Key_Menu or (
+            event.key() == Qt.Key_F10 and event.modifiers() & Qt.ShiftModifier
+        ):
+            center = self.rect().center()
+            menu = QMenu(self)
+            delete_action = menu.addAction(f"Delete \"{self.source.filename}\"")
+            action = menu.exec_(self.mapToGlobal(center))
+            if action == delete_action:
+                self.delete_requested.emit(self.source)
         else:
             super().keyPressEvent(event)
 

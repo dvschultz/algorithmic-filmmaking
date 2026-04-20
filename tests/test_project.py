@@ -21,7 +21,10 @@ class TestProjectCreation:
         assert project.path is None
         assert project.sources == []
         assert project.clips == []
-        assert project.sequence is None
+        # R2 invariant: new projects always have one empty sequence
+        assert project.sequence is not None
+        assert len(project.sequences) == 1
+        assert len(project.sequence.get_all_clips()) == 0
         assert not project.is_dirty
 
     def test_new_project_default_name(self):
@@ -303,16 +306,27 @@ class TestProjectOperations:
 
         assert len(project.clips) == 2
 
-    def test_add_to_sequence_creates_sequence(self):
-        """Test add_to_sequence creates sequence if none exists."""
+    def test_add_to_sequence_adds_to_existing(self):
+        """Test add_to_sequence adds clips to the existing sequence."""
         project = Project.new()
-        assert project.sequence is None
+        # R2: sequence always exists, starts empty
+        assert project.sequence is not None
+        assert len(project.sequence.get_all_clips()) == 0
 
+        source = Source(
+            id="src-1",
+            file_path=Path("/test/video.mp4"),
+            duration_seconds=60.0,
+            fps=30.0,
+            width=1920,
+            height=1080,
+        )
+        project.add_source(source)
         clip = Clip(id="clip-1", source_id="src-1", start_frame=0, end_frame=30)
         project.add_clips([clip])
         project.add_to_sequence(["clip-1"])
 
-        assert project.sequence is not None
+        assert len(project.sequence.get_all_clips()) == 1
 
     def test_add_to_sequence_with_invalid_clip(self):
         """Test add_to_sequence ignores invalid clip IDs."""
@@ -349,7 +363,10 @@ class TestProjectOperations:
 
         assert project.sources == []
         assert project.clips == []
-        assert project.sequence is None
+        # R2 invariant: clear resets to one empty sequence, not None
+        assert project.sequence is not None
+        assert len(project.sequences) == 1
+        assert len(project.sequence.get_all_clips()) == 0
 
 
 class TestProjectPersistence:

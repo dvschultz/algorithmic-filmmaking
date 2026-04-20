@@ -59,7 +59,7 @@ Frame[] (extracted images)                    add to sequence
                                               SequenceClip[] → render → output
 ```
 
-**Source** (`models/clip.py`): `id`, `file_path`, `fps`, `duration_seconds`, `width`, `height`, `analyzed`, `color_profile`
+**Source** (`models/clip.py`): `id`, `file_path`, `fps`, `duration_seconds`, `width`, `height`, `cut`, `has_analysis`, `color_profile`
 
 **Clip** (`models/clip.py`): `id`, `source_id`, `start_frame`, `end_frame`, `name`, `disabled`, `thumbnail_path`, `dominant_colors`, `shot_type`, `transcript`, `tags`, `notes`, `object_labels`, `detected_objects`, `face_embeddings`, `person_count`, `description`, `description_model`, `extracted_texts`, `cinematography`, `average_brightness`, `rms_volume`, `embedding`, `first_frame_embedding`, `last_frame_embedding`, `embedding_model`
 

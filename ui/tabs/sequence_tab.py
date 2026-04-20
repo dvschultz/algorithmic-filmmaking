@@ -14,6 +14,8 @@ from PySide6.QtWidgets import (
     QLabel,
     QCheckBox,
     QMessageBox,
+    QMenu,
+    QInputDialog,
 )
 from PySide6.QtCore import Signal, Qt, Slot
 
@@ -102,10 +104,14 @@ class SequenceTab(BaseTab):
         self._current_algorithm = None
         self._current_state = self.STATE_CARDS
         self._gui_state = None  # Set by MainWindow
+        self._project = None  # Set by MainWindow via set_project()
 
         # Guard flags
         self._apply_in_progress = False
         self._sequence_worker: Optional[SequenceWorker] = None
+        self._algorithm_running = False  # Prevents dirty flag during algo runs
+        self._sequence_dirty = False  # Set on manual user edits (drag, remove)
+        self._replace_sequence_index = None  # Deferred removal for Replace flow
 
         # Confirm state: pending algorithm and clips for generation
         self._pending_algorithm: Optional[str] = None
@@ -140,11 +146,51 @@ class SequenceTab(BaseTab):
         self._set_state(self.STATE_CARDS)
 
     def _create_cards_view(self) -> QWidget:
-        """Create the cards view with empty-sequence guidance."""
+        """Create the cards view with sequence selector and algorithm grid."""
         container = QWidget()
         layout = QVBoxLayout(container)
-        layout.setContentsMargins(Spacing.XL, Spacing.XL, Spacing.XL, Spacing.XL)
-        layout.setSpacing(Spacing.MD)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # Sequence selector bar (always visible at top of cards view)
+        cards_header = QWidget()
+        cards_header.setStyleSheet(f"""
+            QWidget {{
+                background-color: {theme().background_secondary};
+                border-bottom: 1px solid {theme().border_primary};
+            }}
+        """)
+        cards_header_layout = QHBoxLayout(cards_header)
+        cards_header_layout.setContentsMargins(12, 8, 12, 8)
+
+        cards_seq_label = QLabel("Sequence:")
+        cards_seq_label.setStyleSheet(f"color: {theme().text_secondary}; border: none;")
+        cards_header_layout.addWidget(cards_seq_label)
+
+        self.cards_sequence_dropdown = QComboBox()
+        self.cards_sequence_dropdown.setMinimumWidth(UISizes.COMBO_BOX_MIN_WIDTH)
+        self.cards_sequence_dropdown.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
+        self.cards_sequence_dropdown.currentIndexChanged.connect(self._on_sequence_switched)
+        self.cards_sequence_dropdown.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.cards_sequence_dropdown.customContextMenuRequested.connect(
+            self._on_cards_sequence_context_menu
+        )
+        cards_header_layout.addWidget(self.cards_sequence_dropdown)
+
+        cards_header_layout.addStretch()
+
+        cards_new_btn = QPushButton("New Sequence")
+        cards_new_btn.setMinimumHeight(UISizes.BUTTON_MIN_HEIGHT)
+        cards_new_btn.clicked.connect(self._on_new_sequence_clicked)
+        cards_header_layout.addWidget(cards_new_btn)
+
+        layout.addWidget(cards_header)
+
+        # Card grid content area
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(Spacing.XL, Spacing.XL, Spacing.XL, Spacing.XL)
+        content_layout.setSpacing(Spacing.MD)
 
         self.cards_hint_label = QLabel(
             "Timeline is empty. Select clips in Analyze or Cut, or choose a sequencer below to build one."
@@ -153,16 +199,18 @@ class SequenceTab(BaseTab):
         self.cards_hint_label.setStyleSheet(
             f"color: {theme().text_muted}; font-size: {TypeScale.SM}px;"
         )
-        layout.addWidget(self.cards_hint_label)
+        content_layout.addWidget(self.cards_hint_label)
 
         self.card_grid = SortingCardGrid()
         self.card_grid.algorithm_selected.connect(self._on_card_clicked)
         self.card_grid.category_changed.connect(self._on_category_changed)
-        layout.addWidget(self.card_grid)
+        content_layout.addWidget(self.card_grid)
 
         # Restore persisted category (set_category does not emit, so no save loop)
         settings = load_settings()
         self.card_grid.set_category(settings.sequence_selected_category)
+
+        layout.addWidget(content)
 
         return container
 
@@ -201,6 +249,7 @@ class SequenceTab(BaseTab):
         self.timeline.setMinimumHeight(180)
         self.timeline.playhead_changed.connect(self._on_playhead_changed)
         self.timeline.export_requested.connect(self._on_export_requested)
+        self.timeline.sequence_changed.connect(self._on_timeline_user_edit)
         self.timeline_splitter.addWidget(self.timeline)
 
         # Set splitter sizes
@@ -213,7 +262,7 @@ class SequenceTab(BaseTab):
         return container
 
     def _create_header(self) -> QWidget:
-        """Create the header row with algorithm dropdown and clear button."""
+        """Create the header row with sequence dropdown, algorithm dropdown, and buttons."""
         header = QWidget()
         header.setStyleSheet(f"""
             QWidget {{
@@ -223,6 +272,24 @@ class SequenceTab(BaseTab):
         """)
         layout = QHBoxLayout(header)
         layout.setContentsMargins(12, 8, 12, 8)
+
+        # Sequence dropdown (leftmost — higher-level context)
+        seq_label = QLabel("Sequence:")
+        seq_label.setStyleSheet(f"color: {theme().text_secondary}; border: none;")
+        layout.addWidget(seq_label)
+
+        self.sequence_dropdown = QComboBox()
+        self.sequence_dropdown.setMinimumWidth(UISizes.COMBO_BOX_MIN_WIDTH)
+        self.sequence_dropdown.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
+        self.sequence_dropdown.currentIndexChanged.connect(self._on_sequence_switched)
+        self.sequence_dropdown.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.sequence_dropdown.customContextMenuRequested.connect(self._on_sequence_context_menu)
+        layout.addWidget(self.sequence_dropdown)
+
+        # Separator
+        sep = QLabel("|")
+        sep.setStyleSheet(f"color: {theme().text_secondary}; border: none; margin: 0 4px;")
+        layout.addWidget(sep)
 
         label = QLabel("Algorithm:")
         label.setStyleSheet(f"color: {theme().text_secondary}; border: none;")
@@ -280,10 +347,11 @@ class SequenceTab(BaseTab):
 
         layout.addStretch()
 
-        self.clear_btn = QPushButton("Clear Sequence")
-        self.clear_btn.setToolTip("Clear timeline and return to card selection")
-        self.clear_btn.clicked.connect(self._on_clear_clicked)
-        layout.addWidget(self.clear_btn)
+        self.new_seq_btn = QPushButton("New Sequence")
+        self.new_seq_btn.setToolTip("Create a new empty sequence")
+        self.new_seq_btn.setMinimumHeight(UISizes.BUTTON_MIN_HEIGHT)
+        self.new_seq_btn.clicked.connect(self._on_new_sequence_clicked)
+        layout.addWidget(self.new_seq_btn)
 
         return header
 
@@ -748,7 +816,8 @@ class SequenceTab(BaseTab):
         algo_lower = algorithm.lower()
 
         try:
-            # Clear and populate timeline
+            # Create a new sequence for this algorithm run
+            self._create_and_activate_sequence(algo_lower)
             self.timeline.clear_timeline()
 
             current_frame = 0
@@ -788,11 +857,24 @@ class SequenceTab(BaseTab):
             # Notify that clip metadata may have been mutated by auto-compute
             self.clips_data_changed.emit([clip for clip, _ in sorted_clips])
 
+            # If this was a Replace operation, remove the old sequence now that the new one succeeded
+            replace_idx = getattr(self, "_replace_sequence_index", None)
+            if replace_idx is not None and self._project:
+                # The old sequence's index may have shifted because we appended a new one.
+                # The new sequence is at the end; the old one is still at replace_idx
+                # (if it wasn't reused by the empty-sequence optimization).
+                if replace_idx < len(self._project.sequences) and replace_idx != self._project.active_sequence_index:
+                    self._project.remove_sequence(replace_idx)
+                    self._sync_sequence_dropdown()
+                self._replace_sequence_index = None
+
         except Exception as e:
+            self._replace_sequence_index = None
             logger.error(f"Error populating timeline: {e}")
             QMessageBox.critical(self, "Error", f"Failed to generate sequence: {e}")
 
         finally:
+            self._algorithm_running = False
             self._apply_in_progress = False
             self._sequence_worker = None
 
@@ -849,6 +931,8 @@ class SequenceTab(BaseTab):
             return
 
         try:
+            # Create a new sequence for this dialog algorithm
+            self._create_and_activate_sequence(algorithm_key)
             self.timeline.clear_timeline()
 
             first_clip, first_source = sequence_clips[0]
@@ -890,6 +974,9 @@ class SequenceTab(BaseTab):
         except Exception as e:
             logger.error(f"Error applying {display_label} sequence: {e}")
             QMessageBox.critical(self, "Error", f"Failed to apply sequence: {e}")
+
+        finally:
+            self._algorithm_running = False
 
     @Slot(list)
     def _apply_exquisite_corpus_sequence(self, sequence_clips: list):
@@ -1132,6 +1219,7 @@ class SequenceTab(BaseTab):
         try:
             from models.sequence import SequenceClip
 
+            self._create_and_activate_sequence("signature_style")
             self.timeline.clear_timeline()
 
             first_clip, first_source, _, _ = sequence_data[0]
@@ -1183,6 +1271,9 @@ class SequenceTab(BaseTab):
             logger.error(f"Error applying Signature Style sequence: {e}")
             QMessageBox.critical(self, "Error", f"Failed to apply sequence: {e}")
 
+        finally:
+            self._algorithm_running = False
+
     def _show_rose_hobart_dialog(self, clips: list):
         """Show the Rose Hobart dialog for face-filter sequencing.
 
@@ -1233,6 +1324,7 @@ class SequenceTab(BaseTab):
             return
 
         try:
+            self._create_and_activate_sequence("staccato")
             self.timeline.clear_timeline()
 
             first_clip, first_source = sequence_clips[0][0], sequence_clips[0][1]
@@ -1303,6 +1395,9 @@ class SequenceTab(BaseTab):
             logger.error(f"Failed to apply Staccato sequence: {e}")
             QMessageBox.critical(self, "Error", f"Failed to apply sequence:\n{e}")
 
+        finally:
+            self._algorithm_running = False
+
     def _show_eyes_without_a_face_dialog(self, clips: list):
         """Show the Eyes Without a Face dialog for gaze-based sequencing.
 
@@ -1345,6 +1440,7 @@ class SequenceTab(BaseTab):
             return
 
         try:
+            self._create_and_activate_sequence("shuffle")
             self.timeline.clear_timeline()
 
             first_clip, first_source, _ = sequence_data[0]
@@ -1394,6 +1490,9 @@ class SequenceTab(BaseTab):
         except Exception as e:
             logger.error(f"Error applying Dice Roll sequence: {e}")
             QMessageBox.critical(self, "Error", f"Failed to apply sequence: {e}")
+
+        finally:
+            self._algorithm_running = False
 
     # Direction options per algorithm: list of (display_label, internal_key).
     # First entry is the default. Algorithms not listed have no direction.
@@ -1492,17 +1591,30 @@ class SequenceTab(BaseTab):
         self.timeline.sequence_changed.emit()
 
     def _regenerate_sequence(self, algorithm: str):
-        """Regenerate the sequence with current timeline clips."""
+        """Regenerate the sequence with current timeline clips (R3a prompt)."""
         # Use clips currently on timeline
         sequence = self.timeline.get_sequence()
         if not sequence.tracks or not sequence.tracks[0].clips:
+            return
+
+        # R3a: Prompt user — replace current sequence or create new?
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Re-run Algorithm")
+        msg.setText("Replace the current sequence or create a new one?")
+        replace_btn = msg.addButton("Replace", QMessageBox.YesRole)
+        create_btn = msg.addButton("Create New", QMessageBox.NoRole)
+        cancel_btn = msg.addButton("Cancel", QMessageBox.RejectRole)
+        msg.setDefaultButton(create_btn)
+        msg.exec()
+
+        clicked = msg.clickedButton()
+        if clicked == cancel_btn:
             return
 
         # Gather clips from timeline
         clips = []
         for seq_clip in sequence.tracks[0].clips:
             source_clip_id = seq_clip.source_clip_id
-            source_id = seq_clip.source_id
 
             # Look up in available clips
             for clip, source in self._available_clips:
@@ -1510,19 +1622,31 @@ class SequenceTab(BaseTab):
                     clips.append((clip, source))
                     break
 
-        if clips:
-            direction = self._get_current_direction()
+        if not clips:
+            return
+
+        direction = self._get_current_direction()
+        if clicked == replace_btn:
+            # Replace: mark the current sequence for removal AFTER the worker succeeds.
+            # Don't remove now — if the worker fails, we'd lose the original permanently.
+            self._replace_sequence_index = self._project.active_sequence_index if self._project else None
+            self._apply_algorithm(algorithm, clips, direction=direction)
+        else:
+            # Create New: just run the algorithm (it auto-creates a new sequence)
+            self._replace_sequence_index = None
             self._apply_algorithm(algorithm, clips, direction=direction)
 
     @Slot()
-    def _on_clear_clicked(self):
-        """Clear sequence and return to cards."""
+    def _on_new_sequence_clicked(self):
+        """Create a new empty sequence and switch to it."""
+        self._create_and_activate_sequence("manual", display_label="Untitled Sequence")
         self.timeline.clear_timeline()
         self.timeline_preview.clear()
         self._current_algorithm = None
         self.set_chromatic_color_bar_enabled(False, emit_signal=False)
         self._update_chromatic_bar_controls(None)
         self._emit_chromatic_bar_setting_changed()
+        self._algorithm_running = False
         self._set_state(self.STATE_CARDS)
 
     def clear(self):
@@ -1540,6 +1664,258 @@ class SequenceTab(BaseTab):
         self._set_state(self.STATE_CARDS)
         # Reset all cards to enabled for intention flow (fresh project)
         self._reset_card_availability()
+
+    # --- Multi-sequence management ---
+
+    def set_project(self, project):
+        """Set project reference and populate sequence dropdown.
+
+        Called by MainWindow after project load/create.
+        """
+        self._project = project
+        self._sequence_dirty = False
+        self._sync_sequence_dropdown()
+
+    def _generate_sequence_name(self, algorithm_key: str) -> str:
+        """Generate a monotonic auto-name for a new sequence.
+
+        First run of an algorithm uses the display label alone (e.g., "Chromatics").
+        Subsequent runs use "{Label} #{N}" where N is max_existing + 1.
+        """
+        display_label = get_algorithm_label(algorithm_key)
+        if not self._project:
+            return display_label
+
+        # Scan existing names for the highest N matching "{Label} #{N}"
+        max_n = 0
+        bare_exists = False
+        for seq in self._project.sequences:
+            if seq.name == display_label:
+                bare_exists = True
+            elif seq.name.startswith(f"{display_label} #"):
+                try:
+                    n = int(seq.name[len(display_label) + 2:])
+                    max_n = max(max_n, n)
+                except ValueError:
+                    pass
+
+        if not bare_exists and max_n == 0:
+            return display_label
+        return f"{display_label} #{max(max_n + 1, 2)}"
+
+    def _create_and_activate_sequence(
+        self, algorithm_key: str, display_label: Optional[str] = None
+    ) -> "Sequence":
+        """Create a new sequence, append it to the project, activate it, and update the dropdown.
+
+        This is the shared entry point for all apply handlers. After this call,
+        the timeline is cleared and ready for the handler to populate with clips.
+
+        Args:
+            algorithm_key: Internal algorithm key (e.g., "color", "storyteller")
+            display_label: Optional custom name. If None, auto-generated.
+
+        Returns:
+            The new Sequence (already set as active on the project).
+        """
+        from models.sequence import Sequence as SeqModel
+
+        if not self._project:
+            return SeqModel()
+
+        # Persist the departing sequence (no dirty prompt — callers handle that)
+        self._persist_current_sequence()
+
+        # Generate name
+        if display_label is None:
+            name = self._generate_sequence_name(algorithm_key)
+        else:
+            name = display_label
+
+        # If the current sequence is empty (0 clips), reuse it instead of
+        # creating a new one alongside it — avoids orphan "Untitled Sequence"
+        current_seq = self._project.sequence
+        if current_seq and len(current_seq.get_all_clips()) == 0:
+            current_seq.name = name
+            current_seq.algorithm = algorithm_key
+            new_seq = current_seq
+        else:
+            # Create and add a new sequence
+            new_seq = SeqModel(name=name, algorithm=algorithm_key)
+            self._project.add_sequence(new_seq)
+            self._project.set_active_sequence(len(self._project.sequences) - 1)
+
+        # Sync the timeline's scene to point at the new active sequence.
+        # Without this, timeline.get_sequence() keeps returning the previous
+        # sequence object, and the next _persist_current_sequence() call
+        # overwrites the new slot with the old object (duplicate reference).
+        self.timeline.scene.set_sequence(new_seq)
+
+        # Update dropdown
+        self._sync_sequence_dropdown()
+
+        # Set guard flag so timeline changes don't trigger dirty
+        self._algorithm_running = True
+        self._sequence_dirty = False
+
+        return new_seq
+
+    def _sync_sequence_dropdown(self):
+        """Rebuild both dropdown widgets from project.sequences. Blocks signals."""
+        if not self._project:
+            return
+        for dropdown in (self.sequence_dropdown, self.cards_sequence_dropdown):
+            dropdown.blockSignals(True)
+            dropdown.clear()
+            for seq in self._project.sequences:
+                dropdown.addItem(seq.name)
+            dropdown.setCurrentIndex(self._project.active_sequence_index)
+            dropdown.blockSignals(False)
+
+    def _on_sequence_switched(self, new_index: int):
+        """Handle user selecting a different sequence in the dropdown."""
+        if not self._project or new_index < 0 or new_index >= len(self._project.sequences):
+            return
+        if new_index == self._project.active_sequence_index:
+            return
+
+        # Dirty check: prompt if user manually edited the timeline
+        should_persist = True
+        if self._sequence_dirty:
+            result = QMessageBox.question(
+                self,
+                "Unsaved Changes",
+                "The current sequence has unsaved changes.\nSave before switching?",
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+            )
+            if result == QMessageBox.Cancel:
+                # Revert BOTH dropdowns to current index
+                for dd in (self.sequence_dropdown, self.cards_sequence_dropdown):
+                    dd.blockSignals(True)
+                    dd.setCurrentIndex(self._project.active_sequence_index)
+                    dd.blockSignals(False)
+                return
+            elif result == QMessageBox.Discard:
+                should_persist = False
+            # Save: persist below
+
+        if should_persist:
+            self._persist_current_sequence()
+
+        # Switch active sequence
+        self._project.set_active_sequence(new_index)
+        self._sequence_dirty = False
+
+        # Load arriving sequence into timeline
+        self._load_active_sequence()
+
+    def _persist_current_sequence(self):
+        """Sync timeline state back to the project's active sequence."""
+        if not self._project:
+            return
+        timeline_seq = self.timeline.get_sequence()
+        self._project.sequences[self._project.active_sequence_index] = timeline_seq
+
+    def _load_active_sequence(self):
+        """Load the project's active sequence into the timeline and update UI controls."""
+        if not self._project:
+            return
+        sequence = self._project.sequence
+        if sequence and sequence.get_all_clips():
+            sources = self._sources
+            self.timeline.load_sequence(
+                sequence,
+                {s_id: src for s_id, src in sources.items()},
+                {c.id: c for c in self._clips},
+            )
+            self.timeline_preview.set_clips(
+                [(c, sources.get(c.source_id)) for track in sequence.tracks for c in track.clips if sources.get(c.source_id)],
+                sources,
+            )
+            self._set_state(self.STATE_TIMELINE)
+        else:
+            self.timeline.clear_timeline()
+            self.timeline_preview.clear()
+            self._set_state(self.STATE_CARDS)
+
+        # Sync algorithm controls to the arriving sequence
+        self.sync_sequence_metadata(sequence)
+
+    def _on_timeline_user_edit(self):
+        """Called when user manually edits the timeline (not from algorithm run)."""
+        if not self._algorithm_running:
+            self._sequence_dirty = True
+
+    def _on_cards_sequence_context_menu(self, pos):
+        """Context menu for the cards-view sequence dropdown."""
+        self._show_sequence_context_menu(self.cards_sequence_dropdown, pos)
+
+    def _on_sequence_context_menu(self, pos):
+        """Context menu for the timeline-view sequence dropdown."""
+        self._show_sequence_context_menu(self.sequence_dropdown, pos)
+
+    def _show_sequence_context_menu(self, dropdown: QComboBox, pos):
+        """Show context menu on a sequence dropdown (Rename, Delete)."""
+        if not self._project or not self._project.sequences:
+            return
+
+        index = dropdown.currentIndex()
+        if index < 0 or index >= len(self._project.sequences):
+            return
+
+        seq = self._project.sequences[index]
+        menu = QMenu(self)
+
+        rename_action = menu.addAction(f"Rename \"{seq.name}\"...")
+        menu.addSeparator()
+        delete_action = menu.addAction(f"Delete \"{seq.name}\"")
+
+        action = menu.exec(dropdown.mapToGlobal(pos))
+
+        if action == rename_action:
+            self._on_rename_sequence(index)
+        elif action == delete_action:
+            self._on_delete_sequence(index)
+
+    def _on_delete_sequence(self, index: int):
+        """Delete a sequence by index. Confirm if populated (R7)."""
+        if not self._project or index < 0 or index >= len(self._project.sequences):
+            return
+
+        seq = self._project.sequences[index]
+        clip_count = len(seq.get_all_clips())
+
+        # Confirm for populated sequences (R7)
+        if clip_count > 0:
+            result = QMessageBox.question(
+                self,
+                "Delete Sequence",
+                f"Delete \"{seq.name}\"? This cannot be undone.\n({clip_count} clips)",
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if result != QMessageBox.Yes:
+                return
+
+        was_active = (index == self._project.active_sequence_index)
+        self._project.remove_sequence(index)
+        self._sync_sequence_dropdown()
+
+        # If deleted the active sequence, load the new active one
+        if was_active:
+            self._load_active_sequence()
+
+    def _on_rename_sequence(self, index: int):
+        """Rename a sequence via input dialog (R9)."""
+        if not self._project or index < 0 or index >= len(self._project.sequences):
+            return
+
+        seq = self._project.sequences[index]
+        new_name, ok = QInputDialog.getText(
+            self, "Rename Sequence", "Name:", text=seq.name
+        )
+        if ok and new_name.strip():
+            seq.name = new_name.strip()
+            self._sync_sequence_dropdown()
 
     def _is_chromatic_flow_algorithm(self, algorithm: Optional[str]) -> bool:
         """Whether the algorithm uses Chromatics (color-based sorting)."""
@@ -1926,7 +2302,8 @@ class SequenceTab(BaseTab):
                 no_color_handling=no_color_handling,
             )
 
-            # Clear and apply to timeline
+            # Create new sequence and apply to timeline
+            self._create_and_activate_sequence(algorithm.lower())
             self.timeline.clear_timeline()
 
             current_frame = 0
@@ -2013,6 +2390,9 @@ class SequenceTab(BaseTab):
             logger.error(f"Error in generate_and_apply: {e}")
             return {"success": False, "error": str(e)}
 
+        finally:
+            self._algorithm_running = False
+
     def generate_reference_guided(
         self,
         reference_source_id: str,
@@ -2069,7 +2449,8 @@ class SequenceTab(BaseTab):
                     "error": "No clips could be matched. Try different weights or enable allow_repeats."
                 }
 
-            # Apply to timeline
+            # Create new sequence and apply to timeline
+            self._create_and_activate_sequence("reference_guided")
             self.timeline.clear_timeline()
 
             first_clip, first_source = matched[0]
@@ -2125,14 +2506,19 @@ class SequenceTab(BaseTab):
             logger.error(f"Error in generate_reference_guided: {e}")
             return {"success": False, "error": str(e)}
 
+        finally:
+            self._algorithm_running = False
+
     def clear_sequence(self) -> dict:
         """Clear the sequence (for agent tools).
+
+        Creates a new empty sequence (matching the "New Sequence" button).
 
         Returns:
             Dict with success status
         """
-        self._on_clear_clicked()
-        return {"success": True, "message": "Sequence cleared"}
+        self._on_new_sequence_clicked()
+        return {"success": True, "message": "New empty sequence created"}
 
     def apply_intention_workflow_result(
         self,
@@ -2175,7 +2561,8 @@ class SequenceTab(BaseTab):
                 seed=seed,
             )
 
-            # Clear and populate timeline
+            # Create new sequence and populate timeline
+            self._create_and_activate_sequence(algorithm.lower())
             self.timeline.clear_timeline()
 
             # Set FPS from first source
@@ -2229,6 +2616,9 @@ class SequenceTab(BaseTab):
         except Exception as e:
             logger.error(f"Error applying intention workflow result: {e}")
             return {"success": False, "error": str(e)}
+
+        finally:
+            self._algorithm_running = False
 
     def on_tab_activated(self):
         """Called when this tab becomes visible."""

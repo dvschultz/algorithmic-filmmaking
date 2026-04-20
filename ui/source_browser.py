@@ -177,6 +177,7 @@ class SourceBrowser(QWidget):
     source_selected = Signal(object)  # Source
     source_double_clicked = Signal(object)  # Source
     files_dropped = Signal(list)  # List of Paths from add card
+    delete_sources_requested = Signal(list)  # List of source IDs to delete
 
     COLUMNS = 4
 
@@ -233,6 +234,7 @@ class SourceBrowser(QWidget):
         thumb = SourceThumbnail(source)
         thumb.clicked.connect(self._on_thumbnail_clicked)
         thumb.double_clicked.connect(self._on_thumbnail_double_clicked)
+        thumb.delete_requested.connect(self._on_thumbnail_delete_requested)
 
         self.thumbnails.append(thumb)
 
@@ -280,8 +282,8 @@ class SourceBrowser(QWidget):
         return list(self._sources_by_id.values())
 
     def get_unanalyzed_sources(self) -> list[Source]:
-        """Get all sources that haven't been analyzed."""
-        return [s for s in self._sources_by_id.values() if not s.analyzed]
+        """Get all sources that haven't been cut (scene detected)."""
+        return [s for s in self._sources_by_id.values() if not s.cut]
 
     def update_source_thumbnail(self, source_id: str, thumb_path: Path):
         """Update the thumbnail for a specific source."""
@@ -291,13 +293,27 @@ class SourceBrowser(QWidget):
                 break
 
     def update_source_analyzed(self, source_id: str, analyzed: bool = True):
-        """Update the analyzed status for a specific source."""
+        """Backward-compat: mark source as cut."""
+        self.update_source_cut(source_id, analyzed)
+
+    def update_source_cut(self, source_id: str, cut: bool = True):
+        """Update the cut (scene detected) status for a specific source."""
         source = self._sources_by_id.get(source_id)
         if source:
-            source.analyzed = analyzed
+            source.cut = cut
         for thumb in self.thumbnails:
             if thumb.source.id == source_id:
-                thumb.set_analyzed(analyzed)
+                thumb.set_cut(cut)
+                break
+
+    def update_source_has_analysis(self, source_id: str, has_analysis: bool = True):
+        """Update the analysis status for a specific source."""
+        source = self._sources_by_id.get(source_id)
+        if source:
+            source.has_analysis = has_analysis
+        for thumb in self.thumbnails:
+            if thumb.source.id == source_id:
+                thumb.set_has_analysis(has_analysis)
                 break
 
     def _on_thumbnail_clicked(self, source: Source):
@@ -313,6 +329,15 @@ class SourceBrowser(QWidget):
             thumb.set_selected(thumb.source.id in self.selected_source_ids)
 
         self.source_selected.emit(source)
+
+    def _on_thumbnail_delete_requested(self, source: Source):
+        """Handle delete request — include all selected sources if this one is selected."""
+        if source.id in self.selected_source_ids and len(self.selected_source_ids) > 1:
+            # Multi-select: delete all selected sources
+            self.delete_sources_requested.emit(list(self.selected_source_ids))
+        else:
+            # Single source
+            self.delete_sources_requested.emit([source.id])
 
     def select_all(self) -> None:
         """Select all sources."""

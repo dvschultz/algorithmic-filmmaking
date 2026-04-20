@@ -444,7 +444,7 @@ class TestProjectFileFormat:
                 fps=29.97,
                 width=4096,
                 height=2160,
-                analyzed=True,
+                cut=True,
             )
             project.add_source(source)
             project.save(project_path)

@@ -1097,8 +1097,9 @@ class MainWindow(QMainWindow):
         # Set up Frames tab project reference
         self.frames_tab.set_project(self.project)
 
-        # Set up Sequence tab GUI state reference
+        # Set up Sequence tab GUI state and project references
         self.sequence_tab.set_gui_state(self._gui_state)
+        self.sequence_tab.set_project(self.project)
 
         layout.addWidget(self.tab_widget)
 
@@ -1589,6 +1590,7 @@ class MainWindow(QMainWindow):
         self.collect_tab.analyze_requested.connect(self._on_analyze_requested)
         self.collect_tab.source_selected.connect(self._on_source_selected)
         self.collect_tab.download_requested.connect(self._on_download_requested_from_tab)
+        self.collect_tab.delete_sources_requested.connect(self._on_delete_sources_requested)
 
         # Video search panel signals (YouTube and Internet Archive)
         self.collect_tab.youtube_search_panel.search_requested.connect(
@@ -1892,6 +1894,75 @@ class MainWindow(QMainWindow):
         # Refresh Analyze tab lookups (cached properties may have been invalidated)
         if hasattr(self, 'analyze_tab'):
             self.analyze_tab.set_lookups(self.clips_by_id, self.sources_by_id)
+
+    def _on_delete_sources_requested(self, source_ids: list[str]):
+        """Handle delete request from Collect tab. Guards against sequence usage."""
+        if not source_ids:
+            return
+
+        deletable = []
+        blocked = {}  # source_id -> list of sequence names
+
+        for source_id in source_ids:
+            seq_names = self.project.source_in_sequences(source_id)
+            if seq_names:
+                source = self.project.sources_by_id.get(source_id)
+                name = source.filename if source else source_id
+                blocked[name] = seq_names
+            else:
+                deletable.append(source_id)
+
+        # Show error for blocked sources
+        if blocked:
+            lines = []
+            for name, seqs in blocked.items():
+                lines.append(f"  {name}: used in {', '.join(seqs)}")
+            QMessageBox.warning(
+                self,
+                "Cannot Delete",
+                f"The following sources have clips in sequences:\n"
+                + "\n".join(lines)
+                + "\n\nDelete those sequences first.",
+            )
+
+        if not deletable:
+            return
+
+        # Count clips for confirmation message
+        total_clips = sum(
+            len([c for c in self.project.clips if c.source_id == sid])
+            for sid in deletable
+        )
+        source_names = []
+        for sid in deletable:
+            source = self.project.sources_by_id.get(sid)
+            source_names.append(source.filename if source else sid)
+
+        if len(deletable) == 1:
+            msg = f"Delete \"{source_names[0]}\" and its {total_clips} clips?\nThis cannot be undone."
+        else:
+            msg = f"Delete {len(deletable)} sources and {total_clips} clips?\nThis cannot be undone."
+
+        result = QMessageBox.question(
+            self, "Delete Sources", msg,
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if result != QMessageBox.Yes:
+            return
+
+        # Perform deletion
+        for source_id in deletable:
+            self.project.remove_source(source_id)
+            self.collect_tab.remove_source(source_id)
+
+        # Refresh lookups
+        if hasattr(self, "analyze_tab"):
+            self.analyze_tab.set_lookups(self.clips_by_id, self.sources_by_id)
+
+        self._update_window_title()
+        self.status_bar.showMessage(
+            f"Deleted {len(deletable)} source(s) and {total_clips} clips"
+        )
 
     @Slot(list)
     def _on_clips_removed(self, clips: list):
@@ -3784,6 +3855,17 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage(
                 f"Analysis complete - {clip_count} clips ({', '.join(completed)})"
             )
+
+        # Mark affected sources as having analysis data
+        analyzed_source_ids = set()
+        for clip in clips:
+            if clip.source_id:
+                analyzed_source_ids.add(clip.source_id)
+        for source_id in analyzed_source_ids:
+            source = self.project.sources_by_id.get(source_id)
+            if source:
+                source.has_analysis = True
+            self.collect_tab.update_source_has_analysis(source_id, True)
 
         # Save project
         if self.project.path:
@@ -8926,8 +9008,8 @@ class MainWindow(QMainWindow):
         """Save project to the specified file."""
         self.status_bar.showMessage("Saving project...")
 
-        # Get sequence from timeline and update project
-        self.project.sequence = self.sequence_tab.timeline.get_sequence()
+        # Persist current timeline state to the project's active sequence
+        self.sequence_tab._persist_current_sequence()
 
         # Get UI state and update project
         self.project.ui_state = {
@@ -9040,7 +9122,8 @@ class MainWindow(QMainWindow):
             if clip.transcript:
                 self.cut_tab.update_clip_transcript(clip.id, clip.transcript)
 
-        # Restore sequence UI and timeline state
+        # Set project reference on sequence tab and restore timeline state
+        self.sequence_tab.set_project(self.project)
         self._refresh_timeline_from_project()
 
         # Restore UI state
@@ -9099,6 +9182,7 @@ class MainWindow(QMainWindow):
         self.analyze_tab.clear_clips()
         self.frames_tab.frame_browser.clear()
         self.sequence_tab.clear()  # Clear all state including _clips and _available_clips
+        self.sequence_tab.set_project(self.project)  # Re-sync dropdown after clear
         self.render_tab.clear()  # Clear render tab state
 
         # Clear progress bar
@@ -9200,7 +9284,8 @@ class MainWindow(QMainWindow):
                 if clip.transcript:
                     self.cut_tab.update_clip_transcript(clip.id, clip.transcript)
 
-        # Restore sequence UI and timeline state
+        # Set project reference on sequence tab and restore timeline state
+        self.sequence_tab.set_project(self.project)
         self._refresh_timeline_from_project()
 
         # Restore UI state
