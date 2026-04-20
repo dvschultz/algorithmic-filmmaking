@@ -6,6 +6,7 @@ to download exactly what's needed.
 """
 
 import logging
+import sys
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -13,6 +14,25 @@ from core.binary_resolver import find_binary
 from core.dependency_manager import is_binary_available, is_package_available
 
 logger = logging.getLogger(__name__)
+
+# Package names whose C extensions cannot be safely reinstalled in a running
+# process. If already loaded in sys.modules, reinstalling them produces errors
+# like "function '_has_torch_function' already has a docstring" because the
+# new shared objects are layered on top of the already-loaded ones. Skip these
+# from reinstall when they're already imported; install only what's missing.
+_UNSAFE_TO_RELOAD_IF_LOADED = {
+    "torch",
+    "torchvision",
+    "torchaudio",
+    "onnxruntime",
+    "transformers",
+    "insightface",
+    "ultralytics",
+    "mlx",
+    "mlx_vlm",
+    "lightning_whisper_mlx",
+    "paddleocr",
+}
 
 _FULL_PACKAGE_REPAIR_FEATURES = {
     "audio_analysis",
@@ -106,6 +126,31 @@ def requires_full_package_repair(name: str, missing: list[str]) -> bool:
     if name not in _FULL_PACKAGE_REPAIR_FEATURES:
         return False
     return any(dep.startswith("package:") or dep.startswith("runtime:") for dep in missing)
+
+
+def _filter_already_loaded_packages(package_names: list[str]) -> list[str]:
+    """Remove packages whose top-level module is already imported in this process.
+
+    Reinstalling a loaded C extension (e.g. torch) in-process corrupts its
+    runtime state. We keep the loaded ones as-is and let pip install just
+    the remaining packages.
+    """
+    remaining = []
+    skipped = []
+    for pkg_spec in package_names:
+        # Strip version constraints: "torch>=2.4,<2.7" -> "torch"
+        top = pkg_spec.split(">=")[0].split("<=")[0].split("==")[0].split("<")[0].split(">")[0].strip()
+        top_norm = top.replace("-", "_")
+        if top_norm in _UNSAFE_TO_RELOAD_IF_LOADED and top_norm in sys.modules:
+            skipped.append(top_norm)
+        else:
+            remaining.append(pkg_spec)
+    if skipped:
+        logger.info(
+            "Skipping reinstall of already-loaded packages %s (would corrupt C-extension state)",
+            skipped,
+        )
+    return remaining
 
 
 @dataclass
@@ -372,14 +417,16 @@ def install_for_feature(
                 e,
             )
             runtime_repair = True
-            missing = [f"package:{package_name}" for package_name in deps.packages]
+            packages_to_reinstall = _filter_already_loaded_packages(deps.packages)
+            missing = [f"package:{p}" for p in packages_to_reinstall]
     elif requires_full_package_repair(name, missing):
         logger.info(
             "Feature '%s' has partial package coverage; reinstalling the full package set",
             name,
         )
         runtime_repair = True
-        missing = [f"package:{package_name}" for package_name in deps.packages]
+        packages_to_reinstall = _filter_already_loaded_packages(deps.packages)
+        missing = [f"package:{p}" for p in packages_to_reinstall]
 
     success = True
 
@@ -420,12 +467,16 @@ def install_for_feature(
         start = len(binary_steps) / total_steps
         scaled_callback = _scaled_progress_callback(progress_callback, start, 1.0)
         repair_package_names = deps.repair_packages or deps.packages
+        if runtime_repair:
+            # Filter out already-loaded C extensions so we don't corrupt their
+            # runtime state by reinstalling them on top of a live process.
+            repair_package_names = _filter_already_loaded_packages(repair_package_names)
         package_batch_names = repair_package_names if runtime_repair else package_names
         specifiers = [get_pip_specifier(dep_name) for dep_name in package_batch_names]
-        if runtime_repair:
+        if runtime_repair and repair_package_names:
             clear_package_roots(repair_package_names)
         installer = install_native_packages if deps.native_install else install_packages
-        if not installer(specifiers, scaled_callback, no_deps=deps.no_deps):
+        if specifiers and not installer(specifiers, scaled_callback, no_deps=deps.no_deps):
             success = False
 
     if success:
