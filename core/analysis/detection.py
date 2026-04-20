@@ -77,6 +77,57 @@ def _get_model_cache_dir() -> Path:
         return default
 
 
+def _predownload_yolo_weights(model_name: str, cache_dir: Path) -> Path:
+    """Download a YOLO .pt file with Python's urllib before YOLO() tries to.
+
+    Ultralytics' bundled curl sometimes fails with error 56 on flaky networks
+    (proxies, VPNs, rate-limits). This uses Python's HTTP stack with explicit
+    retries and writes the model to the cache dir, then returns the path.
+    Returns the local path if already cached.
+    """
+    import urllib.request
+    import urllib.error
+    import ssl
+    import time
+
+    local_path = cache_dir / model_name
+    if local_path.exists() and local_path.stat().st_size > 0:
+        logger.info(f"YOLO model already cached at {local_path}")
+        return local_path
+
+    url = f"https://github.com/ultralytics/assets/releases/download/v8.4.0/{model_name}"
+
+    try:
+        import certifi
+        ctx = ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        ctx = ssl.create_default_context()
+
+    last_err = None
+    for attempt in range(1, 4):
+        try:
+            logger.info(f"Downloading {model_name} (attempt {attempt}/3) from {url}")
+            req = urllib.request.Request(url, headers={"User-Agent": "scene-ripper"})
+            with urllib.request.urlopen(req, timeout=60, context=ctx) as resp:
+                data = resp.read()
+            tmp_path = local_path.with_suffix(".pt.tmp")
+            tmp_path.write_bytes(data)
+            tmp_path.rename(local_path)
+            logger.info(f"Downloaded {model_name} ({len(data)} bytes) to {local_path}")
+            return local_path
+        except (urllib.error.URLError, ssl.SSLError, OSError, TimeoutError) as e:
+            last_err = e
+            logger.warning(f"YOLO download attempt {attempt} failed: {e}")
+            if attempt < 3:
+                time.sleep(2 * attempt)
+
+    raise RuntimeError(
+        f"Could not download {model_name} from GitHub after 3 attempts. "
+        f"Last error: {last_err}. Check your network/proxy, or download the file "
+        f"manually from {url} and place it at {local_path}."
+    )
+
+
 def _load_yolo(model_size: str = "n"):
     """
     Lazy load YOLO26 model (thread-safe).
@@ -109,10 +160,22 @@ def _load_yolo(model_size: str = "n"):
 
             YOLO = ensure_object_detection_runtime_available()
 
-            # YOLO26 will download the model to cache on first use (~6MB for nano)
             model_name = f"yolo26{model_size}.pt"
+
+            # Pre-download the model ourselves so we control retry + error surface.
+            # Ultralytics' bundled curl returns error 56 on some networks; Python's
+            # urllib is more robust.
             try:
-                _model = YOLO(model_name)
+                local_model_path = _predownload_yolo_weights(model_name, cache_dir)
+            except Exception as e:
+                from core.errors import ModelDownloadError
+
+                raise ModelDownloadError(
+                    f"Failed to download YOLO26{model_size} model: {e}"
+                ) from e
+
+            try:
+                _model = YOLO(str(local_model_path))
             except Exception as e:
                 from core.errors import ModelDownloadError
 
