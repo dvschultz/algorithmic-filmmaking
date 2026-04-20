@@ -38,7 +38,7 @@ mkdir -p AppDir/usr/share/icons/hicolor/scalable/apps
 # Copy application source
 echo "Copying application source..."
 cp -r main.py core/ models/ ui/ AppDir/usr/src/
-cp requirements.txt AppDir/usr/src/
+cp requirements-core.txt AppDir/usr/src/
 
 # Copy desktop entry
 echo "Copying desktop entry..."

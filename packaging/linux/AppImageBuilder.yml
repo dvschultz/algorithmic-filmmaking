@@ -2,7 +2,7 @@ version: 1
 
 script:
   # Install Python dependencies into AppDir
-  - pip install --target="${APPDIR}/usr/lib/python3/site-packages" -r requirements.txt
+  - pip install --target="${APPDIR}/usr/lib/python3/site-packages" -r requirements-core.txt
 
 AppDir:
   path: ./AppDir
