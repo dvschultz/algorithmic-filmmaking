@@ -50,7 +50,8 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-core.txt
+          # Tests need full deps (including optional ML packages)
+          pip install -r requirements.txt
           pip install pytest
 
       - name: Verify FFmpeg
