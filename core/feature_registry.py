@@ -20,17 +20,19 @@ logger = logging.getLogger(__name__)
 # like "function '_has_torch_function' already has a docstring" because the
 # new shared objects are layered on top of the already-loaded ones. Skip these
 # from reinstall when they're already imported; install only what's missing.
+# Native-code packages only — these either bundle C/Rust extensions or Metal/CUDA
+# runtimes that break when reinstalled under a loaded interpreter. Pure-Python
+# packages like transformers, mlx_vlm, ultralytics, and lightning_whisper_mlx
+# must NOT be in this list: they are frequent version-pinned deps of VLMs and
+# skipping them leaves users stuck on stale versions (e.g. a transformers that
+# can't resolve Qwen3-VL's processor class).
 _UNSAFE_TO_RELOAD_IF_LOADED = {
     "torch",
     "torchvision",
     "torchaudio",
     "onnxruntime",
-    "transformers",
     "insightface",
-    "ultralytics",
     "mlx",
-    "mlx_vlm",
-    "lightning_whisper_mlx",
     "paddleocr",
 }
 
