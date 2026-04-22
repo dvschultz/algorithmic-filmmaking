@@ -15,10 +15,13 @@ from typing import Optional
 
 from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
+    QRadioButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
@@ -27,10 +30,12 @@ from PySide6.QtWidgets import (
 from core.analysis.color import COLOR_PALETTES, get_palette_display_name
 from core.analysis.gaze import GAZE_CATEGORY_DISPLAY
 from core.analysis.shots import SHOT_TYPES, get_display_name
+from core.analysis_operations import ANALYSIS_OPERATIONS
 from core.filter_state import FilterState
 from ui.theme import Spacing, TypeScale, UISizes, theme
 from ui.widgets.chip_group import ChipGroup
 from ui.widgets.collapsible_section import CollapsibleSection
+from ui.widgets.count_operator import CountOperator
 
 
 SECTION_SHOT = "shot"
@@ -83,9 +88,13 @@ class FilterSidebar(QWidget):
         self._filter_state = filter_state
         self._sections: dict[str, CollapsibleSection] = {}
         self._chip_groups: dict[str, ChipGroup] = {}
+        # Unit 5 controls
+        self._person_count_control: Optional[CountOperator] = None
+        self._tribool_groups: dict[str, tuple[QRadioButton, QRadioButton, QRadioButton]] = {}
         self._updating_from_state = False
         self._setup_ui(section_expanded_state or {})
         self._populate_existing_filters()
+        self._populate_unit5_filters()
         self._sync_from_state()
         self._filter_state.changed.connect(self._sync_from_state)
         self._refresh_theme()
@@ -210,6 +219,109 @@ class FilterSidebar(QWidget):
         group.selection_changed.connect(on_change)
         return group
 
+    def _populate_unit5_filters(self) -> None:
+        """Wire controls for person count, tribool booleans, has-analysis chips."""
+
+        # People section — extend with person count operator
+        existing_people = self._sections[SECTION_PEOPLE].findChild(QWidget)
+        self._person_count_control = CountOperator()
+        self._person_count_control.value_changed.connect(self._on_person_count_changed)
+
+        people_container = QWidget()
+        pc_layout = QVBoxLayout(people_container)
+        pc_layout.setContentsMargins(0, 0, 0, 0)
+        pc_layout.setSpacing(Spacing.SM)
+        if existing_people is not None:
+            # Re-parent existing gaze control
+            pc_layout.addWidget(self._chip_groups["gaze_filter"].parent())
+        pc_layout.addWidget(
+            self._labelled("Person count", self._person_count_control)
+        )
+        self.set_section_content(SECTION_PEOPLE, people_container)
+
+        # Text section — has_transcript + has_on_screen_text tribools
+        text_container = QWidget()
+        text_layout = QVBoxLayout(text_container)
+        text_layout.setContentsMargins(0, 0, 0, 0)
+        text_layout.setSpacing(Spacing.SM)
+        text_layout.addWidget(
+            self._tribool_row("Has transcript", "has_transcript")
+        )
+        text_layout.addWidget(
+            self._tribool_row("Has on-screen text", "has_on_screen_text")
+        )
+        self.set_section_content(SECTION_TEXT, text_container)
+
+        # Audio section — has_audio tribool only (volume slider deferred)
+        audio_container = QWidget()
+        audio_layout = QVBoxLayout(audio_container)
+        audio_layout.setContentsMargins(0, 0, 0, 0)
+        audio_layout.setSpacing(Spacing.SM)
+        audio_layout.addWidget(self._tribool_row("Has audio", "has_audio"))
+        self.set_section_content(SECTION_AUDIO, audio_container)
+
+        # Meta section — has_analysis_ops chips + enabled tribool
+        meta_container = QWidget()
+        meta_layout = QVBoxLayout(meta_container)
+        meta_layout.setContentsMargins(0, 0, 0, 0)
+        meta_layout.setSpacing(Spacing.SM)
+
+        op_options = [(op.key, op.label) for op in ANALYSIS_OPERATIONS]
+        has_ops_chips = self._build_chip_group(
+            op_options,
+            lambda values: self._set_state("has_analysis_ops", values),
+        )
+        self._chip_groups["has_analysis_ops"] = has_ops_chips
+        meta_layout.addWidget(self._labelled("Has analysis", has_ops_chips))
+        meta_layout.addWidget(self._tribool_row("Enabled", "enabled_filter"))
+        self.set_section_content(SECTION_META, meta_container)
+
+    def _tribool_row(self, label_text: str, field_name: str) -> QWidget:
+        """Yes / No / Any radio triplet bound to a tribool FilterState field."""
+        container = QWidget()
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(Spacing.SM)
+
+        label = QLabel(label_text)
+        label.setMinimumWidth(140)
+        layout.addWidget(label)
+
+        group = QButtonGroup(container)
+        yes_btn = QRadioButton("Yes")
+        no_btn = QRadioButton("No")
+        any_btn = QRadioButton("Any")
+        any_btn.setChecked(True)
+        for btn in (yes_btn, no_btn, any_btn):
+            group.addButton(btn)
+            layout.addWidget(btn)
+        layout.addStretch()
+
+        def on_toggled(_checked):
+            if self._updating_from_state:
+                return
+            if yes_btn.isChecked():
+                setattr(self._filter_state, field_name, True)
+            elif no_btn.isChecked():
+                setattr(self._filter_state, field_name, False)
+            else:
+                setattr(self._filter_state, field_name, None)
+
+        yes_btn.toggled.connect(on_toggled)
+        no_btn.toggled.connect(on_toggled)
+        any_btn.toggled.connect(on_toggled)
+
+        self._tribool_groups[field_name] = (yes_btn, no_btn, any_btn)
+        return container
+
+    def _on_person_count_changed(self, op, n):
+        if self._updating_from_state:
+            return
+        if op is None or n is None:
+            self._filter_state.person_count = None
+        else:
+            self._filter_state.person_count = (op, n)
+
     def _labelled(self, label_text: str, widget: QWidget) -> QWidget:
         container = QWidget()
         layout = QVBoxLayout(container)
@@ -229,13 +341,31 @@ class FilterSidebar(QWidget):
 
     @Slot()
     def _sync_from_state(self) -> None:
-        """State → UI. Push current FilterState values back onto the chip groups."""
+        """State → UI. Push current FilterState values back onto controls."""
         self._updating_from_state = True
         try:
             for field_name, group in self._chip_groups.items():
                 current = getattr(self._filter_state, field_name)
                 if isinstance(current, set):
                     group.set_selected(current)
+
+            # Person count operator
+            if self._person_count_control is not None:
+                pc = self._filter_state.person_count
+                if pc is None:
+                    self._person_count_control.clear()
+                else:
+                    self._person_count_control.set_value(pc[0], pc[1])
+
+            # Triboolean radio groups
+            for field_name, (yes_btn, no_btn, any_btn) in self._tribool_groups.items():
+                current = getattr(self._filter_state, field_name)
+                if current is True:
+                    yes_btn.setChecked(True)
+                elif current is False:
+                    no_btn.setChecked(True)
+                else:
+                    any_btn.setChecked(True)
         finally:
             self._updating_from_state = False
 

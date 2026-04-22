@@ -185,6 +185,54 @@ def test_state_change_updates_chip_selection(qapp):
     assert group.selected_values() == {first_value}
 
 
+def test_person_count_control_writes_to_state(qapp):
+    from core.filter_state import FilterState
+    from ui.widgets.filter_sidebar import FilterSidebar
+
+    fs = FilterState()
+    sidebar = FilterSidebar(fs)
+    sidebar._person_count_control.set_value(">", 2)
+    qapp.processEvents()
+
+    assert fs.person_count == (">", 2)
+
+
+def test_has_audio_tribool(qapp):
+    from core.filter_state import FilterState
+    from ui.widgets.filter_sidebar import FilterSidebar
+
+    fs = FilterState()
+    sidebar = FilterSidebar(fs)
+    yes_btn, no_btn, any_btn = sidebar._tribool_groups["has_audio"]
+
+    yes_btn.setChecked(True)
+    qapp.processEvents()
+    assert fs.has_audio is True
+
+    no_btn.setChecked(True)
+    qapp.processEvents()
+    assert fs.has_audio is False
+
+    any_btn.setChecked(True)
+    qapp.processEvents()
+    assert fs.has_audio is None
+
+
+def test_has_analysis_ops_chips(qapp):
+    from core.filter_state import FilterState
+    from ui.widgets.filter_sidebar import FilterSidebar
+
+    fs = FilterState()
+    sidebar = FilterSidebar(fs)
+    ops_group = sidebar._chip_groups["has_analysis_ops"]
+    # Pick any operation key
+    first_key = next(iter(ops_group._buttons.keys()))
+    ops_group._buttons[first_key].setChecked(True)
+    qapp.processEvents()
+
+    assert first_key in fs.has_analysis_ops
+
+
 def test_state_sync_does_not_loop(qapp):
     """State→UI→state round-trip must not cause a cascade."""
     from core.filter_state import FilterState
