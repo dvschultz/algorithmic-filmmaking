@@ -36,11 +36,12 @@ class CutTab(BaseTab):
     STATE_NO_CLIPS = 1
     STATE_CLIPS = 2
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, filter_state=None):
         # References to be set by MainWindow
         self._current_source = None
         self._clips = []
         self._settings = None
+        self._filter_state = filter_state
         super().__init__(parent)
 
     def _setup_ui(self):
@@ -111,7 +112,7 @@ class CutTab(BaseTab):
         layout.setContentsMargins(0, 0, 0, 0)
 
         # Clip browser (full width - video preview is in clip details sidebar)
-        self.clip_browser = ClipBrowser()
+        self.clip_browser = ClipBrowser(filter_state=self._filter_state)
         self.clip_browser.set_drag_enabled(True)
         self.clip_browser.clip_selected.connect(self._on_clip_selected)
         self.clip_browser.clip_double_clicked.connect(self._on_clip_double_clicked)

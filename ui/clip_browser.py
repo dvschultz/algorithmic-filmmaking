@@ -6,6 +6,8 @@ from typing import Optional
 
 import numpy as np
 
+from core.filter_state import FilterState
+
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -703,42 +705,150 @@ class ClipBrowser(QWidget):
         "9:16": (0.5625, 0.53, 0.59),   # 0.5625 ± 5%
     }
 
+    # ── Filter-state proxy properties ───────────────────────────────
+    # Each pair delegates to `self._filter_state.<field>`. Having these
+    # named with underscores preserves backward compat with tests that
+    # assign `browser._gaze_filter = "at_camera"` directly.
+
+    @property
+    def _current_filter(self) -> str:
+        return self._filter_state.shot_type
+
+    @_current_filter.setter
+    def _current_filter(self, value: str) -> None:
+        self._filter_state.shot_type = value if value else "All"
+
+    @property
+    def _current_color_filter(self) -> str:
+        return self._filter_state.color_palette
+
+    @_current_color_filter.setter
+    def _current_color_filter(self, value: str) -> None:
+        self._filter_state.color_palette = value if value else "All"
+
+    @property
+    def _current_search_query(self) -> str:
+        return self._filter_state.search_query
+
+    @_current_search_query.setter
+    def _current_search_query(self, value: str) -> None:
+        self._filter_state.search_query = value or ""
+
+    @property
+    def _selected_custom_queries(self) -> set:
+        return self._filter_state.selected_custom_queries
+
+    @_selected_custom_queries.setter
+    def _selected_custom_queries(self, value) -> None:
+        self._filter_state.selected_custom_queries = set(value) if value else set()
+
+    @property
+    def _min_duration(self):
+        return self._filter_state.min_duration
+
+    @_min_duration.setter
+    def _min_duration(self, value) -> None:
+        self._filter_state.min_duration = value
+
+    @property
+    def _max_duration(self):
+        return self._filter_state.max_duration
+
+    @_max_duration.setter
+    def _max_duration(self, value) -> None:
+        self._filter_state.max_duration = value
+
+    @property
+    def _aspect_ratio_filter(self) -> str:
+        return self._filter_state.aspect_ratio
+
+    @_aspect_ratio_filter.setter
+    def _aspect_ratio_filter(self, value: str) -> None:
+        self._filter_state.aspect_ratio = value if value else "All"
+
+    @property
+    def _gaze_filter(self):
+        return self._filter_state.gaze_filter
+
+    @_gaze_filter.setter
+    def _gaze_filter(self, value) -> None:
+        self._filter_state.gaze_filter = value
+
+    @property
+    def _object_search(self) -> str:
+        return self._filter_state.object_search
+
+    @_object_search.setter
+    def _object_search(self, value: str) -> None:
+        self._filter_state.object_search = value or ""
+
+    @property
+    def _description_search(self) -> str:
+        return self._filter_state.description_search
+
+    @_description_search.setter
+    def _description_search(self, value: str) -> None:
+        self._filter_state.description_search = value or ""
+
+    @property
+    def _min_brightness(self):
+        return self._filter_state.min_brightness
+
+    @_min_brightness.setter
+    def _min_brightness(self, value) -> None:
+        self._filter_state.min_brightness = value
+
+    @property
+    def _max_brightness(self):
+        return self._filter_state.max_brightness
+
+    @_max_brightness.setter
+    def _max_brightness(self, value) -> None:
+        self._filter_state.max_brightness = value
+
+    @property
+    def _similarity_anchor_id(self):
+        return self._filter_state.similarity_anchor_id
+
+    @_similarity_anchor_id.setter
+    def _similarity_anchor_id(self, value) -> None:
+        self._filter_state.similarity_anchor_id = value
+
+    @property
+    def _similarity_scores(self) -> dict:
+        return self._filter_state.similarity_scores
+
+    @_similarity_scores.setter
+    def _similarity_scores(self, value) -> None:
+        self._filter_state.similarity_scores = dict(value) if value else {}
+
     @property
     def COLUMNS(self) -> int:
         """Calculate number of columns based on available width."""
         return self._calculate_columns()
 
-    def __init__(self):
+    def __init__(self, filter_state: Optional[FilterState] = None):
         super().__init__()
         self.thumbnails: list[ClipThumbnail] = []
         self._thumbnail_by_id: dict[str, ClipThumbnail] = {}  # O(1) lookup by clip_id
         self.selected_clips: set[str] = set()  # clip ids
         self._drag_enabled = False
         self._source_lookup: dict[str, Source] = {}  # clip_id -> Source
-        self._current_filter = "All"  # Current shot type filter
-        self._current_color_filter = "All"  # Current color palette filter
-        self._current_search_query = ""  # Current transcript search query
-        self._selected_custom_queries: set[str] = set()
+
+        # Shared filter state — all filter values live here. Proxy properties
+        # on this class (e.g., `_current_filter`, `_gaze_filter`) read/write
+        # through `_filter_state` so existing tests that mutate private attrs
+        # directly keep working while the shared-state migration (Unit 1 of
+        # `docs/plans/2026-04-21-001-feat-comprehensive-clip-filter-system-plan.md`)
+        # is introduced. Both tabs' browsers share one `FilterState` instance
+        # when MainWindow injects it here.
+        self._filter_state = filter_state if filter_state is not None else FilterState()
+
         self._custom_query_filter_actions: dict[str, QAction] = {}
         self._updating_custom_query_filter_menu = False
         self._last_column_count = 0  # Track columns to detect changes on resize
 
-        # Duration and aspect ratio filters
-        self._min_duration: Optional[float] = None
-        self._max_duration: Optional[float] = None
-        self._aspect_ratio_filter: str = "All"  # "All", "16:9", "4:3", "9:16"
         self._filter_panel_visible = False
-
-        # Gaze, object, description, and brightness filters
-        self._gaze_filter: Optional[str] = None  # None = all, or internal key e.g. "at_camera"
-        self._object_search: str = ""
-        self._description_search: str = ""
-        self._min_brightness: Optional[float] = None
-        self._max_brightness: Optional[float] = None
-
-        # Similarity mode state
-        self._similarity_anchor_id: Optional[str] = None
-        self._similarity_scores: dict[str, float] = {}
 
         # Source grouping state
         self._group_expanded_state: dict[str, bool] = {}  # source_id -> is_expanded

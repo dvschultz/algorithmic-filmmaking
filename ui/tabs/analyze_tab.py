@@ -49,7 +49,7 @@ class AnalyzeTab(BaseTab):
     STATE_NO_CLIPS = 0
     STATE_CLIPS = 1
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, filter_state=None):
         # Clip ID references (not copies) - resolved via MainWindow.clips_by_id
         self._clip_ids: set[str] = set()
         # Source lookup for video preview (set by MainWindow)
@@ -57,6 +57,7 @@ class AnalyzeTab(BaseTab):
         self._clips_by_id: dict = {}
         self._is_analyzing = False
         self._disabled_quick_ops: set[str] = set()
+        self._filter_state = filter_state
         super().__init__(parent)
 
     def _setup_ui(self):
@@ -159,7 +160,7 @@ class AnalyzeTab(BaseTab):
         layout.setContentsMargins(0, 0, 0, 0)
 
         # Clip browser (full width - video preview is in clip details sidebar)
-        self.clip_browser = ClipBrowser()
+        self.clip_browser = ClipBrowser(filter_state=self._filter_state)
         self.clip_browser.set_drag_enabled(True)
         self.clip_browser.clip_selected.connect(self._on_clip_selected)
         self.clip_browser.clip_double_clicked.connect(self._on_clip_double_clicked)

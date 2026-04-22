@@ -1075,10 +1075,16 @@ class MainWindow(QMainWindow):
         self.tab_widget = QTabWidget()
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
 
+        # Shared clip-filter state — Cut and Analyze point at the same
+        # FilterState so filter values are shared across tabs by default
+        # (see docs/plans/2026-04-21-001-feat-comprehensive-clip-filter-system-plan.md).
+        from core.filter_state import FilterState
+        self._filter_state = FilterState()
+
         # Create tabs
         self.collect_tab = CollectTab()
-        self.cut_tab = CutTab()
-        self.analyze_tab = AnalyzeTab()
+        self.cut_tab = CutTab(filter_state=self._filter_state)
+        self.analyze_tab = AnalyzeTab(filter_state=self._filter_state)
         self.frames_tab = FramesTab()
         self.sequence_tab = SequenceTab()
         self.render_tab = RenderTab()
