@@ -472,6 +472,12 @@ class Settings:
     # Sequence tab - remembered category filter
     sequence_selected_category: str = "All"
 
+    # Cut / Analyze filter sidebar — visibility per tab and per-section expand
+    # state. See docs/plans/2026-04-21-001-feat-comprehensive-clip-filter-system-plan.md.
+    cut_filter_sidebar_visible: bool = True
+    analyze_filter_sidebar_visible: bool = True
+    filter_sidebar_section_expanded: dict = field(default_factory=dict)
+
     # Analysis Parallelism Settings
     color_analysis_parallelism: int = 4  # 1-8, I/O-bound image loading
     description_parallelism: int = 3  # 1-5, cloud API I/O-bound
