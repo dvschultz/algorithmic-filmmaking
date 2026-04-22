@@ -893,7 +893,11 @@ class ClipBrowser(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # Header with filter and sort dropdowns
+        # Header with non-filter controls only. Filter UI is now owned by
+        # FilterSidebar (see ui/widgets/filter_sidebar.py); the legacy
+        # filter widgets below are still instantiated for backward compat
+        # with tests that manipulate `browser.filter_combo`, etc. directly,
+        # but they are not added to any visible layout.
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(8, 8, 8, 4)
 
@@ -903,16 +907,7 @@ class ClipBrowser(QWidget):
 
         header_layout.addStretch()
 
-        # Filters toggle button
-        self.filters_btn = QPushButton("Filters")
-        self.filters_btn.setCheckable(True)
-        self.filters_btn.setToolTip("Show/hide duration and aspect ratio filters")
-        self.filters_btn.clicked.connect(self._toggle_filter_panel)
-        header_layout.addWidget(self.filters_btn)
-
-        header_layout.addSpacing(4)
-
-        # Expand/Collapse all buttons
+        # Expand/Collapse all buttons (non-filter)
         self.expand_all_btn = QPushButton("Expand All")
         self.expand_all_btn.setToolTip("Expand all source groups")
         self.expand_all_btn.clicked.connect(self.expand_all_groups)
@@ -923,63 +918,9 @@ class ClipBrowser(QWidget):
         self.collapse_all_btn.clicked.connect(self.collapse_all_groups)
         header_layout.addWidget(self.collapse_all_btn)
 
-        header_layout.addSpacing(8)
-
-        # Shot type filter dropdown
-        filter_label = QLabel("Shot:")
-        header_layout.addWidget(filter_label)
-
-        self.filter_combo = QComboBox()
-        filter_options = ["All"] + [get_display_name(st) for st in SHOT_TYPES]
-        self.filter_combo.addItems(filter_options)
-        self.filter_combo.setFixedWidth(100)
-        self.filter_combo.currentTextChanged.connect(self._on_filter_changed)
-        header_layout.addWidget(self.filter_combo)
-
-        header_layout.addSpacing(8)
-
-        # Color palette filter dropdown
-        color_label = QLabel("Color:")
-        header_layout.addWidget(color_label)
-
-        self.color_filter_combo = QComboBox()
-        color_filter_options = ["All"] + [get_palette_display_name(cp) for cp in COLOR_PALETTES]
-        self.color_filter_combo.addItems(color_filter_options)
-        self.color_filter_combo.setFixedWidth(80)
-        self.color_filter_combo.currentTextChanged.connect(self._on_color_filter_changed)
-        header_layout.addWidget(self.color_filter_combo)
-
-        header_layout.addSpacing(8)
-
-        # Transcript search input
-        search_label = QLabel("Search:")
-        header_layout.addWidget(search_label)
-
-        self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Search transcripts...")
-        self.search_input.setFixedWidth(120)
-        self.search_input.setToolTip("Filter clips by transcript content")
-        self.search_input.textChanged.connect(self._on_search_changed)
-        header_layout.addWidget(self.search_input)
-
-        header_layout.addSpacing(8)
-
-        custom_query_label = QLabel("Custom:")
-        header_layout.addWidget(custom_query_label)
-
-        self.custom_query_filter_btn = QToolButton()
-        self.custom_query_filter_btn.setPopupMode(QToolButton.InstantPopup)
-        self.custom_query_filter_btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
-        self.custom_query_filter_btn.setMinimumWidth(120)
-        self.custom_query_filter_btn.setToolTip("Filter clips by custom query matches")
-        self.custom_query_filter_menu = QMenu(self.custom_query_filter_btn)
-        self.custom_query_filter_btn.setMenu(self.custom_query_filter_menu)
-        header_layout.addWidget(self.custom_query_filter_btn)
-        self._sync_custom_query_filter_options()
-
         header_layout.addSpacing(16)
 
-        # Sort dropdown
+        # Sort dropdown (non-filter)
         sort_label = QLabel("Order:")
         header_layout.addWidget(sort_label)
 
@@ -991,10 +932,41 @@ class ClipBrowser(QWidget):
 
         layout.addLayout(header_layout)
 
-        # Filter panel (collapsible)
+        # ── Legacy filter widgets (parented but not added to visible layout) ──
+        # These instances preserve backward compat with pre-sidebar tests that
+        # read/write `browser.filter_combo`, `browser.gaze_combo`, etc.
+        self.filters_btn = QPushButton("Filters", parent=self)
+        self.filters_btn.setCheckable(True)
+        self.filters_btn.setVisible(False)
+        self.filters_btn.clicked.connect(self._toggle_filter_panel)
+
+        self.filter_combo = QComboBox(parent=self)
+        self.filter_combo.addItems(["All"] + [get_display_name(st) for st in SHOT_TYPES])
+        self.filter_combo.setVisible(False)
+        self.filter_combo.currentTextChanged.connect(self._on_filter_changed)
+
+        self.color_filter_combo = QComboBox(parent=self)
+        self.color_filter_combo.addItems(["All"] + [get_palette_display_name(cp) for cp in COLOR_PALETTES])
+        self.color_filter_combo.setVisible(False)
+        self.color_filter_combo.currentTextChanged.connect(self._on_color_filter_changed)
+
+        self.search_input = QLineEdit(parent=self)
+        self.search_input.setVisible(False)
+        self.search_input.textChanged.connect(self._on_search_changed)
+
+        self.custom_query_filter_btn = QToolButton(parent=self)
+        self.custom_query_filter_btn.setPopupMode(QToolButton.InstantPopup)
+        self.custom_query_filter_btn.setVisible(False)
+        self.custom_query_filter_menu = QMenu(self.custom_query_filter_btn)
+        self.custom_query_filter_btn.setMenu(self.custom_query_filter_menu)
+        self._sync_custom_query_filter_options()
+
+        # Legacy filter panel (slider widgets, gaze combo, etc.) — created
+        # but not added to the visible layout. Tests still access its children
+        # like `browser.gaze_combo` directly.
         self.filter_panel = self._create_filter_panel()
+        self.filter_panel.setParent(self)
         self.filter_panel.setVisible(False)
-        layout.addWidget(self.filter_panel)
 
         # Scroll area for thumbnails
         self.scroll = QScrollArea()
