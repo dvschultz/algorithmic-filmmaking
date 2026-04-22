@@ -18,14 +18,15 @@ def qapp():
 def test_defaults(qapp):
     from core.filter_state import FilterState
     fs = FilterState()
-    assert fs.shot_type == "All"
-    assert fs.color_palette == "All"
-    assert fs.aspect_ratio == "All"
+    # Enum fields are empty sets (= no filter)
+    assert fs.shot_type == set()
+    assert fs.color_palette == set()
+    assert fs.aspect_ratio == set()
+    assert fs.gaze_filter == set()
     assert fs.search_query == ""
     assert fs.selected_custom_queries == set()
     assert fs.min_duration is None
     assert fs.max_duration is None
-    assert fs.gaze_filter is None
     assert fs.object_search == ""
     assert fs.description_search == ""
     assert fs.min_brightness is None
@@ -33,6 +34,29 @@ def test_defaults(qapp):
     assert fs.similarity_anchor_id is None
     assert fs.similarity_scores == {}
     assert fs.has_active() is False
+
+
+def test_enum_assignment_coerces_string_to_set(qapp):
+    from core.filter_state import FilterState
+    fs = FilterState()
+    fs.shot_type = "Close-up"
+    assert fs.shot_type == {"Close-up"}
+
+    fs.shot_type = None
+    assert fs.shot_type == set()
+
+    fs.shot_type = "All"  # Sentinel clears
+    assert fs.shot_type == set()
+
+
+def test_enum_assignment_accepts_list_and_set(qapp):
+    from core.filter_state import FilterState
+    fs = FilterState()
+    fs.shot_type = ["Close-up", "Extreme CU"]
+    assert fs.shot_type == {"Close-up", "Extreme CU"}
+
+    fs.shot_type = {"Wide Shot"}
+    assert fs.shot_type == {"Wide Shot"}
 
 
 def test_assignment_emits_once(qapp):
@@ -55,6 +79,9 @@ def test_assignment_same_value_no_emit(qapp):
     fs.shot_type = "Close-up"
     assert emissions == []
 
+    fs.shot_type = {"Close-up"}
+    assert emissions == []
+
 
 def test_apply_dict_batches_emissions(qapp):
     from core.filter_state import FilterState
@@ -68,12 +95,29 @@ def test_apply_dict_batches_emissions(qapp):
         "min_duration": 2.0,
         "max_duration": 5.0,
     })
-    # 4 fields changed, single emission
     assert len(emissions) == 1
-    assert fs.shot_type == "Close-up"
-    assert fs.color_palette == "Warm"
+    assert fs.shot_type == {"Close-up"}
+    assert fs.color_palette == {"Warm"}
     assert fs.min_duration == 2.0
     assert fs.max_duration == 5.0
+
+
+def test_apply_dict_multi_select_list(qapp):
+    from core.filter_state import FilterState
+    fs = FilterState()
+    fs.apply_dict({"shot_type": ["Close-up", "Extreme CU"]})
+    assert fs.shot_type == {"Close-up", "Extreme CU"}
+
+
+def test_apply_dict_backward_compat_string(qapp):
+    """String input to an enum field behaves like a single-item set."""
+    from core.filter_state import FilterState
+    fs_a = FilterState()
+    fs_b = FilterState()
+    fs_a.apply_dict({"shot_type": "Close-up"})
+    fs_b.apply_dict({"shot_type": ["Close-up"]})
+    assert fs_a.shot_type == fs_b.shot_type
+    assert fs_a.to_dict() == fs_b.to_dict()
 
 
 def test_apply_dict_empty_is_noop(qapp):
@@ -91,7 +135,7 @@ def test_apply_dict_none_clears_enum_fields(qapp):
     fs = FilterState()
     fs.shot_type = "Close-up"
     fs.apply_dict({"shot_type": None})
-    assert fs.shot_type == "All"
+    assert fs.shot_type == set()
 
 
 def test_apply_dict_custom_query_coercions(qapp):
@@ -107,7 +151,6 @@ def test_apply_dict_custom_query_coercions(qapp):
     fs.apply_dict({"custom_query": None})
     assert fs.selected_custom_queries == set()
 
-    # Legacy sentinel strings from the pre-refactor API are treated as "clear"
     fs.apply_dict({"custom_query": "All"})
     assert fs.selected_custom_queries == set()
 
@@ -122,11 +165,38 @@ def test_apply_dict_search_query_lowercased_and_trimmed(qapp):
     assert fs.search_query == "hello"
 
 
+def test_to_dict_single_value_emitted_as_string(qapp):
+    """Backward compat: single-value enums emit a plain string."""
+    from core.filter_state import FilterState
+    fs = FilterState()
+    fs.shot_type = "Close-up"
+    out = fs.to_dict()
+    assert out["shot_type"] == "Close-up"
+
+
+def test_to_dict_multi_value_emitted_as_sorted_list(qapp):
+    from core.filter_state import FilterState
+    fs = FilterState()
+    fs.shot_type = {"Extreme CU", "Close-up"}
+    out = fs.to_dict()
+    assert out["shot_type"] == ["Close-up", "Extreme CU"]
+
+
+def test_to_dict_empty_enum_emits_none(qapp):
+    from core.filter_state import FilterState
+    fs = FilterState()
+    out = fs.to_dict()
+    assert out["shot_type"] is None
+    assert out["color_palette"] is None
+    assert out["aspect_ratio"] is None
+    assert out["gaze"] is None
+
+
 def test_to_dict_round_trip(qapp):
     from core.filter_state import FilterState
     fs = FilterState()
     fs.apply_dict({
-        "shot_type": "Close-up",
+        "shot_type": ["Close-up", "Extreme CU"],
         "color_palette": "Warm",
         "min_duration": 2.0,
         "max_duration": 5.0,
@@ -139,7 +209,7 @@ def test_to_dict_round_trip(qapp):
         "custom_query": ["blue car", "person"],
     })
     out = fs.to_dict()
-    assert out["shot_type"] == "Close-up"
+    assert out["shot_type"] == ["Close-up", "Extreme CU"]
     assert out["color_palette"] == "Warm"
     assert out["min_duration"] == 2.0
     assert out["aspect_ratio"] == "16:9"
@@ -148,23 +218,9 @@ def test_to_dict_round_trip(qapp):
     assert out["min_brightness"] == 0.2
     assert sorted(out["custom_query"]) == ["blue car", "person"]
 
-    # Round-trip: applying to_dict to a fresh state yields identical output
     fs2 = FilterState()
     fs2.apply_dict(out)
     assert fs2.to_dict() == out
-
-
-def test_to_dict_defaults_are_none_for_inactive(qapp):
-    from core.filter_state import FilterState
-    fs = FilterState()
-    out = fs.to_dict()
-    assert out["shot_type"] is None
-    assert out["color_palette"] is None
-    assert out["aspect_ratio"] is None
-    assert out["search_query"] is None
-    assert out["custom_query"] is None
-    assert out["object_search"] is None
-    assert out["description_search"] is None
 
 
 def test_has_active_reflects_any_field(qapp):
@@ -181,7 +237,7 @@ def test_clear_all_resets_and_emits_once(qapp):
     from core.filter_state import FilterState
     fs = FilterState()
     fs.apply_dict({
-        "shot_type": "Close-up",
+        "shot_type": ["Close-up", "Extreme CU"],
         "min_brightness": 0.5,
         "custom_query": ["a"],
     })
@@ -205,14 +261,13 @@ def test_clear_all_on_empty_is_noop(qapp):
 
 
 def test_shared_instance_between_consumers(qapp):
-    """Two consumers sharing one FilterState both see the same mutations."""
     from core.filter_state import FilterState
     fs = FilterState()
-    consumer_a: list[str] = []
-    consumer_b: list[str] = []
-    fs.changed.connect(lambda: consumer_a.append(fs.shot_type))
-    fs.changed.connect(lambda: consumer_b.append(fs.shot_type))
+    consumer_a: list[set] = []
+    consumer_b: list[set] = []
+    fs.changed.connect(lambda: consumer_a.append(set(fs.shot_type)))
+    fs.changed.connect(lambda: consumer_b.append(set(fs.shot_type)))
 
     fs.shot_type = "Close-up"
-    assert consumer_a == ["Close-up"]
-    assert consumer_b == ["Close-up"]
+    assert consumer_a == [{"Close-up"}]
+    assert consumer_b == [{"Close-up"}]

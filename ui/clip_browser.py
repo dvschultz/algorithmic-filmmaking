@@ -8,6 +8,31 @@ import numpy as np
 
 from core.filter_state import FilterState
 
+
+def _enum_str_view(value_set, *, empty):
+    """Convert a FilterState enum set to a backward-compat string/list view.
+
+    Used by ``ClipBrowser`` proxy properties so existing callers that read
+    ``browser._gaze_filter`` / ``browser._current_filter`` still get a string
+    for single-select state and ``empty`` (``"All"`` or ``None``) for the
+    no-filter case.
+    """
+    if not value_set:
+        return empty
+    if len(value_set) == 1:
+        return next(iter(value_set))
+    return sorted(value_set, key=str.lower)
+
+
+def _combo_text_for_enum(value_set, *, fallback):
+    """Single-string representation of a multi-select enum for legacy QComboBox."""
+    if not value_set:
+        return fallback
+    if len(value_set) == 1:
+        return next(iter(value_set))
+    return fallback
+
+
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -711,20 +736,20 @@ class ClipBrowser(QWidget):
     # assign `browser._gaze_filter = "at_camera"` directly.
 
     @property
-    def _current_filter(self) -> str:
-        return self._filter_state.shot_type
+    def _current_filter(self):
+        return _enum_str_view(self._filter_state.shot_type, empty="All")
 
     @_current_filter.setter
-    def _current_filter(self, value: str) -> None:
-        self._filter_state.shot_type = value if value else "All"
+    def _current_filter(self, value) -> None:
+        self._filter_state.shot_type = value
 
     @property
-    def _current_color_filter(self) -> str:
-        return self._filter_state.color_palette
+    def _current_color_filter(self):
+        return _enum_str_view(self._filter_state.color_palette, empty="All")
 
     @_current_color_filter.setter
-    def _current_color_filter(self, value: str) -> None:
-        self._filter_state.color_palette = value if value else "All"
+    def _current_color_filter(self, value) -> None:
+        self._filter_state.color_palette = value
 
     @property
     def _current_search_query(self) -> str:
@@ -759,16 +784,16 @@ class ClipBrowser(QWidget):
         self._filter_state.max_duration = value
 
     @property
-    def _aspect_ratio_filter(self) -> str:
-        return self._filter_state.aspect_ratio
+    def _aspect_ratio_filter(self):
+        return _enum_str_view(self._filter_state.aspect_ratio, empty="All")
 
     @_aspect_ratio_filter.setter
-    def _aspect_ratio_filter(self, value: str) -> None:
-        self._filter_state.aspect_ratio = value if value else "All"
+    def _aspect_ratio_filter(self, value) -> None:
+        self._filter_state.aspect_ratio = value
 
     @property
     def _gaze_filter(self):
-        return self._filter_state.gaze_filter
+        return _enum_str_view(self._filter_state.gaze_filter, empty=None)
 
     @_gaze_filter.setter
     def _gaze_filter(self, value) -> None:
@@ -1746,21 +1771,23 @@ class ClipBrowser(QWidget):
             if thumb.clip.id not in self._similarity_scores:
                 return False
 
-        # Check shot type filter
-        if self._current_filter != "All":
+        # Check shot type filter (multi-select: match any selected value)
+        selected_shots = self._filter_state.shot_type
+        if selected_shots:
             shot_type = thumb.clip.shot_type
             if not shot_type:
                 return False
-            if get_display_name(shot_type) != self._current_filter:
+            if get_display_name(shot_type) not in selected_shots:
                 return False
 
-        # Check color palette filter
-        if self._current_color_filter != "All":
+        # Check color palette filter (multi-select)
+        selected_palettes = self._filter_state.color_palette
+        if selected_palettes:
             colors = thumb.clip.dominant_colors
             if not colors:
                 return False
             palette = classify_color_palette(colors)
-            if get_palette_display_name(palette) != self._current_color_filter:
+            if get_palette_display_name(palette) not in selected_palettes:
                 return False
 
         # Check transcript search
@@ -1785,23 +1812,29 @@ class ClipBrowser(QWidget):
             if self._max_duration is not None and duration > self._max_duration:
                 return False
 
-        # Check aspect ratio filter
-        if self._aspect_ratio_filter != "All":
+        # Check aspect ratio filter (multi-select: any selected aspect must match)
+        selected_aspects = self._filter_state.aspect_ratio
+        if selected_aspects:
             source = thumb.source
-            # Hide clips without source dimensions
             if source.width == 0 or source.height == 0:
                 return False
             aspect = source.aspect_ratio
-            if self._aspect_ratio_filter in self.ASPECT_RATIOS:
-                _, min_ratio, max_ratio = self.ASPECT_RATIOS[self._aspect_ratio_filter]
-                if not (min_ratio <= aspect <= max_ratio):
-                    return False
+            matched = False
+            for key in selected_aspects:
+                if key in self.ASPECT_RATIOS:
+                    _, min_ratio, max_ratio = self.ASPECT_RATIOS[key]
+                    if min_ratio <= aspect <= max_ratio:
+                        matched = True
+                        break
+            if not matched:
+                return False
 
-        # Check gaze direction filter
-        if self._gaze_filter is not None:
+        # Check gaze direction filter (multi-select)
+        selected_gaze = self._filter_state.gaze_filter
+        if selected_gaze:
             if not thumb.clip.gaze_category:
                 return False
-            if thumb.clip.gaze_category != self._gaze_filter:
+            if thumb.clip.gaze_category not in selected_gaze:
                 return False
 
         # Check object search filter
@@ -2179,23 +2212,27 @@ class ClipBrowser(QWidget):
             new_max = self._max_duration if self._max_duration is not None else data_max
             self.duration_slider.set_values(new_min, new_max)
 
-        # Apply aspect ratio filter
+        # Apply aspect ratio filter. Enum fields accept strings (backward compat)
+        # or list/set (multi-select). When multi-select is active, the legacy
+        # QComboBox UI can only reflect one value — show "All" as the fallback
+        # since the sidebar owns the full multi-select state from Unit 4 onward.
         if 'aspect_ratio' in filters:
-            value = filters['aspect_ratio']
-            self._aspect_ratio_filter = value if value else "All"
-            self.aspect_ratio_combo.setCurrentText(self._aspect_ratio_filter)
+            self._filter_state.aspect_ratio = filters['aspect_ratio']
+            self.aspect_ratio_combo.setCurrentText(
+                _combo_text_for_enum(self._filter_state.aspect_ratio, fallback="All")
+            )
 
-        # Apply shot type filter
         if 'shot_type' in filters:
-            value = filters['shot_type']
-            self._current_filter = value if value else "All"
-            self.filter_combo.setCurrentText(self._current_filter)
+            self._filter_state.shot_type = filters['shot_type']
+            self.filter_combo.setCurrentText(
+                _combo_text_for_enum(self._filter_state.shot_type, fallback="All")
+            )
 
-        # Apply color palette filter
         if 'color_palette' in filters:
-            value = filters['color_palette']
-            self._current_color_filter = value if value else "All"
-            self.color_filter_combo.setCurrentText(self._current_color_filter)
+            self._filter_state.color_palette = filters['color_palette']
+            self.color_filter_combo.setCurrentText(
+                _combo_text_for_enum(self._filter_state.color_palette, fallback="All")
+            )
 
         # Apply search query
         if 'search_query' in filters:
@@ -2219,21 +2256,30 @@ class ClipBrowser(QWidget):
                 }
             self._sync_custom_query_filter_options()
 
-        # Apply gaze filter — accepts internal key or display label
+        # Apply gaze filter — accepts internal key, display label, list/set
+        # (multi-select), or None/empty. Normalize to the internal key set.
         if 'gaze' in filters:
             value = filters['gaze']
-            if not value:
-                self._gaze_filter = None
-            elif value in GAZE_CATEGORY_DISPLAY:
-                # Internal key (e.g. "at_camera")
-                self._gaze_filter = value
-            elif value in _GAZE_DISPLAY_TO_KEY:
-                # Display label (e.g. "At Camera")
-                self._gaze_filter = _GAZE_DISPLAY_TO_KEY[value]
+            if value is None or value == "" or value == "All Gaze":
+                self._filter_state.gaze_filter = set()
             else:
-                self._gaze_filter = None
-            # Sync combo box to display label
-            display = GAZE_CATEGORY_DISPLAY.get(self._gaze_filter, "All Gaze")
+                if isinstance(value, str):
+                    items = [value]
+                else:
+                    items = list(value)
+                keys: set[str] = set()
+                for item in items:
+                    if item in GAZE_CATEGORY_DISPLAY:
+                        keys.add(item)
+                    elif item in _GAZE_DISPLAY_TO_KEY:
+                        keys.add(_GAZE_DISPLAY_TO_KEY[item])
+                self._filter_state.gaze_filter = keys
+            # Sync legacy combo box — shows single value or "All Gaze" fallback
+            keys = self._filter_state.gaze_filter
+            if len(keys) == 1:
+                display = GAZE_CATEGORY_DISPLAY.get(next(iter(keys)), "All Gaze")
+            else:
+                display = "All Gaze"
             self.gaze_combo.setCurrentText(display)
 
         # Apply object search filter

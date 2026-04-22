@@ -6,8 +6,12 @@ tabs point at — they share filter values by default. Later units (FilterSideba
 subscribe to :py:attr:`changed` to know when to re-render their widgets.
 
 The public ``apply_dict`` / ``to_dict`` contract mirrors today's
-``ClipBrowser.apply_filters`` / ``get_active_filters`` dict shape exactly so
-existing tests and any agent tools depending on those keys keep working.
+``ClipBrowser.apply_filters`` / ``get_active_filters`` dict shape, with Unit 4
+extending four enum fields (``shot_type``, ``color_palette``, ``aspect_ratio``,
+``gaze_filter``) from single-select to multi-select. Internally these are
+``set[str]``; ``apply_dict`` coerces string / list / tuple / set / None inputs,
+and ``to_dict`` emits ``None`` (no selection), the single string (one value)
+or a sorted list (multiple values) for backward-compat with existing callers.
 """
 
 from typing import Any, Iterable, Optional
@@ -16,6 +20,7 @@ from PySide6.QtCore import QObject, Signal
 
 
 _ENUM_ALL = "All"
+_ENUM_FIELDS = ("shot_type", "color_palette", "aspect_ratio", "gaze_filter")
 
 
 class FilterState(QObject):
@@ -50,14 +55,15 @@ class FilterState(QObject):
         super().__init__(parent)
         self._batching = False
         self._dirty_during_batch = False
-        object.__setattr__(self, "shot_type", _ENUM_ALL)
-        object.__setattr__(self, "color_palette", _ENUM_ALL)
+        # Multi-select enum fields — empty set means "All" (no filter)
+        object.__setattr__(self, "shot_type", set())
+        object.__setattr__(self, "color_palette", set())
+        object.__setattr__(self, "aspect_ratio", set())
+        object.__setattr__(self, "gaze_filter", set())
         object.__setattr__(self, "search_query", "")
         object.__setattr__(self, "selected_custom_queries", set())
         object.__setattr__(self, "min_duration", None)
         object.__setattr__(self, "max_duration", None)
-        object.__setattr__(self, "aspect_ratio", _ENUM_ALL)
-        object.__setattr__(self, "gaze_filter", None)
         object.__setattr__(self, "object_search", "")
         object.__setattr__(self, "description_search", "")
         object.__setattr__(self, "min_brightness", None)
@@ -69,6 +75,8 @@ class FilterState(QObject):
 
     def __setattr__(self, name: str, value: Any) -> None:
         if name in self._FIELD_NAMES and hasattr(self, name):
+            if name in _ENUM_FIELDS:
+                value = _coerce_enum_set(value)
             current = getattr(self, name)
             if current == value:
                 return
@@ -102,7 +110,9 @@ class FilterState(QObject):
 
         Accepts the exact dict shape produced by :py:meth:`to_dict` plus the
         backward-compat keys used by the pre-refactor ``ClipBrowser.apply_filters``.
-        Unknown keys are ignored.
+        Unknown keys are ignored. Enum fields accept a string (single-select
+        backward compat), a list/tuple/set (multi-select), or ``None`` / ``"All"``
+        (clear).
         """
         self._begin_batch()
         try:
@@ -111,16 +121,13 @@ class FilterState(QObject):
                 self.max_duration = filters.get("max_duration")
 
             if "aspect_ratio" in filters:
-                value = filters["aspect_ratio"]
-                self.aspect_ratio = value if value else _ENUM_ALL
+                self.aspect_ratio = filters["aspect_ratio"]
 
             if "shot_type" in filters:
-                value = filters["shot_type"]
-                self.shot_type = value if value else _ENUM_ALL
+                self.shot_type = filters["shot_type"]
 
             if "color_palette" in filters:
-                value = filters["color_palette"]
-                self.color_palette = value if value else _ENUM_ALL
+                self.color_palette = filters["color_palette"]
 
             if "search_query" in filters:
                 value = filters["search_query"] or ""
@@ -130,7 +137,7 @@ class FilterState(QObject):
                 self.selected_custom_queries = _coerce_custom_query(filters["custom_query"])
 
             if "gaze" in filters:
-                self.gaze_filter = filters["gaze"] or None
+                self.gaze_filter = filters["gaze"]
 
             if "object_search" in filters:
                 self.object_search = (filters["object_search"] or "").strip()
@@ -148,10 +155,15 @@ class FilterState(QObject):
             self._end_batch()
 
     def to_dict(self) -> dict:
-        """Return the active-filters dict matching ``ClipBrowser.get_active_filters``."""
+        """Return the active-filters dict matching ``ClipBrowser.get_active_filters``.
+
+        Enum fields emit ``None`` (no selection), the single string (one value)
+        or a sorted list (multiple values) for backward-compat with callers
+        that expect a string for single-select filters.
+        """
         return {
-            "shot_type": self.shot_type if self.shot_type != _ENUM_ALL else None,
-            "color_palette": self.color_palette if self.color_palette != _ENUM_ALL else None,
+            "shot_type": _emit_enum(self.shot_type),
+            "color_palette": _emit_enum(self.color_palette),
             "search_query": self.search_query if self.search_query else None,
             "custom_query": (
                 sorted(self.selected_custom_queries, key=str.lower)
@@ -160,8 +172,8 @@ class FilterState(QObject):
             ),
             "min_duration": self.min_duration,
             "max_duration": self.max_duration,
-            "aspect_ratio": self.aspect_ratio if self.aspect_ratio != _ENUM_ALL else None,
-            "gaze": self.gaze_filter,
+            "aspect_ratio": _emit_enum(self.aspect_ratio),
+            "gaze": _emit_enum(self.gaze_filter),
             "object_search": self.object_search if self.object_search else None,
             "description_search": self.description_search if self.description_search else None,
             "min_brightness": self.min_brightness,
@@ -171,14 +183,14 @@ class FilterState(QObject):
 
     def has_active(self) -> bool:
         return (
-            self.shot_type != _ENUM_ALL
-            or self.color_palette != _ENUM_ALL
+            bool(self.shot_type)
+            or bool(self.color_palette)
+            or bool(self.aspect_ratio)
+            or bool(self.gaze_filter)
             or bool(self.search_query)
             or bool(self.selected_custom_queries)
             or self.min_duration is not None
             or self.max_duration is not None
-            or self.aspect_ratio != _ENUM_ALL
-            or self.gaze_filter is not None
             or bool(self.object_search)
             or bool(self.description_search)
             or self.min_brightness is not None
@@ -190,14 +202,14 @@ class FilterState(QObject):
         """Reset every field to its default. Emits :py:attr:`changed` at most once."""
         self._begin_batch()
         try:
-            self.shot_type = _ENUM_ALL
-            self.color_palette = _ENUM_ALL
+            self.shot_type = set()
+            self.color_palette = set()
+            self.aspect_ratio = set()
+            self.gaze_filter = set()
             self.search_query = ""
             self.selected_custom_queries = set()
             self.min_duration = None
             self.max_duration = None
-            self.aspect_ratio = _ENUM_ALL
-            self.gaze_filter = None
             self.object_search = ""
             self.description_search = ""
             self.min_brightness = None
@@ -218,3 +230,34 @@ def _coerce_custom_query(value: Any) -> set[str]:
     if isinstance(value, (list, tuple, set, frozenset)):
         return {str(v).strip() for v in value if str(v).strip()}
     return set()
+
+
+def _coerce_enum_set(value: Any) -> set[str]:
+    """Normalize enum-field inputs to a ``set[str]``.
+
+    Accepts ``None`` / empty / ``"All"`` (clears), a single string (one-item
+    set), or any iterable of strings (drops ``"All"`` sentinel and empties).
+    """
+    if value is None:
+        return set()
+    if isinstance(value, str):
+        if value == _ENUM_ALL or not value.strip():
+            return set()
+        return {value}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        result: set[str] = set()
+        for item in value:
+            s = str(item).strip()
+            if s and s != _ENUM_ALL:
+                result.add(s)
+        return result
+    return set()
+
+
+def _emit_enum(value: set[str]):
+    """Shape an enum set for ``to_dict`` output (backward-compat with callers)."""
+    if not value:
+        return None
+    if len(value) == 1:
+        return next(iter(value))
+    return sorted(value, key=str.lower)

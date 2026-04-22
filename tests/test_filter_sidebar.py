@@ -140,14 +140,14 @@ def test_shared_filter_state_between_two_sidebars(qapp):
     sidebar_a = FilterSidebar(fs)
     sidebar_b = FilterSidebar(fs)
 
-    events_a: list[str] = []
-    events_b: list[str] = []
-    fs.changed.connect(lambda: events_a.append(fs.shot_type))
-    fs.changed.connect(lambda: events_b.append(fs.shot_type))
+    events_a: list[set] = []
+    events_b: list[set] = []
+    fs.changed.connect(lambda: events_a.append(set(fs.shot_type)))
+    fs.changed.connect(lambda: events_b.append(set(fs.shot_type)))
 
     fs.shot_type = "Close-up"
     qapp.processEvents()
 
-    assert events_a == ["Close-up"]
-    assert events_b == ["Close-up"]
+    assert events_a == [{"Close-up"}]
+    assert events_b == [{"Close-up"}]
     assert sidebar_a.filter_state is sidebar_b.filter_state
