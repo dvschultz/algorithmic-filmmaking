@@ -1100,6 +1100,14 @@ class MainWindow(QMainWindow):
         # Set up Analyze tab lookups (it uses references, not copies)
         self.analyze_tab.set_lookups(self.clips_by_id, self.sources_by_id)
 
+        # Restore filter-sidebar visibility from settings (per tab)
+        try:
+            self.cut_tab.set_filter_sidebar_visible(self.settings.cut_filter_sidebar_visible)
+            self.analyze_tab.set_filter_sidebar_visible(self.settings.analyze_filter_sidebar_visible)
+        except AttributeError:
+            # If settings object doesn't have the fields yet (migration), leave defaults.
+            pass
+
         # Set up Frames tab project reference
         self.frames_tab.set_project(self.project)
 

@@ -24,8 +24,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from core.analysis.color import COLOR_PALETTES, get_palette_display_name
+from core.analysis.gaze import GAZE_CATEGORY_DISPLAY
+from core.analysis.shots import SHOT_TYPES, get_display_name
 from core.filter_state import FilterState
 from ui.theme import Spacing, TypeScale, UISizes, theme
+from ui.widgets.chip_group import ChipGroup
 from ui.widgets.collapsible_section import CollapsibleSection
 
 
@@ -78,7 +82,12 @@ class FilterSidebar(QWidget):
         super().__init__(parent)
         self._filter_state = filter_state
         self._sections: dict[str, CollapsibleSection] = {}
+        self._chip_groups: dict[str, ChipGroup] = {}
+        self._updating_from_state = False
         self._setup_ui(section_expanded_state or {})
+        self._populate_existing_filters()
+        self._sync_from_state()
+        self._filter_state.changed.connect(self._sync_from_state)
         self._refresh_theme()
 
         if theme().changed:
@@ -138,6 +147,97 @@ class FilterSidebar(QWidget):
         root.addWidget(scroll, 1)
 
         self.setMinimumWidth(280)
+
+    # ── Filter population ────────────────────────────────────────────
+
+    def _populate_existing_filters(self) -> None:
+        """Install chip controls for the four multi-select enum filters.
+
+        Unit 4 coverage: shot type, color palette, aspect ratio (inside
+        Shot section), gaze direction. Duration / brightness / other
+        controls arrive in Units 5–6.
+        """
+        # Shot type chips (Visual section)
+        shot_chips = self._build_chip_group(
+            [(st, get_display_name(st)) for st in SHOT_TYPES],
+            lambda values: self._set_state("shot_type", values),
+        )
+        self._chip_groups["shot_type"] = shot_chips
+        shot_label = self._labelled("Shot type", shot_chips)
+        self.set_section_content(SECTION_VISUAL, shot_label)
+
+        # Color palette chips (Visual section is already occupied — put into
+        # the Visual section's layout via replaceWidget? Simpler: nest both
+        # chip groups inside a single container widget.)
+
+        color_chips = self._build_chip_group(
+            [(cp, get_palette_display_name(cp)) for cp in COLOR_PALETTES],
+            lambda values: self._set_state("color_palette", values),
+        )
+        self._chip_groups["color_palette"] = color_chips
+
+        # Rebuild Visual section content to hold both shot + palette chips
+        visual_container = QWidget()
+        v_layout = QVBoxLayout(visual_container)
+        v_layout.setContentsMargins(0, 0, 0, 0)
+        v_layout.setSpacing(Spacing.SM)
+        v_layout.addWidget(self._labelled("Shot type", shot_chips))
+        v_layout.addWidget(self._labelled("Color palette", color_chips))
+        self.set_section_content(SECTION_VISUAL, visual_container)
+
+        # Aspect ratio chips (Shot section)
+        aspect_chips = self._build_chip_group(
+            [("16:9", "16:9"), ("4:3", "4:3"), ("9:16", "9:16 (vertical)")],
+            lambda values: self._set_state("aspect_ratio", values),
+        )
+        self._chip_groups["aspect_ratio"] = aspect_chips
+        self.set_section_content(SECTION_SHOT, self._labelled("Aspect ratio", aspect_chips))
+
+        # Gaze direction chips (People section)
+        gaze_options = [
+            (key, display) for key, display in GAZE_CATEGORY_DISPLAY.items()
+        ]
+        gaze_chips = self._build_chip_group(
+            gaze_options,
+            lambda values: self._set_state("gaze_filter", values),
+        )
+        self._chip_groups["gaze_filter"] = gaze_chips
+        self.set_section_content(SECTION_PEOPLE, self._labelled("Gaze direction", gaze_chips))
+
+    def _build_chip_group(self, options, on_change) -> ChipGroup:
+        group = ChipGroup()
+        group.set_options(options)
+        group.selection_changed.connect(on_change)
+        return group
+
+    def _labelled(self, label_text: str, widget: QWidget) -> QWidget:
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(Spacing.XXS)
+        label = QLabel(label_text)
+        label.setProperty("class", "FilterSidebarFieldLabel")
+        layout.addWidget(label)
+        layout.addWidget(widget)
+        return container
+
+    def _set_state(self, field_name: str, values: set) -> None:
+        """UI → state. Guarded against the round-trip from state → UI."""
+        if self._updating_from_state:
+            return
+        setattr(self._filter_state, field_name, values)
+
+    @Slot()
+    def _sync_from_state(self) -> None:
+        """State → UI. Push current FilterState values back onto the chip groups."""
+        self._updating_from_state = True
+        try:
+            for field_name, group in self._chip_groups.items():
+                current = getattr(self._filter_state, field_name)
+                if isinstance(current, set):
+                    group.set_selected(current)
+        finally:
+            self._updating_from_state = False
 
     # ── Public API ───────────────────────────────────────────────────
 

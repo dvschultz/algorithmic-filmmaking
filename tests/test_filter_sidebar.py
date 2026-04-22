@@ -151,3 +151,57 @@ def test_shared_filter_state_between_two_sidebars(qapp):
     assert events_a == [{"Close-up"}]
     assert events_b == [{"Close-up"}]
     assert sidebar_a.filter_state is sidebar_b.filter_state
+
+
+def test_chip_toggle_updates_filter_state(qapp):
+    """Toggling a chip in the sidebar writes through to FilterState."""
+    from core.filter_state import FilterState
+    from ui.widgets.filter_sidebar import FilterSidebar
+
+    fs = FilterState()
+    sidebar = FilterSidebar(fs)
+    group = sidebar._chip_groups["shot_type"]
+    # Toggle the first chip on
+    first_value = next(iter(group._buttons.keys()))
+    group._buttons[first_value].setChecked(True)
+    qapp.processEvents()
+
+    assert fs.shot_type == {first_value}
+
+
+def test_state_change_updates_chip_selection(qapp):
+    """Mutating FilterState updates the sidebar's chip selection (round-trip)."""
+    from core.filter_state import FilterState
+    from ui.widgets.filter_sidebar import FilterSidebar
+
+    fs = FilterState()
+    sidebar = FilterSidebar(fs)
+    group = sidebar._chip_groups["shot_type"]
+    first_value = next(iter(group._buttons.keys()))
+
+    fs.shot_type = first_value
+    qapp.processEvents()
+
+    assert group.selected_values() == {first_value}
+
+
+def test_state_sync_does_not_loop(qapp):
+    """State→UI→state round-trip must not cause a cascade."""
+    from core.filter_state import FilterState
+    from ui.widgets.filter_sidebar import FilterSidebar
+
+    fs = FilterState()
+    sidebar = FilterSidebar(fs)
+
+    emissions: list[int] = []
+    fs.changed.connect(lambda: emissions.append(1))
+
+    group = sidebar._chip_groups["gaze_filter"]
+    first_value = next(iter(group._buttons.keys()))
+
+    # Simulate user chip click
+    group._buttons[first_value].setChecked(True)
+    qapp.processEvents()
+
+    # Only one emission expected
+    assert len(emissions) == 1

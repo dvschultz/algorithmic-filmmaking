@@ -7,12 +7,14 @@ from PySide6.QtWidgets import (
     QPushButton,
     QWidget,
     QStackedWidget,
+    QSplitter,
 )
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 
 from .base_tab import BaseTab
 from ui.clip_browser import ClipBrowser
 from ui.widgets import EmptyStateWidget
+from ui.widgets.filter_sidebar import FilterSidebar
 
 
 class CutTab(BaseTab):
@@ -41,6 +43,9 @@ class CutTab(BaseTab):
         self._current_source = None
         self._clips = []
         self._settings = None
+        if filter_state is None:
+            from core.filter_state import FilterState
+            filter_state = FilterState()
         self._filter_state = filter_state
         super().__init__(parent)
 
@@ -91,6 +96,14 @@ class CutTab(BaseTab):
         self.analyze_btn.clicked.connect(self._on_analyze_click)
         controls.addWidget(self.analyze_btn)
 
+        # Filter sidebar toggle
+        self.filter_toggle_btn = QPushButton("Filters")
+        self.filter_toggle_btn.setCheckable(True)
+        self.filter_toggle_btn.setChecked(True)
+        self.filter_toggle_btn.setToolTip("Show/hide filter sidebar")
+        self.filter_toggle_btn.clicked.connect(self._on_filter_toggle)
+        controls.addWidget(self.filter_toggle_btn)
+
         controls.addStretch()
 
         # Selection count label
@@ -106,12 +119,12 @@ class CutTab(BaseTab):
         return controls
 
     def _create_content_area(self) -> QWidget:
-        """Create the main content area with clip browser and video player."""
+        """Create the main content area with clip browser and filter sidebar."""
         content = QWidget()
         layout = QVBoxLayout(content)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # Clip browser (full width - video preview is in clip details sidebar)
+        # Clip browser + filter sidebar in a splitter
         self.clip_browser = ClipBrowser(filter_state=self._filter_state)
         self.clip_browser.set_drag_enabled(True)
         self.clip_browser.clip_selected.connect(self._on_clip_selected)
@@ -119,9 +132,31 @@ class CutTab(BaseTab):
         self.clip_browser.clip_dragged_to_timeline.connect(self._on_clip_dragged)
         self.clip_browser.selection_changed.connect(self._on_browser_selection_changed)
         self.clip_browser.filters_changed.connect(self._on_filters_changed)
-        layout.addWidget(self.clip_browser)
+
+        self.filter_sidebar = FilterSidebar(self._filter_state)
+        self.filter_sidebar.visibility_requested.connect(self._on_sidebar_visibility_request)
+
+        self.content_splitter = QSplitter(Qt.Horizontal)
+        self.content_splitter.addWidget(self.clip_browser)
+        self.content_splitter.addWidget(self.filter_sidebar)
+        self.content_splitter.setStretchFactor(0, 1)
+        self.content_splitter.setStretchFactor(1, 0)
+        self.content_splitter.setSizes([800, 320])
+
+        layout.addWidget(self.content_splitter)
 
         return content
+
+    def set_filter_sidebar_visible(self, visible: bool) -> None:
+        self.filter_sidebar.setVisible(visible)
+        if self.filter_toggle_btn.isChecked() != visible:
+            self.filter_toggle_btn.setChecked(visible)
+
+    def _on_filter_toggle(self, checked: bool) -> None:
+        self.filter_sidebar.setVisible(checked)
+
+    def _on_sidebar_visibility_request(self, visible: bool) -> None:
+        self.set_filter_sidebar_visible(visible)
 
     def _on_analyze_click(self):
         """Handle analyze selected button click."""
