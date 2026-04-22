@@ -162,12 +162,26 @@ class CutTab(BaseTab):
         self.filter_sidebar.setVisible(visible)
         if self.filter_toggle_btn.isChecked() != visible:
             self.filter_toggle_btn.setChecked(visible)
+        self._persist_sidebar_visibility(visible)
 
     def _on_filter_toggle(self, checked: bool) -> None:
         self.filter_sidebar.setVisible(checked)
+        self._persist_sidebar_visibility(checked)
 
     def _on_sidebar_visibility_request(self, visible: bool) -> None:
         self.set_filter_sidebar_visible(visible)
+
+    def _persist_sidebar_visibility(self, visible: bool) -> None:
+        """Save Cut tab sidebar visibility to settings."""
+        try:
+            from core.settings import load_settings, save_settings
+            s = load_settings()
+            if s.cut_filter_sidebar_visible != visible:
+                s.cut_filter_sidebar_visible = visible
+                save_settings(s)
+        except Exception:
+            # Never let a persistence failure crash the UI toggle.
+            pass
 
     def refresh_filter_vocabularies(self) -> None:
         """Recompute YOLO label vocabulary from current clips and push to sidebar."""

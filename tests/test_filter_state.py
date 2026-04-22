@@ -260,6 +260,76 @@ def test_clear_all_on_empty_is_noop(qapp):
     assert emissions == []
 
 
+def test_object_setattr_not_used_on_qobject_subclass():
+    """Static canary: using object.__setattr__ on FilterState breaks the
+    PyInstaller-frozen runtime (Shiboken rejects it). See
+    `.claude/skills/pyside6-shiboken-object-setattr-frozen-crash/SKILL.md`.
+
+    Strips comments so a cautionary docstring mentioning the anti-pattern
+    doesn't trip the canary — only actual callable usage fails the test.
+    """
+    import ast
+    import inspect
+    from core import filter_state
+
+    src = inspect.getsource(filter_state.FilterState)
+    tree = ast.parse(src)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr == "__setattr__":
+            target = getattr(node.value, "id", None)
+            assert target != "object", (
+                f"FilterState references object.__setattr__ at line {node.lineno} — "
+                f"this crashes the frozen macOS build (Shiboken rejects it). "
+                f"Use QObject.__setattr__ instead."
+            )
+
+
+def test_clear_all_resets_unit_5_and_6_fields(qapp):
+    """clear_all must touch every field — not just the 13 legacy ones."""
+    from core.filter_state import FilterState
+    fs = FilterState()
+    fs.apply_dict({
+        "shot_type": ["Close-up"],
+        "person_count": [">", 1],
+        "has_audio": True,
+        "has_transcript": False,
+        "has_analysis_ops": ["describe"],
+        "imagenet_labels": ["dog"],
+        "imagenet_mode": "all",
+        "yolo_labels": ["person"],
+        "yolo_total_count": [">", 0],
+        "yolo_per_label_rules": [["person", "=", 1]],
+        "on_screen_text_search": "hello",
+        "tag_note_search": "note",
+        "min_volume": -40.0,
+        "enabled_filter": True,
+    })
+    assert fs.has_active() is True
+
+    fs.clear_all()
+    assert fs.has_active() is False
+    assert fs.person_count is None
+    assert fs.has_audio is None
+    assert fs.imagenet_labels == set()
+    assert fs.yolo_per_label_rules == []
+
+
+def test_apply_dict_malformed_yolo_total_count_resets(qapp):
+    """Malformed yolo_total_count inputs should reset rather than preserve stale state."""
+    from core.filter_state import FilterState
+    fs = FilterState()
+    fs.yolo_total_count = (">", 3)
+    assert fs.yolo_total_count == (">", 3)
+
+    fs.apply_dict({"yolo_total_count": 42})  # scalar, not a 2-tuple
+    assert fs.yolo_total_count is None
+
+    fs.yolo_total_count = (">", 3)
+    fs.apply_dict({"yolo_total_count": [">", "not-an-int"]})
+    assert fs.yolo_total_count is None
+
+
 def test_shared_instance_between_consumers(qapp):
     from core.filter_state import FilterState
     fs = FilterState()

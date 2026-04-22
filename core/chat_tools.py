@@ -1726,15 +1726,35 @@ def navigate_to_tab(tab_name: str, gui_state=None) -> dict:
     requires_project=True,
     modifies_gui_state=True
 )
+def _validate_enum_arg(value, valid_set, field_name: str):
+    """Accept str or list[str] for an agent-tool enum filter. Return (ok_value, error)."""
+    if value is None:
+        return None, None
+    # Normalise single-string and list/tuple inputs to a list
+    if isinstance(value, str):
+        items = [value] if value not in ("", "All") else []
+    elif isinstance(value, (list, tuple)):
+        items = [str(v) for v in value if v not in (None, "", "All")]
+    else:
+        return None, f"Invalid {field_name}: expected str or list[str], got {type(value).__name__}"
+    for item in items:
+        if item not in valid_set:
+            return None, (
+                f"Invalid {field_name} value '{item}'. "
+                f"Valid options: {', '.join(sorted(valid_set))}"
+            )
+    return items if len(items) != 1 else items[0], None
+
+
 def apply_filters(
     main_window,
     min_duration: Optional[float] = None,
     max_duration: Optional[float] = None,
-    aspect_ratio: Optional[str] = None,
-    shot_type: Optional[str] = None,
-    color_palette: Optional[str] = None,
+    aspect_ratio=None,
+    shot_type=None,
+    color_palette=None,
     search_query: Optional[str] = None,
-    gaze: Optional[str] = None,
+    gaze=None,
     object_search: Optional[str] = None,
     description_search: Optional[str] = None,
     clear_all: bool = False,
@@ -1744,42 +1764,38 @@ def apply_filters(
     Args:
         min_duration: Minimum duration in seconds (None = no minimum)
         max_duration: Maximum duration in seconds (None = no maximum)
-        aspect_ratio: Filter by aspect ratio ('16:9', '4:3', '9:16', or None)
-        shot_type: Filter by shot type ('Wide Shot', 'Medium Shot', 'Close-up', 'Extreme CU', or None)
-        color_palette: Filter by color palette ('Warm', 'Cool', 'Neutral', 'Vibrant', or None)
+        aspect_ratio: Filter by aspect ratio — str, list[str], or None.
+          Valid values: '16:9', '4:3', '9:16'. Multi-select chips use list.
+        shot_type: Filter by shot type — str, list[str], or None.
+          Valid values: 'Wide Shot', 'Medium Shot', 'Close-up', 'Extreme CU'.
+        color_palette: Filter by color palette — str, list[str], or None.
+          Valid values: 'Warm', 'Cool', 'Neutral', 'Vibrant'.
         search_query: Filter by transcript text (case-insensitive substring search)
-        gaze: Filter by gaze direction ('at_camera', 'looking_left', 'looking_right',
-              'looking_up', 'looking_down', or None)
+        gaze: Filter by gaze direction — str, list[str], or None.
+          Valid internal keys: 'at_camera', 'looking_left', 'looking_right',
+          'looking_up', 'looking_down'. Display labels also accepted.
         object_search: Filter by detected object labels (case-insensitive substring)
         description_search: Filter by clip description text (case-insensitive substring)
         clear_all: If True, clears all filters instead of applying new ones
 
     Returns:
-        Dict with success status, active filters, and clip counts
+        Dict with success status, active filters, and clip counts. Note that
+        `active_filters` may contain a `list[str]` for multi-select enum fields
+        — feed that back directly into a subsequent call.
     """
     if main_window is None:
         return {"success": False, "error": "Main window not available"}
 
-    # Validate aspect_ratio if provided
-    if aspect_ratio and aspect_ratio not in VALID_ASPECT_RATIOS:
-        return {
-            "success": False,
-            "error": f"Invalid aspect_ratio '{aspect_ratio}'. Valid options: {', '.join(VALID_ASPECT_RATIOS)}"
-        }
-
-    # Validate shot_type if provided
-    if shot_type and shot_type != "All" and shot_type not in VALID_SHOT_TYPES:
-        return {
-            "success": False,
-            "error": f"Invalid shot_type '{shot_type}'. Valid options: {', '.join(VALID_SHOT_TYPES)}"
-        }
-
-    # Validate color_palette if provided
-    if color_palette and color_palette != "All" and color_palette not in VALID_COLOR_PALETTES:
-        return {
-            "success": False,
-            "error": f"Invalid color_palette '{color_palette}'. Valid options: {', '.join(VALID_COLOR_PALETTES)}"
-        }
+    # Validate enum args (accept str, list[str], or None)
+    aspect_ratio, err = _validate_enum_arg(aspect_ratio, VALID_ASPECT_RATIOS, "aspect_ratio")
+    if err:
+        return {"success": False, "error": err}
+    shot_type, err = _validate_enum_arg(shot_type, VALID_SHOT_TYPES, "shot_type")
+    if err:
+        return {"success": False, "error": err}
+    color_palette, err = _validate_enum_arg(color_palette, VALID_COLOR_PALETTES, "color_palette")
+    if err:
+        return {"success": False, "error": err}
 
     # Get the active tab info
     active_tab = main_window._gui_state.active_tab if main_window._gui_state else "unknown"

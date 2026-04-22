@@ -1,12 +1,22 @@
 """Clip browser with thumbnail grid view."""
 
 import logging
+from collections import Counter
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
 
 from core.filter_state import FilterState
+
+# Resolve the has-analysis-of-type predicate at module load so the hot
+# `_matches_filter` loop doesn't re-import on every clip check, and so that
+# a missing dependency surfaces as a visible startup error rather than a
+# silently-bypassed filter.
+try:
+    from core.analysis_availability import operation_is_complete_for_clip as _op_complete
+except ImportError:  # pragma: no cover — analysis_availability is always bundled
+    _op_complete = None
 
 
 def _enum_str_view(value_set, *, empty):
@@ -868,6 +878,15 @@ class ClipBrowser(QWidget):
         # is introduced. Both tabs' browsers share one `FilterState` instance
         # when MainWindow injects it here.
         self._filter_state = filter_state if filter_state is not None else FilterState()
+        # When anything mutates FilterState (sidebar chip toggle, tribool radio,
+        # typeahead commit, programmatic apply_dict), re-filter the grid and
+        # forward the change to tab-level listeners. Without this, Unit 4+
+        # sidebar controls are silent no-ops — they update the shared state
+        # but the grid never refreshes. The legacy hidden widgets still call
+        # _rebuild_grid directly from their handlers, so their paths remain
+        # redundant but harmless (dirty-check in FilterState.__setattr__
+        # prevents duplicate rebuilds when both fire for the same change).
+        self._filter_state.changed.connect(self._on_filter_state_changed)
 
         self._custom_query_filter_actions: dict[str, QAction] = {}
         self._updating_custom_query_filter_menu = False
@@ -1593,6 +1612,17 @@ class ClipBrowser(QWidget):
 
         self._rebuild_grid()
 
+    def _on_filter_state_changed(self) -> None:
+        """Handle any mutation of the shared FilterState.
+
+        Fires for every change — sidebar chip toggles, tribool radios,
+        typeahead commits, programmatic apply_dict calls. Coalesces into a
+        single grid rebuild via `_rebuild_grid`'s QTimer, then notifies
+        tab-level listeners through `filters_changed`.
+        """
+        self._rebuild_grid()
+        self.filters_changed.emit()
+
     def _rebuild_grid(self):
         """Schedule a grid rebuild on the next event loop iteration.
 
@@ -1836,7 +1866,11 @@ class ClipBrowser(QWidget):
         fs = self._filter_state
         clip = thumb.clip
 
-        # Person count operator
+        # Person count operator. Unanalyzed clips (clip.person_count is None)
+        # are treated as having 0 people; callers using "< 0" would otherwise
+        # exclude every clip silently (0 < 0 is False). The CountOperator
+        # spinbox clamps to min=0 so the UI can't express n<0 today, but the
+        # programmatic API accepts any int.
         if fs.person_count is not None:
             op, n = fs.person_count
             count = clip.person_count or 0
@@ -1881,15 +1915,15 @@ class ClipBrowser(QWidget):
             if clip.rms_volume is None or clip.rms_volume > fs.max_volume:
                 return False
 
-        # Has-analysis-of-type — AND across selected operations
-        if fs.has_analysis_ops:
-            try:
-                from core.analysis_availability import operation_is_complete_for_clip
-                for op_key in fs.has_analysis_ops:
-                    if not operation_is_complete_for_clip(op_key, clip):
-                        return False
-            except ImportError:
-                pass
+        # Has-analysis-of-type — AND across selected operations.
+        # Uses the module-level `_op_complete` predicate. If the analysis
+        # availability module somehow failed to import, the filter becomes
+        # a no-op (pass-through) — but this is extremely unlikely since
+        # `core.analysis_availability` is always bundled.
+        if fs.has_analysis_ops and _op_complete is not None:
+            for op_key in fs.has_analysis_ops:
+                if not _op_complete(op_key, clip):
+                    return False
 
         # Enabled / disabled
         if fs.enabled_filter is not None:
@@ -1935,7 +1969,6 @@ class ClipBrowser(QWidget):
 
         # YOLO per-label count rules (AND across rules)
         if fs.yolo_per_label_rules:
-            from collections import Counter
             counts = Counter(d.get("label", "") for d in (clip.detected_objects or []))
             for label, op, n in fs.yolo_per_label_rules:
                 cnt = counts.get(label, 0)
@@ -2202,38 +2235,28 @@ class ClipBrowser(QWidget):
         self._rebuild_grid()
 
     def clear_all_filters(self):
-        """Reset all filters to show all clips."""
-        # Block signals to prevent multiple rebuilds
-        self.filter_combo.blockSignals(True)
-        self.color_filter_combo.blockSignals(True)
-        self.search_input.blockSignals(True)
-        self.duration_slider.blockSignals(True)
-        self.aspect_ratio_combo.blockSignals(True)
-        self.gaze_combo.blockSignals(True)
-        self.object_search_input.blockSignals(True)
-        self.description_search_input.blockSignals(True)
-        self.brightness_slider.blockSignals(True)
+        """Reset all filters to show all clips.
 
-        # Reset all filter values
-        self._current_filter = "All"
-        self._current_color_filter = "All"
-        self._current_search_query = ""
-        self._selected_custom_queries = set()
-        self._min_duration = None
-        self._max_duration = None
-        self._aspect_ratio_filter = "All"
-        self._gaze_filter = None
-        self._object_search = ""
-        self._description_search = ""
-        self._min_brightness = None
-        self._max_brightness = None
+        Delegates to ``FilterState.clear_all()`` so Unit 5/6 fields
+        (person_count, has_audio, imagenet_labels, yolo_*, etc.) are reset
+        alongside the legacy 13 — previously this method only touched the
+        legacy set and left Unit 5/6 filters active after a "Clear".
+        """
+        # Block legacy-widget signals so the syncing calls below don't
+        # trigger extra grid rebuilds — FilterState.changed already does.
+        legacy_widgets = [
+            self.filter_combo, self.color_filter_combo, self.search_input,
+            self.duration_slider, self.aspect_ratio_combo, self.gaze_combo,
+            self.object_search_input, self.description_search_input,
+            self.brightness_slider,
+        ]
+        for w in legacy_widgets:
+            w.blockSignals(True)
 
-        # Reset similarity mode
-        self._similarity_anchor_id = None
-        self._similarity_scores = {}
+        self._filter_state.clear_all()
         self._clear_similarity_btn.setVisible(False)
 
-        # Reset UI controls
+        # Sync legacy (hidden) widget UI to match the cleared state.
         self.filter_combo.setCurrentText("All")
         self.color_filter_combo.setCurrentText("All")
         self.search_input.clear()
@@ -2245,16 +2268,8 @@ class ClipBrowser(QWidget):
         self.brightness_slider.reset()
         self._sync_custom_query_filter_options()
 
-        # Unblock signals
-        self.filter_combo.blockSignals(False)
-        self.color_filter_combo.blockSignals(False)
-        self.search_input.blockSignals(False)
-        self.duration_slider.blockSignals(False)
-        self.aspect_ratio_combo.blockSignals(False)
-        self.gaze_combo.blockSignals(False)
-        self.object_search_input.blockSignals(False)
-        self.description_search_input.blockSignals(False)
-        self.brightness_slider.blockSignals(False)
+        for w in legacy_widgets:
+            w.blockSignals(False)
 
         # Rebuild once
         self._rebuild_grid()
@@ -2449,23 +2464,13 @@ class ClipBrowser(QWidget):
         """Check if any filters are currently active.
 
         Returns:
-            True if at least one filter is set
+            True if at least one filter is set. Delegates to
+            ``FilterState.has_active`` so Unit 5/6 fields are included —
+            this method previously only checked the 13 legacy fields,
+            silently returning False when (e.g.) has_audio or imagenet_labels
+            was the only active filter.
         """
-        return (
-            self._current_filter != "All"
-            or self._current_color_filter != "All"
-            or bool(self._current_search_query)
-            or bool(self._selected_custom_queries)
-            or self._min_duration is not None
-            or self._max_duration is not None
-            or self._aspect_ratio_filter != "All"
-            or self._gaze_filter is not None
-            or bool(self._object_search)
-            or bool(self._description_search)
-            or self._min_brightness is not None
-            or self._max_brightness is not None
-            or self._similarity_anchor_id is not None
-        )
+        return self._filter_state.has_active()
 
     def _incremental_filter_enable(self, clip) -> None:
         """Enable filter controls based on a single clip's data (O(1)).

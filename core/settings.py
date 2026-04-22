@@ -830,6 +830,20 @@ def _load_from_json(config_path: Path, settings: Settings) -> Settings:
         if isinstance(val, str) and val in _VALID_CATEGORIES:
             settings.sequence_selected_category = val
 
+    # Filter sidebar section (Cut / Analyze tab visibility + per-section collapse)
+    if filter_sidebar := data.get("filter_sidebar"):
+        cut_visible = filter_sidebar.get("cut_visible")
+        if isinstance(cut_visible, bool):
+            settings.cut_filter_sidebar_visible = cut_visible
+        analyze_visible = filter_sidebar.get("analyze_visible")
+        if isinstance(analyze_visible, bool):
+            settings.analyze_filter_sidebar_visible = analyze_visible
+        section_expanded = filter_sidebar.get("section_expanded")
+        if isinstance(section_expanded, dict):
+            settings.filter_sidebar_section_expanded = {
+                str(k): bool(v) for k, v in section_expanded.items()
+            }
+
     return settings
 
 
@@ -940,6 +954,11 @@ def _settings_to_json(settings: Settings) -> dict:
         },
         "sequence": {
             "selected_category": settings.sequence_selected_category,
+        },
+        "filter_sidebar": {
+            "cut_visible": settings.cut_filter_sidebar_visible,
+            "analyze_visible": settings.analyze_filter_sidebar_visible,
+            "section_expanded": settings.filter_sidebar_section_expanded,
         },
     }
 

@@ -209,9 +209,21 @@ class AnalyzeTab(BaseTab):
         self.filter_sidebar.setVisible(visible)
         if hasattr(self, "filter_toggle_btn") and self.filter_toggle_btn.isChecked() != visible:
             self.filter_toggle_btn.setChecked(visible)
+        self._persist_sidebar_visibility(visible)
 
     def _on_sidebar_visibility_request(self, visible: bool) -> None:
         self.set_filter_sidebar_visible(visible)
+
+    def _persist_sidebar_visibility(self, visible: bool) -> None:
+        """Save Analyze tab sidebar visibility to settings."""
+        try:
+            from core.settings import load_settings, save_settings
+            s = load_settings()
+            if s.analyze_filter_sidebar_visible != visible:
+                s.analyze_filter_sidebar_visible = visible
+                save_settings(s)
+        except Exception:
+            pass
 
     def refresh_filter_vocabularies(self) -> None:
         """Recompute YOLO label vocabulary from current clips and push to sidebar."""

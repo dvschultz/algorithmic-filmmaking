@@ -249,7 +249,13 @@ class FilterState(QObject):
                 if value is None:
                     self.yolo_total_count = None
                 elif isinstance(value, (list, tuple)) and len(value) == 2:
-                    self.yolo_total_count = (str(value[0]), int(value[1]))
+                    try:
+                        self.yolo_total_count = (str(value[0]), int(value[1]))
+                    except (TypeError, ValueError):
+                        self.yolo_total_count = None
+                else:
+                    # Reject malformed input rather than silently preserving stale state
+                    self.yolo_total_count = None
             if "yolo_per_label_rules" in filters:
                 value = filters["yolo_per_label_rules"]
                 if not value:
@@ -258,7 +264,10 @@ class FilterState(QObject):
                     rules: list[tuple[str, str, int]] = []
                     for rule in value:
                         if isinstance(rule, (list, tuple)) and len(rule) == 3:
-                            rules.append((str(rule[0]), str(rule[1]), int(rule[2])))
+                            try:
+                                rules.append((str(rule[0]), str(rule[1]), int(rule[2])))
+                            except (TypeError, ValueError):
+                                continue  # silently drop malformed rule
                     self.yolo_per_label_rules = rules
         finally:
             self._end_batch()

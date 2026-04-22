@@ -177,21 +177,20 @@ class FilterSidebar(QWidget):
         Shot section), gaze direction. Duration / brightness / other
         controls arrive in Units 5–6.
         """
-        # Shot type chips (Visual section)
+        # Shot type chips (Visual section). `ClipBrowser._matches_filter`
+        # compares clips against the DISPLAY NAME, not the raw shot-type key,
+        # so chip values must be display names (e.g. "Wide", not "wide shot").
         shot_chips = self._build_chip_group(
-            [(st, get_display_name(st)) for st in SHOT_TYPES],
+            [(get_display_name(st), get_display_name(st)) for st in SHOT_TYPES],
             lambda values: self._set_state("shot_type", values),
         )
         self._chip_groups["shot_type"] = shot_chips
         shot_label = self._labelled("Shot type", shot_chips)
         self.set_section_content(SECTION_VISUAL, shot_label)
 
-        # Color palette chips (Visual section is already occupied — put into
-        # the Visual section's layout via replaceWidget? Simpler: nest both
-        # chip groups inside a single container widget.)
-
+        # Color palette chips (same story — match by display name).
         color_chips = self._build_chip_group(
-            [(cp, get_palette_display_name(cp)) for cp in COLOR_PALETTES],
+            [(get_palette_display_name(cp), get_palette_display_name(cp)) for cp in COLOR_PALETTES],
             lambda values: self._set_state("color_palette", values),
         )
         self._chip_groups["color_palette"] = color_chips
@@ -479,14 +478,27 @@ class FilterSidebar(QWidget):
             self._filter_state.yolo_total_count = (op, n)
 
     def refresh_yolo_vocabulary(self, labels: set[str]) -> None:
-        """Update the YOLO label chip vocabulary from the union of detected labels."""
+        """Update the YOLO label chip vocabulary from the union of detected labels.
+
+        Guards `self._updating_from_state` around the rebuild so that
+        ChipGroup.set_options -> selection_changed(set()) cannot round-trip
+        back into FilterState.yolo_labels and transiently clobber the user's
+        active selection (bug where a background analysis worker finishing
+        while the user has a YOLO filter on would fire two grid rebuilds,
+        one with empty state and one with the restored selection).
+        """
         if labels == self._yolo_label_vocabulary:
             return
         self._yolo_label_vocabulary = set(labels)
         options = [(label, label) for label in sorted(labels)]
-        self._chip_groups["yolo_labels"].set_options(options)
-        # Restore selection after options rebuild
-        self._chip_groups["yolo_labels"].set_selected(self._filter_state.yolo_labels)
+        self._updating_from_state = True
+        try:
+            self._chip_groups["yolo_labels"].set_options(options)
+            self._chip_groups["yolo_labels"].set_selected(
+                self._filter_state.yolo_labels
+            )
+        finally:
+            self._updating_from_state = False
 
     def _labelled(self, label_text: str, widget: QWidget) -> QWidget:
         container = QWidget()
