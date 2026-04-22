@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from core.analysis.classification import load_imagenet_class_list
 from core.analysis.color import COLOR_PALETTES, get_palette_display_name
 from core.analysis.gaze import GAZE_CATEGORY_DISPLAY
 from core.analysis.shots import SHOT_TYPES, get_display_name
@@ -36,6 +37,7 @@ from ui.theme import Spacing, TypeScale, UISizes, theme
 from ui.widgets.chip_group import ChipGroup
 from ui.widgets.collapsible_section import CollapsibleSection
 from ui.widgets.count_operator import CountOperator
+from ui.widgets.typeahead_input import TypeaheadInput
 
 
 SECTION_SHOT = "shot"
@@ -92,9 +94,18 @@ class FilterSidebar(QWidget):
         self._person_count_control: Optional[CountOperator] = None
         self._tribool_groups: dict[str, tuple[QRadioButton, QRadioButton, QRadioButton]] = {}
         self._updating_from_state = False
+        # Unit 6 state — dynamic YOLO vocabulary
+        self._yolo_label_vocabulary: set[str] = set()
+        self._imagenet_typeahead: Optional[TypeaheadInput] = None
+        self._imagenet_chip_list: Optional[QWidget] = None
+        self._imagenet_chip_buttons: dict[str, QPushButton] = {}
+        self._imagenet_mode_any: Optional[QRadioButton] = None
+        self._imagenet_mode_all: Optional[QRadioButton] = None
+        self._yolo_total_control: Optional[CountOperator] = None
         self._setup_ui(section_expanded_state or {})
         self._populate_existing_filters()
         self._populate_unit5_filters()
+        self._populate_unit6_filters()
         self._sync_from_state()
         self._filter_state.changed.connect(self._sync_from_state)
         self._refresh_theme()
@@ -322,6 +333,161 @@ class FilterSidebar(QWidget):
         else:
             self._filter_state.person_count = (op, n)
 
+    # ── Unit 6 (ImageNet + YOLO) ─────────────────────────────────────
+
+    def _populate_unit6_filters(self) -> None:
+        """ImageNet typeahead (1000 classes) + YOLO filters."""
+        self._populate_imagenet_section()
+        self._populate_yolo_section()
+
+    def _populate_imagenet_section(self) -> None:
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(Spacing.SM)
+
+        # Mode switch (Any / All)
+        mode_row = QWidget()
+        mode_layout = QHBoxLayout(mode_row)
+        mode_layout.setContentsMargins(0, 0, 0, 0)
+        mode_layout.setSpacing(Spacing.SM)
+        mode_layout.addWidget(QLabel("Match:"))
+        self._imagenet_mode_any = QRadioButton("Any selected")
+        self._imagenet_mode_all = QRadioButton("All selected")
+        self._imagenet_mode_any.setChecked(True)
+        mode_group = QButtonGroup(container)
+        mode_group.addButton(self._imagenet_mode_any)
+        mode_group.addButton(self._imagenet_mode_all)
+        mode_layout.addWidget(self._imagenet_mode_any)
+        mode_layout.addWidget(self._imagenet_mode_all)
+        mode_layout.addStretch()
+
+        def on_mode_toggled(_checked):
+            if self._updating_from_state:
+                return
+            self._filter_state.imagenet_mode = (
+                "all" if self._imagenet_mode_all.isChecked() else "any"
+            )
+
+        self._imagenet_mode_any.toggled.connect(on_mode_toggled)
+        self._imagenet_mode_all.toggled.connect(on_mode_toggled)
+        layout.addWidget(mode_row)
+
+        # Typeahead input
+        self._imagenet_typeahead = TypeaheadInput()
+        self._imagenet_typeahead.setPlaceholderText("Search ImageNet class…")
+        vocab = load_imagenet_class_list()
+        if not vocab:
+            self._imagenet_typeahead._line.setPlaceholderText(
+                "Run Classify to build vocabulary"
+            )
+            self._imagenet_typeahead.setEnabled(False)
+        else:
+            self._imagenet_typeahead.set_vocabulary(vocab)
+            self._imagenet_typeahead.value_selected.connect(
+                self._on_imagenet_value_selected
+            )
+        layout.addWidget(self._imagenet_typeahead)
+
+        # Selected-chips display
+        self._imagenet_chip_list = QWidget()
+        self._imagenet_chip_list_layout = QHBoxLayout(self._imagenet_chip_list)
+        self._imagenet_chip_list_layout.setContentsMargins(0, 0, 0, 0)
+        self._imagenet_chip_list_layout.setSpacing(Spacing.XS)
+        self._imagenet_chip_list_layout.addStretch()
+        layout.addWidget(self._imagenet_chip_list)
+
+        self.set_section_content(SECTION_IMAGENET, container)
+
+    def _on_imagenet_value_selected(self, value: str) -> None:
+        if self._updating_from_state:
+            return
+        current = set(self._filter_state.imagenet_labels)
+        if value in current:
+            return
+        current.add(value)
+        self._filter_state.imagenet_labels = current
+
+    def _rebuild_imagenet_chip_list(self) -> None:
+        """Sync the visual chip list with the current imagenet_labels set."""
+        if self._imagenet_chip_list is None:
+            return
+        layout = self._imagenet_chip_list_layout
+        # Remove existing chip buttons
+        for value, btn in list(self._imagenet_chip_buttons.items()):
+            layout.removeWidget(btn)
+            btn.setParent(None)
+        self._imagenet_chip_buttons.clear()
+
+        # Insert before trailing stretch
+        for value in sorted(self._filter_state.imagenet_labels):
+            btn = QPushButton(f"{value}  ×")
+            btn.setProperty("chip_value", value)
+
+            def on_click(_checked=False, v=value):
+                if self._updating_from_state:
+                    return
+                current = set(self._filter_state.imagenet_labels)
+                current.discard(v)
+                self._filter_state.imagenet_labels = current
+
+            btn.clicked.connect(on_click)
+            btn.setObjectName("ImageNetChipBadge")
+            self._imagenet_chip_buttons[value] = btn
+            layout.insertWidget(layout.count() - 1, btn)
+
+    def _populate_yolo_section(self) -> None:
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(Spacing.SM)
+
+        # YOLO label chips (dynamic vocabulary)
+        yolo_chips = ChipGroup()
+        yolo_chips.selection_changed.connect(
+            lambda values: self._set_state("yolo_labels", values)
+        )
+        self._chip_groups["yolo_labels"] = yolo_chips
+        layout.addWidget(self._labelled("Detected labels", yolo_chips))
+
+        # Total count operator
+        self._yolo_total_control = CountOperator()
+        self._yolo_total_control.value_changed.connect(
+            self._on_yolo_total_count_changed
+        )
+        layout.addWidget(
+            self._labelled("Total object count", self._yolo_total_control)
+        )
+
+        # Note about per-label count rules (full UI deferred)
+        note = QLabel(
+            "Per-label count rules available via apply_filters "
+            "({'yolo_per_label_rules': [('person','=',1)]})"
+        )
+        note.setWordWrap(True)
+        note.setObjectName("FilterSidebarPlaceholder")
+        layout.addWidget(note)
+
+        self.set_section_content(SECTION_YOLO, container)
+
+    def _on_yolo_total_count_changed(self, op, n):
+        if self._updating_from_state:
+            return
+        if op is None or n is None:
+            self._filter_state.yolo_total_count = None
+        else:
+            self._filter_state.yolo_total_count = (op, n)
+
+    def refresh_yolo_vocabulary(self, labels: set[str]) -> None:
+        """Update the YOLO label chip vocabulary from the union of detected labels."""
+        if labels == self._yolo_label_vocabulary:
+            return
+        self._yolo_label_vocabulary = set(labels)
+        options = [(label, label) for label in sorted(labels)]
+        self._chip_groups["yolo_labels"].set_options(options)
+        # Restore selection after options rebuild
+        self._chip_groups["yolo_labels"].set_selected(self._filter_state.yolo_labels)
+
     def _labelled(self, label_text: str, widget: QWidget) -> QWidget:
         container = QWidget()
         layout = QVBoxLayout(container)
@@ -366,6 +532,23 @@ class FilterSidebar(QWidget):
                     no_btn.setChecked(True)
                 else:
                     any_btn.setChecked(True)
+
+            # Unit 6 — ImageNet
+            if self._imagenet_mode_any is not None:
+                mode = self._filter_state.imagenet_mode
+                if mode == "all":
+                    self._imagenet_mode_all.setChecked(True)
+                else:
+                    self._imagenet_mode_any.setChecked(True)
+            self._rebuild_imagenet_chip_list()
+
+            # Unit 6 — YOLO total count
+            if self._yolo_total_control is not None:
+                yc = self._filter_state.yolo_total_count
+                if yc is None:
+                    self._yolo_total_control.clear()
+                else:
+                    self._yolo_total_control.set_value(yc[0], yc[1])
         finally:
             self._updating_from_state = False
 

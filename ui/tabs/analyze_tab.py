@@ -17,6 +17,7 @@ from PySide6.QtCore import Signal, Qt
 from .base_tab import BaseTab
 from ui.clip_browser import ClipBrowser
 from ui.widgets import EmptyStateWidget
+from ui.widgets.active_filter_chips import ActiveFilterChips
 from ui.widgets.filter_sidebar import FilterSidebar
 from ui.dialogs import GlossaryDialog
 from ui.theme import UISizes
@@ -133,6 +134,12 @@ class AnalyzeTab(BaseTab):
         self.filter_toggle_btn.clicked.connect(lambda checked: self.set_filter_sidebar_visible(checked))
         controls.addWidget(self.filter_toggle_btn)
 
+        # Reset filters
+        self.reset_filters_btn = QPushButton("Reset filters")
+        self.reset_filters_btn.setToolTip("Clear all filter values")
+        self.reset_filters_btn.clicked.connect(self._filter_state.clear_all)
+        controls.addWidget(self.reset_filters_btn)
+
         controls.addSpacing(20)
 
         # Clear All button
@@ -172,6 +179,10 @@ class AnalyzeTab(BaseTab):
         layout = QVBoxLayout(content)
         layout.setContentsMargins(0, 0, 0, 0)
 
+        # Active filter chips bar
+        self.active_filter_chips = ActiveFilterChips(self._filter_state)
+        layout.addWidget(self.active_filter_chips)
+
         self.clip_browser = ClipBrowser(filter_state=self._filter_state)
         self.clip_browser.set_drag_enabled(True)
         self.clip_browser.clip_selected.connect(self._on_clip_selected)
@@ -201,6 +212,16 @@ class AnalyzeTab(BaseTab):
 
     def _on_sidebar_visibility_request(self, visible: bool) -> None:
         self.set_filter_sidebar_visible(visible)
+
+    def refresh_filter_vocabularies(self) -> None:
+        """Recompute YOLO label vocabulary from current clips and push to sidebar."""
+        labels: set[str] = set()
+        for thumb in self.clip_browser.thumbnails:
+            for det in (thumb.clip.detected_objects or []):
+                label = det.get("label", "")
+                if label:
+                    labels.add(label)
+        self.filter_sidebar.refresh_yolo_vocabulary(labels)
 
     def _on_quick_run_click(self):
         """Handle quick run button click - immediate single operation."""

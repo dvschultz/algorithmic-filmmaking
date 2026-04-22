@@ -1933,6 +1933,47 @@ class ClipBrowser(QWidget):
             if needle not in tags_text and needle not in notes_text:
                 return False
 
+        # ── Unit 6 predicates: objects (ImageNet + YOLO) ────────────
+        # ImageNet labels (Any / All semantics)
+        if fs.imagenet_labels:
+            clip_labels = set(clip.object_labels or [])
+            if fs.imagenet_mode == "all":
+                if not fs.imagenet_labels.issubset(clip_labels):
+                    return False
+            else:  # "any"
+                if clip_labels.isdisjoint(fs.imagenet_labels):
+                    return False
+
+        # YOLO labels (OR within selected)
+        if fs.yolo_labels:
+            detected_labels = {d.get("label", "") for d in (clip.detected_objects or [])}
+            if detected_labels.isdisjoint(fs.yolo_labels):
+                return False
+
+        # YOLO total object count operator
+        if fs.yolo_total_count is not None:
+            op, n = fs.yolo_total_count
+            total = len(clip.detected_objects or [])
+            if op == ">" and not (total > n):
+                return False
+            if op == "=" and not (total == n):
+                return False
+            if op == "<" and not (total < n):
+                return False
+
+        # YOLO per-label count rules (AND across rules)
+        if fs.yolo_per_label_rules:
+            from collections import Counter
+            counts = Counter(d.get("label", "") for d in (clip.detected_objects or []))
+            for label, op, n in fs.yolo_per_label_rules:
+                cnt = counts.get(label, 0)
+                if op == ">" and not (cnt > n):
+                    return False
+                if op == "=" and not (cnt == n):
+                    return False
+                if op == "<" and not (cnt < n):
+                    return False
+
         return True
 
     def _create_filter_panel(self) -> QFrame:

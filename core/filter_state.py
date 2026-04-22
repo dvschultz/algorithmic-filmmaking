@@ -60,6 +60,12 @@ class FilterState(QObject):
         "has_analysis_ops",
         "enabled_filter",
         "tag_note_search",
+        # Unit 6 additions — objects / ImageNet / YOLO
+        "imagenet_labels",
+        "imagenet_mode",
+        "yolo_labels",
+        "yolo_total_count",
+        "yolo_per_label_rules",
     )
 
     def __init__(self, parent: Optional[QObject] = None):
@@ -92,6 +98,12 @@ class FilterState(QObject):
         object.__setattr__(self, "has_analysis_ops", set())
         object.__setattr__(self, "enabled_filter", None)
         object.__setattr__(self, "tag_note_search", "")
+        # Unit 6 fields
+        object.__setattr__(self, "imagenet_labels", set())
+        object.__setattr__(self, "imagenet_mode", "any")  # "any" | "all"
+        object.__setattr__(self, "yolo_labels", set())
+        object.__setattr__(self, "yolo_total_count", None)  # (op, int) | None
+        object.__setattr__(self, "yolo_per_label_rules", [])  # list[(label, op, int)]
 
     # ── Dirty-tracking field assignment ─────────────────────────────
 
@@ -214,6 +226,32 @@ class FilterState(QObject):
 
             if "tag_note_search" in filters:
                 self.tag_note_search = (filters["tag_note_search"] or "").strip()
+
+            # Unit 6 fields
+            if "imagenet_labels" in filters:
+                self.imagenet_labels = _coerce_str_set(filters["imagenet_labels"])
+            if "imagenet_mode" in filters:
+                value = filters["imagenet_mode"]
+                if value in {"any", "all"}:
+                    self.imagenet_mode = value
+            if "yolo_labels" in filters:
+                self.yolo_labels = _coerce_str_set(filters["yolo_labels"])
+            if "yolo_total_count" in filters:
+                value = filters["yolo_total_count"]
+                if value is None:
+                    self.yolo_total_count = None
+                elif isinstance(value, (list, tuple)) and len(value) == 2:
+                    self.yolo_total_count = (str(value[0]), int(value[1]))
+            if "yolo_per_label_rules" in filters:
+                value = filters["yolo_per_label_rules"]
+                if not value:
+                    self.yolo_per_label_rules = []
+                else:
+                    rules: list[tuple[str, str, int]] = []
+                    for rule in value:
+                        if isinstance(rule, (list, tuple)) and len(rule) == 3:
+                            rules.append((str(rule[0]), str(rule[1]), int(rule[2])))
+                    self.yolo_per_label_rules = rules
         finally:
             self._end_batch()
 
@@ -253,6 +291,16 @@ class FilterState(QObject):
             "has_analysis_ops": sorted(self.has_analysis_ops) if self.has_analysis_ops else None,
             "enabled_filter": self.enabled_filter,
             "tag_note_search": self.tag_note_search or None,
+            # Unit 6 fields
+            "imagenet_labels": sorted(self.imagenet_labels) if self.imagenet_labels else None,
+            "imagenet_mode": self.imagenet_mode if self.imagenet_labels else None,
+            "yolo_labels": sorted(self.yolo_labels) if self.yolo_labels else None,
+            "yolo_total_count": list(self.yolo_total_count) if self.yolo_total_count else None,
+            "yolo_per_label_rules": (
+                [list(r) for r in self.yolo_per_label_rules]
+                if self.yolo_per_label_rules
+                else None
+            ),
         }
 
     def has_active(self) -> bool:
@@ -281,6 +329,11 @@ class FilterState(QObject):
             or bool(self.has_analysis_ops)
             or self.enabled_filter is not None
             or bool(self.tag_note_search)
+            # Unit 6 fields
+            or bool(self.imagenet_labels)
+            or bool(self.yolo_labels)
+            or self.yolo_total_count is not None
+            or bool(self.yolo_per_label_rules)
         )
 
     def clear_all(self) -> None:
@@ -312,6 +365,12 @@ class FilterState(QObject):
             self.has_analysis_ops = set()
             self.enabled_filter = None
             self.tag_note_search = ""
+            # Unit 6 fields
+            self.imagenet_labels = set()
+            self.imagenet_mode = "any"
+            self.yolo_labels = set()
+            self.yolo_total_count = None
+            self.yolo_per_label_rules = []
         finally:
             self._end_batch()
 
@@ -357,6 +416,17 @@ def _emit_enum(value: set[str]):
     if len(value) == 1:
         return next(iter(value))
     return sorted(value, key=str.lower)
+
+
+def _coerce_str_set(value: Any) -> set[str]:
+    """Normalize string-set inputs (ImageNet labels, YOLO labels) to a set[str]."""
+    if value is None:
+        return set()
+    if isinstance(value, str):
+        return {value} if value.strip() else set()
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return {str(v).strip() for v in value if str(v).strip()}
+    return set()
 
 
 def _coerce_tribool(value: Any) -> Optional[bool]:

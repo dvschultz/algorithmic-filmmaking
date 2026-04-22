@@ -14,6 +14,7 @@ from PySide6.QtCore import Qt, Signal
 from .base_tab import BaseTab
 from ui.clip_browser import ClipBrowser
 from ui.widgets import EmptyStateWidget
+from ui.widgets.active_filter_chips import ActiveFilterChips
 from ui.widgets.filter_sidebar import FilterSidebar
 
 
@@ -104,6 +105,12 @@ class CutTab(BaseTab):
         self.filter_toggle_btn.clicked.connect(self._on_filter_toggle)
         controls.addWidget(self.filter_toggle_btn)
 
+        # Reset filters
+        self.reset_filters_btn = QPushButton("Reset filters")
+        self.reset_filters_btn.setToolTip("Clear all filter values (shared state, visible on both tabs)")
+        self.reset_filters_btn.clicked.connect(self._filter_state.clear_all)
+        controls.addWidget(self.reset_filters_btn)
+
         controls.addStretch()
 
         # Selection count label
@@ -123,6 +130,10 @@ class CutTab(BaseTab):
         content = QWidget()
         layout = QVBoxLayout(content)
         layout.setContentsMargins(0, 0, 0, 0)
+
+        # Active filter chips bar (above grid)
+        self.active_filter_chips = ActiveFilterChips(self._filter_state)
+        layout.addWidget(self.active_filter_chips)
 
         # Clip browser + filter sidebar in a splitter
         self.clip_browser = ClipBrowser(filter_state=self._filter_state)
@@ -157,6 +168,16 @@ class CutTab(BaseTab):
 
     def _on_sidebar_visibility_request(self, visible: bool) -> None:
         self.set_filter_sidebar_visible(visible)
+
+    def refresh_filter_vocabularies(self) -> None:
+        """Recompute YOLO label vocabulary from current clips and push to sidebar."""
+        labels: set[str] = set()
+        for thumb in self.clip_browser.thumbnails:
+            for det in (thumb.clip.detected_objects or []):
+                label = det.get("label", "")
+                if label:
+                    labels.add(label)
+        self.filter_sidebar.refresh_yolo_vocabulary(labels)
 
     def _on_analyze_click(self):
         """Handle analyze selected button click."""
