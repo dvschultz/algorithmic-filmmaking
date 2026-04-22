@@ -70,54 +70,62 @@ class FilterState(QObject):
 
     def __init__(self, parent: Optional[QObject] = None):
         super().__init__(parent)
-        self._batching = False
-        self._dirty_during_batch = False
+        # Bootstrap via QObject.__setattr__ so Shiboken's metaclass is happy.
+        # `object.__setattr__` works on a QObject subclass in normal Python but
+        # the PyInstaller-frozen runtime rejects it with
+        # "TypeError: can't apply this __setattr__ to FilterState object".
+        _init = QObject.__setattr__
+        _init(self, "_batching", False)
+        _init(self, "_dirty_during_batch", False)
         # Multi-select enum fields — empty set means "All" (no filter)
-        object.__setattr__(self, "shot_type", set())
-        object.__setattr__(self, "color_palette", set())
-        object.__setattr__(self, "aspect_ratio", set())
-        object.__setattr__(self, "gaze_filter", set())
-        object.__setattr__(self, "search_query", "")
-        object.__setattr__(self, "selected_custom_queries", set())
-        object.__setattr__(self, "min_duration", None)
-        object.__setattr__(self, "max_duration", None)
-        object.__setattr__(self, "object_search", "")
-        object.__setattr__(self, "description_search", "")
-        object.__setattr__(self, "min_brightness", None)
-        object.__setattr__(self, "max_brightness", None)
-        object.__setattr__(self, "similarity_anchor_id", None)
-        object.__setattr__(self, "similarity_scores", {})
+        _init(self, "shot_type", set())
+        _init(self, "color_palette", set())
+        _init(self, "aspect_ratio", set())
+        _init(self, "gaze_filter", set())
+        _init(self, "search_query", "")
+        _init(self, "selected_custom_queries", set())
+        _init(self, "min_duration", None)
+        _init(self, "max_duration", None)
+        _init(self, "object_search", "")
+        _init(self, "description_search", "")
+        _init(self, "min_brightness", None)
+        _init(self, "max_brightness", None)
+        _init(self, "similarity_anchor_id", None)
+        _init(self, "similarity_scores", {})
         # Unit 5 fields
-        object.__setattr__(self, "person_count", None)  # (op, int) | None
-        object.__setattr__(self, "has_audio", None)  # True / False / None (don't care)
-        object.__setattr__(self, "has_transcript", None)
-        object.__setattr__(self, "has_on_screen_text", None)
-        object.__setattr__(self, "on_screen_text_search", "")
-        object.__setattr__(self, "min_volume", None)
-        object.__setattr__(self, "max_volume", None)
-        object.__setattr__(self, "has_analysis_ops", set())
-        object.__setattr__(self, "enabled_filter", None)
-        object.__setattr__(self, "tag_note_search", "")
+        _init(self, "person_count", None)  # (op, int) | None
+        _init(self, "has_audio", None)  # True / False / None (don't care)
+        _init(self, "has_transcript", None)
+        _init(self, "has_on_screen_text", None)
+        _init(self, "on_screen_text_search", "")
+        _init(self, "min_volume", None)
+        _init(self, "max_volume", None)
+        _init(self, "has_analysis_ops", set())
+        _init(self, "enabled_filter", None)
+        _init(self, "tag_note_search", "")
         # Unit 6 fields
-        object.__setattr__(self, "imagenet_labels", set())
-        object.__setattr__(self, "imagenet_mode", "any")  # "any" | "all"
-        object.__setattr__(self, "yolo_labels", set())
-        object.__setattr__(self, "yolo_total_count", None)  # (op, int) | None
-        object.__setattr__(self, "yolo_per_label_rules", [])  # list[(label, op, int)]
+        _init(self, "imagenet_labels", set())
+        _init(self, "imagenet_mode", "any")  # "any" | "all"
+        _init(self, "yolo_labels", set())
+        _init(self, "yolo_total_count", None)  # (op, int) | None
+        _init(self, "yolo_per_label_rules", [])  # list[(label, op, int)]
 
     # ── Dirty-tracking field assignment ─────────────────────────────
 
     def __setattr__(self, name: str, value: Any) -> None:
+        # Use QObject.__setattr__ rather than object.__setattr__: the latter
+        # is rejected by Shiboken's metaclass in frozen PyInstaller builds
+        # ("can't apply this __setattr__ to FilterState object").
         if name in self._FIELD_NAMES and hasattr(self, name):
             if name in _ENUM_FIELDS:
                 value = _coerce_enum_set(value)
             current = getattr(self, name)
             if current == value:
                 return
-            object.__setattr__(self, name, value)
+            QObject.__setattr__(self, name, value)
             self._mark_dirty()
             return
-        object.__setattr__(self, name, value)
+        QObject.__setattr__(self, name, value)
 
     def _mark_dirty(self) -> None:
         if self._batching:
