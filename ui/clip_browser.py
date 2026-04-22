@@ -1860,6 +1860,79 @@ class ClipBrowser(QWidget):
             if thumb.clip.average_brightness is None or thumb.clip.average_brightness > self._max_brightness:
                 return False
 
+        # ── Unit 5 filter predicates ────────────────────────────────
+        fs = self._filter_state
+        clip = thumb.clip
+
+        # Person count operator
+        if fs.person_count is not None:
+            op, n = fs.person_count
+            count = clip.person_count or 0
+            if op == ">" and not (count > n):
+                return False
+            if op == "=" and not (count == n):
+                return False
+            if op == "<" and not (count < n):
+                return False
+
+        # Has audio (tribool)
+        if fs.has_audio is not None:
+            has_audio = bool(clip.transcript) or clip.rms_volume is not None
+            if has_audio != fs.has_audio:
+                return False
+
+        # Has transcript
+        if fs.has_transcript is not None:
+            if bool(clip.transcript) != fs.has_transcript:
+                return False
+
+        # Has on-screen text
+        if fs.has_on_screen_text is not None:
+            if bool(clip.extracted_texts) != fs.has_on_screen_text:
+                return False
+
+        # On-screen text search
+        if fs.on_screen_text_search:
+            needle = fs.on_screen_text_search.lower()
+            haystack = " ".join(
+                (et.text if hasattr(et, "text") else str(et))
+                for et in (clip.extracted_texts or [])
+            ).lower()
+            if needle not in haystack:
+                return False
+
+        # RMS volume range
+        if fs.min_volume is not None:
+            if clip.rms_volume is None or clip.rms_volume < fs.min_volume:
+                return False
+        if fs.max_volume is not None:
+            if clip.rms_volume is None or clip.rms_volume > fs.max_volume:
+                return False
+
+        # Has-analysis-of-type — AND across selected operations
+        if fs.has_analysis_ops:
+            try:
+                from core.analysis_availability import operation_is_complete_for_clip
+                for op_key in fs.has_analysis_ops:
+                    if not operation_is_complete_for_clip(op_key, clip):
+                        return False
+            except ImportError:
+                pass
+
+        # Enabled / disabled
+        if fs.enabled_filter is not None:
+            is_enabled = not clip.disabled
+            if is_enabled != fs.enabled_filter:
+                return False
+
+        # Tag / note search
+        if fs.tag_note_search:
+            needle = fs.tag_note_search.lower()
+            tags_text = " ".join(clip.tags or []).lower()
+            notes_text = (clip.notes or "").lower()
+            if needle not in tags_text and needle not in notes_text:
+                return False
+
         return True
 
     def _create_filter_panel(self) -> QFrame:
@@ -2314,6 +2387,19 @@ class ClipBrowser(QWidget):
         self.description_search_input.blockSignals(False)
         self.brightness_slider.blockSignals(False)
 
+        # Delegate Unit 5+ keys to FilterState. The legacy keys above have
+        # already been applied (often with display↔key conversion, e.g. for
+        # gaze), so strip them before delegation to avoid clobbering.
+        _legacy_keys = {
+            "min_duration", "max_duration", "aspect_ratio", "shot_type",
+            "color_palette", "search_query", "custom_query", "gaze",
+            "object_search", "description_search", "min_brightness",
+            "max_brightness", "similarity_anchor",
+        }
+        unit5_filters = {k: v for k, v in filters.items() if k not in _legacy_keys}
+        if unit5_filters:
+            self._filter_state.apply_dict(unit5_filters)
+
         # Rebuild grid and emit signal
         self._rebuild_grid()
         self.filters_changed.emit()
@@ -2334,27 +2420,17 @@ class ClipBrowser(QWidget):
         """Return current filter state.
 
         Returns:
-            Dict with filter names and their current values
+            Dict with filter names and their current values. The exact
+            shape is determined by ``FilterState.to_dict`` — legacy keys
+            (shot_type, color_palette, search_query, custom_query,
+            min/max_duration, aspect_ratio, gaze, object_search,
+            description_search, min/max_brightness, similarity_anchor)
+            plus Unit 5 additions (person_count, has_audio,
+            has_transcript, has_on_screen_text, on_screen_text_search,
+            min/max_volume, has_analysis_ops, enabled_filter,
+            tag_note_search).
         """
-        return {
-            "shot_type": self._current_filter if self._current_filter != "All" else None,
-            "color_palette": self._current_color_filter if self._current_color_filter != "All" else None,
-            "search_query": self._current_search_query if self._current_search_query else None,
-            "custom_query": (
-                sorted(self._selected_custom_queries, key=str.lower)
-                if self._selected_custom_queries
-                else None
-            ),
-            "min_duration": self._min_duration,
-            "max_duration": self._max_duration,
-            "aspect_ratio": self._aspect_ratio_filter if self._aspect_ratio_filter != "All" else None,
-            "gaze": self._gaze_filter,
-            "object_search": self._object_search if self._object_search else None,
-            "description_search": self._description_search if self._description_search else None,
-            "min_brightness": self._min_brightness,
-            "max_brightness": self._max_brightness,
-            "similarity_anchor": self._similarity_anchor_id,
-        }
+        return self._filter_state.to_dict()
 
     def has_active_filters(self) -> bool:
         """Check if any filters are currently active.

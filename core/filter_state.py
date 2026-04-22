@@ -49,6 +49,17 @@ class FilterState(QObject):
         "max_brightness",
         "similarity_anchor_id",
         "similarity_scores",
+        # Unit 5 additions
+        "person_count",
+        "has_audio",
+        "has_transcript",
+        "has_on_screen_text",
+        "on_screen_text_search",
+        "min_volume",
+        "max_volume",
+        "has_analysis_ops",
+        "enabled_filter",
+        "tag_note_search",
     )
 
     def __init__(self, parent: Optional[QObject] = None):
@@ -70,6 +81,17 @@ class FilterState(QObject):
         object.__setattr__(self, "max_brightness", None)
         object.__setattr__(self, "similarity_anchor_id", None)
         object.__setattr__(self, "similarity_scores", {})
+        # Unit 5 fields
+        object.__setattr__(self, "person_count", None)  # (op, int) | None
+        object.__setattr__(self, "has_audio", None)  # True / False / None (don't care)
+        object.__setattr__(self, "has_transcript", None)
+        object.__setattr__(self, "has_on_screen_text", None)
+        object.__setattr__(self, "on_screen_text_search", "")
+        object.__setattr__(self, "min_volume", None)
+        object.__setattr__(self, "max_volume", None)
+        object.__setattr__(self, "has_analysis_ops", set())
+        object.__setattr__(self, "enabled_filter", None)
+        object.__setattr__(self, "tag_note_search", "")
 
     # ── Dirty-tracking field assignment ─────────────────────────────
 
@@ -151,6 +173,47 @@ class FilterState(QObject):
 
             if "similarity_anchor" in filters:
                 self.similarity_anchor_id = filters["similarity_anchor"]
+
+            # Unit 5 fields
+            if "person_count" in filters:
+                value = filters["person_count"]
+                if value is None:
+                    self.person_count = None
+                elif isinstance(value, (list, tuple)) and len(value) == 2:
+                    self.person_count = (str(value[0]), int(value[1]))
+                else:
+                    self.person_count = None
+
+            if "has_audio" in filters:
+                self.has_audio = _coerce_tribool(filters["has_audio"])
+            if "has_transcript" in filters:
+                self.has_transcript = _coerce_tribool(filters["has_transcript"])
+            if "has_on_screen_text" in filters:
+                self.has_on_screen_text = _coerce_tribool(filters["has_on_screen_text"])
+
+            if "on_screen_text_search" in filters:
+                self.on_screen_text_search = (filters["on_screen_text_search"] or "").strip()
+
+            if "min_volume" in filters or "max_volume" in filters:
+                self.min_volume = filters.get("min_volume")
+                self.max_volume = filters.get("max_volume")
+
+            if "has_analysis_ops" in filters:
+                value = filters["has_analysis_ops"]
+                if value is None:
+                    self.has_analysis_ops = set()
+                elif isinstance(value, str):
+                    self.has_analysis_ops = {value} if value else set()
+                elif isinstance(value, (list, tuple, set, frozenset)):
+                    self.has_analysis_ops = {str(v) for v in value if str(v).strip()}
+                else:
+                    self.has_analysis_ops = set()
+
+            if "enabled_filter" in filters:
+                self.enabled_filter = _coerce_tribool(filters["enabled_filter"])
+
+            if "tag_note_search" in filters:
+                self.tag_note_search = (filters["tag_note_search"] or "").strip()
         finally:
             self._end_batch()
 
@@ -179,6 +242,17 @@ class FilterState(QObject):
             "min_brightness": self.min_brightness,
             "max_brightness": self.max_brightness,
             "similarity_anchor": self.similarity_anchor_id,
+            # Unit 5 fields
+            "person_count": list(self.person_count) if self.person_count else None,
+            "has_audio": self.has_audio,
+            "has_transcript": self.has_transcript,
+            "has_on_screen_text": self.has_on_screen_text,
+            "on_screen_text_search": self.on_screen_text_search or None,
+            "min_volume": self.min_volume,
+            "max_volume": self.max_volume,
+            "has_analysis_ops": sorted(self.has_analysis_ops) if self.has_analysis_ops else None,
+            "enabled_filter": self.enabled_filter,
+            "tag_note_search": self.tag_note_search or None,
         }
 
     def has_active(self) -> bool:
@@ -196,6 +270,17 @@ class FilterState(QObject):
             or self.min_brightness is not None
             or self.max_brightness is not None
             or self.similarity_anchor_id is not None
+            # Unit 5 fields
+            or self.person_count is not None
+            or self.has_audio is not None
+            or self.has_transcript is not None
+            or self.has_on_screen_text is not None
+            or bool(self.on_screen_text_search)
+            or self.min_volume is not None
+            or self.max_volume is not None
+            or bool(self.has_analysis_ops)
+            or self.enabled_filter is not None
+            or bool(self.tag_note_search)
         )
 
     def clear_all(self) -> None:
@@ -216,6 +301,17 @@ class FilterState(QObject):
             self.max_brightness = None
             self.similarity_anchor_id = None
             self.similarity_scores = {}
+            # Unit 5 fields
+            self.person_count = None
+            self.has_audio = None
+            self.has_transcript = None
+            self.has_on_screen_text = None
+            self.on_screen_text_search = ""
+            self.min_volume = None
+            self.max_volume = None
+            self.has_analysis_ops = set()
+            self.enabled_filter = None
+            self.tag_note_search = ""
         finally:
             self._end_batch()
 
@@ -261,3 +357,19 @@ def _emit_enum(value: set[str]):
     if len(value) == 1:
         return next(iter(value))
     return sorted(value, key=str.lower)
+
+
+def _coerce_tribool(value: Any) -> Optional[bool]:
+    """Normalize has_audio / has_transcript / has_on_screen_text / enabled_filter inputs."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.lower()
+        if lowered in {"yes", "true", "1"}:
+            return True
+        if lowered in {"no", "false", "0"}:
+            return False
+        return None
+    return None
