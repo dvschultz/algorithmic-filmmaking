@@ -1075,10 +1075,16 @@ class MainWindow(QMainWindow):
         self.tab_widget = QTabWidget()
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
 
+        # Shared clip-filter state — Cut and Analyze point at the same
+        # FilterState so filter values are shared across tabs by default
+        # (see docs/plans/2026-04-21-001-feat-comprehensive-clip-filter-system-plan.md).
+        from core.filter_state import FilterState
+        self._filter_state = FilterState()
+
         # Create tabs
         self.collect_tab = CollectTab()
-        self.cut_tab = CutTab()
-        self.analyze_tab = AnalyzeTab()
+        self.cut_tab = CutTab(filter_state=self._filter_state)
+        self.analyze_tab = AnalyzeTab(filter_state=self._filter_state)
         self.frames_tab = FramesTab()
         self.sequence_tab = SequenceTab()
         self.render_tab = RenderTab()
@@ -1093,6 +1099,14 @@ class MainWindow(QMainWindow):
 
         # Set up Analyze tab lookups (it uses references, not copies)
         self.analyze_tab.set_lookups(self.clips_by_id, self.sources_by_id)
+
+        # Restore filter-sidebar visibility from settings (per tab)
+        try:
+            self.cut_tab.set_filter_sidebar_visible(self.settings.cut_filter_sidebar_visible)
+            self.analyze_tab.set_filter_sidebar_visible(self.settings.analyze_filter_sidebar_visible)
+        except AttributeError:
+            # If settings object doesn't have the fields yet (migration), leave defaults.
+            pass
 
         # Set up Frames tab project reference
         self.frames_tab.set_project(self.project)

@@ -21,6 +21,25 @@ _labels: Optional[list[str]] = None
 _preprocess = None
 
 
+def load_imagenet_class_list() -> list[str]:
+    """Return the cached ImageNet 1000-class label list.
+
+    Reads `<model_cache_dir>/imagenet_classes.txt` if it exists; otherwise
+    returns an empty list (caller can fall back gracefully — the filter
+    sidebar disables its typeahead when the vocab is empty). Does not
+    trigger a download; that happens lazily on first classification run.
+    """
+    cache_dir = _get_model_cache_dir()
+    labels_path = cache_dir / "imagenet_classes.txt"
+    if not labels_path.exists():
+        return []
+    try:
+        with open(labels_path, "r") as f:
+            return [line.strip() for line in f.readlines() if line.strip()]
+    except OSError:
+        return []
+
+
 def ensure_image_classification_runtime_available():
     """Validate that the local image-classification runtime imports cleanly."""
     try:
