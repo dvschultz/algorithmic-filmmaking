@@ -280,15 +280,15 @@ class SequenceExporter:
         )
         normalized_vf = f"{vf},fps={config.fps}" if vf else f"fps={config.fps}"
 
-        # Use audio trim filters for sample-accurate cutting.
-        # -ss before -i does keyframe-based seeking which is fast but
-        # audio packets don't align with video keyframes, causing audio
-        # from adjacent clips to bleed across cut boundaries.
-        # atrim + asetpts ensures exact audio boundaries.
-        af_parts = [f"atrim=0:{duration_seconds}", "asetpts=PTS-STARTPTS"]
+        # Audio cutting is handled by the output-side -ss + -t below, which
+        # is sample-accurate. Do NOT add atrim=0:duration here: the precise
+        # -ss after -i shifts audio PTS forward, so atrim=0:N keeps a window
+        # that no longer contains any samples — silently producing a
+        # zero-byte audio track in every segment.
+        af_parts = []
         if apply_reverse:
             af_parts.append("areverse")
-        af = ",".join(af_parts)
+        af = ",".join(af_parts) if af_parts else None
 
         # Use "double -ss" for frame-accurate seeking:
         # 1. -ss before -i: fast keyframe seek to ~5s before target (avoids
@@ -313,7 +313,8 @@ class SequenceExporter:
         ]
 
         cmd.extend(["-vf", normalized_vf])
-        cmd.extend(["-af", af])
+        if af:
+            cmd.extend(["-af", af])
 
         cmd.extend([
             "-c:a", config.audio_codec,

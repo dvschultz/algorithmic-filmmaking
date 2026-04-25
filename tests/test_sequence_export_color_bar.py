@@ -157,7 +157,75 @@ def test_export_segment_uses_source_fps_for_trim_and_sequence_fps_for_output(
     assert cmd[cmd.index("-t") + 1] == str(expected_duration)
     assert cmd[cmd.index("-vf") + 1] == "fps=30.0"
     assert cmd[cmd.index("-pix_fmt") + 1] == "yuv420p"
-    # Audio trim filter for sample-accurate cutting
+    # No -af when there's no reverse: output -ss + -t already cuts audio
+    # sample-accurately. Adding atrim=0:N here would silently strip audio
+    # because the precise -ss after -i shifts audio PTS past the atrim window.
+    assert "-af" not in cmd
+
+
+def test_export_segment_omits_atrim_so_audio_survives_double_ss(monkeypatch, tmp_path):
+    """Regression: double -ss + atrim=0:duration silently produced silent
+    segments because output -ss shifts audio PTS past the atrim window.
+
+    The audio filter chain must NOT contain atrim/asetpts. If reverse is
+    not requested, -af should be absent entirely.
+    """
+    exporter = SequenceExporter(ffmpeg_path="ffmpeg")
+    captured = {}
+
+    def fake_run(cmd, capture_output, text, timeout, **kwargs):
+        captured["cmd"] = cmd
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("core.sequence_export.subprocess.run", fake_run)
+
+    config = ExportConfig(output_path=tmp_path / "out.mp4", fps=30.0)
+    exporter._export_segment(
+        source_path=Path("input.mp4"),
+        output_path=tmp_path / "segment.mp4",
+        start_frame=240,  # 10s in at 24fps -> exercises the precise -ss
+        end_frame=264,
+        source_fps=24.0,
+        config=config,
+    )
+
+    cmd = captured["cmd"]
+    cmd_str = " ".join(cmd)
+    assert "atrim" not in cmd_str
+    assert "asetpts" not in cmd_str
+    assert "-af" not in cmd
+
+
+def test_export_segment_uses_areverse_only_when_reverse_requested(monkeypatch, tmp_path):
+    """When seq_clip.reverse is set, -af should be present with areverse only."""
+    exporter = SequenceExporter(ffmpeg_path="ffmpeg")
+    captured = {}
+
+    def fake_run(cmd, capture_output, text, timeout, **kwargs):
+        captured["cmd"] = cmd
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("core.sequence_export.subprocess.run", fake_run)
+
+    seq_clip = SequenceClip(
+        source_clip_id="c1",
+        source_id="s1",
+        in_point=0,
+        out_point=24,
+        reverse=True,
+    )
+    config = ExportConfig(output_path=tmp_path / "out.mp4", fps=30.0)
+    exporter._export_segment(
+        source_path=Path("input.mp4"),
+        output_path=tmp_path / "segment.mp4",
+        start_frame=0,
+        end_frame=24,
+        source_fps=24.0,
+        config=config,
+        seq_clip=seq_clip,
+    )
+
+    cmd = captured["cmd"]
+    assert "-af" in cmd
     af = cmd[cmd.index("-af") + 1]
-    assert f"atrim=0:{expected_duration}" in af
-    assert "asetpts=PTS-STARTPTS" in af
+    assert af == "areverse"
