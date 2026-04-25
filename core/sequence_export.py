@@ -285,10 +285,7 @@ class SequenceExporter:
         # -ss after -i shifts audio PTS forward, so atrim=0:N keeps a window
         # that no longer contains any samples — silently producing a
         # zero-byte audio track in every segment.
-        af_parts = []
-        if apply_reverse:
-            af_parts.append("areverse")
-        af = ",".join(af_parts) if af_parts else None
+        af = "areverse" if apply_reverse else None
 
         # Use "double -ss" for frame-accurate seeking:
         # 1. -ss before -i: fast keyframe seek to ~5s before target (avoids
