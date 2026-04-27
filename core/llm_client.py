@@ -438,6 +438,96 @@ class FallbackLLMClient:
         raise last_error or RuntimeError("All LLM providers failed")
 
 
+def normalize_model_for_litellm(model: str) -> str:
+    """Add the LiteLLM provider prefix when missing (gemini/, anthropic/)."""
+    if not model:
+        return model
+    m = model.lower()
+    if "gemini" in m and not any(model.startswith(p) for p in ["gemini/", "vertex_ai/"]):
+        return f"gemini/{model}"
+    if "claude" in m and not any(model.startswith(p) for p in ["anthropic/", "bedrock/"]):
+        return f"anthropic/{model}"
+    return model
+
+
+def complete_with_local_fallback(
+    *,
+    model: str,
+    messages: list,
+    temperature: Optional[float] = None,
+    **kwargs,
+):
+    """Run litellm.completion against a cloud model, falling back to local Ollama
+    when the cloud call fails with auth/quota errors or no API key is configured.
+
+    Resolves the API key from the model name (not `settings.llm_provider`), so a
+    Gemini model gets a Gemini key even if the chat provider is Anthropic.
+
+    Fallback model: `settings.ollama_model` (default `qwen3:8b`), routed through
+    LiteLLM's `ollama/` provider. The api_base honors `settings.llm_api_base`
+    when set, otherwise LiteLLM uses its Ollama default.
+
+    Returns the LiteLLM response object. Raises the original exception if the
+    cloud call fails with a non-recoverable error AND the local fallback also
+    fails (or isn't reachable).
+    """
+    import litellm
+    from core.settings import get_api_key_for_model, load_settings
+
+    cloud_model = normalize_model_for_litellm(model)
+    api_key = get_api_key_for_model(cloud_model)
+
+    cloud_error: Optional[Exception] = None
+
+    if api_key:
+        try:
+            return litellm.completion(
+                model=cloud_model,
+                messages=messages,
+                api_key=api_key,
+                temperature=temperature,
+                **kwargs,
+            )
+        except (
+            litellm.AuthenticationError,
+            litellm.RateLimitError,
+            litellm.ServiceUnavailableError,
+            litellm.APIConnectionError,
+        ) as exc:
+            cloud_error = exc
+            logger.warning(
+                "Cloud LLM call failed for %s (%s); falling back to local Ollama",
+                cloud_model, type(exc).__name__,
+            )
+    else:
+        logger.warning(
+            "No API key configured for %s; using local Ollama fallback",
+            cloud_model,
+        )
+
+    settings = load_settings()
+    local_model = f"ollama/{settings.ollama_model}"
+    fallback_kwargs = dict(kwargs)
+    if settings.llm_api_base:
+        fallback_kwargs.setdefault("api_base", settings.llm_api_base)
+
+    try:
+        return litellm.completion(
+            model=local_model,
+            messages=messages,
+            temperature=temperature,
+            **fallback_kwargs,
+        )
+    except Exception as local_exc:
+        if cloud_error is not None:
+            logger.error(
+                "Local Ollama fallback also failed: %s. Re-raising original cloud error.",
+                local_exc,
+            )
+            raise cloud_error
+        raise
+
+
 def create_provider_config_from_settings() -> ProviderConfig:
     """Create a ProviderConfig from current application settings.
 

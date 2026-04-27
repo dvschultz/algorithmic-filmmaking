@@ -259,25 +259,15 @@ def propose_next_clip(
         ValueError: If the LLM returns no content, malformed JSON, or an ID
             not in the candidate set.
     """
-    import litellm
-    from core.settings import get_llm_api_key, load_settings
+    from core.llm_client import complete_with_local_fallback
+    from core.settings import load_settings
 
     settings = load_settings()
     model = model or settings.exquisite_corpus_model or "gemini-3-flash-preview"
     if temperature is None:
         temperature = settings.exquisite_corpus_temperature
 
-    # Normalize model name for LiteLLM (same convention as storyteller)
-    if "gemini" in model.lower() and not any(
-        model.startswith(p) for p in ["gemini/", "vertex_ai/"]
-    ):
-        model = f"gemini/{model}"
-    elif "claude" in model.lower() and not any(
-        model.startswith(p) for p in ["anthropic/", "bedrock/"]
-    ):
-        model = f"anthropic/{model}"
-
-    api_key = get_llm_api_key()
+    # Model normalization and API-key resolution are handled by complete_with_local_fallback.
 
     candidate_ids = {short_id for short_id, _ in candidate_digests}
     available_ids = sorted(candidate_ids - set(rejected_short_ids))
@@ -328,10 +318,9 @@ Pick one from the available candidates and explain the metadata-grounded connect
     ]
 
     logger.debug("Free Association LLM call: model=%s, temp=%s", model, temperature)
-    response = litellm.completion(
+    response = complete_with_local_fallback(
         model=model,
         messages=messages,
-        api_key=api_key,
         temperature=temperature,
     )
 

@@ -150,8 +150,8 @@ def generate_poem(
     Raises:
         ValueError: If LLM response cannot be parsed
     """
-    import litellm
-    from core.settings import load_settings, get_llm_api_key
+    from core.llm_client import complete_with_local_fallback
+    from core.settings import load_settings
 
     settings = load_settings()
     model = model or settings.exquisite_corpus_model or "gemini-3-flash-preview"
@@ -175,13 +175,7 @@ def generate_poem(
 
     logger.debug(f"Phrase inventory: {len(phrase_inventory)} clips with text")
 
-    # Normalize model name for LiteLLM
-    if "gemini" in model.lower() and not any(model.startswith(p) for p in ["gemini/", "vertex_ai/"]):
-        model = f"gemini/{model}"
-    elif "claude" in model.lower() and not any(model.startswith(p) for p in ["anthropic/", "bedrock/"]):
-        model = f"anthropic/{model}"
-
-    api_key = get_llm_api_key()
+    # Model normalization and API-key resolution are handled by complete_with_local_fallback.
 
     # Resolve poetic form
     form_def = POETIC_FORMS.get(form, POETIC_FORMS["free_verse"])
@@ -230,10 +224,9 @@ Return ONLY the JSON array of clip_ids in the order they should appear in the po
         {"role": "user", "content": user_prompt},
     ]
 
-    response = litellm.completion(
+    response = complete_with_local_fallback(
         model=model,
         messages=messages,
-        api_key=api_key,
         temperature=temperature,
     )
 

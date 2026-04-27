@@ -98,8 +98,8 @@ def generate_narrative(
     Raises:
         ValueError: If LLM response cannot be parsed
     """
-    import litellm
-    from core.settings import load_settings, get_llm_api_key
+    from core.llm_client import complete_with_local_fallback
+    from core.settings import load_settings
 
     settings = load_settings()
     model = model or settings.exquisite_corpus_model or "gemini-3-flash-preview"
@@ -139,13 +139,7 @@ def generate_narrative(
     )
     total_available_minutes = total_available_seconds / 60
 
-    # Normalize model name for LiteLLM
-    if "gemini" in model.lower() and not any(model.startswith(p) for p in ["gemini/", "vertex_ai/"]):
-        model = f"gemini/{model}"
-    elif "claude" in model.lower() and not any(model.startswith(p) for p in ["anthropic/", "bedrock/"]):
-        model = f"anthropic/{model}"
-
-    api_key = get_llm_api_key()
+    # Model normalization and API-key resolution are handled by complete_with_local_fallback.
 
     # Build duration guidance
     if target_duration_minutes:
@@ -241,10 +235,9 @@ Return the JSON object with selected clips in narrative order."""
         {"role": "user", "content": user_prompt},
     ]
 
-    response = litellm.completion(
+    response = complete_with_local_fallback(
         model=model,
         messages=messages,
-        api_key=api_key,
         temperature=temperature,
     )
 

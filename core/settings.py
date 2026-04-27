@@ -235,6 +235,36 @@ def is_api_key_from_env(provider: str) -> bool:
     return bool(env_var and os.environ.get(env_var))
 
 
+def get_api_key_for_model(model: str) -> str:
+    """Resolve the API key based on the LiteLLM model name's provider prefix.
+
+    Inspects the model string for provider hints (gemini, claude/anthropic, gpt/openai,
+    openrouter) and returns the matching provider key. This lets callers route to a
+    cloud model that doesn't match the user's default `llm_provider` setting.
+
+    Why: The Storyteller / Exquisite Corpus / Free Association sequencers pick their
+    own model (`exquisite_corpus_model`) which may differ from the chat provider.
+    Using `get_llm_api_key()` here would pass the wrong-provider key and trigger
+    `API_KEY_INVALID` on the cloud endpoint.
+
+    Returns empty string for local/ollama models or when no key is configured.
+    """
+    if not model:
+        return ""
+    m = model.lower()
+    if m.startswith("ollama/") or m.startswith("ollama_chat/"):
+        return ""
+    if "gemini" in m or m.startswith("vertex_ai/"):
+        return get_gemini_api_key()
+    if "claude" in m or "anthropic" in m or m.startswith("bedrock/"):
+        return get_anthropic_api_key()
+    if "gpt" in m or m.startswith("openai/"):
+        return get_openai_api_key()
+    if "openrouter" in m:
+        return get_openrouter_api_key()
+    return ""
+
+
 def get_llm_api_key() -> str:
     """Get LLM API key for the currently selected provider.
 
