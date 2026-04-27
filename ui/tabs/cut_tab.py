@@ -111,6 +111,11 @@ class CutTab(BaseTab):
         self.reset_filters_btn.clicked.connect(self._filter_state.clear_all)
         controls.addWidget(self.reset_filters_btn)
 
+        # Active filter chips appear inline next to the buttons so they
+        # don't claim a full row of vertical space when filters are on.
+        self.active_filter_chips = ActiveFilterChips(self._filter_state)
+        controls.addWidget(self.active_filter_chips)
+
         controls.addStretch()
 
         # Selection count label
@@ -130,10 +135,6 @@ class CutTab(BaseTab):
         content = QWidget()
         layout = QVBoxLayout(content)
         layout.setContentsMargins(0, 0, 0, 0)
-
-        # Active filter chips bar (above grid)
-        self.active_filter_chips = ActiveFilterChips(self._filter_state)
-        layout.addWidget(self.active_filter_chips)
 
         # Clip browser + filter sidebar in a splitter
         self.clip_browser = ClipBrowser(filter_state=self._filter_state)

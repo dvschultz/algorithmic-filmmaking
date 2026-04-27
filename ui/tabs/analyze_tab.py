@@ -140,6 +140,11 @@ class AnalyzeTab(BaseTab):
         self.reset_filters_btn.clicked.connect(self._filter_state.clear_all)
         controls.addWidget(self.reset_filters_btn)
 
+        # Active filter chips appear inline next to the buttons so they
+        # don't claim a full row of vertical space when filters are on.
+        self.active_filter_chips = ActiveFilterChips(self._filter_state)
+        controls.addWidget(self.active_filter_chips)
+
         controls.addSpacing(20)
 
         # Clear All button
@@ -178,10 +183,6 @@ class AnalyzeTab(BaseTab):
         content = QWidget()
         layout = QVBoxLayout(content)
         layout.setContentsMargins(0, 0, 0, 0)
-
-        # Active filter chips bar
-        self.active_filter_chips = ActiveFilterChips(self._filter_state)
-        layout.addWidget(self.active_filter_chips)
 
         self.clip_browser = ClipBrowser(filter_state=self._filter_state)
         self.clip_browser.set_drag_enabled(True)

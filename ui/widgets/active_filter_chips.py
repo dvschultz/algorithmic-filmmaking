@@ -12,6 +12,7 @@ from PySide6.QtCore import Signal, Slot
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QPushButton,
+    QSizePolicy,
     QWidget,
 )
 
@@ -60,10 +61,13 @@ class ActiveFilterChips(QWidget):
         self._filter_state = filter_state
         self._chips: list[QPushButton] = []
 
+        # Size to chip content; never expand vertically beyond what one
+        # chip-row needs. Embedded inline in the controls row, so no
+        # trailing stretch — chips flow alongside the surrounding buttons.
+        self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Maximum)
         self._layout = QHBoxLayout(self)
-        self._layout.setContentsMargins(Spacing.MD, Spacing.XXS, Spacing.MD, Spacing.XXS)
+        self._layout.setContentsMargins(0, 0, 0, 0)
         self._layout.setSpacing(Spacing.XS)
-        self._layout.addStretch()
 
         self._rebuild()
         self._filter_state.changed.connect(self._rebuild)
@@ -85,7 +89,7 @@ class ActiveFilterChips(QWidget):
             btn.setObjectName("ActiveFilterChip")
             btn.clicked.connect(lambda _checked=False, fields=clear_fields: self._clear_fields(fields))
             self._chips.append(btn)
-            self._layout.insertWidget(self._layout.count() - 1, btn)
+            self._layout.addWidget(btn)
 
         self.setVisible(bool(entries))
 
