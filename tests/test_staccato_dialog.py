@@ -85,3 +85,55 @@ def test_generate_uses_preview_filtered_markers(qapp, monkeypatch):
     assert captured["strategy"] == "onsets"
     assert captured["cut_times"] == [0.5, 1.5]
     assert captured["started"] is True
+
+
+def test_audio_analysis_worker_receives_onset_profile_config(qapp, monkeypatch):
+    from ui.dialogs.staccato_dialog import StaccatoDialog
+
+    clip, source = _make_clip_and_source()
+    dialog = StaccatoDialog(clips=[(clip, source)])
+    dialog._music_path = Path("/test/drums.wav")
+    dialog._onset_profile_combo.setCurrentIndex(
+        dialog._onset_profile_combo.findData("drums")
+    )
+    dialog._sensitivity_slider.setValue(7)
+    dialog._min_gap_combo.setCurrentIndex(1)  # 60 ms
+    dialog._timing_combo.setCurrentIndex(1)  # Transient Start
+    dialog._resolution_combo.setCurrentIndex(1)  # High Precision
+
+    captured = {}
+
+    class FakeAnalyzeWorker:
+        def __init__(
+            self,
+            music_path,
+            stem_name=None,
+            stems_cache_dir=None,
+            onset_config=None,
+            parent=None,
+        ):
+            captured["music_path"] = music_path
+            captured["stem_name"] = stem_name
+            captured["onset_config"] = onset_config
+            self.audio_ready = _DummySignal()
+            self.error = _DummySignal()
+            self.progress_message = _DummySignal()
+
+        def isRunning(self):
+            return False
+
+        def start(self):
+            captured["started"] = True
+
+    monkeypatch.setattr("ui.dialogs.staccato_dialog.StaccatoAnalyzeWorker", FakeAnalyzeWorker)
+
+    dialog._analyze_audio()
+
+    config = captured["onset_config"]
+    assert captured["started"] is True
+    assert config.profile == "drums"
+    assert config.hop_length == 256
+    assert config.wait_seconds == 0.06
+    assert config.backtrack is True
+    assert config.superflux is True
+    assert config.delta < 0.04

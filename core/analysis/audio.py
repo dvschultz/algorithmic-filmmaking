@@ -148,6 +148,146 @@ class AudioAnalysis:
         return 0.5
 
 
+@dataclass(frozen=True)
+class OnsetDetectionConfig:
+    """Tunable onset detector settings for rhythm-heavy editing workflows."""
+
+    profile: str = "balanced"
+    hop_length: int = 512
+    delta: float = 0.07
+    wait_seconds: float = 0.03
+    pre_max_seconds: float = 0.03
+    post_max_seconds: float = 0.00
+    pre_avg_seconds: float = 0.10
+    post_avg_seconds: float = 0.10
+    backtrack: bool = False
+    superflux: bool = False
+    lag: int = 2
+    max_size: int = 3
+
+
+_ONSET_PROFILE_PRESETS: dict[str, dict[str, object]] = {
+    "balanced": {
+        "delta": 0.07,
+        "hop_length": 512,
+        "wait_seconds": 0.06,
+        "backtrack": False,
+        "superflux": False,
+    },
+    "drums": {
+        "delta": 0.04,
+        "hop_length": 256,
+        "wait_seconds": 0.06,
+        "backtrack": True,
+        "superflux": True,
+    },
+    "dense": {
+        "delta": 0.025,
+        "hop_length": 256,
+        "wait_seconds": 0.03,
+        "backtrack": True,
+        "superflux": True,
+    },
+    "sparse": {
+        "delta": 0.12,
+        "hop_length": 512,
+        "wait_seconds": 0.12,
+        "backtrack": False,
+        "superflux": False,
+    },
+}
+
+
+def make_onset_detection_config(
+    profile: str = "balanced",
+    *,
+    cut_density: int = 5,
+    min_gap_ms: Optional[int] = None,
+    backtrack: Optional[bool] = None,
+    hop_length: Optional[int] = None,
+    delta: Optional[float] = None,
+    superflux: Optional[bool] = None,
+) -> OnsetDetectionConfig:
+    """Build an onset detection config from editor-facing controls.
+
+    Args:
+        profile: One of ``balanced``, ``drums``, ``dense``, ``sparse``, or ``custom``.
+        cut_density: 1-10 where higher means more sensitive onset picking.
+        min_gap_ms: Minimum interval between detected onsets.
+        backtrack: Whether to align detected events to transient starts.
+        hop_length: Analysis hop length. Lower values improve timing precision.
+        delta: Raw peak-picking threshold override.
+        superflux: Whether to use a SuperFlux-style onset envelope.
+    """
+    normalized_profile = (profile or "balanced").lower()
+    preset = dict(_ONSET_PROFILE_PRESETS.get(normalized_profile, _ONSET_PROFILE_PRESETS["balanced"]))
+
+    density = max(1, min(10, int(cut_density)))
+    # Density 1 keeps only clear attacks; density 10 admits much weaker peaks.
+    density_factor = float(np.interp(density, [1, 10], [1.8, 0.45]))
+    base_delta = float(preset["delta"])
+
+    return OnsetDetectionConfig(
+        profile=normalized_profile,
+        hop_length=int(hop_length if hop_length is not None else preset["hop_length"]),
+        delta=float(delta if delta is not None else base_delta * density_factor),
+        wait_seconds=(
+            float(min_gap_ms) / 1000.0
+            if min_gap_ms is not None
+            else float(preset["wait_seconds"])
+        ),
+        backtrack=bool(backtrack if backtrack is not None else preset["backtrack"]),
+        superflux=bool(superflux if superflux is not None else preset["superflux"]),
+    )
+
+
+def _seconds_to_frames(seconds: float, sr: int, hop_length: int) -> int:
+    return max(1, int(round(seconds * sr / hop_length)))
+
+
+def _detect_tuned_onsets(librosa, y, sr: int, config: OnsetDetectionConfig) -> tuple[np.ndarray, np.ndarray]:
+    """Detect onsets using an explicitly configured onset envelope."""
+    hop_length = config.hop_length
+
+    if config.superflux:
+        mel = librosa.feature.melspectrogram(
+            y=y,
+            sr=sr,
+            hop_length=hop_length,
+            fmin=27.5,
+            n_mels=138,
+        )
+        onset_env = librosa.onset.onset_strength(
+            S=librosa.power_to_db(mel, ref=np.max),
+            sr=sr,
+            hop_length=hop_length,
+            lag=config.lag,
+            max_size=config.max_size,
+        )
+    else:
+        onset_env = librosa.onset.onset_strength(
+            y=y,
+            sr=sr,
+            hop_length=hop_length,
+            aggregate=np.median,
+        )
+
+    onset_frames = librosa.onset.onset_detect(
+        onset_envelope=onset_env,
+        sr=sr,
+        hop_length=hop_length,
+        backtrack=config.backtrack,
+        units="frames",
+        pre_max=_seconds_to_frames(config.pre_max_seconds, sr, hop_length),
+        post_max=max(1, _seconds_to_frames(config.post_max_seconds, sr, hop_length)),
+        pre_avg=_seconds_to_frames(config.pre_avg_seconds, sr, hop_length),
+        post_avg=_seconds_to_frames(config.post_avg_seconds, sr, hop_length),
+        delta=config.delta,
+        wait=_seconds_to_frames(config.wait_seconds, sr, hop_length),
+    )
+    return onset_frames, onset_env
+
+
 def _find_nearest(sorted_times: list[float], time: float) -> float:
     """Find the nearest timestamp using binary search.
 
@@ -290,6 +430,7 @@ def analyze_audio(
     audio_path: Path,
     sample_rate: int = 22050,
     include_onsets: bool = True,
+    onset_config: Optional[OnsetDetectionConfig] = None,
 ) -> AudioAnalysis:
     """Analyze audio file for beats, tempo, and onsets.
 
@@ -297,6 +438,7 @@ def analyze_audio(
         audio_path: Path to audio file (WAV, MP3, etc.)
         sample_rate: Sample rate for analysis
         include_onsets: Whether to detect onsets (adds processing time)
+        onset_config: Optional tuned onset detector settings
 
     Returns:
         AudioAnalysis with beat times, tempo, and optionally onsets
@@ -331,11 +473,21 @@ def analyze_audio(
         onset_strengths = []
         if include_onsets:
             logger.info("Detecting onsets")
-            onset_frames = librosa.onset.onset_detect(y=y, sr=sr)
-            onset_times = librosa.frames_to_time(onset_frames, sr=sr).tolist()
+            if onset_config is None:
+                onset_frames = librosa.onset.onset_detect(y=y, sr=sr)
+                onset_env = librosa.onset.onset_strength(y=y, sr=sr)
+                onset_times = librosa.frames_to_time(onset_frames, sr=sr).tolist()
+            else:
+                onset_frames, onset_env = _detect_tuned_onsets(
+                    librosa, y, sr, onset_config
+                )
+                onset_times = librosa.frames_to_time(
+                    onset_frames,
+                    sr=sr,
+                    hop_length=onset_config.hop_length,
+                ).tolist()
 
-            # Compute onset strength envelope and sample at detected onsets
-            onset_env = librosa.onset.onset_strength(y=y, sr=sr)
+            # Sample the same onset strength envelope used for detection.
             if len(onset_frames) > 0:
                 # Clamp frame indices to envelope length
                 valid_frames = np.clip(onset_frames, 0, len(onset_env) - 1)
@@ -372,6 +524,7 @@ def analyze_audio_from_video(
     sample_rate: int = 22050,
     include_onsets: bool = True,
     cleanup: bool = True,
+    onset_config: Optional[OnsetDetectionConfig] = None,
 ) -> AudioAnalysis:
     """Extract and analyze audio from a video file.
 
@@ -382,6 +535,7 @@ def analyze_audio_from_video(
         sample_rate: Sample rate for analysis
         include_onsets: Whether to detect onsets
         cleanup: Whether to delete extracted audio after analysis
+        onset_config: Optional tuned onset detector settings
 
     Returns:
         AudioAnalysis with beat times, tempo, and onsets
@@ -396,11 +550,21 @@ def analyze_audio_from_video(
     if cleanup:
         # Use context manager for guaranteed cleanup
         with extracted_audio(video_path, sample_rate=sample_rate) as audio_path:
-            return analyze_audio(audio_path, sample_rate=sample_rate, include_onsets=include_onsets)
+            return analyze_audio(
+                audio_path,
+                sample_rate=sample_rate,
+                include_onsets=include_onsets,
+                onset_config=onset_config,
+            )
     else:
         # Caller is responsible for cleanup
         audio_path = extract_audio(video_path, sample_rate=sample_rate)
-        return analyze_audio(audio_path, sample_rate=sample_rate, include_onsets=include_onsets)
+        return analyze_audio(
+            audio_path,
+            sample_rate=sample_rate,
+            include_onsets=include_onsets,
+            onset_config=onset_config,
+        )
 
 
 def extract_clip_volume(
@@ -472,12 +636,14 @@ def extract_clip_volume(
 def analyze_music_file(
     music_path: Path,
     include_onsets: bool = True,
+    onset_config: Optional[OnsetDetectionConfig] = None,
 ) -> AudioAnalysis:
     """Analyze a music file (MP3, WAV, FLAC, etc.).
 
     Args:
         music_path: Path to music file
         include_onsets: Whether to detect onsets
+        onset_config: Optional tuned onset detector settings
 
     Returns:
         AudioAnalysis with beat times, tempo, and onsets
@@ -489,4 +655,8 @@ def analyze_music_file(
     if not music_path.exists():
         raise FileNotFoundError(f"Music file not found: {music_path}")
 
-    return analyze_audio(music_path, include_onsets=include_onsets)
+    return analyze_audio(
+        music_path,
+        include_onsets=include_onsets,
+        onset_config=onset_config,
+    )

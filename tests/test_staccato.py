@@ -1,14 +1,19 @@
 """Tests for the Staccato beat-driven sequencer algorithm."""
 
 import pytest
+import numpy as np
 from unittest.mock import MagicMock
 
-from core.analysis.audio import AudioAnalysis
+from core.analysis.audio import (
+    AudioAnalysis,
+    OnsetDetectionConfig,
+    analyze_audio,
+    make_onset_detection_config,
+)
 from core.remix.staccato import (
     StaccatoSlot,
     StaccatoResult,
     StaccatoDebugInfo,
-    StaccatoSlotDebug,
     expand_staccato_slot_segments,
     generate_beat_slots,
     generate_staccato_sequence,
@@ -61,6 +66,72 @@ class TestAudioAnalysisOnsetStrengths:
     def test_onset_strength_at_empty_data(self):
         analysis = AudioAnalysis()
         assert analysis.onset_strength_at(1.0) == 0.5
+
+
+class TestTunedOnsetDetection:
+    """Tests for Staccato-oriented onset detector configuration."""
+
+    def test_drums_profile_is_more_sensitive_than_balanced(self):
+        balanced = make_onset_detection_config("balanced", cut_density=5)
+        drums = make_onset_detection_config("drums", cut_density=7)
+
+        assert drums.delta < balanced.delta
+        assert drums.hop_length < balanced.hop_length
+        assert drums.backtrack is True
+        assert drums.superflux is True
+
+    def test_analyze_audio_passes_tuned_peak_pick_parameters(self, tmp_path, monkeypatch):
+        calls = {}
+
+        class FakeBeat:
+            def beat_track(self, y, sr):
+                return 120.0, np.array([1, 2])
+
+        class FakeOnset:
+            def onset_strength(self, **kwargs):
+                calls["onset_strength"] = kwargs
+                return np.array([0.1, 1.0, 0.2, 0.8])
+
+            def onset_detect(self, **kwargs):
+                calls["onset_detect"] = kwargs
+                return np.array([1, 3])
+
+        class FakeLibrosa:
+            beat = FakeBeat()
+            onset = FakeOnset()
+
+            def load(self, path, sr):
+                calls["load"] = {"path": path, "sr": sr}
+                return np.ones(1024), sr
+
+            def frames_to_time(self, frames, sr, hop_length=512):
+                return np.asarray(frames) * hop_length / sr
+
+        fake_librosa = FakeLibrosa()
+        monkeypatch.setattr("core.analysis.audio._get_librosa", lambda: fake_librosa)
+
+        config = OnsetDetectionConfig(
+            profile="drums",
+            hop_length=256,
+            delta=0.025,
+            wait_seconds=0.06,
+            backtrack=True,
+            superflux=False,
+        )
+        result = analyze_audio(
+            tmp_path / "drums.wav",
+            include_onsets=True,
+            onset_config=config,
+        )
+
+        assert calls["onset_strength"]["hop_length"] == 256
+        assert calls["onset_detect"]["onset_envelope"].tolist() == [0.1, 1.0, 0.2, 0.8]
+        assert calls["onset_detect"]["hop_length"] == 256
+        assert calls["onset_detect"]["delta"] == 0.025
+        assert calls["onset_detect"]["backtrack"] is True
+        assert calls["onset_detect"]["wait"] == 5
+        assert result.onset_times == pytest.approx([256 / 22050, 768 / 22050])
+        assert result.onset_strengths == [1.0, 0.8]
 
 
 # --- Beat slot generation tests ---

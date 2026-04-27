@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QDoubleSpinBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -25,10 +26,15 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PySide6.QtCore import Qt, QUrl, Signal, Slot
+from PySide6.QtCore import Qt, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices
 
-from core.analysis.audio import AudioAnalysis, analyze_music_file
+from core.analysis.audio import (
+    AudioAnalysis,
+    OnsetDetectionConfig,
+    analyze_music_file,
+    make_onset_detection_config,
+)
 from core.remix.staccato import generate_staccato_sequence
 from ui.theme import theme, Spacing, TypeScale, UISizes
 from ui.widgets.waveform_widget import WaveformWidget
@@ -50,12 +56,14 @@ class StaccatoAnalyzeWorker(CancellableWorker):
         music_path: Path,
         stem_name: str | None = None,
         stems_cache_dir: Path | None = None,
+        onset_config: OnsetDetectionConfig | None = None,
         parent=None,
     ):
         super().__init__(parent)
         self._music_path = music_path
         self._stem_name = stem_name
         self._stems_cache_dir = stems_cache_dir
+        self._onset_config = onset_config
 
     def run(self):
         self._log_start()
@@ -93,7 +101,11 @@ class StaccatoAnalyzeWorker(CancellableWorker):
                 f"Analyzing {self._stem_name} track..."
                 if self._stem_name else "Analyzing audio..."
             )
-            analysis = analyze_music_file(audio_path, include_onsets=True)
+            analysis = analyze_music_file(
+                audio_path,
+                include_onsets=True,
+                onset_config=self._onset_config,
+            )
 
             if self.is_cancelled():
                 self._log_cancelled()
@@ -276,6 +288,10 @@ class StaccatoDialog(QDialog):
         self._handler_executed = False
         self._sequence_data = None
         self._debug_info = None
+        self._detection_change_timer = QTimer(self)
+        self._detection_change_timer.setSingleShot(True)
+        self._detection_change_timer.setInterval(450)
+        self._detection_change_timer.timeout.connect(self._reanalyze_after_detection_change)
 
         self.setWindowTitle("Staccato")
         self.setMinimumWidth(520)
@@ -364,7 +380,7 @@ class StaccatoDialog(QDialog):
 
         # Sensitivity slider
         sens_layout = QVBoxLayout()
-        sens_label = QLabel("Sensitivity")
+        sens_label = QLabel("Cut Density")
         sens_label.setStyleSheet(f"color: {theme().text_secondary}; font-size: {TypeScale.SM}px;")
         sens_layout.addWidget(sens_label)
 
@@ -375,10 +391,10 @@ class StaccatoDialog(QDialog):
 
         self._sensitivity_slider = QSlider(Qt.Horizontal)
         self._sensitivity_slider.setRange(1, 10)
-        self._sensitivity_slider.setValue(5)
+        self._sensitivity_slider.setValue(7)
         self._sensitivity_slider.setTickPosition(QSlider.TicksBelow)
         self._sensitivity_slider.setTickInterval(1)
-        self._sensitivity_slider.valueChanged.connect(self._on_sensitivity_or_strategy_changed)
+        self._sensitivity_slider.valueChanged.connect(self._on_cut_density_changed)
         sens_row.addWidget(self._sensitivity_slider)
 
         more_label = QLabel("More Cuts")
@@ -402,6 +418,17 @@ class StaccatoDialog(QDialog):
         controls.addLayout(strat_layout, 1)
 
         layout.addLayout(controls)
+
+        self._advanced_toggle = QCheckBox("Advanced Onset Detection")
+        self._advanced_toggle.setToolTip(
+            "Tune onset detection for drums, ghost notes, and dense transients."
+        )
+        self._advanced_toggle.toggled.connect(self._on_advanced_toggled)
+        layout.addWidget(self._advanced_toggle)
+
+        self._advanced_panel = self._create_advanced_onset_panel()
+        self._advanced_panel.setVisible(False)
+        layout.addWidget(self._advanced_panel)
 
         # Info labels
         self._info_label = QLabel("")
@@ -433,6 +460,118 @@ class StaccatoDialog(QDialog):
         layout.addLayout(btn_layout)
 
         return page
+
+    def _create_advanced_onset_panel(self) -> QWidget:
+        """Create editor-facing onset detector controls."""
+        panel = QWidget()
+        panel.setStyleSheet(f"""
+            QWidget {{
+                background-color: {theme().background_secondary};
+                border: 1px solid {theme().border_primary};
+                border-radius: 6px;
+            }}
+            QLabel, QComboBox, QCheckBox, QDoubleSpinBox {{
+                border: none;
+            }}
+        """)
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(Spacing.MD, Spacing.MD, Spacing.MD, Spacing.MD)
+        layout.setSpacing(Spacing.SM)
+
+        profile_row = QHBoxLayout()
+        profile_label = QLabel("Onset Profile")
+        profile_label.setStyleSheet(f"color: {theme().text_secondary};")
+        profile_row.addWidget(profile_label)
+
+        self._onset_profile_combo = QComboBox()
+        self._onset_profile_combo.addItem("Balanced", "balanced")
+        self._onset_profile_combo.addItem("Drums / Percussion", "drums")
+        self._onset_profile_combo.addItem("Dense / Ghost Notes", "dense")
+        self._onset_profile_combo.addItem("Sparse / Strong Hits", "sparse")
+        self._onset_profile_combo.addItem("Custom", "custom")
+        self._onset_profile_combo.currentIndexChanged.connect(
+            self._on_detection_controls_changed
+        )
+        profile_row.addWidget(self._onset_profile_combo, 1)
+        layout.addLayout(profile_row)
+
+        options_row = QHBoxLayout()
+
+        min_gap_col = QVBoxLayout()
+        min_gap_label = QLabel("Minimum Gap")
+        min_gap_label.setStyleSheet(f"color: {theme().text_secondary}; font-size: {TypeScale.SM}px;")
+        min_gap_col.addWidget(min_gap_label)
+        self._min_gap_combo = QComboBox()
+        for label, value in (
+            ("30 ms", 30),
+            ("60 ms", 60),
+            ("100 ms", 100),
+            ("160 ms", 160),
+        ):
+            self._min_gap_combo.addItem(label, value)
+        self._min_gap_combo.setCurrentIndex(1)
+        self._min_gap_combo.currentIndexChanged.connect(self._on_detection_controls_changed)
+        min_gap_col.addWidget(self._min_gap_combo)
+        options_row.addLayout(min_gap_col)
+
+        timing_col = QVBoxLayout()
+        timing_label = QLabel("Timing")
+        timing_label.setStyleSheet(f"color: {theme().text_secondary}; font-size: {TypeScale.SM}px;")
+        timing_col.addWidget(timing_label)
+        self._timing_combo = QComboBox()
+        self._timing_combo.addItem("Peak", False)
+        self._timing_combo.addItem("Transient Start", True)
+        self._timing_combo.setCurrentIndex(1)
+        self._timing_combo.currentIndexChanged.connect(self._on_detection_controls_changed)
+        timing_col.addWidget(self._timing_combo)
+        options_row.addLayout(timing_col)
+
+        resolution_col = QVBoxLayout()
+        resolution_label = QLabel("Resolution")
+        resolution_label.setStyleSheet(f"color: {theme().text_secondary}; font-size: {TypeScale.SM}px;")
+        resolution_col.addWidget(resolution_label)
+        self._resolution_combo = QComboBox()
+        self._resolution_combo.addItem("Standard", 512)
+        self._resolution_combo.addItem("High Precision", 256)
+        self._resolution_combo.setCurrentIndex(1)
+        self._resolution_combo.currentIndexChanged.connect(self._on_detection_controls_changed)
+        resolution_col.addWidget(self._resolution_combo)
+        options_row.addLayout(resolution_col)
+
+        layout.addLayout(options_row)
+
+        custom_row = QHBoxLayout()
+        self._custom_delta_label = QLabel("Delta Threshold")
+        self._custom_delta_label.setStyleSheet(f"color: {theme().text_secondary};")
+        custom_row.addWidget(self._custom_delta_label)
+        self._custom_delta_spin = QDoubleSpinBox()
+        self._custom_delta_spin.setRange(0.005, 0.3)
+        self._custom_delta_spin.setSingleStep(0.005)
+        self._custom_delta_spin.setDecimals(3)
+        self._custom_delta_spin.setValue(0.04)
+        self._custom_delta_spin.valueChanged.connect(self._on_detection_controls_changed)
+        custom_row.addWidget(self._custom_delta_spin)
+
+        self._custom_superflux_checkbox = QCheckBox("SuperFlux")
+        self._custom_superflux_checkbox.setChecked(True)
+        self._custom_superflux_checkbox.toggled.connect(self._on_detection_controls_changed)
+        custom_row.addWidget(self._custom_superflux_checkbox)
+        custom_row.addStretch()
+        layout.addLayout(custom_row)
+
+        self._custom_delta_label.setVisible(False)
+        self._custom_delta_spin.setVisible(False)
+        self._custom_superflux_checkbox.setVisible(False)
+
+        hint = QLabel(
+            "Use Drums / Percussion or Dense / Ghost Notes when snares, fills, "
+            "or ghost notes are missing."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet(f"color: {theme().text_muted}; font-size: {TypeScale.XS}px;")
+        layout.addWidget(hint)
+
+        return panel
 
     def _create_progress_page(self) -> QWidget:
         page = QWidget()
@@ -487,6 +626,7 @@ class StaccatoDialog(QDialog):
         """Show/hide stem dropdown and check dependency availability."""
         self._stem_combo.setVisible(checked)
         if checked:
+            self._select_drums_profile_if_needed()
             # Check if demucs-infer is available — the worker thread will
             # install on demand if needed, but warn the user upfront about
             # the download size so they can opt out before waiting.
@@ -515,6 +655,7 @@ class StaccatoDialog(QDialog):
     @Slot(str)
     def _on_stem_changed(self, _stem_text: str):
         """Re-analyze when the user changes the stem selection."""
+        self._select_drums_profile_if_needed()
         if self._music_path and self._stem_checkbox.isChecked():
             self._info_label.setText("Re-analyzing...")
             self._generate_btn.setEnabled(False)
@@ -526,6 +667,69 @@ class StaccatoDialog(QDialog):
         if self._stem_checkbox.isChecked():
             return self._stem_combo.currentText().lower()
         return None
+
+    def _select_drums_profile_if_needed(self):
+        """Default drum-stem workflows to the percussion-tuned onset profile."""
+        if (
+            self._stem_checkbox.isChecked()
+            and self._stem_combo.currentText().lower() == "drums"
+            and self._onset_profile_combo.currentData() == "balanced"
+        ):
+            self._onset_profile_combo.setCurrentIndex(
+                self._onset_profile_combo.findData("drums")
+            )
+
+    def _build_onset_config(self) -> OnsetDetectionConfig:
+        """Build onset detector settings from the current Staccato controls."""
+        profile = self._onset_profile_combo.currentData() or "balanced"
+        min_gap_ms = self._min_gap_combo.currentData()
+        backtrack = self._timing_combo.currentData()
+        hop_length = self._resolution_combo.currentData()
+
+        delta = None
+        superflux = None
+        if profile == "custom":
+            delta = self._custom_delta_spin.value()
+            superflux = self._custom_superflux_checkbox.isChecked()
+
+        return make_onset_detection_config(
+            profile,
+            cut_density=self._sensitivity_slider.value(),
+            min_gap_ms=min_gap_ms,
+            backtrack=backtrack,
+            hop_length=hop_length,
+            delta=delta,
+            superflux=superflux,
+        )
+
+    @Slot(bool)
+    def _on_advanced_toggled(self, checked: bool):
+        self._advanced_panel.setVisible(checked)
+
+    def _on_detection_controls_changed(self, *_args):
+        """Handle changes that require re-running onset detection."""
+        is_custom = self._onset_profile_combo.currentData() == "custom"
+        self._custom_delta_label.setVisible(is_custom)
+        self._custom_delta_spin.setVisible(is_custom)
+        self._custom_superflux_checkbox.setVisible(is_custom)
+        self._schedule_reanalysis_for_detection_change()
+
+    def _on_cut_density_changed(self, *_args):
+        """Update current preview and re-run onset detection after a short pause."""
+        self._on_sensitivity_or_strategy_changed()
+        self._schedule_reanalysis_for_detection_change()
+
+    def _schedule_reanalysis_for_detection_change(self):
+        if not self._music_path or self._strategy_combo.currentText().lower() != "onsets":
+            return
+        self._info_label.setText("Updating onset detection...")
+        self._generate_btn.setEnabled(False)
+        self._detection_change_timer.start()
+
+    @Slot()
+    def _reanalyze_after_detection_change(self):
+        if self._music_path:
+            self._analyze_audio()
 
     def _analyze_audio(self):
         """Start background audio analysis."""
@@ -546,6 +750,7 @@ class StaccatoDialog(QDialog):
             self._music_path,
             stem_name=stem_name,
             stems_cache_dir=stems_cache_dir,
+            onset_config=self._build_onset_config(),
             parent=self,
         )
         self._analyze_worker.audio_ready.connect(
@@ -580,7 +785,7 @@ class StaccatoDialog(QDialog):
     def _get_filtered_markers(self) -> list[float]:
         """Get cut-point markers filtered by current strategy and sensitivity.
 
-        Sensitivity 1 = only the strongest onsets, 10 = all onsets.
+        Cut density 1 = only the strongest onsets, 10 = all onsets.
         For beats/downbeats, sensitivity has no effect (all are used).
         """
         analysis = self._audio_analysis
@@ -593,7 +798,7 @@ class StaccatoDialog(QDialog):
         elif strategy == "beats":
             return analysis.beat_times
 
-        # Onsets: filter by strength threshold based on sensitivity
+        # Onsets: filter by strength threshold based on cut density.
         sensitivity = self._sensitivity_slider.value()
         if sensitivity >= 10 or not analysis.onset_strengths:
             return analysis.onset_times
@@ -629,9 +834,11 @@ class StaccatoDialog(QDialog):
         stem_name = self._get_stem_name()
         if stem_name:
             stem_label = f" ({stem_name} stem)"
+        profile_label = self._onset_profile_combo.currentText()
         self._info_label.setText(
             f"{self._audio_analysis.tempo_bpm:.0f} BPM · {len(markers)} cut points · "
-            f"{duration_str}{stem_label} · {len(self._clips)} clips available"
+            f"{duration_str}{stem_label} · {profile_label} · "
+            f"{len(self._clips)} clips available"
         )
 
     @Slot(str)

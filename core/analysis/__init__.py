@@ -16,6 +16,8 @@ from .shots import (
 )
 from .audio import (
     AudioAnalysis,
+    OnsetDetectionConfig,
+    make_onset_detection_config,
     has_audio_track,
     extract_audio,
     extracted_audio,
@@ -45,6 +47,8 @@ __all__ = [
     "SHOT_TYPES",
     # Audio analysis
     "AudioAnalysis",
+    "OnsetDetectionConfig",
+    "make_onset_detection_config",
     "has_audio_track",
     "extract_audio",
     "extracted_audio",
