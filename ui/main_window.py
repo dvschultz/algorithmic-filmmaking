@@ -3315,7 +3315,7 @@ class MainWindow(QMainWindow):
         # Disabled clips are excluded from analysis the same way they're
         # excluded from sequence/export. They keep any prior analysis fields
         # so the Analyze tab can still surface them as disabled.
-        enabled_clips = [c for c in clips if not c.disabled]
+        enabled_clips = [c for c in clips if not getattr(c, "disabled", False)]
         skipped = len(clips) - len(enabled_clips)
         if skipped:
             logger.info("Skipping %d disabled clip(s) from analysis pipeline", skipped)
