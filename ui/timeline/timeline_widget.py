@@ -148,6 +148,8 @@ class TimelineWidget(QWidget):
         # Scene signals
         self.scene.playhead_moved.connect(self._on_playhead_moved)
         self.scene.clip_selected.connect(self._on_clip_selected)
+        self.scene.clip_moved.connect(lambda _clip_id, _start_frame: self.sequence_changed.emit())
+        self.scene.clip_removed.connect(lambda _clip_id: self.sequence_changed.emit())
 
         # View signals
         self.view.position_clicked.connect(self._on_ruler_clicked)

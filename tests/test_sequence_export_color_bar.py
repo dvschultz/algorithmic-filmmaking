@@ -119,6 +119,59 @@ def test_export_resolves_clip_color_and_falls_back_to_black(monkeypatch, tmp_pat
     assert source_fps_values == [24.0, 24.0]
 
 
+def test_export_inserts_black_silent_segments_for_timeline_gaps(monkeypatch, tmp_path):
+    exporter = SequenceExporter(ffmpeg_path="ffmpeg")
+    calls = []
+
+    def fake_export_gap_segment(output_path, duration_seconds, config):
+        calls.append(("gap", duration_seconds))
+        return True
+
+    def fake_export_segment(
+        *,
+        source_path,
+        output_path,
+        start_frame,
+        end_frame,
+        source_fps,
+        config,
+        bar_color=None,
+        seq_clip=None,
+    ):
+        calls.append(("clip", start_frame, end_frame))
+        return True
+
+    def fake_concat_segments(*, segment_paths, output_path, config):
+        return True
+
+    monkeypatch.setattr(exporter, "_export_gap_segment", fake_export_gap_segment)
+    monkeypatch.setattr(exporter, "_export_segment", fake_export_segment)
+    monkeypatch.setattr(exporter, "_concat_segments", fake_concat_segments)
+
+    source = Source(id="src-1", file_path=Path("src.mp4"), fps=30.0, width=1280, height=720)
+    clip = Clip(id="clip-a", source_id=source.id, start_frame=0, end_frame=30)
+    sequence = Sequence(fps=30.0)
+    sequence.tracks[0].clips = [
+        SequenceClip(
+            source_clip_id=clip.id,
+            source_id=source.id,
+            start_frame=30,
+            in_point=0,
+            out_point=30,
+        )
+    ]
+
+    success = exporter.export(
+        sequence=sequence,
+        sources={source.id: source},
+        clips={clip.id: (clip, source)},
+        config=ExportConfig(output_path=tmp_path / "out.mp4", fps=30.0, width=1280, height=720),
+    )
+
+    assert success is True
+    assert calls == [("gap", 1.0), ("clip", 0, 30)]
+
+
 def test_export_segment_uses_source_fps_for_trim_and_sequence_fps_for_output(
     monkeypatch, tmp_path,
 ):

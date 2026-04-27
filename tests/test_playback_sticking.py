@@ -267,3 +267,64 @@ class TestPrematureAdvanceGuard:
         assert called == [48], (
             "_play_clip_at_frame should be called with end_frame when not loading"
         )
+
+    def test_preview_mode_pause_does_not_advance_to_next_clip(self):
+        """Rendered-preview playback is continuous, so pause events must not
+        drive the legacy clip-by-clip advance path."""
+        from types import SimpleNamespace
+
+        w = _FakeMainWindow()
+        w._is_playing = True
+        w._using_rendered_sequence_preview = True
+        w._current_playback_clip = SimpleNamespace(end_frame=lambda: 48)
+        w.clip_details_sidebar = SimpleNamespace(
+            video_player=SimpleNamespace(mute=True)
+        )
+        w.sequence_tab = SimpleNamespace(
+            video_player=SimpleNamespace(
+                set_playing=lambda playing: None,
+                set_speed_control_enabled=lambda enabled: None,
+            )
+        )
+        called = []
+        w._play_clip_at_frame = lambda frame: called.append(frame)
+
+        w._on_video_state_changed(playing=False)
+
+        assert called == []
+        assert w._is_playing is False
+
+
+class TestRenderedPreviewPlaybackMapping:
+    """Rendered preview playback maps preview time directly to timeline time."""
+
+    @pytest.fixture(autouse=True)
+    def _bind_methods(self):
+        from ui.main_window import MainWindow
+
+        _FakeMainWindow._on_video_position_updated = (
+            MainWindow._on_video_position_updated
+        )
+
+    def test_position_update_maps_directly_to_timeline_seconds(self):
+        from types import SimpleNamespace
+
+        positions = []
+        w = _FakeMainWindow()
+        w._using_rendered_sequence_preview = True
+        w._syncing_timeline_from_video = False
+        w._gui_state = None
+        w.sequence_tab = SimpleNamespace(
+            timeline=SimpleNamespace(
+                get_sequence=lambda: SimpleNamespace(duration_seconds=10.0),
+                set_playhead_time=lambda seconds: positions.append(seconds),
+            ),
+            video_player=SimpleNamespace(
+                playback_speed=1.0,
+                is_playing=True,
+            ),
+        )
+
+        w._on_video_position_updated(2500)
+
+        assert positions == [2.5]

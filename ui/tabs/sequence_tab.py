@@ -79,6 +79,7 @@ class SequenceTab(BaseTab):
     playback_requested = Signal(int)  # start_frame
     stop_requested = Signal()
     export_requested = Signal()
+    render_preview_requested = Signal()
     clip_added = Signal(object, object)  # Clip, Source
     clips_data_changed = Signal(list)  # Emitted when auto-compute mutates clip metadata
     chromatic_bar_setting_changed = Signal(bool)  # True when bottom color bar should be visible
@@ -346,6 +347,21 @@ class SequenceTab(BaseTab):
         self.gaze_filter_dropdown.hide()
 
         layout.addStretch()
+
+        self.preview_status_label = QLabel("Preview: Not rendered")
+        self.preview_status_label.setToolTip(
+            "Sequence playback uses a cached 720p proxy preview when available."
+        )
+        self.preview_status_label.setStyleSheet(
+            f"color: {theme().text_muted}; border: none; font-size: {TypeScale.SM}px;"
+        )
+        layout.addWidget(self.preview_status_label)
+
+        self.render_preview_btn = QPushButton("Render Preview")
+        self.render_preview_btn.setToolTip("Render a cached 720p proxy for smooth sequence playback")
+        self.render_preview_btn.setMinimumHeight(UISizes.BUTTON_MIN_HEIGHT)
+        self.render_preview_btn.clicked.connect(self.render_preview_requested.emit)
+        layout.addWidget(self.render_preview_btn)
 
         self.new_seq_btn = QPushButton("New Sequence")
         self.new_seq_btn.setToolTip("Create a new empty sequence")
@@ -1959,6 +1975,20 @@ class SequenceTab(BaseTab):
     def _emit_chromatic_bar_setting_changed(self):
         """Emit normalized chromatic bar state for preview listeners."""
         self.chromatic_bar_setting_changed.emit(self.should_show_chromatic_color_bar())
+
+    def set_sequence_preview_status(
+        self,
+        status: str,
+        detail: str = "",
+        rendering: bool = False,
+    ):
+        """Update cached sequence preview status in the header."""
+        text = f"Preview: {status}"
+        if detail:
+            text = f"{text} ({detail})"
+        self.preview_status_label.setText(text)
+        self.render_preview_btn.setEnabled(not rendering)
+        self.render_preview_btn.setText("Rendering..." if rendering else "Render Preview")
 
     def sync_sequence_metadata(self, sequence):
         """Sync header controls from a loaded/restored sequence model."""

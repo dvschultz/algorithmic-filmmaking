@@ -20,6 +20,7 @@ class TimelineScene(QGraphicsScene):
     # Signals
     playhead_moved = Signal(float)  # Emits time in seconds
     clip_moved = Signal(str, int)  # clip_id, new_start_frame
+    clip_removed = Signal(str)  # clip_id
     clip_selected = Signal(str)  # clip_id
 
     def __init__(self, parent=None):
@@ -241,6 +242,7 @@ class TimelineScene(QGraphicsScene):
                 track.remove_clip(clip_id)
 
             self._update_scene_rect()
+            self.clip_removed.emit(clip_id)
 
     def clear_all_clips(self):
         """Remove all clips from the timeline."""

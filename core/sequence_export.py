@@ -109,10 +109,23 @@ class SequenceExporter:
             # Export each clip segment
             segment_paths = []
             total = len(all_clips)
+            current_frame = 0
 
             for i, seq_clip in enumerate(all_clips):
                 if progress_callback:
                     progress_callback(i / total * 0.8, f"Processing clip {i+1}/{total}")
+
+                if seq_clip.start_frame > current_frame:
+                    gap_path = temp_path / f"segment_{i:04d}_gap.mp4"
+                    gap_seconds = (seq_clip.start_frame - current_frame) / config.fps
+                    if self._export_gap_segment(gap_path, gap_seconds, config):
+                        segment_paths.append(gap_path)
+                    else:
+                        logger.error(
+                            "Sequence export aborted: gap segment failed before seq_clip=%s",
+                            getattr(seq_clip, "id", None),
+                        )
+                        return False
 
                 segment_path = temp_path / f"segment_{i:04d}.mp4"
                 bar_color = None
@@ -178,6 +191,7 @@ class SequenceExporter:
 
                 if success:
                     segment_paths.append(segment_path)
+                    current_frame = max(current_frame, seq_clip.end_frame())
                 else:
                     logger.error(
                         "Sequence export aborted: segment %d failed (seq_clip=%s, frame_entry=%s)",
@@ -246,6 +260,52 @@ class SequenceExporter:
     # Maximum clip duration (seconds) for the reverse filter.
     # reverse buffers the entire clip in RAM (~900 MB for 5s of 1080p30).
     _REVERSE_MAX_DURATION = 15.0
+
+    def _export_gap_segment(
+        self,
+        output_path: Path,
+        duration_seconds: float,
+        config: ExportConfig,
+    ) -> bool:
+        """Export a silent black segment for an empty timeline gap."""
+        if duration_seconds <= 0:
+            return True
+
+        width = config.width or 1280
+        height = config.height or 720
+        cmd = [
+            self.ffmpeg_path,
+            "-y",
+            "-f", "lavfi",
+            "-i", f"color=c=black:s={width}x{height}:r={config.fps}",
+            "-f", "lavfi",
+            "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+            "-t", str(duration_seconds),
+            "-c:v", config.video_codec,
+            "-preset", config.preset,
+            "-crf", str(config.crf),
+            "-pix_fmt", "yuv420p",
+            "-c:a", config.audio_codec,
+            "-b:a", config.audio_bitrate,
+            "-shortest",
+            str(output_path),
+        ]
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            **get_subprocess_kwargs(),
+        )
+        if result.returncode != 0:
+            logger.error(
+                "Gap segment export failed: output=%s duration=%.3fs stderr=%s",
+                output_path,
+                duration_seconds,
+                (result.stderr or "").strip()[-1000:],
+            )
+        return result.returncode == 0
 
     def _export_segment(
         self,

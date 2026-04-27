@@ -38,6 +38,11 @@ from core.downloader import (
     classify_download_error_message,
 )
 from core.sequence_export import SequenceExporter, ExportConfig
+from core.sequence_preview import (
+    SequencePreviewSettings,
+    compute_sequence_preview_signature,
+    get_sequence_preview_path,
+)
 from core.dataset_export import export_dataset, DatasetExportConfig
 from core.edl_export import export_edl, EDLExportConfig
 from core.srt_export import export_srt, SRTExportConfig
@@ -90,6 +95,7 @@ from ui.workers.embedding_worker import EmbeddingAnalysisWorker
 from ui.workers.description_worker import DescriptionWorker
 from ui.workers.custom_query_worker import CustomQueryWorker
 from ui.workers.export_worker import ExportBundleWorker
+from ui.workers.sequence_preview_worker import SequencePreviewWorker
 from core.gui_state import GUIState
 from core.plan_controller import PlanController
 from core.intention_workflow import IntentionWorkflowCoordinator, WorkflowState
@@ -766,6 +772,12 @@ class MainWindow(QMainWindow):
         self.download_worker: Optional[DownloadWorker] = None
         self.url_bulk_download_worker: Optional[URLBulkDownloadWorker] = None
         self.export_worker: Optional[SequenceExportWorker] = None
+        self.sequence_preview_worker: Optional[SequencePreviewWorker] = None
+        self._rendered_sequence_preview_path: Optional[Path] = None
+        self._rendered_sequence_preview_signature: Optional[str] = None
+        self._rendered_sequence_preview_profile: str = SequencePreviewSettings().profile_label
+        self._sequence_preview_play_after_render_frame: Optional[int] = None
+        self._using_rendered_sequence_preview = False
         self.color_worker: Optional[ColorAnalysisWorker] = None
         self.shot_type_worker: Optional[ShotTypeWorker] = None
         self.transcription_worker: Optional[TranscriptionWorker] = None
@@ -1051,6 +1063,7 @@ class MainWindow(QMainWindow):
             (getattr(self, 'youtube_search_worker', None), "YouTubeSearch"),
             (getattr(self, 'ia_search_worker', None), "InternetArchiveSearch"),
             (getattr(self, 'export_worker', None), "Export"),
+            (getattr(self, 'sequence_preview_worker', None), "SequencePreview"),
             (getattr(self, '_gaze_worker', None), "Gaze"),
         ]
 
@@ -1557,6 +1570,7 @@ class MainWindow(QMainWindow):
             self.thumbnail_worker,
             self.download_worker,
             self.export_worker,
+            self.sequence_preview_worker,
             self.color_worker,
             self.shot_type_worker,
             self.transcription_worker,
@@ -1636,12 +1650,14 @@ class MainWindow(QMainWindow):
         self.sequence_tab.playback_requested.connect(self._on_playback_requested)
         self.sequence_tab.stop_requested.connect(self._on_stop_requested)
         self.sequence_tab.export_requested.connect(self._on_sequence_export_click)
+        self.sequence_tab.render_preview_requested.connect(self._on_render_sequence_preview_requested)
         # Intention-first workflow trigger
         self.sequence_tab.intention_import_requested.connect(self._on_intention_import_requested)
         # Description analysis request from Storyteller
         self.sequence_tab.description_analysis_requested.connect(self._on_description_analysis_requested)
         # Update Render tab when sequence changes (clips added/removed/generated)
         self.sequence_tab.timeline.sequence_changed.connect(self._update_render_tab_sequence_info)
+        self.sequence_tab.timeline.sequence_changed.connect(self._invalidate_sequence_preview)
         # Update EDL export menu item when sequence changes
         self.sequence_tab.timeline.sequence_changed.connect(self._on_sequence_changed)
         # Update agent context when sequence changes
@@ -5277,6 +5293,19 @@ class MainWindow(QMainWindow):
         if self._is_playing or self._syncing_timeline_from_video:
             return
 
+        if self._has_ready_sequence_preview():
+            preview_path = self._rendered_sequence_preview_path
+            preview_key = f"preview:{preview_path}"
+            self._preview_sync_clip = None
+            self.sequence_tab.video_player.set_chromatic_color_bar(None)
+            if self._sequence_preview_source_id != preview_key:
+                self._sequence_preview_source_id = preview_key
+                self._using_rendered_sequence_preview = True
+                self.sequence_tab.video_player.clear_clip_range()
+                self.sequence_tab.video_player.load_video(preview_path)
+            self.sequence_tab.video_player.seek_to(time_seconds)
+            return
+
         seq_clip, _, source = self.sequence_tab.timeline.get_clip_at_playhead()
         if not seq_clip or not source:
             # Fallback behavior when no sequence clip is under playhead.
@@ -5331,6 +5360,10 @@ class MainWindow(QMainWindow):
     @Slot()
     def _on_sequence_video_loaded(self):
         """Apply deferred sequence preview sync after a source finishes loading."""
+        if getattr(self, "_using_rendered_sequence_preview", False):
+            self._sequence_preview_loading = False
+            return
+
         self._sequence_preview_loading = False
 
         if self._is_playing:
@@ -5395,10 +5428,192 @@ class MainWindow(QMainWindow):
     @Slot(bool)
     def _on_chromatic_bar_setting_changed(self, enabled: bool):
         """Apply chromatic bar visibility changes to sequence preview."""
+        self._invalidate_sequence_preview()
         if not enabled:
             self.sequence_tab.video_player.set_chromatic_color_bar(None)
             return
         self._update_sequence_chromatic_bar()
+
+    def _get_sequence_preview_inputs(self):
+        """Return sequence render inputs from the active timeline."""
+        sequence = self.sequence_tab.get_sequence()
+        sources = self.sequence_tab.timeline.get_sources_lookup()
+        clips = self.sequence_tab.timeline.get_clips_lookup()
+
+        if not sources and self.sources_by_id:
+            sources = dict(self.sources_by_id)
+        if not clips:
+            for clip in self.clips:
+                source = self.sources_by_id.get(clip.source_id)
+                if source:
+                    clips[clip.id] = (clip, source)
+
+        frames = self.project.frames_by_id if self.project else {}
+        return sequence, sources, clips, frames
+
+    def _get_sequence_preview_cache_entry(self):
+        """Return (signature, path, settings) for the active sequence preview."""
+        sequence, sources, clips, frames = self._get_sequence_preview_inputs()
+        settings = SequencePreviewSettings()
+        signature = compute_sequence_preview_signature(
+            sequence=sequence,
+            sources=sources,
+            clips=clips,
+            frames=frames,
+            settings=settings,
+        )
+        path = get_sequence_preview_path(sequence, signature)
+        return signature, path, settings
+
+    def _has_ready_sequence_preview(self) -> bool:
+        """Whether the active sequence has a valid cached preview file."""
+        sequence = self.sequence_tab.get_sequence()
+        if not sequence.get_all_clips():
+            return False
+        try:
+            signature, path, settings = self._get_sequence_preview_cache_entry()
+        except Exception:
+            return False
+        if path.exists() and path.stat().st_size > 0:
+            self._rendered_sequence_preview_signature = signature
+            self._rendered_sequence_preview_path = path
+            self._rendered_sequence_preview_profile = settings.profile_label
+            return True
+        return False
+
+    @Slot()
+    def _invalidate_sequence_preview(self):
+        """Mark the rendered sequence preview stale after timeline edits."""
+        if getattr(self, "sequence_preview_worker", None) and self.sequence_preview_worker.isRunning():
+            return
+        self._rendered_sequence_preview_path = None
+        self._rendered_sequence_preview_signature = None
+        self._sequence_preview_play_after_render_frame = None
+        self._using_rendered_sequence_preview = False
+        if hasattr(self, "sequence_tab"):
+            sequence = self.sequence_tab.get_sequence()
+            if sequence.get_all_clips():
+                self.sequence_tab.set_sequence_preview_status(
+                    "Stale",
+                    SequencePreviewSettings().profile_label,
+                )
+            else:
+                self.sequence_tab.set_sequence_preview_status("Not rendered")
+
+    @Slot()
+    def _on_render_sequence_preview_requested(self):
+        """Render the active sequence preview explicitly from the header button."""
+        self._start_sequence_preview_render(play_after_frame=None)
+
+    def _start_sequence_preview_render(self, play_after_frame: Optional[int]):
+        """Start preview rendering, optionally continuing playback afterwards."""
+        if self.sequence_preview_worker and self.sequence_preview_worker.isRunning():
+            self._sequence_preview_play_after_render_frame = play_after_frame
+            return
+
+        sequence, sources, clips, frames = self._get_sequence_preview_inputs()
+        if not sequence.get_all_clips():
+            QMessageBox.information(self, "Render Preview", "No clips in timeline to preview")
+            return
+
+        signature, path, settings = self._get_sequence_preview_cache_entry()
+        if path.exists() and path.stat().st_size > 0:
+            self._rendered_sequence_preview_signature = signature
+            self._rendered_sequence_preview_path = path
+            self._rendered_sequence_preview_profile = settings.profile_label
+            self.sequence_tab.set_sequence_preview_status("Ready", settings.profile_label)
+            if play_after_frame is not None:
+                self._start_rendered_sequence_preview_playback(play_after_frame)
+            return
+
+        self._sequence_preview_play_after_render_frame = play_after_frame
+        self.sequence_tab.set_sequence_preview_status(
+            "Rendering",
+            settings.profile_label,
+            rendering=True,
+        )
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.status_bar.showMessage("Rendering sequence preview...")
+
+        self.sequence_preview_worker = SequencePreviewWorker(
+            sequence=sequence,
+            sources=sources,
+            clips=clips,
+            frames=frames,
+            settings=settings,
+        )
+        self.sequence_preview_worker.progress.connect(self._on_sequence_preview_progress)
+        self.sequence_preview_worker.preview_completed.connect(self._on_sequence_preview_finished)
+        self.sequence_preview_worker.error.connect(self._on_sequence_preview_error)
+        self.sequence_preview_worker.finished.connect(self.sequence_preview_worker.deleteLater)
+        self.sequence_preview_worker.finished.connect(
+            lambda: setattr(self, "sequence_preview_worker", None)
+        )
+        self.sequence_preview_worker.start()
+
+    @Slot(float, str)
+    def _on_sequence_preview_progress(self, progress: float, message: str):
+        """Update UI while a sequence preview render is running."""
+        value = int(max(0.0, min(1.0, progress)) * 100)
+        self.progress_bar.setValue(value)
+        self.status_bar.showMessage(message)
+        self.sequence_tab.set_sequence_preview_status(
+            f"Rendering {value}%",
+            self._rendered_sequence_preview_profile,
+            rendering=True,
+        )
+
+    @Slot(object, str, str, bool)
+    def _on_sequence_preview_finished(
+        self,
+        path,
+        signature: str,
+        profile_label: str,
+        from_cache: bool,
+    ):
+        """Handle successful sequence preview render."""
+        try:
+            current_signature, _, _ = self._get_sequence_preview_cache_entry()
+        except Exception:
+            current_signature = None
+        if current_signature != signature:
+            self._sequence_preview_play_after_render_frame = None
+            self.progress_bar.setVisible(False)
+            self.sequence_tab.set_sequence_preview_status(
+                "Stale",
+                SequencePreviewSettings().profile_label,
+            )
+            self.status_bar.showMessage("Sequence preview is stale after timeline changes", 3000)
+            return
+
+        self._rendered_sequence_preview_path = Path(path)
+        self._rendered_sequence_preview_signature = signature
+        self._rendered_sequence_preview_profile = profile_label
+        self.progress_bar.setVisible(False)
+        self.sequence_tab.set_sequence_preview_status("Ready", profile_label)
+        self.status_bar.showMessage(
+            "Sequence preview ready" if not from_cache else "Using cached sequence preview",
+            3000,
+        )
+
+        play_after = self._sequence_preview_play_after_render_frame
+        self._sequence_preview_play_after_render_frame = None
+        if play_after is not None:
+            self._start_rendered_sequence_preview_playback(play_after)
+
+    @Slot(str)
+    def _on_sequence_preview_error(self, message: str):
+        """Handle failed sequence preview render."""
+        self._sequence_preview_play_after_render_frame = None
+        self.progress_bar.setVisible(False)
+        self.sequence_tab.set_sequence_preview_status(
+            "Failed",
+            SequencePreviewSettings().profile_label,
+        )
+        self.status_bar.showMessage("Sequence preview failed", 5000)
+        QMessageBox.warning(self, "Render Preview", f"Preview render failed:\n{message}")
 
     def _resolve_sequence_clip_bar_color(self, seq_clip) -> Optional[tuple[int, int, int]]:
         """Resolve the dominant color for a sequence clip."""
@@ -5434,6 +5649,41 @@ class MainWindow(QMainWindow):
 
     # --- Playback methods ---
 
+    def _start_rendered_sequence_preview_playback(self, start_frame: int):
+        """Play the active sequence through its continuous rendered preview."""
+        if not self._has_ready_sequence_preview() or not self._rendered_sequence_preview_path:
+            self._start_sequence_preview_render(play_after_frame=start_frame)
+            return
+
+        sequence = self.sequence_tab.timeline.get_sequence()
+        if sequence.duration_frames == 0:
+            return
+
+        start_seconds = max(0.0, start_frame / sequence.fps)
+        self._is_playing = True
+        self._using_rendered_sequence_preview = True
+        self._current_playback_clip = None
+        self._preview_sync_clip = None
+        self._pending_sequence_playback_source_id = None
+        self._pending_sequence_playback_range = None
+        self._pending_sequence_preview_source_id = None
+        self._pending_sequence_preview_clip_range = None
+        self._pending_sequence_preview_seek_seconds = None
+        self._sequence_preview_loading = False
+        self.sequence_tab.video_player.set_playing(True)
+        self.sequence_tab.video_player.set_loop(False)
+        self.sequence_tab.video_player.set_speed_control_enabled(False)
+        self.sequence_tab.video_player.set_chromatic_color_bar(None)
+        self.clip_details_sidebar.video_player.mute = True
+
+        preview_key = f"preview:{self._rendered_sequence_preview_path}"
+        if self._sequence_preview_source_id != preview_key:
+            self._sequence_preview_source_id = preview_key
+            self.sequence_tab.video_player.clear_clip_range()
+            self.sequence_tab.video_player.load_video(self._rendered_sequence_preview_path)
+        self.sequence_tab.video_player.seek_to(start_seconds)
+        self.sequence_tab.video_player.play()
+
     def _on_playback_requested(self, start_frame: int):
         """Start sequence playback from given frame."""
         if self._is_playing:
@@ -5445,24 +5695,12 @@ class MainWindow(QMainWindow):
         if sequence.duration_frames == 0:
             return  # Nothing to play
 
-        self._is_playing = True
-        self._preview_sync_clip = None
-        self._pending_sequence_playback_source_id = None
-        self._pending_sequence_playback_range = None
-        self._pending_sequence_preview_source_id = None
-        self._pending_sequence_preview_clip_range = None
-        self._pending_sequence_preview_seek_seconds = None
-        self.sequence_tab.video_player.set_playing(True)
-        # Timeline playback should advance clip-by-clip, not loop a single clip.
-        self.sequence_tab.video_player.set_loop(False)
+        if self._has_ready_sequence_preview():
+            self._start_rendered_sequence_preview_playback(start_frame)
+            return
 
-        # Mute sidebar player to prevent audio overlap
-        self.clip_details_sidebar.video_player.mute = True
-        # Disable speed control during automated sequence playback
-        self.sequence_tab.video_player.set_speed_control_enabled(False)
-
-        # Start playback from current position
-        self._play_clip_at_frame(start_frame)
+        self._start_sequence_preview_render(play_after_frame=start_frame)
+        return
 
     def _play_clip_at_frame(self, frame: int):
         """Load and play the clip at given timeline frame."""
@@ -5526,6 +5764,9 @@ class MainWindow(QMainWindow):
         if not self._is_playing:
             self._playback_timer.stop()
             return
+        if getattr(self, "_using_rendered_sequence_preview", False):
+            self._playback_timer.stop()
+            return
 
         sequence = self.sequence_tab.timeline.get_sequence()
         current_time = self.sequence_tab.timeline.get_playhead_time()
@@ -5567,6 +5808,21 @@ class MainWindow(QMainWindow):
             self._gui_state.update_playback_state(
                 position_ms=position_ms, clip_id=clip_id, speed=speed,
             )
+
+        if getattr(self, "_using_rendered_sequence_preview", False):
+            sequence = self.sequence_tab.timeline.get_sequence()
+            timeline_seconds = position_ms / 1000.0
+            if sequence.duration_seconds > 0:
+                timeline_seconds = max(
+                    0.0,
+                    min(timeline_seconds, sequence.duration_seconds),
+                )
+            self._syncing_timeline_from_video = True
+            try:
+                self.sequence_tab.timeline.set_playhead_time(timeline_seconds)
+            finally:
+                self._syncing_timeline_from_video = False
+            return
 
         # Case 1: Timeline-driven playback (existing behavior)
         if self._is_playing and self._current_playback_clip:
@@ -5643,6 +5899,14 @@ class MainWindow(QMainWindow):
         if not self._is_playing:
             return
 
+        if getattr(self, "_using_rendered_sequence_preview", False):
+            if not playing:
+                self._is_playing = False
+                self.sequence_tab.video_player.set_playing(False)
+                self.clip_details_sidebar.video_player.mute = False
+                self.sequence_tab.video_player.set_speed_control_enabled(True)
+            return
+
         # Ignore pause events during source loading — mpv.pause=True is set
         # synchronously in load_video(), which fires this callback before the
         # new file is ready. Without this guard, we'd prematurely advance to
@@ -5662,6 +5926,7 @@ class MainWindow(QMainWindow):
     def _pause_playback(self):
         """Pause playback."""
         self._is_playing = False
+        self._using_rendered_sequence_preview = False
         self._playback_timer.stop()
         self._pending_sequence_playback_source_id = None
         self._pending_sequence_playback_range = None
@@ -5679,6 +5944,7 @@ class MainWindow(QMainWindow):
     def _stop_playback(self):
         """Stop playback and reset state."""
         self._is_playing = False
+        self._using_rendered_sequence_preview = False
         self._playback_timer.stop()
         self._current_playback_clip = None
         self._preview_sync_clip = None
@@ -9217,6 +9483,10 @@ class MainWindow(QMainWindow):
         self._analyze_queue = deque()
         self._analyze_queue_total = 0
         self._detection_start_time = None
+        self._rendered_sequence_preview_path = None
+        self._rendered_sequence_preview_signature = None
+        self._sequence_preview_play_after_render_frame = None
+        self._using_rendered_sequence_preview = False
         self._detection_current_progress = 0.0
         self.queue_label.setVisible(False)
         self.collect_tab.clear()
