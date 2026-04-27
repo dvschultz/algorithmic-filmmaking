@@ -147,13 +147,6 @@ class AnalyzeTab(BaseTab):
 
         controls.addSpacing(20)
 
-        # Clear All button
-        self.clear_btn = QPushButton("Clear All")
-        self.clear_btn.setToolTip("Remove all clips from analysis")
-        self.clear_btn.setEnabled(False)
-        self.clear_btn.clicked.connect(self._on_clear_click)
-        controls.addWidget(self.clear_btn)
-
         controls.addStretch()
 
         # Selection count label
@@ -288,11 +281,6 @@ class AnalyzeTab(BaseTab):
         dialog = GlossaryDialog(self)
         dialog.exec()
 
-    def _on_clear_click(self):
-        """Handle clear all button click."""
-        self.clear_clips()
-        self.clips_cleared.emit()
-
     def _on_clip_selected(self, clip):
         """Handle clip selection."""
         self.clip_selected.emit(clip)
@@ -340,7 +328,6 @@ class AnalyzeTab(BaseTab):
 
         self._refresh_quick_run_availability()
         self.analyze_btn.setEnabled(controls_enabled)
-        self.clear_btn.setEnabled(controls_enabled)
 
         if has_clips:
             self.clip_count_label.setText(f"{count} clips")

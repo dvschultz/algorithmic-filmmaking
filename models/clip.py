@@ -298,6 +298,34 @@ class Clip:
             return ""
         return " ".join(seg.text for seg in self.transcript)
 
+    # Fields written by analysis operations. User-authored fields
+    # (name, tags, notes, disabled) are deliberately excluded.
+    _ANALYSIS_FIELDS = (
+        "dominant_colors",
+        "shot_type",
+        "transcript",
+        "object_labels",
+        "detected_objects",
+        "face_embeddings",
+        "person_count",
+        "description",
+        "extracted_texts",
+        "custom_queries",
+        "cinematography",
+        "average_brightness",
+        "rms_volume",
+        "embedding",
+        "first_frame_embedding",
+        "last_frame_embedding",
+        "gaze_yaw",
+        "gaze_pitch",
+        "gaze_category",
+    )
+
+    def has_any_analysis(self) -> bool:
+        """True if any analysis-output field has been populated."""
+        return any(getattr(self, f) is not None for f in self._ANALYSIS_FIELDS)
+
     @property
     def combined_text(self) -> Optional[str]:
         """Get deduplicated text from all OCR extractions.

@@ -1786,6 +1786,7 @@ class MainWindow(QMainWindow):
         """Handle clips updated signal from project.
 
         Forwards clip updates to both tab clip browsers for display refresh.
+        Also auto-includes any newly-analyzed clips in the Analyze tab.
 
         Args:
             clips: List of updated clips
@@ -1795,6 +1796,22 @@ class MainWindow(QMainWindow):
             self.cut_tab.clip_browser.update_clips(clips)
         if hasattr(self, 'analyze_tab') and hasattr(self.analyze_tab, 'clip_browser'):
             self.analyze_tab.clip_browser.update_clips(clips)
+            self._auto_include_analyzed_clips(clips)
+
+    def _auto_include_analyzed_clips(self, clips: list) -> None:
+        """Add any clip with at least one analysis result to the Analyze tab.
+
+        Called from clips_added (project load brings analyzed clips into a
+        fresh app session) and clips_updated (analysis pipeline writes
+        results back). Disabled clips are still included if they were
+        analyzed previously — they render as disabled in the browser.
+        """
+        if not hasattr(self, 'analyze_tab'):
+            return
+        existing = self.analyze_tab.get_clip_ids()
+        to_add = [c.id for c in clips if c.has_any_analysis() and c.id not in existing]
+        if to_add:
+            self.analyze_tab.add_clips(to_add)
 
     @Slot(list)
     def _on_clips_added(self, clips: list):
@@ -1811,6 +1828,7 @@ class MainWindow(QMainWindow):
         # Refresh Analyze tab lookups (cached properties may have been invalidated)
         if hasattr(self, 'analyze_tab'):
             self.analyze_tab.set_lookups(self.clips_by_id, self.sources_by_id)
+            self._auto_include_analyzed_clips(clips)
 
         # Determine which source these clips belong to
         clip_source_id = clips[0].source_id if clips else None
@@ -3275,6 +3293,17 @@ class MainWindow(QMainWindow):
         """
         if not clips or not operations:
             return
+
+        # Disabled clips are excluded from analysis the same way they're
+        # excluded from sequence/export. They keep any prior analysis fields
+        # so the Analyze tab can still surface them as disabled.
+        enabled_clips = [c for c in clips if not c.disabled]
+        skipped = len(clips) - len(enabled_clips)
+        if skipped:
+            logger.info("Skipping %d disabled clip(s) from analysis pipeline", skipped)
+        if not enabled_clips:
+            return
+        clips = enabled_clips
 
         # Custom Query needs query text — prompt if not already set (e.g., from agent tool)
         if "custom_query" in operations and not self._custom_query_text:
