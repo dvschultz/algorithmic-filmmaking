@@ -6,7 +6,9 @@ from types import SimpleNamespace
 import pytest
 import logging
 
-from models.clip import Source
+from core.project import Project
+from models.clip import Source, Clip
+from models.sequence import Sequence, SequenceClip
 from tests.conftest import make_test_clip
 from ui.main_window import MainWindow
 
@@ -62,6 +64,23 @@ def _make_window(tmp_path):
     window._default_clip_export_filename = (
         lambda clip, source, ordinal=None:
         MainWindow._default_clip_export_filename(window, clip, source, ordinal)
+    )
+    window._get_edl_sources = lambda: MainWindow._get_edl_sources(window)
+    window._get_edl_frames = lambda: MainWindow._get_edl_frames(window)
+    window._default_sequence_edl_filename = (
+        lambda sequence, index=None:
+        MainWindow._default_sequence_edl_filename(window, sequence, index)
+    )
+    window._persist_sequence_tab_state_for_export = (
+        lambda: MainWindow._persist_sequence_tab_state_for_export(window)
+    )
+    window._export_sequence_edl_to_path = (
+        lambda sequence, output_path:
+        MainWindow._export_sequence_edl_to_path(window, sequence, output_path)
+    )
+    window._unique_edl_output_path = (
+        lambda output_dir, filename:
+        MainWindow._unique_edl_output_path(window, output_dir, filename)
     )
     return window
 
@@ -209,3 +228,122 @@ def test_sequence_export_rejects_unwritable_output_directory(tmp_path, source, m
     assert warnings[0][1] == f"Cannot write to export folder:\n{root_path}\n\nChoose a different location."
     assert window.progress_bar.ranges == []
     assert export_button.enabled is True
+
+
+def test_sequence_tab_edl_export_uses_selected_sequence_and_project_sources(
+    tmp_path, source, monkeypatch
+):
+    project = Project.new(name="EDL Project")
+    project.add_source(source)
+    clip = Clip(id="clip-1", source_id=source.id, start_frame=0, end_frame=30)
+    project.add_clips([clip])
+
+    project.sequences[0].name = "First"
+    project.add_to_sequence(["clip-1"])
+    second = Sequence(name="Second")
+    second.tracks[0].add_clip(
+        SequenceClip(
+            source_clip_id=clip.id,
+            source_id=source.id,
+            start_frame=0,
+            in_point=0,
+            out_point=30,
+        )
+    )
+    project.add_sequence(second)
+
+    window = _make_window(tmp_path)
+    window.project = project
+    window.project_metadata = project.metadata
+    window.current_source = None
+    window.sources_by_id = project.sources_by_id
+    persisted = []
+    window.sequence_tab = SimpleNamespace(
+        _persist_current_sequence=lambda: persisted.append(True)
+    )
+
+    requested_paths = []
+    export_calls = []
+
+    monkeypatch.setattr(
+        "ui.main_window.QFileDialog.getSaveFileName",
+        lambda *args, **kwargs: (str(tmp_path / "chosen"), "Edit Decision List (*.edl)"),
+    )
+    monkeypatch.setattr(
+        "ui.main_window.QDesktopServices.openUrl",
+        lambda url: requested_paths.append(Path(url.toLocalFile())),
+    )
+    monkeypatch.setattr(
+        "ui.main_window.export_edl",
+        lambda sequence, sources, config, frames=None: export_calls.append(
+            (sequence, sources, config, frames)
+        )
+        or True,
+    )
+
+    MainWindow._on_sequence_edl_export_requested(window, 1)
+
+    assert persisted == [True]
+    assert len(export_calls) == 1
+    exported_sequence, exported_sources, config, frames = export_calls[0]
+    assert exported_sequence is project.sequences[1]
+    assert exported_sources == project.sources_by_id
+    assert frames == project.frames_by_id
+    assert config.title == "Second"
+    assert config.output_path == tmp_path / "chosen.edl"
+    assert requested_paths == [tmp_path]
+    assert window.status_bar.messages[-1] == ("EDL exported to chosen.edl", 5000)
+
+
+def test_sequence_tab_batch_edl_export_writes_each_populated_sequence(
+    tmp_path, source, monkeypatch
+):
+    project = Project.new(name="EDL Project")
+    project.add_source(source)
+    clip_a = Clip(id="clip-a", source_id=source.id, start_frame=0, end_frame=30)
+    clip_b = Clip(id="clip-b", source_id=source.id, start_frame=30, end_frame=60)
+    project.add_clips([clip_a, clip_b])
+
+    project.sequences[0].name = "A Cut"
+    project.add_to_sequence(["clip-a"])
+    sequence_b = Sequence(name="B Cut")
+    sequence_b.tracks[0].add_clip(
+        SequenceClip(
+            source_clip_id=clip_b.id,
+            source_id=source.id,
+            start_frame=0,
+            in_point=clip_b.start_frame,
+            out_point=clip_b.end_frame,
+        )
+    )
+    project.add_sequence(sequence_b)
+    project.add_sequence(Sequence(name="Empty"))
+
+    window = _make_window(tmp_path)
+    window.project = project
+    window.project_metadata = project.metadata
+    window.current_source = None
+    window.sources_by_id = project.sources_by_id
+    window.sequence_tab = SimpleNamespace(_persist_current_sequence=lambda: None)
+
+    opened = []
+    monkeypatch.setattr(
+        "ui.main_window.QFileDialog.getExistingDirectory",
+        lambda *args, **kwargs: str(tmp_path),
+    )
+    monkeypatch.setattr(
+        "ui.main_window.QDesktopServices.openUrl",
+        lambda url: opened.append(Path(url.toLocalFile())),
+    )
+
+    MainWindow._on_all_sequence_edl_export_requested(window)
+
+    first_edl = tmp_path / "01_A Cut.edl"
+    second_edl = tmp_path / "02_B Cut.edl"
+    assert first_edl.exists()
+    assert second_edl.exists()
+    assert not (tmp_path / "03_Empty.edl").exists()
+    assert "TITLE: A Cut" in first_edl.read_text()
+    assert "TITLE: B Cut" in second_edl.read_text()
+    assert opened == [tmp_path]
+    assert window.status_bar.messages[-1] == ("Exported 2 sequence EDL(s)", 5000)

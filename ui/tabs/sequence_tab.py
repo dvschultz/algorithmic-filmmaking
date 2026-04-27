@@ -80,6 +80,8 @@ class SequenceTab(BaseTab):
     stop_requested = Signal()
     export_requested = Signal()
     render_preview_requested = Signal()
+    edl_export_requested = Signal(int)  # sequence index
+    all_edl_export_requested = Signal()
     clip_added = Signal(object, object)  # Clip, Source
     clips_data_changed = Signal(list)  # Emitted when auto-compute mutates clip metadata
     chromatic_bar_setting_changed = Signal(bool)  # True when bottom color bar should be visible
@@ -179,6 +181,9 @@ class SequenceTab(BaseTab):
         cards_header_layout.addWidget(self.cards_sequence_dropdown)
 
         cards_header_layout.addStretch()
+
+        self.cards_export_edl_btn = self._create_edl_export_button()
+        cards_header_layout.addWidget(self.cards_export_edl_btn)
 
         cards_new_btn = QPushButton("New Sequence")
         cards_new_btn.setMinimumHeight(UISizes.BUTTON_MIN_HEIGHT)
@@ -363,6 +368,9 @@ class SequenceTab(BaseTab):
         self.render_preview_btn.clicked.connect(self.render_preview_requested.emit)
         layout.addWidget(self.render_preview_btn)
 
+        self.export_edl_btn = self._create_edl_export_button()
+        layout.addWidget(self.export_edl_btn)
+
         self.new_seq_btn = QPushButton("New Sequence")
         self.new_seq_btn.setToolTip("Create a new empty sequence")
         self.new_seq_btn.setMinimumHeight(UISizes.BUTTON_MIN_HEIGHT)
@@ -370,6 +378,52 @@ class SequenceTab(BaseTab):
         layout.addWidget(self.new_seq_btn)
 
         return header
+
+    def _create_edl_export_button(self) -> QPushButton:
+        """Create an EDL export menu button shared by both sequence views."""
+        button = QPushButton("Export EDL")
+        button.setToolTip("Export one sequence or all populated sequences as EDL files")
+        button.setMinimumHeight(UISizes.BUTTON_MIN_HEIGHT)
+        menu = QMenu(button)
+        menu.aboutToShow.connect(lambda menu=menu: self._populate_edl_export_menu(menu))
+        button.setMenu(menu)
+        return button
+
+    def _populate_edl_export_menu(self, menu: QMenu) -> None:
+        """Populate the EDL export menu from the current project sequences."""
+        menu.clear()
+
+        if not self._project or not self._project.sequences:
+            action = menu.addAction("No sequences available")
+            action.setEnabled(False)
+            return
+
+        active_index = self._project.active_sequence_index
+        active_sequence = self._project.sequences[active_index]
+        active_has_clips = bool(active_sequence.get_all_clips())
+        active_action = menu.addAction(f"Export Active: {active_sequence.name}...")
+        active_action.setEnabled(active_has_clips)
+        active_action.triggered.connect(
+            lambda _checked=False, index=active_index: self.edl_export_requested.emit(index)
+        )
+
+        populated_sequences = [
+            (index, sequence)
+            for index, sequence in enumerate(self._project.sequences)
+            if sequence.get_all_clips()
+        ]
+        all_action = menu.addAction("Export All Populated Sequences...")
+        all_action.setEnabled(bool(populated_sequences))
+        all_action.triggered.connect(self.all_edl_export_requested.emit)
+
+        menu.addSeparator()
+        for index, sequence in enumerate(self._project.sequences):
+            label = f"Export {index + 1}. {sequence.name}..."
+            action = menu.addAction(label)
+            action.setEnabled(bool(sequence.get_all_clips()))
+            action.triggered.connect(
+                lambda _checked=False, seq_index=index: self.edl_export_requested.emit(seq_index)
+            )
 
     def _create_confirm_view(self) -> QWidget:
         """Create the confirmation view with cost estimate panel and generate button."""
@@ -1879,13 +1933,18 @@ class SequenceTab(BaseTab):
         seq = self._project.sequences[index]
         menu = QMenu(self)
 
+        export_edl_action = menu.addAction(f"Export EDL for \"{seq.name}\"...")
+        export_edl_action.setEnabled(bool(seq.get_all_clips()))
+        menu.addSeparator()
         rename_action = menu.addAction(f"Rename \"{seq.name}\"...")
         menu.addSeparator()
         delete_action = menu.addAction(f"Delete \"{seq.name}\"")
 
         action = menu.exec(dropdown.mapToGlobal(pos))
 
-        if action == rename_action:
+        if action == export_edl_action:
+            self.edl_export_requested.emit(index)
+        elif action == rename_action:
             self._on_rename_sequence(index)
         elif action == delete_action:
             self._on_delete_sequence(index)

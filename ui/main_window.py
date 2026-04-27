@@ -1651,6 +1651,8 @@ class MainWindow(QMainWindow):
         self.sequence_tab.stop_requested.connect(self._on_stop_requested)
         self.sequence_tab.export_requested.connect(self._on_sequence_export_click)
         self.sequence_tab.render_preview_requested.connect(self._on_render_sequence_preview_requested)
+        self.sequence_tab.edl_export_requested.connect(self._on_sequence_edl_export_requested)
+        self.sequence_tab.all_edl_export_requested.connect(self._on_all_sequence_edl_export_requested)
         # Intention-first workflow trigger
         self.sequence_tab.intention_import_requested.connect(self._on_intention_import_requested)
         # Description analysis request from Storyteller
@@ -8929,21 +8931,86 @@ class MainWindow(QMainWindow):
             clips_only = [clip for clip, source in sequence_clips]
             self.intention_workflow.on_building_complete(clips_only)
 
-    def _on_export_edl_click(self):
-        """Export the timeline sequence as an EDL file."""
-        sequence = self.sequence_tab.timeline.get_sequence()
+    def _get_edl_sources(self) -> dict:
+        """Return project-wide sources for EDL export."""
+        sources_by_id = getattr(self, "sources_by_id", {})
+        if sources_by_id:
+            return dict(sources_by_id)
+        current_source = getattr(self, "current_source", None)
+        if current_source:
+            return {current_source.id: current_source}
+        return {}
+
+    def _get_edl_frames(self) -> dict:
+        """Return project-wide frames for EDL export."""
+        if getattr(self, "project", None):
+            return dict(self.project.frames_by_id)
+        return {}
+
+    def _default_sequence_edl_filename(self, sequence, index: int | None = None) -> str:
+        """Build a safe default filename for a sequence EDL."""
+        name = sequence.name or "Sequence"
+        if name == "Untitled Sequence" and getattr(self, "project_metadata", None):
+            name = self.project_metadata.name
+        if index is not None:
+            name = f"{index + 1:02d}_{name}"
+        return f"{self._sanitize_filename(name)}.edl"
+
+    def _persist_sequence_tab_state_for_export(self) -> None:
+        """Ensure the active timeline is written back before exporting project sequences."""
+        if hasattr(self.sequence_tab, "_persist_current_sequence"):
+            self.sequence_tab._persist_current_sequence()
+
+    def _export_sequence_edl_to_path(self, sequence, output_path: Path) -> bool:
+        """Write one sequence EDL to an explicit path."""
+        if not output_path.suffix:
+            output_path = output_path.with_suffix(".edl")
+
+        config = EDLExportConfig(
+            output_path=output_path,
+            title=sequence.name or "Scene Ripper Export",
+        )
+        return export_edl(
+            sequence,
+            self._get_edl_sources(),
+            config,
+            frames=self._get_edl_frames(),
+        )
+
+    def _unique_edl_output_path(self, output_dir: Path, filename: str) -> Path:
+        """Avoid overwriting duplicate sequence names during batch EDL export."""
+        output_path = output_dir / filename
+        if not output_path.exists():
+            return output_path
+
+        stem = output_path.stem
+        suffix = output_path.suffix or ".edl"
+        counter = 2
+        while True:
+            candidate = output_dir / f"{stem}_{counter}{suffix}"
+            if not candidate.exists():
+                return candidate
+            counter += 1
+
+    @Slot(int)
+    def _on_sequence_edl_export_requested(self, sequence_index: int):
+        """Export a selected project sequence as an EDL file."""
+        if not self.project or sequence_index < 0 or sequence_index >= len(self.project.sequences):
+            QMessageBox.warning(self, "Export EDL", "Sequence not found")
+            return
+
+        self._persist_sequence_tab_state_for_export()
+        sequence = self.project.sequences[sequence_index]
         all_clips = sequence.get_all_clips()
 
         if not all_clips:
             QMessageBox.information(
-                self, "Export EDL", "No clips in timeline to export"
+                self, "Export EDL", "No clips in this sequence to export"
             )
             return
 
         # Get output file path
-        default_name = "sequence.edl"
-        if self.current_source:
-            default_name = f"{self._sanitize_filename(self.current_source.file_path.stem)}_timeline.edl"
+        default_name = self._default_sequence_edl_filename(sequence)
 
         file_path, _ = QFileDialog.getSaveFileName(
             self,
@@ -8956,25 +9023,78 @@ class MainWindow(QMainWindow):
 
         output_path = Path(file_path)
 
-        # Build sources dictionary
-        sources = {}
-        if self.current_source:
-            sources[self.current_source.id] = self.current_source
-
-        config = EDLExportConfig(
-            output_path=output_path,
-            title=sequence.name or "Scene Ripper Export",
-        )
-
         self.status_bar.showMessage("Exporting EDL...")
-        success = export_edl(sequence, sources, config)
+        success = self._export_sequence_edl_to_path(sequence, output_path)
 
         if success:
+            if not output_path.suffix:
+                output_path = output_path.with_suffix(".edl")
             self.status_bar.showMessage(f"EDL exported to {output_path.name}", 5000)
             # Open containing folder
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(output_path.parent)))
         else:
             QMessageBox.warning(self, "Export EDL", "Failed to export EDL file")
+
+    def _on_all_sequence_edl_export_requested(self):
+        """Export every populated project sequence as its own EDL file."""
+        if not self.project:
+            QMessageBox.warning(self, "Export EDL", "No project is open")
+            return
+
+        self._persist_sequence_tab_state_for_export()
+        populated = [
+            (index, sequence)
+            for index, sequence in enumerate(self.project.sequences)
+            if sequence.get_all_clips()
+        ]
+        if not populated:
+            QMessageBox.information(
+                self, "Export EDL", "No populated sequences to export"
+            )
+            return
+
+        output_dir = QFileDialog.getExistingDirectory(
+            self,
+            "Export Sequence EDLs",
+            str(getattr(getattr(self, "settings", None), "export_dir", Path.home())),
+        )
+        if not output_dir:
+            return
+
+        output_dir_path = Path(output_dir)
+        exported: list[Path] = []
+        failed: list[str] = []
+
+        self.status_bar.showMessage("Exporting sequence EDLs...")
+        for index, sequence in populated:
+            output_path = self._unique_edl_output_path(
+                output_dir_path,
+                self._default_sequence_edl_filename(sequence, index=index),
+            )
+            if self._export_sequence_edl_to_path(sequence, output_path):
+                exported.append(output_path)
+            else:
+                failed.append(sequence.name or f"Sequence {index + 1}")
+
+        if failed:
+            QMessageBox.warning(
+                self,
+                "Export EDL",
+                "Some sequences could not be exported:\n" + "\n".join(failed),
+            )
+
+        if exported:
+            self.status_bar.showMessage(
+                f"Exported {len(exported)} sequence EDL(s)", 5000
+            )
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(output_dir_path)))
+        else:
+            self.status_bar.showMessage("No EDL files exported", 5000)
+
+    def _on_export_edl_click(self):
+        """Export the active timeline sequence as an EDL file."""
+        index = self.project.active_sequence_index if self.project else 0
+        self._on_sequence_edl_export_requested(index)
 
     def _on_export_bundle_click(self):
         """Export the project as a self-contained bundle folder."""
