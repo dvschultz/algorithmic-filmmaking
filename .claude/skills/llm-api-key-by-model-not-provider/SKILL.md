@@ -139,6 +139,14 @@ resolution, and Ollama fallback internally.
   If a new failure mode emerges (e.g., a content filter raising a different
   exception), extend the except tuple — don't catch bare `Exception`, since
   programming errors should propagate.
+- If the caller passes a model that already starts with `ollama/` or
+  `ollama_chat/`, `complete_with_local_fallback` short-circuits to litellm
+  directly with the caller's exact model. Don't reintroduce a path that
+  overrides the caller's local model with `settings.ollama_model`.
+- The hardcoded last-resort fallback in storyteller/exquisite_corpus/
+  free_association is `f"ollama/{settings.ollama_model}"`, NOT a cloud model
+  string. Don't reintroduce a hardcoded cloud model — degenerate cases (empty
+  setting) must not require an API key.
 - Check for sibling bugs by grepping
   `grep -rn "get_llm_api_key" core/ --include="*.py" | grep -v settings.py`.
   Each call site should be reviewed for whether the model it uses matches

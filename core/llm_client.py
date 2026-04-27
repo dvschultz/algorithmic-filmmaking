@@ -474,9 +474,22 @@ def complete_with_local_fallback(
     import litellm
     from core.settings import get_api_key_for_model, load_settings
 
+    settings = load_settings()
     cloud_model = normalize_model_for_litellm(model)
-    api_key = get_api_key_for_model(cloud_model)
 
+    # If the caller already targets a local model, just use it directly.
+    if cloud_model.startswith(("ollama/", "ollama_chat/")):
+        local_kwargs = dict(kwargs)
+        if settings.llm_api_base:
+            local_kwargs.setdefault("api_base", settings.llm_api_base)
+        return litellm.completion(
+            model=cloud_model,
+            messages=messages,
+            temperature=temperature,
+            **local_kwargs,
+        )
+
+    api_key = get_api_key_for_model(cloud_model)
     cloud_error: Optional[Exception] = None
 
     if api_key:
@@ -505,7 +518,6 @@ def complete_with_local_fallback(
             cloud_model,
         )
 
-    settings = load_settings()
     local_model = f"ollama/{settings.ollama_model}"
     fallback_kwargs = dict(kwargs)
     if settings.llm_api_base:

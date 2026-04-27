@@ -154,7 +154,7 @@ def generate_poem(
     from core.settings import load_settings
 
     settings = load_settings()
-    model = model or settings.exquisite_corpus_model or "gemini-3-flash-preview"
+    model = model or settings.exquisite_corpus_model or f"ollama/{settings.ollama_model}"
     temperature = settings.exquisite_corpus_temperature
     original_model = model
 
