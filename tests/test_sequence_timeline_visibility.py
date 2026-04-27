@@ -46,6 +46,37 @@ def test_sequence_timeline_splitter_sections_cannot_be_collapsed(qapp):
     assert tab.timeline.minimumHeight() >= 180
 
 
+def test_timeline_move_and_delete_emit_sequence_changed(qapp):
+    from ui.timeline.timeline_widget import TimelineWidget
+
+    timeline = TimelineWidget()
+    changes = []
+    timeline.sequence_changed.connect(lambda: changes.append(True))
+
+    source = Source(
+        id="src-1",
+        file_path=Path("/tmp/test.mp4"),
+        duration_seconds=10.0,
+        fps=24.0,
+        width=1920,
+        height=1080,
+    )
+    clip = Clip(
+        id="clip-1",
+        source_id=source.id,
+        start_frame=0,
+        end_frame=24,
+    )
+    timeline.add_clip(clip, source)
+    changes.clear()
+
+    seq_clip = timeline.sequence.get_all_clips()[0]
+    timeline.scene.clip_moved.emit(seq_clip.id, seq_clip.start_frame)
+    timeline.scene.remove_clip(seq_clip.id)
+
+    assert len(changes) == 2
+
+
 class _FakeTimeline:
     def __init__(self):
         self.loaded = None

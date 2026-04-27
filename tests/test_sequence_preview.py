@@ -70,6 +70,35 @@ def test_preview_signature_changes_when_music_changes(tmp_path):
     assert first != second
 
 
+def test_preview_signature_changes_when_source_file_changes(tmp_path):
+    sequence, sources, clips = _make_sequence_with_clips(tmp_path)
+    first = compute_sequence_preview_signature(sequence, sources, clips)
+
+    source = next(iter(sources.values()))
+    source.file_path.write_bytes(b"changed source bytes")
+    second = compute_sequence_preview_signature(sequence, sources, clips)
+
+    assert first != second
+
+
+def test_preview_signature_changes_when_proxy_settings_change(tmp_path):
+    sequence, sources, clips = _make_sequence_with_clips(tmp_path)
+    first = compute_sequence_preview_signature(
+        sequence,
+        sources,
+        clips,
+        settings=SequencePreviewSettings(width=1280, height=720),
+    )
+    second = compute_sequence_preview_signature(
+        sequence,
+        sources,
+        clips,
+        settings=SequencePreviewSettings(width=854, height=480),
+    )
+
+    assert first != second
+
+
 def test_render_sequence_preview_uses_proxy_export_config(monkeypatch, tmp_path):
     sequence, sources, clips = _make_sequence_with_clips(tmp_path)
     music = tmp_path / "music.wav"
