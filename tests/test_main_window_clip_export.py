@@ -82,6 +82,20 @@ def _make_window(tmp_path):
         lambda output_dir, filename:
         MainWindow._unique_edl_output_path(window, output_dir, filename)
     )
+    window._get_populated_edl_sequences = (
+        lambda: MainWindow._get_populated_edl_sequences(window)
+    )
+    window._format_sequence_edl_choice_label = (
+        lambda index, sequence:
+        MainWindow._format_sequence_edl_choice_label(window, index, sequence)
+    )
+    window._prompt_for_edl_sequence_index = (
+        lambda: MainWindow._prompt_for_edl_sequence_index(window)
+    )
+    window._on_sequence_edl_export_requested = (
+        lambda sequence_index:
+        MainWindow._on_sequence_edl_export_requested(window, sequence_index)
+    )
     return window
 
 
@@ -347,3 +361,64 @@ def test_sequence_tab_batch_edl_export_writes_each_populated_sequence(
     assert "TITLE: B Cut" in second_edl.read_text()
     assert opened == [tmp_path]
     assert window.status_bar.messages[-1] == ("Exported 2 sequence EDL(s)", 5000)
+
+
+def test_file_menu_edl_export_prompts_for_sequence_before_export(
+    tmp_path, source, monkeypatch
+):
+    project = Project.new(name="EDL Project")
+    project.add_source(source)
+    clip_a = Clip(id="clip-a", source_id=source.id, start_frame=0, end_frame=30)
+    clip_b = Clip(id="clip-b", source_id=source.id, start_frame=30, end_frame=60)
+    project.add_clips([clip_a, clip_b])
+
+    project.sequences[0].name = "Active Cut"
+    project.add_to_sequence(["clip-a"])
+    selected_sequence = Sequence(name="Selected Cut")
+    selected_sequence.tracks[0].add_clip(
+        SequenceClip(
+            source_clip_id=clip_b.id,
+            source_id=source.id,
+            start_frame=0,
+            in_point=clip_b.start_frame,
+            out_point=clip_b.end_frame,
+        )
+    )
+    project.add_sequence(selected_sequence)
+
+    window = _make_window(tmp_path)
+    window.project = project
+    window.project_metadata = project.metadata
+    window.current_source = None
+    window.sources_by_id = project.sources_by_id
+    window.sequence_tab = SimpleNamespace(_persist_current_sequence=lambda: None)
+
+    prompts = []
+    export_calls = []
+    monkeypatch.setattr(
+        "ui.main_window.QInputDialog.getItem",
+        lambda *args: prompts.append(args) or (args[3][1], True),
+    )
+    monkeypatch.setattr(
+        "ui.main_window.QFileDialog.getSaveFileName",
+        lambda *args, **kwargs: (str(tmp_path / "file_menu"), "Edit Decision List (*.edl)"),
+    )
+    monkeypatch.setattr("ui.main_window.QDesktopServices.openUrl", lambda *_args: None)
+    monkeypatch.setattr(
+        "ui.main_window.export_edl",
+        lambda sequence, sources, config, frames=None: export_calls.append(
+            (sequence, sources, config, frames)
+        )
+        or True,
+    )
+
+    MainWindow._on_export_edl_click(window)
+
+    assert len(prompts) == 1
+    assert prompts[0][3] == [
+        "1. Active Cut (1 clip)",
+        "2. Selected Cut (1 clip)",
+    ]
+    assert len(export_calls) == 1
+    assert export_calls[0][0] is selected_sequence
+    assert export_calls[0][2].output_path == tmp_path / "file_menu.edl"

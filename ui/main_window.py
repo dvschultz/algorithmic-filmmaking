@@ -5420,8 +5420,11 @@ class MainWindow(QMainWindow):
     def _on_sequence_changed(self):
         """Handle sequence modification."""
         # Update Export EDL menu item state
-        sequence = self.sequence_tab.timeline.get_sequence()
-        has_clips = sequence.duration_frames > 0
+        if self.project and self.project.sequences:
+            has_clips = any(sequence.duration_frames > 0 for sequence in self.project.sequences)
+        else:
+            sequence = self.sequence_tab.timeline.get_sequence()
+            has_clips = sequence.duration_frames > 0
         self.export_edl_action.setEnabled(has_clips)
 
         # Update chat panel with project state (sequence may have changed)
@@ -8992,6 +8995,59 @@ class MainWindow(QMainWindow):
                 return candidate
             counter += 1
 
+    def _get_populated_edl_sequences(self) -> list[tuple[int, object]]:
+        """Return project sequences that contain timeline entries."""
+        if not self.project:
+            return []
+        return [
+            (index, sequence)
+            for index, sequence in enumerate(self.project.sequences)
+            if sequence.get_all_clips()
+        ]
+
+    def _format_sequence_edl_choice_label(self, index: int, sequence) -> str:
+        """Build a user-facing sequence choice label for File > Export EDL."""
+        clip_count = len(sequence.get_all_clips())
+        clip_word = "clip" if clip_count == 1 else "clips"
+        return f"{index + 1}. {sequence.name or 'Untitled Sequence'} ({clip_count} {clip_word})"
+
+    def _prompt_for_edl_sequence_index(self) -> int | None:
+        """Ask which populated sequence should be exported from the File menu."""
+        self._persist_sequence_tab_state_for_export()
+        populated = self._get_populated_edl_sequences()
+        if not populated:
+            QMessageBox.information(
+                self, "Export EDL", "No populated sequences to export"
+            )
+            return None
+
+        if len(populated) == 1:
+            return populated[0][0]
+
+        labels = [
+            self._format_sequence_edl_choice_label(index, sequence)
+            for index, sequence in populated
+        ]
+        active_index = self.project.active_sequence_index
+        default_choice = 0
+        for position, (index, _sequence) in enumerate(populated):
+            if index == active_index:
+                default_choice = position
+                break
+
+        selected, accepted = QInputDialog.getItem(
+            self,
+            "Export EDL",
+            "Sequence:",
+            labels,
+            default_choice,
+            False,
+        )
+        if not accepted or not selected:
+            return None
+
+        return populated[labels.index(selected)][0]
+
     @Slot(int)
     def _on_sequence_edl_export_requested(self, sequence_index: int):
         """Export a selected project sequence as an EDL file."""
@@ -9092,9 +9148,10 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("No EDL files exported", 5000)
 
     def _on_export_edl_click(self):
-        """Export the active timeline sequence as an EDL file."""
-        index = self.project.active_sequence_index if self.project else 0
-        self._on_sequence_edl_export_requested(index)
+        """Export a user-selected sequence as an EDL file from the File menu."""
+        index = self._prompt_for_edl_sequence_index()
+        if index is not None:
+            self._on_sequence_edl_export_requested(index)
 
     def _on_export_bundle_click(self):
         """Export the project as a self-contained bundle folder."""
