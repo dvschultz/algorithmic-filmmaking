@@ -167,12 +167,14 @@ class StaccatoGenerateWorker(CancellableWorker):
         clips: list,
         audio_analysis: AudioAnalysis,
         strategy: str,
+        cut_times: list[float] | None = None,
         parent=None,
     ):
         super().__init__(parent)
         self._clips = clips
         self._audio_analysis = audio_analysis
         self._strategy = strategy
+        self._cut_times = cut_times
 
     def run(self):
         self._log_start()
@@ -191,6 +193,7 @@ class StaccatoGenerateWorker(CancellableWorker):
                 clips=self._clips,
                 audio_analysis=self._audio_analysis,
                 strategy=self._strategy,
+                cut_times=self._cut_times,
                 progress_cb=self._on_progress,
             )
 
@@ -236,7 +239,18 @@ class StaccatoGenerateWorker(CancellableWorker):
                 clip.embedding = emb
                 clip.embedding_model = _EMBEDDING_MODEL_TAG
         except Exception as e:
-            logger.warning(f"Failed to compute embeddings: {e}")
+            raise RuntimeError(f"Failed to compute clip embeddings: {e}") from e
+
+        still_missing = []
+        for clip, _source in self._clips:
+            if getattr(clip, "embedding", None) is None:
+                still_missing.append(getattr(clip, "id", "<unknown>"))
+        if still_missing:
+            raise RuntimeError(
+                "Missing DINOv2 embeddings for "
+                f"{len(still_missing)} clips. Run embedding analysis first or "
+                "ensure thumbnails exist before generating Staccato."
+            )
 
     def _on_progress(self, current: int, total: int):
         self.progress_update.emit(current, total)
@@ -636,11 +650,13 @@ class StaccatoDialog(QDialog):
         self._progress_label.setText("Preparing...")
 
         strategy_text = self._strategy_combo.currentText().lower()
+        cut_times = self._get_filtered_markers()
 
         self._generate_worker = StaccatoGenerateWorker(
             clips=self._clips,
             audio_analysis=self._audio_analysis,
             strategy=strategy_text,
+            cut_times=cut_times,
             parent=self,
         )
         self._generate_worker.progress_update.connect(self._on_progress_update)

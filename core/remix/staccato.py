@@ -103,6 +103,7 @@ class StaccatoSlot:
 def generate_beat_slots(
     audio_analysis: AudioAnalysis,
     strategy: str = "onsets",
+    cut_times: Optional[list[float]] = None,
 ) -> list[StaccatoSlot]:
     """Generate time slots from the audio's beat/onset structure.
 
@@ -113,12 +114,13 @@ def generate_beat_slots(
     Returns:
         List of StaccatoSlot with timing and onset strength
     """
-    if strategy == "downbeats":
-        cut_times = audio_analysis.downbeat_times
-    elif strategy == "beats":
-        cut_times = audio_analysis.beat_times
-    else:  # onsets
-        cut_times = audio_analysis.onset_times
+    if cut_times is None:
+        if strategy == "downbeats":
+            cut_times = audio_analysis.downbeat_times
+        elif strategy == "beats":
+            cut_times = audio_analysis.beat_times
+        else:  # onsets
+            cut_times = audio_analysis.onset_times
 
     if not cut_times:
         cut_times = audio_analysis.beat_times
@@ -221,6 +223,7 @@ def generate_staccato_sequence(
     clips: list,
     audio_analysis: AudioAnalysis,
     strategy: str = "onsets",
+    cut_times: Optional[list[float]] = None,
     progress_cb=None,
 ) -> StaccatoResult:
     """Generate a beat-driven sequence using onset strength for visual contrast.
@@ -229,6 +232,8 @@ def generate_staccato_sequence(
         clips: List of (Clip, Source) tuples with DINOv2 embeddings
         audio_analysis: Analyzed music file with onset strengths
         strategy: "beats", "downbeats", or "onsets"
+        cut_times: Optional explicit cut markers. When provided, generation
+            uses these exact markers instead of recomputing them from strategy.
         progress_cb: Optional callback(current, total) for progress
 
     Returns:
@@ -241,7 +246,7 @@ def generate_staccato_sequence(
         return StaccatoResult([])
 
     # Build the beat slot schedule
-    slots = generate_beat_slots(audio_analysis, strategy)
+    slots = generate_beat_slots(audio_analysis, strategy, cut_times=cut_times)
     if not slots:
         logger.warning("No beat slots generated from audio analysis")
         return StaccatoResult([])
@@ -319,3 +324,26 @@ def generate_staccato_sequence(
         progress_cb(len(slots), len(slots))
 
     return StaccatoResult(result, debug=debug)
+
+
+def expand_staccato_slot_segments(clip, source, slot_duration: float) -> list[tuple[int, int]]:
+    """Expand one Staccato slot into one or more looping source segments.
+
+    Returns a list of absolute source-frame `(in_point, out_point)` pairs that,
+    when placed sequentially, fill the requested slot by repeating the clip from
+    its start as many times as needed.
+    """
+    fps = getattr(source, "fps", 24.0) or 24.0
+    clip_start = getattr(clip, "start_frame", 0)
+    clip_end = getattr(clip, "end_frame", clip_start + max(1, round(fps)))
+    clip_frames = max(1, clip_end - clip_start)
+    slot_frames = max(1, round(slot_duration * fps))
+
+    segments = []
+    remaining_frames = slot_frames
+    while remaining_frames > 0:
+        segment_frames = min(clip_frames, remaining_frames)
+        segments.append((clip_start, clip_start + segment_frames))
+        remaining_frames -= segment_frames
+
+    return segments

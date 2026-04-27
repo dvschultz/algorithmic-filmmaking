@@ -126,6 +126,7 @@ class StorytellerDialog(QDialog):
         self.project = project
         self.narrative_lines = []
         self.worker = None
+        self._generation_failed = False
         self._initial_duration = initial_duration
         self._initial_structure = initial_structure
         self._initial_theme = initial_theme
@@ -461,6 +462,9 @@ class StorytellerDialog(QDialog):
     def _go_back(self):
         """Navigate to previous page."""
         current = self.stack.currentIndex()
+        if current == self.PAGE_PROGRESS and self._generation_failed:
+            self._return_to_config_after_error()
+            return
         if current == self.PAGE_PREVIEW:
             self.stack.setCurrentIndex(self.PAGE_CONFIG)
             self._update_nav_buttons()
@@ -484,6 +488,9 @@ class StorytellerDialog(QDialog):
             self.stack.setCurrentIndex(self.PAGE_PROGRESS)
             self._update_nav_buttons()
             self._start_generation()
+
+        elif current == self.PAGE_PROGRESS and self._generation_failed:
+            self._return_to_config_after_error()
 
         elif current == self.PAGE_PREVIEW:
             # Finish and create sequence
@@ -518,6 +525,11 @@ class StorytellerDialog(QDialog):
 
     def _start_generation(self):
         """Start the narrative generation worker."""
+        self._generation_failed = False
+        self.progress_bar.setMinimum(0)
+        self.progress_bar.setMaximum(0)
+        self.progress_label.setText("Starting...")
+
         # Build clips_with_descriptions list as tuples
         clips_data = []
         for clip in self.clips_with_descriptions:
@@ -554,6 +566,7 @@ class StorytellerDialog(QDialog):
 
     def _on_generation_finished(self, narrative_lines: list):
         """Handle generation completion."""
+        self._generation_failed = False
         self.narrative_lines = narrative_lines
 
         # Calculate stats
@@ -583,6 +596,7 @@ class StorytellerDialog(QDialog):
     def _on_generation_error(self, error_msg: str):
         """Handle generation error."""
         logger.error(f"Generation error: {error_msg}")
+        self._generation_failed = True
         self.progress_label.setText(f"Error: {error_msg}")
         self.progress_bar.setMaximum(100)
         self.progress_bar.setValue(0)
@@ -591,8 +605,12 @@ class StorytellerDialog(QDialog):
         self.back_btn.setVisible(True)
         self.next_btn.setText("Try Again")
         self.next_btn.setEnabled(True)
-        self.next_btn.clicked.disconnect()
-        self.next_btn.clicked.connect(lambda: self.stack.setCurrentIndex(self.PAGE_CONFIG))
+
+    def _return_to_config_after_error(self):
+        """Return to the config page after a failed generation attempt."""
+        self._generation_failed = False
+        self.stack.setCurrentIndex(self.PAGE_CONFIG)
+        self._update_nav_buttons()
 
     def _display_narrative(self):
         """Display the generated narrative in the list widget."""

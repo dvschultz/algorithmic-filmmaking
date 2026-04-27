@@ -250,6 +250,59 @@ class TestGenerateNarrative:
                     narrative_structure="auto",
                 )
 
+    def test_generate_narrative_rejects_empty_llm_content(self, mock_clips):
+        """Test handling of empty or filtered LLM responses."""
+        clips_with_desc = [(mock_clips[0], "Test description")]
+
+        mock_response = Mock()
+        mock_response.choices = [Mock()]
+        mock_response.choices[0].message.content = None
+
+        mock_settings = Mock()
+        mock_settings.exquisite_corpus_model = "gemini-2.5-flash"
+        mock_settings.exquisite_corpus_temperature = 0.7
+
+        with patch("core.settings.load_settings", return_value=mock_settings), \
+             patch("core.settings.get_llm_api_key", return_value="test-api-key"), \
+             patch("litellm.completion", return_value=mock_response):
+
+            with pytest.raises(ValueError, match="LLM returned no content"):
+                generate_narrative(
+                    clips_with_descriptions=clips_with_desc,
+                    target_duration_minutes=None,
+                    narrative_structure="auto",
+                )
+
+    def test_generate_narrative_rejects_duplicate_clip_ids(self, mock_clips):
+        """Test duplicate clip selections are rejected instead of repeated."""
+        clips_with_desc = [
+            (mock_clips[0], "A busy city street at dawn"),
+            (mock_clips[1], "A person sitting alone in a park"),
+        ]
+
+        mock_response = Mock()
+        mock_response.choices = [Mock()]
+        mock_response.choices[0].message.content = json.dumps({
+            "selected": ["c1", "c1"],
+            "excluded": [],
+            "structure_used": "auto",
+        })
+
+        mock_settings = Mock()
+        mock_settings.exquisite_corpus_model = "gemini-2.5-flash"
+        mock_settings.exquisite_corpus_temperature = 0.7
+
+        with patch("core.settings.load_settings", return_value=mock_settings), \
+             patch("core.settings.get_llm_api_key", return_value="test-api-key"), \
+             patch("litellm.completion", return_value=mock_response):
+
+            with pytest.raises(ValueError, match="duplicate clip_id"):
+                generate_narrative(
+                    clips_with_descriptions=clips_with_desc,
+                    target_duration_minutes=None,
+                    narrative_structure="auto",
+                )
+
 
 class TestSequenceByNarrative:
     """Tests for the sequence_by_narrative function."""

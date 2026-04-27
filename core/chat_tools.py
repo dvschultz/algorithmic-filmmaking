@@ -4762,12 +4762,13 @@ def generate_storyteller(
         if clip and clip.description:
             source = project.sources_by_id.get(clip.source_id)
             if source:
+                clip._duration_seconds = clip.duration_seconds(source.fps)
                 clips_with_desc.append((clip, clip.description))
 
     if not clips_with_desc:
         return {"success": False, "error": "No selected clips have descriptions. Run Describe analysis first."}
 
-    from core.remix.storyteller import generate_narrative
+    from core.remix.storyteller import generate_narrative, sequence_by_narrative
     try:
         narrative_lines = generate_narrative(
             clips_with_desc,
@@ -4778,18 +4779,23 @@ def generate_storyteller(
         if not narrative_lines:
             return {"success": False, "error": "LLM could not generate a narrative from the available clips."}
 
+        sequence = sequence_by_narrative(
+            narrative_lines,
+            project.clips_by_id,
+            project.sources_by_id,
+        )
+        if not sequence:
+            return {"success": False, "error": "Could not resolve generated narrative to project clips."}
+
         # Apply narrative order to timeline
         seq_tab = main_window.sequence_tab
         seq_tab.timeline.clear_timeline()
         current_frame = 0
         applied = 0
-        for line in narrative_lines:
-            clip = line.clip
-            source = project.sources_by_id.get(clip.source_id)
-            if source:
-                seq_tab.timeline.add_clip(clip, source, track_index=0, start_frame=current_frame)
-                current_frame += clip.duration_frames
-                applied += 1
+        for clip, source in sequence:
+            seq_tab.timeline.add_clip(clip, source, track_index=0, start_frame=current_frame)
+            current_frame += clip.duration_frames
+            applied += 1
         seq_tab.timeline._on_zoom_fit()
         seq_tab._set_state(seq_tab.STATE_TIMELINE)
 
@@ -5921,6 +5927,20 @@ def generate_staccato(
 
     if not clips:
         return {"success": False, "error": "No clips available for sequencing"}
+
+    missing_embeddings = [
+        getattr(clip, "id", "<unknown>")
+        for clip, _source in clips
+        if getattr(clip, "embedding", None) is None
+    ]
+    if missing_embeddings:
+        return {
+            "success": False,
+            "error": (
+                f"Staccato requires DINOv2 embeddings, but {len(missing_embeddings)} "
+                "selected clips are missing them. Run embedding analysis first."
+            ),
+        }
 
     # Generate the staccato sequence
     try:

@@ -248,7 +248,10 @@ Return the JSON object with selected clips in narrative order."""
         temperature=temperature,
     )
 
-    response_text = response.choices[0].message.content.strip()
+    content = response.choices[0].message.content
+    if content is None or not str(content).strip():
+        raise ValueError("LLM returned no content (possible content filter or rate limit)")
+    response_text = str(content).strip()
     logger.debug(f"LLM response: {response_text[:300]}...")
 
     # Parse response
@@ -278,15 +281,25 @@ Return the JSON object with selected clips in narrative order."""
         if not isinstance(selected, list):
             raise ValueError("'selected' is not an array")
 
+        validated_selected = []
+        seen_clip_ids = set()
+        for short_id in selected:
+            if not isinstance(short_id, str):
+                raise ValueError("'selected' must contain clip_id strings")
+            if short_id in seen_clip_ids:
+                raise ValueError(f"LLM returned duplicate clip_id '{short_id}'")
+            seen_clip_ids.add(short_id)
+            validated_selected.append(short_id)
+
         # Build narrative lines, mapping short IDs back to full clip IDs
         narrative_lines = []
-        for i, short_id in enumerate(selected, 1):
+        for i, short_id in enumerate(validated_selected, 1):
             if short_id in clip_inventory:
                 full_clip_id = short_to_full_id[short_id]
                 description = clip_inventory[short_id]["description"]
 
                 # Determine narrative role based on position and structure
-                role = _determine_narrative_role(i, len(selected), structure_used)
+                role = _determine_narrative_role(i, len(validated_selected), structure_used)
 
                 narrative_lines.append(NarrativeLine(
                     clip_id=full_clip_id,

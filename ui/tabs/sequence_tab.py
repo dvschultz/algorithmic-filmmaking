@@ -1317,13 +1317,15 @@ class SequenceTab(BaseTab):
         """Apply the sequence from Staccato dialog.
 
         Staccato emits (Clip, Source, slot_duration_seconds) tuples.
-        Each clip is trimmed to fit its beat slot duration so the
-        total sequence matches the music track length.
+        Short clips are looped by repeating their source range until the full
+        beat slot is filled, so the total sequence matches the music track length.
         """
         if not sequence_clips:
             return
 
         try:
+            from core.remix.staccato import expand_staccato_slot_segments
+
             self._create_and_activate_sequence("staccato")
             self.timeline.clear_timeline()
 
@@ -1339,37 +1341,32 @@ class SequenceTab(BaseTab):
                 "Staccato: placing %d clips at timeline fps=%.3f",
                 len(sequence_clips), fps,
             )
+            preview_clips = []
             for entry in sequence_clips:
                 clip, source = entry[0], entry[1]
                 slot_duration = entry[2] if len(entry) > 2 else None
 
                 if slot_duration is not None:
-                    # Trim clip to fit the beat slot duration
-                    slot_frames_src = round(slot_duration * source.fps)
-                    clip_frames = clip.end_frame - clip.start_frame
-                    trimmed_frames = min(slot_frames_src, clip_frames)
-                    in_point = clip.start_frame
-                    out_point = clip.start_frame + trimmed_frames
+                    segments = expand_staccato_slot_segments(clip, source, slot_duration)
                 else:
-                    in_point = clip.start_frame
-                    out_point = clip.end_frame
-                    slot_duration = (out_point - in_point) / source.fps
+                    segments = [(clip.start_frame, clip.end_frame)]
 
-                current_frame = round(current_time * fps)
-                self.timeline.add_clip(
-                    clip, source, track_index=0, start_frame=current_frame,
-                    in_point=in_point, out_point=out_point,
-                )
-                self.clip_added.emit(clip, source)
-                current_time += slot_duration
+                for in_point, out_point in segments:
+                    segment_duration = (out_point - in_point) / source.fps
+                    current_frame = round(current_time * fps)
+                    self.timeline.add_clip(
+                        clip, source, track_index=0, start_frame=current_frame,
+                        in_point=in_point, out_point=out_point,
+                    )
+                    self.clip_added.emit(clip, source)
+                    preview_clips.append((clip, source))
+                    current_time += segment_duration
 
             logger.info(
                 "Staccato: total timeline duration=%.2fs (%d clips placed)",
-                current_time, len(sequence_clips),
+                current_time, len(preview_clips),
             )
 
-            # Convert (clip, source, duration) back to (clip, source) for preview
-            preview_clips = [(entry[0], entry[1]) for entry in sequence_clips]
             self.timeline_preview.set_clips(preview_clips, self._sources)
             self.timeline._on_zoom_fit()
 

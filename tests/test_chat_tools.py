@@ -1,10 +1,11 @@
 """Unit tests for content-aware chat tools."""
 
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
+from core.analysis.audio import AudioAnalysis
 from core.project import Project
 from models.clip import Source, Clip
 
@@ -1820,3 +1821,101 @@ class TestProjectSummaryGazeCount:
         result = get_project_summary(project)
 
         assert "Gaze analyzed**: 1/2" in result["summary"]
+
+
+class TestStorytellerTool:
+    """Tests for the Storyteller chat tool."""
+
+    def test_generate_storyteller_applies_resolved_sequence_order(self):
+        """Storyteller should resolve NarrativeLine clip IDs back to project clips."""
+        from core.chat_tools import generate_storyteller
+        from core.remix.storyteller import NarrativeLine
+
+        project = _create_chat_test_project()
+        clip_1 = make_test_clip(
+            "clip-1",
+            source_id="src-1",
+            start_frame=0,
+            end_frame=60,
+            description="First clip",
+        )
+        clip_2 = make_test_clip(
+            "clip-2",
+            source_id="src-2",
+            start_frame=0,
+            end_frame=48,
+            description="Second clip",
+        )
+        project.add_clips([clip_1, clip_2])
+
+        main_window = Mock()
+        main_window._gui_state = Mock(analyze_selected_ids=["clip-1", "clip-2"], cut_selected_ids=[])
+        main_window.sequence_tab = Mock()
+        main_window.sequence_tab.timeline = Mock()
+        main_window.sequence_tab.STATE_TIMELINE = "timeline"
+
+        def fake_generate_narrative(
+            clips_with_descriptions,
+            target_duration_minutes,
+            narrative_structure,
+            theme,
+        ):
+            clips_by_id = {clip.id: clip for clip, _desc in clips_with_descriptions}
+            assert clips_by_id["clip-1"]._duration_seconds == pytest.approx(2.0)
+            assert clips_by_id["clip-2"]._duration_seconds == pytest.approx(2.0)
+            return [
+                NarrativeLine("clip-2", "Second clip", "opening", 1),
+                NarrativeLine("clip-1", "First clip", "closing", 2),
+            ]
+
+        with patch("core.remix.storyteller.generate_narrative", side_effect=fake_generate_narrative):
+            result = generate_storyteller(
+                project,
+                main_window,
+                theme="contrast",
+                structure="auto",
+                target_duration_minutes=10,
+            )
+
+        assert result["success"] is True
+        assert result["clip_count"] == 2
+
+        add_calls = main_window.sequence_tab.timeline.add_clip.call_args_list
+        assert [call.args[0].id for call in add_calls] == ["clip-2", "clip-1"]
+        assert [call.args[1].id for call in add_calls] == ["src-2", "src-1"]
+        main_window.sequence_tab.timeline.clear_timeline.assert_called_once()
+        main_window.sequence_tab.timeline._on_zoom_fit.assert_called_once()
+        main_window.sequence_tab._set_state.assert_called_once_with("timeline")
+
+
+class TestStaccatoTool:
+    """Tests for the Staccato chat tool."""
+
+    def test_generate_staccato_rejects_missing_embeddings(self):
+        """The agent tool should fail clearly instead of silently degrading."""
+        from core.chat_tools import generate_staccato
+
+        project = _create_chat_test_project()
+        clip = make_test_clip(
+            "clip-1",
+            source_id="src-1",
+            start_frame=0,
+            end_frame=60,
+        )
+        clip.embedding = None
+        project.add_clips([clip])
+
+        main_window = Mock()
+        main_window.sequence_tab = Mock()
+
+        with patch("core.chat_tools._validate_path", return_value=(True, "", Path("/test/audio.mp3"))), \
+             patch("core.analysis.audio.analyze_music_file", return_value=AudioAnalysis(beat_times=[1.0], duration_seconds=2.0)):
+            result = generate_staccato(
+                project,
+                main_window,
+                audio_path="/test/audio.mp3",
+                strategy="beats",
+            )
+
+        assert result["success"] is False
+        assert "embeddings" in result["error"].lower()

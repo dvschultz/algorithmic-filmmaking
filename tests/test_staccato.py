@@ -9,6 +9,7 @@ from core.remix.staccato import (
     StaccatoResult,
     StaccatoDebugInfo,
     StaccatoSlotDebug,
+    expand_staccato_slot_segments,
     generate_beat_slots,
     generate_staccato_sequence,
     _cosine_distance,
@@ -102,6 +103,15 @@ class TestGenerateBeatSlots:
         analysis = AudioAnalysis()
         slots = generate_beat_slots(analysis, strategy="onsets")
         assert slots == []
+
+    def test_explicit_cut_times_override_strategy_markers(self):
+        analysis = self._make_analysis()
+        slots = generate_beat_slots(
+            analysis,
+            strategy="onsets",
+            cut_times=[0.5, 1.5],
+        )
+        assert [slot.start_time for slot in slots] == [0.5, 1.5]
 
     def test_short_slots_filtered(self):
         """Slots shorter than 0.1s should be skipped."""
@@ -267,6 +277,45 @@ class TestGenerateStaccatoSequence:
         assert len(result) == 2
         # Should have progress calls for each slot + final
         assert len(progress_calls) >= 2
+
+    def test_generation_uses_explicit_cut_times(self):
+        clips = [
+            (self._make_clip("c1", [1.0, 0.0]), self._make_source("s1")),
+            (self._make_clip("c2", [0.0, 1.0]), self._make_source("s1")),
+        ]
+        analysis = AudioAnalysis(
+            beat_times=[0.5, 1.0, 1.5, 2.0],
+            onset_times=[0.5, 1.0, 1.5, 2.0],
+            onset_strengths=[0.2, 0.9, 0.3, 0.8],
+            duration_seconds=2.5,
+        )
+        result = generate_staccato_sequence(
+            clips,
+            analysis,
+            strategy="onsets",
+            cut_times=[0.5, 1.5],
+        )
+        assert len(result) == 2
+        assert result.debug is not None
+        assert result.debug.total_slots == 2
+
+
+class TestExpandStaccatoSlotSegments:
+
+    def test_expands_short_clip_into_looping_segments(self):
+        clip = MagicMock()
+        clip.start_frame = 10
+        clip.end_frame = 58  # 48 frames = 2 seconds at 24fps
+        source = MagicMock()
+        source.fps = 24.0
+
+        segments = expand_staccato_slot_segments(clip, source, slot_duration=5.0)
+
+        assert segments == [
+            (10, 58),
+            (10, 58),
+            (10, 34),
+        ]
 
 
 # --- StaccatoResult wrapper tests ---
