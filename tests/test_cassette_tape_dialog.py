@@ -120,6 +120,27 @@ class TestSetupPage:
         result = dialog._phrases_with_counts()
         assert result == [("thank you", 3), ("hello", 4)]
 
+    def test_duplicate_phrases_merge_with_max_count(self, qapp, transcribed_project):
+        dialog = _make_dialog(qapp, transcribed_project)
+        dialog.phrase_rows[0].line_edit.setText("thank you")
+        dialog.phrase_rows[0].slider.setValue(2)
+        dialog.phrase_rows[1].line_edit.setText("Thank You")  # different case
+        dialog.phrase_rows[1].slider.setValue(5)
+        dialog.phrase_rows[2].line_edit.setText("hello")
+        dialog.phrase_rows[2].slider.setValue(1)
+        result = dialog._phrases_with_counts()
+        # First-occurrence original-case spelling preserved; counts merged via max.
+        assert result == [("thank you", 5), ("hello", 1)]
+        assert dialog._has_duplicate_phrase_rows() is True
+
+    def test_no_duplicates_returns_each_row(self, qapp, transcribed_project):
+        dialog = _make_dialog(qapp, transcribed_project)
+        dialog.phrase_rows[0].line_edit.setText("alpha")
+        dialog.phrase_rows[1].line_edit.setText("bravo")
+        assert dialog._has_duplicate_phrase_rows() is False
+        result = dialog._phrases_with_counts()
+        assert {p for p, _ in result} == {"alpha", "bravo"}
+
 
 class TestProgressPageAndWorkerFlow:
     def test_clicking_find_matches_advances_to_progress(self, qapp, transcribed_project):

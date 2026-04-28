@@ -458,7 +458,50 @@ class CassetteTapeDialog(QDialog):
         self._update_next_btn_enabled()
 
     def _phrases_with_counts(self) -> list[tuple[str, int]]:
-        return [(r.phrase(), r.count()) for r in self.phrase_rows if r.phrase()]
+        """Collect non-empty phrase rows, deduping by phrase text.
+
+        Two rows reading the same phrase (case-insensitive) would otherwise
+        collide on the dict key in match_phrases and silently drop one row's
+        intent. Merge them into a single entry, taking the *max* of the two
+        counts (the user gets at least what the larger slider asked for).
+        """
+        merged: dict[str, int] = {}
+        for row in self.phrase_rows:
+            phrase = row.phrase()
+            if not phrase:
+                continue
+            key = phrase.casefold()
+            count = row.count()
+            if key in merged:
+                merged[key] = max(merged[key], count)
+            else:
+                merged[key] = count
+        # Preserve the original-case spelling of the first occurrence by
+        # walking the rows again in order.
+        seen: set[str] = set()
+        out: list[tuple[str, int]] = []
+        for row in self.phrase_rows:
+            phrase = row.phrase()
+            if not phrase:
+                continue
+            key = phrase.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append((phrase, merged[key]))
+        return out
+
+    def _has_duplicate_phrase_rows(self) -> bool:
+        seen: set[str] = set()
+        for row in self.phrase_rows:
+            phrase = row.phrase()
+            if not phrase:
+                continue
+            key = phrase.casefold()
+            if key in seen:
+                return True
+            seen.add(key)
+        return False
 
     # ---------- Navigation / state ----------
 
@@ -537,6 +580,15 @@ class CassetteTapeDialog(QDialog):
         phrases = self._phrases_with_counts()
         if not phrases:
             return
+
+        if self._has_duplicate_phrase_rows():
+            QMessageBox.information(
+                self,
+                "Cassette Tape — duplicate phrases",
+                "Two or more phrase rows have the same text. They will be "
+                "merged into a single search using the larger 'matches per "
+                "phrase' value.",
+            )
 
         self.stack.setCurrentIndex(self.PAGE_PROGRESS)
         self._update_nav_buttons()
