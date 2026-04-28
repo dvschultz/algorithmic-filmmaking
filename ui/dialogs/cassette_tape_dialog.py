@@ -68,7 +68,11 @@ class CassetteTapeWorker(CancellableWorker):
     suppressing the post-completion signal.
     """
 
-    matches_ready = Signal(dict)  # phrase -> [MatchResult]
+    # Emit a list of (phrase, [MatchResult]) tuples — NOT a dict.
+    # PySide6 marshals dict across thread-boundary signals as QVariantMap
+    # (a QMap, sorted alphabetically by key), which would silently reorder
+    # the user's phrase entries on the review screen.
+    matches_ready = Signal(list)
 
     def __init__(
         self,
@@ -91,7 +95,9 @@ class CassetteTapeWorker(CancellableWorker):
             if self.is_cancelled():
                 self._log_cancelled()
                 return
-            self.matches_ready.emit(results)
+            # Convert to ordered list of tuples for the cross-thread signal.
+            ordered = list(results.items())
+            self.matches_ready.emit(ordered)
             self._log_complete()
         except Exception as exc:
             if self.is_cancelled():
@@ -613,8 +619,15 @@ class CassetteTapeDialog(QDialog):
         self.worker.error.connect(self._on_match_error)
         self.worker.start()
 
-    def _on_matches_ready(self, results: dict[str, list[MatchResult]]):
-        self.matches_by_phrase = results
+    def _on_matches_ready(self, results):
+        # results is list[tuple[str, list[MatchResult]]] ordered by user input.
+        # Store as dict (Python dicts preserve insertion order) so downstream
+        # code that iterates .items() / .values() sees the user's phrase order.
+        if isinstance(results, dict):
+            # Defensive: tolerate the legacy dict shape if any caller still uses it.
+            self.matches_by_phrase = results
+        else:
+            self.matches_by_phrase = dict(results)
         self._populate_review_page()
         self.stack.setCurrentIndex(self.PAGE_REVIEW)
         self._update_nav_buttons()

@@ -179,6 +179,62 @@ class TestProgressPageAndWorkerFlow:
         assert "rapidfuzz blew up" in args[2]
 
 
+class TestPhraseOrderPreservation:
+    """Regression for the dict→QVariantMap reordering bug.
+
+    PySide6 marshals dicts across thread-boundary signals as QVariantMap
+    (a QMap, sorted alphabetically by key). The worker must emit a list
+    of tuples to preserve user-entered phrase order on the review screen.
+    """
+
+    def test_worker_emits_list_not_dict(self, qapp):
+        # The matches_ready signal must be Signal(list), not Signal(dict),
+        # so cross-thread queued connections don't silently sort by key.
+        from ui.dialogs.cassette_tape_dialog import CassetteTapeWorker
+        worker = CassetteTapeWorker(phrases_with_counts=[], clips=[])
+        # Trigger run() and capture the emit. We patch match_phrases to
+        # return phrases in non-alphabetical order ("sorry", "rescue", "search")
+        # and assert the emitted list preserves that order.
+        from unittest.mock import patch
+        captured = []
+        worker.matches_ready.connect(lambda r: captured.append(r))
+        ordered_dict = {"sorry": [], "rescue": [], "search": []}
+        with patch("ui.dialogs.cassette_tape_dialog.match_phrases", return_value=ordered_dict):
+            worker.run()
+        assert len(captured) == 1
+        result = captured[0]
+        # Must be a list of (phrase, matches) tuples, not a dict.
+        assert isinstance(result, list), f"expected list payload, got {type(result).__name__}"
+        keys_in_order = [phrase for phrase, _ in result]
+        assert keys_in_order == ["sorry", "rescue", "search"], (
+            f"phrase order not preserved across signal: {keys_in_order}"
+        )
+
+    def test_dialog_preserves_user_order_in_review(self, qapp, transcribed_project):
+        """End-to-end: typing 'sorry', 'rescue', 'search' in three rows and
+        running matches places them in that order on the review page."""
+        clips, _, _ = transcribed_project
+        dialog = _make_dialog(qapp, transcribed_project)
+        dialog.phrase_rows[0].line_edit.setText("sorry")
+        dialog.phrase_rows[1].line_edit.setText("rescue")
+        dialog.phrase_rows[2].line_edit.setText("search")
+
+        # Build a results payload in user order
+        match_for = lambda phrase: MatchResult(
+            phrase=phrase, clip_id="c1", segment_index=0,
+            segment=clips[0].transcript[0], score=80, match_start=0, match_end=5,
+        )
+        ordered_results = [
+            ("sorry", [match_for("sorry")]),
+            ("rescue", [match_for("rescue")]),
+            ("search", [match_for("search")]),
+        ]
+        dialog._on_matches_ready(ordered_results)
+
+        # matches_by_phrase preserves order via dict insertion semantics
+        assert list(dialog.matches_by_phrase.keys()) == ["sorry", "rescue", "search"]
+
+
 class TestCancellation:
     def test_match_phrases_aborts_when_is_cancelled_returns_true(self, qapp, transcribed_project):
         # match_phrases checks the cancel flag between phrases and returns {}.
