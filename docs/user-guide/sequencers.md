@@ -322,3 +322,24 @@ Build a sequence one clip at a time with an LLM collaborator. The algorithm open
 Embeddings power a local candidate shortlist so the LLM only sees the most similar clips at each step — this keeps prompts small and responses fast. Without embeddings the algorithm falls back to random sampling, which degrades proposal quality. Each accepted transition is saved as a rationale on the resulting SequenceClip, visible in exported SRTs.
 
 Requires a cloud LLM API key.
+
+### Cassette Tape
+
+Find clips that say specific phrases — the transcript-driven mixtape. This is a quote-finder: you supply a list of phrases and Cassette Tape pulls the closest matches from your transcribed clips, returning a sequence of sub-clips trimmed to just the lines that matched.
+
+**Required analysis:** Transcribe (speech transcription with per-segment timing)
+
+**Dialog workflow:**
+
+1. **Setup.** Enter one phrase per row. The slider next to each phrase sets how many matches to pull (1–5). Add or remove rows as needed. Click **Find Matches**.
+2. **Review.** Cassette Tape scores every transcript segment in the project against each phrase and groups the top matches under their phrase. Each match shows the source clip, the matched transcript snippet (with the matching words highlighted), and a 0–100 confidence score (green ≥ 80, yellow 50–79, red < 50). Toggle any match off to exclude it.
+3. **Generate.** The remaining matches are assembled into a sequence in phrase order, with each clip trimmed to just the matched transcript segment.
+
+**Tips:**
+
+- Short, distinct phrases (3–6 words) work best. Two-word phrases like "thank you" tend to match too broadly.
+- The slider controls *how many* matches per phrase, not how strict the matching is. Quality control happens on the review screen.
+- Clips without transcripts are silently excluded. If the project has no transcribed clips, the dialog will tell you to run **Analyze → Transcribe** first.
+- Disabled clips are excluded automatically.
+
+Cassette Tape uses local string-similarity matching (RapidFuzz `partial_ratio`). It does not require a cloud API key.
