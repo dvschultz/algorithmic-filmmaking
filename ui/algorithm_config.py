@@ -122,6 +122,15 @@ ALGORITHM_CONFIG = {
         "is_dialog": True,
         "categories": ["connect", "text"],
     },
+    "cassette_tape": {
+        "icon": "",
+        "label": "Cassette Tape",
+        "description": "Find clips that say specific phrases — the transcript-driven mixtape",
+        "allow_duplicates": False,
+        "required_analysis": ["transcribe"],
+        "is_dialog": True,
+        "categories": ["arrange", "audio"],
+    },
     "reference_guided": {
         "icon": "",
         "label": "Reference Guide",
