@@ -761,6 +761,7 @@ Available tools:
                 "gaze_sort": analysis_counts.get("gaze_category", 0) > 0,
                 "gaze_consistency": analysis_counts.get("gaze_category", 0) > 0,
                 "eyes_without_a_face": analysis_counts.get("gaze_category", 0) > 0,
+                "cassette_tape": any(c.transcript for c in self.project.clips),
             }
             # These always work (no analysis required)
             for a in ("duration", "shuffle", "sequential", "exquisite_corpus",

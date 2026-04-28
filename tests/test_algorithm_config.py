@@ -35,4 +35,4 @@ def test_multi_tagged_algorithms():
 
 
 def test_algorithm_count():
-    assert len(ALGORITHM_CONFIG) == 20
+    assert len(ALGORITHM_CONFIG) == 21

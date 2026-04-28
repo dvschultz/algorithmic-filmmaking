@@ -12,6 +12,7 @@ from .dice_roll_dialog import DiceRollDialog
 from .staccato_dialog import StaccatoDialog
 from .eyes_without_a_face_dialog import EyesWithoutAFaceDialog
 from .free_association_dialog import FreeAssociationDialog
+from .cassette_tape_dialog import CassetteTapeDialog
 from .url_import_dialog import URLImportDialog
 
 __all__ = [
@@ -28,5 +29,6 @@ __all__ = [
     "StaccatoDialog",
     "EyesWithoutAFaceDialog",
     "FreeAssociationDialog",
+    "CassetteTapeDialog",
     "URLImportDialog",
 ]
