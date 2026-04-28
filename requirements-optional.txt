@@ -25,7 +25,6 @@ ultralytics>=8.4.0,<9
 
 # OCR / Text Extraction
 paddleocr>=3.0.0,<4
-rapidfuzz>=3.0.0
 
 # Audio Analysis
 librosa>=0.10.0,<1.0
