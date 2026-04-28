@@ -81,8 +81,10 @@ SUPPLEMENTAL_HIDDENIMPORTS = (
     "html.parser",
     "html.entities",
     "_markupbase",
-    # librosa/soundfile depend on aifc and sunau which are deprecated in
-    # Python 3.11 and removed in 3.13. PyInstaller may skip them.
+    # librosa/soundfile/audioread depend on stdlib audio readers at runtime.
+    # PyInstaller can miss these because audio analysis dependencies are loaded
+    # on demand after the base app is frozen.
+    "wave",
     "aifc",
     "sunau",
 )
