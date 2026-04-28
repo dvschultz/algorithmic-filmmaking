@@ -46,6 +46,8 @@ def test_sequence_export_logs_concat_failure(monkeypatch, tmp_path, caplog):
         id="seq-1",
         is_frame_entry=False,
         source_clip_id="clip-1",
+        start_frame=0,
+        end_frame=lambda: 30,
         in_point=0,
         out_point=30,
         reverse=False,
