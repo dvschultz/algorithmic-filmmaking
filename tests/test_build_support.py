@@ -152,9 +152,10 @@ def test_core_requirement_distributions_follow_requirements_file(tmp_path):
     assert "opencv-python" in distributions
     assert "google-api-python-client" in distributions
     assert "pyside6" in distributions
-    # paddleocr and rapidfuzz are optional (on-demand), not core
+    # rapidfuzz is required by the Cassette Tape sequencer (core)
+    assert "rapidfuzz" in distributions
+    # paddleocr is optional (on-demand)
     assert "paddleocr" not in distributions
-    assert "rapidfuzz" not in distributions
 
 
 def test_core_requirement_distributions_support_direct_reference_requirements(tmp_path):
@@ -211,9 +212,10 @@ def test_core_pyinstaller_collect_targets_cover_packaged_runtime_dependencies(tm
     assert "cv2" in targets
     assert "numpy" in targets
     assert "mpv" in targets
-    # paddleocr/rapidfuzz are in requirements-core-macos.txt, not core
+    # rapidfuzz is required by the Cassette Tape sequencer (core)
+    assert "rapidfuzz" in targets
+    # paddleocr is optional (on-demand)
     assert "paddleocr" not in targets
-    assert "rapidfuzz" not in targets
 
 
 def test_core_pyinstaller_metadata_covers_core_requirements(tmp_path):
