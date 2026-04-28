@@ -4233,6 +4233,7 @@ def list_sorting_algorithms(project) -> dict:
     # Check if clips have color analysis
     clips = project.clips
     has_colors = any(clip.dominant_colors for clip in clips) if clips else False
+    has_transcripts = any(clip.transcript for clip in clips) if clips else False
 
     has_brightness = any(clip.average_brightness is not None for clip in clips) if clips else False
     has_volume = any(clip.rms_volume is not None for clip in clips) if clips else False
@@ -4392,6 +4393,20 @@ def list_sorting_algorithms(project) -> dict:
             "available": has_gaze,
             "reason": None if has_gaze else "Run gaze analysis on clips first",
             "parameters": []
+        },
+        {
+            "key": "cassette_tape",
+            "name": "Cassette Tape",
+            "description": "Find clips that say specific phrases (transcript-driven mixtape)",
+            "available": has_transcripts,
+            "reason": None if has_transcripts else "Run transcribe analysis on clips first",
+            "parameters": [
+                {
+                    "name": "phrases",
+                    "type": "array",
+                    "description": "List of {phrase: str, count: int} dicts. count is 1-5 matches per phrase. Use generate_cassette_tape, not generate_remix."
+                }
+            ]
         },
     ]
 
@@ -4807,6 +4822,103 @@ def generate_storyteller(
             "theme": theme,
         }
     except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@tools.register(
+    description="Generate a Cassette Tape sequence: find clips that say specific phrases. "
+                "For each phrase the agent supplies, the top-N best-matching transcript "
+                "segments are selected and assembled into a sequence of sub-clips trimmed "
+                "to just the matched lines. Requires transcribe analysis. Phrases is a list "
+                "of {phrase: str, count: int} where count is 1-5 matches per phrase.",
+    requires_project=True,
+    modifies_gui_state=True
+)
+def generate_cassette_tape(
+    project,
+    main_window,
+    phrases: list,
+) -> dict:
+    """Generate a Cassette Tape phrase-driven sequence.
+
+    Args:
+        phrases: List of {"phrase": str, "count": int} dicts. Count must be 1-5;
+            values outside that range are clamped. Empty/whitespace-only phrases
+            are skipped.
+
+    Returns:
+        Dict with success status, applied sub-clip count, and per-phrase counts.
+    """
+    if not phrases:
+        return {"success": False, "error": "No phrases provided."}
+
+    # Validate + normalize input. The agent may pass weird shapes; defend at the boundary.
+    phrases_with_counts: list[tuple[str, int]] = []
+    for entry in phrases:
+        if not isinstance(entry, dict):
+            continue
+        phrase = str(entry.get("phrase", "") or "").strip()
+        if not phrase:
+            continue
+        try:
+            count = int(entry.get("count", 3))
+        except (TypeError, ValueError):
+            count = 3
+        count = max(1, min(5, count))
+        phrases_with_counts.append((phrase, count))
+
+    if not phrases_with_counts:
+        return {"success": False, "error": "All supplied phrases were empty after trimming."}
+
+    gui_state = main_window._gui_state if main_window else None
+    selected_ids = []
+    if gui_state:
+        selected_ids = gui_state.analyze_selected_ids or gui_state.cut_selected_ids or []
+
+    # If clips are selected, use the selection; otherwise use the whole project.
+    if selected_ids:
+        candidate_clips = [project.clips_by_id[cid] for cid in selected_ids
+                           if cid in project.clips_by_id]
+    else:
+        candidate_clips = list(project.clips_by_id.values())
+
+    transcribed = [c for c in candidate_clips if c.transcript and not c.disabled]
+    if not transcribed:
+        return {
+            "success": False,
+            "error": "No transcribed clips available. Run Transcribe analysis on clips first.",
+        }
+
+    from core.remix.cassette_tape import (
+        build_sequence_data,
+        flatten_matches_in_phrase_order,
+        match_phrases,
+    )
+
+    try:
+        results = match_phrases(phrases_with_counts, transcribed)
+        if not results:
+            return {"success": False, "error": "No matches found for the supplied phrases."}
+
+        flat = flatten_matches_in_phrase_order(results)  # all matches enabled
+        sequence_data = build_sequence_data(flat, project.clips_by_id, project.sources_by_id)
+        if not sequence_data:
+            return {"success": False, "error": "Could not resolve matches to project clips."}
+
+        seq_tab = main_window.sequence_tab
+        seq_tab._apply_cassette_tape_sequence(sequence_data)
+
+        return {
+            "success": True,
+            "algorithm": "cassette_tape",
+            "clip_count": len(sequence_data),
+            "phrases": [
+                {"phrase": p, "match_count": len(results.get(p, []))}
+                for p, _ in phrases_with_counts
+            ],
+        }
+    except Exception as e:
+        logger.exception("generate_cassette_tape failed")
         return {"success": False, "error": str(e)}
 
 
