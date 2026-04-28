@@ -143,8 +143,8 @@ class _PhraseRow(QWidget):
         self.count_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.count_label)
 
-        self.remove_btn = QPushButton("×")
-        self.remove_btn.setFixedSize(28, 28)
+        self.remove_btn = QPushButton("Remove")
+        self.remove_btn.setFixedHeight(UISizes.BUTTON_MIN_HEIGHT)
         self.remove_btn.setToolTip("Remove this phrase")
         self.remove_btn.clicked.connect(lambda: self.remove_requested.emit(self))
         layout.addWidget(self.remove_btn)
@@ -361,7 +361,9 @@ class CassetteTapeDialog(QDialog):
         ct_label = QLabel("Matches per phrase")
         ct_label.setFixedWidth(160)
         head_row.addWidget(ct_label)
-        head_row.addSpacing(34)  # Align with × buttons below
+        # The Remove button column has a flexible width; reserve enough
+        # right-padding so the column header doesn't crowd the count badge.
+        head_row.addSpacing(86)
         layout.addLayout(head_row)
 
         # Scrollable phrase list
