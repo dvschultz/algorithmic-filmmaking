@@ -14,17 +14,18 @@ app = QApplication.instance() or QApplication(sys.argv)
 
 
 EXPECTED_COUNTS = {
-    "All": 20,
-    "Arrange": 9,
+    "All": 21,
+    "Arrange": 10,  # +1 for cassette_tape
     "Find": 4,
     "Connect": 6,  # +1 for free_association
-    "Audio": 3,
+    "Audio": 4,  # +1 for cassette_tape
     "Text": 3,  # +1 for free_association
 }
 
 ARRANGE_KEYS = {
     "shuffle", "sequential", "duration", "color",
     "brightness", "volume", "shot_type", "proximity", "gaze_sort",
+    "cassette_tape",
 }
 
 TEXT_KEYS = {"exquisite_corpus", "storyteller", "free_association"}
@@ -49,11 +50,11 @@ class TestCategoryFiltering:
         self.grid.set_category("All")
         assert _visible_keys(self.grid) == set(ALGORITHM_CONFIG.keys())
 
-    def test_arrange_shows_9_cards(self):
+    def test_arrange_shows_expected_cards(self):
         self.grid.set_category("Arrange")
         visible = _visible_keys(self.grid)
         assert visible == ARRANGE_KEYS
-        assert len(visible) == 9
+        assert len(visible) == 10
 
     def test_text_shows_2_cards(self):
         self.grid.set_category("Text")
@@ -88,7 +89,7 @@ class TestCategoryFiltering:
         self.grid.set_category("Text")
         assert len(_visible_keys(self.grid)) == 3
         self.grid.set_category("All")
-        assert len(_visible_keys(self.grid)) == 20
+        assert len(_visible_keys(self.grid)) == 21
 
     def test_selection_cleared_on_hidden_card(self):
         # Select a card in Arrange
