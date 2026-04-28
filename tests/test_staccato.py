@@ -96,6 +96,10 @@ class TestTunedOnsetDetection:
                 calls["onset_detect"] = kwargs
                 return np.array([1, 3])
 
+            def onset_backtrack(self, events, energy):
+                calls["onset_backtrack"] = {"events": events, "energy": energy}
+                return np.array([0, 2])
+
         class FakeLibrosa:
             beat = FakeBeat()
             onset = FakeOnset()
@@ -128,10 +132,70 @@ class TestTunedOnsetDetection:
         assert calls["onset_detect"]["onset_envelope"].tolist() == [0.1, 1.0, 0.2, 0.8]
         assert calls["onset_detect"]["hop_length"] == 256
         assert calls["onset_detect"]["delta"] == 0.025
-        assert calls["onset_detect"]["backtrack"] is True
+        assert calls["onset_detect"]["backtrack"] is False
         assert calls["onset_detect"]["wait"] == 5
-        assert result.onset_times == pytest.approx([256 / 22050, 768 / 22050])
+        assert calls["onset_backtrack"]["events"].tolist() == [1, 3]
+        assert result.onset_times == pytest.approx([0.0, 512 / 22050])
         assert result.onset_strengths == [1.0, 0.8]
+
+    def test_analyze_audio_uses_superflux_envelope(self, tmp_path, monkeypatch):
+        calls = {}
+
+        class FakeBeat:
+            def beat_track(self, y, sr):
+                return 120.0, np.array([1, 2])
+
+        class FakeFeature:
+            def melspectrogram(self, **kwargs):
+                calls["melspectrogram"] = kwargs
+                return np.array([[1.0, 2.0], [3.0, 4.0]])
+
+        class FakeOnset:
+            def onset_strength(self, **kwargs):
+                calls["onset_strength"] = kwargs
+                return np.array([0.2, 0.9])
+
+            def onset_detect(self, **kwargs):
+                calls["onset_detect"] = kwargs
+                return np.array([1])
+
+        class FakeLibrosa:
+            beat = FakeBeat()
+            feature = FakeFeature()
+            onset = FakeOnset()
+
+            def load(self, path, sr):
+                return np.ones(1024), sr
+
+            def frames_to_time(self, frames, sr, hop_length=512):
+                return np.asarray(frames) * hop_length / sr
+
+            def power_to_db(self, value, ref):
+                calls["power_to_db"] = {"value": value, "ref": ref}
+                return value
+
+        fake_librosa = FakeLibrosa()
+        monkeypatch.setattr("core.analysis.audio._get_librosa", lambda: fake_librosa)
+
+        config = OnsetDetectionConfig(
+            profile="drums",
+            hop_length=256,
+            delta=0.025,
+            wait_seconds=0.06,
+            backtrack=False,
+            superflux=True,
+        )
+        result = analyze_audio(
+            tmp_path / "drums.wav",
+            include_onsets=True,
+            onset_config=config,
+        )
+
+        assert calls["melspectrogram"]["hop_length"] == 256
+        assert calls["onset_strength"]["S"].tolist() == [[1.0, 2.0], [3.0, 4.0]]
+        assert calls["onset_strength"]["lag"] == 2
+        assert calls["onset_strength"]["max_size"] == 3
+        assert result.onset_strengths == [1.0]
 
 
 # --- Beat slot generation tests ---

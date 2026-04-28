@@ -1,10 +1,13 @@
 """Focused tests for single-clip export helpers on MainWindow."""
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import logging
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from core.project import Project
 from models.clip import Source, Clip
@@ -53,6 +56,24 @@ class _DummyExportButton:
         self.enabled = enabled
 
 
+@pytest.fixture
+def qapp():
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication([])
+    return app
+
+
+class _CaptureSignal:
+    def __init__(self):
+        self.values = []
+
+    def emit(self, *args):
+        self.values.append(args)
+
+
 def _make_window(tmp_path):
     window = SimpleNamespace(
         settings=SimpleNamespace(export_dir=tmp_path),
@@ -73,6 +94,9 @@ def _make_window(tmp_path):
     )
     window._persist_sequence_tab_state_for_export = (
         lambda: MainWindow._persist_sequence_tab_state_for_export(window)
+    )
+    window._normalize_edl_output_path = (
+        lambda output_path: MainWindow._normalize_edl_output_path(window, output_path)
     )
     window._export_sequence_edl_to_path = (
         lambda sequence, output_path:
@@ -281,7 +305,7 @@ def test_sequence_tab_edl_export_uses_selected_sequence_and_project_sources(
 
     monkeypatch.setattr(
         "ui.main_window.QFileDialog.getSaveFileName",
-        lambda *args, **kwargs: (str(tmp_path / "chosen"), "Edit Decision List (*.edl)"),
+        lambda *args, **kwargs: (str(tmp_path / "chosen.txt"), "All Files (*)"),
     )
     monkeypatch.setattr(
         "ui.main_window.QDesktopServices.openUrl",
@@ -422,3 +446,43 @@ def test_file_menu_edl_export_prompts_for_sequence_before_export(
     assert len(export_calls) == 1
     assert export_calls[0][0] is selected_sequence
     assert export_calls[0][2].output_path == tmp_path / "file_menu.edl"
+
+
+def test_sequence_tab_edl_menu_actions_emit_sequence_indexes(qapp, source):
+    from PySide6.QtWidgets import QMenu
+    from ui.tabs.sequence_tab import SequenceTab
+
+    project = Project.new(name="EDL Project")
+    project.add_source(source)
+    clip = Clip(id="clip-1", source_id=source.id, start_frame=0, end_frame=30)
+    project.add_clips([clip])
+    project.sequences[0].name = "Active Cut"
+    project.add_to_sequence(["clip-1"])
+    empty = Sequence(name="Empty Cut")
+    project.add_sequence(empty)
+
+    tab = SimpleNamespace(
+        _project=project,
+        edl_export_requested=_CaptureSignal(),
+        all_edl_export_requested=_CaptureSignal(),
+    )
+    menu = QMenu()
+
+    SequenceTab._populate_edl_export_menu(tab, menu)
+
+    actions = menu.actions()
+    assert actions[0].text() == "Export Active: Active Cut..."
+    assert actions[0].isEnabled() is True
+    assert actions[1].text() == "Export All Populated Sequences..."
+    assert actions[1].isEnabled() is True
+    assert actions[3].text() == "Export 1. Active Cut..."
+    assert actions[3].isEnabled() is True
+    assert actions[4].text() == "Export 2. Empty Cut..."
+    assert actions[4].isEnabled() is False
+
+    actions[0].trigger()
+    actions[1].trigger()
+    actions[3].trigger()
+
+    assert tab.edl_export_requested.values == [(0,), (0,)]
+    assert tab.all_edl_export_requested.values == [()]

@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -93,6 +94,7 @@ def test_audio_analysis_worker_receives_onset_profile_config(qapp, monkeypatch):
     clip, source = _make_clip_and_source()
     dialog = StaccatoDialog(clips=[(clip, source)])
     dialog._music_path = Path("/test/drums.wav")
+    dialog._advanced_toggle.setChecked(True)
     dialog._onset_profile_combo.setCurrentIndex(
         dialog._onset_profile_combo.findData("drums")
     )
@@ -137,3 +139,100 @@ def test_audio_analysis_worker_receives_onset_profile_config(qapp, monkeypatch):
     assert config.backtrack is True
     assert config.superflux is True
     assert config.delta < 0.04
+
+
+def test_default_onset_config_does_not_use_hidden_advanced_controls(qapp):
+    from ui.dialogs.staccato_dialog import StaccatoDialog
+
+    clip, source = _make_clip_and_source()
+    dialog = StaccatoDialog(clips=[(clip, source)])
+
+    config = dialog._build_onset_config()
+
+    assert dialog._advanced_toggle.isChecked() is False
+    assert config.profile == "balanced"
+    assert config.hop_length == 512
+    assert config.backtrack is False
+    assert config.superflux is False
+
+
+def test_declining_stem_dependency_prompt_keeps_balanced_profile(qapp, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+    from ui.dialogs.staccato_dialog import StaccatoDialog
+
+    clip, source = _make_clip_and_source()
+    dialog = StaccatoDialog(clips=[(clip, source)])
+
+    monkeypatch.setattr(
+        "core.feature_registry.check_feature_ready",
+        lambda feature: (False, ["demucs"]),
+    )
+    monkeypatch.setattr(
+        "ui.dialogs.staccato_dialog.QMessageBox.question",
+        lambda *args, **kwargs: QMessageBox.No,
+    )
+
+    dialog._on_stem_toggled(True)
+
+    assert dialog._stem_checkbox.isChecked() is False
+    assert dialog._stem_combo.isVisible() is False
+    assert dialog._onset_profile_combo.currentData() == "balanced"
+
+
+def test_onset_control_changes_are_reanalyzed_when_switching_back_to_onsets(qapp):
+    from ui.dialogs.staccato_dialog import StaccatoDialog
+
+    clip, source = _make_clip_and_source()
+    dialog = StaccatoDialog(clips=[(clip, source)])
+    dialog._music_path = Path("/test/drums.wav")
+    dialog._audio_analysis = AudioAnalysis(
+        beat_times=[0.5, 1.0],
+        onset_times=[0.25, 0.75],
+        onset_strengths=[1.0, 0.8],
+        duration_seconds=1.0,
+    )
+    dialog._audio_samples = np.zeros(16, dtype=np.float32)
+
+    starts = []
+    dialog._detection_change_timer = SimpleNamespace(
+        start=lambda: starts.append(True),
+        stop=lambda: None,
+    )
+
+    dialog._strategy_combo.setCurrentText("Beats")
+    dialog._on_detection_controls_changed()
+
+    assert dialog._onset_analysis_dirty is True
+    assert starts == []
+
+    dialog._strategy_combo.setCurrentText("Onsets")
+
+    assert starts == [True]
+
+
+def test_drums_profile_auto_switch_does_not_schedule_duplicate_reanalysis(
+    qapp, monkeypatch
+):
+    from ui.dialogs.staccato_dialog import StaccatoDialog
+
+    clip, source = _make_clip_and_source()
+    dialog = StaccatoDialog(clips=[(clip, source)])
+    dialog._music_path = Path("/test/drums.wav")
+    dialog._stem_checkbox.blockSignals(True)
+    dialog._stem_checkbox.setChecked(True)
+    dialog._stem_checkbox.blockSignals(False)
+    dialog._stem_combo.setCurrentText("Drums")
+
+    starts = []
+    analyzes = []
+    dialog._detection_change_timer = SimpleNamespace(
+        start=lambda: starts.append(True),
+        stop=lambda: None,
+    )
+    monkeypatch.setattr(dialog, "_analyze_audio", lambda: analyzes.append(True))
+
+    dialog._on_stem_changed("Drums")
+
+    assert dialog._onset_profile_combo.currentData() == "drums"
+    assert starts == []
+    assert analyzes == [True]

@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PySide6.QtCore import Qt, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import Qt, QSignalBlocker, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices
 
 from core.analysis.audio import (
@@ -288,6 +288,7 @@ class StaccatoDialog(QDialog):
         self._handler_executed = False
         self._sequence_data = None
         self._debug_info = None
+        self._onset_analysis_dirty = False
         self._detection_change_timer = QTimer(self)
         self._detection_change_timer.setSingleShot(True)
         self._detection_change_timer.setInterval(450)
@@ -626,7 +627,6 @@ class StaccatoDialog(QDialog):
         """Show/hide stem dropdown and check dependency availability."""
         self._stem_combo.setVisible(checked)
         if checked:
-            self._select_drums_profile_if_needed()
             # Check if demucs-infer is available — the worker thread will
             # install on demand if needed, but warn the user upfront about
             # the download size so they can opt out before waiting.
@@ -642,8 +642,12 @@ class StaccatoDialog(QDialog):
                     QMessageBox.Yes | QMessageBox.No,
                 )
                 if reply != QMessageBox.Yes:
+                    blocker = QSignalBlocker(self._stem_checkbox)
                     self._stem_checkbox.setChecked(False)
+                    del blocker
+                    self._stem_combo.setVisible(False)
                     return
+            self._select_drums_profile_if_needed()
 
         # Re-analyze if we already have a file loaded
         if self._music_path:
@@ -675,13 +679,21 @@ class StaccatoDialog(QDialog):
             and self._stem_combo.currentText().lower() == "drums"
             and self._onset_profile_combo.currentData() == "balanced"
         ):
+            blocker = QSignalBlocker(self._onset_profile_combo)
             self._onset_profile_combo.setCurrentIndex(
                 self._onset_profile_combo.findData("drums")
             )
+            del blocker
 
     def _build_onset_config(self) -> OnsetDetectionConfig:
         """Build onset detector settings from the current Staccato controls."""
-        profile = self._onset_profile_combo.currentData() or "balanced"
+        profile = self._active_onset_profile()
+        if not self._advanced_toggle.isChecked():
+            return make_onset_detection_config(
+                profile,
+                cut_density=self._sensitivity_slider.value(),
+            )
+
         min_gap_ms = self._min_gap_combo.currentData()
         backtrack = self._timing_combo.currentData()
         hop_length = self._resolution_combo.currentData()
@@ -702,9 +714,21 @@ class StaccatoDialog(QDialog):
             superflux=superflux,
         )
 
+    def _active_onset_profile(self) -> str:
+        """Return the visible/effective onset profile."""
+        if self._advanced_toggle.isChecked():
+            return self._onset_profile_combo.currentData() or "balanced"
+        if (
+            self._stem_checkbox.isChecked()
+            and self._stem_combo.currentText().lower() == "drums"
+        ):
+            return "drums"
+        return "balanced"
+
     @Slot(bool)
     def _on_advanced_toggled(self, checked: bool):
         self._advanced_panel.setVisible(checked)
+        self._schedule_reanalysis_for_detection_change()
 
     def _on_detection_controls_changed(self, *_args):
         """Handle changes that require re-running onset detection."""
@@ -720,8 +744,14 @@ class StaccatoDialog(QDialog):
         self._schedule_reanalysis_for_detection_change()
 
     def _schedule_reanalysis_for_detection_change(self):
-        if not self._music_path or self._strategy_combo.currentText().lower() != "onsets":
+        if not self._music_path:
             return
+        self._onset_analysis_dirty = True
+        if self._strategy_combo.currentText().lower() != "onsets":
+            return
+        self._queue_onset_reanalysis()
+
+    def _queue_onset_reanalysis(self):
         self._info_label.setText("Updating onset detection...")
         self._generate_btn.setEnabled(False)
         self._detection_change_timer.start()
@@ -733,6 +763,8 @@ class StaccatoDialog(QDialog):
 
     def _analyze_audio(self):
         """Start background audio analysis."""
+        self._detection_change_timer.stop()
+        self._onset_analysis_dirty = False
         if self._analyze_worker and self._analyze_worker.isRunning():
             self._analyze_worker.cancel()
             self._analyze_worker.wait(2000)
@@ -820,6 +852,11 @@ class StaccatoDialog(QDialog):
         if not self._audio_analysis or self._audio_samples is None:
             return
 
+        strategy = self._strategy_combo.currentText().lower()
+        if strategy == "onsets" and self._onset_analysis_dirty and self._music_path:
+            self._queue_onset_reanalysis()
+            return
+
         markers = self._get_filtered_markers()
         self._waveform.set_audio_data(
             samples=self._audio_samples,
@@ -834,7 +871,10 @@ class StaccatoDialog(QDialog):
         stem_name = self._get_stem_name()
         if stem_name:
             stem_label = f" ({stem_name} stem)"
-        profile_label = self._onset_profile_combo.currentText()
+        if self._active_onset_profile() == "balanced":
+            profile_label = "Balanced"
+        else:
+            profile_label = self._onset_profile_combo.currentText()
         self._info_label.setText(
             f"{self._audio_analysis.tempo_bpm:.0f} BPM · {len(markers)} cut points · "
             f"{duration_str}{stem_label} · {profile_label} · "

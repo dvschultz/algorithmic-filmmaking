@@ -245,7 +245,12 @@ def _seconds_to_frames(seconds: float, sr: int, hop_length: int) -> int:
     return max(1, int(round(seconds * sr / hop_length)))
 
 
-def _detect_tuned_onsets(librosa, y, sr: int, config: OnsetDetectionConfig) -> tuple[np.ndarray, np.ndarray]:
+def _detect_tuned_onsets(
+    librosa,
+    y,
+    sr: int,
+    config: OnsetDetectionConfig,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Detect onsets using an explicitly configured onset envelope."""
     hop_length = config.hop_length
 
@@ -272,11 +277,11 @@ def _detect_tuned_onsets(librosa, y, sr: int, config: OnsetDetectionConfig) -> t
             aggregate=np.median,
         )
 
-    onset_frames = librosa.onset.onset_detect(
+    peak_frames = librosa.onset.onset_detect(
         onset_envelope=onset_env,
         sr=sr,
         hop_length=hop_length,
-        backtrack=config.backtrack,
+        backtrack=False,
         units="frames",
         pre_max=_seconds_to_frames(config.pre_max_seconds, sr, hop_length),
         post_max=max(1, _seconds_to_frames(config.post_max_seconds, sr, hop_length)),
@@ -285,7 +290,11 @@ def _detect_tuned_onsets(librosa, y, sr: int, config: OnsetDetectionConfig) -> t
         delta=config.delta,
         wait=_seconds_to_frames(config.wait_seconds, sr, hop_length),
     )
-    return onset_frames, onset_env
+    onset_frames = peak_frames
+    if config.backtrack and len(peak_frames) > 0:
+        onset_frames = librosa.onset.onset_backtrack(peak_frames, onset_env)
+
+    return onset_frames, onset_env, peak_frames
 
 
 def _find_nearest(sorted_times: list[float], time: float) -> float:
@@ -478,7 +487,7 @@ def analyze_audio(
                 onset_env = librosa.onset.onset_strength(y=y, sr=sr)
                 onset_times = librosa.frames_to_time(onset_frames, sr=sr).tolist()
             else:
-                onset_frames, onset_env = _detect_tuned_onsets(
+                onset_frames, onset_env, strength_frames = _detect_tuned_onsets(
                     librosa, y, sr, onset_config
                 )
                 onset_times = librosa.frames_to_time(
@@ -487,10 +496,12 @@ def analyze_audio(
                     hop_length=onset_config.hop_length,
                 ).tolist()
 
-            # Sample the same onset strength envelope used for detection.
+            # Sample peak frames for strength, even when displayed onsets are backtracked.
             if len(onset_frames) > 0:
+                if onset_config is None:
+                    strength_frames = onset_frames
                 # Clamp frame indices to envelope length
-                valid_frames = np.clip(onset_frames, 0, len(onset_env) - 1)
+                valid_frames = np.clip(strength_frames, 0, len(onset_env) - 1)
                 raw_strengths = onset_env[valid_frames].tolist()
                 # Normalize to [0, 1]
                 max_str = max(raw_strengths) if raw_strengths else 0.0

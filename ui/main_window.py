@@ -8964,10 +8964,15 @@ class MainWindow(QMainWindow):
         if hasattr(self.sequence_tab, "_persist_current_sequence"):
             self.sequence_tab._persist_current_sequence()
 
+    def _normalize_edl_output_path(self, output_path: Path) -> Path:
+        """Ensure an EDL export path uses the extension the exporter writes."""
+        if output_path.suffix.lower() != ".edl":
+            return output_path.with_suffix(".edl")
+        return output_path
+
     def _export_sequence_edl_to_path(self, sequence, output_path: Path) -> bool:
         """Write one sequence EDL to an explicit path."""
-        if not output_path.suffix:
-            output_path = output_path.with_suffix(".edl")
+        output_path = self._normalize_edl_output_path(output_path)
 
         config = EDLExportConfig(
             output_path=output_path,
@@ -9077,14 +9082,12 @@ class MainWindow(QMainWindow):
         if not file_path:
             return
 
-        output_path = Path(file_path)
+        output_path = self._normalize_edl_output_path(Path(file_path))
 
         self.status_bar.showMessage("Exporting EDL...")
         success = self._export_sequence_edl_to_path(sequence, output_path)
 
         if success:
-            if not output_path.suffix:
-                output_path = output_path.with_suffix(".edl")
             self.status_bar.showMessage(f"EDL exported to {output_path.name}", 5000)
             # Open containing folder
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(output_path.parent)))
