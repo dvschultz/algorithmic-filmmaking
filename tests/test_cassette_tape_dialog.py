@@ -149,9 +149,53 @@ class TestProgressPageAndWorkerFlow:
 
     def test_match_error_returns_to_setup(self, qapp, transcribed_project):
         dialog = _make_dialog(qapp, transcribed_project)
-        dialog._on_match_error("rapidfuzz blew up")
+        with patch("ui.dialogs.cassette_tape_dialog.QMessageBox.warning") as warn:
+            dialog._on_match_error("rapidfuzz blew up")
         assert dialog.stack.currentIndex() == dialog.PAGE_SETUP
-        assert "rapidfuzz" in dialog.progress_status.text()
+        # Error surfaces via QMessageBox, not the hidden progress page label.
+        assert warn.called
+        args = warn.call_args.args
+        assert "rapidfuzz blew up" in args[2]
+
+
+class TestCancellation:
+    def test_match_phrases_aborts_when_is_cancelled_returns_true(self, qapp, transcribed_project):
+        # match_phrases checks the cancel flag between phrases and returns {}.
+        from core.remix.cassette_tape import match_phrases
+        clips, _, _ = transcribed_project
+        cancelled = {"flag": True}
+        result = match_phrases(
+            [("thank you", 1), ("hello", 1)],
+            clips,
+            is_cancelled=lambda: cancelled["flag"],
+        )
+        assert result == {}
+
+    def test_cancel_during_progress_disconnects_signals_and_clears_worker(self, qapp, transcribed_project):
+        dialog = _make_dialog(qapp, transcribed_project)
+        dialog.phrase_rows[0].line_edit.setText("thank you")
+        with patch("ui.dialogs.cassette_tape_dialog.CassetteTapeWorker.start"):
+            dialog._on_next()
+        # Worker is alive but not running (start patched). Force isRunning to True.
+        with patch.object(dialog.worker, "isRunning", return_value=True), \
+             patch.object(dialog.worker, "wait") as wait_call, \
+             patch.object(dialog.worker, "quit") as quit_call:
+            dialog._stop_worker_if_running()
+        wait_call.assert_called_once_with()  # unbounded
+        quit_call.assert_called_once()
+        assert dialog.worker is None
+
+    def test_close_event_stops_worker(self, qapp, transcribed_project):
+        from PySide6.QtGui import QCloseEvent
+        dialog = _make_dialog(qapp, transcribed_project)
+        dialog.phrase_rows[0].line_edit.setText("thank you")
+        with patch("ui.dialogs.cassette_tape_dialog.CassetteTapeWorker.start"):
+            dialog._on_next()
+        called = {"stop": 0}
+        with patch.object(dialog, "_stop_worker_if_running",
+                          side_effect=lambda: called.update(stop=called["stop"] + 1)):
+            dialog.closeEvent(QCloseEvent())
+        assert called["stop"] == 1
 
 
 class TestReviewPage:

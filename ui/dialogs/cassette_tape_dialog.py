@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal, QThread
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -34,8 +35,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from core.remix.cassette_tape import MatchResult, match_phrases
+from core.remix.cassette_tape import (
+    MatchResult,
+    build_sequence_data,
+    flatten_matches_in_phrase_order,
+    match_phrases,
+)
+from models.clip import Clip
 from ui.theme import UISizes, theme
+from ui.workers.base import CancellableWorker
 
 logger = logging.getLogger(__name__)
 
@@ -51,33 +59,46 @@ SLIDER_DEFAULT = 3
 DEFAULT_PHRASE_ROWS = 3
 
 
-class CassetteTapeWorker(QThread):
-    """Background worker that runs phrase matching off the UI thread."""
+class CassetteTapeWorker(CancellableWorker):
+    """Background worker that runs phrase matching off the UI thread.
 
-    progress = Signal(int, int)  # (current, total)
+    Inherits ``cancel()`` / ``is_cancelled()`` / ``error`` from
+    ``CancellableWorker``; the cancel flag is plumbed into ``match_phrases``
+    so a long-running scoring pass can actually abort instead of just
+    suppressing the post-completion signal.
+    """
+
     matches_ready = Signal(dict)  # phrase -> [MatchResult]
-    error = Signal(str)
 
-    def __init__(self, phrases_with_counts: list[tuple[str, int]],
-                 clips: list, parent=None):
+    def __init__(
+        self,
+        phrases_with_counts: list[tuple[str, int]],
+        clips: list[Clip],
+        parent=None,
+    ):
         super().__init__(parent)
         self.phrases_with_counts = phrases_with_counts
         self.clips = clips
-        self._cancelled = False
 
     def run(self):
+        self._log_start()
         try:
-            self.progress.emit(0, len(self.phrases_with_counts))
-            results = match_phrases(self.phrases_with_counts, self.clips)
-            if not self._cancelled:
-                self.matches_ready.emit(results)
+            results = match_phrases(
+                self.phrases_with_counts,
+                self.clips,
+                is_cancelled=self.is_cancelled,
+            )
+            if self.is_cancelled():
+                self._log_cancelled()
+                return
+            self.matches_ready.emit(results)
+            self._log_complete()
         except Exception as exc:
-            if not self._cancelled:
-                logger.exception("Cassette Tape matching failed")
-                self.error.emit(str(exc))
-
-    def cancel(self):
-        self._cancelled = True
+            if self.is_cancelled():
+                self._log_cancelled()
+                return
+            logger.exception("Cassette Tape matching failed")
+            self.error.emit(f"{type(exc).__name__}: {exc}")
 
 
 class _PhraseRow(QWidget):
@@ -481,11 +502,34 @@ class CassetteTapeDialog(QDialog):
             self._update_nav_buttons()
 
     def _on_cancel(self):
+        self._stop_worker_if_running()
+        self.reject()
+
+    def closeEvent(self, event):
+        """Window-X / ESC must also stop the worker — never tear down a
+        running QThread parented to this dialog."""
+        self._stop_worker_if_running()
+        super().closeEvent(event)
+
+    def _stop_worker_if_running(self):
         if self.worker and self.worker.isRunning():
             self.worker.cancel()
+            # Disconnect signals so a late delivery doesn't try to populate
+            # an already-closing dialog.
+            try:
+                self.worker.matches_ready.disconnect(self._on_matches_ready)
+            except (RuntimeError, TypeError):
+                pass
+            try:
+                self.worker.error.disconnect(self._on_match_error)
+            except (RuntimeError, TypeError):
+                pass
             self.worker.quit()
-            self.worker.wait(2000)
-        self.reject()
+            # Unbounded wait — the cooperative cancel returns within one
+            # phrase iteration, which is sub-second on typical projects.
+            self.worker.wait()
+            self.worker.deleteLater()
+            self.worker = None
 
     # ---------- Matching ----------
 
@@ -516,9 +560,13 @@ class CassetteTapeDialog(QDialog):
 
     def _on_match_error(self, message: str):
         logger.error("Cassette Tape error: %s", message)
-        self.progress_status.setText(f"Error: {message}")
         self.stack.setCurrentIndex(self.PAGE_SETUP)
         self._update_nav_buttons()
+        QMessageBox.warning(
+            self,
+            "Cassette Tape — matching failed",
+            f"Could not finish matching:\n\n{message}",
+        )
 
     # ---------- Review page ----------
 
@@ -573,11 +621,6 @@ class CassetteTapeDialog(QDialog):
     # ---------- Final emit ----------
 
     def _finish_with_sequence(self):
-        from core.remix.cassette_tape import (
-            build_sequence_data,
-            flatten_matches_in_phrase_order,
-        )
-
         enabled_keys = {
             (r.match.phrase, r.match.clip_id, r.match.segment_index)
             for r in self._match_rows

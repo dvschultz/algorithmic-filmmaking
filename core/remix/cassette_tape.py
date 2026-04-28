@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 from models.clip import Clip, Source
 from core.transcription import TranscriptSegment
@@ -75,6 +75,7 @@ def _score_phrase_against_segment(phrase: str, segment_text: str) -> tuple[int, 
 def match_phrases(
     phrases_with_counts: list[tuple[str, int]],
     clips: list[Clip],
+    is_cancelled: Optional[Callable[[], bool]] = None,
 ) -> dict[str, list[MatchResult]]:
     """Score each phrase against every transcript segment and return top-N.
 
@@ -84,12 +85,17 @@ def match_phrases(
             but we defend here too).
         clips: All clips in the candidate pool. Clips without a transcript or
             with ``disabled=True`` are silently excluded.
+        is_cancelled: Optional callable returning ``True`` when the caller
+            wants to abort. Checked once per phrase; partial results are
+            discarded and an empty dict is returned. Lets a worker thread's
+            cancel() actually unblock a long-running match instead of just
+            suppressing the post-completion signal.
 
     Returns:
         Dict keyed by phrase (in input order, Python 3.7+ insertion-ordered)
         whose values are lists of ``MatchResult`` objects sorted best-first.
         Each list contains at most ``count`` results — fewer if the candidate
-        pool has fewer segments.
+        pool has fewer segments. Returns ``{}`` if cancelled mid-loop.
     """
     candidates: list[tuple[int, Clip, int, TranscriptSegment]] = []
     for clip_index, clip in enumerate(clips):
@@ -111,6 +117,10 @@ def match_phrases(
     results: dict[str, list[MatchResult]] = {}
 
     for phrase, count in phrases_with_counts:
+        if is_cancelled is not None and is_cancelled():
+            logger.info("cassette_tape: matching cancelled mid-loop")
+            return {}
+
         phrase_clean = (phrase or "").strip()
         if not phrase_clean or count <= 0:
             continue
@@ -127,8 +137,11 @@ def match_phrases(
                 match_start=m_start,
                 match_end=m_end,
             )
-            # Sort tuple: -score (best first), seg.start_time, clip_index, seg_index
-            # for deterministic tie-breaking. Tuples are sorted lexicographically.
+            # Sort key projects (-score, start_time, clip_index) — MatchResult
+            # itself is never compared because the lambda below picks indices
+            # 0/2/1 only. Deterministic tie-break: best score wins, then
+            # earliest segment in the source, then earliest clip in the
+            # candidate list.
             scored.append((-score, clip_index, segment.start_time, mr))
 
         scored.sort(key=lambda r: (r[0], r[2], r[1]))
