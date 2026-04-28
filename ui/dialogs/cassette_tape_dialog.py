@@ -254,7 +254,13 @@ class CassetteTapeDialog(QDialog):
     PAGE_PROGRESS = 1
     PAGE_REVIEW = 2
 
-    def __init__(self, clips, sources_by_id, project, parent=None):
+    def __init__(
+        self,
+        clips: list[Clip],
+        sources_by_id: dict,
+        project,
+        parent=None,
+    ):
         super().__init__(parent)
         self.all_clips = clips
         self.sources_by_id = sources_by_id
@@ -292,6 +298,7 @@ class CassetteTapeDialog(QDialog):
         # Navigation
         nav = QHBoxLayout()
         self.back_btn = QPushButton("Back")
+        self.back_btn.setMinimumHeight(UISizes.BUTTON_MIN_HEIGHT)
         self.back_btn.clicked.connect(self._on_back)
         self.back_btn.setVisible(False)
         nav.addWidget(self.back_btn)
@@ -299,10 +306,12 @@ class CassetteTapeDialog(QDialog):
         nav.addStretch()
 
         self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.setMinimumHeight(UISizes.BUTTON_MIN_HEIGHT)
         self.cancel_btn.clicked.connect(self._on_cancel)
         nav.addWidget(self.cancel_btn)
 
         self.next_btn = QPushButton("Find Matches")
+        self.next_btn.setMinimumHeight(UISizes.BUTTON_MIN_HEIGHT)
         self.next_btn.clicked.connect(self._on_next)
         nav.addWidget(self.next_btn)
         layout.addLayout(nav)
@@ -604,7 +613,7 @@ class CassetteTapeDialog(QDialog):
         self.worker.error.connect(self._on_match_error)
         self.worker.start()
 
-    def _on_matches_ready(self, results: dict):
+    def _on_matches_ready(self, results: dict[str, list[MatchResult]]):
         self.matches_by_phrase = results
         self._populate_review_page()
         self.stack.setCurrentIndex(self.PAGE_REVIEW)

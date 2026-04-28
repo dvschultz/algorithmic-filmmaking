@@ -1367,7 +1367,7 @@ class SequenceTab(BaseTab):
         dialog.exec()
 
     @Slot(list)
-    def _apply_cassette_tape_sequence(self, sequence_data: list):
+    def _apply_cassette_tape_sequence(self, sequence_data: list[tuple]):
         """Apply the sequence from the Cassette Tape dialog.
 
         The dialog emits ``(Clip, Source, in_point, out_point)`` tuples where
@@ -1383,7 +1383,10 @@ class SequenceTab(BaseTab):
             self.timeline.clear_timeline()
 
             first_clip, first_source, _, _ = sequence_data[0]
-            fps = first_source.fps
+            # Defensive: a Source with fps<=0 (corrupted metadata, failed probe)
+            # would propagate divide-by-zero into the timeline scene.
+            # build_sequence_data has the same fallback; mirror it here.
+            fps = first_source.fps if first_source.fps and first_source.fps > 0 else 30.0
             self.timeline.set_fps(fps)
             self.video_player.load_video(first_source.file_path)
 
