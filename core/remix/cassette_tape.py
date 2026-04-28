@@ -46,28 +46,49 @@ def _score_phrase_against_segment(phrase: str, segment_text: str) -> tuple[int, 
     """Score a phrase against a segment's text.
 
     Returns ``(score_0_100, match_start, match_end)``. ``match_start``/``end``
-    point into ``segment_text`` so the UI can highlight the matched substring.
-    Returns ``(0, -1, -1)`` for empty inputs.
+    point into the **original** ``segment_text`` so the UI can highlight the
+    matched substring without index drift on Unicode characters whose
+    lowercase form has a different length (e.g., Turkish dotted-I, German ß
+    in a casefold scenario).
+
+    We pass ``processor=str.lower`` to rapidfuzz so it lowercases internally
+    for scoring, while ``partial_ratio_alignment`` returns indices into the
+    *original* strings — which is exactly what we need for highlight
+    rendering. Returns ``(0, -1, -1)`` for empty inputs or when alignment
+    fails.
     """
     if not phrase or not segment_text:
         return 0, -1, -1
 
     from rapidfuzz import fuzz
 
-    phrase_lc = phrase.lower()
-    text_lc = segment_text.lower()
-
-    score = int(round(fuzz.partial_ratio(phrase_lc, text_lc)))
-
+    score = -1
     match_start = -1
     match_end = -1
     try:
-        alignment = fuzz.partial_ratio_alignment(phrase_lc, text_lc)
+        alignment = fuzz.partial_ratio_alignment(
+            phrase, segment_text, processor=str.lower
+        )
     except Exception:
+        logger.debug(
+            "rapidfuzz partial_ratio_alignment failed; falling back to score-only path",
+            exc_info=True,
+        )
         alignment = None
+
     if alignment is not None:
+        # alignment.score is 0-100 already; round to int so callers see a
+        # stable badge value. dest_start/dest_end index into segment_text.
+        score = int(round(alignment.score))
         match_start = int(alignment.dest_start)
         match_end = int(alignment.dest_end)
+    else:
+        # Score-only fallback when alignment is unavailable for any reason.
+        try:
+            score = int(round(fuzz.partial_ratio(phrase, segment_text, processor=str.lower)))
+        except Exception:
+            logger.debug("rapidfuzz partial_ratio also failed", exc_info=True)
+            score = 0
 
     return score, match_start, match_end
 

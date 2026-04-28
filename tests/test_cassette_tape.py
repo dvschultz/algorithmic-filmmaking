@@ -67,6 +67,17 @@ class TestScorePhraseAgainstSegment:
         )
         assert score < 60
 
+    def test_alignment_indices_map_into_original_case_text(self):
+        """rapidfuzz alignment must return indices into the ORIGINAL text,
+        not the lowercased copy — otherwise Unicode chars whose lowercase
+        form has a different length (Turkish dotted-I, German ß casefold,
+        etc.) shift the highlight."""
+        text = "Welcome to İstanbul tonight"
+        score, start, end = _score_phrase_against_segment("istanbul", text)
+        assert score >= 80
+        # The highlighted span must contain the (case-preserved) word.
+        assert "İstanbul" in text[start:end]
+
 
 class TestMatchPhrasesHappyPaths:
     def test_phrase_thank_you_finds_match(self):
