@@ -4852,6 +4852,8 @@ def generate_cassette_tape(
     if not phrases:
         return {"success": False, "error": "No phrases provided."}
 
+    from core.remix.cassette_tape import SLIDER_DEFAULT, clamp_count
+
     # Validate + normalize input. The agent may pass weird shapes; defend at the boundary.
     phrases_with_counts: list[tuple[str, int]] = []
     for entry in phrases:
@@ -4861,11 +4863,10 @@ def generate_cassette_tape(
         if not phrase:
             continue
         try:
-            count = int(entry.get("count", 3))
+            count = int(entry.get("count", SLIDER_DEFAULT))
         except (TypeError, ValueError):
-            count = 3
-        count = max(1, min(5, count))
-        phrases_with_counts.append((phrase, count))
+            count = SLIDER_DEFAULT
+        phrases_with_counts.append((phrase, clamp_count(count)))
 
     if not phrases_with_counts:
         return {"success": False, "error": "All supplied phrases were empty after trimming."}

@@ -42,6 +42,34 @@ class MatchResult:
     match_end: int  # substring end in segment.text (chars), or -1 if unknown
 
 
+# Slider range for matches-per-phrase. Both the dialog setup screen and
+# the agent tool's input validator clamp to this range.
+SLIDER_MIN = 1
+SLIDER_MAX = 5
+SLIDER_DEFAULT = 3
+
+
+def clamp_count(count: int) -> int:
+    """Clamp a phrase's match-count to [SLIDER_MIN, SLIDER_MAX]."""
+    return max(SLIDER_MIN, min(SLIDER_MAX, count))
+
+
+def safe_fps(source: Optional[Source]) -> float:
+    """Return the source's fps, or 30.0 if missing / non-positive.
+
+    A Source with fps<=0 (corrupted metadata, failed probe) would propagate
+    divide-by-zero into seconds-to-frames math and the timeline scene. The
+    UI apply path and build_sequence_data both need this guard, so the
+    helper lives here next to the matcher.
+    """
+    if source is None:
+        return 30.0
+    fps = getattr(source, "fps", None)
+    if fps and fps > 0:
+        return float(fps)
+    return 30.0
+
+
 _MIN_SEGMENT_CHARS = 3
 """Floor for transcript segment length. Segments shorter than this are
 treated as noise (Whisper often emits single-char artifacts on silent or
@@ -187,27 +215,36 @@ def match_phrases(
         if not phrase_clean or count <= 0:
             continue
 
-        scored: list[tuple[int, int, float, MatchResult]] = []
+        # Score each candidate and keep only the lightweight tuple needed for
+        # ranking + later MatchResult reconstruction. Deferring the dataclass
+        # construction until after the sort+slice avoids ~99% throwaway
+        # allocations at typical scale (only `count` of N candidates survive).
+        # Tuple shape: (-score, clip_index, start_time, score, m_start, m_end,
+        #               segment, clip_id, seg_index). The sort uses the first
+        # three for deterministic tie-break (best score, earliest segment,
+        # earliest clip in input order).
+        scored: list[tuple] = []
         for clip_index, clip, seg_index, segment in candidates:
             score, m_start, m_end = _score_phrase_against_segment(phrase_clean, segment.text)
-            mr = MatchResult(
-                phrase=phrase_clean,
-                clip_id=clip.id,
-                segment_index=seg_index,
-                segment=segment,
-                score=score,
-                match_start=m_start,
-                match_end=m_end,
-            )
-            # Sort key projects (-score, start_time, clip_index) — MatchResult
-            # itself is never compared because the lambda below picks indices
-            # 0/2/1 only. Deterministic tie-break: best score wins, then
-            # earliest segment in the source, then earliest clip in the
-            # candidate list.
-            scored.append((-score, clip_index, segment.start_time, mr))
+            scored.append((
+                -score, clip_index, segment.start_time,
+                score, m_start, m_end, segment, clip.id, seg_index,
+            ))
 
         scored.sort(key=lambda r: (r[0], r[2], r[1]))
-        results[phrase_clean] = [item[3] for item in scored[:count]]
+
+        results[phrase_clean] = [
+            MatchResult(
+                phrase=phrase_clean,
+                clip_id=item[7],
+                segment_index=item[8],
+                segment=item[6],
+                score=item[3],
+                match_start=item[4],
+                match_end=item[5],
+            )
+            for item in scored[:count]
+        ]
 
         logger.debug(
             "cassette_tape: phrase=%r returned %d matches (best score=%d)",
@@ -247,7 +284,7 @@ def build_sequence_data(
             logger.warning("cassette_tape: source not found for clip %s", clip.id)
             continue
 
-        fps = source.fps if source.fps and source.fps > 0 else 30.0
+        fps = safe_fps(source)
         in_frame = int(round(match.segment.start_time * fps))
         out_frame = int(round(match.segment.end_time * fps))
         if out_frame <= in_frame:

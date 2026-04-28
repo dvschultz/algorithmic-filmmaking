@@ -1280,24 +1280,41 @@ class SequenceTab(BaseTab):
 
     @Slot(list)
     def _apply_signature_style_sequence(self, sequence_data: list):
-        """Apply the sequence from Signature Style dialog.
+        """Apply the sequence from Signature Style dialog."""
+        self._apply_dialog_sequence_trimmed(
+            sequence_data,
+            algorithm_key="signature_style",
+            display_label="Signature Style",
+            allow_repeats=True,
+        )
 
-        The dialog emits (Clip, Source, in_point, out_point) tuples
-        to support clip trimming based on drawing segment durations.
+    def _apply_dialog_sequence_trimmed(
+        self,
+        sequence_data: list,
+        *,
+        algorithm_key: str,
+        display_label: str,
+        allow_repeats: bool,
+    ):
+        """Apply a dialog sequence emitted as ``(Clip, Source, in_point, out_point)`` tuples.
+
+        Shared by Signature Style and Cassette Tape — both dialogs trim sub-clips
+        with frame offsets relative to ``clip.start_frame``. Adds clips to track 0
+        in order, sets the algorithm metadata on the sequence, and refreshes the
+        chromatic bar / dropdown / preview.
         """
         if not sequence_data:
-            logger.warning("No clips in Signature Style sequence")
+            logger.warning("No clips in %s sequence", display_label)
             return
 
         try:
-            from models.sequence import SequenceClip
+            from core.remix.cassette_tape import safe_fps
 
-            self._create_and_activate_sequence("signature_style")
+            self._create_and_activate_sequence(algorithm_key)
             self.timeline.clear_timeline()
 
             first_clip, first_source, _, _ = sequence_data[0]
-            fps = first_source.fps
-            self.timeline.set_fps(fps)
+            self.timeline.set_fps(safe_fps(first_source))
             self.video_player.load_video(first_source.file_path)
 
             current_frame = 0
@@ -1311,37 +1328,34 @@ class SequenceTab(BaseTab):
                     out_point=clip.start_frame + out_point,
                     thumbnail_path=str(clip.thumbnail_path) if clip.thumbnail_path else None,
                 )
-                duration_frames = out_point - in_point
-                current_frame += duration_frames
+                current_frame += out_point - in_point
                 self.clip_added.emit(clip, source)
 
-            # Build (Clip, Source) list for timeline preview
             preview_clips = [(clip, source) for clip, source, _, _ in sequence_data]
             self.timeline_preview.set_clips(preview_clips, self._sources)
             self.timeline._on_zoom_fit()
 
             self.algorithm_dropdown.blockSignals(True)
-            display_label = "Signature Style"
             if self.algorithm_dropdown.findText(display_label) == -1:
                 self.algorithm_dropdown.addItem(display_label)
             self.algorithm_dropdown.setCurrentText(display_label)
             self.algorithm_dropdown.blockSignals(False)
 
-            self._current_algorithm = "signature_style"
+            self._current_algorithm = algorithm_key
 
             sequence = self.timeline.get_sequence()
-            sequence.algorithm = "signature_style"
-            sequence.allow_repeats = True
-            self._apply_chromatic_bar_to_sequence("signature_style")
-            self._update_chromatic_bar_controls("signature_style")
+            sequence.algorithm = algorithm_key
+            sequence.allow_repeats = allow_repeats
+            self._apply_chromatic_bar_to_sequence(algorithm_key)
+            self._update_chromatic_bar_controls(algorithm_key)
             self._emit_chromatic_bar_setting_changed()
 
             self._set_state(self.STATE_TIMELINE)
 
-            logger.info(f"Applied {len(sequence_data)} clips from Signature Style")
+            logger.info("Applied %d clips from %s", len(sequence_data), display_label)
 
         except Exception as e:
-            logger.error(f"Error applying Signature Style sequence: {e}")
+            logger.error("Error applying %s sequence: %s", display_label, e)
             QMessageBox.critical(self, "Error", f"Failed to apply sequence: {e}")
 
         finally:
@@ -1367,74 +1381,14 @@ class SequenceTab(BaseTab):
         dialog.exec()
 
     @Slot(list)
-    def _apply_cassette_tape_sequence(self, sequence_data: list[tuple]):
-        """Apply the sequence from the Cassette Tape dialog.
-
-        The dialog emits ``(Clip, Source, in_point, out_point)`` tuples where
-        in/out are frame offsets relative to ``clip.start_frame`` — same
-        convention as Signature Style.
-        """
-        if not sequence_data:
-            logger.warning("No clips in Cassette Tape sequence")
-            return
-
-        try:
-            self._create_and_activate_sequence("cassette_tape")
-            self.timeline.clear_timeline()
-
-            first_clip, first_source, _, _ = sequence_data[0]
-            # Defensive: a Source with fps<=0 (corrupted metadata, failed probe)
-            # would propagate divide-by-zero into the timeline scene.
-            # build_sequence_data has the same fallback; mirror it here.
-            fps = first_source.fps if first_source.fps and first_source.fps > 0 else 30.0
-            self.timeline.set_fps(fps)
-            self.video_player.load_video(first_source.file_path)
-
-            current_frame = 0
-            for clip, source, in_point, out_point in sequence_data:
-                self.timeline.scene.add_clip_to_track(
-                    track_index=0,
-                    source_clip_id=clip.id,
-                    source_id=source.id,
-                    start_frame=current_frame,
-                    in_point=clip.start_frame + in_point,
-                    out_point=clip.start_frame + out_point,
-                    thumbnail_path=str(clip.thumbnail_path) if clip.thumbnail_path else None,
-                )
-                duration_frames = out_point - in_point
-                current_frame += duration_frames
-                self.clip_added.emit(clip, source)
-
-            preview_clips = [(clip, source) for clip, source, _, _ in sequence_data]
-            self.timeline_preview.set_clips(preview_clips, self._sources)
-            self.timeline._on_zoom_fit()
-
-            self.algorithm_dropdown.blockSignals(True)
-            display_label = "Cassette Tape"
-            if self.algorithm_dropdown.findText(display_label) == -1:
-                self.algorithm_dropdown.addItem(display_label)
-            self.algorithm_dropdown.setCurrentText(display_label)
-            self.algorithm_dropdown.blockSignals(False)
-
-            self._current_algorithm = "cassette_tape"
-
-            sequence = self.timeline.get_sequence()
-            sequence.algorithm = "cassette_tape"
-            sequence.allow_repeats = False
-            self._apply_chromatic_bar_to_sequence("cassette_tape")
-            self._update_chromatic_bar_controls("cassette_tape")
-            self._emit_chromatic_bar_setting_changed()
-
-            self._set_state(self.STATE_TIMELINE)
-
-            logger.info(f"Applied {len(sequence_data)} sub-clips from Cassette Tape")
-
-        except Exception as e:
-            logger.error(f"Error applying Cassette Tape sequence: {e}")
-            QMessageBox.critical(self, "Error", f"Failed to apply sequence: {e}")
-
-        finally:
-            self._algorithm_running = False
+    def _apply_cassette_tape_sequence(self, sequence_data: list):
+        """Apply the sequence from the Cassette Tape dialog."""
+        self._apply_dialog_sequence_trimmed(
+            sequence_data,
+            algorithm_key="cassette_tape",
+            display_label="Cassette Tape",
+            allow_repeats=False,
+        )
 
     def _show_rose_hobart_dialog(self, clips: list):
         """Show the Rose Hobart dialog for face-filter sequencing.

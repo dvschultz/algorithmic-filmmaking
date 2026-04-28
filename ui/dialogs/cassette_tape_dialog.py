@@ -14,6 +14,7 @@ matching the convention used by Signature Style.
 from __future__ import annotations
 
 import logging
+from html import escape as html_escape
 from typing import Optional
 
 from PySide6.QtCore import Qt, Signal
@@ -37,9 +38,13 @@ from PySide6.QtWidgets import (
 
 from core.remix.cassette_tape import (
     MatchResult,
+    SLIDER_DEFAULT,
+    SLIDER_MAX,
+    SLIDER_MIN,
     build_sequence_data,
     flatten_matches_in_phrase_order,
     match_phrases,
+    safe_fps,
 )
 from models.clip import Clip
 from ui.theme import UISizes, theme
@@ -53,9 +58,8 @@ CONFIDENCE_HIGH = 80
 CONFIDENCE_MID = 50
 
 # Slider range
-SLIDER_MIN = 1
-SLIDER_MAX = 5
-SLIDER_DEFAULT = 3
+# Slider range constants live in core/remix/cassette_tape.py so the agent
+# tool and the dialog stay in sync. Imported above.
 DEFAULT_PHRASE_ROWS = 3
 
 
@@ -211,10 +215,10 @@ class _MatchRow(QWidget):
     def _score_color(score: int) -> str:
         t = theme()
         if score >= CONFIDENCE_HIGH:
-            return getattr(t, "accent_green", "#5cb85c")
+            return t.accent_green
         if score >= CONFIDENCE_MID:
-            return getattr(t, "accent_yellow", "#f0ad4e")
-        return getattr(t, "accent_red", "#d9534f")
+            return t.accent_orange  # mid-tier; theme has no separate yellow
+        return t.accent_red
 
     @staticmethod
     def _build_snippet_html(match: MatchResult) -> str:
@@ -223,22 +227,14 @@ class _MatchRow(QWidget):
         start = match.match_start
         end = match.match_end
         if 0 <= start < end <= len(text):
-            before = _escape_html(text[:start])
-            hit = _escape_html(text[start:end])
-            after = _escape_html(text[end:])
+            before = html_escape(text[:start])
+            hit = html_escape(text[start:end])
+            after = html_escape(text[end:])
             return f'{before}<b style="color: {theme().accent_blue};">{hit}</b>{after}'
-        return _escape_html(text)
+        return html_escape(text)
 
     def is_enabled(self) -> bool:
         return self.checkbox.isChecked()
-
-
-def _escape_html(text: str) -> str:
-    return (
-        text.replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-    )
 
 
 class CassetteTapeDialog(QDialog):
@@ -281,6 +277,9 @@ class CassetteTapeDialog(QDialog):
             c for c in clips
             if c.transcript and not c.disabled
         ]
+        self._setup_no_transcripts = not self.transcribed_clips
+        # Cache id->Clip lookup once; used by both review and finish paths.
+        self._clips_by_id = {c.id: c for c in clips}
 
         self.setWindowTitle("Cassette Tape")
         self.setMinimumSize(700, 600)
@@ -337,14 +336,13 @@ class CassetteTapeDialog(QDialog):
         header.setFont(header_font)
         layout.addWidget(header)
 
-        if not self.transcribed_clips:
+        if self._setup_no_transcripts:
             warn = QLabel(
                 "This project has no transcribed clips. Run Analyze → Transcribe first."
             )
             warn.setWordWrap(True)
             warn.setStyleSheet(f"color: {theme().accent_red};")
             layout.addWidget(warn)
-            self._setup_no_transcripts = True
         else:
             info = QLabel(
                 f"Find clips that say specific phrases. "
@@ -353,7 +351,6 @@ class CassetteTapeDialog(QDialog):
             )
             info.setWordWrap(True)
             layout.addWidget(info)
-            self._setup_no_transcripts = False
 
         layout.addSpacing(12)
 
@@ -472,15 +469,17 @@ class CassetteTapeDialog(QDialog):
         row.deleteLater()
         self._update_next_btn_enabled()
 
-    def _phrases_with_counts(self) -> list[tuple[str, int]]:
-        """Collect non-empty phrase rows, deduping by phrase text.
+    def _collect_phrase_entries(self) -> tuple[list[tuple[str, int]], bool]:
+        """Single-pass collect of non-empty phrase rows, deduping case-insensitively.
 
-        Two rows reading the same phrase (case-insensitive) would otherwise
-        collide on the dict key in match_phrases and silently drop one row's
-        intent. Merge them into a single entry, taking the *max* of the two
-        counts (the user gets at least what the larger slider asked for).
+        Returns ``(entries, had_duplicates)`` where ``entries`` preserves the
+        first-occurrence original-case spelling and merges duplicate phrases
+        with ``max(count)``, and ``had_duplicates`` is True when at least one
+        row was merged into an earlier one. The merge prevents the dict-key
+        collision in match_phrases that would otherwise silently drop a row.
         """
-        merged: dict[str, int] = {}
+        merged: dict[str, list] = {}  # casefold -> [original_phrase, max_count]
+        had_duplicates = False
         for row in self.phrase_rows:
             phrase = row.phrase()
             if not phrase:
@@ -488,35 +487,16 @@ class CassetteTapeDialog(QDialog):
             key = phrase.casefold()
             count = row.count()
             if key in merged:
-                merged[key] = max(merged[key], count)
+                merged[key][1] = max(merged[key][1], count)
+                had_duplicates = True
             else:
-                merged[key] = count
-        # Preserve the original-case spelling of the first occurrence by
-        # walking the rows again in order.
-        seen: set[str] = set()
-        out: list[tuple[str, int]] = []
-        for row in self.phrase_rows:
-            phrase = row.phrase()
-            if not phrase:
-                continue
-            key = phrase.casefold()
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append((phrase, merged[key]))
-        return out
+                merged[key] = [phrase, count]
+        return [(orig, cnt) for orig, cnt in merged.values()], had_duplicates
 
-    def _has_duplicate_phrase_rows(self) -> bool:
-        seen: set[str] = set()
-        for row in self.phrase_rows:
-            phrase = row.phrase()
-            if not phrase:
-                continue
-            key = phrase.casefold()
-            if key in seen:
-                return True
-            seen.add(key)
-        return False
+    def _phrases_with_counts(self) -> list[tuple[str, int]]:
+        """Public-shape compatibility wrapper for tests / external callers."""
+        entries, _ = self._collect_phrase_entries()
+        return entries
 
     # ---------- Navigation / state ----------
 
@@ -592,11 +572,11 @@ class CassetteTapeDialog(QDialog):
     # ---------- Matching ----------
 
     def _start_matching(self):
-        phrases = self._phrases_with_counts()
+        phrases, had_duplicates = self._collect_phrase_entries()
         if not phrases:
             return
 
-        if self._has_duplicate_phrase_rows():
+        if had_duplicates:
             QMessageBox.information(
                 self,
                 "Cassette Tape — duplicate phrases",
@@ -620,14 +600,11 @@ class CassetteTapeDialog(QDialog):
         self.worker.start()
 
     def _on_matches_ready(self, results):
-        # results is list[tuple[str, list[MatchResult]]] ordered by user input.
-        # Store as dict (Python dicts preserve insertion order) so downstream
-        # code that iterates .items() / .values() sees the user's phrase order.
-        if isinstance(results, dict):
-            # Defensive: tolerate the legacy dict shape if any caller still uses it.
-            self.matches_by_phrase = results
-        else:
-            self.matches_by_phrase = dict(results)
+        # results is list[tuple[str, list[MatchResult]]] from the worker.
+        # Rebuild a dict (insertion-ordered) so downstream iteration preserves
+        # the user's phrase entry order — see the matches_ready signal note
+        # above for why a dict can't be sent across the thread boundary.
+        self.matches_by_phrase = dict(results)
         self._populate_review_page()
         self.stack.setCurrentIndex(self.PAGE_REVIEW)
         self._update_nav_buttons()
@@ -645,17 +622,16 @@ class CassetteTapeDialog(QDialog):
     # ---------- Review page ----------
 
     def _populate_review_page(self):
-        # Clear existing rows
-        while self.review_layout.count() > 1:  # keep trailing stretch
-            item = self.review_layout.takeAt(0)
+        # Clear existing rows. Take from the back to avoid the O(n²) index
+        # shifts that takeAt(0) would cause; keep the trailing stretch.
+        while self.review_layout.count() > 1:
+            item = self.review_layout.takeAt(self.review_layout.count() - 2)
             w = item.widget()
             if w:
                 w.deleteLater()
         self._match_rows = []
 
-        clips_by_id = {c.id: c for c in self.all_clips}
         total_matches = 0
-
         for phrase, matches in self.matches_by_phrase.items():
             group_label = QLabel(f"“{phrase}”  ({len(matches)} match{'es' if len(matches) != 1 else ''})")
             group_font = QFont()
@@ -671,13 +647,7 @@ class CassetteTapeDialog(QDialog):
                 continue
 
             for match in matches:
-                clip = clips_by_id.get(match.clip_id)
-                source = self.sources_by_id.get(clip.source_id) if clip else None
-                clip_name = clip.display_name(
-                    source.file_path.name if source and source.file_path else "",
-                    source.fps if source else 30.0,
-                ) if clip else match.clip_id
-                row = _MatchRow(match, clip_name)
+                row = _MatchRow(match, self._clip_display_name(match))
                 row.checkbox.stateChanged.connect(lambda _: self._update_next_btn_enabled())
                 self._match_rows.append(row)
                 self.review_layout.insertWidget(self.review_layout.count() - 1, row)
@@ -688,6 +658,14 @@ class CassetteTapeDialog(QDialog):
             f"{sum(1 for v in self.matches_by_phrase.values() if v)} phrase(s). "
             f"Toggle off any you don't want before generating."
         )
+
+    def _clip_display_name(self, match: MatchResult) -> str:
+        clip = self._clips_by_id.get(match.clip_id)
+        if clip is None:
+            return match.clip_id
+        source = self.sources_by_id.get(clip.source_id)
+        file_name = source.file_path.name if source and source.file_path else ""
+        return clip.display_name(file_name, safe_fps(source))
 
     def _any_match_enabled(self) -> bool:
         return any(r.is_enabled() for r in self._match_rows)
@@ -701,8 +679,7 @@ class CassetteTapeDialog(QDialog):
             if r.is_enabled()
         }
         flat = flatten_matches_in_phrase_order(self.matches_by_phrase, enabled_keys)
-        clips_by_id = {c.id: c for c in self.all_clips}
-        sequence_data = build_sequence_data(flat, clips_by_id, self.sources_by_id)
+        sequence_data = build_sequence_data(flat, self._clips_by_id, self.sources_by_id)
 
         if not sequence_data:
             logger.warning("Cassette Tape: no enabled matches to emit")
