@@ -78,6 +78,47 @@ class TestScorePhraseAgainstSegment:
         # The highlighted span must contain the (case-preserved) word.
         assert "İstanbul" in text[start:end]
 
+    def test_short_segment_does_not_score_100_against_long_phrase(self):
+        """Regression for the asymmetric-partial_ratio bug. partial_ratio
+        aligns the shorter string against substrings of the longer; a
+        1-char segment like 'I' would score 100 against any phrase
+        containing 'I'. After the length-branch fix, short segments get
+        whole-string ratio scoring (length-penalized) so they can't fake
+        a perfect match."""
+        score, _, _ = _score_phrase_against_segment("I love you", "I")
+        assert score < 50, f"single-char segment should not score 100 (got {score})"
+
+    def test_single_char_a_does_not_match_long_phrase(self):
+        score, _, _ = _score_phrase_against_segment("thank you very much", "a")
+        # 'a' is below the noise floor, hard-zeroed.
+        assert score == 0
+
+    def test_noise_floor_drops_two_char_segments(self):
+        """Segments under 3 chars are forced to score 0 — Whisper
+        artifacts like single letters or punctuation should not surface
+        as matches."""
+        for noisy in ["a", ".", "uh", "I"]:
+            score, _, _ = _score_phrase_against_segment("hello world", noisy)
+            assert score == 0, f"noise '{noisy}' scored {score}, expected 0"
+
+    def test_segment_just_under_phrase_length_uses_ratio(self):
+        """When segment is shorter than phrase but still substantive,
+        ratio is used (not partial_ratio). Score should be high but not
+        the inflated 100 partial_ratio would have given."""
+        # phrase 13 chars, segment 9 chars, both meaningful
+        score, _, _ = _score_phrase_against_segment("hello there mate", "hello there")
+        # ratio gives length-penalized score, partial_ratio would give 100
+        assert 50 <= score < 100
+
+    def test_segment_longer_than_phrase_still_uses_partial_ratio(self):
+        """Don't regress the original behavior: phrase-inside-longer-segment
+        still scores 100."""
+        score, start, end = _score_phrase_against_segment(
+            "thank you", "well thank you for coming today"
+        )
+        assert score >= 95
+        assert start >= 0 and end > start
+
 
 class TestMatchPhrasesHappyPaths:
     def test_phrase_thank_you_finds_match(self):

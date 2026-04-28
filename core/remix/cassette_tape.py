@@ -42,6 +42,14 @@ class MatchResult:
     match_end: int  # substring end in segment.text (chars), or -1 if unknown
 
 
+_MIN_SEGMENT_CHARS = 3
+"""Floor for transcript segment length. Segments shorter than this are
+treated as noise (Whisper often emits single-char artifacts on silent or
+near-silent clips: "a", ".", "uh"). They aren't excluded from the
+candidate set — empty-text exclusion still happens earlier — but their
+score is forced to 0 so they don't surface as matches."""
+
+
 def _score_phrase_against_segment(phrase: str, segment_text: str) -> tuple[int, int, int]:
     """Score a phrase against a segment's text.
 
@@ -51,20 +59,56 @@ def _score_phrase_against_segment(phrase: str, segment_text: str) -> tuple[int, 
     lowercase form has a different length (e.g., Turkish dotted-I, German ß
     in a casefold scenario).
 
-    We pass ``processor=str.lower`` to rapidfuzz so it lowercases internally
-    for scoring, while ``partial_ratio_alignment`` returns indices into the
-    *original* strings — which is exactly what we need for highlight
-    rendering. Returns ``(0, -1, -1)`` for empty inputs or when alignment
-    fails.
+    Scoring is length-aware to fix `partial_ratio`'s asymmetric bias:
+
+    - When the segment is **at least** as long as the phrase, use
+      ``partial_ratio`` so a phrase appearing inside a longer segment
+      ("thank you" inside "well thank you for coming") scores high.
+    - When the segment is **shorter** than the phrase, fall back to
+      ``ratio`` (length-penalized whole-string Levenshtein) so a single-
+      character segment like "a" or "the" cannot score 100 against a
+      multi-word phrase that happens to contain that token. Without this
+      branch, ``partial_ratio`` would invert the intent: it aligns the
+      shorter string (the segment) against substrings of the longer (the
+      phrase), so any segment that appears verbatim inside the phrase
+      scores 100 — which is the opposite of what the user wants.
+
+    Segments under :data:`_MIN_SEGMENT_CHARS` characters (after strip) are
+    treated as noise and forced to score 0; Whisper emits these on silent
+    clips as hallucination artifacts.
+
+    We pass ``processor=str.lower`` to rapidfuzz so it lowercases
+    internally for scoring, while alignment indices remain valid against
+    the *original* strings. Returns ``(0, -1, -1)`` for empty inputs or
+    when alignment fails.
     """
     if not phrase or not segment_text:
         return 0, -1, -1
 
+    # Noise floor: very short segments cannot meaningfully "say" the phrase.
+    if len(segment_text.strip()) < _MIN_SEGMENT_CHARS:
+        return 0, -1, -1
+
     from rapidfuzz import fuzz
 
-    score = -1
+    score = 0
     match_start = -1
     match_end = -1
+
+    # Length-branch: segments shorter than the phrase get whole-string ratio
+    # (penalises length difference) instead of partial_ratio (which would
+    # match the segment as a substring of the phrase — wrong direction).
+    if len(segment_text) < len(phrase):
+        try:
+            score = int(round(fuzz.ratio(phrase, segment_text, processor=str.lower)))
+        except Exception:
+            logger.debug("rapidfuzz ratio failed", exc_info=True)
+            score = 0
+        # No meaningful sub-region to highlight when scoring whole-string;
+        # let the UI render the full segment text.
+        return score, 0, len(segment_text)
+
+    # Segment is at least as long as the phrase — partial_ratio is correct.
     try:
         alignment = fuzz.partial_ratio_alignment(
             phrase, segment_text, processor=str.lower
@@ -77,13 +121,10 @@ def _score_phrase_against_segment(phrase: str, segment_text: str) -> tuple[int, 
         alignment = None
 
     if alignment is not None:
-        # alignment.score is 0-100 already; round to int so callers see a
-        # stable badge value. dest_start/dest_end index into segment_text.
         score = int(round(alignment.score))
         match_start = int(alignment.dest_start)
         match_end = int(alignment.dest_end)
     else:
-        # Score-only fallback when alignment is unavailable for any reason.
         try:
             score = int(round(fuzz.partial_ratio(phrase, segment_text, processor=str.lower)))
         except Exception:
