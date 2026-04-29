@@ -35,6 +35,7 @@ class ProjectSignalAdapter(QObject):
     clips_removed = Signal(list)        # list[Clip]
     frames_removed = Signal(list)       # list[Frame]
     sequence_changed = Signal(list)     # list[str] clip_ids
+    audio_sources_changed = Signal(list)  # list[AudioSource]
     project_saved = Signal(object)      # Path
     project_loaded = Signal()           # (no data)
     project_cleared = Signal()          # (no data)
@@ -92,6 +93,8 @@ class ProjectSignalAdapter(QObject):
             self.frames_removed.emit(data)
         elif event == "sequence_changed":
             self.sequence_changed.emit(data)
+        elif event == "audio_sources_changed":
+            self.audio_sources_changed.emit(data)
         elif event == "project_saved":
             self.project_saved.emit(data)
         elif event == "project_loaded":

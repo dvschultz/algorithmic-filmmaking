@@ -760,6 +760,10 @@ class MainWindow(QMainWindow):
         self._project_adapter.source_updated.connect(self._on_source_updated)
         self._project_adapter.frames_removed.connect(self._on_frames_removed)
         self._project_adapter.sequence_changed.connect(lambda _: self._refresh_timeline_from_project())
+        self._project_adapter.audio_sources_changed.connect(self._on_audio_sources_changed)
+
+        # Active audio import workers (kept alive while running)
+        self._active_audio_imports: set = set()
 
         # UI state (not part of Project - these are GUI-specific selections)
         self.current_source: Optional[Source] = None  # Currently active/selected source
@@ -1615,6 +1619,8 @@ class MainWindow(QMainWindow):
         """Connect UI signals."""
         # Collect tab signals
         self.collect_tab.videos_added.connect(self._on_videos_added)
+        self.collect_tab.audio_files_added.connect(self._on_audio_files_added)
+        self.collect_tab.audio_remove_requested.connect(self._on_audio_remove_requested)
         self.collect_tab.analyze_requested.connect(self._on_analyze_requested)
         self.collect_tab.source_selected.connect(self._on_source_selected)
         self.collect_tab.download_requested.connect(self._on_download_requested_from_tab)
@@ -3198,6 +3204,49 @@ class MainWindow(QMainWindow):
         self._update_chat_project_state()
 
         self.status_bar.showMessage(f"Added to library: {path.name}")
+
+    def _on_audio_files_added(self, paths: list[Path]):
+        """Spawn an AudioImportWorker for each picked audio file."""
+        from ui.workers.audio_import_worker import AudioImportWorker
+
+        # Reject duplicates by file path (matches video import behavior)
+        existing_paths = {a.file_path for a in self.project.audio_sources}
+
+        for path in paths:
+            if path in existing_paths:
+                self.status_bar.showMessage(f"Audio already in library: {path.name}")
+                continue
+
+            worker = AudioImportWorker(path, parent=self)
+            self._active_audio_imports.add(worker)
+
+            worker.audio_ready.connect(self._on_audio_imported)
+            worker.error.connect(self._on_audio_import_error)
+            worker.finished_signal.connect(
+                lambda w=worker: self._active_audio_imports.discard(w)
+            )
+            worker.start()
+
+    def _on_audio_imported(self, audio):
+        """Handle a successful audio import — add to project."""
+        self.project.add_audio_source(audio)
+        self._update_chat_project_state()
+        self.status_bar.showMessage(f"Audio added: {audio.filename}")
+
+    def _on_audio_import_error(self, message: str):
+        """Show audio import errors in the status bar."""
+        self.status_bar.showMessage(f"Audio import failed: {message}")
+
+    def _on_audio_remove_requested(self, audio_source_id: str):
+        """Remove an audio source from the project."""
+        removed = self.project.remove_audio_source(audio_source_id)
+        if removed is not None:
+            self._update_chat_project_state()
+            self.status_bar.showMessage(f"Audio removed: {removed.filename}")
+
+    def _on_audio_sources_changed(self, audio_sources):
+        """Refresh the Collect tab's audio library when project state changes."""
+        self.collect_tab.set_audio_sources(audio_sources)
 
     def _generate_source_thumbnail(self, source: Source):
         """Generate a thumbnail for a source video (first frame)."""
@@ -9583,6 +9632,9 @@ class MainWindow(QMainWindow):
             if not source.thumbnail_path or not source.thumbnail_path.exists():
                 self._generate_source_thumbnail(source)
 
+        # Restore audio sources in the Collect tab
+        self.collect_tab.set_audio_sources(self.project.audio_sources)
+
         # Set first source as current (for backwards compatibility)
         self.current_source = self.sources[0]
 
@@ -9747,6 +9799,9 @@ class MainWindow(QMainWindow):
             # Generate source thumbnails if missing
             if not source.thumbnail_path or not source.thumbnail_path.exists():
                 self._generate_source_thumbnail(source)
+
+        # Restore audio sources in the Collect tab
+        self.collect_tab.set_audio_sources(self.project.audio_sources)
 
         # Set first source as current
         if self.sources:
