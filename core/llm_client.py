@@ -450,6 +450,48 @@ def normalize_model_for_litellm(model: str) -> str:
     return model
 
 
+def _ollama_api_base(settings) -> str:
+    return getattr(settings, "llm_api_base", "").strip() or "http://localhost:11434"
+
+
+def _ollama_model_name(model: str) -> str:
+    for prefix in ("ollama/", "ollama_chat/"):
+        if model.startswith(prefix):
+            return model.removeprefix(prefix)
+    return model
+
+
+def _local_llm_unavailable_message(
+    *,
+    model: str,
+    api_base: str,
+    original_error: Exception,
+    cloud_model: str | None = None,
+    cloud_error: Exception | None = None,
+    missing_api_key: bool = False,
+) -> str:
+    """Build a user-facing error for local Ollama failures."""
+    reason_prefix = ""
+    if missing_api_key and cloud_model:
+        reason_prefix = (
+            f"No API key is configured for {cloud_model}, so Scene Ripper tried "
+            "the local Ollama fallback. "
+        )
+    elif cloud_error is not None and cloud_model:
+        reason_prefix = (
+            f"The cloud model {cloud_model} failed with "
+            f"{type(cloud_error).__name__}, so Scene Ripper tried the local "
+            "Ollama fallback. "
+        )
+
+    return (
+        f"{reason_prefix}Cannot connect to local Ollama at {api_base} for "
+        f"model {model}. Start Ollama, run `ollama pull {_ollama_model_name(model)}`, "
+        "or configure a working cloud LLM/API key in Settings. "
+        f"Original error: {original_error}"
+    )
+
+
 def complete_with_local_fallback(
     *,
     model: str,
@@ -467,30 +509,39 @@ def complete_with_local_fallback(
     LiteLLM's `ollama/` provider. The api_base honors `settings.llm_api_base`
     when set, otherwise LiteLLM uses its Ollama default.
 
-    Returns the LiteLLM response object. Raises the original exception if the
-    cloud call fails with a non-recoverable error AND the local fallback also
-    fails (or isn't reachable).
+    Returns the LiteLLM response object. Raises a user-facing RuntimeError when
+    local Ollama is selected or used as fallback but is not reachable.
     """
     import litellm
     from core.settings import get_api_key_for_model, load_settings
 
     settings = load_settings()
     cloud_model = normalize_model_for_litellm(model)
+    api_base = _ollama_api_base(settings)
 
     # If the caller already targets a local model, just use it directly.
     if cloud_model.startswith(("ollama/", "ollama_chat/")):
         local_kwargs = dict(kwargs)
-        if settings.llm_api_base:
-            local_kwargs.setdefault("api_base", settings.llm_api_base)
-        return litellm.completion(
-            model=cloud_model,
-            messages=messages,
-            temperature=temperature,
-            **local_kwargs,
-        )
+        local_kwargs.setdefault("api_base", api_base)
+        try:
+            return litellm.completion(
+                model=cloud_model,
+                messages=messages,
+                temperature=temperature,
+                **local_kwargs,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                _local_llm_unavailable_message(
+                    model=cloud_model,
+                    api_base=api_base,
+                    original_error=exc,
+                )
+            ) from exc
 
     api_key = get_api_key_for_model(cloud_model)
     cloud_error: Optional[Exception] = None
+    missing_api_key = False
 
     if api_key:
         try:
@@ -513,6 +564,7 @@ def complete_with_local_fallback(
                 cloud_model, type(exc).__name__,
             )
     else:
+        missing_api_key = True
         logger.warning(
             "No API key configured for %s; using local Ollama fallback",
             cloud_model,
@@ -520,8 +572,7 @@ def complete_with_local_fallback(
 
     local_model = f"ollama/{settings.ollama_model}"
     fallback_kwargs = dict(kwargs)
-    if settings.llm_api_base:
-        fallback_kwargs.setdefault("api_base", settings.llm_api_base)
+    fallback_kwargs.setdefault("api_base", api_base)
 
     try:
         return litellm.completion(
@@ -531,13 +582,16 @@ def complete_with_local_fallback(
             **fallback_kwargs,
         )
     except Exception as local_exc:
-        if cloud_error is not None:
-            logger.error(
-                "Local Ollama fallback also failed: %s. Re-raising original cloud error.",
-                local_exc,
+        raise RuntimeError(
+            _local_llm_unavailable_message(
+                model=local_model,
+                api_base=api_base,
+                original_error=local_exc,
+                cloud_model=cloud_model,
+                cloud_error=cloud_error,
+                missing_api_key=missing_api_key,
             )
-            raise cloud_error
-        raise
+        ) from local_exc
 
 
 def create_provider_config_from_settings() -> ProviderConfig:

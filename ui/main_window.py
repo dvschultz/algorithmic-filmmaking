@@ -1978,7 +1978,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 "Cannot Delete",
-                f"The following sources have clips in sequences:\n"
+                "The following sources have clips in sequences:\n"
                 + "\n".join(lines)
                 + "\n\nDelete those sequences first.",
             )
@@ -3218,6 +3218,7 @@ class MainWindow(QMainWindow):
             if path in existing_paths:
                 self.status_bar.showMessage(f"Audio already in library: {path.name}")
                 continue
+            existing_paths.add(path)
 
             worker = AudioImportWorker(path, parent=self)
             self._active_audio_imports.add(worker)
@@ -5271,6 +5272,12 @@ class MainWindow(QMainWindow):
         # If agent was waiting for detection, send result back
         if self._pending_agent_detection and self._chat_worker:
             self._pending_agent_detection = False
+            if self.current_source:
+                current_source_clips = self.project.clips_by_source.get(
+                    self.current_source.id, []
+                )
+            else:
+                current_source_clips = []
             clip_ids = [c.id for c in current_source_clips]
             result = {
                 "tool_call_id": self._pending_agent_tool_call_id,

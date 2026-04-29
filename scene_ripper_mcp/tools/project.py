@@ -2,7 +2,6 @@
 
 import json
 import logging
-from pathlib import Path
 from typing import Annotated
 
 from mcp.server.fastmcp import Context
@@ -133,7 +132,7 @@ async def detect_scenes(
             clips=clips,
             sequence=None,
             metadata=metadata,
-            audio_sources=audio_sources,
+            audio_sources=[],
         )
 
         if not success:
@@ -191,7 +190,7 @@ async def create_project(
             clips=[],
             sequence=None,
             metadata=metadata,
-            audio_sources=audio_sources,
+            audio_sources=[],
         )
 
         if success:

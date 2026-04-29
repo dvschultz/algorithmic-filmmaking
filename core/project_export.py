@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from core.project import save_project, Project
+from models.audio_source import AudioSource
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +35,12 @@ class ExportResult:
     dest_dir: Path = field(default_factory=Path)
     sources_copied: int = 0
     frames_copied: int = 0
+    audio_sources_copied: int = 0
     clips_exported: int = 0
     clips_skipped: int = 0
     sources_skipped: list[str] = field(default_factory=list)
     frames_skipped: list[str] = field(default_factory=list)
+    audio_sources_skipped: list[str] = field(default_factory=list)
     total_bytes: int = 0
     include_videos: bool = True
 
@@ -141,22 +144,26 @@ def export_project_bundle(
     # Create bundle directory structure
     sources_dir = dest_dir / "sources"
     frames_dir = dest_dir / "frames"
+    audio_dir = dest_dir / "audio"
     clips_dir = dest_dir / "clips"
     dest_dir.mkdir(parents=True)
     sources_dir.mkdir()
     frames_dir.mkdir()
+    audio_dir.mkdir()
     clips_dir.mkdir()
 
     try:
         # Build filename maps for collision resolution
         source_paths = [s.file_path for s in project.sources]
         frame_paths = [f.file_path for f in project.frames]
+        audio_paths = [a.file_path for a in project.audio_sources]
 
         source_name_map = _build_filename_map(source_paths, "sources")
         frame_name_map = _build_filename_map(frame_paths, "frames")
+        audio_name_map = _build_filename_map(audio_paths, "audio")
 
         # Count total files to process for progress
-        total_files = len(project.frames) + len(project.clips)
+        total_files = len(project.frames) + len(project.clips) + len(project.audio_sources)
         if include_videos:
             total_files += len(project.sources)
         current_file = 0
@@ -183,6 +190,29 @@ def export_project_bundle(
             current_file += 1
             if progress_callback:
                 progress_callback(current_file, total_files, frame.file_path.name)
+
+        # Copy audio source files
+        for audio in project.audio_sources:
+            if cancel_check and cancel_check():
+                _cleanup_partial_bundle(dest_dir)
+                return result
+
+            bundle_rel = audio_name_map.get(audio.file_path)
+            if bundle_rel is None:
+                continue
+
+            dest_path = dest_dir / bundle_rel
+            if audio.file_path.exists():
+                shutil.copy2(audio.file_path, dest_path)
+                result.audio_sources_copied += 1
+                result.total_bytes += audio.file_path.stat().st_size
+            else:
+                result.audio_sources_skipped.append(str(audio.file_path))
+                logger.warning(f"Audio file missing, skipped: {audio.file_path}")
+
+            current_file += 1
+            if progress_callback:
+                progress_callback(current_file, total_files, audio.file_path.name)
 
         # Export trimmed clips using FFmpeg
         if project.clips:
@@ -241,6 +271,14 @@ def export_project_bundle(
             rewritten = replace(frame, file_path=Path(bundle_rel))
             rewritten_frames.append(rewritten)
 
+        # Build rewritten AudioSource objects
+        rewritten_audio_sources: list[AudioSource] = []
+        for audio in project.audio_sources:
+            bundle_rel = audio_name_map.get(audio.file_path, f"audio/{audio.filename}")
+            from dataclasses import replace
+            rewritten = replace(audio, file_path=Path(bundle_rel))
+            rewritten_audio_sources.append(rewritten)
+
         # Save the project file into the bundle
         project_name = project.metadata.name or "Untitled Project"
         project_filename = f"{project_name}.sceneripper"
@@ -255,6 +293,7 @@ def export_project_bundle(
             project,
             rewritten_sources,
             rewritten_frames,
+            rewritten_audio_sources,
         )
 
         # Strip _absolute_path fields from the exported JSON
@@ -349,6 +388,7 @@ def _write_bundle_project_file(
     project: Project,
     rewritten_sources,
     rewritten_frames,
+    rewritten_audio_sources,
 ) -> None:
     """Write the project JSON with rewritten paths.
 
@@ -364,7 +404,7 @@ def _write_bundle_project_file(
         ui_state=project.ui_state,
         metadata=project.metadata,
         frames=rewritten_frames,
-        audio_sources=project.audio_sources,
+        audio_sources=rewritten_audio_sources,
     )
 
 

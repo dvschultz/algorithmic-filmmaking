@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -188,6 +189,47 @@ def test_collect_tab_audio_remove_signal_propagates(qapp, make_audio):
     # Simulate the inner library widget firing its remove signal
     tab.audio_library.remove_requested.emit("a1")
     assert emissions == ["a1"]
+
+
+def test_main_window_audio_import_deduplicates_single_batch(tmp_path, monkeypatch):
+    from core.project import Project
+    from ui.main_window import MainWindow
+
+    class DummySignal:
+        def connect(self, *_args, **_kwargs):
+            return None
+
+    started_paths = []
+
+    class FakeAudioImportWorker:
+        def __init__(self, path, parent=None):
+            self.path = path
+            self.audio_ready = DummySignal()
+            self.error = DummySignal()
+            self.finished_signal = DummySignal()
+
+        def start(self):
+            started_paths.append(self.path)
+
+    project = Project.new()
+    window = SimpleNamespace(
+        project=project,
+        _active_audio_imports=set(),
+        _on_audio_imported=lambda *_args, **_kwargs: None,
+        _on_audio_import_error=lambda *_args, **_kwargs: None,
+        status_bar=SimpleNamespace(showMessage=lambda *_args, **_kwargs: None),
+    )
+    audio_file = tmp_path / "song.wav"
+    audio_file.write_bytes(b"")
+
+    monkeypatch.setattr(
+        "ui.workers.audio_import_worker.AudioImportWorker",
+        FakeAudioImportWorker,
+    )
+
+    MainWindow._on_audio_files_added(window, [audio_file, audio_file])
+
+    assert started_paths == [audio_file]
 
 
 def test_audio_format_helpers():

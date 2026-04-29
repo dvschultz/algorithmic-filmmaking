@@ -35,14 +35,13 @@ from core.analysis.audio import (
     analyze_music_file,
     make_onset_detection_config,
 )
+from core.audio_formats import AUDIO_FILE_DIALOG_FILTER as _AUDIO_FORMATS
 from core.remix.staccato import generate_staccato_sequence
 from ui.theme import theme, Spacing, TypeScale, UISizes
 from ui.widgets.waveform_widget import WaveformWidget
 from ui.workers.base import CancellableWorker
 
 logger = logging.getLogger(__name__)
-
-from core.audio_formats import AUDIO_FILE_DIALOG_FILTER as _AUDIO_FORMATS
 
 
 class StaccatoAnalyzeWorker(CancellableWorker):
@@ -621,7 +620,12 @@ class StaccatoDialog(QDialog):
 
         return page
 
-    def _populate_audio_combo(self) -> None:
+    def _populate_audio_combo(
+        self,
+        *,
+        selected_audio_source_id: str | None = None,
+        analyze_selection: bool = True,
+    ) -> None:
         """Populate the audio-source combo from the project + the Import-new item."""
         self._audio_combo.blockSignals(True)
         self._audio_combo.clear()
@@ -643,17 +647,20 @@ class StaccatoDialog(QDialog):
         self._audio_combo.insertSeparator(self._audio_combo.count())
         self._audio_combo.addItem("Import new…", self._IMPORT_NEW_SENTINEL)
 
-        # Default selection: first real audio source if one exists, else placeholder
+        # Default selection: requested source, first real source, or placeholder.
+        selected_index = 0
         if audio_sources:
-            self._audio_combo.setCurrentIndex(0)
-        else:
-            self._audio_combo.setCurrentIndex(0)
+            for index, audio in enumerate(audio_sources):
+                if audio.id == selected_audio_source_id:
+                    selected_index = index
+                    break
+        self._audio_combo.setCurrentIndex(selected_index)
 
         self._audio_combo.blockSignals(False)
 
         # Trigger analysis for the default selection (if any real source picked)
-        if audio_sources:
-            self._select_audio_source_by_id(audio_sources[0].id)
+        if audio_sources and analyze_selection:
+            self._select_audio_source_by_id(audio_sources[selected_index].id)
 
     def _select_audio_source_by_id(self, audio_source_id: str) -> None:
         """Switch the dialog to use the given audio source and re-analyze."""
@@ -727,13 +734,9 @@ class StaccatoDialog(QDialog):
         if self._project is not None:
             self._project.add_audio_source(audio)
         # Refresh the combo so the new source appears, then select it.
-        self._populate_audio_combo()
+        self._populate_audio_combo(selected_audio_source_id=audio.id)
         if self._project is not None:
-            # Find the index whose data matches the new id
-            for i in range(self._audio_combo.count()):
-                if self._audio_combo.itemData(i) == audio.id:
-                    self._audio_combo.setCurrentIndex(i)
-                    return
+            return
         # Project-less fallback (shouldn't really happen): use path directly
         self._music_path = audio.file_path
         self._info_label.setText("Analyzing audio...")

@@ -1,7 +1,6 @@
 """Unit and integration tests for project bundle export."""
 
 import json
-import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 
@@ -9,11 +8,11 @@ import pytest
 
 from core.project import Project, ProjectMetadata, load_project
 from core.project_export import (
-    ExportResult,
     _build_filename_map,
     _strip_absolute_paths,
     export_project_bundle,
 )
+from models.audio_source import AudioSource
 from models.clip import Source, Clip
 from models.frame import Frame
 from models.sequence import Sequence, SequenceClip
@@ -48,7 +47,27 @@ def _make_frame(tmp_path: Path, name: str = "frame_0001.png", source_id: str = N
     )
 
 
-def _make_project(sources=None, clips=None, frames=None, sequence=None, name="Test Project") -> Project:
+def _make_audio(tmp_path: Path, name: str = "song.mp3", size: int = 512) -> AudioSource:
+    """Create an AudioSource with a real file on disk."""
+    audio_file = tmp_path / name
+    audio_file.write_bytes(b"\x00" * size)
+    return AudioSource(
+        id=f"aud-{name}",
+        file_path=audio_file,
+        duration_seconds=120.0,
+        sample_rate=44100,
+        channels=2,
+    )
+
+
+def _make_project(
+    sources=None,
+    clips=None,
+    frames=None,
+    sequence=None,
+    audio_sources=None,
+    name="Test Project",
+) -> Project:
     """Create a Project with given data."""
     return Project(
         metadata=ProjectMetadata(name=name),
@@ -56,6 +75,7 @@ def _make_project(sources=None, clips=None, frames=None, sequence=None, name="Te
         clips=clips or [],
         frames=frames or [],
         sequence=sequence,
+        audio_sources=audio_sources or [],
     )
 
 
@@ -472,6 +492,7 @@ class TestExportThenLoadRoundTrip:
 
         source = _make_source(originals, "video.mp4")
         frame = _make_frame(originals, "f1.png", source_id=source.id)
+        audio = _make_audio(originals, "song.mp3")
         clip = Clip(
             id="clip-1",
             source_id=source.id,
@@ -496,6 +517,7 @@ class TestExportThenLoadRoundTrip:
             clips=[clip],
             frames=[frame],
             sequence=sequence,
+            audio_sources=[audio],
             name="RoundTrip",
         )
         dest = tmp_path / "RoundTrip-export"
@@ -504,7 +526,7 @@ class TestExportThenLoadRoundTrip:
 
         # Load the exported project
         project_file = dest / "RoundTrip.sceneripper"
-        loaded_sources, loaded_clips, loaded_seq, metadata, ui_state, loaded_frames, _audio = load_project(
+        loaded_sources, loaded_clips, loaded_seq, metadata, ui_state, loaded_frames, loaded_audio = load_project(
             project_file
         )
 
@@ -530,6 +552,16 @@ class TestExportThenLoadRoundTrip:
         assert loaded_frames[0].id == frame.id
         # Frame path resolves to bundle
         assert loaded_frames[0].file_path == dest / "frames" / "f1.png"
+
+        # Verify audio sources
+        assert len(loaded_audio) == 1
+        assert loaded_audio[0].id == audio.id
+        assert loaded_audio[0].file_path == dest / "audio" / "song.mp3"
+        assert loaded_audio[0].file_path.exists()
+
+        data = json.loads(project_file.read_text())
+        assert data["audio_sources"][0]["file_path"] == "audio/song.mp3"
+        assert "_absolute_path" not in data["audio_sources"][0]
 
         # Verify metadata
         assert metadata.name == "RoundTrip"

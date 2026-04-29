@@ -77,7 +77,7 @@ def describe(
     config = CLIConfig.load()
 
     try:
-        sources, clips, sequence, metadata, ui_state, _ = load_project(
+        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(
             filepath=project_file,
             missing_source_callback=lambda path, sid: None,
         )
@@ -178,6 +178,7 @@ def describe(
         sequence=sequence,
         ui_state=ui_state,
         metadata=metadata,
+        audio_sources=audio_sources,
     )
 
     if not success:
@@ -251,7 +252,7 @@ def colors(
         exit_with(ExitCode.DEPENDENCY_MISSING, f"Missing dependency: {e}")
 
     try:
-        sources, clips, sequence, metadata, ui_state, _ = load_project(
+        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(
             filepath=project_file,
             missing_source_callback=lambda path, sid: None,
         )
@@ -317,6 +318,7 @@ def colors(
         sequence=sequence,
         ui_state=ui_state,
         metadata=metadata,
+        audio_sources=audio_sources,
     )
 
     if not success:
@@ -387,7 +389,7 @@ def shots(
     config = CLIConfig.load()
 
     try:
-        sources, clips, sequence, metadata, ui_state, _ = load_project(
+        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(
             filepath=project_file,
             missing_source_callback=lambda path, sid: None,
         )
@@ -473,6 +475,7 @@ def shots(
         sequence=sequence,
         ui_state=ui_state,
         metadata=metadata,
+        audio_sources=audio_sources,
     )
 
     if not success:
@@ -563,7 +566,7 @@ def classify(
     config = CLIConfig.load()
 
     try:
-        sources, clips, sequence, metadata, ui_state, _ = load_project(
+        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(
             filepath=project_file,
             missing_source_callback=lambda path, sid: None,
         )
@@ -655,6 +658,7 @@ def classify(
         sequence=sequence,
         ui_state=ui_state,
         metadata=metadata,
+        audio_sources=audio_sources,
     )
 
     if not success:
@@ -737,7 +741,7 @@ def objects(
     config = CLIConfig.load()
 
     try:
-        sources, clips, sequence, metadata, ui_state, _ = load_project(
+        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(
             filepath=project_file,
             missing_source_callback=lambda path, sid: None,
         )
@@ -831,6 +835,7 @@ def objects(
         sequence=sequence,
         ui_state=ui_state,
         metadata=metadata,
+        audio_sources=audio_sources,
     )
 
     if not success:
@@ -915,7 +920,7 @@ def people(
     config = CLIConfig.load()
 
     try:
-        sources, clips, sequence, metadata, ui_state, _ = load_project(
+        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(
             filepath=project_file,
             missing_source_callback=lambda path, sid: None,
         )
@@ -1006,6 +1011,7 @@ def people(
         sequence=sequence,
         ui_state=ui_state,
         metadata=metadata,
+        audio_sources=audio_sources,
     )
 
     if not success:

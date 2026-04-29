@@ -1,11 +1,12 @@
 """Unit tests for CLI commands and utilities."""
 
+import ast
 import json
 import os
 import sys
 import tempfile
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
@@ -13,7 +14,7 @@ from click.testing import CliRunner
 from cli.main import cli, register_commands
 from cli.utils.errors import ExitCode, exit_with, handle_error
 from cli.utils.config import CLIConfig, get_config_dir, get_cache_dir
-from cli.utils.output import output_result, output_table, _serialize_value
+from cli.utils.output import _serialize_value
 
 
 class TestExitCodes:
@@ -387,6 +388,57 @@ class TestTranscribeCommand:
         assert result.exit_code == 0
         assert "--model" in result.output or "-m" in result.output
         assert "--language" in result.output
+
+
+class TestCLIAudioSourceProjectContract:
+    """Regression coverage for the project load/save tuple contract in CLI commands."""
+
+    @staticmethod
+    def _parse_command_module(filename: str) -> ast.Module:
+        path = Path(__file__).parents[1] / "cli" / "commands" / filename
+        return ast.parse(path.read_text(encoding="utf-8"))
+
+    @staticmethod
+    def _call_name(call: ast.Call) -> str | None:
+        if isinstance(call.func, ast.Name):
+            return call.func.id
+        if isinstance(call.func, ast.Attribute):
+            return call.func.attr
+        return None
+
+    def test_project_load_call_sites_unpack_audio_sources(self):
+        for filename in ("analyze.py", "export.py", "transcribe.py"):
+            tree = self._parse_command_module(filename)
+            load_assignments = [
+                node
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Assign)
+                and isinstance(node.value, ast.Call)
+                and self._call_name(node.value) == "load_project"
+            ]
+
+            assert load_assignments, f"{filename} should load project files"
+            for assignment in load_assignments:
+                target = assignment.targets[0]
+                assert isinstance(target, ast.Tuple), f"{filename} load_project target must be tuple"
+                assert len(target.elts) == 7, f"{filename} must unpack audio_sources"
+
+    def test_mutating_cli_save_call_sites_preserve_audio_sources(self):
+        for filename in ("analyze.py", "transcribe.py"):
+            tree = self._parse_command_module(filename)
+            save_calls = [
+                node
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Call)
+                and self._call_name(node) == "save_project"
+            ]
+
+            assert save_calls, f"{filename} should save project files"
+            for call in save_calls:
+                keyword_names = {keyword.arg for keyword in call.keywords}
+                assert "audio_sources" in keyword_names, (
+                    f"{filename} save_project must preserve audio_sources"
+                )
 
 
 class TestYouTubeCommands:

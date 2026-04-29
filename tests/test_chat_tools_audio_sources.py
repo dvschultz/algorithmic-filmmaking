@@ -1,7 +1,6 @@
 """Tests for audio source agent tools (U7)."""
 
 import json
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -154,6 +153,28 @@ class TestImportAudioSource:
         assert new_audio.sample_rate == 48000
         assert new_audio.channels == 1
 
+    def test_relative_path_resolves_against_project_file(self, tmp_path):
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        audio_file = project_dir / "song.wav"
+        audio_file.write_bytes(b"")
+        project = Project(path=project_dir / "p.sceneripper")
+
+        with patch("core.ffmpeg.FFmpegProcessor") as mock_proc_cls:
+            instance = mock_proc_cls.return_value
+            instance.ffprobe_available = True
+            instance.get_audio_info.return_value = {
+                "duration": 90.0,
+                "sample_rate": 48000,
+                "channels": 1,
+                "codec": "wav",
+            }
+
+            result = import_audio_source(project, file_path="song.wav")
+
+        assert result["success"] is True
+        assert project.audio_sources[0].file_path == audio_file
+
     def test_zero_duration_rejected(self, tmp_path):
         project = Project.new()
         audio_file = tmp_path / "empty.wav"
@@ -238,3 +259,70 @@ class TestMCPAudioSourceTools:
         result = json.loads(result_json)
         assert result["success"] is False
         assert "list_audio_sources" in result["error"]
+
+    def test_mcp_create_project_does_not_require_audio_sources_variable(self, tmp_path):
+        from scene_ripper_mcp.tools import project as mcp_project_tools
+        from scene_ripper_mcp.tools.project import create_project
+
+        project_path = tmp_path / "new.sceneripper"
+
+        with patch.object(
+            mcp_project_tools, "validate_project_path",
+            return_value=(True, None, project_path),
+        ):
+            result_json = pytest.importorskip("asyncio").run(
+                create_project(name="New", output_path=str(project_path))
+            )
+
+        result = json.loads(result_json)
+        assert result["success"] is True
+        loaded = Project.load(project_path)
+        assert loaded.audio_sources == []
+
+    def test_mcp_detect_scenes_does_not_require_audio_sources_variable(self, tmp_path):
+        from models.clip import Clip, Source
+        from scene_ripper_mcp.tools import project as mcp_project_tools
+        from scene_ripper_mcp.tools.project import detect_scenes
+
+        video_path = tmp_path / "video.mp4"
+        video_path.write_bytes(b"video")
+        project_path = tmp_path / "detected.sceneripper"
+        source = Source(
+            id="source-1",
+            file_path=video_path,
+            duration_seconds=10.0,
+            fps=30.0,
+            width=1920,
+            height=1080,
+        )
+        clips = [
+            Clip(
+                id="clip-1",
+                source_id="source-1",
+                start_frame=0,
+                end_frame=30,
+            )
+        ]
+
+        with (
+            patch.object(
+                mcp_project_tools,
+                "validate_video_path",
+                return_value=(True, None, video_path),
+            ),
+            patch.object(
+                mcp_project_tools,
+                "validate_project_path",
+                return_value=(True, None, project_path),
+            ),
+            patch("core.scene_detect.SceneDetector") as detector_cls,
+        ):
+            detector_cls.return_value.detect_scenes.return_value = (source, clips)
+            result_json = pytest.importorskip("asyncio").run(
+                detect_scenes(str(video_path), str(project_path))
+            )
+
+        result = json.loads(result_json)
+        assert result["success"] is True
+        loaded = Project.load(project_path)
+        assert loaded.audio_sources == []

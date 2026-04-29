@@ -93,8 +93,6 @@ def transcribe(
         from core.transcription import (
             transcribe_clip,
             is_faster_whisper_available,
-            FasterWhisperNotInstalledError,
-            WHISPER_MODELS as CORE_MODELS,
         )
         from core.project import load_project, save_project, ProjectLoadError
     except ImportError as e:
@@ -116,7 +114,7 @@ def transcribe(
 
     # Load project
     try:
-        sources, clips, sequence, metadata, ui_state, _ = load_project(
+        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(
             filepath=project_file,
             missing_source_callback=lambda path, sid: None,
         )
@@ -193,6 +191,7 @@ def transcribe(
         sequence=sequence,
         ui_state=ui_state,
         metadata=metadata,
+        audio_sources=audio_sources,
     )
 
     if not success:

@@ -11,14 +11,11 @@ during chat interactions. Tools are split into two categories:
 """
 
 import inspect
-import json
 import logging
-import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from datetime import datetime
-from typing import Any, Callable, Optional, get_type_hints
+from typing import Callable, Optional, get_type_hints
 
 from core.youtube_api import (
     YouTubeSearchClient,
@@ -28,14 +25,12 @@ from core.youtube_api import (
 )
 from core.downloader import VideoDownloader
 from core.settings import load_settings
-from core.analysis.shots import SHOT_TYPES
 from core.constants import (
     VALID_ASPECT_RATIOS,
     VALID_COLOR_PALETTES,
     VALID_SHOT_TYPES,
     VALID_SORT_ORDERS,
 )
-from core.gui_state import NameProjectThenPlanAction
 from core.plan_controller import PlanController
 
 logger = logging.getLogger(__name__)
@@ -598,7 +593,9 @@ def import_audio_source(project, file_path: str) -> dict:
     from core.ffmpeg import FFmpegProcessor
     from models.audio_source import AudioSource
 
-    path = Path(file_path)
+    path = Path(file_path).expanduser()
+    if not path.is_absolute() and getattr(project, "path", None):
+        path = project.path.parent / path
     if not path.exists():
         return {"success": False, "error": f"File not found: {file_path}"}
     if not is_audio_file(path):
@@ -2558,7 +2555,7 @@ def export_sequence(
     Returns:
         Dict with success status and output path
     """
-    from core.sequence_export import SequenceExporter, ExportConfig
+    from core.sequence_export import ExportConfig
 
     # Validate quality parameter
     valid_qualities = ["low", "medium", "high"]
@@ -3096,10 +3093,6 @@ def add_note(project, clip_id: str, note: str) -> dict:
     }
 
 
-# Valid shot types for update_clip validation (imported from core.analysis.shots)
-VALID_SHOT_TYPES = set(SHOT_TYPES)
-
-
 @tools.register(
     description="Update clip metadata. Only specified fields are updated. Shot type must be one of: 'wide shot', 'medium shot', 'close-up', 'extreme close-up', or empty string to clear.",
     requires_project=True,
@@ -3438,7 +3431,7 @@ def detect_scenes(
             "clips_detected": len(clips),
             "clip_ids": [clip.id for clip in clips],
             "source_id": source.id,
-            "is_fallback_clip": is_fallback,
+            "is_fallback_clip": False,
             "message": message
         }
 
@@ -4395,14 +4388,7 @@ def list_sorting_algorithms(project) -> dict:
     has_colors = any(clip.dominant_colors for clip in clips) if clips else False
     has_transcripts = any(clip.transcript for clip in clips) if clips else False
 
-    has_brightness = any(clip.average_brightness is not None for clip in clips) if clips else False
-    has_volume = any(clip.rms_volume is not None for clip in clips) if clips else False
     has_shot_type = any(clip.shot_type for clip in clips) if clips else False
-    has_embeddings = any(clip.embedding is not None for clip in clips) if clips else False
-    has_boundary_emb = any(
-        clip.first_frame_embedding is not None and clip.last_frame_embedding is not None
-        for clip in clips
-    ) if clips else False
     has_text = any(clip.extracted_texts for clip in clips) if clips else False
     has_descriptions = any(clip.description for clip in clips) if clips else False
     has_face_embeddings = any(clip.face_embeddings for clip in clips) if clips else False
@@ -5481,7 +5467,7 @@ def update_settings(setting_name: str, value) -> dict:
     expected_type = spec[0]
 
     # Type validation
-    if expected_type == float:
+    if expected_type is float:
         try:
             value = float(value)
         except (TypeError, ValueError):
@@ -5492,7 +5478,7 @@ def update_settings(setting_name: str, value) -> dict:
                 "success": False,
                 "error": f"Setting '{setting_name}' must be between {min_val} and {max_val}"
             }
-    elif expected_type == int:
+    elif expected_type is int:
         try:
             value = int(value)
         except (TypeError, ValueError):
@@ -5503,7 +5489,7 @@ def update_settings(setting_name: str, value) -> dict:
                 "success": False,
                 "error": f"Setting '{setting_name}' must be between {min_val} and {max_val}"
             }
-    elif expected_type == str:
+    elif expected_type is str:
         value = str(value)
         allowed_values = spec[1]
         if allowed_values is not None and value not in allowed_values:
@@ -6002,6 +5988,7 @@ def detect_audio_beats(
     modifies_gui_state=False
 )
 def align_sequence_to_audio(
+    project,
     audio_path: str,
     strategy: str = "nearest",
     max_adjustment: float = 0.5
@@ -6146,7 +6133,6 @@ def generate_staccato(
     Returns:
         Dict with success status, clip count, and slot count
     """
-    from pathlib import Path
     from core.analysis.audio import analyze_music_file
     from core.remix.staccato import generate_staccato_sequence
 
@@ -6266,6 +6252,7 @@ def generate_staccato(
     modifies_gui_state=False
 )
 def get_sequence_analysis(
+    project,
     genre_comparison: Optional[str] = None
 ) -> dict:
     """Analyze the sequence for pacing and continuity metrics.
@@ -6344,7 +6331,7 @@ def get_sequence_analysis(
     requires_project=True,
     modifies_gui_state=False
 )
-def check_continuity_issues() -> dict:
+def check_continuity_issues(project) -> dict:
     """Check sequence for potential continuity problems.
 
     Returns:
@@ -6414,6 +6401,7 @@ def check_continuity_issues() -> dict:
     modifies_gui_state=False
 )
 def generate_analysis_report(
+    project,
     sections: Optional[list[str]] = None,
     include_clip_details: bool = False,
     output_format: str = "markdown",

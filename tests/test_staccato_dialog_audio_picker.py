@@ -1,7 +1,6 @@
 """Tests for the audio source picker in StaccatoDialog (U5)."""
 
 import os
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -203,6 +202,37 @@ def test_import_new_routes_through_worker_and_selects_new_source(
     assert project.get_audio_source("new-aud") is expected_audio
     # And the combo should have it auto-selected
     assert dialog._audio_combo.currentData() == "new-aud"
+
+
+def test_import_new_with_existing_audio_analyzes_new_source_once(
+    qapp, make_audio, monkeypatch
+):
+    from core.project import Project
+    from models.audio_source import AudioSource
+    from ui.dialogs.staccato_dialog import StaccatoDialog
+
+    project = Project.new()
+    existing = make_audio("existing.wav", id="existing")
+    project.add_audio_source(existing)
+    new_path = make_audio("new.wav", id="unused").file_path
+    new_audio = AudioSource(id="new", file_path=new_path, duration_seconds=42.0)
+
+    analyzed_paths = []
+    monkeypatch.setattr(
+        StaccatoDialog,
+        "_analyze_audio",
+        lambda self: analyzed_paths.append(self._music_path),
+    )
+
+    dialog = StaccatoDialog(clips=[], project=project)
+    analyzed_paths.clear()
+
+    dialog._on_imported_audio_ready(new_audio)
+
+    assert dialog._audio_combo.currentData() == "new"
+    assert analyzed_paths == [new_path]
+    dialog.deleteLater()
+    qapp.processEvents()
 
 
 def test_cancelled_import_new_resets_combo(qapp, make_audio, patched_dialog):
