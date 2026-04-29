@@ -179,6 +179,49 @@ class FFmpegProcessor:
             "codec": video_stream.get("codec_name", "unknown"),
         }
 
+    def get_audio_info(self, audio_path: Path) -> dict:
+        """Get audio metadata using FFprobe.
+
+        Returns dict with: duration, sample_rate, channels, codec
+
+        Raises:
+            RuntimeError: If FFprobe fails or no audio stream is found
+        """
+        cmd = [
+            self.ffprobe_path,
+            "-v", "quiet",
+            "-print_format", "json",
+            "-show_format",
+            "-show_streams",
+            str(audio_path),
+        ]
+
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=30,
+            **get_subprocess_kwargs(),
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"FFprobe failed: {result.stderr}")
+
+        import json
+        data = json.loads(result.stdout)
+
+        audio_stream = None
+        for stream in data.get("streams", []):
+            if stream.get("codec_type") == "audio":
+                audio_stream = stream
+                break
+
+        if not audio_stream:
+            raise ValueError("No audio stream found")
+
+        return {
+            "duration": float(data.get("format", {}).get("duration", 0)),
+            "sample_rate": int(audio_stream.get("sample_rate", 0)),
+            "channels": int(audio_stream.get("channels", 0)),
+            "codec": audio_stream.get("codec_name", "unknown"),
+        }
+
 
 def extract_frame(
     video_path: Path,
