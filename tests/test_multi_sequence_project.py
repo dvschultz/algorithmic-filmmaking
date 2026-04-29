@@ -475,7 +475,7 @@ class TestMCPReadModifyWrite:
 
         # Simulate MCP: load with load_project(), modify the active sequence,
         # then save back with save_project() (no extra_data)
-        sources, clips, sequence, metadata, ui_state, frames = load_project(project_path)
+        sources, clips, sequence, metadata, ui_state, frames, _audio = load_project(project_path)
 
         # MCP modifies the active sequence (clears it)
         sequence.tracks[0].clips.clear()
@@ -603,7 +603,7 @@ class TestSourceInSequences:
                 json.dump(data, f)
 
             result = load_project(path)
-            assert len(result) == 6
-            sources, clips, sequence, metadata, ui_state, frames = result
+            assert len(result) == 7
+            sources, clips, sequence, metadata, ui_state, frames, _audio = result
             # Returns the active sequence (index 1 = "B")
             assert sequence.name == "B"

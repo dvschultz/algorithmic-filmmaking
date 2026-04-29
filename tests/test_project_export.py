@@ -504,7 +504,7 @@ class TestExportThenLoadRoundTrip:
 
         # Load the exported project
         project_file = dest / "RoundTrip.sceneripper"
-        loaded_sources, loaded_clips, loaded_seq, metadata, ui_state, loaded_frames = load_project(
+        loaded_sources, loaded_clips, loaded_seq, metadata, ui_state, loaded_frames, _audio = load_project(
             project_file
         )
 
@@ -549,7 +549,7 @@ class TestExportThenLoadRoundTrip:
         project_file = dest / "LightRT.sceneripper"
         missing_callback = Mock(return_value=None)
 
-        loaded_sources, _, _, _, _, _ = load_project(
+        loaded_sources, _, _, _, _, _, _ = load_project(
             project_file,
             missing_source_callback=missing_callback,
         )

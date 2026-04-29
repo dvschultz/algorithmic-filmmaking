@@ -534,7 +534,7 @@ class TestProjectFramePersistence:
         assert len(data["frames"]) == 3
 
         # Load and verify
-        _, _, _, _, _, loaded_frames = load_project(
+        _, _, _, _, _, loaded_frames, _ = load_project(
             filepath=project_file,
             missing_source_callback=lambda p, sid: None,
         )
@@ -559,7 +559,7 @@ class TestProjectFramePersistence:
         with open(project_file, "w") as f:
             json.dump(old_data, f)
 
-        _, _, _, metadata, _, frames = load_project(
+        _, _, _, metadata, _, frames, _ = load_project(
             filepath=project_file,
             missing_source_callback=lambda p, sid: None,
         )

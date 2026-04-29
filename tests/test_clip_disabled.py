@@ -189,7 +189,7 @@ class TestDisabledClipSaveLoad:
         save_project(project_path, [source], clips, None)
 
         # Load and verify
-        loaded_sources, loaded_clips, _, _, _, _ = load_project(project_path)
+        loaded_sources, loaded_clips, _, _, _, _, _ = load_project(project_path)
         by_id = {c.id: c for c in loaded_clips}
         assert by_id["c0"].disabled is True
         assert by_id["c1"].disabled is False

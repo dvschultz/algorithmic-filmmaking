@@ -364,6 +364,7 @@ def _write_bundle_project_file(
         ui_state=project.ui_state,
         metadata=project.metadata,
         frames=rewritten_frames,
+        audio_sources=project.audio_sources,
     )
 
 

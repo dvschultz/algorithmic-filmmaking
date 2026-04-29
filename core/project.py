@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 import uuid
 
+from models.audio_source import AudioSource
 from models.clip import Source, Clip
 from models.frame import Frame
 from models.sequence import Sequence
@@ -174,6 +175,7 @@ def save_project(
     progress_callback: Optional[Callable[[float, str], None]] = None,
     frames: Optional[list[Frame]] = None,
     extra_data: Optional[dict] = None,
+    audio_sources: Optional[list[AudioSource]] = None,
 ) -> bool:
     """Save project to JSON file with relative paths.
 
@@ -262,6 +264,13 @@ def save_project(
         project_data["frames"] = [
             frame.to_dict(base_path=base_path)
             for frame in frames
+        ]
+
+    # Serialize audio sources
+    if audio_sources:
+        project_data["audio_sources"] = [
+            audio.to_dict(base_path=base_path)
+            for audio in audio_sources
         ]
 
     # Add UI state
@@ -417,6 +426,10 @@ def _validate_project_structure(data: dict) -> list[str]:
     if "frames" in data and not isinstance(data["frames"], list):
         errors.append("Field 'frames' must be a list")
 
+    # Audio sources must be a list (optional - not present in old projects)
+    if "audio_sources" in data and not isinstance(data["audio_sources"], list):
+        errors.append("Field 'audio_sources' must be a list")
+
     # Validate frame entries have required fields
     for i, frame in enumerate(data.get("frames", [])):
         if not isinstance(frame, dict):
@@ -434,7 +447,7 @@ def load_project(
     filepath: Path,
     progress_callback: Optional[Callable[[float, str], None]] = None,
     missing_source_callback: Optional[Callable[[Path, str], Optional[Path]]] = None,
-) -> tuple[list[Source], list[Clip], Optional[Sequence], ProjectMetadata, dict, list[Frame]]:
+) -> tuple[list[Source], list[Clip], Optional[Sequence], ProjectMetadata, dict, list[Frame], list[AudioSource]]:
     """Load project from JSON file, resolving paths and validating sources.
 
     Args:
@@ -444,7 +457,7 @@ def load_project(
             Called when a source video is not found. Return new path to remap, or None to skip.
 
     Returns:
-        Tuple of (sources, clips, sequence, metadata, ui_state, frames)
+        Tuple of (sources, clips, sequence, metadata, ui_state, frames, audio_sources)
 
     Raises:
         ProjectLoadError: If the project file cannot be loaded
@@ -574,6 +587,17 @@ def load_project(
         frame = Frame.from_dict(frame_data, base_path=base_path)
         frames.append(frame)
 
+    # Load audio sources (optional — not present in old projects)
+    audio_sources: list[AudioSource] = []
+    for audio_data in data.get("audio_sources", []):
+        if not isinstance(audio_data, dict):
+            logger.warning(f"Skipping non-dict audio_source entry: {audio_data!r}")
+            continue
+        try:
+            audio_sources.append(AudioSource.from_dict(audio_data, base_path=base_path))
+        except (ValueError, KeyError, TypeError) as e:
+            logger.warning(f"Skipping malformed audio source: {e}")
+
     # Load UI state
     ui_state = data.get("ui_state", {})
 
@@ -582,9 +606,10 @@ def load_project(
 
     logger.info(
         f"Project loaded from {filepath}: "
-        f"{len(sources)} sources, {len(clips)} clips, {len(frames)} frames"
+        f"{len(sources)} sources, {len(clips)} clips, "
+        f"{len(frames)} frames, {len(audio_sources)} audio sources"
     )
-    return sources, clips, sequence, metadata, ui_state, frames
+    return sources, clips, sequence, metadata, ui_state, frames, audio_sources
 
 
 def get_project_name_from_path(filepath: Path) -> str:
@@ -615,6 +640,7 @@ class Project:
         frames: Optional[list[Frame]] = None,
         sequences: Optional[list[Sequence]] = None,
         active_sequence_index: int = 0,
+        audio_sources: Optional[list[AudioSource]] = None,
     ):
         """Initialize a Project.
 
@@ -628,12 +654,14 @@ class Project:
             frames: List of extracted/imported frames
             sequences: List of all sequences (takes precedence over sequence)
             active_sequence_index: Index of the active sequence in the list
+            audio_sources: List of imported audio files (not cut into clips)
         """
         self.path = path
         self.metadata = metadata or ProjectMetadata()
         self._sources = sources or []
         self._clips = clips or []
         self._frames: list[Frame] = frames or []
+        self._audio_sources: list[AudioSource] = audio_sources or []
         self.ui_state = ui_state or {}
 
         # Multi-sequence storage: sequences list + active index
@@ -764,12 +792,22 @@ class Project:
         """All frames (extracted and imported)."""
         return self._frames
 
+    @property
+    def audio_sources(self) -> list[AudioSource]:
+        """All imported audio files in the project."""
+        return self._audio_sources
+
     # --- Cached property indexes ---
 
     @cached_property
     def sources_by_id(self) -> dict[str, Source]:
         """Source lookup by ID."""
         return {s.id: s for s in self._sources}
+
+    @cached_property
+    def audio_sources_by_id(self) -> dict[str, AudioSource]:
+        """Audio source lookup by ID."""
+        return {a.id: a for a in self._audio_sources}
 
     @cached_property
     def clips_by_id(self) -> dict[str, Clip]:
@@ -812,6 +850,7 @@ class Project:
         for attr in (
             "sources_by_id", "clips_by_id", "clips_by_source",
             "frames_by_id", "frames_by_source", "frames_by_clip",
+            "audio_sources_by_id",
         ):
             self.__dict__.pop(attr, None)
 
@@ -908,6 +947,39 @@ class Project:
         self._dirty = True
         self._notify_observers("source_updated", source)
         return source
+
+    def add_audio_source(self, audio_source: AudioSource) -> None:
+        """Add an imported audio file to the project.
+
+        Args:
+            audio_source: AudioSource to add
+        """
+        self._audio_sources.append(audio_source)
+        self._invalidate_caches()
+        self._dirty = True
+        self._notify_observers("audio_sources_changed", self._audio_sources)
+
+    def remove_audio_source(self, audio_source_id: str) -> Optional[AudioSource]:
+        """Remove an audio source by ID.
+
+        Args:
+            audio_source_id: ID of the audio source to remove
+
+        Returns:
+            The removed AudioSource, or None if not found
+        """
+        audio = self.audio_sources_by_id.get(audio_source_id)
+        if audio is None:
+            return None
+        self._audio_sources.remove(audio)
+        self._invalidate_caches()
+        self._dirty = True
+        self._notify_observers("audio_sources_changed", self._audio_sources)
+        return audio
+
+    def get_audio_source(self, audio_source_id: str) -> Optional[AudioSource]:
+        """Look up an audio source by ID."""
+        return self.audio_sources_by_id.get(audio_source_id)
 
     def add_clips(self, clips: list[Clip]) -> None:
         """Add detected clips to the project.
@@ -1298,6 +1370,7 @@ class Project:
             progress_callback=progress_callback,
             frames=self._frames,
             extra_data=extra_data,
+            audio_sources=self._audio_sources,
         )
 
         if success:
@@ -1350,7 +1423,7 @@ class Project:
         except (json.JSONDecodeError, OSError, IOError):
             pass  # Will be handled by load_project() below
 
-        sources, clips, sequence, metadata, ui_state, frames = load_project(
+        sources, clips, sequence, metadata, ui_state, frames, audio_sources = load_project(
             filepath=path,
             missing_source_callback=missing_source_callback,
             progress_callback=progress_callback,
@@ -1386,6 +1459,7 @@ class Project:
                 active_sequence_index=active_idx,
                 ui_state=ui_state,
                 frames=frames,
+                audio_sources=audio_sources,
             )
         else:
             project = cls(
@@ -1396,6 +1470,7 @@ class Project:
                 sequence=sequence,
                 ui_state=ui_state,
                 frames=frames,
+                audio_sources=audio_sources,
             )
         project._dirty = False
         return project
@@ -1417,6 +1492,7 @@ class Project:
         self._sources = []
         self._clips = []
         self._frames = []
+        self._audio_sources = []
         self.sequences = [Sequence()]
         self.active_sequence_index = 0
         self.ui_state = {}
