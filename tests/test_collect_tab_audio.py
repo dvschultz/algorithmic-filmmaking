@@ -65,6 +65,39 @@ def test_audio_library_list_emits_remove_request(qapp, make_audio):
     assert emissions == ["a1"]
 
 
+def test_audio_library_list_emits_transcribe_request(qapp, make_audio):
+    from ui.widgets.audio_library_list import AudioLibraryList
+
+    a1 = make_audio("a.mp3", id="a1")
+    widget = AudioLibraryList()
+    widget.set_sources([a1])
+
+    emissions: list[str] = []
+    widget.transcribe_requested.connect(lambda aid: emissions.append(aid))
+
+    btn = widget._table.cellWidget(0, widget._COL_TRANSCRIBE)
+    assert btn.text() == "Transcribe"
+    assert btn.isEnabled() is True
+    btn.click()
+
+    assert emissions == ["a1"]
+
+
+def test_audio_library_list_disables_transcribe_when_already_transcribed(qapp, make_audio):
+    from core.transcription import TranscriptSegment
+    from ui.widgets.audio_library_list import AudioLibraryList
+
+    a1 = make_audio("a.mp3", id="a1")
+    a1.transcript = [TranscriptSegment(start_time=0.0, end_time=1.0, text="hi")]
+
+    widget = AudioLibraryList()
+    widget.set_sources([a1])
+
+    btn = widget._table.cellWidget(0, widget._COL_TRANSCRIBE)
+    assert btn.text() == "Transcribed"
+    assert btn.isEnabled() is False
+
+
 def test_audio_library_list_emits_selection(qapp, make_audio):
     from ui.widgets.audio_library_list import AudioLibraryList
 

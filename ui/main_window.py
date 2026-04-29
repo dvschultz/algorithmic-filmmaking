@@ -764,6 +764,7 @@ class MainWindow(QMainWindow):
 
         # Active audio import workers (kept alive while running)
         self._active_audio_imports: set = set()
+        self._active_audio_transcribes: set = set()
 
         # UI state (not part of Project - these are GUI-specific selections)
         self.current_source: Optional[Source] = None  # Currently active/selected source
@@ -1621,6 +1622,7 @@ class MainWindow(QMainWindow):
         self.collect_tab.videos_added.connect(self._on_videos_added)
         self.collect_tab.audio_files_added.connect(self._on_audio_files_added)
         self.collect_tab.audio_remove_requested.connect(self._on_audio_remove_requested)
+        self.collect_tab.audio_transcribe_requested.connect(self._on_audio_transcribe_requested)
         self.collect_tab.analyze_requested.connect(self._on_analyze_requested)
         self.collect_tab.source_selected.connect(self._on_source_selected)
         self.collect_tab.download_requested.connect(self._on_download_requested_from_tab)
@@ -3247,6 +3249,47 @@ class MainWindow(QMainWindow):
     def _on_audio_sources_changed(self, audio_sources):
         """Refresh the Collect tab's audio library when project state changes."""
         self.collect_tab.set_audio_sources(audio_sources)
+
+    def _on_audio_transcribe_requested(self, audio_source_id: str):
+        """Run Whisper transcription on the selected audio source."""
+        from ui.workers.audio_transcribe_worker import AudioTranscribeWorker
+
+        audio = self.project.get_audio_source(audio_source_id)
+        if audio is None:
+            self.status_bar.showMessage(f"Audio source not found: {audio_source_id}")
+            return
+        if audio.transcript:
+            self.status_bar.showMessage(f"Already transcribed: {audio.filename}")
+            return
+
+        worker = AudioTranscribeWorker(audio, parent=self)
+        self._active_audio_transcribes.add(worker)
+
+        worker.transcript_ready.connect(self._on_audio_transcript_ready)
+        worker.error.connect(self._on_audio_transcribe_error)
+        worker.finished_signal.connect(
+            lambda w=worker: self._active_audio_transcribes.discard(w)
+        )
+        self.status_bar.showMessage(f"Transcribing {audio.filename}…")
+        worker.start()
+
+    def _on_audio_transcript_ready(self, audio_source_id: str, segments: list):
+        """Persist the transcript on the AudioSource and notify observers."""
+        audio = self.project.get_audio_source(audio_source_id)
+        if audio is None:
+            return
+        audio.transcript = segments
+        self.project._dirty = True
+        self.project._notify_observers(
+            "audio_sources_changed", self.project.audio_sources
+        )
+        self.status_bar.showMessage(
+            f"Transcribed {audio.filename}: {len(segments)} segment(s)"
+        )
+        self._update_chat_project_state()
+
+    def _on_audio_transcribe_error(self, message: str):
+        self.status_bar.showMessage(f"Transcription failed: {message}")
 
     def _generate_source_thumbnail(self, source: Source):
         """Generate a thumbnail for a source video (first frame)."""

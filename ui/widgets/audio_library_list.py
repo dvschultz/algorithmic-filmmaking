@@ -28,10 +28,12 @@ class AudioLibraryList(QWidget):
 
     audio_source_selected = Signal(object)  # AudioSource
     remove_requested = Signal(str)  # audio source id
+    transcribe_requested = Signal(str)  # audio source id
 
     _COL_FILENAME = 0
     _COL_DURATION = 1
-    _COL_REMOVE = 2
+    _COL_TRANSCRIBE = 2
+    _COL_REMOVE = 3
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -42,8 +44,8 @@ class AudioLibraryList(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        self._table = QTableWidget(0, 3, self)
-        self._table.setHorizontalHeaderLabels(["Filename", "Duration", ""])
+        self._table = QTableWidget(0, 4, self)
+        self._table.setHorizontalHeaderLabels(["Filename", "Duration", "", ""])
         self._table.verticalHeader().setVisible(False)
         self._table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self._table.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -54,6 +56,7 @@ class AudioLibraryList(QWidget):
         header = self._table.horizontalHeader()
         header.setSectionResizeMode(self._COL_FILENAME, QHeaderView.Stretch)
         header.setSectionResizeMode(self._COL_DURATION, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(self._COL_TRANSCRIBE, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(self._COL_REMOVE, QHeaderView.ResizeToContents)
 
         self._table.itemSelectionChanged.connect(self._on_selection_changed)
@@ -76,6 +79,17 @@ class AudioLibraryList(QWidget):
 
         duration_item = QTableWidgetItem(audio.duration_str)
         self._table.setItem(row, self._COL_DURATION, duration_item)
+
+        transcribe_btn = QPushButton("Transcribed" if audio.transcript else "Transcribe")
+        if audio.transcript:
+            transcribe_btn.setEnabled(False)
+            transcribe_btn.setToolTip(f"{len(audio.transcript)} segments")
+        else:
+            transcribe_btn.setToolTip("Run Whisper on this audio source")
+        transcribe_btn.clicked.connect(
+            lambda _checked=False, aid=audio.id: self.transcribe_requested.emit(aid)
+        )
+        self._table.setCellWidget(row, self._COL_TRANSCRIBE, transcribe_btn)
 
         remove_btn = QPushButton("Remove")
         remove_btn.clicked.connect(lambda _checked=False, aid=audio.id: self.remove_requested.emit(aid))
