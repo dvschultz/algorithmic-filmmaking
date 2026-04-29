@@ -2,6 +2,8 @@
 
 The **Collect** tab is your source video library. It's where you import videos (local files or YouTube downloads), see which have been cut into clips, and manage what's in the project.
 
+You can also import **audio files** here — they appear in a separate Audio Library section below the videos. Audio sources feed the Staccato sequencer and audio transcription. See [Audio Sources](audio-sources.md) for details.
+
 ## Source thumbnails
 
 Each imported video appears as a thumbnail card. The filename is shown below the image. Status badges below the filename indicate what's been done with the source.

@@ -201,12 +201,12 @@ Keep clips in their original order. This is the simplest algorithm: clips appear
 
 ### Staccato
 
-Cut clips to the rhythm of a music track. Opens a dialog where you select an audio file, preview the waveform with beat markers, and generate a sequence where onset strength drives visual contrast — stronger beats trigger bigger visual jumps between consecutive clips.
+Cut clips to the rhythm of a music track. Opens a dialog where you pick a project audio source, preview the waveform with beat markers, and generate a sequence where onset strength drives visual contrast — stronger beats trigger bigger visual jumps between consecutive clips.
 
 **Required analysis:** Embeddings (DINOv2, auto-computed if missing)
 
 **Dialog workflow:**
-1. Click **Select Music File** to choose an MP3, WAV, FLAC, M4A, AAC, or OGG file
+1. Pick an audio source from the **Audio source** dropdown. The dropdown is populated from your project's [audio library](audio-sources.md) — if you haven't imported audio yet, choose **Import new…** to import one without leaving the dialog.
 2. The audio is analyzed and a waveform is displayed with beat/onset markers overlaid
 3. Adjust the **Sensitivity** slider to control the number of cut points ("Fewer Cuts" to "More Cuts")
 4. Choose a **Beat Strategy** from the dropdown: Onsets (transients/hits), Beats (regular pulse), or Downbeats (strong beats only)
