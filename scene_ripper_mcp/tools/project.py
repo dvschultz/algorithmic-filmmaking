@@ -36,7 +36,7 @@ async def get_project_info(
     try:
         from core.project import load_project
 
-        sources, clips, sequence, metadata, ui_state, _ = load_project(path)
+        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(path)
 
         # Compute analysis statistics
         has_colors = sum(1 for c in clips if c.dominant_colors)
@@ -133,6 +133,7 @@ async def detect_scenes(
             clips=clips,
             sequence=None,
             metadata=metadata,
+            audio_sources=audio_sources,
         )
 
         if not success:
@@ -190,6 +191,7 @@ async def create_project(
             clips=[],
             sequence=None,
             metadata=metadata,
+            audio_sources=audio_sources,
         )
 
         if success:
@@ -301,7 +303,7 @@ async def import_video(
             await ctx.report_progress(0.1, "Loading project...")
 
         # Load existing project
-        sources, clips, sequence, metadata, ui_state, _ = load_project(proj_path)
+        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(proj_path)
 
         if ctx:
             await ctx.report_progress(0.2, "Analyzing video...")
@@ -343,6 +345,7 @@ async def import_video(
             sequence=sequence,
             ui_state=ui_state,
             metadata=metadata,
+            audio_sources=audio_sources,
         )
 
         if not success:
@@ -386,7 +389,7 @@ async def list_sources(
     try:
         from core.project import load_project
 
-        sources, clips, _, _, _, _ = load_project(path)
+        sources, clips, _, _, _, _, audio_sources = load_project(path)
 
         source_list = []
         for source in sources:
@@ -442,7 +445,7 @@ async def remove_source(
     try:
         from core.project import load_project, save_project
 
-        sources, clips, sequence, metadata, ui_state, _ = load_project(path)
+        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(path)
 
         # Find and remove source
         source_to_remove = None
@@ -472,6 +475,7 @@ async def remove_source(
             sequence=sequence,
             ui_state=ui_state,
             metadata=metadata,
+            audio_sources=audio_sources,
         )
 
         if not success:
@@ -488,4 +492,121 @@ async def remove_source(
         )
     except Exception as e:
         logger.exception("Failed to remove source")
+        return json.dumps({"success": False, "error": str(e)})
+
+
+@mcp.tool()
+async def list_audio_sources(
+    project_path: Annotated[str, "Absolute path to .sceneripper project file"],
+    ctx: Context = None,
+) -> str:
+    """List all imported audio sources in a Scene Ripper project.
+
+    Audio sources are imported audio files (music, podcasts, voiceovers).
+    They are not cut into clips and never appear in the sequencer output —
+    they exist to feed audio tools like Staccato and transcription.
+
+    Args:
+        project_path: Absolute path to the project file.
+
+    Returns:
+        JSON with success flag, audio source count, and per-source metadata
+        (id, filename, duration, sample_rate, channels, transcribed flag).
+    """
+    valid, error, path = validate_project_path(project_path)
+    if not valid:
+        return json.dumps({"success": False, "error": error})
+
+    try:
+        from core.project import load_project
+
+        _sources, _clips, _seq, _meta, _ui, _frames, audio_sources = load_project(path)
+
+        payload = []
+        for a in audio_sources:
+            payload.append({
+                "id": a.id,
+                "filename": a.filename,
+                "duration": a.duration_seconds,
+                "duration_str": a.duration_str,
+                "sample_rate": a.sample_rate,
+                "channels": a.channels,
+                "transcribed": bool(a.transcript),
+                "transcript_segment_count": len(a.transcript) if a.transcript else 0,
+            })
+
+        return json.dumps({
+            "success": True,
+            "audio_sources": payload,
+            "count": len(payload),
+        })
+    except Exception as e:
+        logger.exception("Failed to list audio sources")
+        return json.dumps({"success": False, "error": str(e)})
+
+
+@mcp.tool()
+async def get_audio_source(
+    project_path: Annotated[str, "Absolute path to .sceneripper project file"],
+    audio_source_id: Annotated[str, "ID of the audio source (use list_audio_sources to find)"],
+    ctx: Context = None,
+) -> str:
+    """Get full details for a single audio source, including its transcript
+    if one has been generated.
+
+    Args:
+        project_path: Absolute path to the project file.
+        audio_source_id: ID of the audio source.
+
+    Returns:
+        JSON with the full audio source record, including any transcript
+        segments. Returns success=False with a guidance message if the ID
+        is unknown.
+    """
+    valid, error, path = validate_project_path(project_path)
+    if not valid:
+        return json.dumps({"success": False, "error": error})
+
+    try:
+        from core.project import load_project
+
+        _sources, _clips, _seq, _meta, _ui, _frames, audio_sources = load_project(path)
+
+        match = next((a for a in audio_sources if a.id == audio_source_id), None)
+        if match is None:
+            return json.dumps({
+                "success": False,
+                "error": (
+                    f"Audio source '{audio_source_id}' not found. "
+                    "Use list_audio_sources to see available IDs."
+                ),
+            })
+
+        transcript_payload = None
+        if match.transcript:
+            transcript_payload = [
+                {
+                    "start_time": seg.start_time,
+                    "end_time": seg.end_time,
+                    "text": seg.text,
+                    "confidence": seg.confidence,
+                }
+                for seg in match.transcript
+            ]
+
+        return json.dumps({
+            "success": True,
+            "audio_source": {
+                "id": match.id,
+                "filename": match.filename,
+                "file_path": str(match.file_path),
+                "duration": match.duration_seconds,
+                "duration_str": match.duration_str,
+                "sample_rate": match.sample_rate,
+                "channels": match.channels,
+                "transcript": transcript_payload,
+            },
+        })
+    except Exception as e:
+        logger.exception("Failed to get audio source")
         return json.dumps({"success": False, "error": str(e)})

@@ -32,7 +32,7 @@ async def get_sequence(
     try:
         from core.project import load_project
 
-        sources, clips, sequence, metadata, ui_state, _ = load_project(path)
+        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(path)
 
         if not sequence:
             return json.dumps(
@@ -127,7 +127,7 @@ async def add_to_sequence(
         from core.project import load_project, save_project
         from models.sequence import Sequence, SequenceClip, Track
 
-        sources, clips, sequence, metadata, ui_state, _ = load_project(path)
+        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(path)
 
         # Build lookups
         sources_by_id = {s.id: s for s in sources}
@@ -202,6 +202,7 @@ async def add_to_sequence(
             sequence=sequence,
             ui_state=ui_state,
             metadata=metadata,
+            audio_sources=audio_sources,
         )
 
         if not success:
@@ -242,7 +243,7 @@ async def remove_from_sequence(
     try:
         from core.project import load_project, save_project
 
-        sources, clips, sequence, metadata, ui_state, _ = load_project(path)
+        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(path)
 
         if not sequence:
             return json.dumps({"success": False, "error": "No sequence in project"})
@@ -264,6 +265,7 @@ async def remove_from_sequence(
             sequence=sequence,
             ui_state=ui_state,
             metadata=metadata,
+            audio_sources=audio_sources,
         )
 
         if not success:
@@ -308,7 +310,7 @@ async def reorder_sequence(
     try:
         from core.project import load_project, save_project
 
-        sources, clips, sequence, metadata, ui_state, _ = load_project(path)
+        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(path)
 
         if not sequence:
             return json.dumps({"success": False, "error": "No sequence in project"})
@@ -352,6 +354,7 @@ async def reorder_sequence(
             sequence=sequence,
             ui_state=ui_state,
             metadata=metadata,
+            audio_sources=audio_sources,
         )
 
         if not success:
@@ -392,7 +395,7 @@ async def clear_sequence(
     try:
         from core.project import load_project, save_project
 
-        sources, clips, sequence, metadata, ui_state, _ = load_project(path)
+        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(path)
 
         if not sequence:
             return json.dumps(
@@ -417,6 +420,7 @@ async def clear_sequence(
             sequence=sequence,
             ui_state=ui_state,
             metadata=metadata,
+            audio_sources=audio_sources,
         )
 
         if not success:
@@ -459,7 +463,7 @@ async def shuffle_sequence(
         import random
         from core.project import load_project, save_project
 
-        sources, clips, sequence, metadata, ui_state, _ = load_project(path)
+        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(path)
 
         if not sequence:
             return json.dumps({"success": False, "error": "No sequence in project"})
@@ -522,6 +526,7 @@ async def shuffle_sequence(
             sequence=sequence,
             ui_state=ui_state,
             metadata=metadata,
+            audio_sources=audio_sources,
         )
 
         if not success:

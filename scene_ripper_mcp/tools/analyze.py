@@ -43,7 +43,7 @@ async def analyze_colors(
         if ctx:
             await ctx.report_progress(0.1, "Loading project...")
 
-        sources, clips, sequence, metadata, ui_state, _ = load_project(path)
+        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(path)
 
         if not clips:
             return json.dumps({"success": False, "error": "No clips in project"})
@@ -88,6 +88,7 @@ async def analyze_colors(
             sequence=sequence,
             ui_state=ui_state,
             metadata=metadata,
+            audio_sources=audio_sources,
         )
 
         if not success:
@@ -137,7 +138,7 @@ async def analyze_shots(
         if ctx:
             await ctx.report_progress(0.1, "Loading project...")
 
-        sources, clips, sequence, metadata, ui_state, _ = load_project(path)
+        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(path)
 
         if not clips:
             return json.dumps({"success": False, "error": "No clips in project"})
@@ -188,6 +189,7 @@ async def analyze_shots(
             sequence=sequence,
             ui_state=ui_state,
             metadata=metadata,
+            audio_sources=audio_sources,
         )
 
         if not success:
@@ -251,7 +253,7 @@ async def transcribe(
         if ctx:
             await ctx.report_progress(0.1, "Loading project...")
 
-        sources, clips, sequence, metadata, ui_state, _ = load_project(path)
+        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(path)
 
         if not clips:
             return json.dumps({"success": False, "error": "No clips in project"})
@@ -304,6 +306,7 @@ async def transcribe(
             sequence=sequence,
             ui_state=ui_state,
             metadata=metadata,
+            audio_sources=audio_sources,
         )
 
         if not success:
@@ -349,7 +352,7 @@ async def get_analysis_status(
     try:
         from core.project import load_project
 
-        sources, clips, sequence, metadata, ui_state, _ = load_project(path)
+        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(path)
 
         # Count analysis types
         has_colors = sum(1 for c in clips if c.dominant_colors)

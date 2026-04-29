@@ -36,7 +36,7 @@ async def list_clips(
     try:
         from core.project import load_project
 
-        sources, clips, sequence, metadata, ui_state, _ = load_project(path)
+        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(path)
 
         # Build source lookup
         sources_by_id = {s.id: s for s in sources}
@@ -123,7 +123,7 @@ async def filter_clips(
     try:
         from core.project import load_project
 
-        sources, clips, sequence, metadata, ui_state, _ = load_project(path)
+        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(path)
 
         # Build source lookup
         sources_by_id = {s.id: s for s in sources}
@@ -207,7 +207,7 @@ async def get_clip_metadata(
     try:
         from core.project import load_project
 
-        sources, clips, sequence, metadata, ui_state, _ = load_project(path)
+        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(path)
 
         # Find clip
         clip = None
@@ -297,7 +297,7 @@ async def add_clip_tags(
     try:
         from core.project import load_project, save_project
 
-        sources, clips, sequence, metadata, ui_state, _ = load_project(path)
+        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(path)
 
         # Find and update clip
         clip = None
@@ -322,6 +322,7 @@ async def add_clip_tags(
             sequence=sequence,
             ui_state=ui_state,
             metadata=metadata,
+            audio_sources=audio_sources,
         )
 
         if not success:
@@ -364,7 +365,7 @@ async def remove_clip_tags(
     try:
         from core.project import load_project, save_project
 
-        sources, clips, sequence, metadata, ui_state, _ = load_project(path)
+        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(path)
 
         # Find and update clip
         clip = None
@@ -390,6 +391,7 @@ async def remove_clip_tags(
             sequence=sequence,
             ui_state=ui_state,
             metadata=metadata,
+            audio_sources=audio_sources,
         )
 
         if not success:
@@ -432,7 +434,7 @@ async def add_clip_note(
     try:
         from core.project import load_project, save_project
 
-        sources, clips, sequence, metadata, ui_state, _ = load_project(path)
+        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(path)
 
         # Find and update clip
         clip = None
@@ -455,6 +457,7 @@ async def add_clip_note(
             sequence=sequence,
             ui_state=ui_state,
             metadata=metadata,
+            audio_sources=audio_sources,
         )
 
         if not success:
@@ -496,7 +499,7 @@ async def search_transcripts(
     try:
         from core.project import load_project
 
-        sources, clips, sequence, metadata, ui_state, _ = load_project(path)
+        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(path)
 
         # Build source lookup
         sources_by_id = {s.id: s for s in sources}

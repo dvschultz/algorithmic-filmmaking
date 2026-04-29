@@ -489,6 +489,166 @@ def list_sources(project) -> dict:
 
 
 @tools.register(
+    description=(
+        "List all imported audio sources (music, podcasts, voiceovers) in the project. "
+        "Audio sources are not cut into clips; they feed audio tools like Staccato and "
+        "transcription."
+    ),
+    requires_project=True,
+    modifies_gui_state=False,
+    modifies_project_state=False,
+)
+def list_audio_sources(project) -> dict:
+    """List all imported audio sources in the project.
+
+    Returns:
+        Dict with success status and list of audio sources with metadata.
+    """
+    audio_sources = []
+    for a in project.audio_sources:
+        audio_sources.append({
+            "id": a.id,
+            "filename": a.filename,
+            "duration": a.duration_seconds,
+            "duration_str": a.duration_str,
+            "sample_rate": a.sample_rate,
+            "channels": a.channels,
+            "transcribed": bool(a.transcript),
+            "transcript_segment_count": len(a.transcript) if a.transcript else 0,
+        })
+
+    return {
+        "success": True,
+        "audio_sources": audio_sources,
+        "count": len(audio_sources),
+    }
+
+
+@tools.register(
+    description=(
+        "Get full details for a single audio source by ID, including its transcript "
+        "if one has been generated."
+    ),
+    requires_project=True,
+    modifies_gui_state=False,
+    modifies_project_state=False,
+)
+def get_audio_source(project, audio_source_id: str) -> dict:
+    """Return detailed information about an audio source.
+
+    Args:
+        audio_source_id: ID of the audio source (use list_audio_sources to find IDs).
+    """
+    audio = project.get_audio_source(audio_source_id)
+    if audio is None:
+        return {
+            "success": False,
+            "error": (
+                f"Audio source '{audio_source_id}' not found. "
+                "Use list_audio_sources to see available IDs."
+            ),
+        }
+
+    transcript_payload = None
+    if audio.transcript:
+        transcript_payload = [
+            {
+                "start_time": seg.start_time,
+                "end_time": seg.end_time,
+                "text": seg.text,
+                "confidence": seg.confidence,
+            }
+            for seg in audio.transcript
+        ]
+
+    return {
+        "success": True,
+        "audio_source": {
+            "id": audio.id,
+            "filename": audio.filename,
+            "file_path": str(audio.file_path),
+            "duration": audio.duration_seconds,
+            "duration_str": audio.duration_str,
+            "sample_rate": audio.sample_rate,
+            "channels": audio.channels,
+            "transcript": transcript_payload,
+        },
+    }
+
+
+@tools.register(
+    description=(
+        "Import an audio file (mp3/wav/flac/m4a/aac/ogg) into the project. "
+        "The file is added to the project's audio library and becomes available "
+        "to Staccato and transcription. Returns the new audio source ID."
+    ),
+    requires_project=True,
+    modifies_gui_state=False,
+    modifies_project_state=True,
+)
+def import_audio_source(project, file_path: str) -> dict:
+    """Synchronously import an audio file and add it to the project.
+
+    Args:
+        file_path: Absolute or project-relative path to the audio file.
+    """
+    from pathlib import Path
+
+    from core.audio_formats import is_audio_file
+    from core.ffmpeg import FFmpegProcessor
+    from models.audio_source import AudioSource
+
+    path = Path(file_path)
+    if not path.exists():
+        return {"success": False, "error": f"File not found: {file_path}"}
+    if not is_audio_file(path):
+        return {
+            "success": False,
+            "error": (
+                f"Unsupported audio format: {path.suffix or '<no extension>'}. "
+                "Supported: .mp3, .wav, .flac, .m4a, .aac, .ogg."
+            ),
+        }
+
+    try:
+        processor = FFmpegProcessor()
+    except RuntimeError as exc:
+        return {"success": False, "error": f"FFmpeg unavailable: {exc}"}
+
+    if not processor.ffprobe_available:
+        return {"success": False, "error": "FFprobe is not available"}
+
+    try:
+        info = processor.get_audio_info(path)
+    except ValueError:
+        return {"success": False, "error": f"Not an audio file: {path.name}"}
+    except RuntimeError as exc:
+        return {"success": False, "error": f"Failed to probe audio: {exc}"}
+
+    duration = info.get("duration", 0.0)
+    if duration <= 0:
+        return {
+            "success": False,
+            "error": f"Audio file has zero duration: {path.name}",
+        }
+
+    audio = AudioSource(
+        file_path=path,
+        duration_seconds=duration,
+        sample_rate=info.get("sample_rate", 0),
+        channels=info.get("channels", 0),
+    )
+    project.add_audio_source(audio)
+
+    return {
+        "success": True,
+        "audio_source_id": audio.id,
+        "filename": audio.filename,
+        "duration": audio.duration_seconds,
+    }
+
+
+@tools.register(
     description="Add clips to the timeline sequence by their IDs. Clips will appear in the Sequence tab.",
     requires_project=True,
     modifies_gui_state=True,
