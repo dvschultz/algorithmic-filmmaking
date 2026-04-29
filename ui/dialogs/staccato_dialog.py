@@ -42,7 +42,7 @@ from ui.workers.base import CancellableWorker
 
 logger = logging.getLogger(__name__)
 
-_AUDIO_FORMATS = "Audio Files (*.mp3 *.wav *.flac *.m4a *.aac *.ogg);;All Files (*)"
+from core.audio_formats import AUDIO_FILE_DIALOG_FILTER as _AUDIO_FORMATS
 
 
 class StaccatoAnalyzeWorker(CancellableWorker):

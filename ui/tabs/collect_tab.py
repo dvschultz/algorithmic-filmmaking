@@ -4,36 +4,46 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtWidgets import (
-    QVBoxLayout,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QVBoxLayout,
 )
 from PySide6.QtCore import Signal
 
 from .base_tab import BaseTab
+from core.audio_formats import AUDIO_FILE_DIALOG_FILTER, is_audio_file
+from models.audio_source import AudioSource
 from models.clip import Source
 from ui.dialogs import URLImportDialog
 from ui.source_browser import SourceBrowser
-from ui.youtube_search_panel import YouTubeSearchPanel
 from ui.theme import theme, TypeScale
+from ui.widgets.audio_library_list import AudioLibraryList
+from ui.youtube_search_panel import YouTubeSearchPanel
 
 
 class CollectTab(BaseTab):
     """Tab for importing local videos and managing video library.
 
     Signals:
-        videos_added: Emitted when videos are added to library (paths: list[Path])
+        videos_added: Emitted when video files are added to library (paths: list[Path])
+        audio_files_added: Emitted when audio files are added (paths: list[Path])
+        audio_remove_requested: Emitted when an audio source removal is requested (audio_source_id: str)
         analyze_requested: Emitted when analysis is requested (source_ids: list[str])
             If empty list, analyze all unanalyzed sources.
         download_requested: Emitted when URL download is requested (url: str, resolution: str)
         source_selected: Emitted when a source is selected (source: Source)
+        audio_source_selected: Emitted when an audio source row is clicked (audio: AudioSource)
     """
 
     videos_added = Signal(list)  # list of Paths
+    audio_files_added = Signal(list)  # list of Paths
+    audio_remove_requested = Signal(str)  # audio source id
     analyze_requested = Signal(list)  # list of source IDs (empty = all unanalyzed)
     download_requested = Signal(str, str)  # URL, resolution tier
     source_selected = Signal(object)  # Source
+    audio_source_selected = Signal(object)  # AudioSource
     delete_sources_requested = Signal(list)  # list of source IDs
 
     def _setup_ui(self):
@@ -58,6 +68,19 @@ class CollectTab(BaseTab):
         self.source_browser.delete_sources_requested.connect(self.delete_sources_requested)
         layout.addWidget(self.source_browser, 1)  # Stretch factor 1
 
+        # Audio library section (below videos)
+        self._audio_header = QLabel("Audio Library")
+        self._audio_header.setStyleSheet(
+            f"color: {theme().text_primary}; font-weight: bold; "
+            f"font-size: {TypeScale.MD}px; padding: 10px 10px 4px 10px;"
+        )
+        layout.addWidget(self._audio_header)
+
+        self.audio_library = AudioLibraryList()
+        self.audio_library.audio_source_selected.connect(self.audio_source_selected)
+        self.audio_library.remove_requested.connect(self.audio_remove_requested)
+        layout.addWidget(self.audio_library)
+
     def _create_toolbar(self) -> QHBoxLayout:
         """Create the top toolbar."""
         toolbar = QHBoxLayout()
@@ -77,6 +100,14 @@ class CollectTab(BaseTab):
 
         toolbar.addStretch()
 
+        # Import audio button
+        self.audio_btn = QPushButton("Import Audio...")
+        self.audio_btn.setToolTip("Import audio files (mp3/wav/m4a/flac/ogg)")
+        self.audio_btn.clicked.connect(self._on_audio_click)
+        toolbar.addWidget(self.audio_btn)
+
+        toolbar.addSpacing(8)
+
         # Import from URL button
         self.url_btn = QPushButton("Import from URL...")
         self.url_btn.setToolTip("Download video from YouTube or Vimeo")
@@ -95,8 +126,21 @@ class CollectTab(BaseTab):
         return toolbar
 
     def _on_files_dropped(self, paths: list[Path]):
-        """Handle files dropped on add card."""
-        self.videos_added.emit(paths)
+        """Route dropped files: audio extensions to audio import, the rest to videos."""
+        audio_paths = [p for p in paths if is_audio_file(p)]
+        video_paths = [p for p in paths if not is_audio_file(p)]
+        if audio_paths:
+            self.audio_files_added.emit(audio_paths)
+        if video_paths:
+            self.videos_added.emit(video_paths)
+
+    def _on_audio_click(self):
+        """Open a file dialog to pick audio files."""
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Import Audio Files", "", AUDIO_FILE_DIALOG_FILTER
+        )
+        if paths:
+            self.audio_files_added.emit([Path(p) for p in paths])
 
     def _on_analyze_click(self):
         """Handle Cut New Videos button click."""
@@ -156,6 +200,7 @@ class CollectTab(BaseTab):
     def clear(self):
         """Clear all sources from the library."""
         self.source_browser.clear()
+        self.audio_library.set_sources([])
         self._update_ui_state()
 
     def get_source(self, source_id: str) -> Optional[Source]:
@@ -195,3 +240,13 @@ class CollectTab(BaseTab):
             self.url_btn.setText("Downloading...")
         else:
             self.url_btn.setText("Import from URL...")
+
+    # --- Audio source list management ---
+
+    def set_audio_sources(self, audio_sources: list[AudioSource]) -> None:
+        """Render the given audio sources in the audio library list."""
+        self.audio_library.set_sources(audio_sources)
+
+    def get_audio_sources(self) -> list[AudioSource]:
+        """Return the currently displayed audio sources."""
+        return self.audio_library.get_sources()
