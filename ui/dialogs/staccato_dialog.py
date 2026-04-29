@@ -277,11 +277,26 @@ class StaccatoDialog(QDialog):
 
     sequence_ready = Signal(object)  # list of (Clip, Source)
 
-    def __init__(self, clips: list, parent=None):
+    # Sentinel value stored in the combo box for the "Import new…" item.
+    _IMPORT_NEW_SENTINEL = "__import_new__"
+
+    def __init__(self, clips: list, project=None, parent=None):
+        """Create the Staccato dialog.
+
+        Args:
+            clips: List of (Clip, Source) tuples to process.
+            project: Project instance — used to populate the audio-source
+                picker and to register newly imported audio sources. May be
+                None for legacy callers that pre-date the picker (the dialog
+                falls back to a single Import-new item in that case).
+            parent: Qt parent widget.
+        """
         super().__init__(parent)
         self._clips = clips
+        self._project = project
         self._analyze_worker = None
         self._generate_worker = None
+        self._import_worker = None  # In-flight AudioImportWorker, if any
         self._audio_analysis: AudioAnalysis | None = None
         self._audio_samples: np.ndarray | None = None
         self._music_path: Path | None = None
@@ -298,6 +313,7 @@ class StaccatoDialog(QDialog):
         self.setMinimumWidth(520)
         self.setMinimumHeight(420)
         self._setup_ui()
+        self._populate_audio_combo()
 
     @property
     def music_path(self) -> Path | None:
@@ -342,15 +358,15 @@ class StaccatoDialog(QDialog):
 
         layout.addSpacing(Spacing.SM)
 
-        # Music file picker
+        # Music source picker (project audio sources + "Import new…")
         file_row = QHBoxLayout()
-        self._file_label = QLabel("No file selected")
-        self._file_label.setStyleSheet(f"color: {theme().text_muted};")
-        file_row.addWidget(self._file_label, 1)
+        file_row.addWidget(QLabel("Audio source:"))
 
-        file_btn = QPushButton("Select Music File...")
-        file_btn.clicked.connect(self._on_select_file)
-        file_row.addWidget(file_btn)
+        self._audio_combo = QComboBox()
+        self._audio_combo.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)
+        self._audio_combo.setMinimumWidth(UISizes.COMBO_BOX_MIN_WIDTH)
+        self._audio_combo.currentIndexChanged.connect(self._on_audio_combo_changed)
+        file_row.addWidget(self._audio_combo, 1)
         layout.addLayout(file_row)
 
         # Stem separation controls
@@ -605,22 +621,156 @@ class StaccatoDialog(QDialog):
 
         return page
 
-    @Slot()
-    def _on_select_file(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Select Music File", "", _AUDIO_FORMATS,
-        )
-        if not path:
+    def _populate_audio_combo(self) -> None:
+        """Populate the audio-source combo from the project + the Import-new item."""
+        self._audio_combo.blockSignals(True)
+        self._audio_combo.clear()
+
+        audio_sources = list(self._project.audio_sources) if self._project is not None else []
+
+        if not audio_sources:
+            self._audio_combo.addItem("No audio sources — import one below", None)
+            # Disable that placeholder so it's never picked as a real source
+            model = self._audio_combo.model()
+            item = model.item(0) if hasattr(model, "item") else None
+            if item is not None:
+                item.setEnabled(False)
+        else:
+            for audio in audio_sources:
+                label = f"{audio.filename} ({audio.duration_str})"
+                self._audio_combo.addItem(label, audio.id)
+
+        self._audio_combo.insertSeparator(self._audio_combo.count())
+        self._audio_combo.addItem("Import new…", self._IMPORT_NEW_SENTINEL)
+
+        # Default selection: first real audio source if one exists, else placeholder
+        if audio_sources:
+            self._audio_combo.setCurrentIndex(0)
+        else:
+            self._audio_combo.setCurrentIndex(0)
+
+        self._audio_combo.blockSignals(False)
+
+        # Trigger analysis for the default selection (if any real source picked)
+        if audio_sources:
+            self._select_audio_source_by_id(audio_sources[0].id)
+
+    def _select_audio_source_by_id(self, audio_source_id: str) -> None:
+        """Switch the dialog to use the given audio source and re-analyze."""
+        if self._project is None:
+            return
+        audio = self._project.get_audio_source(audio_source_id)
+        if audio is None:
             return
 
-        self._music_path = Path(path)
-        self._file_label.setText(self._music_path.name)
-        self._file_label.setStyleSheet(f"color: {theme().text_primary};")
+        if not audio.file_path.exists():
+            self._info_label.setText(
+                f"Audio file is missing on disk: {audio.filename}"
+            )
+            self._music_path = None
+            self._generate_btn.setEnabled(False)
+            return
+
+        self._music_path = audio.file_path
         self._generate_btn.setEnabled(False)
         self._info_label.setText("Analyzing audio...")
         self._waveform.clear()
-
         self._analyze_audio()
+
+    @Slot(int)
+    def _on_audio_combo_changed(self, index: int) -> None:
+        """Handle selection change in the audio source combo."""
+        if index < 0:
+            return
+        data = self._audio_combo.itemData(index)
+        if data is None:
+            # Placeholder ("No audio sources"); nothing to do.
+            return
+        if data == self._IMPORT_NEW_SENTINEL:
+            self._on_import_new_audio()
+            return
+        # Real audio source id
+        self._select_audio_source_by_id(data)
+
+    def _on_import_new_audio(self) -> None:
+        """Open a file dialog to pick an audio file; spawn an import worker."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import Audio File", "", _AUDIO_FORMATS,
+        )
+        if not path:
+            self._reset_combo_to_current_source()
+            return
+
+        if self._project is None:
+            # Legacy fallback: just use the path directly
+            self._music_path = Path(path)
+            self._info_label.setText("Analyzing audio...")
+            self._waveform.clear()
+            self._analyze_audio()
+            return
+
+        # Spawn AudioImportWorker; on success, add to project and select it.
+        from ui.workers.audio_import_worker import AudioImportWorker
+
+        self._info_label.setText(f"Importing {Path(path).name}…")
+        self._generate_btn.setEnabled(False)
+
+        self._import_worker = AudioImportWorker(Path(path), parent=self)
+        self._import_worker.audio_ready.connect(self._on_imported_audio_ready)
+        self._import_worker.error.connect(self._on_imported_audio_error)
+        self._import_worker.finished_signal.connect(self._on_import_worker_finished)
+        self._import_worker.start()
+
+    @Slot(object)
+    def _on_imported_audio_ready(self, audio) -> None:
+        """Add the freshly imported audio source and select it."""
+        if self._project is not None:
+            self._project.add_audio_source(audio)
+        # Refresh the combo so the new source appears, then select it.
+        self._populate_audio_combo()
+        if self._project is not None:
+            # Find the index whose data matches the new id
+            for i in range(self._audio_combo.count()):
+                if self._audio_combo.itemData(i) == audio.id:
+                    self._audio_combo.setCurrentIndex(i)
+                    return
+        # Project-less fallback (shouldn't really happen): use path directly
+        self._music_path = audio.file_path
+        self._info_label.setText("Analyzing audio...")
+        self._analyze_audio()
+
+    @Slot(str)
+    def _on_imported_audio_error(self, message: str) -> None:
+        """Surface the import error and reset the combo."""
+        self._info_label.setText(f"Audio import failed: {message}")
+        self._reset_combo_to_current_source()
+
+    def _on_import_worker_finished(self) -> None:
+        self._import_worker = None
+
+    def _reset_combo_to_current_source(self) -> None:
+        """After a cancelled / failed Import-new, restore the combo to the
+        currently-selected audio source (or first real one) without triggering
+        analysis.
+        """
+        self._audio_combo.blockSignals(True)
+        target_id: str | None = None
+        if self._music_path is not None and self._project is not None:
+            for audio in self._project.audio_sources:
+                if audio.file_path == self._music_path:
+                    target_id = audio.id
+                    break
+        if target_id is None and self._project is not None and self._project.audio_sources:
+            target_id = self._project.audio_sources[0].id
+
+        if target_id is not None:
+            for i in range(self._audio_combo.count()):
+                if self._audio_combo.itemData(i) == target_id:
+                    self._audio_combo.setCurrentIndex(i)
+                    break
+        else:
+            self._audio_combo.setCurrentIndex(0)
+        self._audio_combo.blockSignals(False)
 
     @Slot(bool)
     def _on_stem_toggled(self, checked: bool):
