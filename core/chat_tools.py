@@ -4271,10 +4271,13 @@ def analyze_all_live(
 
 
 @tools.register(
-    description="Run a custom visual query across clips. Evaluates whether each clip's "
-                "thumbnail matches a natural language description (e.g., 'blue flower', "
-                "'person wearing a hat'). Returns True/False with confidence for each clip. "
-                "Uses the configured VLM (cloud or local). Results accumulate on clips.",
+    description="Run the Custom Visual Query analysis operation across clips. "
+                "Use this tool when the user asks to visually search for something "
+                "inside clips, such as 'eye', 'blue flower', or 'person wearing a hat'. "
+                "This is NOT a sorting/sequencing algorithm and NOT a metadata-only "
+                "description search. It runs a VLM yes/no query on clip thumbnails and "
+                "returns actual match/non-match results with confidence. Results "
+                "accumulate on clips.",
     requires_project=True,
     modifies_gui_state=True,
     modifies_project_state=True

@@ -1209,17 +1209,17 @@ class TestPendingActionTracking:
 class TestExportBundle:
     """Tests for export_bundle tool."""
 
-    def test_export_bundle_no_main_window(self):
+    def test_export_bundle_no_main_window(self, tmp_path):
         """Test export_bundle returns error when main_window is None."""
         from core.chat_tools import export_bundle
 
         project = _create_chat_test_project()
-        result = export_bundle(None, project)
+        result = export_bundle(None, project, output_path=str(tmp_path / "bundle"))
 
         assert result["success"] is False
         assert "Main window" in result["error"]
 
-    def test_export_bundle_already_running(self):
+    def test_export_bundle_already_running(self, tmp_path):
         """Test export_bundle returns error when already in progress."""
         from core.chat_tools import export_bundle
 
@@ -1229,7 +1229,7 @@ class TestExportBundle:
         worker.isRunning.return_value = True
         main_window.export_bundle_worker = worker
 
-        result = export_bundle(main_window, project)
+        result = export_bundle(main_window, project, output_path=str(tmp_path / "bundle"))
 
         assert result["success"] is False
         assert "already in progress" in result["error"]
@@ -1285,6 +1285,24 @@ class TestExportBundle:
 
         assert result["success"] is False
         assert "Failed to start" in result["error"]
+
+    def test_custom_visual_query_returns_analysis_pipeline_marker(self):
+        """custom_visual_query should route to the real analysis operation."""
+        from core.chat_tools import custom_visual_query
+
+        project = _create_chat_test_project()
+        clip = make_test_clip("clip-eye")
+        project.add_clips([clip])
+        main_window = Mock()
+        main_window.project = project
+        main_window.analyze_tab.get_clips.return_value = [clip]
+
+        result = custom_visual_query(main_window, query="eye")
+
+        assert result["_wait_for_worker"] == "analyze_all"
+        assert result["operations"] == ["custom_query"]
+        assert result["clip_ids"] == ["clip-eye"]
+        assert main_window._custom_query_text == "eye"
 
 
 class TestUpdateClipCinematography:

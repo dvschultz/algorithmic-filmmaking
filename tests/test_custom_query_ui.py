@@ -156,6 +156,47 @@ def test_custom_query_ready_updates_tabs_sidebar_and_dirty_state(source):
     assert dirty_calls == [True]
 
 
+def test_custom_query_agent_summary_groups_actual_matches(source):
+    from ui.main_window import MainWindow
+
+    clip_match_high = make_test_clip("c-high", description="Close-up of an eye")
+    clip_match_high.custom_queries = [
+        {"query": "eye", "match": True, "confidence": 0.91, "model": "qwen3-vl-4b"},
+    ]
+    clip_no_match = make_test_clip("c-no", description="A hand in shadow")
+    clip_no_match.custom_queries = [
+        {"query": "eye", "match": False, "confidence": 0.18, "model": "qwen3-vl-4b"},
+    ]
+    clip_match_latest = make_test_clip("c-latest", description="Eye reflection")
+    clip_match_latest.custom_queries = [
+        {"query": "eye", "match": False, "confidence": 0.22, "model": "old"},
+        {"query": "eye", "match": True, "confidence": 0.74, "model": "qwen3-vl-4b"},
+    ]
+    clip_missing = make_test_clip("c-missing")
+
+    window = SimpleNamespace(
+        project=SimpleNamespace(sources_by_id={source.id: source}),
+    )
+
+    summary = MainWindow._build_custom_query_agent_summary(
+        window,
+        [clip_match_latest, clip_no_match, clip_match_high, clip_missing],
+        "eye",
+    )
+
+    assert summary["query"] == "eye"
+    assert summary["checked_count"] == 4
+    assert summary["matched_count"] == 2
+    assert summary["non_match_count"] == 1
+    assert summary["missing_result_count"] == 1
+    assert summary["missing_result_ids"] == ["c-missing"]
+    assert [row["clip_id"] for row in summary["matches"]] == ["c-high", "c-latest"]
+    assert summary["matches"][0]["description"] == "Close-up of an eye"
+    assert summary["matches"][0]["source_name"] == "video.mp4"
+    assert "metadata search" in summary["response_guidance"]
+    assert "separate numbered-list items" in summary["response_guidance"]
+
+
 def test_clip_thumbnail_custom_query_badges_edge_cases(qapp, source):
     """Badge container hides on non-matches and cleanly re-renders on updates."""
     from ui.clip_browser import ClipBrowser

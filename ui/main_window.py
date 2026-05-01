@@ -791,6 +791,7 @@ class MainWindow(QMainWindow):
         self.description_worker: Optional[DescriptionWorker] = None
         self.custom_query_worker: Optional[CustomQueryWorker] = None
         self._custom_query_text: Optional[str] = None
+        self._active_custom_query_text: Optional[str] = None
         self.youtube_search_worker: Optional[YouTubeSearchWorker] = None
         self.ia_search_worker: Optional[InternetArchiveSearchWorker] = None
         self.bulk_download_worker: Optional[BulkDownloadWorker] = None
@@ -3820,6 +3821,7 @@ class MainWindow(QMainWindow):
 
         # Clear immediately to prevent stale reuse
         self._custom_query_text = None
+        self._active_custom_query_text = query
 
         self._custom_query_finished_handled = False
         tier = self.settings.description_model_tier
@@ -3962,6 +3964,70 @@ class MainWindow(QMainWindow):
     def _on_pipeline_custom_query_finished(self):
         self._on_analysis_phase_worker_finished("custom_query")
 
+    def _build_custom_query_agent_summary(
+        self,
+        clips: list,
+        query: str | None,
+    ) -> dict | None:
+        """Build a structured summary for the chat agent after custom query analysis."""
+        if not query:
+            return None
+
+        matches = []
+        non_matches = []
+        missing_result_ids = []
+
+        for clip in clips:
+            latest_result = None
+            for query_result in reversed(getattr(clip, "custom_queries", None) or []):
+                if str(query_result.get("query") or "").strip() == query:
+                    latest_result = query_result
+                    break
+
+            if latest_result is None:
+                missing_result_ids.append(clip.id)
+                continue
+
+            source = self.project.sources_by_id.get(clip.source_id)
+            row = {
+                "clip_id": clip.id,
+                "source_name": source.filename if source else None,
+                "match": bool(latest_result.get("match")),
+                "confidence": latest_result.get("confidence"),
+                "model": latest_result.get("model"),
+                "description": getattr(clip, "description", None),
+            }
+            if row["match"]:
+                matches.append(row)
+            else:
+                non_matches.append(row)
+
+        matches.sort(
+            key=lambda row: (
+                row["confidence"]
+                if isinstance(row.get("confidence"), (int, float))
+                else -1.0
+            ),
+            reverse=True,
+        )
+
+        return {
+            "query": query,
+            "checked_count": len(clips),
+            "matched_count": len(matches),
+            "non_match_count": len(non_matches),
+            "missing_result_count": len(missing_result_ids),
+            "missing_result_ids": missing_result_ids[:20],
+            "matches": matches[:20],
+            "response_guidance": (
+                "Summarize these actual VLM custom visual query results. "
+                "Do not describe this as a metadata search or sorting algorithm. "
+                "Format each matched clip as one bullet containing clip_id, "
+                "confidence, and description/source if present; do not split a "
+                "single match across separate numbered-list items."
+            ),
+        }
+
     def _on_analysis_phase_worker_finished(self, op_key: str):
         """Handle completion of one worker in the analysis pipeline.
 
@@ -4040,24 +4106,35 @@ class MainWindow(QMainWindow):
                 if clip.transcript:
                     transcribed_count += 1
 
+            agent_result = {
+                "success": True,
+                "clip_count": clip_count,
+                "clip_ids": [c.id for c in clips],
+                "operations_completed": completed,
+                "shot_type_summary": shot_types,
+                "transcribed_count": transcribed_count,
+                "message": f"Analyzed {clip_count} clips ({', '.join(completed)})",
+            }
+            custom_query_summary = self._build_custom_query_agent_summary(
+                clips,
+                self._active_custom_query_text,
+            )
+            if custom_query_summary is not None and "custom_query" in completed:
+                agent_result["custom_visual_query"] = custom_query_summary
+
             result = {
                 "tool_call_id": self._pending_agent_tool_call_id,
                 "name": self._pending_agent_tool_name,
                 "success": True,
-                "result": {
-                    "success": True,
-                    "clip_count": clip_count,
-                    "clip_ids": [c.id for c in clips],
-                    "operations_completed": completed,
-                    "shot_type_summary": shot_types,
-                    "transcribed_count": transcribed_count,
-                    "message": f"Analyzed {clip_count} clips ({', '.join(completed)})"
-                }
+                "result": agent_result,
             }
             self._pending_agent_tool_call_id = None
             self._pending_agent_tool_name = None
             self._chat_worker.set_gui_tool_result(result)
             logger.info(f"Sent analysis result to agent: {clip_count} clips")
+
+        if "custom_query" in completed:
+            self._active_custom_query_text = None
 
         self._analysis_clips = []
         self._analysis_selected_ops = []
