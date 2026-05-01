@@ -1,9 +1,14 @@
 """Regression tests for GUI analysis pipeline orchestration logic."""
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from core.transcription import TranscriptSegment
+from models.cinematography import CinematographyAnalysis
+from models.clip import ExtractedText, Source
+from tests.conftest import make_test_clip
 from ui.main_window import MainWindow
 
 
@@ -40,6 +45,97 @@ def test_phase_advances_from_local_to_cloud_after_color_completion():
     assert harness._analysis_current_phase == "cloud"
     assert harness._analysis_phase_remaining == 1
     assert harness.pipeline_completed is False
+
+
+def test_agent_analysis_summary_includes_operation_specific_results():
+    clip = make_test_clip(
+        "clip-1",
+        dominant_colors=[(10, 20, 30), (255, 0, 128)],
+        shot_type="close-up",
+        object_labels=["eye", "face"],
+        detected_objects=[{"label": "person", "confidence": 0.92}],
+        person_count=1,
+        description="Close-up of an eye",
+    )
+    clip.face_embeddings = [{"embedding": [0.1, 0.2], "confidence": 0.88, "bbox": [1, 2, 3, 4]}]
+    clip.extracted_texts = [
+        ExtractedText(frame_number=1, text="LOOK", confidence=0.91, source="vlm")
+    ]
+    clip.transcript = [
+        TranscriptSegment(start_time=0.0, end_time=1.2, text="I see an eye", confidence=0.9)
+    ]
+    clip.description_model = "qwen3-vl-4b"
+    clip.cinematography = CinematographyAnalysis(
+        shot_size="CU",
+        shot_size_confidence=0.83,
+        lighting_style="low_key",
+        analysis_model="test-cine",
+    )
+    clip.custom_queries = [
+        {"query": "eye", "match": True, "confidence": 0.93, "model": "qwen3-vl-4b"}
+    ]
+    clip.gaze_category = "at_camera"
+    clip.gaze_yaw = 1.5
+    clip.gaze_pitch = -0.5
+    clip.embedding = [0.1] * 512
+    clip.embedding_model = "dinov2-vit-b-14"
+    clip.first_frame_embedding = [0.1] * 512
+    clip.last_frame_embedding = [0.2] * 512
+
+    source = Source(id="src-1", file_path=Path("/test/video.mp4"))
+    harness = SimpleNamespace(
+        project=SimpleNamespace(sources_by_id={source.id: source}),
+        _active_custom_query_text="eye",
+    )
+    harness._build_agent_clip_context = lambda clip: MainWindow._build_agent_clip_context(
+        harness, clip
+    )
+    harness._build_custom_query_agent_summary = (
+        lambda clips, query: MainWindow._build_custom_query_agent_summary(
+            harness, clips, query
+        )
+    )
+    harness._rgb_to_hex = MainWindow._rgb_to_hex
+    harness._truncate_for_agent = MainWindow._truncate_for_agent
+    harness._summarize_detections_for_agent = MainWindow._summarize_detections_for_agent
+
+    results = MainWindow._build_agent_analysis_summary(
+        harness,
+        [clip],
+        [
+            "colors",
+            "shots",
+            "classify",
+            "detect_objects",
+            "face_embeddings",
+            "extract_text",
+            "transcribe",
+            "describe",
+            "cinematography",
+            "custom_query",
+            "gaze",
+            "embeddings",
+        ],
+    )
+
+    assert results["colors"]["clips"][0]["dominant_colors_hex"] == ["#0a141e", "#ff0080"]
+    assert results["shots"]["distribution"] == {"close-up": 1}
+    assert results["classify"]["clips"][0]["labels"] == ["eye", "face"]
+    assert results["detect_objects"]["total_people"] == 1
+    assert results["detect_objects"]["clips"][0]["objects"] == [
+        {"label": "person", "confidence": 0.92}
+    ]
+    assert results["face_embeddings"]["total_faces"] == 1
+    assert results["extract_text"]["clips"][0]["text"] == "LOOK"
+    assert results["transcribe"]["clips"][0]["transcript_excerpt"] == "I see an eye"
+    assert results["describe"]["clips"][0]["description"] == "Close-up of an eye"
+    assert results["describe"]["clips"][0]["model"] == "qwen3-vl-4b"
+    assert results["cinematography"]["clips"][0]["cinematography"]["shot_size"] == "CU"
+    assert results["custom_query"]["matched_count"] == 1
+    assert results["gaze"]["distribution"] == {"at_camera": 1}
+    assert results["embeddings"]["clips"][0]["embedding_dimensions"] == 512
+    assert results["embeddings"]["clips"][0]["has_boundary_embeddings"] is True
+    assert "Do not invent" in results["response_guidance"]
 
 
 class SignalStub:

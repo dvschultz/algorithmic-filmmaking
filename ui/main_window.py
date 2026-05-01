@@ -4028,6 +4028,262 @@ class MainWindow(QMainWindow):
             ),
         }
 
+    def _build_agent_clip_context(self, clip) -> dict:
+        source = self.project.sources_by_id.get(clip.source_id)
+        return {
+            "clip_id": clip.id,
+            "source_name": source.filename if source else None,
+            "description": getattr(clip, "description", None),
+        }
+
+    @staticmethod
+    def _rgb_to_hex(color) -> str | None:
+        try:
+            r, g, b = color
+            return f"#{int(r):02x}{int(g):02x}{int(b):02x}"
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _truncate_for_agent(value: str | None, limit: int = 500) -> str | None:
+        if not value:
+            return None
+        text = str(value).strip()
+        if len(text) <= limit:
+            return text
+        return text[: limit - 3].rstrip() + "..."
+
+    @staticmethod
+    def _summarize_detections_for_agent(detections: list[dict] | None) -> list[dict]:
+        rows = []
+        for detection in detections or []:
+            row = {
+                "label": detection.get("label") or detection.get("class") or detection.get("name"),
+            }
+            confidence = detection.get("confidence")
+            if isinstance(confidence, (int, float)):
+                row["confidence"] = round(float(confidence), 4)
+            rows.append(row)
+        return rows[:10]
+
+    def _build_agent_analysis_summary(
+        self,
+        clips: list,
+        completed_ops: list[str],
+    ) -> dict:
+        """Build operation-specific analysis results for chat-agent summaries."""
+        summaries: dict[str, dict] = {}
+
+        if "colors" in completed_ops:
+            per_clip = []
+            for clip in clips:
+                if not clip.dominant_colors:
+                    continue
+                row = self._build_agent_clip_context(clip)
+                row["dominant_colors_rgb"] = [list(color) for color in clip.dominant_colors[:5]]
+                row["dominant_colors_hex"] = [
+                    hex_color
+                    for hex_color in (
+                        self._rgb_to_hex(color) for color in clip.dominant_colors[:5]
+                    )
+                    if hex_color is not None
+                ]
+                per_clip.append(row)
+            summaries["colors"] = {
+                "analyzed_count": len(per_clip),
+                "clips": per_clip[:20],
+            }
+
+        if "shots" in completed_ops:
+            distribution = {}
+            per_clip = []
+            for clip in clips:
+                if not clip.shot_type:
+                    continue
+                distribution[clip.shot_type] = distribution.get(clip.shot_type, 0) + 1
+                row = self._build_agent_clip_context(clip)
+                row["shot_type"] = clip.shot_type
+                per_clip.append(row)
+            summaries["shots"] = {
+                "analyzed_count": len(per_clip),
+                "distribution": distribution,
+                "clips": per_clip[:20],
+            }
+
+        if "classify" in completed_ops:
+            per_clip = []
+            for clip in clips:
+                if not clip.object_labels:
+                    continue
+                row = self._build_agent_clip_context(clip)
+                row["labels"] = list(clip.object_labels[:10])
+                per_clip.append(row)
+            summaries["classify"] = {
+                "analyzed_count": len(per_clip),
+                "clips": per_clip[:20],
+            }
+
+        if "detect_objects" in completed_ops:
+            per_clip = []
+            total_people = 0
+            for clip in clips:
+                if clip.detected_objects is None and clip.person_count is None:
+                    continue
+                total_people += clip.person_count or 0
+                row = self._build_agent_clip_context(clip)
+                row["person_count"] = clip.person_count or 0
+                row["objects"] = self._summarize_detections_for_agent(clip.detected_objects)
+                per_clip.append(row)
+            summaries["detect_objects"] = {
+                "analyzed_count": len(per_clip),
+                "total_people": total_people,
+                "clips": per_clip[:20],
+            }
+
+        if "face_embeddings" in completed_ops:
+            per_clip = []
+            for clip in clips:
+                if not clip.face_embeddings:
+                    continue
+                row = self._build_agent_clip_context(clip)
+                row["face_count"] = len(clip.face_embeddings)
+                confidences = [
+                    entry.get("confidence")
+                    for entry in clip.face_embeddings
+                    if isinstance(entry.get("confidence"), (int, float))
+                ]
+                if confidences:
+                    row["max_confidence"] = round(max(confidences), 4)
+                per_clip.append(row)
+            summaries["face_embeddings"] = {
+                "analyzed_count": len(per_clip),
+                "total_faces": sum(row["face_count"] for row in per_clip),
+                "clips": per_clip[:20],
+            }
+
+        if "extract_text" in completed_ops:
+            per_clip = []
+            for clip in clips:
+                text = clip.combined_text
+                if not text:
+                    continue
+                row = self._build_agent_clip_context(clip)
+                row["text"] = self._truncate_for_agent(text)
+                row["text_result_count"] = len(clip.extracted_texts or [])
+                per_clip.append(row)
+            summaries["extract_text"] = {
+                "analyzed_count": len(per_clip),
+                "clips": per_clip[:20],
+            }
+
+        if "transcribe" in completed_ops:
+            per_clip = []
+            for clip in clips:
+                if not clip.transcript:
+                    continue
+                row = self._build_agent_clip_context(clip)
+                row["transcript_excerpt"] = self._truncate_for_agent(clip.get_transcript_text())
+                row["segment_count"] = len(clip.transcript)
+                per_clip.append(row)
+            summaries["transcribe"] = {
+                "analyzed_count": len(per_clip),
+                "clips": per_clip[:20],
+            }
+
+        if "describe" in completed_ops:
+            per_clip = []
+            for clip in clips:
+                if not clip.description:
+                    continue
+                row = self._build_agent_clip_context(clip)
+                row["model"] = clip.description_model
+                per_clip.append(row)
+            summaries["describe"] = {
+                "analyzed_count": len(per_clip),
+                "clips": per_clip[:20],
+            }
+
+        if "cinematography" in completed_ops:
+            per_clip = []
+            for clip in clips:
+                if not clip.cinematography:
+                    continue
+                data = clip.cinematography.to_dict()
+                row = self._build_agent_clip_context(clip)
+                row["cinematography"] = {
+                    key: data.get(key)
+                    for key in (
+                        "shot_size",
+                        "shot_size_confidence",
+                        "camera_angle",
+                        "camera_movement",
+                        "subject_position",
+                        "lighting_style",
+                        "emotional_intensity",
+                        "suggested_pacing",
+                        "analysis_model",
+                    )
+                    if data.get(key) is not None
+                }
+                per_clip.append(row)
+            summaries["cinematography"] = {
+                "analyzed_count": len(per_clip),
+                "clips": per_clip[:20],
+            }
+
+        if "custom_query" in completed_ops:
+            custom_query_summary = self._build_custom_query_agent_summary(
+                clips,
+                self._active_custom_query_text,
+            )
+            if custom_query_summary is not None:
+                summaries["custom_query"] = custom_query_summary
+
+        if "gaze" in completed_ops:
+            distribution = {}
+            per_clip = []
+            for clip in clips:
+                if not clip.gaze_category:
+                    continue
+                distribution[clip.gaze_category] = distribution.get(clip.gaze_category, 0) + 1
+                row = self._build_agent_clip_context(clip)
+                row["gaze_category"] = clip.gaze_category
+                row["gaze_yaw"] = clip.gaze_yaw
+                row["gaze_pitch"] = clip.gaze_pitch
+                per_clip.append(row)
+            summaries["gaze"] = {
+                "analyzed_count": len(per_clip),
+                "distribution": distribution,
+                "clips": per_clip[:20],
+            }
+
+        if "embeddings" in completed_ops:
+            per_clip = []
+            for clip in clips:
+                if clip.embedding is None:
+                    continue
+                row = self._build_agent_clip_context(clip)
+                row["embedding_model"] = clip.embedding_model
+                row["embedding_dimensions"] = len(clip.embedding)
+                row["has_boundary_embeddings"] = (
+                    clip.first_frame_embedding is not None
+                    and clip.last_frame_embedding is not None
+                )
+                per_clip.append(row)
+            summaries["embeddings"] = {
+                "analyzed_count": len(per_clip),
+                "clips": per_clip[:20],
+            }
+
+        if summaries:
+            summaries["response_guidance"] = (
+                "Summarize only facts present in these structured analysis results. "
+                "Do not invent clip descriptions, labels, counts, or matches that are "
+                "not present in the tool output. Group each clip's result together."
+            )
+
+        return summaries
+
     def _on_analysis_phase_worker_finished(self, op_key: str):
         """Handle completion of one worker in the analysis pipeline.
 
@@ -4115,12 +4371,11 @@ class MainWindow(QMainWindow):
                 "transcribed_count": transcribed_count,
                 "message": f"Analyzed {clip_count} clips ({', '.join(completed)})",
             }
-            custom_query_summary = self._build_custom_query_agent_summary(
-                clips,
-                self._active_custom_query_text,
-            )
-            if custom_query_summary is not None and "custom_query" in completed:
-                agent_result["custom_visual_query"] = custom_query_summary
+            analysis_results = self._build_agent_analysis_summary(clips, completed)
+            if analysis_results:
+                agent_result["analysis_results"] = analysis_results
+                if "custom_query" in analysis_results:
+                    agent_result["custom_visual_query"] = analysis_results["custom_query"]
 
             result = {
                 "tool_call_id": self._pending_agent_tool_call_id,
