@@ -4036,6 +4036,22 @@ class MainWindow(QMainWindow):
             "description": getattr(clip, "description", None),
         }
 
+    def _build_agent_detected_clip_summary(self, clips: list) -> list[dict]:
+        rows = []
+        for clip in clips[:20]:
+            source = self.project.sources_by_id.get(clip.source_id)
+            fps = source.fps if source else 30.0
+            rows.append(
+                {
+                    "clip_id": clip.id,
+                    "source_name": source.filename if source else None,
+                    "start_seconds": round(clip.start_time(fps), 3),
+                    "end_seconds": round(clip.end_time(fps), 3),
+                    "duration_seconds": round(clip.duration_seconds(fps), 3),
+                }
+            )
+        return rows
+
     @staticmethod
     def _rgb_to_hex(color) -> str | None:
         try:
@@ -4284,6 +4300,31 @@ class MainWindow(QMainWindow):
 
         return summaries
 
+    def _build_agent_analysis_result(
+        self,
+        clips: list,
+        completed_ops: list[str],
+        message: str,
+        extra: dict | None = None,
+    ) -> dict:
+        """Build the full agent-facing payload for analysis completion."""
+        result = {
+            "success": True,
+            "clip_count": len(clips),
+            "clip_ids": [clip.id for clip in clips],
+            "operations_completed": completed_ops,
+            "message": message,
+        }
+        if extra:
+            result.update(extra)
+
+        analysis_results = self._build_agent_analysis_summary(clips, completed_ops)
+        if analysis_results:
+            result["analysis_results"] = analysis_results
+            if "custom_query" in analysis_results:
+                result["custom_visual_query"] = analysis_results["custom_query"]
+        return result
+
     def _on_analysis_phase_worker_finished(self, op_key: str):
         """Handle completion of one worker in the analysis pipeline.
 
@@ -4362,20 +4403,15 @@ class MainWindow(QMainWindow):
                 if clip.transcript:
                     transcribed_count += 1
 
-            agent_result = {
-                "success": True,
-                "clip_count": clip_count,
-                "clip_ids": [c.id for c in clips],
-                "operations_completed": completed,
-                "shot_type_summary": shot_types,
-                "transcribed_count": transcribed_count,
-                "message": f"Analyzed {clip_count} clips ({', '.join(completed)})",
-            }
-            analysis_results = self._build_agent_analysis_summary(clips, completed)
-            if analysis_results:
-                agent_result["analysis_results"] = analysis_results
-                if "custom_query" in analysis_results:
-                    agent_result["custom_visual_query"] = analysis_results["custom_query"]
+            agent_result = self._build_agent_analysis_result(
+                clips,
+                completed,
+                f"Analyzed {clip_count} clips ({', '.join(completed)})",
+                {
+                    "shot_type_summary": shot_types,
+                    "transcribed_count": transcribed_count,
+                },
+            )
 
             result = {
                 "tool_call_id": self._pending_agent_tool_call_id,
@@ -4833,16 +4869,16 @@ class MainWindow(QMainWindow):
         # Send result back to agent
         if self._pending_agent_color_analysis and self._chat_worker:
             self._pending_agent_color_analysis = False
+            agent_result = self._build_agent_analysis_result(
+                clips,
+                ["colors"],
+                f"Extracted colors from {clip_count} clips",
+            )
             result = {
                 "tool_call_id": self._pending_agent_tool_call_id,
                 "name": self._pending_agent_tool_name,
                 "success": True,
-                "result": {
-                    "success": True,
-                    "clip_count": clip_count,
-                    "clip_ids": [c.id for c in clips],
-                    "message": f"Extracted colors from {clip_count} clips"
-                }
+                "result": agent_result,
             }
             self._pending_agent_tool_call_id = None
             self._pending_agent_tool_name = None
@@ -4884,17 +4920,17 @@ class MainWindow(QMainWindow):
         # Send result back to agent
         if self._pending_agent_shot_analysis and self._chat_worker:
             self._pending_agent_shot_analysis = False
+            agent_result = self._build_agent_analysis_result(
+                clips,
+                ["shots"],
+                f"Classified shot types for {clip_count} clips",
+                {"shot_type_summary": shot_types},
+            )
             result = {
                 "tool_call_id": self._pending_agent_tool_call_id,
                 "name": self._pending_agent_tool_name,
                 "success": True,
-                "result": {
-                    "success": True,
-                    "clip_count": clip_count,
-                    "clip_ids": [c.id for c in clips],
-                    "shot_type_summary": shot_types,
-                    "message": f"Classified shot types for {clip_count} clips"
-                }
+                "result": agent_result,
             }
             self._pending_agent_tool_call_id = None
             self._pending_agent_tool_name = None
@@ -4969,17 +5005,17 @@ class MainWindow(QMainWindow):
         # Send result back to agent
         if self._pending_agent_transcription and self._chat_worker:
             self._pending_agent_transcription = False
+            agent_result = self._build_agent_analysis_result(
+                clips,
+                ["transcribe"],
+                f"Transcribed {transcribed_count} of {clip_count} clips",
+                {"transcribed_count": transcribed_count},
+            )
             result = {
                 "tool_call_id": self._pending_agent_tool_call_id,
                 "name": self._pending_agent_tool_name,
                 "success": True,
-                "result": {
-                    "success": True,
-                    "clip_count": clip_count,
-                    "transcribed_count": transcribed_count,
-                    "clip_ids": [c.id for c in clips],
-                    "message": f"Transcribed {transcribed_count} of {clip_count} clips"
-                }
+                "result": agent_result,
             }
             self._pending_agent_tool_call_id = None
             self._pending_agent_tool_name = None
@@ -5621,6 +5657,14 @@ class MainWindow(QMainWindow):
                     "source_name": self.current_source.filename if self.current_source else None,
                     "clip_count": len(clip_ids),
                     "clip_ids": clip_ids,
+                    "detected_clips": self._build_agent_detected_clip_summary(
+                        current_source_clips
+                    ),
+                    "response_guidance": (
+                        "Summarize the scene detection using only these clip IDs, "
+                        "source names, and timing ranges. Do not invent descriptions "
+                        "for detected clips."
+                    ),
                     "message": f"Detected {len(clip_ids)} scenes"
                 }
             }
@@ -8021,13 +8065,18 @@ class MainWindow(QMainWindow):
             # Build result summary
             described_count = sum(1 for c in clips if c.description)
 
-            result = {
-                "success": error_count == 0 or described_count > 0,  # Partial success is still success
-                "described_clips": described_count,
-                "total_clips": len(clips),
-                "error_count": error_count,
-                "sample_descriptions": [],
-            }
+            result = self._build_agent_analysis_result(
+                clips,
+                ["describe"],
+                f"Generated descriptions for {described_count} of {len(clips)} clips",
+                {
+                    "described_clips": described_count,
+                    "total_clips": len(clips),
+                    "error_count": error_count,
+                    "sample_descriptions": [],
+                },
+            )
+            result["success"] = error_count == 0 or described_count > 0
 
             # Include error info if present
             if error_count > 0 and last_error:
@@ -8121,12 +8170,16 @@ class MainWindow(QMainWindow):
 
             # Build result summary
             classified_count = sum(1 for c in clips if c.object_labels)
-            result = {
-                "success": True,
-                "classified_clips": classified_count,
-                "total_clips": len(clips),
-                "sample_labels": [],
-            }
+            result = self._build_agent_analysis_result(
+                clips,
+                ["classify"],
+                f"Classified {classified_count} of {len(clips)} clips",
+                {
+                    "classified_clips": classified_count,
+                    "total_clips": len(clips),
+                    "sample_labels": [],
+                },
+            )
 
             # Include sample labels from first few clips
             for clip in clips[:3]:
@@ -8283,7 +8336,6 @@ class MainWindow(QMainWindow):
             total_people = sum(c.person_count or 0 for c in clips)
 
             result = {
-                "success": True,
                 "analyzed_clips": detected_count,
                 "total_clips": len(clips),
                 "total_people_detected": total_people,
@@ -8298,6 +8350,12 @@ class MainWindow(QMainWindow):
                             label = det["label"]
                             all_labels[label] = all_labels.get(label, 0) + 1
                 result["object_counts"] = all_labels
+            result = self._build_agent_analysis_result(
+                clips,
+                ["detect_objects"],
+                f"Detected objects in {detected_count} of {len(clips)} clips",
+                result,
+            )
 
             if self._chat_worker:
                 result = {

@@ -1738,6 +1738,36 @@ class TestGazeAlgorithmsInAgentTools:
         assert result["success"] is True
         main_window.sequence_tab.generate_and_apply.assert_called_once()
 
+    def test_generate_remix_adds_agent_sequence_summary(self):
+        """Generated remix results should include ordered clip context for the agent."""
+        from core.chat_tools import generate_remix
+
+        project = _create_chat_test_project()
+        clip = make_test_clip(
+            "clip-1",
+            source_id="src-1",
+            start_frame=30,
+            end_frame=90,
+            description="Close-up of an eye",
+        )
+        project.add_clips([clip])
+
+        main_window = Mock()
+        main_window.sequence_tab.generate_and_apply.return_value = {
+            "success": True,
+            "clip_count": 1,
+            "algorithm": "sequential",
+            "clips": [{"id": "clip-1", "source_id": "src-1", "duration": 2.0}],
+        }
+
+        result = generate_remix(project, main_window, algorithm="sequential", clip_count=1)
+
+        assert result["success"] is True
+        assert result["sequence_summary"]["ordered_clip_count"] == 1
+        assert result["sequence_summary"]["clips"][0]["clip_id"] == "clip-1"
+        assert result["sequence_summary"]["clips"][0]["source_name"] == "video1.mp4"
+        assert "Do not invent" in result["sequence_summary"]["response_guidance"]
+
     def test_generate_remix_rejects_invalid_algorithm(self):
         """Test that generate_remix rejects unknown algorithm names."""
         from core.chat_tools import generate_remix
@@ -1904,6 +1934,11 @@ class TestStorytellerTool:
         main_window.sequence_tab.timeline.clear_timeline.assert_called_once()
         main_window.sequence_tab.timeline._on_zoom_fit.assert_called_once()
         main_window.sequence_tab._set_state.assert_called_once_with("timeline")
+        assert result["sequence_summary"]["ordered_clip_count"] == 2
+        assert [row["clip_id"] for row in result["sequence_summary"]["clips"]] == [
+            "clip-2",
+            "clip-1",
+        ]
 
 
 class TestStaccatoTool:
@@ -1937,3 +1972,26 @@ class TestStaccatoTool:
 
         assert result["success"] is False
         assert "embeddings" in result["error"].lower()
+
+
+class TestAnalysisReportTool:
+    """Tests for agent-facing analysis report payloads."""
+
+    def test_generate_analysis_report_truncates_large_report_for_agent(self):
+        """Large reports should provide an excerpt instead of flooding tool context."""
+        from core.chat_tools import generate_analysis_report
+
+        project = _create_chat_test_project()
+        clip = make_test_clip("clip-1", source_id="src-1", start_frame=0, end_frame=60)
+        project.add_clips([clip])
+        project.add_to_sequence(["clip-1"])
+        long_report = "section text " * 1200
+
+        with patch("core.scene_report.generate_sequence_report", return_value=long_report):
+            result = generate_analysis_report(project)
+
+        assert result["success"] is True
+        assert "report" not in result
+        assert result["report_summary"]["is_truncated"] is True
+        assert len(result["report_summary"]["report_excerpt"]) < len(long_report)
+        assert "Do not paste the full report" in result["report_summary"]["response_guidance"]

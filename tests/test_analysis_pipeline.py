@@ -98,6 +98,9 @@ def test_agent_analysis_summary_includes_operation_specific_results():
     harness._rgb_to_hex = MainWindow._rgb_to_hex
     harness._truncate_for_agent = MainWindow._truncate_for_agent
     harness._summarize_detections_for_agent = MainWindow._summarize_detections_for_agent
+    harness._build_agent_analysis_summary = (
+        lambda clips, ops: MainWindow._build_agent_analysis_summary(harness, clips, ops)
+    )
 
     results = MainWindow._build_agent_analysis_summary(
         harness,
@@ -136,6 +139,47 @@ def test_agent_analysis_summary_includes_operation_specific_results():
     assert results["embeddings"]["clips"][0]["embedding_dimensions"] == 512
     assert results["embeddings"]["clips"][0]["has_boundary_embeddings"] is True
     assert "Do not invent" in results["response_guidance"]
+
+
+def test_agent_analysis_result_wraps_single_operation_structured_results():
+    clip = make_test_clip(
+        "clip-1",
+        dominant_colors=[(10, 20, 30)],
+        description="A clipped result",
+    )
+    source = Source(id="src-1", file_path=Path("/test/video.mp4"))
+    harness = SimpleNamespace(
+        project=SimpleNamespace(sources_by_id={source.id: source}),
+        _active_custom_query_text=None,
+    )
+    harness._build_agent_clip_context = lambda clip: MainWindow._build_agent_clip_context(
+        harness, clip
+    )
+    harness._build_custom_query_agent_summary = (
+        lambda clips, query: MainWindow._build_custom_query_agent_summary(
+            harness, clips, query
+        )
+    )
+    harness._rgb_to_hex = MainWindow._rgb_to_hex
+    harness._truncate_for_agent = MainWindow._truncate_for_agent
+    harness._summarize_detections_for_agent = MainWindow._summarize_detections_for_agent
+    harness._build_agent_analysis_summary = (
+        lambda clips, ops: MainWindow._build_agent_analysis_summary(harness, clips, ops)
+    )
+
+    result = MainWindow._build_agent_analysis_result(
+        harness,
+        [clip],
+        ["colors"],
+        "Extracted colors from 1 clips",
+    )
+
+    assert result["success"] is True
+    assert result["operations_completed"] == ["colors"]
+    assert result["analysis_results"]["colors"]["clips"][0]["dominant_colors_hex"] == [
+        "#0a141e"
+    ]
+    assert "Do not invent" in result["analysis_results"]["response_guidance"]
 
 
 class SignalStub:

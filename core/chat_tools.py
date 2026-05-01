@@ -126,6 +126,115 @@ def _is_path_under(path: Path, root: Path) -> bool:
         return False
 
 
+def _truncate_for_agent(text: str | None, limit: int = 1200) -> str | None:
+    """Keep tool payloads concise enough for reliable agent summaries."""
+    if not text:
+        return None
+    value = str(text).strip()
+    if len(value) <= limit:
+        return value
+    return value[: limit - 3].rstrip() + "..."
+
+
+def _clip_summary_for_agent(project, clip, source=None, index: int | None = None) -> dict:
+    """Compact, factual clip context for LLM-facing tool results."""
+    if source is None:
+        source = project.sources_by_id.get(clip.source_id)
+    fps = source.fps if source else 30.0
+    row = {
+        "clip_id": clip.id,
+        "source_id": clip.source_id,
+        "source_name": source.filename if source else None,
+        "start_seconds": round(clip.start_time(fps), 3),
+        "duration_seconds": round(clip.duration_seconds(fps), 3),
+    }
+    if index is not None:
+        row["sequence_index"] = index
+    if getattr(clip, "description", None):
+        row["description"] = _truncate_for_agent(clip.description, 240)
+    if getattr(clip, "shot_type", None):
+        row["shot_type"] = clip.shot_type
+    return row
+
+
+def _summarize_clip_sequence_for_agent(
+    project,
+    clip_entries: list,
+    *,
+    limit: int = 20,
+) -> dict:
+    """Summarize ordered clip entries returned by sequence/remix tools."""
+    clips = []
+    total_duration = 0.0
+    for index, entry in enumerate(clip_entries):
+        if isinstance(entry, dict):
+            clip = project.clips_by_id.get(entry.get("id") or entry.get("clip_id"))
+            source = project.sources_by_id.get(entry.get("source_id") or "")
+            if source is None and clip is not None:
+                source = project.sources_by_id.get(clip.source_id)
+            duration = entry.get("duration") or entry.get("duration_seconds")
+        else:
+            clip = entry[0] if entry else None
+            source = entry[1] if len(entry) > 1 else None
+            if len(entry) > 3 and isinstance(entry[2], (int, float)) and isinstance(entry[3], (int, float)):
+                fps = source.fps if source else 30.0
+                duration = (entry[3] - entry[2]) / fps
+            else:
+                duration = entry[2] if len(entry) > 2 and isinstance(entry[2], (int, float)) else None
+
+        if clip is None:
+            continue
+        if duration is None:
+            fps = source.fps if source else 30.0
+            duration = clip.duration_seconds(fps)
+        total_duration += float(duration)
+        if len(clips) < limit:
+            row = _clip_summary_for_agent(project, clip, source, index=index + 1)
+            row["sequence_duration_seconds"] = round(float(duration), 3)
+            clips.append(row)
+
+    return {
+        "ordered_clip_count": len(clip_entries),
+        "summarized_clip_count": len(clips),
+        "total_duration_seconds": round(total_duration, 3),
+        "clips": clips,
+        "response_guidance": (
+            "Summarize this generated sequence using only these ordered clips, "
+            "durations, source names, and stated tool parameters. Do not invent "
+            "visual details or rationale that is not present in the payload."
+        ),
+    }
+
+
+def _add_sequence_summary_for_agent(project, result: dict, clip_entries: list | None = None) -> dict:
+    """Attach a compact ordered sequence summary to a successful tool result."""
+    if not result.get("success"):
+        return result
+    entries = clip_entries
+    if entries is None:
+        entries = result.get("clips", [])
+    if entries:
+        result["sequence_summary"] = _summarize_clip_sequence_for_agent(project, entries)
+    return result
+
+
+def _summarize_report_for_agent(report: str, sections: list[str], output_format: str) -> dict:
+    """Return report metadata and a bounded excerpt for chat responses."""
+    excerpt_limit = 6000 if output_format == "markdown" else 3000
+    return {
+        "format": output_format,
+        "sections_included": sections,
+        "character_count": len(report),
+        "word_count": len(report.split()) if output_format == "markdown" else 0,
+        "is_truncated": len(report) > excerpt_limit,
+        "report_excerpt": _truncate_for_agent(report, excerpt_limit),
+        "response_guidance": (
+            "Use report_excerpt for the chat response. Do not paste the full report "
+            "unless the user explicitly asks for it; mention when the report is truncated."
+        ),
+    }
+
+
 # Timeout values for tools (in seconds)
 # Used by both CLI subprocess calls and GUI tool async workers
 TOOL_TIMEOUTS = {
@@ -3431,6 +3540,15 @@ def detect_scenes(
             "clips_detected": len(clips),
             "clip_ids": [clip.id for clip in clips],
             "source_id": source.id,
+            "source_name": source.filename,
+            "detected_clips": [
+                _clip_summary_for_agent(project, clip, source)
+                for clip in clips[:20]
+            ],
+            "response_guidance": (
+                "Summarize scene detection using only the detected clip IDs, "
+                "source name, and timing ranges. Do not invent clip descriptions."
+            ),
             "is_fallback_clip": False,
             "message": message
         }
@@ -4670,6 +4788,7 @@ def generate_remix(
         no_color_handling=no_color_handling,
         transform_options=transform_options,
     )
+    _add_sequence_summary_for_agent(project, result)
 
     return result
 
@@ -4772,12 +4891,12 @@ def generate_eyes_without_a_face(
         seq_tab.timeline._on_zoom_fit()
         seq_tab._set_state(seq_tab.STATE_TIMELINE)
 
-        return {
+        return _add_sequence_summary_for_agent(project, {
             "success": True,
             "algorithm": f"eyes_without_a_face ({mode})",
             "clip_count": len(sorted_clips),
             "mode": mode,
-        }
+        }, sorted_clips)
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -4866,6 +4985,7 @@ def generate_exquisite_corpus(
         seq_tab.timeline.clear_timeline()
         current_frame = 0
         applied = 0
+        applied_entries = []
         for line in poem_lines:
             clip = line.clip
             source = project.sources_by_id.get(clip.source_id)
@@ -4873,17 +4993,18 @@ def generate_exquisite_corpus(
                 seq_tab.timeline.add_clip(clip, source, track_index=0, start_frame=current_frame)
                 current_frame += clip.duration_frames
                 applied += 1
+                applied_entries.append((clip, source))
         seq_tab.timeline._on_zoom_fit()
         seq_tab._set_state(seq_tab.STATE_TIMELINE)
 
-        return {
+        return _add_sequence_summary_for_agent(project, {
             "success": True,
             "algorithm": "exquisite_corpus",
             "clip_count": applied,
             "poem_lines": len(poem_lines),
             "mood": mood,
             "form": form,
-        }
+        }, applied_entries)
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -4963,13 +5084,13 @@ def generate_storyteller(
         seq_tab.timeline._on_zoom_fit()
         seq_tab._set_state(seq_tab.STATE_TIMELINE)
 
-        return {
+        return _add_sequence_summary_for_agent(project, {
             "success": True,
             "algorithm": "storyteller",
             "clip_count": applied,
             "structure": structure,
             "theme": theme,
-        }
+        }, sequence)
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -5058,7 +5179,7 @@ def generate_cassette_tape(
         seq_tab = main_window.sequence_tab
         seq_tab._apply_cassette_tape_sequence(sequence_data)
 
-        return {
+        return _add_sequence_summary_for_agent(project, {
             "success": True,
             "algorithm": "cassette_tape",
             "clip_count": len(sequence_data),
@@ -5066,7 +5187,7 @@ def generate_cassette_tape(
                 {"phrase": p, "match_count": len(results.get(p, []))}
                 for p, _ in phrases_with_counts
             ],
-        }
+        }, sequence_data)
     except Exception as e:
         logger.exception("generate_cassette_tape failed")
         return {"success": False, "error": str(e)}
@@ -5151,13 +5272,13 @@ def generate_signature_style(
         seq_tab.timeline._on_zoom_fit()
         seq_tab._set_state(seq_tab.STATE_TIMELINE)
 
-        return {
+        return _add_sequence_summary_for_agent(project, {
             "success": True,
             "algorithm": f"signature_style ({mode})",
             "clip_count": len(sequence),
             "sample_count": sample_count,
             "reference_image": str(image_path),
-        }
+        }, [(clip, source, (out_pt - in_pt) / source.fps) for clip, source, in_pt, out_pt in sequence])
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -5235,7 +5356,7 @@ def generate_reference_guided(
         allow_repeats=allow_repeats,
     )
 
-    return result
+    return _add_sequence_summary_for_agent(project, result)
 
 
 @tools.register(
@@ -5342,13 +5463,13 @@ def generate_rose_hobart(
             sequence_clips, "rose_hobart", "Rose Hobart"
         )
 
-    return {
+    return _add_sequence_summary_for_agent(project, {
         "success": True,
         "matched_count": len(matched),
         "total_clips": len(clips),
         "sensitivity": sensitivity,
         "ordering": ordering,
-    }
+    }, [(clip, source) for clip, source, _confidence in sequence_clips])
 
 
 @tools.register(
@@ -6226,7 +6347,7 @@ def generate_staccato(
         sequence_clips, str(validated_path)
     )
 
-    return {
+    response = {
         "success": True,
         "clip_count": len(sequence_clips),
         "slot_count": result.debug.total_slots if result.debug else len(sequence_clips),
@@ -6239,6 +6360,30 @@ def generate_staccato(
             f"beat slots at {audio_analysis.tempo_bpm:.1f} BPM"
         ),
     }
+    if result.debug:
+        response["staccato_debug_summary"] = {
+            "total_slots": result.debug.total_slots,
+            "total_clips_available": result.debug.total_clips_available,
+            "looped_slot_count": sum(1 for slot in result.debug.slots if slot.needs_loop),
+            "slots": [
+                {
+                    "slot_index": slot.slot_index,
+                    "start_time": round(slot.start_time, 3),
+                    "end_time": round(slot.end_time, 3),
+                    "clip_id": slot.clip_id,
+                    "source_name": slot.source_filename,
+                    "onset_strength": round(slot.onset_strength, 4),
+                    "cosine_distance": (
+                        round(slot.cosine_distance, 4)
+                        if slot.cosine_distance is not None
+                        else None
+                    ),
+                    "needs_loop": slot.needs_loop,
+                }
+                for slot in result.debug.slots[:20]
+            ],
+        }
+    return _add_sequence_summary_for_agent(project, response, sequence_clips)
 
 
 # =============================================================================
@@ -6486,17 +6631,18 @@ def generate_analysis_report(
         if output_format == "html":
             report = report_to_html(report)
 
-        # Calculate word count (for markdown)
-        word_count = len(report.split()) if output_format == "markdown" else 0
-
-        return {
+        report_summary = _summarize_report_for_agent(report, sections, output_format)
+        result = {
             "success": True,
             "format": output_format,
             "sections_included": sections,
-            "word_count": word_count,
-            "report": report,
-            "message": f"Generated {output_format} report with {len(sections)} sections"
+            "word_count": report_summary["word_count"],
+            "report_summary": report_summary,
+            "message": f"Generated {output_format} report with {len(sections)} sections",
         }
+        if not report_summary["is_truncated"]:
+            result["report"] = report
+        return result
 
     except Exception as e:
         return {
