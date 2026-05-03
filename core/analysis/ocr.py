@@ -27,9 +27,12 @@ _ocr_engine_lock = threading.Lock()
 
 def ensure_ocr_runtime_available():
     """Validate that the OCR runtime imports cleanly."""
+    global _paddleocr_available
+
     try:
         from paddleocr import PaddleOCR
 
+        _paddleocr_available = True
         return PaddleOCR
     except Exception as e:
         raise RuntimeError(f"OCR runtime is incomplete: {e}") from e
@@ -51,9 +54,9 @@ def _check_paddleocr() -> bool:
                 ensure_ocr_runtime_available()
                 _paddleocr_available = True
                 logger.info("PaddleOCR available")
-            except ImportError:
+            except Exception as e:
                 _paddleocr_available = False
-                logger.info("PaddleOCR not available")
+                logger.info(f"PaddleOCR not available: {e}")
 
     return _paddleocr_available
 

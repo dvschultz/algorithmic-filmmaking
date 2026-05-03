@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-02-06T02:44:42.206352+00:00",
+  "updated_at": "2026-05-03T22:40:49.261601+00:00",
   "patterns": [
     {
       "signature": "unknown-component|unknown-cause|linux-pyside6-distribution-packaging",
@@ -104,6 +104,19 @@
         "docs/solutions/ui-bugs/timeline-widget-sequence-mismatch-20260124.md"
       ],
       "symptom_examples": [],
+      "playbook_skill": null
+    },
+    {
+      "signature": "ocr-runtime-incomplete-missing-paddleocr|core/analysis/ocr.py",
+      "title": "Missing PaddleOCR runtime logs per-frame OCR extraction errors",
+      "problem_type": "runtime_error",
+      "occurrences": 1,
+      "first_seen": "2026-05-03T22:40:49.261379+00:00",
+      "last_seen": "2026-05-03T22:40:49.261599+00:00",
+      "solution_refs": [],
+      "symptom_examples": [
+        "Error extracting text from frame 55503: OCR runtime is incomplete: No module named 'paddleocr'"
+      ],
       "playbook_skill": null
     }
   ]

@@ -138,11 +138,13 @@ class TestOCRModelDownloadErrors:
         import core.analysis.ocr as mod
 
         mod._ocr_engine = None
+        mod._paddleocr_available = None
 
     def teardown_method(self):
         import core.analysis.ocr as mod
 
         mod._ocr_engine = None
+        mod._paddleocr_available = None
 
     @patch("core.analysis.ocr.ensure_ocr_runtime_available")
     def test_paddleocr_init_failure_raises_model_download_error(self, mock_ensure):
@@ -153,6 +155,16 @@ class TestOCRModelDownloadErrors:
 
         with pytest.raises(ModelDownloadError, match="PaddleOCR"):
             _get_ocr_engine()
+
+    @patch("core.analysis.ocr.ensure_ocr_runtime_available")
+    def test_missing_paddleocr_runtime_is_reported_unavailable(self, mock_ensure):
+        mock_ensure.side_effect = RuntimeError(
+            "OCR runtime is incomplete: No module named 'paddleocr'"
+        )
+
+        from core.analysis.ocr import is_paddleocr_available
+
+        assert is_paddleocr_available() is False
 
 
 class TestStemSeparationModelDownloadErrors:

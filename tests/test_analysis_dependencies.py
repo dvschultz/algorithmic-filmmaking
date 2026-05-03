@@ -32,7 +32,7 @@ def test_detection_and_face_ops_map_to_their_features():
     assert get_operation_feature_candidates("boundary_embeddings", settings) == ["embeddings"]
 
 
-def test_text_extraction_only_requires_ocr_in_paddleocr_mode():
+def test_text_extraction_requires_ocr_when_local_ocr_is_used():
     assert get_operation_feature_candidates(
         "extract_text",
         _settings(text_extraction_method="paddleocr"),
@@ -40,6 +40,10 @@ def test_text_extraction_only_requires_ocr_in_paddleocr_mode():
     assert get_operation_feature_candidates(
         "extract_text",
         _settings(text_extraction_method="hybrid"),
+    ) == ["ocr"]
+    assert get_operation_feature_candidates(
+        "extract_text",
+        _settings(text_extraction_method="vlm"),
     ) == []
 
 

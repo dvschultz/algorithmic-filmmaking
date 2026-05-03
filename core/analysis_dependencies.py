@@ -45,7 +45,7 @@ def get_operation_feature_candidates(
 
     if op_key == "extract_text":
         method = text_extraction_method or getattr(settings, "text_extraction_method", "hybrid")
-        return ["ocr"] if method == "paddleocr" else []
+        return ["ocr"] if method in ("paddleocr", "hybrid") else []
 
     if op_key == "transcribe":
         backend = transcription_backend or getattr(settings, "transcription_backend", "auto")

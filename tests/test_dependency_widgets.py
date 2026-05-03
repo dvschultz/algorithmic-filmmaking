@@ -89,6 +89,26 @@ def test_analysis_operation_gate_uses_runtime_ready_check(monkeypatch):
     assert MainWindow._ensure_analysis_operation_available(Harness(), "shots") is False
 
 
+def test_extract_text_hybrid_prompts_for_ocr_install(monkeypatch):
+    class Harness:
+        def __init__(self):
+            self.settings = SimpleNamespace(text_extraction_method="hybrid")
+
+    prompts = []
+
+    monkeypatch.setattr(
+        "core.feature_registry.check_feature_ready",
+        lambda _feature: (False, ["package:paddleocr"]),
+    )
+    monkeypatch.setattr(
+        "ui.widgets.dependency_widgets.prompt_feature_download",
+        lambda feature_name, *_args, **_kwargs: prompts.append(feature_name) or True,
+    )
+
+    assert MainWindow._ensure_analysis_operation_available(Harness(), "extract_text") is True
+    assert prompts == ["ocr"]
+
+
 def test_description_gate_attempts_preferred_install_before_cpu_fallback(monkeypatch):
     class Harness:
         def __init__(self):
