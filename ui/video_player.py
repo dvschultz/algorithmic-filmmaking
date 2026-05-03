@@ -649,7 +649,7 @@ class VideoPlayer(QWidget):
 
         Uses MPV's ab-loop properties for frame-accurate looping when
         ``_loop_clip`` is True.  When looping is disabled, the ab-loop
-        is not set and playback pauses at the clip end via ``_on_eof``.
+        is not set and playback pauses at the clip end from position updates.
         """
         if not self._player_ready:
             return
@@ -701,6 +701,23 @@ class VideoPlayer(QWidget):
             self._pending_play_on_load = True
             return
         self._mpv.pause = False
+
+    def _pause_at_clip_end(self):
+        """Pause non-looping clip playback at the configured clip end."""
+        if (
+            self._clip_start_ms is None
+            or self._clip_end_ms is None
+            or self._loop_clip
+            or not self._player_ready
+            or not self._media_loaded
+        ):
+            return
+
+        end_seconds = self._clip_end_ms / 1000.0
+        self._safe_mpv_command(setattr, self._mpv, 'pause', True)
+        self._safe_mpv_command(self._mpv.seek, end_seconds, 'absolute', 'exact')
+        self.position_slider.setValue(self._clip_end_ms - self._clip_start_ms)
+        self._update_time_label(self._clip_end_ms)
 
     def play(self):
         """Start or resume playback."""
@@ -987,6 +1004,10 @@ class VideoPlayer(QWidget):
         self.position_updated.emit(position_ms)
 
         if self._clip_start_ms is not None and self._clip_end_ms is not None:
+            if not self._loop_clip and position_ms >= self._clip_end_ms:
+                self._pause_at_clip_end()
+                return
+
             relative_ms = position_ms - self._clip_start_ms
             clip_duration = self._clip_end_ms - self._clip_start_ms
             relative_ms = max(0, min(relative_ms, clip_duration))

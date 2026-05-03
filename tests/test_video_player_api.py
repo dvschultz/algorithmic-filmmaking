@@ -200,6 +200,31 @@ class TestClipRange:
         assert player._clip_end_ms == 15000
         assert player._mock.pause is False
 
+    def test_non_looping_clip_pauses_at_clip_end(self, player):
+        player._shutdown_event.clear()
+        player.set_loop(False)
+        player.set_clip_range(5.0, 15.0)
+        player._mock.seek.reset_mock()
+        player._mock.pause = False
+
+        player._on_position_changed(15.25)
+
+        assert player._mock.pause is True
+        player._mock.seek.assert_called_once_with(15.0, 'absolute', 'exact')
+        assert player.position_slider.value() == 10000
+
+    def test_looping_clip_does_not_pause_at_clip_end(self, player):
+        player._shutdown_event.clear()
+        player.set_loop(True)
+        player.set_clip_range(5.0, 15.0)
+        player._mock.seek.reset_mock()
+        player._mock.pause = False
+
+        player._on_position_changed(15.25)
+
+        assert player._mock.pause is False
+        player._mock.seek.assert_not_called()
+
     def test_on_file_loaded_applies_pending_seek_and_play(self, player):
         player._shutdown_event.clear()
         player._media_loaded = False
