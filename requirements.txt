@@ -23,6 +23,7 @@ faster-whisper>=1.0.0
 # mlx-vlm is heavy; both are in requirements-optional.txt
 google-api-python-client>=2.100.0
 keyring>=24.0
+mcp[cli]>=1.2.0
 
 # LLM Integration
 # Vendored wheel avoids build-time dependency on PyPI-hosted LiteLLM artifacts.
