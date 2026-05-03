@@ -77,6 +77,73 @@ def test_timeline_move_and_delete_emit_sequence_changed(qapp):
     assert len(changes) == 2
 
 
+def test_timeline_zoom_fit_can_fit_long_sequences_below_manual_zoom_minimum(qapp):
+    from ui.timeline.timeline_widget import TimelineWidget
+
+    timeline = TimelineWidget()
+    timeline.resize(640, 240)
+    timeline.show()
+    qapp.processEvents()
+
+    source = Source(
+        id="src-1",
+        file_path=Path("/tmp/test.mp4"),
+        duration_seconds=300.0,
+        fps=24.0,
+        width=1920,
+        height=1080,
+    )
+    clip = Clip(
+        id="clip-1",
+        source_id=source.id,
+        start_frame=0,
+        end_frame=7200,
+    )
+    timeline.add_clip(clip, source)
+
+    timeline._on_zoom_fit()
+
+    available_width = timeline.view.viewport().width() - 40
+    expected_pps = available_width / timeline.sequence.duration_seconds
+    assert timeline.view.pixels_per_second == pytest.approx(expected_pps)
+    assert timeline.view.pixels_per_second < timeline.view.MIN_PIXELS_PER_SECOND
+
+
+def test_timeline_zoom_fit_scrolls_back_to_start(qapp):
+    from ui.timeline.timeline_widget import TimelineWidget
+
+    timeline = TimelineWidget()
+    timeline.resize(640, 240)
+    timeline.show()
+    qapp.processEvents()
+
+    source = Source(
+        id="src-1",
+        file_path=Path("/tmp/test.mp4"),
+        duration_seconds=10.0,
+        fps=24.0,
+        width=1920,
+        height=1080,
+    )
+    clip = Clip(
+        id="clip-1",
+        source_id=source.id,
+        start_frame=0,
+        end_frame=240,
+    )
+    timeline.add_clip(clip, source)
+    timeline.view.reset_zoom()
+    qapp.processEvents()
+
+    scrollbar = timeline.view.horizontalScrollBar()
+    scrollbar.setValue(scrollbar.maximum())
+    assert scrollbar.value() > scrollbar.minimum()
+
+    timeline._on_zoom_fit()
+
+    assert scrollbar.value() == scrollbar.minimum()
+
+
 class _FakeTimeline:
     def __init__(self):
         self.loaded = None

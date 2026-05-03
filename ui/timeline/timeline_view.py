@@ -14,6 +14,7 @@ class TimelineView(QGraphicsView):
     position_clicked = Signal(float)  # Emits time in seconds when ruler clicked
 
     MIN_PIXELS_PER_SECOND = 10
+    MIN_FIT_PIXELS_PER_SECOND = 0.25
     MAX_PIXELS_PER_SECOND = 500
     DEFAULT_PIXELS_PER_SECOND = 100
 
@@ -182,11 +183,15 @@ class TimelineView(QGraphicsView):
 
         available_width = self.viewport().width() - 40  # Margin
         new_pps = available_width / duration_seconds
-        new_pps = max(self.MIN_PIXELS_PER_SECOND, new_pps)
+        new_pps = max(
+            self.MIN_FIT_PIXELS_PER_SECOND,
+            min(self.MAX_PIXELS_PER_SECOND, new_pps),
+        )
 
         self.pixels_per_second = new_pps
         if self.scene():
             self.scene().set_pixels_per_second(new_pps)
+        self.horizontalScrollBar().setValue(self.horizontalScrollBar().minimum())
         self.zoom_changed.emit(self.pixels_per_second)
 
     def reset_zoom(self):
