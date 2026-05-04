@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QToolButton,
     QGraphicsOpacityEffect,
     QRubberBand,
+    QSizePolicy,
 )
 
 from core.analysis.color import (
@@ -81,6 +82,10 @@ def _combo_text_for_enum(value_set, *, fallback):
     return fallback
 
 logger = logging.getLogger(__name__)
+
+VIRTUALIZATION_THRESHOLD = 300
+VIRTUAL_CARD_ROW_HEIGHT = 246
+VIRTUAL_ROW_BUFFER = 4
 
 
 def get_latest_custom_query_results(custom_queries: list[dict] | None) -> dict[str, dict]:
@@ -871,6 +876,12 @@ class ClipBrowser(QWidget):
         self.selected_clips: set[str] = set()  # clip ids
         self._drag_enabled = False
         self._source_lookup: dict[str, Source] = {}  # clip_id -> Source
+        self._virtual_mode = False
+        self._virtual_entries: list[tuple[Clip, Source]] = []
+        self._virtual_display_rows: list[tuple[str, object]] = []
+        self._virtual_top_spacer: QWidget | None = None
+        self._virtual_bottom_spacer: QWidget | None = None
+        self._virtual_render_range: tuple[int, int] | None = None
 
         # Shared filter state — all filter values live here. Proxy properties
         # on this class (e.g., `_current_filter`, `_gaze_filter`) read/write
@@ -993,6 +1004,7 @@ class ClipBrowser(QWidget):
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll.verticalScrollBar().valueChanged.connect(self._on_scroll_changed)
 
         # Container for grid
         self.container = _SelectionContainer(self)
@@ -1032,17 +1044,32 @@ class ClipBrowser(QWidget):
         new_cols = self._calculate_columns()
         if new_cols != self._last_column_count:
             self._last_column_count = new_cols
-            if self.thumbnails:
+            if self.thumbnails or self._virtual_entries:
                 self._rebuild_grid()
         else:
             self._last_column_count = new_cols
 
     def refresh_layout(self):
         """Force a grid rebuild using the current viewport width."""
-        if not self.thumbnails:
+        if not self.thumbnails and not self._virtual_entries:
             return
+        if self._virtual_mode and self.thumbnails:
+            current_columns = self._calculate_columns()
+            if current_columns == self._last_column_count:
+                return
         self._last_column_count = 0
         self._rebuild_grid()
+
+    def _on_scroll_changed(self, _value: int) -> None:
+        """Refresh realized cards as the virtual browser scrolls."""
+        if self._virtual_mode and not getattr(self, "_rebuild_pending", False):
+            if self._virtual_display_rows:
+                first_row, last_row = self._current_virtual_render_range(
+                    len(self._virtual_display_rows)
+                )
+                if (first_row, last_row) == self._virtual_render_range:
+                    return
+            self._rebuild_grid()
 
     def _show_empty_state(self):
         """Show the empty state label in the grid."""
@@ -1074,8 +1101,84 @@ class ClipBrowser(QWidget):
 
         return thumb
 
+    def _all_entries(self) -> list[tuple[Clip, Source]]:
+        """Return all browser clips as data pairs."""
+        if self._virtual_mode:
+            return list(self._virtual_entries)
+        return [(thumb.clip, thumb.source) for thumb in self.thumbnails]
+
+    def is_virtualized(self) -> bool:
+        """Whether the browser is storing clips as data and rendering a visible window."""
+        return self._virtual_mode
+
+    def get_total_clip_count(self) -> int:
+        """Return total clips in the browser, including unrealized virtual clips."""
+        if self._virtual_mode:
+            return len(self._virtual_entries)
+        return len(self.thumbnails)
+
+    def get_realized_clip_count(self) -> int:
+        """Return the number of live card widgets currently realized."""
+        return len(self.thumbnails)
+
+    def set_virtual_clips(self, clip_source_pairs: list[tuple[Clip, Source]]) -> None:
+        """Load clips in data-backed mode and realize only visible widgets."""
+        self.clear()
+        self._virtual_mode = True
+        self._virtual_entries = []
+        self._source_lookup = {}
+        seen: set[str] = set()
+        for clip, source in clip_source_pairs:
+            if clip.id in seen:
+                continue
+            seen.add(clip.id)
+            self._virtual_entries.append((clip, source))
+            self._source_lookup[clip.id] = source
+
+        self._sync_custom_query_filter_options()
+        for clip, _source in self._virtual_entries:
+            self._incremental_filter_enable(clip)
+        self._update_duration_range()
+        self._rebuild_grid()
+
+    def _clear_realized_virtual_widgets(self) -> None:
+        """Remove currently realized virtual widgets from the grid."""
+        while self.grid.count():
+            item = self.grid.takeAt(0)
+            widget = item.widget()
+            if widget is None:
+                continue
+            widget.setVisible(False)
+            if widget is not self.empty_label:
+                widget.deleteLater()
+
+        self._empty_label_in_grid = False
+        self.thumbnails = []
+        self._thumbnail_by_id = {}
+        self._source_headers = {}
+        self._virtual_top_spacer = None
+        self._virtual_bottom_spacer = None
+        self._virtual_render_range = None
+
+    def _make_virtual_spacer(self, height: int) -> QWidget:
+        spacer = QWidget()
+        spacer.setFixedHeight(max(0, height))
+        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        return spacer
+
     def add_clip(self, clip: Clip, source: Source):
         """Add a clip to the browser."""
+        if self._virtual_mode:
+            if clip.id in self._source_lookup:
+                return
+            self._virtual_entries.append((clip, source))
+            self._source_lookup[clip.id] = source
+            self._sync_custom_query_filter_options()
+            self._incremental_filter_enable(clip)
+            self._update_duration_range()
+            self._rebuild_grid()
+            return
+
         if clip.id in self._thumbnail_by_id:
             return
 
@@ -1097,13 +1200,35 @@ class ClipBrowser(QWidget):
         self,
         clip_source_pairs: list[tuple[Clip, Source]],
         defer_rebuild: bool = False,
+        defer_filter_sync: bool = False,
     ) -> None:
         """Add multiple clips with one filter sync and one grid rebuild.
 
         When called repeatedly during batched project loads, set
         `defer_rebuild=True` to skip the per-batch grid rebuild and duration
-        refresh, then call `finalize_batch_load()` once after the final batch.
+        refresh. Set `defer_filter_sync=True` to skip rebuilding filter menus
+        on every batch. Then call `finalize_batch_load()` once after the final
+        batch.
         """
+        if self._virtual_mode:
+            added: list[Clip] = []
+            for clip, source in clip_source_pairs:
+                if clip.id in self._source_lookup:
+                    continue
+                self._virtual_entries.append((clip, source))
+                self._source_lookup[clip.id] = source
+                added.append(clip)
+            if not added:
+                return
+            if not defer_filter_sync:
+                self._sync_custom_query_filter_options()
+            for clip in added:
+                self._incremental_filter_enable(clip)
+            if not defer_rebuild:
+                self._rebuild_grid()
+                self._update_duration_range()
+            return
+
         added: list[Clip] = []
         for clip, source in clip_source_pairs:
             if clip.id in self._thumbnail_by_id:
@@ -1116,7 +1241,8 @@ class ClipBrowser(QWidget):
         if not added:
             return
 
-        self._sync_custom_query_filter_options()
+        if not defer_filter_sync:
+            self._sync_custom_query_filter_options()
         for clip in added:
             self._incremental_filter_enable(clip)
         if not defer_rebuild:
@@ -1125,6 +1251,7 @@ class ClipBrowser(QWidget):
 
     def finalize_batch_load(self) -> None:
         """Flush deferred rebuilds after a series of `add_clips(defer_rebuild=True)` calls."""
+        self._sync_custom_query_filter_options()
         self._rebuild_grid()
         self._update_duration_range()
 
@@ -1138,6 +1265,12 @@ class ClipBrowser(QWidget):
         for header in self._source_headers.values():
             self.grid.removeWidget(header)
             header.deleteLater()
+        if self._virtual_top_spacer:
+            self.grid.removeWidget(self._virtual_top_spacer)
+            self._virtual_top_spacer.deleteLater()
+        if self._virtual_bottom_spacer:
+            self.grid.removeWidget(self._virtual_bottom_spacer)
+            self._virtual_bottom_spacer.deleteLater()
 
         self.thumbnails = []
         self._thumbnail_by_id = {}
@@ -1145,6 +1278,13 @@ class ClipBrowser(QWidget):
         self._source_lookup = {}
         self._source_headers = {}
         self._group_expanded_state = {}
+        self._virtual_mode = False
+        self._virtual_entries = []
+        self._virtual_display_rows = []
+        self._virtual_top_spacer = None
+        self._virtual_bottom_spacer = None
+        self._virtual_render_range = None
+        self.container.setMinimumHeight(0)
         self._selected_custom_queries = set()
         self._sync_custom_query_filter_options()
 
@@ -1154,6 +1294,31 @@ class ClipBrowser(QWidget):
     def remove_clips_for_source(self, source_id: str):
         """Remove all clips for a specific source (used when re-analyzing)."""
         selection_before = set(self.selected_clips)
+
+        if self._virtual_mode:
+            removed_ids = {
+                clip.id
+                for clip, source in self._virtual_entries
+                if source.id == source_id
+            }
+            if self._similarity_anchor_id in removed_ids:
+                self._clear_similarity()
+            self._virtual_entries = [
+                (clip, source)
+                for clip, source in self._virtual_entries
+                if source.id != source_id
+            ]
+            for clip_id in removed_ids:
+                self.selected_clips.discard(clip_id)
+                self._source_lookup.pop(clip_id, None)
+            if removed_ids:
+                selection_changed = self._sync_custom_query_filter_options()
+                self._rebuild_grid()
+                if self.selected_clips != selection_before:
+                    self._emit_selection_changed()
+                if selection_changed:
+                    self.filters_changed.emit()
+            return
 
         # Separate into keep and remove in single pass (O(n) instead of O(n²))
         keep = []
@@ -1202,6 +1367,28 @@ class ClipBrowser(QWidget):
         ids_to_remove = set(clip_ids)
         selection_before = set(self.selected_clips)
 
+        if self._virtual_mode:
+            if self._similarity_anchor_id in ids_to_remove:
+                self._clear_similarity()
+            before_count = len(self._virtual_entries)
+            self._virtual_entries = [
+                (clip, source)
+                for clip, source in self._virtual_entries
+                if clip.id not in ids_to_remove
+            ]
+            removed = before_count != len(self._virtual_entries)
+            for clip_id in ids_to_remove:
+                self.selected_clips.discard(clip_id)
+                self._source_lookup.pop(clip_id, None)
+            if removed:
+                selection_changed = self._sync_custom_query_filter_options()
+                self._rebuild_grid()
+                if self.selected_clips != selection_before:
+                    self._emit_selection_changed()
+                if selection_changed:
+                    self.filters_changed.emit()
+            return
+
         # Clear similarity mode if the anchor clip is being removed
         if self._similarity_anchor_id and self._similarity_anchor_id in ids_to_remove:
             self._clear_similarity()
@@ -1238,6 +1425,14 @@ class ClipBrowser(QWidget):
 
     def get_selected_clips(self) -> list[Clip]:
         """Get list of selected clips."""
+        if not self.selected_clips:
+            return []
+        if self._virtual_mode:
+            return [
+                clip
+                for clip, _source in self._ordered_filtered_entries()
+                if clip.id in self.selected_clips
+            ]
         return [t.clip for t in self.thumbnails if t.clip.id in self.selected_clips]
 
     def set_selection(self, clip_ids: list[str]) -> None:
@@ -1250,6 +1445,14 @@ class ClipBrowser(QWidget):
 
     def select_all(self) -> None:
         """Select all visible clips."""
+        if self._virtual_mode:
+            self._set_selected_ids({
+                clip.id
+                for clip, _source in self._ordered_filtered_entries()
+                if not clip.disabled
+            })
+            return
+
         # Only select clips that are currently visible (not filtered out) and enabled.
         self._set_selected_ids({
             thumb.clip.id
@@ -1273,11 +1476,21 @@ class ClipBrowser(QWidget):
 
     def _emit_selection_changed(self) -> None:
         """Emit selected IDs in stable display order."""
-        selected_ids = [
-            thumb.clip.id
-            for thumb in self.thumbnails
-            if thumb.clip.id in self.selected_clips
-        ]
+        if not self.selected_clips:
+            self.selection_changed.emit([])
+            return
+        if self._virtual_mode:
+            selected_ids = [
+                clip.id
+                for clip, _source in self._ordered_filtered_entries()
+                if clip.id in self.selected_clips
+            ]
+        else:
+            selected_ids = [
+                thumb.clip.id
+                for thumb in self.thumbnails
+                if thumb.clip.id in self.selected_clips
+            ]
         self.selection_changed.emit(selected_ids)
 
     def _on_container_mouse_press(self, event) -> None:
@@ -1440,6 +1653,11 @@ class ClipBrowser(QWidget):
             self._rebuild_grid()
             if selection_changed:
                 self.filters_changed.emit()
+        elif self._virtual_mode and clip_id in self._source_lookup:
+            selection_changed = self._sync_custom_query_filter_options()
+            self._rebuild_grid()
+            if selection_changed:
+                self.filters_changed.emit()
 
     def update_clip_cinematography(self, clip_id: str, cinematography):
         """Update the cinematography for a specific clip thumbnail (O(1) lookup)."""
@@ -1454,16 +1672,22 @@ class ClipBrowser(QWidget):
             thumb.set_gaze(category)
             self._update_filter_availability()
             self._rebuild_grid()
+        elif self._virtual_mode and clip_id in self._source_lookup:
+            self._update_filter_availability()
+            self._rebuild_grid()
 
     def update_clip_thumbnail(self, clip_id: str, thumb_path: Path):
         """Update the thumbnail image for a specific clip (O(1) lookup)."""
-        logger.info(f"ClipBrowser.update_clip_thumbnail: clip_id={clip_id}, path={thumb_path}")
+        logger.debug(f"ClipBrowser.update_clip_thumbnail: clip_id={clip_id}, path={thumb_path}")
         thumb = self._thumbnail_by_id.get(clip_id)
         if thumb:
-            logger.info("  Found thumbnail widget, calling set_thumbnail")
             thumb.set_thumbnail(thumb_path)
         else:
-            logger.warning(f"  Thumbnail widget not found! _thumbnail_by_id keys: {list(self._thumbnail_by_id.keys())[:5]}...")
+            logger.debug(
+                "Thumbnail widget not found for %s; browser has %s thumbnails",
+                clip_id,
+                len(self._thumbnail_by_id),
+            )
 
     def update_clips(self, clips: list[Clip]):
         """Update thumbnails for the given clips (called when clips are edited).
@@ -1481,6 +1705,8 @@ class ClipBrowser(QWidget):
                 thumb.set_colors(clip.dominant_colors)
                 thumb.set_custom_queries(clip.custom_queries)
                 thumb._update_style()  # Refresh disabled visual state
+        if self._virtual_mode:
+            self._rebuild_grid()
         selection_changed = self._sync_custom_query_filter_options()
         self._rebuild_grid()
         if selection_changed:
@@ -1489,8 +1715,8 @@ class ClipBrowser(QWidget):
     def _available_custom_query_names(self) -> list[str]:
         """Return sorted custom query names present across all clips."""
         names: set[str] = set()
-        for thumb in self.thumbnails:
-            names.update(get_latest_custom_query_results(thumb.clip.custom_queries).keys())
+        for clip, _source in self._all_entries():
+            names.update(get_latest_custom_query_results(clip.custom_queries).keys())
         return sorted(names, key=str.lower)
 
     def _refresh_custom_query_filter_button(self):
@@ -1606,10 +1832,17 @@ class ClipBrowser(QWidget):
 
     def _sort_by_timeline(self):
         """Sort clips by timeline order (start frame) within each source group."""
+        if self._virtual_mode:
+            self._rebuild_grid()
+            return
         self._sort_within_groups(key=lambda t: t.clip.start_frame)
 
     def _sort_by_color(self):
         """Sort clips by primary hue (HSV color wheel order) within each source group."""
+        if self._virtual_mode:
+            self._rebuild_grid()
+            return
+
         def get_hue(thumb: ClipThumbnail) -> float:
             if thumb.clip.dominant_colors:
                 return get_primary_hue(thumb.clip.dominant_colors)
@@ -1619,6 +1852,9 @@ class ClipBrowser(QWidget):
 
     def _sort_by_duration(self):
         """Sort clips by duration (longest first) within each source group."""
+        if self._virtual_mode:
+            self._rebuild_grid()
+            return
         self._sort_within_groups(
             key=lambda t: t.clip.duration_seconds(t.source.fps),
             reverse=True,
@@ -1681,6 +1917,9 @@ class ClipBrowser(QWidget):
     def _do_rebuild_grid(self):
         """Actually rebuild the grid layout with source grouping, current order, and filter."""
         self._rebuild_pending = False
+        if self._virtual_mode:
+            self._do_rebuild_virtual_grid()
+            return
         try:
             # Guard against C++ object deleted (deferred timer can fire after widget teardown)
             self.scroll.viewport()
@@ -1784,6 +2023,153 @@ class ClipBrowser(QWidget):
             header.deleteLater()
             self._group_expanded_state.pop(stale_id, None)
 
+    def _ordered_grouped_entries(self) -> dict[str, list[tuple[Clip, Source]]]:
+        """Return virtual entries grouped and sorted like the widget grid."""
+        grouped: dict[str, list[tuple[Clip, Source]]] = {}
+        for clip, source in self._virtual_entries:
+            grouped.setdefault(source.id, []).append((clip, source))
+
+        sort_option = self.sort_combo.currentText()
+        for entries in grouped.values():
+            if self._similarity_anchor_id is not None:
+                entries.sort(
+                    key=lambda pair: self._similarity_scores.get(pair[0].id, 0.0),
+                    reverse=True,
+                )
+            elif sort_option == "Color":
+                entries.sort(
+                    key=lambda pair: get_primary_hue(pair[0].dominant_colors)
+                    if pair[0].dominant_colors else 0.0
+                )
+            elif sort_option == "Duration":
+                entries.sort(
+                    key=lambda pair: pair[0].duration_seconds(pair[1].fps),
+                    reverse=True,
+                )
+            else:
+                entries.sort(key=lambda pair: pair[0].start_frame)
+
+        return grouped
+
+    def _ordered_filtered_entries(self) -> list[tuple[Clip, Source]]:
+        """Return virtual entries in display order with active filters applied."""
+        grouped = self._ordered_grouped_entries()
+        ordered: list[tuple[Clip, Source]] = []
+        for source_id in sorted(
+            grouped,
+            key=lambda sid: grouped[sid][0][1].filename.lower() if grouped[sid] else "",
+        ):
+            ordered.extend(
+                (clip, source)
+                for clip, source in grouped[source_id]
+                if self._matches_entry(clip, source)
+            )
+        return ordered
+
+    def _build_virtual_rows(self) -> list[tuple[str, object]]:
+        """Build row records for the virtual grid."""
+        grouped = self._ordered_grouped_entries()
+        rows: list[tuple[str, object]] = []
+        columns = self.COLUMNS
+        for source_id in sorted(
+            grouped,
+            key=lambda sid: grouped[sid][0][1].filename.lower() if grouped[sid] else "",
+        ):
+            source_entries = grouped[source_id]
+            if not source_entries:
+                continue
+            source = source_entries[0][1]
+            visible_entries = [
+                (clip, src)
+                for clip, src in source_entries
+                if self._matches_entry(clip, src)
+            ]
+            total_count = len(source_entries)
+            visible_count = len(visible_entries)
+            selected_count = sum(
+                1 for clip, _source in source_entries if clip.id in self.selected_clips
+            )
+            rows.append((
+                "header",
+                (source_id, source, total_count, visible_count, selected_count),
+            ))
+            if source_id not in self._group_expanded_state:
+                self._group_expanded_state[source_id] = True
+            if self._group_expanded_state[source_id]:
+                for start in range(0, visible_count, columns):
+                    rows.append(("clips", visible_entries[start:start + columns]))
+        return rows
+
+    def _current_virtual_render_range(self, row_count: int) -> tuple[int, int]:
+        """Calculate the virtual row range that should be realized."""
+        viewport_height = max(1, self.scroll.viewport().height())
+        scroll_value = self.scroll.verticalScrollBar().value()
+        row_height = VIRTUAL_CARD_ROW_HEIGHT
+        first_row = max(0, (scroll_value // row_height) - VIRTUAL_ROW_BUFFER)
+        visible_rows = (viewport_height // row_height) + (VIRTUAL_ROW_BUFFER * 2) + 2
+        last_row = min(row_count, first_row + visible_rows)
+        return first_row, last_row
+
+    def _do_rebuild_virtual_grid(self):
+        """Render only the visible row window for large clip sets."""
+        try:
+            self.scroll.viewport()
+        except RuntimeError:
+            return
+
+        self._last_column_count = self._calculate_columns()
+        self._clear_realized_virtual_widgets()
+        if not self._virtual_entries:
+            self._show_empty_state()
+            return
+
+        rows = self._build_virtual_rows()
+        self._virtual_display_rows = rows
+        if not rows:
+            self._show_empty_state()
+            return
+
+        self._hide_empty_state()
+        first_row, last_row = self._current_virtual_render_range(len(rows))
+
+        row_height = VIRTUAL_CARD_ROW_HEIGHT
+        total_height = len(rows) * row_height
+        self.container.setMinimumHeight(total_height + (UISizes.GRID_MARGIN * 2))
+        self._virtual_render_range = (first_row, last_row)
+
+        grid_row = 0
+        top_height = first_row * row_height
+        if top_height:
+            self._virtual_top_spacer = self._make_virtual_spacer(top_height)
+            self.grid.addWidget(self._virtual_top_spacer, grid_row, 0, 1, self.COLUMNS)
+            grid_row += 1
+
+        for row_type, payload in rows[first_row:last_row]:
+            if row_type == "header":
+                source_id, source, total_count, visible_count, selected_count = payload
+                header = self._get_or_create_header(source_id, source.filename, total_count)
+                header.set_clip_counts(total_count, visible_count, selected_count)
+                header.set_expanded(self._group_expanded_state.get(source_id, True))
+                self.grid.addWidget(header, grid_row, 0, 1, self.COLUMNS)
+                header.setVisible(True)
+                grid_row += 1
+                continue
+
+            entries = payload
+            for col, (clip, source) in enumerate(entries):
+                thumb = self._create_thumbnail(clip, source)
+                thumb.set_selected(clip.id in self.selected_clips)
+                self.thumbnails.append(thumb)
+                self._thumbnail_by_id[clip.id] = thumb
+                self.grid.addWidget(thumb, grid_row, col, Qt.AlignTop | Qt.AlignLeft)
+                thumb.setVisible(True)
+            grid_row += 1
+
+        bottom_height = max(0, (len(rows) - last_row) * row_height)
+        if bottom_height:
+            self._virtual_bottom_spacer = self._make_virtual_spacer(bottom_height)
+            self.grid.addWidget(self._virtual_bottom_spacer, grid_row, 0, 1, self.COLUMNS)
+
     def _get_or_create_header(
         self, source_id: str, filename: str, clip_count: int
     ) -> SourceGroupHeader:
@@ -1813,15 +2199,19 @@ class ClipBrowser(QWidget):
 
     def _matches_filter(self, thumb: ClipThumbnail) -> bool:
         """Check if a thumbnail matches all filters (AND logic)."""
+        return self._matches_entry(thumb.clip, thumb.source)
+
+    def _matches_entry(self, clip: Clip, source: Source) -> bool:
+        """Check if a clip/source data pair matches all filters."""
         # Check similarity mode — exclude clips without valid embeddings
         if self._similarity_anchor_id is not None:
-            if thumb.clip.id not in self._similarity_scores:
+            if clip.id not in self._similarity_scores:
                 return False
 
         # Check shot type filter (multi-select: match any selected value)
         selected_shots = self._filter_state.shot_type
         if selected_shots:
-            shot_type = thumb.clip.shot_type
+            shot_type = clip.shot_type
             if not shot_type:
                 return False
             if get_display_name(shot_type) not in selected_shots:
@@ -1830,7 +2220,7 @@ class ClipBrowser(QWidget):
         # Check color palette filter (multi-select)
         selected_palettes = self._filter_state.color_palette
         if selected_palettes:
-            colors = thumb.clip.dominant_colors
+            colors = clip.dominant_colors
             if not colors:
                 return False
             palette = classify_color_palette(colors)
@@ -1839,13 +2229,13 @@ class ClipBrowser(QWidget):
 
         # Check transcript search
         if self._current_search_query:
-            transcript_text = thumb.clip.get_transcript_text().lower()
+            transcript_text = clip.get_transcript_text().lower()
             if self._current_search_query not in transcript_text:
                 return False
 
         # Check custom query result filter
         if self._selected_custom_queries:
-            latest_results = get_latest_custom_query_results(thumb.clip.custom_queries)
+            latest_results = get_latest_custom_query_results(clip.custom_queries)
             for query_name in self._selected_custom_queries:
                 query_result = latest_results.get(query_name)
                 if not query_result or not bool(query_result.get("match")):
@@ -1853,7 +2243,7 @@ class ClipBrowser(QWidget):
 
         # Check duration filter
         if self._min_duration is not None or self._max_duration is not None:
-            duration = thumb.clip.duration_seconds(thumb.source.fps)
+            duration = clip.duration_seconds(source.fps)
             if self._min_duration is not None and duration < self._min_duration:
                 return False
             if self._max_duration is not None and duration > self._max_duration:
@@ -1862,7 +2252,6 @@ class ClipBrowser(QWidget):
         # Check aspect ratio filter (multi-select: any selected aspect must match)
         selected_aspects = self._filter_state.aspect_ratio
         if selected_aspects:
-            source = thumb.source
             if source.width == 0 or source.height == 0:
                 return False
             aspect = source.aspect_ratio
@@ -1879,37 +2268,36 @@ class ClipBrowser(QWidget):
         # Check gaze direction filter (multi-select)
         selected_gaze = self._filter_state.gaze_filter
         if selected_gaze:
-            if not thumb.clip.gaze_category:
+            if not clip.gaze_category:
                 return False
-            if thumb.clip.gaze_category not in selected_gaze:
+            if clip.gaze_category not in selected_gaze:
                 return False
 
         # Check object search filter
         if self._object_search:
             query = self._object_search.lower()
-            labels_text = " ".join(thumb.clip.object_labels or []).lower()
+            labels_text = " ".join(clip.object_labels or []).lower()
             detected_text = " ".join(
-                d.get("label", "") for d in (thumb.clip.detected_objects or [])
+                d.get("label", "") for d in (clip.detected_objects or [])
             ).lower()
             if query not in labels_text and query not in detected_text:
                 return False
 
         # Check description search filter
         if self._description_search:
-            if self._description_search.lower() not in (thumb.clip.description or "").lower():
+            if self._description_search.lower() not in (clip.description or "").lower():
                 return False
 
         # Check brightness range filter
         if self._min_brightness is not None:
-            if thumb.clip.average_brightness is None or thumb.clip.average_brightness < self._min_brightness:
+            if clip.average_brightness is None or clip.average_brightness < self._min_brightness:
                 return False
         if self._max_brightness is not None:
-            if thumb.clip.average_brightness is None or thumb.clip.average_brightness > self._max_brightness:
+            if clip.average_brightness is None or clip.average_brightness > self._max_brightness:
                 return False
 
         # ── Unit 5 filter predicates ────────────────────────────────
         fs = self._filter_state
-        clip = thumb.clip
 
         # Person count operator. Unanalyzed clips (clip.person_count is None)
         # are treated as having 0 people; callers using "< 0" would otherwise
@@ -2137,12 +2525,13 @@ class ClipBrowser(QWidget):
 
     def _update_duration_range(self):
         """Update duration slider range based on actual clip durations."""
-        if not self.thumbnails:
+        entries = self._all_entries()
+        if not entries:
             return
 
         durations = [
-            thumb.clip.duration_seconds(thumb.source.fps)
-            for thumb in self.thumbnails
+            clip.duration_seconds(source.fps)
+            for clip, source in entries
         ]
         if durations:
             min_dur = min(durations)
@@ -2243,10 +2632,10 @@ class ClipBrowser(QWidget):
         # Batch-vectorize: stack valid embeddings into a matrix for a single matmul
         valid_ids: list[str] = []
         valid_embs: list[list] = []
-        for thumb in self.thumbnails:
-            emb = thumb.clip.embedding
+        for candidate_clip, _source in self._all_entries():
+            emb = candidate_clip.embedding
             if emb is not None and len(emb) == anchor_dim:
-                valid_ids.append(thumb.clip.id)
+                valid_ids.append(candidate_clip.id)
                 valid_embs.append(emb)
 
         if valid_embs:
@@ -2545,13 +2934,14 @@ class ClipBrowser(QWidget):
 
         A filter is enabled if ANY clip has the relevant field populated.
         """
-        has_gaze = any(t.clip.gaze_category for t in self.thumbnails)
+        entries = self._all_entries()
+        has_gaze = any(clip.gaze_category for clip, _source in entries)
         has_objects = any(
-            t.clip.object_labels or t.clip.detected_objects for t in self.thumbnails
+            clip.object_labels or clip.detected_objects for clip, _source in entries
         )
-        has_descriptions = any(t.clip.description for t in self.thumbnails)
+        has_descriptions = any(clip.description for clip, _source in entries)
         has_brightness = any(
-            t.clip.average_brightness is not None for t in self.thumbnails
+            clip.average_brightness is not None for clip, _source in entries
         )
 
         # Gaze filter
@@ -2591,15 +2981,18 @@ class ClipBrowser(QWidget):
         Returns:
             Number of visible clips
         """
+        if self._virtual_mode:
+            return len(self._ordered_filtered_entries())
         return sum(1 for thumb in self.thumbnails if self._matches_filter(thumb))
 
     def toggle_disabled(self, clip_ids: list[str]):
         """Toggle the disabled state of clips by ID via undo stack."""
         selection_before = set(self.selected_clips)
+        clips_by_id = {clip.id: clip for clip, _source in self._all_entries()}
         becoming_disabled = {
             clip_id
             for clip_id in clip_ids
-            if (thumb := self._thumbnail_by_id.get(clip_id)) is not None and not thumb.clip.disabled
+            if (clip := clips_by_id.get(clip_id)) is not None and not clip.disabled
         }
 
         from ui.commands.toggle_clip_disabled import ToggleClipDisabledCommand
@@ -2610,15 +3003,18 @@ class ClipBrowser(QWidget):
         else:
             # Fallback when no undo stack (e.g. tests)
             for clip_id in clip_ids:
-                thumb = self._thumbnail_by_id.get(clip_id)
-                if thumb:
-                    thumb.clip.disabled = not thumb.clip.disabled
+                clip = clips_by_id.get(clip_id)
+                if clip:
+                    clip.disabled = not clip.disabled
+                if thumb := self._thumbnail_by_id.get(clip_id):
                     thumb._update_style()
 
         # Disabling a clip should only clear selection for that clip.
         self.selected_clips.difference_update(becoming_disabled)
         for thumb in self.thumbnails:
             thumb.set_selected(thumb.clip.id in self.selected_clips)
+        if self._virtual_mode:
+            self._rebuild_grid()
 
         if self.selected_clips != selection_before:
             self._emit_selection_changed()

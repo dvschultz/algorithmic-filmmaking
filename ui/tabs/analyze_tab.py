@@ -12,10 +12,10 @@ from PySide6.QtWidgets import (
     QComboBox,
     QSplitter,
 )
-from PySide6.QtCore import Signal, Qt
+from PySide6.QtCore import Signal, Qt, QTimer
 
 from .base_tab import BaseTab
-from ui.clip_browser import ClipBrowser
+from ui.clip_browser import ClipBrowser, VIRTUALIZATION_THRESHOLD
 from ui.widgets import EmptyStateWidget
 from ui.widgets.active_filter_chips import ActiveFilterChips
 from ui.widgets.filter_sidebar import FilterSidebar
@@ -58,6 +58,7 @@ class AnalyzeTab(BaseTab):
         # Source lookup for video preview (set by MainWindow)
         self._sources_by_id: dict = {}
         self._clips_by_id: dict = {}
+        self._pending_browser_clip_ids: list[str] = []
         self._is_analyzing = False
         self._disabled_quick_ops: set[str] = set()
         if filter_state is None:
@@ -314,7 +315,7 @@ class AnalyzeTab(BaseTab):
 
         # Update clip count label
         visible = self.clip_browser.get_visible_clip_count()
-        total = len(self.clip_browser.thumbnails)
+        total = self.clip_browser.get_total_clip_count()
         if self.clip_browser.has_active_filters():
             self.clip_count_label.setText(f"{visible}/{total} clips")
         else:
@@ -348,13 +349,15 @@ class AnalyzeTab(BaseTab):
         self._clips_by_id = clips_by_id
         self._sources_by_id = sources_by_id
 
-    def add_clips(self, clip_ids: list[str]):
+    def add_clips(self, clip_ids: list[str], populate_browser: bool = True):
         """Add clips to the analysis tab (merge with deduplication).
 
         Args:
             clip_ids: List of clip IDs to add
+            populate_browser: When False, restore only the clip ID state and
+                defer ClipBrowser widget creation until the Analyze tab is shown.
         """
-        added_count = 0
+        clip_source_pairs = []
         for clip_id in clip_ids:
             if clip_id not in self._clip_ids:
                 self._clip_ids.add(clip_id)
@@ -362,16 +365,77 @@ class AnalyzeTab(BaseTab):
                 clip = self._clips_by_id.get(clip_id)
                 source = self._sources_by_id.get(clip.source_id) if clip else None
                 if clip and source:
-                    self.clip_browser.add_clip(clip, source)
-                    added_count += 1
+                    clip_source_pairs.append((clip, source))
                 else:
                     logger.warning(f"Could not add clip {clip_id}: clip or source not found")
                     self._clip_ids.discard(clip_id)
+
+        added_count = len(clip_source_pairs)
+        if clip_source_pairs:
+            if populate_browser:
+                self._add_pairs_to_browser(clip_source_pairs)
+            else:
+                self._pending_browser_clip_ids.extend(
+                    clip.id for clip, _source in clip_source_pairs
+                )
 
         if added_count > 0:
             logger.info(f"Added {added_count} clips to Analyze tab")
         self._update_ui_state()
         self.clips_changed.emit(self.get_clip_ids())
+
+    def _add_pairs_to_browser(self, clip_source_pairs: list[tuple]) -> None:
+        """Populate the clip browser with one filter sync and one layout rebuild."""
+        if len(clip_source_pairs) >= VIRTUALIZATION_THRESHOLD:
+            self.clip_browser.set_virtual_clips(clip_source_pairs)
+            return
+
+        self.clip_browser.add_clips(
+            clip_source_pairs,
+            defer_rebuild=True,
+            defer_filter_sync=True,
+        )
+        self.clip_browser.finalize_batch_load()
+
+    def _populate_pending_browser_clips(self) -> None:
+        """Create deferred Analyze clip widgets when the tab is first shown."""
+        if not self._pending_browser_clip_ids:
+            return
+
+        pending_ids = self._pending_browser_clip_ids
+        self._pending_browser_clip_ids = []
+        clip_source_pairs = []
+        for clip_id in pending_ids:
+            if clip_id not in self._clip_ids:
+                continue
+            if clip_id in self.clip_browser._thumbnail_by_id:
+                continue
+            clip = self._clips_by_id.get(clip_id)
+            source = self._sources_by_id.get(clip.source_id) if clip else None
+            if clip and source:
+                clip_source_pairs.append((clip, source))
+            else:
+                logger.warning(f"Could not restore deferred clip {clip_id}: clip or source not found")
+                self._clip_ids.discard(clip_id)
+
+        if clip_source_pairs:
+            self._add_pairs_to_browser(clip_source_pairs)
+            self._log_deferred_browser_population(len(clip_source_pairs))
+
+    def _log_deferred_browser_population(self, clip_count: int) -> None:
+        """Log deferred Analyze restore with virtual/realized counts."""
+        if not self.clip_browser.is_virtualized():
+            logger.info(f"Populated {clip_count} deferred Analyze clips")
+            return
+
+        QTimer.singleShot(
+            0,
+            lambda: logger.info(
+                "Virtualized Analyze browser for %s deferred clips; realized %s widgets",
+                clip_count,
+                self.clip_browser.get_realized_clip_count(),
+            ),
+        )
 
     def remove_clip(self, clip_id: str):
         """Remove a single clip from the analysis tab.
@@ -381,6 +445,11 @@ class AnalyzeTab(BaseTab):
         """
         if clip_id in self._clip_ids:
             self._clip_ids.discard(clip_id)
+            self._pending_browser_clip_ids = [
+                pending_id
+                for pending_id in self._pending_browser_clip_ids
+                if pending_id != clip_id
+            ]
             # Remove from ClipBrowser
             clip = self._clips_by_id.get(clip_id)
             if clip:
@@ -398,6 +467,7 @@ class AnalyzeTab(BaseTab):
     def clear_clips(self):
         """Remove all clips from the analysis tab."""
         self._clip_ids.clear()
+        self._pending_browser_clip_ids.clear()
         self.clip_browser.clear()
         # Clear lookup dictionaries (will be re-set on next project load)
         self._clips_by_id = {}
@@ -419,6 +489,11 @@ class AnalyzeTab(BaseTab):
             logger.warning(f"Removing {len(orphaned)} orphaned clips from Analyze tab")
             for clip_id in orphaned:
                 self._clip_ids.discard(clip_id)
+            self._pending_browser_clip_ids = [
+                clip_id
+                for clip_id in self._pending_browser_clip_ids
+                if clip_id in self._clip_ids
+            ]
             # Rebuild ClipBrowser — also discard IDs that can't be resolved
             # (_clips_by_id may be stale if set_lookups hasn't been called yet)
             self.clip_browser.clear()
@@ -469,35 +544,45 @@ class AnalyzeTab(BaseTab):
     def update_clip_colors(self, clip_id: str, colors: list):
         """Update colors for a clip."""
         if clip_id in self._clip_ids:
-            self.clip_browser.update_clip_colors(clip_id, colors)
+            if clip_id in self.clip_browser._thumbnail_by_id:
+                self.clip_browser.update_clip_colors(clip_id, colors)
             self._refresh_quick_run_availability()
 
     def update_clip_shot_type(self, clip_id: str, shot_type: str):
         """Update shot type for a clip."""
         if clip_id in self._clip_ids:
-            self.clip_browser.update_clip_shot_type(clip_id, shot_type)
+            if clip_id in self.clip_browser._thumbnail_by_id:
+                self.clip_browser.update_clip_shot_type(clip_id, shot_type)
             self._refresh_quick_run_availability()
 
     def update_clip_thumbnail(self, clip_id: str, thumb_path):
         """Update thumbnail for a clip."""
-        if clip_id in self._clip_ids:
+        if (
+            clip_id in self._clip_ids
+            and clip_id in self.clip_browser._thumbnail_by_id
+        ):
             self.clip_browser.update_clip_thumbnail(clip_id, thumb_path)
 
     def update_clip_transcript(self, clip_id: str, segments: list):
         """Update transcript for a clip."""
         if clip_id in self._clip_ids:
-            self.clip_browser.update_clip_transcript(clip_id, segments)
+            if clip_id in self.clip_browser._thumbnail_by_id:
+                self.clip_browser.update_clip_transcript(clip_id, segments)
             self._refresh_quick_run_availability()
 
     def update_clip_extracted_text(self, clip_id: str, texts: list):
         """Update extracted text for a clip."""
         if clip_id in self._clip_ids:
-            self.clip_browser.update_clip_extracted_text(clip_id, texts)
+            if clip_id in self.clip_browser._thumbnail_by_id:
+                self.clip_browser.update_clip_extracted_text(clip_id, texts)
             self._refresh_quick_run_availability()
 
     def update_clip_custom_queries(self, clip_id: str, custom_queries: list[dict] | None):
         """Update custom query results for a clip."""
-        if clip_id in self._clip_ids:
+        if (
+            clip_id in self._clip_ids
+            and clip_id in self.clip_browser._thumbnail_by_id
+        ):
             self.clip_browser.update_clip_custom_queries(clip_id, custom_queries)
 
     def update_clip_cinematography(self, clip_id: str, cinematography):
@@ -508,7 +593,8 @@ class AnalyzeTab(BaseTab):
             cinematography: CinematographyAnalysis object
         """
         if clip_id in self._clip_ids:
-            self.clip_browser.update_clip_cinematography(clip_id, cinematography)
+            if clip_id in self.clip_browser._thumbnail_by_id:
+                self.clip_browser.update_clip_cinematography(clip_id, cinematography)
             self._refresh_quick_run_availability()
 
     def set_analyzing(self, is_analyzing: bool, operation: str = ""):
@@ -545,6 +631,7 @@ class AnalyzeTab(BaseTab):
 
     def on_tab_activated(self):
         """Refresh clip browser layout when tab becomes visible."""
+        self._populate_pending_browser_clips()
         if (
             self.state_stack.currentIndex() == self.STATE_CLIPS
             and self.clip_browser.thumbnails

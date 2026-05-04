@@ -221,7 +221,7 @@ class CutTab(BaseTab):
         """Handle filter changes - clear selection and update UI."""
         self.clear_selection()
         visible = self.clip_browser.get_visible_clip_count()
-        total = len(self.clip_browser.thumbnails)
+        total = self.clip_browser.get_total_clip_count()
         if self.clip_browser.has_active_filters():
             self.clip_count_label.setText(f"{visible}/{total} clips")
         else:
