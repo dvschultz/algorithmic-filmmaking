@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QSlider,
     QProgressBar,
-    QWidget,
     QGroupBox,
     QMessageBox,
     QFrame,
@@ -64,6 +63,18 @@ DIMENSION_INFO = {
         "tooltip": "Match overall visual appearance (DINOv2 embeddings)",
         "analysis_key": "embeddings",
         "default_weight": 100,
+    },
+    "description": {
+        "label": "Description",
+        "tooltip": "Match generated clip descriptions",
+        "analysis_key": "describe",
+        "default_weight": 60,
+    },
+    "transcript": {
+        "label": "Transcript",
+        "tooltip": "Match spoken transcript text",
+        "analysis_key": "transcribe",
+        "default_weight": 60,
     },
     "movement": {
         "label": "Movement",

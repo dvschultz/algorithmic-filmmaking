@@ -5286,8 +5286,9 @@ def generate_signature_style(
 @tools.register(
     description="Generate a reference-guided sequence that matches your clips to a reference "
                 "video's structure across weighted dimensions (color, brightness, shot_scale, "
-                "audio, embedding, movement, duration). Use get_available_dimensions first to "
-                "check which dimensions have data. Use list_sources to find source IDs.",
+                "audio, embedding, description, transcript, movement, duration). Use "
+                "get_available_dimensions first to check which dimensions have data. "
+                "Use list_sources to find source IDs.",
     requires_project=True,
     modifies_gui_state=True
 )
@@ -5303,7 +5304,8 @@ def generate_reference_guided(
     Args:
         reference_source_id: Source ID of the reference video (use list_sources to find IDs)
         weights: Dimension weights as {"dimension": 0.0-1.0}. Available dimensions:
-            color, brightness, shot_scale, audio, embedding, movement, duration.
+            color, brightness, shot_scale, audio, embedding, description,
+            transcript, movement, duration.
             Defaults to {"embedding": 1.0, "brightness": 0.4, "duration": 0.6}
         allow_repeats: Allow same clip to match multiple reference positions
 
@@ -5321,7 +5323,17 @@ def generate_reference_guided(
         }
 
     # Validate weights
-    valid_dims = {"color", "brightness", "shot_scale", "audio", "embedding", "movement", "duration"}
+    valid_dims = {
+        "color",
+        "brightness",
+        "shot_scale",
+        "audio",
+        "embedding",
+        "description",
+        "transcript",
+        "movement",
+        "duration",
+    }
     invalid = set(weights.keys()) - valid_dims
     if invalid:
         return {
