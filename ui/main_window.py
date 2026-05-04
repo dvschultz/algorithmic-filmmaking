@@ -74,6 +74,7 @@ from ui.tabs import CollectTab, CutTab, AnalyzeTab, FramesTab, SequenceTab, Rend
 from ui.theme import theme, Spacing
 from ui.chat_panel import ChatPanel
 from ui.chat_worker import ChatAgentWorker
+from ui.clip_browser import VIRTUALIZATION_THRESHOLD
 from ui.clip_details_sidebar import ClipDetailsSidebar
 from ui.dialogs import IntentionImportDialog, AnalysisPickerDialog, URLImportDialog
 from ui.log_viewer import LogViewerWidget, get_in_app_log_bridge
@@ -250,19 +251,21 @@ class ThumbnailWorker(QThread):
             try:
                 # Use clip's source if available, fall back to default source
                 source = self.sources_by_id.get(clip.source_id, self.source)
-                logger.info(f"ThumbnailWorker: clip {clip.id[:8]} source_id={clip.source_id}, found source: {source.id if source else None}")
+                if i == 0 or (i + 1) % 100 == 0:
+                    logger.info("ThumbnailWorker: processing %s/%s thumbnails", i + 1, total)
+                logger.debug(f"ThumbnailWorker: clip {clip.id[:8]} source_id={clip.source_id}, found source: {source.id if source else None}")
                 if not source:
                     logger.warning(f"No source found for clip {clip.id} (source_id={clip.source_id})")
                     continue
 
-                logger.info(f"ThumbnailWorker: generating thumbnail for clip {clip.id}, video: {source.file_path}")
+                logger.debug(f"ThumbnailWorker: generating thumbnail for clip {clip.id}, video: {source.file_path}")
                 thumb_path = generator.generate_clip_thumbnail(
                     video_path=source.file_path,
                     start_seconds=clip.start_time(source.fps),
                     end_seconds=clip.end_time(source.fps),
                 )
                 clip.thumbnail_path = thumb_path
-                logger.info(f"ThumbnailWorker: emitting thumbnail_ready for clip {clip.id}, path={thumb_path}")
+                logger.debug(f"ThumbnailWorker: emitting thumbnail_ready for clip {clip.id}, path={thumb_path}")
                 self.thumbnail_ready.emit(clip.id, str(thumb_path))
             except Exception as e:
                 logger.warning(f"Failed to generate thumbnail for clip {clip.id}: {e}")
@@ -10047,7 +10050,7 @@ class MainWindow(QMainWindow):
             valid_clip_ids = [cid for cid in ui_state["analyze_clip_ids"]
                               if cid in self.clips_by_id]
             if valid_clip_ids:
-                self.analyze_tab.add_clips(valid_clip_ids)
+                self.analyze_tab.add_clips(valid_clip_ids, populate_browser=False)
                 logger.info(f"Restored {len(valid_clip_ids)} clips to Analyze tab")
 
         self._add_recent_project(filepath)
@@ -10085,6 +10088,16 @@ class MainWindow(QMainWindow):
                 on_finished()
             return
 
+        if total >= VIRTUALIZATION_THRESHOLD:
+            logger.info("Using virtual clip browser for %s loaded clips", total)
+            self.cut_tab.clip_browser.set_virtual_clips(clip_source_pairs)
+            self.status_bar.showMessage(
+                f"Project loaded: {filepath.name} ({len(self.clips)} clips)"
+            )
+            if on_finished:
+                QTimer.singleShot(250, on_finished)
+            return
+
         generation = getattr(self, "_project_load_generation", 0) + 1
         self._project_load_generation = generation
         batch_size = 75
@@ -10093,27 +10106,49 @@ class MainWindow(QMainWindow):
             if getattr(self, "_project_load_generation", None) != generation:
                 return
 
-            batch = clip_source_pairs[start:start + batch_size]
-            loaded = min(start + len(batch), total)
-            is_last_batch = loaded >= total
-            if batch:
-                self.cut_tab.clip_browser.add_clips(
-                    batch, defer_rebuild=not is_last_batch
+            batch_started = time.perf_counter()
+            try:
+                batch = clip_source_pairs[start:start + batch_size]
+                loaded = min(start + len(batch), total)
+                is_last_batch = loaded >= total
+                if batch:
+                    self.cut_tab.clip_browser.add_clips(
+                        batch,
+                        defer_rebuild=True,
+                        defer_filter_sync=True,
+                    )
+
+                elapsed_ms = (time.perf_counter() - batch_started) * 1000
+                logger.debug(
+                    "Loaded clip browser batch %s-%s/%s in %.1f ms",
+                    start,
+                    loaded,
+                    total,
+                    elapsed_ms,
                 )
 
-            if not is_last_batch:
+                if not is_last_batch:
+                    self.status_bar.showMessage(
+                        f"Loading clip browser: {loaded}/{total} clips..."
+                    )
+                    QTimer.singleShot(0, lambda: add_batch(loaded))
+                    return
+
+                self.cut_tab.clip_browser.finalize_batch_load()
                 self.status_bar.showMessage(
-                    f"Loading clip browser: {loaded}/{total} clips..."
+                    f"Project loaded: {filepath.name} ({len(self.clips)} clips)"
                 )
-                QTimer.singleShot(0, lambda: add_batch(loaded))
-                return
-
-            self.cut_tab.clip_browser.finalize_batch_load()
-            self.status_bar.showMessage(
-                f"Project loaded: {filepath.name} ({len(self.clips)} clips)"
-            )
-            if on_finished:
-                on_finished()
+                if on_finished:
+                    QTimer.singleShot(250, on_finished)
+            except Exception:
+                logger.exception(
+                    "Failed while loading clip browser batch starting at %s/%s",
+                    start,
+                    total,
+                )
+                self.status_bar.showMessage(
+                    f"Failed loading clip browser at {start}/{total} clips"
+                )
 
         self.status_bar.showMessage(f"Loading clip browser: 0/{total} clips...")
         QTimer.singleShot(0, add_batch)
@@ -10271,7 +10306,7 @@ class MainWindow(QMainWindow):
             valid_clip_ids = [cid for cid in ui_state["analyze_clip_ids"]
                               if cid in self.clips_by_id]
             if valid_clip_ids:
-                self.analyze_tab.add_clips(valid_clip_ids)
+                self.analyze_tab.add_clips(valid_clip_ids, populate_browser=False)
 
         # Update UI
         self._on_sequence_changed()
@@ -10336,11 +10371,11 @@ class MainWindow(QMainWindow):
 
     def _on_project_thumbnail_ready(self, clip_id: str, thumb_path: str):
         """Handle individual thumbnail during project load (update, don't add)."""
-        logger.info(f"_on_project_thumbnail_ready: clip_id={clip_id}, thumb_path={thumb_path}")
+        logger.debug(f"_on_project_thumbnail_ready: clip_id={clip_id}, thumb_path={thumb_path}")
         clip = self.clips_by_id.get(clip_id)
         if clip:
             thumb_path_obj = Path(thumb_path)
-            logger.info(f"  thumbnail exists: {thumb_path_obj.exists()}")
+            logger.debug(f"  thumbnail exists: {thumb_path_obj.exists()}")
             clip.thumbnail_path = thumb_path_obj
             self.cut_tab.update_clip_thumbnail(clip_id, thumb_path_obj)
             self.analyze_tab.update_clip_thumbnail(clip_id, thumb_path_obj)

@@ -7,7 +7,6 @@ progress counter to show more clips than were visible in the browser.
 
 import pytest
 from pathlib import Path
-from unittest.mock import patch
 
 from models.clip import Source, Clip
 from tests.conftest import make_test_clip
@@ -66,6 +65,27 @@ def _make_clips(prefix: str, source_id: str, count: int) -> list[Clip]:
 
 class TestRemoveOrphanedClipSync:
     """Verify _clip_ids stays in sync with browser after orphan removal."""
+
+    def test_add_clips_can_defer_browser_population(
+        self, analyze_tab, source_a
+    ):
+        """Project restore can restore Analyze state without building widgets."""
+        clips = _make_clips("lazy", "src-a", 3)
+        analyze_tab.set_lookups({c.id: c for c in clips}, {"src-a": source_a})
+
+        analyze_tab.add_clips([c.id for c in clips], populate_browser=False)
+
+        assert set(analyze_tab._clip_ids) == {c.id for c in clips}
+        assert analyze_tab._pending_browser_clip_ids == [c.id for c in clips]
+        assert analyze_tab.clip_browser.thumbnails == []
+
+        analyze_tab.on_tab_activated()
+
+        assert analyze_tab._pending_browser_clip_ids == []
+        assert analyze_tab.clip_browser.get_total_clip_count() == 3
+        assert [thumb.clip.id for thumb in analyze_tab.clip_browser.thumbnails] == [
+            c.id for c in clips
+        ]
 
     def test_orphan_removal_discards_unresolvable_ids(
         self, analyze_tab, source_a, source_b

@@ -97,6 +97,83 @@ def test_add_clips_defer_rebuild_skips_until_finalize(qapp, source, monkeypatch)
     assert rebuilds == [True]
 
 
+def test_add_clips_can_defer_filter_sync_until_finalize(qapp, source, monkeypatch):
+    from ui.clip_browser import ClipBrowser
+
+    browser = ClipBrowser()
+    syncs = []
+    rebuilds = []
+    monkeypatch.setattr(browser, "_sync_custom_query_filter_options", lambda: syncs.append(True))
+    monkeypatch.setattr(browser, "_rebuild_grid", lambda: rebuilds.append(True))
+
+    clips = [make_test_clip(f"c{i}") for i in range(3)]
+    browser.add_clips(
+        [(clip, source) for clip in clips],
+        defer_rebuild=True,
+        defer_filter_sync=True,
+    )
+
+    assert syncs == []
+    assert rebuilds == []
+
+    browser.finalize_batch_load()
+    assert syncs == [True]
+    assert rebuilds == [True]
+
+
+def test_virtual_clip_browser_realizes_only_visible_window(qapp, source):
+    from ui.clip_browser import ClipBrowser
+
+    browser = ClipBrowser()
+    browser.resize(700, 500)
+    clips = [make_test_clip(f"v{i}") for i in range(100)]
+
+    browser.set_virtual_clips([(clip, source) for clip in clips])
+    qapp.processEvents()
+
+    assert browser._virtual_mode is True
+    assert len(browser._virtual_entries) == 100
+    assert 0 < len(browser.thumbnails) < 100
+    assert browser.is_virtualized() is True
+    assert browser.get_total_clip_count() == 100
+    assert browser.get_realized_clip_count() == len(browser.thumbnails)
+    assert all(browser.get_source_for_clip(clip.id) is source for clip in clips)
+
+
+def test_virtual_clip_browser_selection_uses_all_filtered_data(qapp, source):
+    from ui.clip_browser import ClipBrowser
+
+    browser = ClipBrowser()
+    clips = [make_test_clip(f"v{i}") for i in range(25)]
+    clips[3].disabled = True
+    clips[10].disabled = True
+
+    browser.set_virtual_clips([(clip, source) for clip in clips])
+    qapp.processEvents()
+    browser.select_all()
+
+    selected_ids = {clip.id for clip in browser.get_selected_clips()}
+    assert selected_ids == {clip.id for clip in clips if not clip.disabled}
+
+
+def test_virtual_refresh_layout_skips_when_columns_unchanged(qapp, source, monkeypatch):
+    from ui.clip_browser import ClipBrowser
+
+    browser = ClipBrowser()
+    browser.resize(700, 500)
+    clips = [make_test_clip(f"v{i}") for i in range(100)]
+    browser.set_virtual_clips([(clip, source) for clip in clips])
+    qapp.processEvents()
+    browser._last_column_count = browser._calculate_columns()
+
+    rebuilds = []
+    monkeypatch.setattr(browser, "_rebuild_grid", lambda: rebuilds.append(True))
+
+    browser.refresh_layout()
+
+    assert rebuilds == []
+
+
 def test_toggle_disabled_unselects_only_toggled_clip(qapp, source):
     from ui.clip_browser import ClipBrowser
 
