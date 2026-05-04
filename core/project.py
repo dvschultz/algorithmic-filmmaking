@@ -222,7 +222,7 @@ def save_project(
     if progress_callback:
         progress_callback(0.4, "Serializing clips...")
 
-    project_data["clips"] = [clip.to_dict() for clip in clips]
+    project_data["clips"] = [clip.to_dict(base_path=base_path) for clip in clips]
 
     # Copy/link pre-rendered clips into project folder
     if progress_callback:
@@ -537,7 +537,7 @@ def load_project(
     for clip_data in data.get("clips", []):
         source_id = clip_data.get("source_id", "")
         if source_id in sources_by_id:
-            clip = Clip.from_dict(clip_data)
+            clip = Clip.from_dict(clip_data, base_path=base_path)
             clips.append(clip)
         else:
             logger.warning(f"Skipping clip with missing source: {clip_data.get('id')}")

@@ -115,6 +115,15 @@ def _has_audio_stream(path: Path) -> Optional[bool]:
 
     return bool(result.stdout.strip())
 
+
+def _require_ffmpeg() -> str:
+    """Return the resolved FFmpeg path or raise a user-facing transcription error."""
+    ffmpeg_path = find_binary("ffmpeg")
+    if ffmpeg_path is None:
+        raise FFmpegNotFoundError()
+    return ffmpeg_path
+
+
 # Available model configurations
 WHISPER_MODELS = {
     "tiny.en": {"size": "39MB", "speed": "~32x", "accuracy": "Basic", "vram": "<1GB"},
@@ -147,6 +156,16 @@ class TranscriptionError(Exception):
     pass
 
 
+class FFmpegNotFoundError(TranscriptionError):
+    """Raised when FFmpeg is required but unavailable."""
+
+    def __init__(self):
+        super().__init__(
+            "FFmpeg is required for transcription but was not found. "
+            "Install FFmpeg from Settings > Dependencies and try again."
+        )
+
+
 class FasterWhisperNotInstalledError(TranscriptionError):
     """Raised when faster-whisper is not installed."""
     def __init__(self):
@@ -166,7 +185,7 @@ def is_faster_whisper_available() -> bool:
     global _faster_whisper_available
     if _faster_whisper_available is None:
         try:
-            import faster_whisper
+            import faster_whisper  # noqa: F401
             _faster_whisper_available = True
         except ImportError:
             _faster_whisper_available = False
@@ -468,7 +487,7 @@ def _transcribe_video_mlx(
         tmp_path = Path(tmp.name)
 
     try:
-        _ffmpeg = find_binary("ffmpeg") or "ffmpeg"
+        _ffmpeg = _require_ffmpeg()
         subprocess.run(
             [
                 _ffmpeg, "-y",
@@ -540,7 +559,7 @@ def transcribe_clip(
 
     try:
         # Extract audio segment with FFmpeg
-        _ffmpeg = find_binary("ffmpeg") or "ffmpeg"
+        _ffmpeg = _require_ffmpeg()
         subprocess.run(
             [
                 _ffmpeg, "-y",
@@ -595,6 +614,8 @@ def transcribe_clip(
 
         return results
 
+    except FileNotFoundError as e:
+        raise FFmpegNotFoundError() from e
     except subprocess.CalledProcessError as e:
         logger.warning(f"FFmpeg failed to extract audio: {e.stderr.decode() if e.stderr else e}")
         return []
@@ -693,7 +714,7 @@ def _transcribe_cloud_groq(
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             tmp_path = Path(tmp.name)
         try:
-            _ffmpeg = find_binary("ffmpeg") or "ffmpeg"
+            _ffmpeg = _require_ffmpeg()
             subprocess.run(
                 [
                     _ffmpeg, "-y",

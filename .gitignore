@@ -240,3 +240,7 @@ test_clips/
 .cog/
 **/model/
 !models/  # Keep our models/ source directory
+
+# Local agent tooling artifacts
+.claude/scheduled_tasks.lock
+.context/

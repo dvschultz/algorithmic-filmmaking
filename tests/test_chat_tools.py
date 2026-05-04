@@ -1249,8 +1249,9 @@ class TestExportBundle:
         assert "_wait_for_worker" in result
         assert result["_wait_for_worker"] == "export_bundle"
         assert result["include_videos"] is True
+        assert result["include_clips"] is True
         main_window.start_agent_export_bundle.assert_called_once_with(
-            tmp_path / "test_bundle", True
+            tmp_path / "test_bundle", True, True
         )
 
     def test_export_bundle_lightweight(self, tmp_path):
@@ -1267,8 +1268,33 @@ class TestExportBundle:
 
         assert "_wait_for_worker" in result
         assert result["include_videos"] is False
+        assert result["include_clips"] is False
         main_window.start_agent_export_bundle.assert_called_once_with(
-            tmp_path / "test_bundle", False
+            tmp_path / "test_bundle", False, False
+        )
+
+    def test_export_bundle_can_skip_trimmed_clips(self, tmp_path):
+        """Test export_bundle can skip trimmed clip media independently."""
+        from core.chat_tools import export_bundle
+
+        project = _create_chat_test_project()
+        main_window = Mock()
+        main_window.export_bundle_worker = None
+        main_window.start_agent_export_bundle.return_value = True
+
+        dest = str(tmp_path / "test_bundle")
+        result = export_bundle(
+            main_window,
+            project,
+            output_path=dest,
+            include_clips=False,
+        )
+
+        assert "_wait_for_worker" in result
+        assert result["include_videos"] is True
+        assert result["include_clips"] is False
+        main_window.start_agent_export_bundle.assert_called_once_with(
+            tmp_path / "test_bundle", True, False
         )
 
     def test_export_bundle_worker_fails_to_start(self, tmp_path):

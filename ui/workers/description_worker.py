@@ -14,7 +14,7 @@ from typing import Optional
 from PySide6.QtCore import Signal
 
 from core.settings import load_settings
-from ui.workers.base import CancellableWorker
+from ui.workers.base import CancellableWorker, is_transient_provider_error
 
 logger = logging.getLogger(__name__)
 
@@ -183,12 +183,10 @@ class DescriptionWorker(CancellableWorker):
                     return task.clip_id, None, None, description
             except Exception as e:
                 last_error = str(e)
-                # Retry on rate-limit errors
-                is_rate_limit = "429" in last_error or "rate" in last_error.lower()
-                if is_rate_limit and attempt < _MAX_RETRIES:
+                if is_transient_provider_error(last_error) and attempt < _MAX_RETRIES:
                     delay = _RETRY_DELAYS[attempt]
                     logger.warning(
-                        f"Rate limit for {task.clip_id}, "
+                        f"Transient description failure for {task.clip_id}, "
                         f"retry {attempt + 1}/{_MAX_RETRIES} in {delay}s"
                     )
                     time.sleep(delay)

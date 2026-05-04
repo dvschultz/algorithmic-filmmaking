@@ -32,12 +32,14 @@ class ExportBundleWorker(CancellableWorker):
         project: Project,
         dest_dir: Path,
         include_videos: bool = True,
+        include_clips: bool = True,
         parent=None,
     ):
         super().__init__(parent)
         self._project = project
         self._dest_dir = dest_dir
         self._include_videos = include_videos
+        self._include_clips = include_clips
 
     def run(self):
         self._log_start()
@@ -48,6 +50,7 @@ class ExportBundleWorker(CancellableWorker):
                 project=self._project,
                 dest_dir=self._dest_dir,
                 include_videos=self._include_videos,
+                include_clips=self._include_clips,
                 progress_callback=lambda c, t, f: self.progress.emit(c, t, f),
                 cancel_check=self.is_cancelled,
             )

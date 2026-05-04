@@ -7,7 +7,45 @@ from typing import Optional
 
 import numpy as np
 
+from PySide6.QtCore import Qt, Signal, QMimeData, QRect, QTimer
+from PySide6.QtGui import QPixmap, QDrag, QPainter, QColor, QKeyEvent, QAction
+from PySide6.QtWidgets import (
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QScrollArea,
+    QGridLayout,
+    QLabel,
+    QFrame,
+    QApplication,
+    QComboBox,
+    QLineEdit,
+    QPushButton,
+    QMenu,
+    QToolButton,
+    QGraphicsOpacityEffect,
+    QRubberBand,
+)
+
+from core.analysis.color import (
+    get_primary_hue,
+    classify_color_palette,
+    get_palette_display_name,
+    COLOR_PALETTES,
+)
+from core.analysis.gaze import GAZE_CATEGORY_DISPLAY
+from core.analysis.shots import get_display_name, SHOT_TYPES
 from core.filter_state import FilterState
+from core.film_glossary import get_badge_tooltip
+from models.clip import Clip, Source
+from models.cinematography import CinematographyAnalysis
+from ui.gradient_glow import paint_gradient_glow, paint_card_body, RoundedTopLabel
+from ui.theme import theme, UISizes, TypeScale, Spacing, Radii
+from ui.widgets.range_slider import RangeSlider
+from ui.widgets.source_group_header import SourceGroupHeader
+
+# Reverse map: display label -> internal key (built once at module load)
+_GAZE_DISPLAY_TO_KEY = {v: k for k, v in GAZE_CATEGORY_DISPLAY.items()}
 
 # Resolve the has-analysis-of-type predicate at module load so the hot
 # `_matches_filter` loop doesn't re-import on every clip check, and so that
@@ -41,42 +79,6 @@ def _combo_text_for_enum(value_set, *, fallback):
     if len(value_set) == 1:
         return next(iter(value_set))
     return fallback
-
-
-from PySide6.QtWidgets import (
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QScrollArea,
-    QGridLayout,
-    QLabel,
-    QFrame,
-    QApplication,
-    QComboBox,
-    QLineEdit,
-    QPushButton,
-    QMenu,
-    QToolButton,
-    QGraphicsOpacityEffect,
-    QRubberBand,
-)
-from PySide6.QtCore import Qt, Signal, QMimeData, QRect, QTimer
-from PySide6.QtGui import QPixmap, QDrag, QPainter, QColor, QKeyEvent, QAction
-
-from ui.widgets.range_slider import RangeSlider
-from ui.widgets.source_group_header import SourceGroupHeader
-
-from models.clip import Clip, Source
-from models.cinematography import CinematographyAnalysis
-from core.analysis.color import get_primary_hue, classify_color_palette, get_palette_display_name, COLOR_PALETTES
-from core.analysis.gaze import GAZE_CATEGORY_DISPLAY
-
-# Reverse map: display label -> internal key (built once at module load)
-_GAZE_DISPLAY_TO_KEY = {v: k for k, v in GAZE_CATEGORY_DISPLAY.items()}
-from core.analysis.shots import get_display_name, SHOT_TYPES
-from core.film_glossary import get_badge_tooltip
-from ui.theme import theme, UISizes, TypeScale, Spacing, Radii
-from ui.gradient_glow import paint_gradient_glow, paint_card_body, RoundedTopLabel
 
 logger = logging.getLogger(__name__)
 
@@ -1056,8 +1058,8 @@ class ClipBrowser(QWidget):
             self.grid.removeWidget(self.empty_label)
             self._empty_label_in_grid = False
 
-    def add_clip(self, clip: Clip, source: Source):
-        """Add a clip to the browser."""
+    def _create_thumbnail(self, clip: Clip, source: Source) -> ClipThumbnail:
+        """Create and wire a thumbnail widget for a clip."""
         # Store source reference
         self._source_lookup[clip.id] = source
 
@@ -1070,6 +1072,14 @@ class ClipBrowser(QWidget):
         thumb.export_requested.connect(self._on_export_requested)
         thumb.find_similar_requested.connect(self._activate_similarity)
 
+        return thumb
+
+    def add_clip(self, clip: Clip, source: Source):
+        """Add a clip to the browser."""
+        if clip.id in self._thumbnail_by_id:
+            return
+
+        thumb = self._create_thumbnail(clip, source)
         self.thumbnails.append(thumb)
         self._thumbnail_by_id[clip.id] = thumb  # O(1) lookup
 
@@ -1081,6 +1091,41 @@ class ClipBrowser(QWidget):
         self._rebuild_grid()
 
         # Update duration range for spinboxes
+        self._update_duration_range()
+
+    def add_clips(
+        self,
+        clip_source_pairs: list[tuple[Clip, Source]],
+        defer_rebuild: bool = False,
+    ) -> None:
+        """Add multiple clips with one filter sync and one grid rebuild.
+
+        When called repeatedly during batched project loads, set
+        `defer_rebuild=True` to skip the per-batch grid rebuild and duration
+        refresh, then call `finalize_batch_load()` once after the final batch.
+        """
+        added: list[Clip] = []
+        for clip, source in clip_source_pairs:
+            if clip.id in self._thumbnail_by_id:
+                continue
+            thumb = self._create_thumbnail(clip, source)
+            self.thumbnails.append(thumb)
+            self._thumbnail_by_id[clip.id] = thumb
+            added.append(clip)
+
+        if not added:
+            return
+
+        self._sync_custom_query_filter_options()
+        for clip in added:
+            self._incremental_filter_enable(clip)
+        if not defer_rebuild:
+            self._rebuild_grid()
+            self._update_duration_range()
+
+    def finalize_batch_load(self) -> None:
+        """Flush deferred rebuilds after a series of `add_clips(defer_rebuild=True)` calls."""
+        self._rebuild_grid()
         self._update_duration_range()
 
     def clear(self):

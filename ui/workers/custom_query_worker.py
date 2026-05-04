@@ -13,7 +13,7 @@ from typing import Optional
 
 from PySide6.QtCore import Signal
 
-from ui.workers.base import CancellableWorker
+from ui.workers.base import CancellableWorker, is_transient_provider_error
 
 logger = logging.getLogger(__name__)
 
@@ -172,11 +172,10 @@ class CustomQueryWorker(CancellableWorker):
                 return task.clip_id, task.query, match, confidence, model, None
             except Exception as e:
                 last_error = str(e)
-                is_rate_limit = "429" in last_error or "rate" in last_error.lower()
-                if is_rate_limit and attempt < _MAX_RETRIES:
+                if is_transient_provider_error(last_error) and attempt < _MAX_RETRIES:
                     delay = _RETRY_DELAYS[attempt]
                     logger.warning(
-                        f"Rate limit for {task.clip_id}, "
+                        f"Transient query failure for {task.clip_id}, "
                         f"retry {attempt + 1}/{_MAX_RETRIES} in {delay}s"
                     )
                     time.sleep(delay)
