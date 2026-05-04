@@ -7101,7 +7101,7 @@ class MainWindow(QMainWindow):
         Args:
             dest_dir: Destination directory for the bundle
             include_videos: Whether to include source video files
-            include_clips: Whether to export trimmed clip media files
+            include_clips: Whether to export trimmed clip media
 
         Returns:
             True if export started, False if already in progress

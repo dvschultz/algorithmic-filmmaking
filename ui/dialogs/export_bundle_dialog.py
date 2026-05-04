@@ -18,8 +18,6 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
 )
-from PySide6.QtCore import Qt
-
 from core.project import Project
 from core.settings import format_size
 from ui.theme import theme, TypeScale, Spacing, UISizes
@@ -88,6 +86,11 @@ class ExportBundleDialog(QDialog):
         self._include_videos_cb.toggled.connect(self._update_summary)
         layout.addWidget(self._include_videos_cb)
 
+        self._include_clips_cb = QCheckBox("Include trimmed clips")
+        self._include_clips_cb.setChecked(True)
+        self._include_clips_cb.toggled.connect(self._update_summary)
+        layout.addWidget(self._include_clips_cb)
+
         # Summary label
         self._summary_label = QLabel()
         self._summary_label.setWordWrap(True)
@@ -126,6 +129,7 @@ class ExportBundleDialog(QDialog):
         clips = self._project.clips
         frames = self._project.frames
         include_videos = self._include_videos_cb.isChecked()
+        include_clips = self._include_clips_cb.isChecked()
 
         # Calculate video sizes
         video_size = 0
@@ -156,7 +160,8 @@ class ExportBundleDialog(QDialog):
             size_str = format_size(video_size) if include_videos else "excluded"
             parts.append(f"{len(sources)} source(s) ({size_str})")
         if clips:
-            parts.append(f"{len(clips)} trimmed clip(s)")
+            clip_str = "will be exported" if include_clips else "excluded"
+            parts.append(f"{len(clips)} trimmed clip(s) ({clip_str})")
         if frames:
             parts.append(f"{len(frames)} frame(s) ({format_size(frame_size)})")
 
@@ -169,7 +174,7 @@ class ExportBundleDialog(QDialog):
         total = frame_size + (video_size if include_videos else 0)
         if total > 0:
             summary += f"\nEstimated bundle size: {format_size(total)}"
-            if clips:
+            if clips and include_clips:
                 summary += " + trimmed clips"
 
         # Warnings for missing files
@@ -193,3 +198,7 @@ class ExportBundleDialog(QDialog):
     @property
     def include_videos(self) -> bool:
         return self._include_videos_cb.isChecked()
+
+    @property
+    def include_clips(self) -> bool:
+        return self._include_clips_cb.isChecked()

@@ -7624,8 +7624,9 @@ def export_clips(
 @tools.register(
     description="Export the current project as a self-contained bundle folder. "
                 "The bundle includes the project file, thumbnails, and optionally "
-                "the source video files. Use lightweight=True to skip copying video "
-                "files (project file + thumbnails only). "
+                "source video files and trimmed clip media. Use lightweight=True to "
+                "skip copying video files and exporting trimmed clips (project file "
+                "+ thumbnails only). "
                 "Runs in background - may take significant time for large projects.",
     requires_project=True,
     modifies_gui_state=True,
@@ -7636,12 +7637,16 @@ def export_bundle(
     project,
     output_path: Optional[str] = None,
     lightweight: bool = False,
+    include_clips: Optional[bool] = None,
 ) -> dict:
     """Export the project as a self-contained bundle folder.
 
     Args:
         output_path: Destination directory path (optional, defaults to export_dir)
-        lightweight: If True, skip copying source video files (default False)
+        lightweight: If True, skip copying source video files and trimmed clips
+            by default.
+        include_clips: Whether to export trimmed clip media. Defaults to
+            not lightweight.
 
     Returns:
         Dict with _wait_for_worker marker for async execution
@@ -7673,9 +7678,14 @@ def export_bundle(
         return {"success": False, "error": "Bundle export already in progress"}
 
     include_videos = not lightweight
+    should_include_clips = not lightweight if include_clips is None else include_clips
 
     # Start async export via worker
-    started = main_window.start_agent_export_bundle(dest_dir, include_videos)
+    started = main_window.start_agent_export_bundle(
+        dest_dir,
+        include_videos,
+        should_include_clips,
+    )
     if not started:
         return {"success": False, "error": "Failed to start bundle export worker"}
 
@@ -7684,6 +7694,7 @@ def export_bundle(
         "_wait_for_worker": "export_bundle",
         "output_path": str(dest_dir),
         "include_videos": include_videos,
+        "include_clips": should_include_clips,
     }
 
 
