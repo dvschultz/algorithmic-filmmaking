@@ -23,6 +23,28 @@ _MAX_RETRIES = 3
 _RETRY_DELAYS = [2, 5, 10]  # seconds
 
 
+def _is_retryable_description_error(message: str) -> bool:
+    """Return True for transient cloud/provider failures worth retrying."""
+    normalized = message.lower()
+    return (
+        "429" in normalized
+        or "rate limit" in normalized
+        or "too many requests" in normalized
+        or "500" in normalized
+        or "502" in normalized
+        or "503" in normalized
+        or "504" in normalized
+        or "internalservererror" in normalized
+        or "internal error" in normalized
+        or "temporarily unavailable" in normalized
+        or "service unavailable" in normalized
+        or "timeout" in normalized
+        or "timed out" in normalized
+        or "connection" in normalized
+        or "network" in normalized
+    )
+
+
 @dataclass(frozen=True)
 class DescriptionTask:
     """Immutable task data for thread pool execution."""
@@ -183,12 +205,10 @@ class DescriptionWorker(CancellableWorker):
                     return task.clip_id, None, None, description
             except Exception as e:
                 last_error = str(e)
-                # Retry on rate-limit errors
-                is_rate_limit = "429" in last_error or "rate" in last_error.lower()
-                if is_rate_limit and attempt < _MAX_RETRIES:
+                if _is_retryable_description_error(last_error) and attempt < _MAX_RETRIES:
                     delay = _RETRY_DELAYS[attempt]
                     logger.warning(
-                        f"Rate limit for {task.clip_id}, "
+                        f"Transient description failure for {task.clip_id}, "
                         f"retry {attempt + 1}/{_MAX_RETRIES} in {delay}s"
                     )
                     time.sleep(delay)

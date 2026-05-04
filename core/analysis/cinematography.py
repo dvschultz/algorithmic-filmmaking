@@ -316,6 +316,25 @@ left, right, up, down, forward, backward, clockwise, counterclockwise
 Return your analysis as a JSON object with these exact field names."""
 
 
+def _coerce_cinematography_payload(data: object) -> dict:
+    """Return a cinematography object from provider JSON payload variants."""
+    if isinstance(data, dict):
+        return data
+
+    if isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict):
+                logger.info(
+                    "Cinematography response was a JSON list; using first object item"
+                )
+                return item
+        raise ValueError("Cinematography response JSON list did not contain an object")
+
+    raise ValueError(
+        f"Cinematography response JSON must be an object, got {type(data).__name__}"
+    )
+
+
 def _parse_json_response(response_text: str) -> dict:
     """Parse JSON from VLM response, handling markdown code blocks.
 
@@ -332,7 +351,7 @@ def _parse_json_response(response_text: str) -> dict:
 
     # Try direct JSON parse first
     try:
-        return json.loads(text)
+        return _coerce_cinematography_payload(json.loads(text))
     except json.JSONDecodeError:
         pass
 
@@ -341,7 +360,7 @@ def _parse_json_response(response_text: str) -> dict:
     match = re.search(code_block_pattern, text, re.DOTALL)
     if match:
         try:
-            return json.loads(match.group(1).strip())
+            return _coerce_cinematography_payload(json.loads(match.group(1).strip()))
         except json.JSONDecodeError:
             pass
 
@@ -350,7 +369,7 @@ def _parse_json_response(response_text: str) -> dict:
     match = re.search(json_pattern, text, re.DOTALL)
     if match:
         try:
-            return json.loads(match.group(0))
+            return _coerce_cinematography_payload(json.loads(match.group(0)))
         except json.JSONDecodeError:
             pass
 

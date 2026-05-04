@@ -368,7 +368,7 @@ def test_launch_worker_emits_pipeline_completion(
     assert harness.finished_ops == [expected_op]
 
 
-def test_shot_type_error_handler_shows_reason(monkeypatch):
+def test_shot_type_error_handler_records_reason():
     messages = []
 
     class Harness:
@@ -377,21 +377,15 @@ def test_shot_type_error_handler_shows_reason(monkeypatch):
             self._gui_state = SimpleNamespace(set_last_error=lambda value: messages.append(("last_error", value)))
             self.status_bar = SimpleNamespace(showMessage=lambda text, timeout=0: messages.append(("status", text, timeout)))
 
-    def _capture_warning(parent, title, message):
-        messages.append(("dialog", title, message))
-
-    monkeypatch.setattr("ui.main_window.QMessageBox.warning", _capture_warning)
-
     harness = Harness()
     MainWindow._on_shot_type_error(harness, "clip-1: torch import failed")
 
     assert harness._shot_type_run_error == "clip-1: torch import failed"
     assert ("last_error", "Shot type classification error: clip-1: torch import failed") in messages
     assert ("status", "Shot type classification finished with errors", 5000) in messages
-    assert ("dialog", "Shot Type Classification Error", "clip-1: torch import failed") in messages
 
 
-def test_description_error_handler_surfaces_first_error(monkeypatch):
+def test_description_error_handler_records_first_error():
     messages = []
 
     class Harness:
@@ -407,11 +401,6 @@ def test_description_error_handler_surfaces_first_error(monkeypatch):
 
         def _summarize_description_errors(self):
             return MainWindow._summarize_description_errors(self)
-
-    def _capture_warning(parent, title, message):
-        messages.append(("dialog", title, message))
-
-    monkeypatch.setattr("ui.main_window.QMessageBox.warning", _capture_warning)
 
     harness = Harness()
     MainWindow._on_description_error(harness, "clip-1", "401 Unauthorized")
@@ -422,10 +411,9 @@ def test_description_error_handler_surfaces_first_error(monkeypatch):
         "Description error: clip-1: 401 Unauthorized",
     ) in messages
     assert ("status", "Description generation finished with errors", 5000) in messages
-    assert ("dialog", "Description Error", "clip-1: 401 Unauthorized") in messages
 
 
-def test_description_error_handler_summarizes_multiple_failures(monkeypatch):
+def test_description_error_handler_summarizes_multiple_failures():
     messages = []
 
     class Harness:
@@ -442,8 +430,6 @@ def test_description_error_handler_summarizes_multiple_failures(monkeypatch):
         def _summarize_description_errors(self):
             return MainWindow._summarize_description_errors(self)
 
-    monkeypatch.setattr("ui.main_window.QMessageBox.warning", lambda *args: messages.append(("dialog", args[1], args[2])))
-
     harness = Harness()
     MainWindow._on_description_error(harness, "clip-1", "401 Unauthorized")
     MainWindow._on_description_error(harness, "clip-2", "429 Too Many Requests")
@@ -452,4 +438,39 @@ def test_description_error_handler_summarizes_multiple_failures(monkeypatch):
     assert "- clip-1: 401 Unauthorized" in harness._description_run_error
     assert "- clip-2: 429 Too Many Requests" in harness._description_run_error
     assert messages.count(("status", "Description generation finished with errors", 5000)) == 2
-    assert len([m for m in messages if m[0] == "dialog"]) == 1
+
+
+def test_analysis_error_summary_dialog_is_aggregated(monkeypatch):
+    messages = []
+
+    class Harness:
+        _color_run_error = None
+        _shot_type_run_error = None
+        _classification_run_error = None
+        _object_detection_run_error = None
+        _text_extraction_run_error = None
+        _transcription_run_error = "FFmpeg is required for transcription"
+        _description_run_error = "clip-1: 401 Unauthorized"
+        _cinematography_run_error = None
+
+        def _get_completed_analysis_error_details(self, completed_ops):
+            return MainWindow._get_completed_analysis_error_details(self, completed_ops)
+
+    monkeypatch.setattr(
+        "ui.main_window.QMessageBox.warning",
+        lambda _parent, title, message: messages.append((title, message)),
+    )
+
+    harness = Harness()
+    MainWindow._show_completed_analysis_error_dialog(
+        harness,
+        ["transcribe", "describe"],
+    )
+
+    assert len(messages) == 1
+    title, message = messages[0]
+    assert title == "Analysis Finished With Errors"
+    assert "Transcription:" in message
+    assert "FFmpeg is required for transcription" in message
+    assert "Description:" in message
+    assert "clip-1: 401 Unauthorized" in message

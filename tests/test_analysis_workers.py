@@ -389,7 +389,10 @@ class TestTranscriptionWorkerTaskBuilding:
         clip_without = make_test_clip("c2")
 
         worker = TranscriptionWorker(
-            [clip_with, clip_without], source, skip_existing=True
+            [clip_with, clip_without],
+            source,
+            skip_existing=True,
+            backend="faster-whisper",
         )
         assert len(worker._tasks) == 1
         assert worker._tasks[0].clip_id == "c2"
@@ -401,7 +404,10 @@ class TestTranscriptionWorkerTaskBuilding:
         clip_without = make_test_clip("c2")
 
         worker = TranscriptionWorker(
-            [clip_with, clip_without], source, skip_existing=False
+            [clip_with, clip_without],
+            source,
+            skip_existing=False,
+            backend="faster-whisper",
         )
         assert len(worker._tasks) == 2
 
@@ -410,7 +416,7 @@ class TestTranscriptionWorkerTaskBuilding:
 
         clip = make_test_clip("c1", start_frame=300, end_frame=600)
 
-        worker = TranscriptionWorker([clip], source)
+        worker = TranscriptionWorker([clip], source, backend="faster-whisper")
         assert len(worker._tasks) == 1
         task = worker._tasks[0]
         assert task.start_time == 300 / 30.0  # 10.0 seconds
@@ -446,6 +452,72 @@ class TestTranscriptionWorkerTaskBuilding:
 
         worker = TranscriptionWorker([], source, parallelism=4, backend="auto")
         assert worker._parallelism == 1
+
+
+class TestTranscriptionWorkerErrors:
+    def test_missing_ffmpeg_emits_single_batch_error(self, source, monkeypatch):
+        from ui.workers.transcription_worker import TranscriptionWorker
+
+        clips = [make_test_clip("clip-1"), make_test_clip("clip-2")]
+        worker = TranscriptionWorker(
+            clips,
+            source,
+            backend="faster-whisper",
+            skip_existing=False,
+        )
+
+        monkeypatch.setattr("core.binary_resolver.find_binary", lambda _name: None)
+        monkeypatch.setattr(
+            "core.transcription.get_model",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("model should not load when ffmpeg is missing")
+            ),
+        )
+
+        errors = []
+        completed = []
+        worker.error.connect(errors.append)
+        worker.transcription_completed.connect(lambda: completed.append(True))
+
+        worker.run()
+
+        assert completed == [True]
+        assert len(errors) == 1
+        assert "FFmpeg is required for transcription" in errors[0]
+
+    def test_emits_aggregated_error_summary(self, source, monkeypatch):
+        from ui.workers.transcription_worker import TranscriptionWorker
+
+        clips = [make_test_clip("clip-1"), make_test_clip("clip-2")]
+        worker = TranscriptionWorker(
+            clips,
+            source,
+            parallelism=1,
+            backend="faster-whisper",
+            skip_existing=False,
+        )
+
+        monkeypatch.setattr("core.binary_resolver.find_binary", lambda _name: "/usr/bin/ffmpeg")
+        monkeypatch.setattr("core.transcription.get_model", lambda *_args, **_kwargs: object())
+        monkeypatch.setattr(
+            worker,
+            "_process_task",
+            lambda task: (task.clip_id, None, "audio extraction failed", False),
+        )
+
+        errors = []
+        completed = []
+        worker.error.connect(errors.append)
+        worker.transcription_completed.connect(lambda: completed.append(True))
+
+        worker.run()
+
+        assert completed == [True]
+        assert len(errors) == 1
+        assert "Transcription failed for 2 clips" in errors[0]
+        assert "clip-1" in errors[0]
+        assert "clip-2" in errors[0]
+        assert "audio extraction failed" in errors[0]
 
 
 # --- ClassificationWorker ---
@@ -637,6 +709,89 @@ class TestDescriptionWorkerTaskBuilding:
 
         worker = DescriptionWorker([clip], sources=sources_by_id)
         assert len(worker._tasks) == 0
+
+
+class TestDescriptionWorkerRetries:
+    def test_retries_transient_provider_500(
+        self,
+        monkeypatch,
+        thumbnail_path,
+        sources_by_id,
+    ):
+        from ui.workers.description_worker import DescriptionWorker
+
+        clip = _make_clip_with_thumb("clip-1", thumbnail_path)
+        worker = DescriptionWorker(
+            [clip],
+            sources=sources_by_id,
+            tier="cloud",
+            skip_existing=False,
+        )
+
+        attempts = []
+        sleeps = []
+
+        def _describe_frame(*_args, **_kwargs):
+            attempts.append(True)
+            if len(attempts) == 1:
+                raise RuntimeError(
+                    "Video description failed (gemini-3.1-flash-lite-preview): "
+                    "litellm.InternalServerError: 500 Internal error encountered."
+                )
+            return "Recovered description", "gemini-3.1-flash-lite-preview (video)"
+
+        monkeypatch.setattr("core.analysis.description.describe_frame", _describe_frame)
+        monkeypatch.setattr(
+            "ui.workers.description_worker.time.sleep",
+            lambda delay: sleeps.append(delay),
+        )
+
+        clip_id, description, model, error = worker._process_task(worker._tasks[0])
+
+        assert clip_id == "clip-1"
+        assert description == "Recovered description"
+        assert model == "gemini-3.1-flash-lite-preview (video)"
+        assert error is None
+        assert len(attempts) == 2
+        assert sleeps == [2]
+
+    def test_does_not_retry_auth_errors(
+        self,
+        monkeypatch,
+        thumbnail_path,
+        sources_by_id,
+    ):
+        from ui.workers.description_worker import DescriptionWorker
+
+        clip = _make_clip_with_thumb("clip-1", thumbnail_path)
+        worker = DescriptionWorker(
+            [clip],
+            sources=sources_by_id,
+            tier="cloud",
+            skip_existing=False,
+        )
+
+        attempts = []
+
+        def _describe_frame(*_args, **_kwargs):
+            attempts.append(True)
+            raise RuntimeError("Video description failed: authentication failed")
+
+        monkeypatch.setattr("core.analysis.description.describe_frame", _describe_frame)
+        monkeypatch.setattr(
+            "ui.workers.description_worker.time.sleep",
+            lambda _delay: (_ for _ in ()).throw(
+                AssertionError("auth errors should not sleep for retry")
+            ),
+        )
+
+        clip_id, description, model, error = worker._process_task(worker._tasks[0])
+
+        assert clip_id == "clip-1"
+        assert description is None
+        assert model is None
+        assert "authentication failed" in error
+        assert len(attempts) == 1
 
 
 # --- Settings round-trip ---

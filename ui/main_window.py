@@ -818,6 +818,8 @@ class MainWindow(QMainWindow):
         self._text_extraction_run_error: Optional[str] = None
         self._cinematography_run_error: Optional[str] = None
         self._shot_type_run_error: Optional[str] = None
+        self._transcription_run_error: Optional[str] = None
+        self._transcription_run_errors: list[str] = []
         self._transcription_finished_handled = False
         self._text_extraction_finished_handled = False
         self._cinematography_finished_handled = False
@@ -4368,6 +4370,7 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage(
                 f"Analysis finished with errors ({', '.join(error_labels)}) - {clip_count} clips ({', '.join(completed)})"
             )
+            self._show_completed_analysis_error_dialog(completed)
         else:
             self.status_bar.showMessage(
                 f"Analysis complete - {clip_count} clips ({', '.join(completed)})"
@@ -4456,29 +4459,11 @@ class MainWindow(QMainWindow):
     def _on_transcription_error(self, error: str):
         """Handle transcription error."""
         logger.error(f"Transcription error: {error}")
+        if error not in self._transcription_run_errors:
+            self._transcription_run_errors.append(error)
+        self._transcription_run_error = self._summarize_transcription_errors()
         self._gui_state.set_last_error(f"Transcription error: {error}")
-        self.progress_bar.setVisible(False)
-
-        if "not installed" in error.lower():
-            QMessageBox.critical(
-                self,
-                "Transcription Error",
-                "The faster-whisper package is not installed.\n\n"
-                "Install it with: pip install faster-whisper"
-            )
-        elif "download" in error.lower() or "model" in error.lower():
-            QMessageBox.warning(
-                self,
-                "Model Download Error",
-                f"Failed to download or load the Whisper model:\n\n{error}\n\n"
-                "Check your internet connection and try again."
-            )
-        else:
-            QMessageBox.warning(
-                self,
-                "Transcription Error",
-                f"An error occurred during transcription:\n\n{error}"
-            )
+        self.status_bar.showMessage("Transcription finished with errors", 5000)
 
     @Slot(str)
     def _on_shot_type_error(self, error_msg: str):
@@ -4491,11 +4476,6 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(
             "Shot type classification finished with errors",
             5000,
-        )
-        QMessageBox.warning(
-            self,
-            "Shot Type Classification Error",
-            error_msg,
         )
 
     def _on_classify_from_tab(self):
@@ -4528,12 +4508,6 @@ class MainWindow(QMainWindow):
             "Description generation finished with errors",
             5000,
         )
-        if len(self._description_run_errors) == 1:
-            QMessageBox.warning(
-                self,
-                "Description Error",
-                summary_line,
-            )
 
     @Slot(str)
     def _on_color_error(self, error_msg: str):
@@ -4574,6 +4548,11 @@ class MainWindow(QMainWindow):
         self._description_run_error = None
         self._description_run_errors = []
 
+    def _reset_transcription_run_errors(self) -> None:
+        """Clear accumulated transcription errors for a new run."""
+        self._transcription_run_error = None
+        self._transcription_run_errors = []
+
     def _summarize_description_errors(self) -> Optional[str]:
         """Return a compact summary of accumulated description errors."""
         if not self._description_run_errors:
@@ -4587,6 +4566,26 @@ class MainWindow(QMainWindow):
         summary = (
             f"Description failed for {len(self._description_run_errors)} clips:\n\n"
             f"{preview}"
+        )
+        if remaining > 0:
+            summary += f"\n\n... and {remaining} more"
+        return summary
+
+    def _summarize_transcription_errors(self) -> Optional[str]:
+        """Return a compact summary of accumulated transcription errors."""
+        if not self._transcription_run_errors:
+            return None
+
+        if len(self._transcription_run_errors) == 1:
+            return self._transcription_run_errors[0]
+
+        preview = "\n".join(
+            f"- {message}" for message in self._transcription_run_errors[:3]
+        )
+        remaining = len(self._transcription_run_errors) - 3
+        summary = (
+            f"Transcription failed in {len(self._transcription_run_errors)} "
+            f"batches:\n\n{preview}"
         )
         if remaining > 0:
             summary += f"\n\n... and {remaining} more"
@@ -4606,19 +4605,10 @@ class MainWindow(QMainWindow):
             setattr(self, attr_name, None)
         elif op_key == "describe":
             self._reset_description_run_errors()
+        elif op_key == "transcribe":
+            self._reset_transcription_run_errors()
         elif op_key == "shots":
             self._shot_type_run_error = None
-
-    # Map error handler attr names to analysis op keys for reinstall prompts
-    _ERROR_ATTR_TO_OP_KEY: dict[str, str] = {
-        "_color_run_error": "colors",
-        "_shot_type_run_error": "shots",
-        "_classification_run_error": "classify",
-        "_object_detection_run_error": "detect_objects",
-        "_text_extraction_run_error": "extract_text",
-        "_description_run_error": "describe",
-        "_cinematography_run_error": "cinematography",
-    }
 
     def _record_analysis_run_error(
         self,
@@ -4627,87 +4617,61 @@ class MainWindow(QMainWindow):
         error_msg: str,
         dialog_title: str,
     ) -> None:
-        """Persist and surface a summarized analysis error.
-
-        If the error looks like a missing module, offers to reinstall dependencies.
-        """
+        """Persist an analysis error for the end-of-run summary dialog."""
         first_error = getattr(self, attr_name) is None
         setattr(self, attr_name, error_msg)
         self._gui_state.set_last_error(f"{ui_label} error: {error_msg}")
         self.status_bar.showMessage(f"{ui_label} finished with errors", 5000)
         if first_error:
-            if self._is_missing_module_error(error_msg):
-                self._offer_dependency_reinstall(attr_name, ui_label, error_msg, dialog_title)
-            else:
-                QMessageBox.warning(self, dialog_title, error_msg)
-
-    @staticmethod
-    def _is_missing_module_error(error_msg: str) -> bool:
-        """Check if an error message indicates a missing Python module."""
-        lowered = error_msg.lower()
-        return (
-            "no module named" in lowered
-            or "runtime is incomplete" in lowered
-            or "cannot import name" in lowered
-            or "module" in lowered and "has no attribute" in lowered
-        )
-
-    def _offer_dependency_reinstall(
-        self,
-        attr_name: str,
-        ui_label: str,
-        error_msg: str,
-        dialog_title: str,
-    ) -> None:
-        """Show error with option to reinstall missing dependencies."""
-        op_key = self._ERROR_ATTR_TO_OP_KEY.get(attr_name)
-
-        reply = QMessageBox.question(
-            self,
-            dialog_title,
-            f"{error_msg}\n\n"
-            "This looks like a missing or corrupted package.\n"
-            "Would you like to reinstall the dependencies?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes,
-        )
-
-        if reply != QMessageBox.Yes or not op_key:
-            return
-
-        from core.analysis_dependencies import get_operation_feature_candidates
-
-        candidates = get_operation_feature_candidates(op_key, self.settings)
-        if not candidates:
-            return
-
-        from ui.widgets.dependency_widgets import prompt_feature_download
-
-        feature_name = candidates[0]
-        if prompt_feature_download(feature_name, self):
-            self.status_bar.showMessage(
-                f"{ui_label} dependencies reinstalled. Try running the analysis again.",
-                5000,
+            logger.info(
+                "%s error dialog deferred until analysis completion: %s",
+                ui_label,
+                dialog_title,
             )
-            # Clear the error so the next run starts fresh
-            setattr(self, attr_name, None)
 
     def _get_completed_analysis_error_labels(self, completed_ops: list[str]) -> list[str]:
         """Return user-facing labels for analysis operations that finished with errors."""
-        labels: list[str] = []
+        return [
+            label
+            for _, _, label in self._get_completed_analysis_error_details(completed_ops)
+        ]
+
+    def _get_completed_analysis_error_details(
+        self,
+        completed_ops: list[str],
+    ) -> list[tuple[str, str, str]]:
+        """Return (op_key, error, label) for completed operations with errors."""
+        details: list[tuple[str, str, str]] = []
         op_errors = [
             ("colors", self._color_run_error, "colors"),
             ("shots", self._shot_type_run_error, "shot type"),
             ("classify", self._classification_run_error, "classification"),
             ("detect_objects", self._object_detection_run_error, "object detection"),
             ("extract_text", self._text_extraction_run_error, "text extraction"),
+            ("transcribe", self._transcription_run_error, "transcription"),
             ("describe", self._description_run_error, "description"),
             ("cinematography", self._cinematography_run_error, "cinematography"),
         ]
         for op_key, error_value, label in op_errors:
             if error_value and op_key in completed_ops:
-                labels.append(label)
-        return labels
+                details.append((op_key, error_value, label))
+        return details
+
+    def _show_completed_analysis_error_dialog(self, completed_ops: list[str]) -> None:
+        """Show one aggregated error dialog after an analysis run finishes."""
+        details = self._get_completed_analysis_error_details(completed_ops)
+        if not details:
+            return
+
+        sections = [
+            f"{label.title()}:\n{error_value}"
+            for _, error_value, label in details
+        ]
+        QMessageBox.warning(
+            self,
+            "Analysis Finished With Errors",
+            "Some analysis operations failed:\n\n" + "\n\n".join(sections),
+        )
 
     def _on_description_analysis_requested(self, clip_ids: list):
         """Handle description analysis request from Sequence tab (Storyteller).
@@ -6859,6 +6823,7 @@ class MainWindow(QMainWindow):
                 f"Frame analysis finished with errors ({', '.join(error_labels)})",
                 5000,
             )
+            self._show_completed_analysis_error_dialog(completed_ops)
         else:
             self.status_bar.showMessage("Frame analysis complete", 3000)
 

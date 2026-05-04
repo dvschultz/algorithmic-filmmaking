@@ -18,6 +18,19 @@ from ui.workers.base import CancellableWorker
 logger = logging.getLogger(__name__)
 
 
+def _summarize_errors(errors: list[tuple[str, str]]) -> str:
+    """Return a compact user-facing summary for transcription failures."""
+    preview = "\n".join(f"- {clip_id}: {message}" for clip_id, message in errors[:3])
+    if len(errors) == 1:
+        return errors[0][1]
+
+    remaining = len(errors) - 3
+    summary = f"Transcription failed for {len(errors)} clips:\n\n{preview}"
+    if remaining > 0:
+        summary += f"\n\n... and {remaining} more"
+    return summary
+
+
 @dataclass(frozen=True)
 class TranscriptionTask:
     """Immutable task data for thread pool execution."""
@@ -107,6 +120,7 @@ class TranscriptionWorker(CancellableWorker):
         try:
             from core.transcription import (
                 transcribe_clip,
+                FFmpegNotFoundError,
                 FasterWhisperNotInstalledError,
                 ModelDownloadError,
             )
@@ -120,7 +134,7 @@ class TranscriptionWorker(CancellableWorker):
                 backend=self._backend,
             )
             return task.clip_id, segments, None, False
-        except (FasterWhisperNotInstalledError, ModelDownloadError) as e:
+        except (FFmpegNotFoundError, FasterWhisperNotInstalledError, ModelDownloadError) as e:
             return task.clip_id, None, str(e), True  # Critical error
         except Exception as e:
             return task.clip_id, None, str(e), False
@@ -132,6 +146,19 @@ class TranscriptionWorker(CancellableWorker):
         total = len(self._tasks)
         if total == 0:
             logger.info("No clips to process for transcription")
+            self.transcription_completed.emit()
+            self._log_complete()
+            return
+
+        from core.binary_resolver import find_binary
+
+        if find_binary("ffmpeg") is None:
+            message = (
+                "FFmpeg is required for transcription but was not found. "
+                "Install FFmpeg from Settings > Dependencies and try again."
+            )
+            self._log_error(message)
+            self.error.emit(message)
             self.transcription_completed.emit()
             self._log_complete()
             return
@@ -161,6 +188,7 @@ class TranscriptionWorker(CancellableWorker):
                 return
 
         completed = 0
+        errors: list[tuple[str, str]] = []
 
         with ThreadPoolExecutor(max_workers=self._parallelism) as executor:
             future_to_task = {
@@ -183,7 +211,7 @@ class TranscriptionWorker(CancellableWorker):
 
                     if error_msg and error_msg != "Cancelled":
                         self._log_error(error_msg, clip_id)
-                        self.error.emit(error_msg)
+                        errors.append((clip_id, error_msg))
                         if is_critical:
                             # Cancel all remaining work
                             for f in future_to_task:
@@ -193,8 +221,12 @@ class TranscriptionWorker(CancellableWorker):
                         self.transcript_ready.emit(clip_id, segments)
                 except Exception as e:
                     self._log_error(str(e), task.clip_id)
+                    errors.append((task.clip_id, str(e)))
 
                 self.progress.emit(completed, total)
+
+        if errors:
+            self.error.emit(_summarize_errors(errors))
 
         self.transcription_completed.emit()
         self._log_complete()

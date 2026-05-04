@@ -2,7 +2,9 @@
 
 from pathlib import Path
 
-from core.transcription import transcribe_clip, transcribe_video
+import pytest
+
+from core.transcription import FFmpegNotFoundError, transcribe_clip, transcribe_video
 
 
 def test_transcribe_clip_skips_video_without_audio(monkeypatch):
@@ -41,3 +43,24 @@ def test_transcribe_video_skips_video_without_audio(monkeypatch):
 
     assert result == []
     assert progress == [(1.0, "No audio track found")]
+
+
+def test_transcribe_clip_missing_ffmpeg_raises_clear_error(monkeypatch):
+    """Missing FFmpeg should fail before subprocess tries the literal command."""
+    monkeypatch.setattr("core.transcription._has_audio_stream", lambda _path: None)
+    monkeypatch.setattr("core.transcription._resolve_backend", lambda _backend: "faster-whisper")
+    monkeypatch.setattr("core.transcription.find_binary", lambda _name: None)
+    monkeypatch.setattr(
+        "core.transcription.subprocess.run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("subprocess should not run without ffmpeg")
+        ),
+    )
+
+    with pytest.raises(FFmpegNotFoundError, match="FFmpeg is required for transcription"):
+        transcribe_clip(
+            Path("/tmp/video.mp4"),
+            start_time=0.0,
+            end_time=5.0,
+            backend="faster-whisper",
+        )
