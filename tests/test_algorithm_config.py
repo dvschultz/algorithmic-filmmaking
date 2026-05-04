@@ -26,7 +26,7 @@ def test_multi_tagged_algorithms():
         "volume": ["arrange", "audio"],
         "gaze_sort": ["arrange", "find"],
         "eyes_without_a_face": ["find", "connect"],
-        "reference_guided": ["connect", "audio"],
+        "reference_guided": ["connect", "audio", "text"],
     }
     for key, cats in expected.items():
         assert ALGORITHM_CONFIG[key]["categories"] == cats, (

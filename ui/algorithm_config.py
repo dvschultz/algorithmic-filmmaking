@@ -138,7 +138,7 @@ ALGORITHM_CONFIG = {
         "allow_duplicates": True,
         "required_analysis": [],  # Dynamic — depends on selected dimensions
         "is_dialog": True,
-        "categories": ["connect", "audio"],
+        "categories": ["connect", "audio", "text"],
     },
     "signature_style": {
         "icon": "",

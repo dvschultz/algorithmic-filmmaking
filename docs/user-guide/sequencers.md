@@ -255,7 +255,7 @@ Match your clips to a reference video's structure. Opens a dialog.
 **Dialog workflow:**
 1. Select a source video as the "reference" — its clips become the template structure
 2. All clips from other sources become the matching pool
-3. Adjust seven dimension sliders to control matching weights: Color, Brightness, Shot Scale, Audio Energy, Visual Match (DINOv2), Movement, and Duration. Dimensions without analysis data are grayed out
+3. Adjust dimension sliders to control matching weights: Color, Brightness, Shot Scale, Audio Energy, Visual Match (DINOv2), Description, Transcript, Movement, and Duration. Dimensions without analysis data are grayed out
 4. Optionally allow repeated clips with the "Allow Repeats" checkbox
 5. Click **Generate** to find the best-matching clip for each position in the reference
 

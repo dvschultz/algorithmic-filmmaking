@@ -6,6 +6,8 @@ on artist-selected dimensions and weights.
 """
 
 import logging
+import re
+from collections import Counter
 from typing import TYPE_CHECKING, Optional
 
 import numpy as np
@@ -21,6 +23,9 @@ _EMBEDDING_DIMENSIONS = {"embedding"}
 # Dimensions that use exact-match categorical distance
 _CATEGORICAL_DIMENSIONS = {"movement"}
 
+# Dimensions that use lexical text cosine distance
+_TEXT_DIMENSIONS = {"description", "transcript"}
+
 # Mapping from dimension key to the analysis fields checked
 DIMENSION_ANALYSIS_REQUIREMENTS = {
     "color": ["colors"],
@@ -28,9 +33,13 @@ DIMENSION_ANALYSIS_REQUIREMENTS = {
     "shot_scale": ["shots"],
     "audio": ["volume"],
     "embedding": ["embeddings"],
+    "description": ["describe"],
+    "transcript": ["transcribe"],
     "movement": ["cinematography"],
     "duration": [],  # Always available from clip frames
 }
+
+_TOKEN_RE = re.compile(r"[a-z0-9']+")
 
 # Shot size proximity scores (10-class cinematography)
 _SHOT_SIZE_PROXIMITY = {
@@ -68,6 +77,11 @@ def _get_proximity_score(clip: "Clip") -> float:
     return 5.0
 
 
+def _text_vector(text: str) -> Counter[str]:
+    """Convert analysis text to a token-frequency vector."""
+    return Counter(_TOKEN_RE.findall(text.lower()))
+
+
 def extract_feature_vector(
     clip: "Clip",
     source: "Source",
@@ -102,6 +116,18 @@ def extract_feature_vector(
     if "embedding" in active_dimensions and clip.embedding:
         vector["embedding"] = clip.embedding
 
+    if "description" in active_dimensions and clip.description:
+        description_vector = _text_vector(clip.description)
+        if description_vector:
+            vector["description"] = description_vector
+
+    if "transcript" in active_dimensions:
+        transcript_text = clip.get_transcript_text()
+        if transcript_text:
+            transcript_vector = _text_vector(transcript_text)
+            if transcript_vector:
+                vector["transcript"] = transcript_vector
+
     if "movement" in active_dimensions:
         movement = None
         if clip.cinematography and clip.cinematography.camera_movement:
@@ -121,8 +147,8 @@ def compute_normalizers(
 ) -> dict[str, tuple[float, float]]:
     """Compute min-max normalizers for scalar dimensions.
 
-    Embedding and categorical dimensions are excluded (they use their own
-    distance metrics).
+    Embedding, text, and categorical dimensions are excluded (they use their
+    own distance metrics).
 
     Args:
         all_vectors: Feature vectors from both reference and user clips
@@ -134,7 +160,11 @@ def compute_normalizers(
     normalizers: dict[str, tuple[float, float]] = {}
 
     for dim in active_dimensions:
-        if dim in _EMBEDDING_DIMENSIONS or dim in _CATEGORICAL_DIMENSIONS:
+        if (
+            dim in _EMBEDDING_DIMENSIONS
+            or dim in _TEXT_DIMENSIONS
+            or dim in _CATEGORICAL_DIMENSIONS
+        ):
             continue
 
         values = [v[dim] for v in all_vectors if dim in v and isinstance(v[dim], (int, float))]
@@ -163,6 +193,23 @@ def _cosine_distance(a: list[float], b: list[float]) -> float:
     similarity = float(np.clip(similarity, -1.0, 1.0))
     # Cosine distance: 0 (identical) to 2 (opposite), normalize to [0, 1]
     return (1.0 - similarity) / 2.0
+
+
+def _text_cosine_distance(a: Counter[str], b: Counter[str]) -> float:
+    """Compute cosine distance between token-frequency vectors."""
+    if not a or not b:
+        return 1.0
+
+    shared = set(a) & set(b)
+    dot = sum(a[token] * b[token] for token in shared)
+    norm_a = sum(count * count for count in a.values()) ** 0.5
+    norm_b = sum(count * count for count in b.values()) ** 0.5
+    if norm_a == 0 or norm_b == 0:
+        return 1.0
+
+    similarity = dot / (norm_a * norm_b)
+    similarity = max(0.0, min(1.0, similarity))
+    return 1.0 - similarity
 
 
 def _batch_cosine_distances(
@@ -229,6 +276,8 @@ def weighted_distance(
 
         if dim in _EMBEDDING_DIMENSIONS:
             dist = embedding_dist if embedding_dist is not None else _cosine_distance(ref_vector[dim], user_vector[dim])
+        elif dim in _TEXT_DIMENSIONS:
+            dist = _text_cosine_distance(ref_vector[dim], user_vector[dim])
         elif dim in _CATEGORICAL_DIMENSIONS:
             dist = 0.0 if ref_vector[dim] == user_vector[dim] else 1.0
         else:
@@ -362,6 +411,8 @@ def get_active_dimensions_for_clips(
         "shot_scale": "shots",
         "audio": "volume",
         "embedding": "embeddings",
+        "description": "describe",
+        "transcript": "transcribe",
         "movement": "cinematography",
         "duration": None,  # Always available
     }

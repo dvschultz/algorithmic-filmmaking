@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from core.transcription import TranscriptSegment
 from models.clip import Source, Clip
 from models.sequence import Sequence
 from core.remix.reference_match import (
@@ -31,7 +32,18 @@ def _make_clip(
     shot_type=None,
     rms_volume=None,
     embedding=None,
+    description=None,
+    transcript_text=None,
 ):
+    transcript = None
+    if transcript_text is not None:
+        transcript = [
+            TranscriptSegment(
+                text=transcript_text,
+                start_time=0.0,
+                end_time=1.0,
+            )
+        ]
     return Clip(
         id=clip_id,
         source_id=source_id,
@@ -42,6 +54,8 @@ def _make_clip(
         shot_type=shot_type,
         rms_volume=rms_volume,
         embedding=embedding,
+        description=description,
+        transcript=transcript,
     )
 
 
@@ -80,6 +94,20 @@ class TestExtractFeatureVector:
         vec = extract_feature_vector(clip, source, ["embedding"])
         assert vec["embedding"] == emb
 
+    def test_extracts_description_text_vector(self):
+        clip = _make_clip(description="A red car drives past a red house")
+        source = _make_source()
+        vec = extract_feature_vector(clip, source, ["description"])
+        assert vec["description"]["red"] == 2
+        assert vec["description"]["car"] == 1
+
+    def test_extracts_transcript_text_vector(self):
+        clip = _make_clip(transcript_text="hello world hello")
+        source = _make_source()
+        vec = extract_feature_vector(clip, source, ["transcript"])
+        assert vec["transcript"]["hello"] == 2
+        assert vec["transcript"]["world"] == 1
+
 
 # --- Normalization ---
 
@@ -108,6 +136,11 @@ class TestComputeNormalizers:
         vectors = [{"movement": "pan"}]
         normalizers = compute_normalizers(vectors, ["movement"])
         assert "movement" not in normalizers
+
+    def test_skips_text_dimensions(self):
+        vectors = [{"description": {"beach": 1}}]
+        normalizers = compute_normalizers(vectors, ["description"])
+        assert "description" not in normalizers
 
 
 # --- Weighted Distance ---
@@ -168,6 +201,42 @@ class TestWeightedDistance:
         weights = {"movement": 1.0}
         dist = weighted_distance(ref, user, weights, {})
         assert dist == pytest.approx(1.0)
+
+    def test_text_exact_match(self):
+        ref = extract_feature_vector(
+            _make_clip(description="person walks on beach"),
+            _make_source(),
+            ["description"],
+        )
+        user = extract_feature_vector(
+            _make_clip(description="person walks on beach"),
+            _make_source(),
+            ["description"],
+        )
+        dist = weighted_distance(ref, user, {"description": 1.0}, {})
+        assert dist == pytest.approx(0.0)
+
+    def test_text_partial_match_beats_unrelated(self):
+        ref = extract_feature_vector(
+            _make_clip(description="person walks on beach at sunset"),
+            _make_source(),
+            ["description"],
+        )
+        partial = extract_feature_vector(
+            _make_clip(description="person runs along beach"),
+            _make_source(),
+            ["description"],
+        )
+        unrelated = extract_feature_vector(
+            _make_clip(description="city traffic and buildings"),
+            _make_source(),
+            ["description"],
+        )
+
+        weights = {"description": 1.0}
+        partial_dist = weighted_distance(ref, partial, weights, {})
+        unrelated_dist = weighted_distance(ref, unrelated, weights, {})
+        assert partial_dist < unrelated_dist
 
     def test_missing_dimension_in_one_vector(self):
         ref = {"brightness": 0.5, "color": 0.3}
@@ -307,6 +376,81 @@ class TestReferenceGuidedMatch:
         # u3 is best: close brightness AND close duration
         assert result[0][0].id == "u3"
 
+    def test_matching_by_description(self):
+        source = _make_source()
+        user_source = _make_source("src-2")
+
+        ref_clips = [
+            (
+                _make_clip(
+                    "r1",
+                    description="a quiet beach at sunset with ocean waves",
+                ),
+                source,
+            ),
+        ]
+        user_clips = [
+            (
+                _make_clip(
+                    "u1",
+                    source_id="src-2",
+                    description="crowded city street with traffic",
+                ),
+                user_source,
+            ),
+            (
+                _make_clip(
+                    "u2",
+                    source_id="src-2",
+                    description="sunset over the beach and ocean",
+                ),
+                user_source,
+            ),
+        ]
+
+        result = reference_guided_match(
+            ref_clips,
+            user_clips,
+            {"description": 1.0},
+        )
+        assert result[0][0].id == "u2"
+
+    def test_matching_by_transcript(self):
+        source = _make_source()
+        user_source = _make_source("src-2")
+
+        ref_clips = [
+            (
+                _make_clip("r1", transcript_text="we should leave before sunrise"),
+                source,
+            ),
+        ]
+        user_clips = [
+            (
+                _make_clip(
+                    "u1",
+                    source_id="src-2",
+                    transcript_text="the market opens at noon",
+                ),
+                user_source,
+            ),
+            (
+                _make_clip(
+                    "u2",
+                    source_id="src-2",
+                    transcript_text="before sunrise we should leave",
+                ),
+                user_source,
+            ),
+        ]
+
+        result = reference_guided_match(
+            ref_clips,
+            user_clips,
+            {"transcript": 1.0},
+        )
+        assert result[0][0].id == "u2"
+
 
 # --- Sequence Model Serialization ---
 
@@ -377,6 +521,16 @@ class TestGetActiveDimensions:
         clips = [_make_clip(average_brightness=0.5)]
         dims = get_active_dimensions_for_clips(clips)
         assert "brightness" in dims
+
+    def test_description_available_when_analyzed(self):
+        clips = [_make_clip(description="A beach at sunset")]
+        dims = get_active_dimensions_for_clips(clips)
+        assert "description" in dims
+
+    def test_transcript_available_when_analyzed(self):
+        clips = [_make_clip(transcript_text="hello world")]
+        dims = get_active_dimensions_for_clips(clips)
+        assert "transcript" in dims
 
 
 # --- Cost Estimation Override ---
