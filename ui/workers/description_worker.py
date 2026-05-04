@@ -14,35 +14,13 @@ from typing import Optional
 from PySide6.QtCore import Signal
 
 from core.settings import load_settings
-from ui.workers.base import CancellableWorker
+from ui.workers.base import CancellableWorker, is_transient_provider_error
 
 logger = logging.getLogger(__name__)
 
 # Retry configuration for cloud API rate limits
 _MAX_RETRIES = 3
 _RETRY_DELAYS = [2, 5, 10]  # seconds
-
-
-def _is_retryable_description_error(message: str) -> bool:
-    """Return True for transient cloud/provider failures worth retrying."""
-    normalized = message.lower()
-    return (
-        "429" in normalized
-        or "rate limit" in normalized
-        or "too many requests" in normalized
-        or "500" in normalized
-        or "502" in normalized
-        or "503" in normalized
-        or "504" in normalized
-        or "internalservererror" in normalized
-        or "internal error" in normalized
-        or "temporarily unavailable" in normalized
-        or "service unavailable" in normalized
-        or "timeout" in normalized
-        or "timed out" in normalized
-        or "connection" in normalized
-        or "network" in normalized
-    )
 
 
 @dataclass(frozen=True)
@@ -205,7 +183,7 @@ class DescriptionWorker(CancellableWorker):
                     return task.clip_id, None, None, description
             except Exception as e:
                 last_error = str(e)
-                if _is_retryable_description_error(last_error) and attempt < _MAX_RETRIES:
+                if is_transient_provider_error(last_error) and attempt < _MAX_RETRIES:
                     delay = _RETRY_DELAYS[attempt]
                     logger.warning(
                         f"Transient description failure for {task.clip_id}, "

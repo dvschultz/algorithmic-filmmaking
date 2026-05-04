@@ -13,22 +13,14 @@ from typing import Optional
 
 from PySide6.QtCore import Signal
 
-from ui.workers.base import CancellableWorker
+from ui.workers.base import CancellableWorker, summarize_clip_errors
 
 logger = logging.getLogger(__name__)
 
 
 def _summarize_errors(errors: list[tuple[str, str]]) -> str:
     """Return a compact user-facing summary for transcription failures."""
-    preview = "\n".join(f"- {clip_id}: {message}" for clip_id, message in errors[:3])
-    if len(errors) == 1:
-        return errors[0][1]
-
-    remaining = len(errors) - 3
-    summary = f"Transcription failed for {len(errors)} clips:\n\n{preview}"
-    if remaining > 0:
-        summary += f"\n\n... and {remaining} more"
-    return summary
+    return summarize_clip_errors(errors, operation_label="Transcription")
 
 
 @dataclass(frozen=True)
@@ -151,12 +143,10 @@ class TranscriptionWorker(CancellableWorker):
             return
 
         from core.binary_resolver import find_binary
+        from core.transcription import FFmpegNotFoundError
 
         if find_binary("ffmpeg") is None:
-            message = (
-                "FFmpeg is required for transcription but was not found. "
-                "Install FFmpeg from Settings > Dependencies and try again."
-            )
+            message = str(FFmpegNotFoundError())
             self._log_error(message)
             self.error.emit(message)
             self.transcription_completed.emit()

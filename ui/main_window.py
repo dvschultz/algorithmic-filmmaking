@@ -82,7 +82,7 @@ from core.analysis_operations import (
     OPERATIONS_BY_KEY,
     PHASE_ORDER,
 )
-from ui.workers.base import CancellableWorker
+from ui.workers.base import CancellableWorker, summarize_messages
 from ui.workers.cinematography_worker import CinematographyWorker
 from ui.workers.color_worker import ColorAnalysisWorker
 from ui.workers.shot_type_worker import ShotTypeWorker
@@ -4517,7 +4517,6 @@ class MainWindow(QMainWindow):
             "_color_run_error",
             "Color extraction",
             error_msg,
-            "Color Extraction Error",
         )
 
     @Slot(str)
@@ -4528,7 +4527,6 @@ class MainWindow(QMainWindow):
             "_classification_run_error",
             "Content classification",
             error_msg,
-            "Classification Error",
         )
 
     @Slot(str)
@@ -4537,10 +4535,8 @@ class MainWindow(QMainWindow):
         logger.warning(f"Object detection error: {error_msg}")
         self._record_analysis_run_error(
             "_object_detection_run_error",
-            error_msg=error_msg,
-            ui_label="Object detection",
-            dialog_title="Object Detection Error",
-            attr_name="_object_detection_run_error",
+            "Object detection",
+            error_msg,
         )
 
     def _reset_description_run_errors(self) -> None:
@@ -4557,39 +4553,22 @@ class MainWindow(QMainWindow):
         """Return a compact summary of accumulated description errors."""
         if not self._description_run_errors:
             return None
-
-        preview = "\n".join(f"- {message}" for message in self._description_run_errors[:3])
-        if len(self._description_run_errors) == 1:
-            return self._description_run_errors[0]
-
-        remaining = len(self._description_run_errors) - 3
-        summary = (
-            f"Description failed for {len(self._description_run_errors)} clips:\n\n"
-            f"{preview}"
+        return summarize_messages(
+            self._description_run_errors,
+            header=f"Description failed for {len(self._description_run_errors)} clips:",
         )
-        if remaining > 0:
-            summary += f"\n\n... and {remaining} more"
-        return summary
 
     def _summarize_transcription_errors(self) -> Optional[str]:
         """Return a compact summary of accumulated transcription errors."""
         if not self._transcription_run_errors:
             return None
-
-        if len(self._transcription_run_errors) == 1:
-            return self._transcription_run_errors[0]
-
-        preview = "\n".join(
-            f"- {message}" for message in self._transcription_run_errors[:3]
+        return summarize_messages(
+            self._transcription_run_errors,
+            header=(
+                f"Transcription failed in {len(self._transcription_run_errors)} "
+                "batches:"
+            ),
         )
-        remaining = len(self._transcription_run_errors) - 3
-        summary = (
-            f"Transcription failed in {len(self._transcription_run_errors)} "
-            f"batches:\n\n{preview}"
-        )
-        if remaining > 0:
-            summary += f"\n\n... and {remaining} more"
-        return summary
 
     def _reset_analysis_run_error(self, op_key: str) -> None:
         """Clear the stored error summary for an analysis operation."""
@@ -4615,19 +4594,11 @@ class MainWindow(QMainWindow):
         attr_name: str,
         ui_label: str,
         error_msg: str,
-        dialog_title: str,
     ) -> None:
         """Persist an analysis error for the end-of-run summary dialog."""
-        first_error = getattr(self, attr_name) is None
         setattr(self, attr_name, error_msg)
         self._gui_state.set_last_error(f"{ui_label} error: {error_msg}")
         self.status_bar.showMessage(f"{ui_label} finished with errors", 5000)
-        if first_error:
-            logger.info(
-                "%s error dialog deferred until analysis completion: %s",
-                ui_label,
-                dialog_title,
-            )
 
     def _get_completed_analysis_error_labels(self, completed_ops: list[str]) -> list[str]:
         """Return user-facing labels for analysis operations that finished with errors."""
@@ -4747,7 +4718,6 @@ class MainWindow(QMainWindow):
             "_text_extraction_run_error",
             "Text extraction",
             error_msg,
-            "Text Extraction Error",
         )
 
     def _on_cinematography_from_tab(self):
@@ -4801,7 +4771,6 @@ class MainWindow(QMainWindow):
             "_cinematography_run_error",
             "Cinematography analysis",
             error_msg,
-            "Cinematography Error",
         )
 
     # Agent-triggered analysis completion handlers

@@ -13,22 +13,14 @@ from typing import Optional
 
 from PySide6.QtCore import Signal
 
-from ui.workers.base import CancellableWorker
+from ui.workers.base import CancellableWorker, summarize_clip_errors
 
 logger = logging.getLogger(__name__)
 
 
 def _summarize_errors(errors: list[tuple[str, str]]) -> str:
     """Return a compact user-facing summary for a batch failure."""
-    preview = "\n".join(f"- {clip_id}: {message}" for clip_id, message in errors[:3])
-    if len(errors) == 1:
-        return errors[0][1]
-
-    remaining = len(errors) - 3
-    summary = f"Color extraction failed for {len(errors)} clips:\n\n{preview}"
-    if remaining > 0:
-        summary += f"\n\n... and {remaining} more"
-    return summary
+    return summarize_clip_errors(errors, operation_label="Color extraction")
 
 
 @dataclass(frozen=True)
