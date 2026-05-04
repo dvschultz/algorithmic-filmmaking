@@ -276,6 +276,28 @@ class ThumbnailWorker(QThread):
         # QThread's built-in finished signal will be emitted after run() returns
 
 
+class SaveProjectWorker(QThread):
+    """Background worker for saving a project without blocking the UI."""
+
+    save_finished = Signal(bool, str, str)  # success, path, error
+
+    def __init__(self, project: Project, filepath: Path):
+        super().__init__()
+        self.project = project
+        self.filepath = filepath
+
+    def run(self):
+        try:
+            started = time.perf_counter()
+            success = self.project.save(self.filepath)
+            elapsed = time.perf_counter() - started
+            logger.info("Saved project to %s in %.2fs", self.filepath, elapsed)
+            self.save_finished.emit(success, str(self.filepath), "")
+        except Exception as e:
+            logger.error("Project save failed: %s", e, exc_info=True)
+            self.save_finished.emit(False, str(self.filepath), str(e))
+
+
 class DownloadWorker(CancellableWorker):
     """Background worker for video downloads."""
 
@@ -799,6 +821,7 @@ class MainWindow(QMainWindow):
         self.ia_search_worker: Optional[InternetArchiveSearchWorker] = None
         self.bulk_download_worker: Optional[BulkDownloadWorker] = None
         self.export_bundle_worker: Optional[ExportBundleWorker] = None
+        self.save_worker: Optional[SaveProjectWorker] = None
         self.youtube_client: Optional[YouTubeSearchClient] = None
 
         # Intention-first workflow coordinator and dialog
@@ -1075,6 +1098,7 @@ class MainWindow(QMainWindow):
             (getattr(self, 'ia_search_worker', None), "InternetArchiveSearch"),
             (getattr(self, 'export_worker', None), "Export"),
             (getattr(self, 'sequence_preview_worker', None), "SequencePreview"),
+            (getattr(self, 'save_worker', None), "Save"),
             (getattr(self, '_gaze_worker', None), "Gaze"),
         ]
 
@@ -9929,8 +9953,12 @@ class MainWindow(QMainWindow):
                 path = path.with_suffix(".sceneripper")
             self._save_project_to_file(path)
 
-    def _save_project_to_file(self, filepath: Path):
+    def _save_project_to_file(self, filepath: Path, *, asynchronous: bool = True):
         """Save project to the specified file."""
+        if self.save_worker and self.save_worker.isRunning():
+            self.status_bar.showMessage("Save already in progress...")
+            return
+
         self.status_bar.showMessage("Saving project...")
 
         # Persist current timeline state to the project's active sequence
@@ -9944,15 +9972,43 @@ class MainWindow(QMainWindow):
         # Update metadata name to match filename
         self.project.metadata.name = filepath.stem
 
-        # Save using Project class
-        success = self.project.save(filepath)
+        if not asynchronous:
+            started = time.perf_counter()
+            success = self.project.save(filepath)
+            logger.info(
+                "Saved project to %s in %.2fs",
+                filepath,
+                time.perf_counter() - started,
+            )
+            if success:
+                self._add_recent_project(filepath)
+                self._update_window_title()
+                self.status_bar.showMessage(f"Project saved: {filepath.name}")
+            else:
+                QMessageBox.warning(self, "Save Project", "Failed to save project")
+                self.status_bar.showMessage("Save failed")
+            return
+
+        self.save_project_action.setEnabled(False)
+        self.save_project_as_action.setEnabled(False)
+        self.save_worker = SaveProjectWorker(self.project, filepath)
+        self.save_worker.save_finished.connect(self._on_project_save_finished)
+        self.save_worker.start()
+
+    def _on_project_save_finished(self, success: bool, filepath_str: str, error: str):
+        """Handle completion of a background project save."""
+        filepath = Path(filepath_str)
+        self.save_project_action.setEnabled(True)
+        self.save_project_as_action.setEnabled(True)
+        self.save_worker = None
 
         if success:
             self._add_recent_project(filepath)
             self._update_window_title()
             self.status_bar.showMessage(f"Project saved: {filepath.name}")
         else:
-            QMessageBox.warning(self, "Save Project", "Failed to save project")
+            message = f"Failed to save project:\n{error}" if error else "Failed to save project"
+            QMessageBox.warning(self, "Save Project", message)
             self.status_bar.showMessage("Save failed")
 
     def _load_project_file(self, filepath: Path):
@@ -10406,7 +10462,10 @@ class MainWindow(QMainWindow):
         )
 
         if result == QMessageBox.Save:
-            self._on_save_project()
+            if self.current_project_path:
+                self._save_project_to_file(self.current_project_path, asynchronous=False)
+            else:
+                self._on_save_project_as()
             return not self._is_dirty  # True if save succeeded
         elif result == QMessageBox.Discard:
             return True
@@ -10447,6 +10506,7 @@ class MainWindow(QMainWindow):
             ("transcription", self.transcription_worker),
             ("classification", self.classification_worker),
             ("object_detection", self.detection_worker_yolo),
+            ("save", self.save_worker),
             ("gaze", getattr(self, '_gaze_worker', None)),
         ]
 
