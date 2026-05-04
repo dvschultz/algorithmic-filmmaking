@@ -1,14 +1,11 @@
 """Tests for video color profile detection."""
 
-import tempfile
 from pathlib import Path
 
 import cv2
 import numpy as np
-import pytest
 
 from core.analysis.color import (
-    ColorProfileResult,
     detect_video_color_profile,
 )
 
@@ -264,6 +261,17 @@ class TestSourceColorProfile:
 
 class TestSceneDetectorGrayscaleIntegration:
     """Integration tests for SceneDetector with grayscale auto-detection."""
+
+    def test_progress_frame_callback_accepts_frame_timecode(self):
+        """PySceneDetect progress callbacks may pass FrameTimecode objects."""
+        from core.scene_detect import _frame_num_to_int
+
+        class FakeFrameTimecode:
+            def get_frames(self):
+                return 42
+
+        assert _frame_num_to_int(FakeFrameTimecode()) == 42
+        assert _frame_num_to_int(42) == 42
 
     def test_grayscale_video_sets_luma_only(self, tmp_path):
         """SceneDetector should auto-detect grayscale and use luma-only detection."""

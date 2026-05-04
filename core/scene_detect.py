@@ -9,13 +9,19 @@ import cv2
 import numpy as np
 from scenedetect import detect, AdaptiveDetector, ContentDetector
 from scenedetect.scene_manager import SceneManager
-from scenedetect.video_stream import VideoStream
 from scenedetect.backends.opencv import VideoStreamCv2
 
 from core.analysis.color import detect_video_color_profile
 from models.clip import Clip, Source
 
 logger = logging.getLogger(__name__)
+
+
+def _frame_num_to_int(frame_num) -> int:
+    """Normalize PySceneDetect callback frame values to integer frame numbers."""
+    if hasattr(frame_num, "get_frames"):
+        return int(frame_num.get_frames())
+    return int(frame_num)
 
 
 @dataclass
@@ -498,13 +504,14 @@ class SceneDetector:
 
         def frame_callback(frame_img, frame_num):
             nonlocal last_logged_percent
+            current_frame = _frame_num_to_int(frame_num)
             # Calculate progress (10% to 90% range for detection phase)
-            progress = 0.1 + (frame_num / total_frames) * 0.8
-            percent = int((frame_num / total_frames) * 100)
+            progress = 0.1 + (current_frame / total_frames) * 0.8
+            percent = int((current_frame / total_frames) * 100)
 
             # Log every 10% and update progress callback every 1%
             if percent >= last_logged_percent + 10:
-                logger.info(f"Scene detection: {percent}% ({frame_num:,}/{total_frames:,} frames)")
+                logger.info(f"Scene detection: {percent}% ({current_frame:,}/{total_frames:,} frames)")
                 last_logged_percent = percent
 
             # Update progress callback every 1% to avoid too many UI updates
@@ -655,7 +662,7 @@ class SceneDetector:
             scene_cuts: list[int] = []
             min_scene_frames = config.min_scene_frames
 
-            for t_idx, (lo, hi, text_lo, text_hi) in enumerate(change_intervals):
+            for t_idx, (lo, hi, text_lo, _text_hi) in enumerate(change_intervals):
                 # Binary search for the exact transition frame
                 while hi - lo > 1:
                     mid = (lo + hi) // 2
@@ -675,7 +682,6 @@ class SceneDetector:
                     else:
                         # Mid has new text — transition is before mid
                         hi = mid
-                        text_hi = mid_text
 
                 # The transition is at frame `hi`
                 cut_frame = max(0, hi - config.cut_offset)
