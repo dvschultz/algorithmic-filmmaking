@@ -60,6 +60,23 @@ def test_select_all_excludes_disabled_clips(qapp, source, monkeypatch):
     assert selected_ids == {"c2", "c4"}
 
 
+def test_add_clips_bulk_populates_lookup_once(qapp, source, monkeypatch):
+    from ui.clip_browser import ClipBrowser
+
+    browser = ClipBrowser()
+    clips = [make_test_clip("c1"), make_test_clip("c2"), make_test_clip("c3")]
+    rebuilds = []
+
+    monkeypatch.setattr(browser, "_rebuild_grid", lambda: rebuilds.append(True))
+
+    browser.add_clips([(clip, source) for clip in clips])
+
+    assert [thumb.clip.id for thumb in browser.thumbnails] == ["c1", "c2", "c3"]
+    assert set(browser._thumbnail_by_id) == {"c1", "c2", "c3"}
+    assert all(browser.get_source_for_clip(clip.id) is source for clip in clips)
+    assert rebuilds == [True]
+
+
 def test_toggle_disabled_unselects_only_toggled_clip(qapp, source):
     from ui.clip_browser import ClipBrowser
 

@@ -10019,23 +10019,10 @@ class MainWindow(QMainWindow):
         self.cut_tab.set_source(self.current_source)
         self.cut_tab.clear_clips()
         self.cut_tab.set_clips(self.clips)
-
-        # Add clips to Cut tab browser with their correct source
-        for clip in self.clips:
-            clip_source = self.sources_by_id.get(clip.source_id)
-            if not clip_source:
-                logging.warning(f"Clip {clip.id} references unknown source {clip.source_id}")
-                continue
-            self.cut_tab.add_clip(clip, clip_source)
-            # Update colors and shot type if present
-            if clip.dominant_colors:
-                self.cut_tab.update_clip_colors(clip.id, clip.dominant_colors)
-            if clip.shot_type:
-                self.cut_tab.update_clip_shot_type(clip.id, clip.shot_type)
-            if clip.gaze_category:
-                self.cut_tab.update_clip_gaze(clip.id, clip.gaze_category)
-            if clip.transcript:
-                self.cut_tab.update_clip_transcript(clip.id, clip.transcript)
+        self._populate_cut_tab_clip_browser_incrementally(
+            filepath,
+            on_finished=self._regenerate_missing_thumbnails,
+        )
 
         # Set project reference on sequence tab and restore timeline state
         self.sequence_tab.set_project(self.project)
@@ -10063,8 +10050,59 @@ class MainWindow(QMainWindow):
             f"Project loaded: {filepath.name} ({len(self.clips)} clips)"
         )
 
-        # Regenerate missing thumbnails
-        self._regenerate_missing_thumbnails()
+    def _populate_cut_tab_clip_browser_incrementally(
+        self,
+        filepath: Path,
+        *,
+        on_finished=None,
+    ) -> None:
+        """Populate the Cut tab clip grid in small UI-thread batches."""
+        clip_source_pairs = []
+        for clip in self.clips:
+            clip_source = self.sources_by_id.get(clip.source_id)
+            if not clip_source:
+                logger.warning(
+                    "Clip %s references unknown source %s",
+                    clip.id,
+                    clip.source_id,
+                )
+                continue
+            clip_source_pairs.append((clip, clip_source))
+
+        total = len(clip_source_pairs)
+        if total == 0:
+            if on_finished:
+                on_finished()
+            return
+
+        generation = getattr(self, "_project_load_generation", 0) + 1
+        self._project_load_generation = generation
+        batch_size = 75
+
+        def add_batch(start: int = 0) -> None:
+            if getattr(self, "_project_load_generation", None) != generation:
+                return
+
+            batch = clip_source_pairs[start:start + batch_size]
+            if batch:
+                self.cut_tab.clip_browser.add_clips(batch)
+
+            loaded = min(start + len(batch), total)
+            if loaded < total:
+                self.status_bar.showMessage(
+                    f"Loading clip browser: {loaded}/{total} clips..."
+                )
+                QTimer.singleShot(0, lambda: add_batch(loaded))
+                return
+
+            self.status_bar.showMessage(
+                f"Project loaded: {filepath.name} ({len(self.clips)} clips)"
+            )
+            if on_finished:
+                on_finished()
+
+        self.status_bar.showMessage(f"Loading clip browser: 0/{total} clips...")
+        QTimer.singleShot(0, add_batch)
 
     def _clear_project_state(self):
         """Clear current project state.
@@ -10077,6 +10115,7 @@ class MainWindow(QMainWindow):
         # Stop playback and timers first
         self._stop_playback()
         self._auto_save_timer.stop()
+        self._project_load_generation = getattr(self, "_project_load_generation", 0) + 1
 
         # Stop any running workers
         self._stop_all_workers()
