@@ -77,6 +77,26 @@ def test_add_clips_bulk_populates_lookup_once(qapp, source, monkeypatch):
     assert rebuilds == [True]
 
 
+def test_add_clips_defer_rebuild_skips_until_finalize(qapp, source, monkeypatch):
+    from ui.clip_browser import ClipBrowser
+
+    browser = ClipBrowser()
+    rebuilds = []
+    monkeypatch.setattr(browser, "_rebuild_grid", lambda: rebuilds.append(True))
+
+    # Three deferred batches must not trigger any rebuild.
+    for batch_idx in range(3):
+        clips = [make_test_clip(f"b{batch_idx}-{i}") for i in range(2)]
+        browser.add_clips([(c, source) for c in clips], defer_rebuild=True)
+
+    assert rebuilds == []
+    assert len(browser.thumbnails) == 6
+
+    # finalize_batch_load() flushes a single rebuild.
+    browser.finalize_batch_load()
+    assert rebuilds == [True]
+
+
 def test_toggle_disabled_unselects_only_toggled_clip(qapp, source):
     from ui.clip_browser import ClipBrowser
 

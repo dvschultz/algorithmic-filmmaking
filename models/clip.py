@@ -178,6 +178,40 @@ class Source:
         )
 
 
+def _resolve_thumbnail_path(
+    data: dict,
+    base_path: Optional[Path],
+) -> Optional[Path]:
+    """Resolve a clip's persisted thumbnail_path against base_path.
+
+    Returns None when no path is stored, when path traversal is detected, or
+    when neither the resolved path nor the absolute fallback exists on disk.
+    A None result lets the loader regenerate or skip the missing thumbnail.
+    """
+    raw = data.get("thumbnail_path")
+    if not raw:
+        return None
+    candidate = Path(raw)
+    if base_path and not candidate.is_absolute():
+        resolved = (base_path / candidate).resolve()
+        try:
+            resolved.relative_to(base_path.resolve())
+        except ValueError:
+            logger.warning(
+                "Thumbnail path traversal detected, ignoring: %s", raw
+            )
+            return None
+        candidate = resolved
+    if candidate.exists():
+        return candidate
+    fallback = data.get("_thumbnail_absolute_path")
+    if fallback:
+        fallback_path = Path(fallback)
+        if fallback_path.exists():
+            return fallback_path
+    return None
+
+
 def _validate_optional_float(value, field_name: str) -> Optional[float]:
     """Validate that a deserialized value is a float or None."""
     if value is None:
@@ -348,8 +382,12 @@ class Clip:
                 seen.add(normalized)
         return " | ".join(unique_texts) if unique_texts else None
 
-    def to_dict(self) -> dict:
-        """Serialize to dictionary for JSON export."""
+    def to_dict(self, base_path: Optional[Path] = None) -> dict:
+        """Serialize to dictionary for JSON export.
+
+        Args:
+            base_path: If provided, store thumbnail_path relative to this directory.
+        """
         data = {
             "id": self.id,
             "source_id": self.source_id,
@@ -359,6 +397,18 @@ class Clip:
         # Custom name (only if set)
         if self.name:
             data["name"] = self.name
+        # Thumbnail path: prefer relative-to-base when possible so bundles are portable
+        if self.thumbnail_path:
+            if base_path:
+                try:
+                    data["thumbnail_path"] = (
+                        self.thumbnail_path.relative_to(base_path).as_posix()
+                    )
+                except ValueError:
+                    data["thumbnail_path"] = self.thumbnail_path.as_posix()
+                data["_thumbnail_absolute_path"] = self.thumbnail_path.as_posix()
+            else:
+                data["thumbnail_path"] = self.thumbnail_path.as_posix()
         # Colors as RGB objects
         if self.dominant_colors:
             data["dominant_colors"] = [
@@ -433,8 +483,13 @@ class Clip:
         return data
 
     @classmethod
-    def from_dict(cls, data: dict) -> "Clip":
-        """Deserialize from dictionary."""
+    def from_dict(cls, data: dict, base_path: Optional[Path] = None) -> "Clip":
+        """Deserialize from dictionary.
+
+        Args:
+            data: Dictionary from JSON
+            base_path: Base directory to resolve relative thumbnail_path against
+        """
         from core.transcription import TranscriptSegment
         from models.cinematography import CinematographyAnalysis
 
@@ -504,13 +559,15 @@ class Clip:
             if not face_embeddings:
                 face_embeddings = None
 
+        thumbnail_path = _resolve_thumbnail_path(data, base_path)
+
         return cls(
             id=data.get("id", str(uuid.uuid4())),
             source_id=data.get("source_id", ""),
             start_frame=data.get("start_frame", 0),
             end_frame=data.get("end_frame", 0),
             name=data.get("name", ""),  # Backwards compatible: defaults to empty
-            thumbnail_path=None,  # Regenerate on load
+            thumbnail_path=thumbnail_path,
             dominant_colors=colors,
             shot_type=data.get("shot_type"),
             transcript=transcript,

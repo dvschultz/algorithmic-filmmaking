@@ -1093,8 +1093,17 @@ class ClipBrowser(QWidget):
         # Update duration range for spinboxes
         self._update_duration_range()
 
-    def add_clips(self, clip_source_pairs: list[tuple[Clip, Source]]) -> None:
-        """Add multiple clips with one filter sync and one grid rebuild."""
+    def add_clips(
+        self,
+        clip_source_pairs: list[tuple[Clip, Source]],
+        defer_rebuild: bool = False,
+    ) -> None:
+        """Add multiple clips with one filter sync and one grid rebuild.
+
+        When called repeatedly during batched project loads, set
+        `defer_rebuild=True` to skip the per-batch grid rebuild and duration
+        refresh, then call `finalize_batch_load()` once after the final batch.
+        """
         added: list[Clip] = []
         for clip, source in clip_source_pairs:
             if clip.id in self._thumbnail_by_id:
@@ -1110,6 +1119,12 @@ class ClipBrowser(QWidget):
         self._sync_custom_query_filter_options()
         for clip in added:
             self._incremental_filter_enable(clip)
+        if not defer_rebuild:
+            self._rebuild_grid()
+            self._update_duration_range()
+
+    def finalize_batch_load(self) -> None:
+        """Flush deferred rebuilds after a series of `add_clips(defer_rebuild=True)` calls."""
         self._rebuild_grid()
         self._update_duration_range()
 

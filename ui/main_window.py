@@ -7090,12 +7090,18 @@ class MainWindow(QMainWindow):
         self.export_worker.start()
         return True
 
-    def start_agent_export_bundle(self, dest_dir: Path, include_videos: bool = True) -> bool:
+    def start_agent_export_bundle(
+        self,
+        dest_dir: Path,
+        include_videos: bool = True,
+        include_clips: bool = True,
+    ) -> bool:
         """Start a bundle export triggered by agent.
 
         Args:
             dest_dir: Destination directory for the bundle
             include_videos: Whether to include source video files
+            include_clips: Whether to export trimmed clip media files
 
         Returns:
             True if export started, False if already in progress
@@ -7114,6 +7120,7 @@ class MainWindow(QMainWindow):
             project=self.project,
             dest_dir=dest_dir,
             include_videos=include_videos,
+            include_clips=include_clips,
             parent=self,
         )
         self.export_bundle_worker.progress.connect(self._on_export_bundle_progress)
@@ -9590,6 +9597,7 @@ class MainWindow(QMainWindow):
 
         dest_dir = dialog.dest_dir
         include_videos = dialog.include_videos
+        include_clips = dialog.include_clips
 
         if not dest_dir or str(dest_dir).strip() == "":
             return
@@ -9612,6 +9620,7 @@ class MainWindow(QMainWindow):
             project=self.project,
             dest_dir=dest_dir,
             include_videos=include_videos,
+            include_clips=include_clips,
             parent=self,
         )
         self.export_bundle_worker.progress.connect(self._on_export_bundle_progress)
@@ -9670,6 +9679,7 @@ class MainWindow(QMainWindow):
                     "sources_copied": result.sources_copied,
                     "clips_exported": result.clips_exported,
                     "frames_copied": result.frames_copied,
+                    "include_clips": result.include_clips,
                     "message": msg,
                 }
             }
@@ -10084,17 +10094,21 @@ class MainWindow(QMainWindow):
                 return
 
             batch = clip_source_pairs[start:start + batch_size]
-            if batch:
-                self.cut_tab.clip_browser.add_clips(batch)
-
             loaded = min(start + len(batch), total)
-            if loaded < total:
+            is_last_batch = loaded >= total
+            if batch:
+                self.cut_tab.clip_browser.add_clips(
+                    batch, defer_rebuild=not is_last_batch
+                )
+
+            if not is_last_batch:
                 self.status_bar.showMessage(
                     f"Loading clip browser: {loaded}/{total} clips..."
                 )
                 QTimer.singleShot(0, lambda: add_batch(loaded))
                 return
 
+            self.cut_tab.clip_browser.finalize_batch_load()
             self.status_bar.showMessage(
                 f"Project loaded: {filepath.name} ({len(self.clips)} clips)"
             )

@@ -250,7 +250,7 @@ class TestExportProjectBundle:
         assert result.sources_copied == 2
 
     def test_lightweight_export_skips_videos(self, tmp_path):
-        """Lightweight export writes source paths in JSON but doesn't copy files."""
+        """Lightweight export keeps original source paths when videos are not copied."""
         originals = tmp_path / "originals"
         originals.mkdir()
         source = _make_source(originals, "video.mp4", size=2048)
@@ -264,9 +264,10 @@ class TestExportProjectBundle:
         assert not (dest / "sources" / "video.mp4").exists()
         assert result.sources_copied == 0
 
-        # But JSON still references sources/video.mp4
+        # Source was not copied, so the JSON should not point at a missing
+        # bundle-local source path.
         project_json = json.loads((dest / "Light.sceneripper").read_text())
-        assert project_json["sources"][0]["file_path"] == "sources/video.mp4"
+        assert project_json["sources"][0]["file_path"] == source.file_path.as_posix()
 
     def test_lightweight_export_still_copies_frames(self, tmp_path):
         """Lightweight export copies frame files even when videos are excluded."""
@@ -282,6 +283,55 @@ class TestExportProjectBundle:
 
         assert (dest / "frames" / "f1.png").exists()
         assert result.frames_copied == 1
+
+    @patch("core.ffmpeg.FFmpegProcessor")
+    def test_export_can_skip_trimmed_clips(self, mock_ffmpeg_cls, tmp_path):
+        """Bundle export can preserve clip metadata without exporting media files."""
+        originals = tmp_path / "originals"
+        originals.mkdir()
+        source = _make_source(originals, "video.mp4")
+        clip = Clip(id="c1", source_id=source.id, start_frame=0, end_frame=90)
+
+        project = _make_project(sources=[source], clips=[clip], name="NoClipMedia")
+        dest = tmp_path / "NoClipMedia-export"
+
+        result = export_project_bundle(project, dest, include_clips=False)
+
+        assert result.include_clips is False
+        assert result.clips_exported == 0
+        assert not any((dest / "clips").iterdir())
+        mock_ffmpeg_cls.return_value.extract_clip.assert_not_called()
+
+        data = json.loads((dest / "NoClipMedia.sceneripper").read_text())
+        assert data["clips"][0]["id"] == "c1"
+
+    @patch("core.ffmpeg.FFmpegProcessor")
+    def test_lightweight_export_can_skip_videos_and_trimmed_clips(
+        self,
+        mock_ffmpeg_cls,
+        tmp_path,
+    ):
+        """Lightweight bundles can omit both source videos and trimmed clip media."""
+        originals = tmp_path / "originals"
+        originals.mkdir()
+        source = _make_source(originals, "video.mp4")
+        clip = Clip(id="c1", source_id=source.id, start_frame=0, end_frame=90)
+
+        project = _make_project(sources=[source], clips=[clip], name="LightNoClips")
+        dest = tmp_path / "LightNoClips-export"
+
+        result = export_project_bundle(
+            project,
+            dest,
+            include_videos=False,
+            include_clips=False,
+        )
+
+        assert result.sources_copied == 0
+        assert result.clips_exported == 0
+        assert not (dest / "sources" / "video.mp4").exists()
+        assert not any((dest / "clips").iterdir())
+        mock_ffmpeg_cls.return_value.extract_clip.assert_not_called()
 
     def test_missing_source_skipped_with_warning(self, tmp_path, caplog):
         """Missing source videos are skipped and logged."""
@@ -300,6 +350,9 @@ class TestExportProjectBundle:
         assert len(result.sources_skipped) == 1
         assert "nonexistent.mp4" in result.sources_skipped[0]
 
+        project_json = json.loads((dest / "MissingSrc.sceneripper").read_text())
+        assert project_json["sources"][0]["file_path"] == source.file_path.as_posix()
+
     def test_missing_frame_skipped_with_warning(self, tmp_path, caplog):
         """Missing frame files are skipped and logged."""
         frame = Frame(
@@ -315,6 +368,90 @@ class TestExportProjectBundle:
         assert result.frames_copied == 0
         assert len(result.frames_skipped) == 1
         assert "nonexistent.png" in result.frames_skipped[0]
+
+    def test_clip_thumbnails_copied_into_bundle(self, tmp_path):
+        """Clip thumbnails are copied into bundle/thumbnails/ and JSON paths rewritten."""
+        originals = tmp_path / "originals"
+        originals.mkdir()
+        cache = tmp_path / "thumb-cache"
+        cache.mkdir()
+
+        source = _make_source(originals, "video.mp4")
+
+        thumb_a = cache / "thumb_a.jpg"
+        thumb_a.write_bytes(b"\xff\xd8\xff\xe0jpgA")
+        clip_a = Clip(
+            id="c-a",
+            source_id=source.id,
+            start_frame=0,
+            end_frame=90,
+            thumbnail_path=thumb_a,
+        )
+
+        # Clip with a thumbnail_path that no longer exists on disk — should be
+        # silently skipped; export must not crash and JSON should drop the path.
+        clip_b = Clip(
+            id="c-b",
+            source_id=source.id,
+            start_frame=90,
+            end_frame=180,
+            thumbnail_path=cache / "missing.jpg",
+        )
+
+        project = _make_project(
+            sources=[source],
+            clips=[clip_a, clip_b],
+            name="ThumbBundle",
+        )
+        dest = tmp_path / "ThumbBundle-export"
+
+        result = export_project_bundle(project, dest, include_clips=False)
+
+        # Only the existing thumbnail is copied into the bundle.
+        assert result.thumbnails_copied == 1
+        copied = dest / "thumbnails" / "c-a.jpg"
+        assert copied.exists()
+        assert copied.read_bytes() == thumb_a.read_bytes()
+
+        # JSON references the relative bundle path, no absolute fallback leaks.
+        data = json.loads((dest / "ThumbBundle.sceneripper").read_text())
+        clips_by_id = {c["id"]: c for c in data["clips"]}
+        assert clips_by_id["c-a"]["thumbnail_path"] == "thumbnails/c-a.jpg"
+        assert "_thumbnail_absolute_path" not in clips_by_id["c-a"]
+        assert "thumbnail_path" not in clips_by_id["c-b"]
+
+        # In-memory project state is not mutated by the export.
+        assert clip_a.thumbnail_path == thumb_a
+        assert clip_b.thumbnail_path == cache / "missing.jpg"
+
+    def test_clip_thumbnails_round_trip_through_load(self, tmp_path):
+        """A bundled thumbnail is restored to the loaded Clip without regeneration."""
+        originals = tmp_path / "originals"
+        originals.mkdir()
+        cache = tmp_path / "cache"
+        cache.mkdir()
+
+        source = _make_source(originals, "video.mp4")
+        thumb = cache / "thumb_xyz.jpg"
+        thumb.write_bytes(b"\xff\xd8\xff\xe0RT")
+        clip = Clip(
+            id="c-rt",
+            source_id=source.id,
+            start_frame=0,
+            end_frame=60,
+            thumbnail_path=thumb,
+        )
+        project = _make_project(
+            sources=[source], clips=[clip], name="RoundTrip",
+        )
+        dest = tmp_path / "RoundTrip-export"
+
+        export_project_bundle(project, dest, include_clips=False)
+
+        _, clips, *_ = load_project(dest / "RoundTrip.sceneripper")
+        assert clips[0].thumbnail_path is not None
+        assert clips[0].thumbnail_path.exists()
+        assert clips[0].thumbnail_path.read_bytes() == thumb.read_bytes()
 
     def test_dest_already_exists_raises(self, tmp_path):
         """Export raises FileExistsError if destination already exists."""
@@ -566,8 +703,8 @@ class TestExportThenLoadRoundTrip:
         # Verify metadata
         assert metadata.name == "RoundTrip"
 
-    def test_lightweight_round_trip_triggers_missing_callback(self, tmp_path):
-        """Loading a lightweight bundle triggers missing_source_callback."""
+    def test_lightweight_round_trip_keeps_original_source_path(self, tmp_path):
+        """Loading a lightweight bundle resolves the original source path."""
         originals = tmp_path / "originals"
         originals.mkdir()
         source = _make_source(originals, "video.mp4")
@@ -577,7 +714,8 @@ class TestExportThenLoadRoundTrip:
 
         export_project_bundle(project, dest, include_videos=False)
 
-        # Load the lightweight bundle — source video won't exist in bundle
+        # Load the lightweight bundle. The source video was not copied, so the
+        # exported project should keep using the original source path.
         project_file = dest / "LightRT.sceneripper"
         missing_callback = Mock(return_value=None)
 
@@ -586,7 +724,6 @@ class TestExportThenLoadRoundTrip:
             missing_source_callback=missing_callback,
         )
 
-        # Callback should have been called for the missing source
-        assert missing_callback.called
-        # Source was skipped (callback returned None)
-        assert len(loaded_sources) == 0
+        assert not missing_callback.called
+        assert len(loaded_sources) == 1
+        assert loaded_sources[0].file_path == source.file_path
