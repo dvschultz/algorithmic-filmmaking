@@ -838,6 +838,7 @@ class MainWindow(QMainWindow):
         self.bulk_download_worker: Optional[BulkDownloadWorker] = None
         self.export_bundle_worker: Optional[ExportBundleWorker] = None
         self.save_worker: Optional[SaveProjectWorker] = None
+        self._save_project_context: Optional[dict] = None
         self.youtube_client: Optional[YouTubeSearchClient] = None
 
         # Intention-first workflow coordinator and dialog
@@ -3352,7 +3353,7 @@ class MainWindow(QMainWindow):
         if audio is None:
             return
         audio.transcript = segments
-        self.project._dirty = True
+        self.project.mark_dirty()
         self.project._notify_observers(
             "audio_sources_changed", self.project.audio_sources
         )
@@ -10050,6 +10051,11 @@ class MainWindow(QMainWindow):
         # Snapshot project state at dispatch time so main-thread mutations
         # while the worker runs cannot corrupt the on-disk file.
         snapshot = self.project.snapshot_for_save()
+        self._save_project_context = {
+            "project": self.project,
+            "mutation_generation": self.project.mutation_generation,
+            "filepath": filepath,
+        }
         self.save_worker = SaveProjectWorker(snapshot, filepath)
         self.save_worker.save_finished.connect(self._on_project_save_finished)
         self.save_worker.start()
@@ -10059,22 +10065,43 @@ class MainWindow(QMainWindow):
         filepath = Path(filepath_str)
         self.save_project_action.setEnabled(True)
         self.save_project_as_action.setEnabled(True)
+        save_context = self._save_project_context
+        self._save_project_context = None
         self.save_worker = None
+        stale_save = False
         if success:
             # The worker only writes the snapshot to disk; the live Project
             # bookkeeping (path + dirty flag + project_saved notification)
             # happens here on the main thread.
-            self.project.path = filepath
-            self.project.mark_clean()
-            try:
-                self.project._notify_observers("project_saved", filepath)
-            except Exception:
-                logger.exception("project_saved observer notification failed")
+            if (
+                not save_context
+                or save_context.get("project") is not self.project
+                or save_context.get("mutation_generation")
+                != self.project.mutation_generation
+            ):
+                stale_save = True
+                logger.info(
+                    "Ignoring stale save completion for %s; live project changed "
+                    "while save was in flight",
+                    filepath,
+                )
+            else:
+                self.project.path = filepath
+                self.project.mark_clean()
+                try:
+                    self.project._notify_observers("project_saved", filepath)
+                except Exception:
+                    logger.exception("project_saved observer notification failed")
 
-        if success:
+        if success and not stale_save:
             self._add_recent_project(filepath)
             self._update_window_title()
             self.status_bar.showMessage(f"Project saved: {filepath.name}")
+        elif success:
+            self._update_window_title()
+            self.status_bar.showMessage(
+                f"Project saved: {filepath.name}; newer changes remain unsaved"
+            )
         else:
             message = f"Failed to save project:\n{error}" if error else "Failed to save project"
             QMessageBox.warning(self, "Save Project", message)

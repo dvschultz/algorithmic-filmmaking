@@ -1,6 +1,7 @@
 """Tests for SaveProjectWorker — concurrency safety and signal contract."""
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -35,6 +36,40 @@ def _make_project_with_clip(tmp_dir: Path) -> Project:
     return project
 
 
+class _ActionStub:
+    def __init__(self):
+        self.enabled = None
+
+    def setEnabled(self, enabled: bool):
+        self.enabled = enabled
+
+
+class _StatusBarStub:
+    def __init__(self):
+        self.messages = []
+
+    def showMessage(self, message: str, *_args):
+        self.messages.append(message)
+
+
+class _SaveCompletionWindowStub:
+    def __init__(self, project: Project, context: dict | None):
+        self.project = project
+        self._save_project_context = context
+        self.save_worker = SimpleNamespace()
+        self.save_project_action = _ActionStub()
+        self.save_project_as_action = _ActionStub()
+        self.status_bar = _StatusBarStub()
+        self.recent_projects = []
+        self.window_title_updates = 0
+
+    def _add_recent_project(self, filepath: Path):
+        self.recent_projects.append(filepath)
+
+    def _update_window_title(self):
+        self.window_title_updates += 1
+
+
 def test_snapshot_for_save_is_independent_of_live_project(tmp_path):
     """Snapshot must not see post-snapshot mutations on the live project."""
     project = _make_project_with_clip(tmp_path)
@@ -47,6 +82,80 @@ def test_snapshot_for_save_is_independent_of_live_project(tmp_path):
     snapshot_clip_ids = {c.id for c in snapshot["clips"]}
     assert snapshot_clip_ids == {"clip-1"}
     assert snapshot["clips"][0].shot_type is None
+
+
+def test_project_mutation_generation_increments_even_when_already_dirty(tmp_path):
+    """Save completion needs a monotonic mutation generation, not just dirty bool."""
+    project = _make_project_with_clip(tmp_path)
+    generation = project.mutation_generation
+
+    project.mark_dirty()
+    project.mark_dirty()
+
+    assert project.is_dirty
+    assert project.mutation_generation == generation + 2
+
+
+def test_save_completion_marks_clean_for_current_unchanged_project(tmp_path):
+    from ui.main_window import MainWindow
+
+    project = _make_project_with_clip(tmp_path)
+    target = tmp_path / "out.sceneripper"
+    context = {
+        "project": project,
+        "mutation_generation": project.mutation_generation,
+        "filepath": target,
+    }
+    window = _SaveCompletionWindowStub(project, context)
+
+    MainWindow._on_project_save_finished(window, True, str(target), "")
+
+    assert project.path == target
+    assert not project.is_dirty
+    assert window.recent_projects == [target]
+    assert window._save_project_context is None
+    assert window.save_worker is None
+
+
+def test_stale_save_completion_does_not_mark_mutated_project_clean(tmp_path):
+    from ui.main_window import MainWindow
+
+    project = _make_project_with_clip(tmp_path)
+    target = tmp_path / "out.sceneripper"
+    context = {
+        "project": project,
+        "mutation_generation": project.mutation_generation,
+        "filepath": target,
+    }
+    window = _SaveCompletionWindowStub(project, context)
+
+    project.add_clips([make_test_clip("clip-2", source_id="src-1")])
+    MainWindow._on_project_save_finished(window, True, str(target), "")
+
+    assert project.path is None
+    assert project.is_dirty
+    assert window.recent_projects == []
+    assert "newer changes remain unsaved" in window.status_bar.messages[-1]
+
+
+def test_stale_save_completion_does_not_attach_path_to_replaced_project(tmp_path):
+    from ui.main_window import MainWindow
+
+    original_project = _make_project_with_clip(tmp_path)
+    current_project = Project.new(name="replacement")
+    target = tmp_path / "out.sceneripper"
+    context = {
+        "project": original_project,
+        "mutation_generation": original_project.mutation_generation,
+        "filepath": target,
+    }
+    window = _SaveCompletionWindowStub(current_project, context)
+
+    MainWindow._on_project_save_finished(window, True, str(target), "")
+
+    assert current_project.path is None
+    assert not current_project.is_dirty
+    assert window.recent_projects == []
 
 
 def test_save_worker_emits_success_signal(qapp, tmp_path):
