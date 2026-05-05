@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QRect
+from PySide6.QtTest import QTest
 
 from models.clip import Source
 from tests.conftest import make_test_clip
@@ -209,6 +210,50 @@ def test_virtual_refresh_layout_skips_when_columns_unchanged(qapp, source, monke
     browser.refresh_layout()
 
     assert rebuilds == []
+
+
+def test_virtual_scroll_reuses_cached_rows(qapp, source, monkeypatch):
+    from ui.clip_browser import ClipBrowser, VIRTUAL_CARD_ROW_HEIGHT
+
+    browser = ClipBrowser()
+    browser.resize(700, 500)
+    clips = [make_test_clip(f"v{i}") for i in range(100)]
+    browser.set_virtual_clips([(clip, source) for clip in clips])
+    qapp.processEvents()
+
+    calls = []
+    original = browser._build_virtual_rows
+
+    def wrapped_build(*args, **kwargs):
+        calls.append(True)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(browser, "_build_virtual_rows", wrapped_build)
+    browser.scroll.verticalScrollBar().setValue(VIRTUAL_CARD_ROW_HEIGHT * 3)
+    browser._on_scroll_changed(browser.scroll.verticalScrollBar().value())
+    QTest.qWait(25)
+    qapp.processEvents()
+
+    assert calls == []
+
+
+def test_virtual_scroll_reuses_cached_thumbnail_widgets(qapp, source):
+    from ui.clip_browser import ClipBrowser
+
+    browser = ClipBrowser()
+    browser.resize(700, 500)
+    clips = [make_test_clip(f"v{i}") for i in range(100)]
+    browser.set_virtual_clips([(clip, source) for clip in clips])
+    qapp.processEvents()
+
+    first_id = browser.thumbnails[0].clip.id
+    first_widget = browser.thumbnails[0]
+
+    browser._clear_realized_virtual_widgets()
+    reused = browser._get_virtual_thumbnail(clips[0], source)
+
+    assert reused is first_widget
+    assert browser._virtual_widget_cache[first_id] is first_widget
 
 
 def test_toggle_disabled_unselects_only_toggled_clip(qapp, source):

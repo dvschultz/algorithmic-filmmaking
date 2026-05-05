@@ -13,6 +13,7 @@ Backend selection:
 """
 
 import contextlib
+import importlib.util
 import logging
 import os
 import platform
@@ -181,14 +182,12 @@ class ModelDownloadError(TranscriptionError):
 
 
 def is_faster_whisper_available() -> bool:
-    """Check if faster-whisper is installed."""
+    """Check if faster-whisper is installed without importing PyAV."""
     global _faster_whisper_available
     if _faster_whisper_available is None:
-        try:
-            import faster_whisper  # noqa: F401
-            _faster_whisper_available = True
-        except ImportError:
-            _faster_whisper_available = False
+        _faster_whisper_available = (
+            importlib.util.find_spec("faster_whisper") is not None
+        )
     return _faster_whisper_available
 
 

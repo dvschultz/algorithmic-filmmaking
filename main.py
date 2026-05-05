@@ -80,17 +80,6 @@ if is_frozen():
     _setup_frozen_environment()
 
 import platform
-if platform.system() == "Darwin":
-    # Homebrew on Apple Silicon / Intel puts libs in different locations.
-    # python-mpv needs libmpv.dylib on the loader path.
-    for lib_dir in ("/opt/homebrew/lib", "/usr/local/lib"):
-        if os.path.isdir(lib_dir):
-            existing = os.environ.get("DYLD_LIBRARY_PATH", "")
-            if lib_dir not in existing:
-                os.environ["DYLD_LIBRARY_PATH"] = (
-                    f"{lib_dir}:{existing}" if existing else lib_dir
-                )
-            break
 
 # Pre-import torch BEFORE PySide6 to prevent "function '_has_torch_function'
 # already has a docstring" RuntimeError. This conflict occurs when torch's C
@@ -121,12 +110,10 @@ if platform.system() == "Darwin" and platform.machine() == "arm64":
 
 
 def _check_mpv_available() -> bool:
-    """Check if libmpv is available. Returns True if OK, False if missing."""
-    try:
-        import mpv  # noqa: F401
-        return True
-    except (ImportError, OSError):
-        return False
+    """Check if libmpv is discoverable without loading it into the process."""
+    from ui.video_player import _find_mpv_library
+
+    return _find_mpv_library() is not None
 
 
 def _show_mpv_missing_dialog(app: QApplication):

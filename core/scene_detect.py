@@ -1,12 +1,20 @@
 """Scene detection module wrapping PySceneDetect."""
 
 import logging
+import sys
 from pathlib import Path
 from typing import Callable, Optional
 from dataclasses import dataclass
 
 import cv2
 import numpy as np
+
+# PySceneDetect eagerly imports its PyAV backend from scenedetect.backends,
+# which loads PyAV's bundled FFmpeg dylibs. Scene Ripper uses the OpenCV
+# backend explicitly, so keep PyAV out of the GUI process unless transcription
+# actually needs it.
+sys.modules.setdefault("scenedetect.backends.pyav", None)
+
 from scenedetect import detect, AdaptiveDetector, ContentDetector
 from scenedetect.scene_manager import SceneManager
 from scenedetect.backends.opencv import VideoStreamCv2

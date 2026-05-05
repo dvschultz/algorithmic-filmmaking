@@ -1,7 +1,7 @@
 """Clip browser with thumbnail grid view."""
 
 import logging
-from collections import Counter
+from collections import Counter, OrderedDict
 from pathlib import Path
 from typing import Optional
 
@@ -86,6 +86,36 @@ logger = logging.getLogger(__name__)
 VIRTUALIZATION_THRESHOLD = 300
 VIRTUAL_CARD_ROW_HEIGHT = 246
 VIRTUAL_ROW_BUFFER = 4
+VIRTUAL_SCROLL_REBUILD_DELAY_MS = 16
+VIRTUAL_WIDGET_CACHE_LIMIT = 192
+THUMBNAIL_PIXMAP_CACHE_LIMIT = 512
+
+_THUMBNAIL_PIXMAP_CACHE: OrderedDict[tuple[str, int, int, int], QPixmap] = OrderedDict()
+
+
+def _scaled_thumbnail_from_cache(path: Path, width: int, height: int) -> QPixmap:
+    """Return a cached scaled thumbnail pixmap for card rendering."""
+    try:
+        stat = path.stat()
+        mtime_ns = stat.st_mtime_ns
+    except OSError:
+        mtime_ns = 0
+
+    key = (str(path), mtime_ns, width, height)
+    cached = _THUMBNAIL_PIXMAP_CACHE.get(key)
+    if cached is not None:
+        _THUMBNAIL_PIXMAP_CACHE.move_to_end(key)
+        return cached
+
+    pixmap = QPixmap(str(path))
+    if pixmap.isNull():
+        return pixmap
+
+    scaled = pixmap.scaled(width, height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+    _THUMBNAIL_PIXMAP_CACHE[key] = scaled
+    while len(_THUMBNAIL_PIXMAP_CACHE) > THUMBNAIL_PIXMAP_CACHE_LIMIT:
+        _THUMBNAIL_PIXMAP_CACHE.popitem(last=False)
+    return scaled
 
 
 def get_latest_custom_query_results(custom_queries: list[dict] | None) -> dict[str, dict]:
@@ -311,14 +341,9 @@ class ClipThumbnail(QFrame):
 
     def _load_thumbnail(self, path: Path):
         """Load thumbnail image."""
-        pixmap = QPixmap(str(path))
+        pixmap = _scaled_thumbnail_from_cache(path, 220, 124)
         if not pixmap.isNull():
-            scaled = pixmap.scaled(
-                220, 124,
-                Qt.KeepAspectRatio,
-                Qt.SmoothTransformation
-            )
-            self.thumbnail_label.setPixmap(scaled)
+            self.thumbnail_label.setPixmap(pixmap)
 
     def _format_duration(self, seconds: float) -> str:
         """Format duration as MM:SS.ms"""
@@ -882,6 +907,9 @@ class ClipBrowser(QWidget):
         self._virtual_top_spacer: QWidget | None = None
         self._virtual_bottom_spacer: QWidget | None = None
         self._virtual_render_range: tuple[int, int] | None = None
+        self._virtual_rows_dirty = True
+        self._virtual_rows_columns = 0
+        self._virtual_widget_cache: OrderedDict[str, ClipThumbnail] = OrderedDict()
 
         # Shared filter state — all filter values live here. Proxy properties
         # on this class (e.g., `_current_filter`, `_gaze_filter`) read/write
@@ -1055,7 +1083,7 @@ class ClipBrowser(QWidget):
             return
         if self._virtual_mode and self.thumbnails:
             current_columns = self._calculate_columns()
-            if current_columns == self._last_column_count:
+            if current_columns == self._last_column_count and not self._virtual_rows_dirty:
                 return
         self._last_column_count = 0
         self._rebuild_grid()
@@ -1069,7 +1097,10 @@ class ClipBrowser(QWidget):
                 )
                 if (first_row, last_row) == self._virtual_render_range:
                     return
-            self._rebuild_grid()
+            self._rebuild_grid(
+                invalidate_virtual_rows=False,
+                delay_ms=VIRTUAL_SCROLL_REBUILD_DELAY_MS,
+            )
 
     def _show_empty_state(self):
         """Show the empty state label in the grid."""
@@ -1135,6 +1166,7 @@ class ClipBrowser(QWidget):
             self._virtual_entries.append((clip, source))
             self._source_lookup[clip.id] = source
 
+        self._invalidate_virtual_rows()
         self._sync_custom_query_filter_options()
         for clip, _source in self._virtual_entries:
             self._incremental_filter_enable(clip)
@@ -1149,6 +1181,8 @@ class ClipBrowser(QWidget):
             if widget is None:
                 continue
             widget.setVisible(False)
+            if isinstance(widget, ClipThumbnail):
+                continue
             if widget is not self.empty_label:
                 widget.deleteLater()
 
@@ -1165,6 +1199,35 @@ class ClipBrowser(QWidget):
         spacer.setFixedHeight(max(0, height))
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         return spacer
+
+    def _invalidate_virtual_rows(self) -> None:
+        """Mark cached virtual display rows stale."""
+        self._virtual_rows_dirty = True
+        self._virtual_render_range = None
+
+    def _get_virtual_thumbnail(self, clip: Clip, source: Source) -> ClipThumbnail:
+        """Return a cached virtual thumbnail widget for a clip."""
+        thumb = self._virtual_widget_cache.get(clip.id)
+        if thumb is not None and (thumb.clip is not clip or thumb.source.id != source.id):
+            self._virtual_widget_cache.pop(clip.id, None)
+            thumb.deleteLater()
+            thumb = None
+
+        if thumb is None:
+            thumb = self._create_thumbnail(clip, source)
+            self._virtual_widget_cache[clip.id] = thumb
+        else:
+            self._virtual_widget_cache.move_to_end(clip.id)
+            thumb.set_drag_enabled(self._drag_enabled)
+
+        while len(self._virtual_widget_cache) > VIRTUAL_WIDGET_CACHE_LIMIT:
+            evict_id, evict_thumb = self._virtual_widget_cache.popitem(last=False)
+            if evict_thumb.isVisible():
+                self._virtual_widget_cache[evict_id] = evict_thumb
+                break
+            evict_thumb.deleteLater()
+
+        return thumb
 
     def add_clip(self, clip: Clip, source: Source):
         """Add a clip to the browser."""
@@ -1257,9 +1320,15 @@ class ClipBrowser(QWidget):
 
     def clear(self):
         """Clear all clips."""
+        visible_virtual_widget_ids = {id(thumb) for thumb in self.thumbnails}
         for thumb in self.thumbnails:
             self.grid.removeWidget(thumb)
             thumb.deleteLater()
+
+        for thumb in self._virtual_widget_cache.values():
+            if id(thumb) not in visible_virtual_widget_ids:
+                thumb.deleteLater()
+        self._virtual_widget_cache.clear()
 
         # Clear source headers
         for header in self._source_headers.values():
@@ -1284,6 +1353,8 @@ class ClipBrowser(QWidget):
         self._virtual_top_spacer = None
         self._virtual_bottom_spacer = None
         self._virtual_render_range = None
+        self._virtual_rows_dirty = True
+        self._virtual_rows_columns = 0
         self.container.setMinimumHeight(0)
         self._selected_custom_queries = set()
         self._sync_custom_query_filter_options()
@@ -1910,15 +1981,22 @@ class ClipBrowser(QWidget):
         self._rebuild_grid()
         self.filters_changed.emit()
 
-    def _rebuild_grid(self):
+    def _rebuild_grid(
+        self,
+        *,
+        invalidate_virtual_rows: bool = True,
+        delay_ms: int = 0,
+    ):
         """Schedule a grid rebuild on the next event loop iteration.
 
         Coalesces multiple calls into a single rebuild, which also ensures
         Qt has processed layouts so viewport dimensions are correct.
         """
+        if self._virtual_mode and invalidate_virtual_rows:
+            self._invalidate_virtual_rows()
         if not getattr(self, '_rebuild_pending', False):
             self._rebuild_pending = True
-            QTimer.singleShot(0, self._do_rebuild_grid)
+            QTimer.singleShot(delay_ms, self._do_rebuild_grid)
 
     def _do_rebuild_grid(self):
         """Actually rebuild the grid layout with source grouping, current order, and filter."""
@@ -2072,11 +2150,11 @@ class ClipBrowser(QWidget):
             )
         return ordered
 
-    def _build_virtual_rows(self) -> list[tuple[str, object]]:
+    def _build_virtual_rows(self, columns: int | None = None) -> list[tuple[str, object]]:
         """Build row records for the virtual grid."""
         grouped = self._ordered_grouped_entries()
         rows: list[tuple[str, object]] = []
-        columns = self.COLUMNS
+        columns = columns or self.COLUMNS
         for source_id in sorted(
             grouped,
             key=lambda sid: grouped[sid][0][1].filename.lower() if grouped[sid] else "",
@@ -2106,6 +2184,19 @@ class ClipBrowser(QWidget):
                     rows.append(("clips", visible_entries[start:start + columns]))
         return rows
 
+    def _get_virtual_rows(self) -> list[tuple[str, object]]:
+        """Return cached virtual rows, rebuilding only when the data shape changes."""
+        columns = self.COLUMNS
+        if (
+            self._virtual_rows_dirty
+            or self._virtual_rows_columns != columns
+            or not self._virtual_display_rows
+        ):
+            self._virtual_display_rows = self._build_virtual_rows(columns)
+            self._virtual_rows_columns = columns
+            self._virtual_rows_dirty = False
+        return self._virtual_display_rows
+
     def _current_virtual_render_range(self, row_count: int) -> tuple[int, int]:
         """Calculate the virtual row range that should be realized."""
         viewport_height = max(1, self.scroll.viewport().height())
@@ -2124,57 +2215,69 @@ class ClipBrowser(QWidget):
             return
 
         self._last_column_count = self._calculate_columns()
-        self._clear_realized_virtual_widgets()
         if not self._virtual_entries:
+            self._clear_realized_virtual_widgets()
             self._show_empty_state()
             return
 
-        rows = self._build_virtual_rows()
-        self._virtual_display_rows = rows
+        rows = self._get_virtual_rows()
         if not rows:
+            self._clear_realized_virtual_widgets()
             self._show_empty_state()
             return
 
-        self._hide_empty_state()
         first_row, last_row = self._current_virtual_render_range(len(rows))
 
         row_height = VIRTUAL_CARD_ROW_HEIGHT
         total_height = len(rows) * row_height
         self.container.setMinimumHeight(total_height + (UISizes.GRID_MARGIN * 2))
-        self._virtual_render_range = (first_row, last_row)
 
-        grid_row = 0
-        top_height = first_row * row_height
-        if top_height:
-            self._virtual_top_spacer = self._make_virtual_spacer(top_height)
-            self.grid.addWidget(self._virtual_top_spacer, grid_row, 0, 1, self.COLUMNS)
-            grid_row += 1
+        self.setUpdatesEnabled(False)
+        try:
+            self._clear_realized_virtual_widgets()
+            self._hide_empty_state()
+            self._virtual_render_range = (first_row, last_row)
 
-        for row_type, payload in rows[first_row:last_row]:
-            if row_type == "header":
-                source_id, source, total_count, visible_count, selected_count = payload
-                header = self._get_or_create_header(source_id, source.filename, total_count)
-                header.set_clip_counts(total_count, visible_count, selected_count)
-                header.set_expanded(self._group_expanded_state.get(source_id, True))
-                self.grid.addWidget(header, grid_row, 0, 1, self.COLUMNS)
-                header.setVisible(True)
+            grid_row = 0
+            top_height = first_row * row_height
+            if top_height:
+                self._virtual_top_spacer = self._make_virtual_spacer(top_height)
+                self.grid.addWidget(self._virtual_top_spacer, grid_row, 0, 1, self.COLUMNS)
                 grid_row += 1
-                continue
 
-            entries = payload
-            for col, (clip, source) in enumerate(entries):
-                thumb = self._create_thumbnail(clip, source)
-                thumb.set_selected(clip.id in self.selected_clips)
-                self.thumbnails.append(thumb)
-                self._thumbnail_by_id[clip.id] = thumb
-                self.grid.addWidget(thumb, grid_row, col, Qt.AlignTop | Qt.AlignLeft)
-                thumb.setVisible(True)
-            grid_row += 1
+            for row_type, payload in rows[first_row:last_row]:
+                if row_type == "header":
+                    source_id, source, total_count, visible_count, selected_count = payload
+                    header = self._get_or_create_header(source_id, source.filename, total_count)
+                    header.set_clip_counts(total_count, visible_count, selected_count)
+                    header.set_expanded(self._group_expanded_state.get(source_id, True))
+                    self.grid.addWidget(header, grid_row, 0, 1, self.COLUMNS)
+                    header.setVisible(True)
+                    grid_row += 1
+                    continue
 
-        bottom_height = max(0, (len(rows) - last_row) * row_height)
-        if bottom_height:
-            self._virtual_bottom_spacer = self._make_virtual_spacer(bottom_height)
-            self.grid.addWidget(self._virtual_bottom_spacer, grid_row, 0, 1, self.COLUMNS)
+                entries = payload
+                for col, (clip, source) in enumerate(entries):
+                    thumb = self._get_virtual_thumbnail(clip, source)
+                    thumb.set_selected(clip.id in self.selected_clips)
+                    self.thumbnails.append(thumb)
+                    self._thumbnail_by_id[clip.id] = thumb
+                    self.grid.addWidget(thumb, grid_row, col, Qt.AlignTop | Qt.AlignLeft)
+                    thumb.setVisible(True)
+                grid_row += 1
+
+            bottom_height = max(0, (len(rows) - last_row) * row_height)
+            if bottom_height:
+                self._virtual_bottom_spacer = self._make_virtual_spacer(bottom_height)
+                self.grid.addWidget(
+                    self._virtual_bottom_spacer,
+                    grid_row,
+                    0,
+                    1,
+                    self.COLUMNS,
+                )
+        finally:
+            self.setUpdatesEnabled(True)
 
     def _get_or_create_header(
         self, source_id: str, filename: str, clip_count: int

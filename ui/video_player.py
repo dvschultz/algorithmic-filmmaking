@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ctypes.util
 import ctypes
+import importlib
 import locale
 import logging
 import os
@@ -57,12 +58,60 @@ def _find_bundled_mpv_library() -> Optional[Path]:
     return None
 
 
-def _prepare_frozen_mpv_import() -> Optional[Path]:
-    """Make bundled libmpv discoverable before importing python-mpv."""
-    library_path = _find_bundled_mpv_library()
-    if library_path is None:
-        return None
+def _find_system_mpv_library() -> Optional[Path]:
+    """Return a system libmpv path without broadening DYLD_LIBRARY_PATH."""
+    env_path = os.environ.get("SCENE_RIPPER_LIBMPV_DYLIB", "").strip()
+    candidates: list[Path] = []
+    if env_path:
+        candidates.append(Path(env_path))
 
+    if sys.platform == "darwin":
+        candidates.extend(
+            [
+                Path("/opt/homebrew/lib/libmpv.dylib"),
+                Path("/opt/homebrew/opt/mpv/lib/libmpv.dylib"),
+                Path("/usr/local/lib/libmpv.dylib"),
+                Path("/usr/local/opt/mpv/lib/libmpv.dylib"),
+            ]
+        )
+
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+
+    found = ctypes.util.find_library("mpv")
+    if found:
+        return Path(found)
+
+    return None
+
+
+def _find_mpv_library() -> Optional[Path]:
+    """Return the best known libmpv path without loading the library."""
+    return _find_bundled_mpv_library() or _find_system_mpv_library()
+
+
+def _patch_find_library_for_mpv(library_path: Path) -> None:
+    """Point python-mpv's ctypes lookup at one exact libmpv path."""
+    original_find_library = getattr(
+        ctypes.util.find_library,
+        "_scene_ripper_original_find_library",
+        ctypes.util.find_library,
+    )
+    known_names = {"mpv", "libmpv", "mpv-2.dll", "libmpv-2.dll", "mpv-1.dll"}
+
+    def _patched_find_library(name: str):
+        if name in known_names:
+            return str(library_path)
+        return original_find_library(name)
+
+    _patched_find_library._scene_ripper_original_find_library = original_find_library  # type: ignore[attr-defined]
+    _patched_find_library._scene_ripper_mpv_path = str(library_path)  # type: ignore[attr-defined]
+    ctypes.util.find_library = _patched_find_library
+
+
+def _prepare_mpv_import(library_path: Path) -> None:
+    """Make libmpv discoverable before importing python-mpv."""
     library_dir = str(library_path.parent)
     current_path = os.environ.get("PATH", "")
     path_parts = current_path.split(os.pathsep) if current_path else []
@@ -79,24 +128,34 @@ def _prepare_frozen_mpv_import() -> Optional[Path]:
             logger = logging.getLogger(__name__)
             logger.debug("Failed to register bundled mpv DLL directory", exc_info=True)
 
-    original_find_library = ctypes.util.find_library
-    known_names = {"mpv", "libmpv", "mpv-2.dll", "libmpv-2.dll", "mpv-1.dll"}
+    _patch_find_library_for_mpv(library_path)
 
-    def _patched_find_library(name: str):
-        if name in known_names:
-            return str(library_path)
-        return original_find_library(name)
 
-    ctypes.util.find_library = _patched_find_library
+def _prepare_frozen_mpv_import() -> Optional[Path]:
+    """Make bundled libmpv discoverable before importing python-mpv."""
+    library_path = _find_bundled_mpv_library()
+    if library_path is None:
+        return None
+
+    _prepare_mpv_import(library_path)
     return library_path
 
 
-_prepare_frozen_mpv_import()
+def _import_mpv():
+    """Import python-mpv only when playback actually initializes."""
+    global mpv
+    if mpv is not None:
+        return mpv
 
-try:
-    import mpv
-except OSError:
-    mpv = None  # libmpv not available (e.g. Windows CI without DLL)
+    library_path = _find_mpv_library()
+    if library_path is not None:
+        _prepare_mpv_import(library_path)
+
+    mpv = importlib.import_module("mpv")
+    return mpv
+
+
+mpv = None  # Loaded lazily to avoid libmpv/PyAV FFmpeg dylib collisions at startup.
 
 from core.constants import PLAYBACK_SPEEDS, DEFAULT_SPEED_INDEX
 from ui.theme import theme, TypeScale, Spacing, UISizes
@@ -523,13 +582,15 @@ class VideoPlayer(QWidget):
         """Set up MPV player instance with OpenGL render API."""
         if self._player_ready:
             return
-        if mpv is None:
+        try:
+            mpv_module = _import_mpv()
+        except (ImportError, OSError) as e:
             raise RuntimeError(
                 "libmpv is not available. Install mpv/libmpv for your platform."
-            )
+            ) from e
 
         # Create mpv with vo=libmpv — rendering is handled by MpvGLWidget
-        self._mpv = mpv.MPV(
+        self._mpv = mpv_module.MPV(
             vo='libmpv',
             keep_open='yes',
             idle='yes',

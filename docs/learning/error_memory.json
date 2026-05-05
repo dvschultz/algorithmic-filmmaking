@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-05-05T02:36:53.147763+00:00",
+  "updated_at": "2026-05-05T02:47:21.599303+00:00",
   "patterns": [
     {
       "signature": "unknown-component|unknown-cause|linux-pyside6-distribution-packaging",
@@ -147,6 +147,21 @@
       "symptom_examples": [
         "Cut tab hides new clips when thumbnail generation fails with rational FFmpeg seek time",
         "Cut tab source group disappears after analysis refresh"
+      ],
+      "playbook_skill": null
+    },
+    {
+      "signature": "macos-runtime|duplicate-native-ffmpeg-runtime|avfframereceiver-libmpv-pyav-dylib-collision",
+      "title": "macOS libmpv and PyAV load duplicate FFmpeg dylibs",
+      "problem_type": "runtime_error",
+      "occurrences": 1,
+      "first_seen": "2026-05-05T02:47:21.599217+00:00",
+      "last_seen": "2026-05-05T02:47:21.599291+00:00",
+      "solution_refs": [
+        "docs/solutions/runtime-errors/macos-libmpv-pyav-ffmpeg-dylib-collision-20260504.md"
+      ],
+      "symptom_examples": [
+        "macOS libmpv and PyAV load duplicate FFmpeg dylibs"
       ],
       "playbook_skill": null
     }
