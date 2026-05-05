@@ -4414,6 +4414,14 @@ class MainWindow(QMainWindow):
                 source.has_analysis = True
             self.collect_tab.update_source_has_analysis(source_id, True)
 
+        # Analysis can update data-backed virtual browsers for clips whose
+        # card widgets are not currently realized. Refresh the affected clip
+        # data so every source group remains represented after the grid rebuilds.
+        if hasattr(self, 'cut_tab') and hasattr(self.cut_tab, 'clip_browser'):
+            self.cut_tab.clip_browser.update_clips(clips)
+        if hasattr(self, 'analyze_tab') and hasattr(self.analyze_tab, 'clip_browser'):
+            self.analyze_tab.clip_browser.update_clips(clips)
+
         # Save project
         if self.project.path:
             self.project.save()

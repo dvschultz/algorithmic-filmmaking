@@ -156,6 +156,43 @@ def test_virtual_clip_browser_selection_uses_all_filtered_data(qapp, source):
     assert selected_ids == {clip.id for clip in clips if not clip.disabled}
 
 
+def test_virtual_clip_browser_update_preserves_multi_source_entries(qapp, source):
+    from ui.clip_browser import ClipBrowser
+
+    other_source = Source(
+        id="src-2",
+        file_path=Path("/test/new-video.mp4"),
+        duration_seconds=8.0,
+        fps=24.0,
+        width=1280,
+        height=720,
+    )
+    old_clips = [make_test_clip(f"old-{i}", source_id=source.id) for i in range(75)]
+    new_clips = [make_test_clip(f"new-{i}", source_id=other_source.id) for i in range(25)]
+
+    browser = ClipBrowser()
+    browser.resize(700, 500)
+    browser.set_virtual_clips(
+        [(clip, source) for clip in old_clips]
+        + [(clip, other_source) for clip in new_clips]
+    )
+    qapp.processEvents()
+
+    updated_new_clip = make_test_clip(
+        "new-3",
+        source_id=other_source.id,
+        shot_type="close-up",
+    )
+    browser.update_clips([updated_new_clip])
+    qapp.processEvents()
+
+    assert browser.get_total_clip_count() == 100
+    assert sum(1 for clip, src in browser._virtual_entries if src.id == source.id) == 75
+    assert sum(1 for clip, src in browser._virtual_entries if src.id == other_source.id) == 25
+    stored = {clip.id: clip for clip, _source in browser._virtual_entries}
+    assert stored["new-3"].shot_type == "close-up"
+
+
 def test_virtual_refresh_layout_skips_when_columns_unchanged(qapp, source, monkeypatch):
     from ui.clip_browser import ClipBrowser
 

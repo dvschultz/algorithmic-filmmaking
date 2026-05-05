@@ -47,6 +47,52 @@ def test_phase_advances_from_local_to_cloud_after_color_completion():
     assert harness.pipeline_completed is False
 
 
+def test_pipeline_complete_refreshes_cut_browser_after_analysis():
+    """Analysis completion should refresh data-backed Cut tab clip entries."""
+    clip = make_test_clip("clip-1", source_id="src-1")
+    source = Source(id="src-1", file_path=Path("/test/video.mp4"))
+    refreshed = []
+
+    class Browser:
+        def update_clips(self, clips):
+            refreshed.extend(clips)
+
+    class AnalyzeTab:
+        clip_browser = Browser()
+
+        def set_analyzing(self, _value):
+            return None
+
+    class Harness:
+        def __init__(self):
+            self._analysis_clips = [clip]
+            self._analysis_completed_ops = ["describe"]
+            self._analysis_selected_ops = ["describe"]
+            self._pending_agent_analyze_all = False
+            self._chat_worker = None
+            self._active_custom_query_text = "query"
+            self._gui_state = SimpleNamespace(clear_processing=lambda _name: None)
+            self.analyze_tab = AnalyzeTab()
+            self.cut_tab = SimpleNamespace(clip_browser=Browser())
+            self.progress_bar = SimpleNamespace(setVisible=lambda _value: None)
+            self.status_bar = SimpleNamespace(showMessage=lambda _message: None)
+            self.project = SimpleNamespace(sources_by_id={source.id: source}, path=None)
+            self.collect_tab = SimpleNamespace(update_source_has_analysis=lambda *_args: None)
+
+        def _get_completed_analysis_error_labels(self, _completed):
+            return []
+
+        def _update_chat_project_state(self):
+            return None
+
+    harness = Harness()
+
+    MainWindow._on_analysis_pipeline_complete(harness)
+
+    assert refreshed == [clip, clip]
+    assert source.has_analysis is True
+
+
 def test_agent_analysis_summary_includes_operation_specific_results():
     clip = make_test_clip(
         "clip-1",

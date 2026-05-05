@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-05-05T01:06:05.999748+00:00",
+  "updated_at": "2026-05-05T02:36:53.147763+00:00",
   "patterns": [
     {
       "signature": "unknown-component|unknown-cause|linux-pyside6-distribution-packaging",
@@ -136,16 +136,17 @@
     },
     {
       "signature": "cut_tab|thumbnail_ready_required_for_clip_card|ffmpeg-rational-ss",
-      "title": "Cut tab hides new clips when thumbnail generation fails with rational FFmpeg seek time",
+      "title": "Cut tab source group disappears after analysis refresh",
       "problem_type": "runtime_error",
-      "occurrences": 1,
+      "occurrences": 2,
       "first_seen": "2026-05-05T01:06:05.999651+00:00",
-      "last_seen": "2026-05-05T01:06:05.999733+00:00",
+      "last_seen": "2026-05-05T02:36:53.147564+00:00",
       "solution_refs": [
         "docs/solutions/ui-bugs/cut-tab-clips-hidden-after-thumbnail-failure.md"
       ],
       "symptom_examples": [
-        "Cut tab hides new clips when thumbnail generation fails with rational FFmpeg seek time"
+        "Cut tab hides new clips when thumbnail generation fails with rational FFmpeg seek time",
+        "Cut tab source group disappears after analysis refresh"
       ],
       "playbook_skill": null
     }

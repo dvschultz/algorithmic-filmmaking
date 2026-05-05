@@ -1695,6 +1695,13 @@ class ClipBrowser(QWidget):
         Args:
             clips: List of clips that were updated
         """
+        updated_by_id = {clip.id: clip for clip in clips}
+        if self._virtual_mode and updated_by_id:
+            self._virtual_entries = [
+                (updated_by_id.get(existing_clip.id, existing_clip), source)
+                for existing_clip, source in self._virtual_entries
+            ]
+
         for clip in clips:
             thumb = self._thumbnail_by_id.get(clip.id)
             if thumb:
@@ -1705,8 +1712,7 @@ class ClipBrowser(QWidget):
                 thumb.set_colors(clip.dominant_colors)
                 thumb.set_custom_queries(clip.custom_queries)
                 thumb._update_style()  # Refresh disabled visual state
-        if self._virtual_mode:
-            self._rebuild_grid()
+
         selection_changed = self._sync_custom_query_filter_options()
         self._rebuild_grid()
         if selection_changed:
