@@ -25,9 +25,6 @@ block_cipher = None
 VERSION = os.environ.get("APP_VERSION", "0.2.0")
 BUILD_VERSION = os.environ.get("APP_BUILD_VERSION", VERSION)
 UPDATE_CHANNEL = os.environ.get("APP_UPDATE_CHANNEL", "stable")
-SPARKLE_FEED_URL = os.environ.get("SPARKLE_FEED_URL", "")
-SPARKLE_PUBLIC_ED_KEY = os.environ.get("SPARKLE_PUBLIC_ED_KEY", "")
-SPARKLE_PRIVATE_ED_KEY = os.environ.get("UPDATE_PRIVATE_ED_KEY", "")
 PROJECT_ROOT = Path.cwd()
 BUILD_ROOT = Path(os.environ.get("SCENE_RIPPER_BUILD_ROOT", str(PROJECT_ROOT / "build")))
 VERSION_FILE = BUILD_ROOT / "release-metadata" / "app_version.txt"
@@ -44,10 +41,9 @@ build_support_spec = importlib.util.spec_from_file_location(
 )
 build_support = importlib.util.module_from_spec(build_support_spec)
 build_support_spec.loader.exec_module(build_support)
-SPARKLE_PUBLIC_ED_KEY = build_support.resolve_update_public_ed_key(
-    SPARKLE_PUBLIC_ED_KEY,
-    SPARKLE_PRIVATE_ED_KEY,
-)
+sparkle_metadata = build_support.resolve_macos_sparkle_metadata(os.environ)
+SPARKLE_FEED_URL = sparkle_metadata.feed_url
+SPARKLE_PUBLIC_ED_KEY = sparkle_metadata.public_ed_key
 binaries = (
     build_support.collect_macos_mpv_binaries(PROJECT_ROOT)
     + build_support.collect_macos_ffmpeg_binaries(PROJECT_ROOT)

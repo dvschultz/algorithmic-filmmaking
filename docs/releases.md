@@ -143,6 +143,16 @@ macOS:
 APP_VERSION=0.1.1 ./packaging/macos/build.sh --dmg
 ```
 
+To build a local macOS app with native updater metadata, also set:
+
+```bash
+export UPDATE_FEED_URL="https://github.com/<owner>/<repo>/releases/download/update-feed/appcast-macos.xml"
+export UPDATE_PUBLIC_ED_KEY="<base64-public-key>"
+APP_VERSION=0.1.1 ./packaging/macos/build.sh --dmg
+```
+
+If you only have the private updater key available locally, `build.sh` will derive the public key from `UPDATE_PRIVATE_ED_KEY` before invoking PyInstaller.
+
 Windows:
 
 ```powershell

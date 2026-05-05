@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-05-03T22:40:49.261601+00:00",
+  "updated_at": "2026-05-05T00:37:28.242520+00:00",
   "patterns": [
     {
       "signature": "unknown-component|unknown-cause|linux-pyside6-distribution-packaging",
@@ -116,6 +116,21 @@
       "solution_refs": [],
       "symptom_examples": [
         "Error extracting text from frame 55503: OCR runtime is incomplete: No module named 'paddleocr'"
+      ],
+      "playbook_skill": null
+    },
+    {
+      "signature": "macos_updater|missing_bundle_metadata|native-updater-metadata-not-configured",
+      "title": "macOS native updater metadata missing falls back to browser checks",
+      "problem_type": "build_configuration",
+      "occurrences": 1,
+      "first_seen": "2026-05-05T00:37:28.242247+00:00",
+      "last_seen": "2026-05-05T00:37:28.242500+00:00",
+      "solution_refs": [
+        "docs/solutions/deployment/macos-native-updater-metadata-fallback.md"
+      ],
+      "symptom_examples": [
+        "macOS native updater metadata missing falls back to browser checks"
       ],
       "playbook_skill": null
     }

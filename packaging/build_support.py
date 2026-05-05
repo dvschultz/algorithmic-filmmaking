@@ -7,12 +7,23 @@ import binascii
 import os
 import re
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 WINDOWS_MPV_DLL_NAMES = ("mpv-2.dll", "libmpv-2.dll", "mpv-1.dll")
 WINDOWS_WINSPARKLE_DLL_NAMES = ("WinSparkle.dll", "winsparkle.dll")
 WINDOWS_FFMPEG_BINARY_NAMES = ("ffmpeg.exe", "ffprobe.exe")
 MACOS_FFMPEG_BINARY_NAMES = ("ffmpeg", "ffprobe")
+
+
+@dataclass(frozen=True)
+class MacOSSparkleMetadata:
+    """Resolved Sparkle metadata for macOS app bundles."""
+
+    feed_url: str
+    public_ed_key: str
+
+
 REQUIREMENT_TO_IMPORT_TARGET = {
     "certifi": "certifi",
     "click": "click",
@@ -334,6 +345,20 @@ def resolve_update_public_ed_key(
         return ""
     except (ValueError, TypeError, binascii.Error):
         return ""
+
+
+def resolve_macos_sparkle_metadata(environ: dict[str, str]) -> MacOSSparkleMetadata:
+    """Resolve Sparkle plist metadata from canonical and compatibility env names."""
+    feed_url = (
+        environ.get("SPARKLE_FEED_URL", "").strip()
+        or environ.get("UPDATE_FEED_URL", "").strip()
+    )
+    public_ed_key = resolve_update_public_ed_key(
+        environ.get("SPARKLE_PUBLIC_ED_KEY", "").strip()
+        or environ.get("UPDATE_PUBLIC_ED_KEY", "").strip(),
+        environ.get("UPDATE_PRIVATE_ED_KEY", "").strip(),
+    )
+    return MacOSSparkleMetadata(feed_url=feed_url, public_ed_key=public_ed_key)
 
 
 def find_windows_mpv_runtime_dir(project_root: Path) -> Path | None:

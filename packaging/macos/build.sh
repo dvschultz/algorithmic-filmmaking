@@ -8,8 +8,15 @@
 #   ./packaging/macos/build.sh --dmg --sign  # Build all + sign
 #
 # Environment variables:
-#   APP_VERSION       Version string (default: 0.2.4)
-#   CODESIGN_IDENTITY Signing identity (default: ad-hoc "-")
+#   APP_VERSION            Version string (default: 0.2.4)
+#   APP_BUILD_VERSION      Machine version string (default: APP_VERSION)
+#   APP_UPDATE_CHANNEL     Update channel (default: stable)
+#   CODESIGN_IDENTITY      Signing identity (default: ad-hoc "-")
+#   SPARKLE_FEED_URL       Sparkle appcast URL for native updater metadata
+#   UPDATE_FEED_URL        Compatibility alias for SPARKLE_FEED_URL
+#   SPARKLE_PUBLIC_ED_KEY  Sparkle EdDSA public key for native updater metadata
+#   UPDATE_PUBLIC_ED_KEY   Compatibility alias for SPARKLE_PUBLIC_ED_KEY
+#   UPDATE_PRIVATE_ED_KEY  Private key used to derive the public updater key if needed
 
 set -euo pipefail
 
@@ -18,6 +25,8 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 DEFAULT_EXTERNAL_BUILD_ROOT="/Volumes/Lexar/scene-ripper-build"
 
 APP_VERSION="${APP_VERSION:-0.2.4}"
+APP_BUILD_VERSION="${APP_BUILD_VERSION:-${APP_VERSION}}"
+APP_UPDATE_CHANNEL="${APP_UPDATE_CHANNEL:-stable}"
 CODESIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
 BUILD_DMG=false
 CODE_SIGN=false
@@ -35,6 +44,13 @@ echo "    Project root: ${PROJECT_ROOT}"
 echo "    Sign: ${CODE_SIGN} (identity: ${CODESIGN_IDENTITY})"
 echo "    DMG: ${BUILD_DMG}"
 echo ""
+
+if [ -z "${SPARKLE_FEED_URL:-}" ] && [ -n "${UPDATE_FEED_URL:-}" ]; then
+    export SPARKLE_FEED_URL="${UPDATE_FEED_URL}"
+fi
+if [ -z "${SPARKLE_PUBLIC_ED_KEY:-}" ] && [ -n "${UPDATE_PUBLIC_ED_KEY:-}" ]; then
+    export SPARKLE_PUBLIC_ED_KEY="${UPDATE_PUBLIC_ED_KEY}"
+fi
 
 BUILD_ROOT="${SCENE_RIPPER_BUILD_ROOT:-}"
 if [ -z "${BUILD_ROOT}" ] && [ -d "/Volumes/Lexar" ]; then
@@ -162,13 +178,42 @@ pip install \
     --quiet
 # lightning-whisper-mlx must be --no-deps to avoid tiktoken conflict with litellm
 pip install 'lightning-whisper-mlx>=0.0.10,<1.0' --no-deps --quiet
-pip install pyinstaller --quiet
+pip install pyinstaller cryptography --quiet
+
+if [ -z "${SPARKLE_PUBLIC_ED_KEY:-}" ] && [ -n "${UPDATE_PRIVATE_ED_KEY:-}" ]; then
+    SPARKLE_PUBLIC_ED_KEY="$(PROJECT_ROOT="$PROJECT_ROOT" python - <<'PY'
+import importlib.util
+import os
+from pathlib import Path
+
+project_root = Path(os.environ["PROJECT_ROOT"])
+spec = importlib.util.spec_from_file_location(
+    "scene_ripper_build_support",
+    project_root / "packaging" / "build_support.py",
+)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+print(module.resolve_update_public_ed_key("", os.environ.get("UPDATE_PRIVATE_ED_KEY", "")), end="")
+PY
+)"
+    export SPARKLE_PUBLIC_ED_KEY
+fi
+
+if [ -n "${SPARKLE_FEED_URL:-}" ] && [ -n "${SPARKLE_PUBLIC_ED_KEY:-}" ]; then
+    echo "==> Native updater metadata will be embedded."
+else
+    echo "==> Native updater metadata incomplete; built app will use browser update fallback."
+    echo "    Set SPARKLE_FEED_URL and SPARKLE_PUBLIC_ED_KEY, or UPDATE_FEED_URL plus UPDATE_PRIVATE_ED_KEY."
+fi
 
 # -------------------------------------------------------------------
 # 2. Run PyInstaller
 # -------------------------------------------------------------------
 echo "==> Running PyInstaller..."
 export APP_VERSION
+export APP_BUILD_VERSION
+export APP_UPDATE_CHANNEL
 cd "$PROJECT_ROOT"
 pyinstaller "${SCRIPT_DIR}/scene_ripper.spec" \
     --distpath "${PYINSTALLER_DIST_PATH}" \

@@ -29,6 +29,7 @@ get_core_pyinstaller_metadata = build_support.get_core_pyinstaller_metadata
 get_pyinstaller_data_excludes = build_support.get_pyinstaller_data_excludes
 get_pyinstaller_hiddenimport_excludes = build_support.get_pyinstaller_hiddenimport_excludes
 read_core_requirement_distributions = build_support.read_core_requirement_distributions
+resolve_macos_sparkle_metadata = build_support.resolve_macos_sparkle_metadata
 resolve_update_public_ed_key = build_support.resolve_update_public_ed_key
 use_full_package_collection = build_support.use_full_package_collection
 
@@ -308,6 +309,32 @@ def test_resolve_update_public_ed_key_derives_from_private_pkcs8_der():
     )
 
     assert derived_public == expected_public
+
+
+def test_resolve_macos_sparkle_metadata_accepts_canonical_env_names():
+    """macOS packaging should read Sparkle-specific metadata env vars."""
+    metadata = resolve_macos_sparkle_metadata(
+        {
+            "SPARKLE_FEED_URL": "https://example.com/appcast-macos.xml",
+            "SPARKLE_PUBLIC_ED_KEY": "public-key",
+        }
+    )
+
+    assert metadata.feed_url == "https://example.com/appcast-macos.xml"
+    assert metadata.public_ed_key == "public-key"
+
+
+def test_resolve_macos_sparkle_metadata_accepts_release_env_aliases():
+    """Local macOS builds should support the documented updater env names."""
+    metadata = resolve_macos_sparkle_metadata(
+        {
+            "UPDATE_FEED_URL": "https://example.com/appcast-macos.xml",
+            "UPDATE_PUBLIC_ED_KEY": "public-key",
+        }
+    )
+
+    assert metadata.feed_url == "https://example.com/appcast-macos.xml"
+    assert metadata.public_ed_key == "public-key"
 
 
 def test_litellm_uses_curated_collection_rules():
