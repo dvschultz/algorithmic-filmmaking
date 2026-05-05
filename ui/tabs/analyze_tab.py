@@ -408,7 +408,7 @@ class AnalyzeTab(BaseTab):
         for clip_id in pending_ids:
             if clip_id not in self._clip_ids:
                 continue
-            if clip_id in self.clip_browser._thumbnail_by_id:
+            if self.clip_browser.is_clip_realized(clip_id):
                 continue
             clip = self._clips_by_id.get(clip_id)
             source = self._sources_by_id.get(clip.source_id) if clip else None
@@ -419,23 +419,21 @@ class AnalyzeTab(BaseTab):
                 self._clip_ids.discard(clip_id)
 
         if clip_source_pairs:
+            clip_count = len(clip_source_pairs)
             self._add_pairs_to_browser(clip_source_pairs)
-            self._log_deferred_browser_population(len(clip_source_pairs))
-
-    def _log_deferred_browser_population(self, clip_count: int) -> None:
-        """Log deferred Analyze restore with virtual/realized counts."""
-        if not self.clip_browser.is_virtualized():
-            logger.info(f"Populated {clip_count} deferred Analyze clips")
-            return
-
-        QTimer.singleShot(
-            0,
-            lambda: logger.info(
-                "Virtualized Analyze browser for %s deferred clips; realized %s widgets",
-                clip_count,
-                self.clip_browser.get_realized_clip_count(),
-            ),
-        )
+            if self.clip_browser.is_virtualized():
+                # Defer one tick so realization counts reflect the rebuilt grid.
+                QTimer.singleShot(
+                    0,
+                    lambda count=clip_count: logger.info(
+                        "Virtualized Analyze browser for %s deferred clips; "
+                        "realized %s widgets",
+                        count,
+                        self.clip_browser.get_realized_clip_count(),
+                    ),
+                )
+            else:
+                logger.info(f"Populated {clip_count} deferred Analyze clips")
 
     def remove_clip(self, clip_id: str):
         """Remove a single clip from the analysis tab.
@@ -544,14 +542,14 @@ class AnalyzeTab(BaseTab):
     def update_clip_colors(self, clip_id: str, colors: list):
         """Update colors for a clip."""
         if clip_id in self._clip_ids:
-            if clip_id in self.clip_browser._thumbnail_by_id:
+            if self.clip_browser.is_clip_realized(clip_id):
                 self.clip_browser.update_clip_colors(clip_id, colors)
             self._refresh_quick_run_availability()
 
     def update_clip_shot_type(self, clip_id: str, shot_type: str):
         """Update shot type for a clip."""
         if clip_id in self._clip_ids:
-            if clip_id in self.clip_browser._thumbnail_by_id:
+            if self.clip_browser.is_clip_realized(clip_id):
                 self.clip_browser.update_clip_shot_type(clip_id, shot_type)
             self._refresh_quick_run_availability()
 
@@ -559,21 +557,21 @@ class AnalyzeTab(BaseTab):
         """Update thumbnail for a clip."""
         if (
             clip_id in self._clip_ids
-            and clip_id in self.clip_browser._thumbnail_by_id
+            and self.clip_browser.is_clip_realized(clip_id)
         ):
             self.clip_browser.update_clip_thumbnail(clip_id, thumb_path)
 
     def update_clip_transcript(self, clip_id: str, segments: list):
         """Update transcript for a clip."""
         if clip_id in self._clip_ids:
-            if clip_id in self.clip_browser._thumbnail_by_id:
+            if self.clip_browser.is_clip_realized(clip_id):
                 self.clip_browser.update_clip_transcript(clip_id, segments)
             self._refresh_quick_run_availability()
 
     def update_clip_extracted_text(self, clip_id: str, texts: list):
         """Update extracted text for a clip."""
         if clip_id in self._clip_ids:
-            if clip_id in self.clip_browser._thumbnail_by_id:
+            if self.clip_browser.is_clip_realized(clip_id):
                 self.clip_browser.update_clip_extracted_text(clip_id, texts)
             self._refresh_quick_run_availability()
 
@@ -581,7 +579,7 @@ class AnalyzeTab(BaseTab):
         """Update custom query results for a clip."""
         if (
             clip_id in self._clip_ids
-            and clip_id in self.clip_browser._thumbnail_by_id
+            and self.clip_browser.is_clip_realized(clip_id)
         ):
             self.clip_browser.update_clip_custom_queries(clip_id, custom_queries)
 
@@ -593,7 +591,7 @@ class AnalyzeTab(BaseTab):
             cinematography: CinematographyAnalysis object
         """
         if clip_id in self._clip_ids:
-            if clip_id in self.clip_browser._thumbnail_by_id:
+            if self.clip_browser.is_clip_realized(clip_id):
                 self.clip_browser.update_clip_cinematography(clip_id, cinematography)
             self._refresh_quick_run_availability()
 

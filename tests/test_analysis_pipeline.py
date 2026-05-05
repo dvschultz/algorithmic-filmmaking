@@ -48,20 +48,29 @@ def test_phase_advances_from_local_to_cloud_after_color_completion():
 
 
 def test_pipeline_complete_refreshes_cut_browser_after_analysis():
-    """Analysis completion should refresh data-backed Cut tab clip entries."""
+    """Analysis completion should refresh data-backed clip entries via project.update_clips.
+
+    The single project.update_clips() call replaces the previous duplicate path
+    that called update_clips directly on both browsers; both Cut and Analyze
+    tabs now refresh through the standard `clips_updated` observer chain.
+    """
     clip = make_test_clip("clip-1", source_id="src-1")
     source = Source(id="src-1", file_path=Path("/test/video.mp4"))
-    refreshed = []
-
-    class Browser:
-        def update_clips(self, clips):
-            refreshed.extend(clips)
+    project_updated = []
 
     class AnalyzeTab:
-        clip_browser = Browser()
+        clip_browser = SimpleNamespace(update_clips=lambda *_args, **_kwargs: None)
 
         def set_analyzing(self, _value):
             return None
+
+    class FakeProject:
+        def __init__(self):
+            self.sources_by_id = {source.id: source}
+            self.path = None
+
+        def update_clips(self, clips):
+            project_updated.extend(clips)
 
     class Harness:
         def __init__(self):
@@ -73,10 +82,14 @@ def test_pipeline_complete_refreshes_cut_browser_after_analysis():
             self._active_custom_query_text = "query"
             self._gui_state = SimpleNamespace(clear_processing=lambda _name: None)
             self.analyze_tab = AnalyzeTab()
-            self.cut_tab = SimpleNamespace(clip_browser=Browser())
+            self.cut_tab = SimpleNamespace(
+                clip_browser=SimpleNamespace(
+                    update_clips=lambda *_args, **_kwargs: None
+                )
+            )
             self.progress_bar = SimpleNamespace(setVisible=lambda _value: None)
             self.status_bar = SimpleNamespace(showMessage=lambda _message: None)
-            self.project = SimpleNamespace(sources_by_id={source.id: source}, path=None)
+            self.project = FakeProject()
             self.collect_tab = SimpleNamespace(update_source_has_analysis=lambda *_args: None)
 
         def _get_completed_analysis_error_labels(self, _completed):
@@ -89,7 +102,8 @@ def test_pipeline_complete_refreshes_cut_browser_after_analysis():
 
     MainWindow._on_analysis_pipeline_complete(harness)
 
-    assert refreshed == [clip, clip]
+    # Single project-level update notification (no duplicate per-browser calls).
+    assert project_updated == [clip]
     assert source.has_analysis is True
 
 

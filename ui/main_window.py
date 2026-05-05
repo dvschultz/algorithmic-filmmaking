@@ -67,6 +67,7 @@ from core.project import (
     Project,
     ProjectMetadata,
     ProjectLoadError,
+    save_project,
 )
 from ui.project_adapter import ProjectSignalAdapter
 from ui.settings_dialog import SettingsDialog
@@ -74,7 +75,7 @@ from ui.tabs import CollectTab, CutTab, AnalyzeTab, FramesTab, SequenceTab, Rend
 from ui.theme import theme, Spacing
 from ui.chat_panel import ChatPanel
 from ui.chat_worker import ChatAgentWorker
-from ui.clip_browser import VIRTUALIZATION_THRESHOLD
+from ui.clip_browser import VIRTUALIZATION_THRESHOLD, clear_thumbnail_pixmap_cache
 from ui.clip_details_sidebar import ClipDetailsSidebar
 from ui.dialogs import IntentionImportDialog, AnalysisPickerDialog, URLImportDialog
 from ui.log_viewer import LogViewerWidget, get_in_app_log_bridge
@@ -277,19 +278,34 @@ class ThumbnailWorker(QThread):
 
 
 class SaveProjectWorker(QThread):
-    """Background worker for saving a project without blocking the UI."""
+    """Background worker for saving a project without blocking the UI.
+
+    Takes a *snapshot* of the project state at dispatch time (rather than the
+    live `Project`) so the main thread can keep mutating the project while a
+    save is in flight without corrupting the on-disk JSON.
+    """
 
     save_finished = Signal(bool, str, str)  # success, path, error
 
-    def __init__(self, project: Project, filepath: Path):
+    def __init__(self, snapshot: dict, filepath: Path):
         super().__init__()
-        self.project = project
+        self._snapshot = snapshot
         self.filepath = filepath
 
     def run(self):
         try:
             started = time.perf_counter()
-            success = self.project.save(self.filepath)
+            success = save_project(
+                filepath=self.filepath,
+                sources=self._snapshot["sources"],
+                clips=self._snapshot["clips"],
+                sequence=self._snapshot["sequence"],
+                ui_state=self._snapshot["ui_state"],
+                metadata=self._snapshot["metadata"],
+                frames=self._snapshot["frames"],
+                extra_data=self._snapshot["extra_data"],
+                audio_sources=self._snapshot["audio_sources"],
+            )
             elapsed = time.perf_counter() - started
             logger.info("Saved project to %s in %.2fs", self.filepath, elapsed)
             self.save_finished.emit(success, str(self.filepath), "")
@@ -894,6 +910,11 @@ class MainWindow(QMainWindow):
 
         # Plan execution state
         self._pending_plan_tool_call_id: Optional[str] = None
+
+        # Track clip IDs whose disabled state was just toggled so the next
+        # `clips_updated` notification can preserve the existing card layout
+        # (avoids visual reflow when only the disabled flag changed).
+        self._preserve_clip_update_layout_ids: set[str] = set()
 
         # GUI state tracking for agent context awareness
         self._gui_state = GUIState()
@@ -1673,6 +1694,7 @@ class MainWindow(QMainWindow):
         self.cut_tab.clip_browser.filters_changed.connect(self._on_cut_filters_changed)
         self.cut_tab.clip_browser.view_details_requested.connect(self.show_clip_details)
         self.cut_tab.clip_browser.export_requested.connect(self._on_clip_export_requested)
+        self.cut_tab.clip_browser.disabled_clips_changed.connect(self._on_disabled_clips_changed)
 
         # Analyze tab signals
         self.analyze_tab.quick_run_requested.connect(self._on_quick_run_from_tab)
@@ -1683,6 +1705,7 @@ class MainWindow(QMainWindow):
         self.analyze_tab.clip_browser.filters_changed.connect(self._on_analyze_filters_changed)
         self.analyze_tab.clip_browser.view_details_requested.connect(self.show_clip_details)
         self.analyze_tab.clip_browser.export_requested.connect(self._on_clip_export_requested)
+        self.analyze_tab.clip_browser.disabled_clips_changed.connect(self._on_disabled_clips_changed)
 
         # Sequence tab signals
         self.sequence_tab.playback_requested.connect(self._on_playback_requested)
@@ -1838,6 +1861,16 @@ class MainWindow(QMainWindow):
         logger.debug(f"Clip {clip.id} updated from sidebar")
 
     @Slot(list)
+    def _on_disabled_clips_changed(self, clip_ids: list):
+        """Record clip IDs whose disabled state is being toggled.
+
+        ClipBrowser emits this just before pushing the toggle command onto the
+        undo stack; the resulting `clips_updated` notification can then
+        preserve the existing layout for these IDs.
+        """
+        self._preserve_clip_update_layout_ids.update(clip_ids)
+
+    @Slot(list)
     def _on_clips_updated(self, clips: list):
         """Handle clips updated signal from project.
 
@@ -1848,14 +1881,10 @@ class MainWindow(QMainWindow):
             clips: List of updated clips
         """
         updated_ids = {clip.id for clip in clips}
-        preserve_ids = set(getattr(self, "_preserve_clip_update_layout_ids", set()))
+        preserve_ids = self._preserve_clip_update_layout_ids
         preserve_layout = bool(updated_ids and updated_ids.issubset(preserve_ids))
         if preserve_layout:
-            remaining = preserve_ids - updated_ids
-            if remaining:
-                self._preserve_clip_update_layout_ids = remaining
-            elif hasattr(self, "_preserve_clip_update_layout_ids"):
-                delattr(self, "_preserve_clip_update_layout_ids")
+            preserve_ids.difference_update(updated_ids)
 
         # Update clip browsers in both tabs
         if hasattr(self, 'cut_tab') and hasattr(self.cut_tab, 'clip_browser'):
@@ -4428,12 +4457,11 @@ class MainWindow(QMainWindow):
             self.collect_tab.update_source_has_analysis(source_id, True)
 
         # Analysis can update data-backed virtual browsers for clips whose
-        # card widgets are not currently realized. Refresh the affected clip
-        # data so every source group remains represented after the grid rebuilds.
-        if hasattr(self, 'cut_tab') and hasattr(self.cut_tab, 'clip_browser'):
-            self.cut_tab.clip_browser.update_clips(clips)
-        if hasattr(self, 'analyze_tab') and hasattr(self.analyze_tab, 'clip_browser'):
-            self.analyze_tab.clip_browser.update_clips(clips)
+        # card widgets are not currently realized. Notify the project once so
+        # the standard `clips_updated` observer path refreshes both browsers
+        # (and any other listeners) — this also marks the project dirty.
+        if clips and hasattr(self, "project") and hasattr(self.project, "update_clips"):
+            self.project.update_clips(clips)
 
         # Save project
         if self.project.path:
@@ -10019,7 +10047,10 @@ class MainWindow(QMainWindow):
 
         self.save_project_action.setEnabled(False)
         self.save_project_as_action.setEnabled(False)
-        self.save_worker = SaveProjectWorker(self.project, filepath)
+        # Snapshot project state at dispatch time so main-thread mutations
+        # while the worker runs cannot corrupt the on-disk file.
+        snapshot = self.project.snapshot_for_save()
+        self.save_worker = SaveProjectWorker(snapshot, filepath)
         self.save_worker.save_finished.connect(self._on_project_save_finished)
         self.save_worker.start()
 
@@ -10029,6 +10060,16 @@ class MainWindow(QMainWindow):
         self.save_project_action.setEnabled(True)
         self.save_project_as_action.setEnabled(True)
         self.save_worker = None
+        if success:
+            # The worker only writes the snapshot to disk; the live Project
+            # bookkeeping (path + dirty flag + project_saved notification)
+            # happens here on the main thread.
+            self.project.path = filepath
+            self.project.mark_clean()
+            try:
+                self.project._notify_observers("project_saved", filepath)
+            except Exception:
+                logger.exception("project_saved observer notification failed")
 
         if success:
             self._add_recent_project(filepath)
@@ -10333,6 +10374,10 @@ class MainWindow(QMainWindow):
 
         # Clear GUI state (for agent context)
         self._gui_state.clear()
+
+        # Flush the module-level thumbnail pixmap cache so stale thumbnails
+        # from the previous project don't linger in memory.
+        clear_thumbnail_pixmap_cache()
 
     def _refresh_ui_from_project(self):
         """Refresh all UI components after project load.

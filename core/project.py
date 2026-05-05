@@ -1327,6 +1327,36 @@ class Project:
 
     # --- Persistence ---
 
+    def snapshot_for_save(self) -> dict:
+        """Return a deep-copied snapshot of all save-relevant project state.
+
+        Used by `SaveProjectWorker` so the background thread serializes a
+        stable view of the project even if the main thread mutates the live
+        project mid-save. The snapshot returns the same kwargs `save_project()`
+        already accepts plus the `extra_data` payload `Project.save()` builds.
+        """
+        import copy
+
+        non_active = [
+            s for i, s in enumerate(self.sequences)
+            if i != self.active_sequence_index and s
+        ]
+        extra_data = {
+            "_all_sequences": list(self.sequences),
+            "active_sequence_index": self.active_sequence_index,
+            "_additional_sequences": non_active,
+        }
+        return {
+            "sources": copy.deepcopy(self._sources),
+            "clips": copy.deepcopy(self._clips),
+            "sequence": copy.deepcopy(self.sequence),
+            "ui_state": copy.deepcopy(self.ui_state),
+            "metadata": copy.deepcopy(self.metadata),
+            "frames": copy.deepcopy(self._frames),
+            "extra_data": copy.deepcopy(extra_data),
+            "audio_sources": copy.deepcopy(self._audio_sources),
+        }
+
     def save(
         self,
         path: Optional[Path] = None,
