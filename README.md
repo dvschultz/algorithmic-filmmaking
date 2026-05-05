@@ -14,7 +14,7 @@ Scene Ripper analyzes video files to detect scene boundaries, enriches clips wit
 - Film language analysis with scene reports and editing suggestions
 - Integrated chat agent for AI-assisted editing
 - Thumbnail grid browser with collapsible source headers
-- Multiple sequencing modes with shot type filtering and direction control
+- 21 sequencing modes including sort, similarity, audio, text, gaze, reference, and drawing-guided workflows
 - Export individual clips or complete sequences
 - YouTube/Internet Archive import
 - Project save/load with full state persistence
@@ -139,7 +139,7 @@ The app uses a 5-tab workflow, though you can skip or revisit tabs as needed:
 1. **Collect**: Import a video file (drag-drop or file browser)
 2. **Cut**: Adjust sensitivity and click "Detect Scenes"
 3. **Analyze**: (Optional) Run analysis to add descriptions, transcripts, shot types
-4. **Sequence**: Add clips to timeline, use shuffle or Exquisite Corpus mode
+4. **Sequence**: Add clips to the timeline manually or generate one with a sequencer algorithm
 5. **Render**: Export as MP4 or EDL for external editors
 
 ## User Guides
@@ -223,8 +223,11 @@ Configure your preferred LLM provider (OpenAI, Anthropic, Gemini, Ollama) in Set
 Multiple ways to arrange clips:
 
 - **Manual**: Drag-drop clips to timeline
-- **Shuffle**: Randomize with constraints (no same-source consecutive)
-- **Exquisite Corpus**: Generate poetry from extracted text, then sequence clips by matching lines
+- **Arrange**: Sort by color, duration, brightness, volume, shot scale, gaze, or original order
+- **Connect**: Chain clips by visual similarity, match cut boundaries, follow a reference guide, or build LLM-guided associations
+- **Audio**: Cut to music with Staccato or pull spoken phrases with Cassette Tape
+- **Text and AI**: Generate poetry, story structures, transcript phrase sequences, or drawing-guided edits
+- **Find**: Filter a specific person with Rose Hobart or build gaze-based edits with Eyes Without a Face
 
 **Sorting options:**
 - **Shot Type**: Filter by Wide Shot, Full Shot, Medium Shot, Close-up, or Extreme Close-up
@@ -418,7 +421,7 @@ python -m cli.main --help
 - [x] Transcription (faster-whisper)
 - [x] Color analysis with direction control
 - [x] Integrated chat agent
-- [x] Exquisite Corpus sequencer
+- [x] 21 sequencer algorithms
 - [x] CLI for batch processing
 - [x] Project save/load
 - [x] Intention-first workflow
@@ -430,5 +433,5 @@ python -m cli.main --help
 
 **Future:**
 - [ ] FAISS vector similarity search
-- [ ] Similarity-based sequencing
+- [ ] Model/view timeline virtualization
 - [ ] Motion-based ordering

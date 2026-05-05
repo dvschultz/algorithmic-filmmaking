@@ -181,7 +181,7 @@ When creating plans, follow these tool dependency rules:
 2. If the user wants to search multiple topics, create a plan that interleaves
    search and download steps for each topic.
 
-3. SEQUENCE GENERATION: Use the generate_remix tool to create sequences with any of the 13 sorting algorithms. Use list_sorting_algorithms first to check which algorithms are available based on clip analysis state. For matching clips to a reference video's structure, use the generate_reference_guided tool instead.
+3. SEQUENCE GENERATION: Use the generate_remix tool for the 12 direct sorting/arranging algorithms. Use list_sorting_algorithms first to check which algorithms are available based on clip analysis state. Use specialized tools for dialog-heavy sequencers: generate_reference_guided, generate_staccato, generate_rose_hobart, generate_eyes_without_a_face, generate_cassette_tape, generate_signature_style, generate_exquisite_corpus, and generate_storyteller. Reference Guide duration matching does not trim matched clips to the guide clip length.
 ```
 
 ### Local/Ollama-Only Prompt Extension

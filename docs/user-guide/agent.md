@@ -125,7 +125,9 @@ Most agent capabilities work regardless of which provider you choose for the cha
 | Describe clips | Yes (Qwen3-VL / Moondream) | Optional (cloud tier) |
 | Text extraction (OCR) | Yes (PaddleOCR) | Optional (VLM fallback) |
 | Cinematography analysis | Yes (Apple Silicon) | Optional (cloud tier) |
-| Storyteller / Exquisite Corpus | No | Yes |
+| Storyteller / Exquisite Corpus / Free Association | No | Yes |
+| Signature Style Parametric mode | Yes | No |
+| Signature Style VLM mode | No | Yes |
 | Scene detection | Yes | No |
 | Export | Yes | No |
 

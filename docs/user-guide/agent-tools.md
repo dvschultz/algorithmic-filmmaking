@@ -1,6 +1,6 @@
 # Agent Tools Reference
 
-The Scene Ripper chat agent has access to 106 tools organized by category. You don't need to call these by name — just describe what you want in natural language and the agent will use the right tool. This reference is for understanding what's possible.
+The Scene Ripper chat agent has access to 117 tools organized by category. You don't need to call these by name — just describe what you want in natural language and the agent will use the right tool. This reference is for understanding what's possible.
 
 > Type `/help` in the chat panel to see a condensed version of this list.
 
@@ -106,10 +106,15 @@ See [Audio Sources](audio-sources.md) for the full audio import / transcription 
 
 | Tool | What it does | Example prompt |
 |------|-------------|----------------|
-| `generate_remix` | Generate a sequence with any algorithm | "Arrange clips by color, warm to cool" |
+| `generate_remix` | Generate a direct sort/arrange sequence | "Arrange clips by color, warm to cool" |
 | `generate_staccato` | Beat-driven sequence from music | "Create a staccato sequence using this song" |
 | `generate_rose_hobart` | Filter clips by a person's face | "Show only clips with this person" |
 | `generate_reference_guided` | Match clips to a reference edit | "Match my clips to the reference video's structure" |
+| `generate_eyes_without_a_face` | Gaze-based eyeline, filter, or rotation sequence | "Build a shot-reverse-shot sequence from gaze" |
+| `generate_exquisite_corpus` | Poem sequence from extracted text | "Make an Exquisite Corpus poem sequence" |
+| `generate_storyteller` | Narrative sequence from descriptions | "Tell a three-act story with these clips" |
+| `generate_cassette_tape` | Phrase sequence from transcripts | "Find clips saying these phrases" |
+| `generate_signature_style` | Image/drawing-guided sequence | "Make a sequence based on this drawing" |
 | `list_sorting_algorithms` | See available algorithms | "What sequencing algorithms can I use?" |
 | `get_available_dimensions` | See matching dimensions | "What dimensions are available for reference matching?" |
 | `get_remix_state` | Get current sequence tab state | "What algorithm is currently active?" |
@@ -130,8 +135,27 @@ See [Audio Sources](audio-sources.md) for the full audio import / transcription 
 | `sequential` | Time Capsule | "Keep clips in original order" |
 | `gaze_sort` | Gaze Sort | "Sort clips by gaze direction, left to right" |
 | `gaze_consistency` | Gaze Consistency | "Group clips by gaze direction" |
-| `exquisite_corpus` | Exquisite Corpus | "Create a poem from the on-screen text" |
-| `storyteller` | Storyteller | "Tell a story with these clips" |
+
+`generate_remix` is the right tool for these 12 direct arrange/connect algorithms. Dialog-heavy sequencers with extra parameters use their own tools instead: `generate_reference_guided`, `generate_staccato`, `generate_rose_hobart`, `generate_eyes_without_a_face`, `generate_cassette_tape`, `generate_signature_style`, `generate_exquisite_corpus`, and `generate_storyteller`. Free Association is currently GUI-only.
+
+**Reference Guide parameters:**
+
+| Parameter | Type | Notes |
+|-----------|------|-------|
+| `reference_source_id` | string | Source ID of the reference video. Use `list_sources` first. |
+| `weights` | object | Optional dimension weights from `0.0` to `1.0`. Valid keys: `color`, `brightness`, `shot_scale`, `audio`, `embedding`, `description`, `transcript`, `movement`, `duration`. Defaults to `{"embedding": 1.0, "brightness": 0.4, "duration": 0.6}`. |
+| `allow_repeats` | boolean | When false, each candidate clip can be used once. When true, clips can fill multiple reference positions. |
+
+Call `get_available_dimensions` before `generate_reference_guided` to see which dimensions have analysis data. Description and transcript matching use token-frequency text similarity, not semantic LLM matching. Visual Match uses DINOv2 embedding cosine distance. Duration affects matching only; matched clips are not trimmed to the guide clip length.
+
+**Trim-aware sequencers:**
+
+| Tool | Output timing |
+|------|---------------|
+| `generate_staccato` | Trims or loops clips to beat slots |
+| `generate_cassette_tape` | Trims to matched transcript segments |
+| `generate_signature_style` | Trims longer clips to drawing/image segment durations |
+| `generate_reference_guided` | Does not trim to the reference clip length |
 
 ### Sequence Editing
 

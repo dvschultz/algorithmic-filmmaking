@@ -22,12 +22,12 @@ SigLIP 2 is a contrastive vision-language model from Google. Instead of generati
 
 ### DINOv2 — Visual Embeddings
 
-Generates a 768-dimensional embedding vector for each clip's thumbnail. These embeddings capture the visual content of a frame — similar-looking frames produce similar vectors. Several sequencer algorithms use these embeddings to find visual relationships between clips (match cuts, visual similarity sorting, etc.).
+Generates a 768-dimensional embedding vector for each clip's thumbnail. These embeddings capture the visual content of a frame — similar-looking frames produce similar vectors. Several sequencer algorithms use these embeddings to find visual relationships between clips.
 
 DINOv2 is a self-supervised vision transformer from Meta. It was trained without text labels, learning visual features purely from images. This makes it especially good at capturing structural and compositional similarity rather than semantic categories.
 
 **Model:** [facebook/dinov2-base](https://huggingface.co/facebook/dinov2-base) (~330 MB)
-**Used in:** Analyze tab > Compute Embeddings; Sequence tab (Match Cut, Similarity Sort, Exquisite Corpus)
+**Used in:** Analyze tab > Compute Embeddings; Sequence tab (Human Centipede, Staccato, Reference Guide's Visual Match dimension, and Free Association candidate shortlisting). The same DINOv2 runtime also powers Match Cut's first/last-frame boundary embeddings.
 **Try it:** [DINOv2 Demo Lab](https://dinov2.metademolab.com/)
 
 ---

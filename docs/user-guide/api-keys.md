@@ -19,7 +19,8 @@ You don't need all of these. Most users need just one or two.
 | Classify shots | Any VLM provider |
 | Extract on-screen text | Any VLM provider |
 | Storyteller sequencer | Any LLM provider |
-| Exquisite Corpus sequencer | Any VLM provider |
+| Exquisite Corpus sequencer | Any LLM provider for poem generation; OCR can run locally or use a VLM fallback |
+| Free Association sequencer | Any LLM provider |
 | Signature Style sequencer (VLM mode) | Any VLM provider |
 | YouTube search and download | YouTube Data API |
 | Replicate models | Replicate |

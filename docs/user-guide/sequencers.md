@@ -1,16 +1,58 @@
 # Sequencer Algorithms
 
-Scene Ripper includes 20 sequencer algorithms that arrange your clips into a sequence. Each algorithm uses a different creative logic to determine the order.
+Scene Ripper includes 21 sequencer algorithms that arrange your clips into a sequence. Each algorithm uses a different creative logic to determine the order, choose matches, or trim clips into timed slots.
 
 To use a sequencer, go to the **Sequence** tab, select an algorithm from the dropdown, and click **Generate**. Some algorithms require that you run specific analysis on your clips first (in the **Analyze** tab). Others open a dialog where you configure additional options before generating.
 
-> Some algorithms (like Storyteller and Exquisite Corpus) require a cloud API key. See the [API Keys Guide](api-keys.md) for setup instructions.
+> Some algorithms, modes, and agent workflows require an LLM or VLM API key. Storyteller, Exquisite Corpus, Free Association, and Signature Style's VLM mode are the main examples. See the [API Keys Guide](api-keys.md) for setup instructions.
+
+Most sequencers use the clips currently selected in the Cut or Analyze tab. If no clips are selected, select the clips you want to sequence first. Dialog-based sequencers may add their own setup steps, such as choosing a music track, reference video, phrase list, drawing, or face reference.
+
+## Timing and Trimming
+
+Most sequencers place each matched clip at its full detected clip length. They change order and selection, but they do not retime the source material.
+
+The main exceptions are:
+
+| Sequencer | Timing behavior |
+|-----------|-----------------|
+| **Staccato** | Trims or loops clips so each beat slot is filled |
+| **Signature Style** | Trims longer clips to the drawing segment duration; shorter clips play full length |
+| **Cassette Tape** | Trims clips to the matched transcript segment |
+
+Reference Guide uses duration as an optional matching dimension, but it does **not** trim a matched clip to the guide clip's length. If you enable Duration, it prefers clips with similar lengths; the output still uses the matched clip's own length.
 
 ---
 
+## Algorithm Index
+
+| Algorithm | Category | Requires first | Trims output? |
+|-----------|----------|----------------|---------------|
+| Chromatics | Arrange | Colors | No |
+| Tempo Shift | Arrange | None | No |
+| Into the Dark | Arrange | Brightness, auto-computed if missing | No |
+| Crescendo | Arrange / Audio | Volume, auto-computed if missing | No |
+| Focal Ladder | Arrange | Shot classification | No |
+| Up Close and Personal | Arrange | Shot classification or Rich Analysis shot size | No |
+| Gaze Sort | Arrange / Find | Gaze analysis | No |
+| Gaze Consistency | Find | Gaze analysis | No |
+| Hatchet Job | Arrange | None | No |
+| Time Capsule | Arrange | None | No |
+| Human Centipede | Connect | Visual embeddings, auto-computed if missing | No |
+| Match Cut | Connect | Boundary embeddings, auto-computed if missing | No |
+| Staccato | Audio | Audio source and visual embeddings | Yes |
+| Exquisite Corpus | Text | Extract Text plus an LLM | No |
+| Storyteller | Text | Describe plus an LLM | No |
+| Reference Guide | Connect / Audio / Text | Depends on enabled dimensions | No |
+| Signature Style | Connect | Colors; VLM mode benefits from shots/descriptions | Yes |
+| Rose Hobart | Find | Reference face image; face dependencies install on demand | No |
+| Eyes Without a Face | Find / Connect | Gaze analysis | No |
+| Free Association | Connect / Text | Describe and embeddings plus an LLM | No |
+| Cassette Tape | Text / Audio | Transcribe | Yes |
+
 ## Managing Multiple Sequences
 
-A project holds any number of named sequences — run 20 different algorithms and keep every result side by side for comparison. Every algorithm run creates a new sequence instead of overwriting the previous one.
+A project holds any number of named sequences — run 21 different algorithms and keep every result side by side for comparison. Every algorithm run creates a new sequence instead of overwriting the previous one.
 
 ### Sequence dropdown
 
@@ -108,9 +150,11 @@ If clips haven't been analyzed for volume yet, this algorithm will automatically
 
 ### Focal Ladder
 
-Arrange clips by camera shot scale, from wide establishing shots to tight close-ups (or reverse).
+Arrange clips by camera shot scale, from wide establishing shots to tight close-ups.
 
 **Required analysis:** Shots (shot type classification)
+
+Focal Ladder has no direction dropdown in the current UI. Use **Up Close and Personal** when you want an explicit far-to-close or close-to-far direction.
 
 ### Up Close and Personal
 
@@ -187,7 +231,7 @@ Randomly shuffle clips into a new order. Opens a dialog where you can optionally
 - **Random V-Flip:** Randomly flip some clips vertically
 - **Random Reverse:** Randomly play some clips in reverse
 
-When transforms are enabled, the dialog pre-renders each affected clip via FFmpeg before assembling the sequence. A progress bar shows rendering status.
+The shuffle uses a constrained shuffle that avoids placing clips from the same source back-to-back when possible. When transforms are enabled, the dialog pre-renders each affected clip via FFmpeg before assembling the sequence. A progress bar shows rendering status. Reverse pre-rendering is capped for long clips to keep render time bounded.
 
 ### Time Capsule
 
@@ -203,16 +247,19 @@ Keep clips in their original order. This is the simplest algorithm: clips appear
 
 Cut clips to the rhythm of a music track. Opens a dialog where you pick a project audio source, preview the waveform with beat markers, and generate a sequence where onset strength drives visual contrast — stronger beats trigger bigger visual jumps between consecutive clips.
 
-**Required analysis:** Embeddings (DINOv2, auto-computed if missing)
+**Required analysis:** Audio source, Embeddings (DINOv2, auto-computed in the dialog if dependencies and thumbnails are available)
 
 **Dialog workflow:**
 1. Pick an audio source from the **Audio source** dropdown. The dropdown is populated from your project's [audio library](audio-sources.md) — if you haven't imported audio yet, choose **Import new…** to import one without leaving the dialog.
 2. The audio is analyzed and a waveform is displayed with beat/onset markers overlaid
 3. Adjust the **Sensitivity** slider to control the number of cut points ("Fewer Cuts" to "More Cuts")
 4. Choose a **Beat Strategy** from the dropdown: Onsets (transients/hits), Beats (regular pulse), or Downbeats (strong beats only)
-5. Click **Generate** to match clips to beat intervals. Each clip is trimmed to fit its slot; clips shorter than their slot are looped. Clips can repeat when there are more beat slots than clips.
+5. Optional advanced onset controls let you choose an onset profile, minimum gap, timing mode, and analysis resolution when transient detection needs tuning
+6. Click **Generate** to match clips to beat intervals. Each clip is trimmed to fit its slot; clips shorter than their slot are looped. Clips can repeat when there are more beat slots than clips.
 
 The algorithm uses DINOv2 visual embeddings to measure similarity between clips. At each cut point, it measures the onset strength and selects a clip whose visual distance from the previous clip matches that strength — hard hits get jarring visual jumps, soft transitions get visually similar clips.
+
+Staccato exhausts the available clip pool before repeating clips. The resulting timeline stores the music path on the sequence and should closely match the generated beat-slot timing.
 
 ---
 
@@ -259,6 +306,24 @@ Match your clips to a reference video's structure. Opens a dialog.
 4. Optionally allow repeated clips with the "Allow Repeats" checkbox
 5. Click **Generate** to find the best-matching clip for each position in the reference
 
+**Matching details:**
+
+| Dimension | Data used | Match behavior |
+|-----------|-----------|----------------|
+| Color | Dominant color hue | Numeric distance after normalization |
+| Brightness | Average luminance | Numeric distance after normalization |
+| Shot Scale | Rich Analysis shot size, falling back to shot classification | Wide-to-close proximity distance |
+| Audio Energy | RMS volume | Numeric distance after normalization |
+| Visual Match | DINOv2 embedding | Cosine distance |
+| Description | Describe text | Token-frequency cosine distance |
+| Transcript | Transcribed speech text | Token-frequency cosine distance |
+| Movement | Rich Analysis camera movement | Exact categorical match |
+| Duration | Clip duration | Numeric distance after normalization |
+
+Reference Guide matches greedily from the first reference clip to the last. With **Allow Repeats** off, each candidate clip can be used once; if the matching pool runs out, later reference positions stay unmatched. With **Allow Repeats** on, the same candidate can fill multiple reference positions.
+
+Duration is only a matching signal. Matched clips are not trimmed to the guide clip duration.
+
 ### Signature Style
 
 Interpret a drawing as an editing guide. Opens a large canvas-based dialog.
@@ -266,16 +331,18 @@ Interpret a drawing as an editing guide. Opens a large canvas-based dialog.
 **Required analysis:** Colors
 
 **Dialog workflow:**
-1. Draw on the canvas (or import an image). The Y-axis maps to pacing (spiky = fast cuts, smooth = slow) and color maps to color matching against your clips
+1. Draw on the canvas (or import an image). In Parametric mode, the drawing is sampled left-to-right: the line's vertical changes map to pacing (spiky = fast cuts, smooth = slow), and ink color maps to color matching against your clips
 2. Set a target duration and FPS
 3. Choose between **Parametric** mode (pixel-level analysis with a granularity slider) or **VLM** mode (a vision model interprets the drawing's meaning)
 4. Click **Generate** to match your drawing to clips and assemble a timed sequence
+
+The matcher can reuse clips. Longer clips are center-trimmed to the target segment duration; clips shorter than a segment play at full length. Parametric mode mainly uses duration, color, brightness, and available shot metadata. VLM mode adds interpreted shot type, brightness, and energy targets when the vision model can infer them.
 
 ### Rose Hobart
 
 Isolate clips featuring a specific person. Named after Joseph Cornell's 1936 found-footage film. Opens a dialog.
 
-**Required analysis:** None (face detection runs in the dialog)
+**Required analysis:** None required ahead of time in the GUI. Face detection runs in the dialog and caches results on clips. The agent tool uses already computed face embeddings.
 
 **Dialog workflow:**
 1. Upload 1-3 reference photos of the person you want to find. Each image is analyzed for faces, and a green bounding box highlights the detected face
@@ -310,7 +377,7 @@ Clips without gaze data are always appended at the end of the sequence.
 
 Build a sequence one clip at a time with an LLM collaborator. The algorithm opens a dialog where you interactively accept, reject, or swap each proposed next clip, with a rationale from the LLM explaining each transition.
 
-**Required analysis:** Describe, Embeddings
+**Required analysis:** Describe, Embeddings, LLM provider
 
 **Dialog workflow:**
 
@@ -320,8 +387,6 @@ Build a sequence one clip at a time with an LLM collaborator. The algorithm open
 4. Repeat until you're satisfied or the pool is exhausted
 
 Embeddings power a local candidate shortlist so the LLM only sees the most similar clips at each step — this keeps prompts small and responses fast. Without embeddings the algorithm falls back to random sampling, which degrades proposal quality. Each accepted transition is saved as a rationale on the resulting SequenceClip, visible in exported SRTs.
-
-Requires a cloud LLM API key.
 
 ### Cassette Tape
 
@@ -342,4 +407,4 @@ Find clips that say specific phrases — the transcript-driven mixtape. This is 
 - Clips without transcripts are silently excluded. If the project has no transcribed clips, the dialog will tell you to run **Analyze → Transcribe** first.
 - Disabled clips are excluded automatically.
 
-Cassette Tape uses local string-similarity matching (RapidFuzz `partial_ratio`). It does not require a cloud API key.
+Cassette Tape uses local string-similarity matching (RapidFuzz `partial_ratio`). It does not require a cloud API key. It works at transcript-segment granularity, so it can trim the resulting sequence to the exact matched line instead of using the whole detected clip.

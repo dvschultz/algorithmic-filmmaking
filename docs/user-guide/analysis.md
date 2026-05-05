@@ -198,7 +198,7 @@ On Apple Silicon Macs, transcription runs on the GPU via MLX for significantly f
 - **Language** — English, Auto-detect, or a specific language code
 - **Backend** — Auto (recommended), faster-whisper, mlx-whisper, or Groq (cloud)
 
-**Used by:** Storyteller sequencer, transcript search, SRT export.
+**Used by:** Cassette Tape, Reference Guide's Transcript dimension, transcript search, SRT export.
 
 ---
 
@@ -224,7 +224,7 @@ Two input modes are available for cloud descriptions:
 - **Cloud model** — Gemini, Claude, or GPT-4o variant
 - **Input mode** — Frame or Video (cloud only, Gemini only)
 
-**Used by:** Chat agent search, Storyteller sequencer, clip filtering.
+**Used by:** Chat agent search, Storyteller, Reference Guide's Description dimension, Free Association, clip filtering.
 
 <details>
 <summary><strong>Prompt used</strong></summary>
@@ -275,7 +275,7 @@ Two input modes are available:
 - **Local model** — Qwen2.5-VL-7B (Apple Silicon only, ~4 GB)
 - **Input mode** — Frame or Video
 
-**Used by:** Focal Ladder (uses the detailed shot size), clip filtering by any cinematography field.
+**Used by:** Focal Ladder and Up Close and Personal (detailed shot size), Reference Guide's Shot Scale and Movement dimensions, clip filtering by any cinematography field.
 
 > **Tip:** Rich Analysis provides a more detailed shot size classification (10 types) than Shot Classification (5 types). If you run both, the Rich Analysis values take precedence for sequencer algorithms that use shot size.
 
@@ -416,7 +416,7 @@ The detector samples one frame per second through each clip, so it catches faces
 **Runs:** Locally (InsightFace, no API key needed)
 **Speed:** Moderate (processes sequentially to manage memory)
 
-**Used by:** Rose Hobart sequencer (filters clips to only those containing a specific person).
+**Used by:** Rose Hobart sequencer and agent tool. The GUI can compute missing face embeddings inside the Rose Hobart dialog and cache them on clips.
 
 > **Note:** Face detection requires a C/C++ compiler for initial installation of the InsightFace library (Xcode Command Line Tools on macOS).
 
@@ -434,7 +434,7 @@ Extracts a 768-dimensional DINOv2 visual feature vector from each clip's thumbna
 **Runs:** Locally (DINOv2 via transformers, no API key needed). Downloads ~450 MB of model files on first use.
 **Speed:** Moderate (processes in batches on GPU if available, otherwise CPU).
 
-**Used by:** Human Centipede (similarity chaining), Staccato, Reference Guide (when the embedding dimension is active), and Free Association (for local candidate shortlisting).
+**Used by:** Human Centipede (similarity chaining), Staccato, Reference Guide's Visual Match dimension, and Free Association candidate shortlisting. The same DINOv2 runtime also powers Match Cut's first/last-frame boundary embeddings.
 
 > **Tip:** If you haven't run this explicitly and try to use a sequencer that needs embeddings, the app will auto-compute them as a side effect of running the sequencer. Running Generate Embeddings up front is faster when you plan to use multiple embedding-based sequencers on the same clips.
 
