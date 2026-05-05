@@ -240,6 +240,16 @@ Call `get_available_dimensions` before `generate_reference_guided` to see which 
 | `export_dataset` | Export clip data as JSON | "Export a dataset of all clip metadata" |
 | `export_bundle` | Export a self-contained project bundle | "Export a portable project bundle" |
 
+**Bundle export parameters:**
+
+| Parameter | Type | Notes |
+|-----------|------|-------|
+| `output_path` | string | Optional destination directory. Defaults to `<export_dir>/<project_name>_bundle`. Existing destination is replaced. |
+| `lightweight` | boolean | When `true`, skips both source video files and trimmed clip media (project file + thumbnails only). Defaults to `false`. |
+| `include_clips` | boolean | Independent override for trimmed-clip media export. When omitted, defaults to `not lightweight` (clips included unless `lightweight=true`). Set explicitly to `true` or `false` to control trimmed-clip output regardless of `lightweight`. |
+
+Use `include_clips` when you want a "videos but no trimmed clips" or "trimmed clips but no source videos" bundle — for example, "Export a lightweight bundle but still include the trimmed clips" sets `lightweight=true` and `include_clips=true`.
+
 ---
 
 ## Plans

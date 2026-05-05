@@ -118,6 +118,30 @@ def _scaled_thumbnail_from_cache(path: Path, width: int, height: int) -> QPixmap
     return scaled
 
 
+def _sort_key_by_color(clip: Clip) -> float:
+    """Module-level color sort key for both virtual and non-virtual paths."""
+    return get_primary_hue(clip.dominant_colors) if clip.dominant_colors else 0.0
+
+
+def _sort_key_by_duration(clip: Clip, source: Source) -> float:
+    """Module-level duration sort key (seconds) for both browser paths."""
+    return clip.duration_seconds(source.fps)
+
+
+def _sort_key_by_timeline(clip: Clip) -> int:
+    """Module-level timeline sort key (start frame) for both browser paths."""
+    return clip.start_frame
+
+
+def clear_thumbnail_pixmap_cache() -> None:
+    """Flush the module-level scaled-thumbnail pixmap cache.
+
+    Should be called when a project is closed/reopened so stale pixmaps from
+    the previous project don't linger and waste memory.
+    """
+    _THUMBNAIL_PIXMAP_CACHE.clear()
+
+
 def get_latest_custom_query_results(custom_queries: list[dict] | None) -> dict[str, dict]:
     """Collapse append-only custom query history to the latest result per query."""
     latest_results: dict[str, dict] = {}
@@ -762,6 +786,7 @@ class ClipBrowser(QWidget):
     filters_changed = Signal()  # Emitted when any filter changes
     view_details_requested = Signal(object, object)  # Clip, Source - request to show clip details
     export_requested = Signal(object, object)  # Clip, Source - request to export a single clip
+    disabled_clips_changed = Signal(list)  # list[str] clip IDs whose disabled state was toggled
 
     _MIN_COLUMNS = 2
 
@@ -910,6 +935,7 @@ class ClipBrowser(QWidget):
         self._virtual_rows_dirty = True
         self._virtual_rows_columns = 0
         self._virtual_widget_cache: OrderedDict[str, ClipThumbnail] = OrderedDict()
+        self._rebuild_pending: bool = False
 
         # Shared filter state — all filter values live here. Proxy properties
         # on this class (e.g., `_current_filter`, `_gaze_filter`) read/write
@@ -1152,6 +1178,10 @@ class ClipBrowser(QWidget):
         """Return the number of live card widgets currently realized."""
         return len(self.thumbnails)
 
+    def is_clip_realized(self, clip_id: str) -> bool:
+        """Whether a clip currently has a live card widget realized in the grid."""
+        return clip_id in self._thumbnail_by_id
+
     def set_virtual_clips(self, clip_source_pairs: list[tuple[Clip, Source]]) -> None:
         """Load clips in data-backed mode and realize only visible widgets."""
         self.clear()
@@ -1174,22 +1204,40 @@ class ClipBrowser(QWidget):
         self._rebuild_grid()
 
     def _clear_realized_virtual_widgets(self) -> None:
-        """Remove currently realized virtual widgets from the grid."""
+        """Remove currently realized virtual widgets from the grid.
+
+        Reuses cached `ClipThumbnail` widgets via `_virtual_widget_cache`, and
+        also reuses `SourceGroupHeader` widgets registered in
+        `_source_headers`. Only headers whose `source_id` is no longer present
+        in the current virtual entries are torn down (handled below).
+        """
         while self.grid.count():
             item = self.grid.takeAt(0)
             widget = item.widget()
             if widget is None:
                 continue
             widget.setVisible(False)
-            if isinstance(widget, ClipThumbnail):
+            if isinstance(widget, (ClipThumbnail, SourceGroupHeader)):
                 continue
             if widget is not self.empty_label:
                 widget.deleteLater()
 
+        # Drop any header whose source_id is no longer represented in the
+        # virtual entries; reuse the rest on the next rebuild.
+        if self._source_headers:
+            current_source_ids = {source.id for _clip, source in self._virtual_entries}
+            stale_ids = [
+                sid for sid in self._source_headers
+                if sid not in current_source_ids
+            ]
+            for sid in stale_ids:
+                header = self._source_headers.pop(sid)
+                header.deleteLater()
+                self._group_expanded_state.pop(sid, None)
+
         self._empty_label_in_grid = False
         self.thumbnails = []
         self._thumbnail_by_id = {}
-        self._source_headers = {}
         self._virtual_top_spacer = None
         self._virtual_bottom_spacer = None
         self._virtual_render_range = None
@@ -1220,12 +1268,18 @@ class ClipBrowser(QWidget):
             self._virtual_widget_cache.move_to_end(clip.id)
             thumb.set_drag_enabled(self._drag_enabled)
 
-        while len(self._virtual_widget_cache) > VIRTUAL_WIDGET_CACHE_LIMIT:
-            evict_id, evict_thumb = self._virtual_widget_cache.popitem(last=False)
-            if evict_thumb.isVisible():
-                self._virtual_widget_cache[evict_id] = evict_thumb
-                break
-            evict_thumb.deleteLater()
+        # Walk oldest-to-newest and evict the first non-visible entry. If
+        # every cached widget is currently visible, accept that the cache is
+        # briefly over-limit rather than looping forever.
+        if len(self._virtual_widget_cache) > VIRTUAL_WIDGET_CACHE_LIMIT:
+            evict_target_id: str | None = None
+            for cached_id, cached_thumb in self._virtual_widget_cache.items():
+                if not cached_thumb.isVisible():
+                    evict_target_id = cached_id
+                    break
+            if evict_target_id is not None:
+                evict_thumb = self._virtual_widget_cache.pop(evict_target_id)
+                evict_thumb.deleteLater()
 
         return thumb
 
@@ -1239,7 +1293,14 @@ class ClipBrowser(QWidget):
             self._sync_custom_query_filter_options()
             self._incremental_filter_enable(clip)
             self._update_duration_range()
-            self._rebuild_grid()
+            # Per-clip thumbnail-ready signals can call this dozens of times in
+            # quick succession; coalesce into one rebuild via the existing
+            # _rebuild_pending guard inside _rebuild_grid.
+            self._invalidate_virtual_rows()
+            self._rebuild_grid(
+                invalidate_virtual_rows=False,
+                delay_ms=VIRTUAL_SCROLL_REBUILD_DELAY_MS,
+            )
             return
 
         if clip.id in self._thumbnail_by_id:
@@ -1495,7 +1556,13 @@ class ClipBrowser(QWidget):
             thumb.set_drag_enabled(enabled)
 
     def get_selected_clips(self) -> list[Clip]:
-        """Get list of selected clips."""
+        """Get list of selected clips.
+
+        Returns only currently-visible (non-filtered-out) selected clips so the
+        result is consistent regardless of whether the browser is operating in
+        virtual or non-virtual mode (the same project crossing the
+        VIRTUALIZATION_THRESHOLD must not return different selection sets).
+        """
         if not self.selected_clips:
             return []
         if self._virtual_mode:
@@ -1504,7 +1571,11 @@ class ClipBrowser(QWidget):
                 for clip, _source in self._ordered_filtered_entries()
                 if clip.id in self.selected_clips
             ]
-        return [t.clip for t in self.thumbnails if t.clip.id in self.selected_clips]
+        return [
+            t.clip
+            for t in self.thumbnails
+            if t.clip.id in self.selected_clips and self._matches_filter(t)
+        ]
 
     def set_selection(self, clip_ids: list[str]) -> None:
         """Set the selection to the specified clip IDs.
@@ -1861,6 +1932,18 @@ class ClipBrowser(QWidget):
                 (updated_by_id.get(existing_clip.id, existing_clip), source)
                 for existing_clip, source in self._virtual_entries
             ]
+            # Replace any stale Clip references in the cached display rows so
+            # subsequent renders (when preserve_layout=True keeps the cache)
+            # don't show pre-edit data.
+            if self._virtual_display_rows:
+                for row_index, (row_type, payload) in enumerate(self._virtual_display_rows):
+                    if row_type != "clips":
+                        continue
+                    refreshed = [
+                        (updated_by_id.get(clip.id, clip), source)
+                        for clip, source in payload
+                    ]
+                    self._virtual_display_rows[row_index] = (row_type, refreshed)
 
         for clip in clips:
             thumb = self._thumbnail_by_id.get(clip.id)
@@ -2015,20 +2098,14 @@ class ClipBrowser(QWidget):
         if self._virtual_mode:
             self._rebuild_grid()
             return
-        self._sort_within_groups(key=lambda t: t.clip.start_frame)
+        self._sort_within_groups(key=lambda t: _sort_key_by_timeline(t.clip))
 
     def _sort_by_color(self):
         """Sort clips by primary hue (HSV color wheel order) within each source group."""
         if self._virtual_mode:
             self._rebuild_grid()
             return
-
-        def get_hue(thumb: ClipThumbnail) -> float:
-            if thumb.clip.dominant_colors:
-                return get_primary_hue(thumb.clip.dominant_colors)
-            return 0.0
-
-        self._sort_within_groups(key=get_hue)
+        self._sort_within_groups(key=lambda t: _sort_key_by_color(t.clip))
 
     def _sort_by_duration(self):
         """Sort clips by duration (longest first) within each source group."""
@@ -2036,7 +2113,7 @@ class ClipBrowser(QWidget):
             self._rebuild_grid()
             return
         self._sort_within_groups(
-            key=lambda t: t.clip.duration_seconds(t.source.fps),
+            key=lambda t: _sort_key_by_duration(t.clip, t.source),
             reverse=True,
         )
 
@@ -2224,17 +2301,14 @@ class ClipBrowser(QWidget):
                     reverse=True,
                 )
             elif sort_option == "Color":
-                entries.sort(
-                    key=lambda pair: get_primary_hue(pair[0].dominant_colors)
-                    if pair[0].dominant_colors else 0.0
-                )
+                entries.sort(key=lambda pair: _sort_key_by_color(pair[0]))
             elif sort_option == "Duration":
                 entries.sort(
-                    key=lambda pair: pair[0].duration_seconds(pair[1].fps),
+                    key=lambda pair: _sort_key_by_duration(pair[0], pair[1]),
                     reverse=True,
                 )
             else:
-                entries.sort(key=lambda pair: pair[0].start_frame)
+                entries.sort(key=lambda pair: _sort_key_by_timeline(pair[0]))
 
         return grouped
 
@@ -3216,9 +3290,9 @@ class ClipBrowser(QWidget):
         from ui.commands.toggle_clip_disabled import ToggleClipDisabledCommand
         main_win = self.window()
         if hasattr(main_win, 'undo_stack'):
-            pending = set(getattr(main_win, "_preserve_clip_update_layout_ids", set()))
-            pending.update(clip_ids)
-            setattr(main_win, "_preserve_clip_update_layout_ids", pending)
+            # Notify listeners (e.g. MainWindow) that these IDs are toggling so the
+            # downstream `clips_updated` handler can preserve layout for them.
+            self.disabled_clips_changed.emit(list(clip_ids))
             cmd = ToggleClipDisabledCommand(main_win.project, clip_ids)
             main_win.undo_stack.push(cmd)
         else:

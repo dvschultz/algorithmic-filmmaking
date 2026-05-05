@@ -49,6 +49,28 @@ Keep native media runtimes out of startup imports and avoid broad dynamic-librar
 5. Prevent PySceneDetect from importing its PyAV backend during `core.scene_detect` import, because Scene Ripper uses the OpenCV backend explicitly.
 6. Change `is_faster_whisper_available()` to use `importlib.util.find_spec()` so availability checks do not import `faster_whisper` or PyAV.
 
+## Note on `faster_whisper` and PyAV
+
+`faster_whisper` 1.x eagerly imports `av` at the top of `faster_whisper/audio.py`,
+and `faster_whisper/__init__.py` re-exports `decode_audio` from that module.
+That means **any** code path that does `import faster_whisper` (or
+`from faster_whisper import ...`) will load PyAV's bundled FFmpeg dylibs.
+
+Scene Ripper handles this by deferring the `from faster_whisper import WhisperModel`
+import until transcription actually runs (`ensure_faster_whisper_runtime_available()`
+inside `get_model()`), and by using `importlib.util.find_spec()` for availability
+checks. The `tests/test_transcription_runtime_imports.py` suite locks down this
+boundary: `import core.transcription` must not pull `av` into `sys.modules`.
+
+The `sys.modules.setdefault("scenedetect.backends.pyav", None)` sentinel only
+blocks PySceneDetect's pyav backend; it does **not** prevent `faster_whisper`
+(or any other library) from importing `av` directly. We deliberately do not
+install a `sys.meta_path` finder that hard-blocks `av`, because transcription
+legitimately needs PyAV at runtime. The defense is the import boundary —
+`faster_whisper` is loaded lazily only when the user runs transcription, which
+keeps PyAV out of the GUI process for the common case of users who never use
+transcription.
+
 ## Verification
 
 Use import-boundary tests to ensure startup does not load `mpv`, `av`, or `scenedetect` unnecessarily:
@@ -60,7 +82,7 @@ python -m pytest tests/test_video_player_runtime.py tests/test_transcription_run
 Useful manual check:
 
 ```bash
-python -c "import sys; import ui.video_player; import core.scene_detect; print('mpv' in sys.modules, 'av' in sys.modules)"
+python -c "import sys; import ui.video_player; import core.scene_detect; import core.transcription; print('mpv' in sys.modules, 'av' in sys.modules)"
 ```
 
 Expected output is `False False`.

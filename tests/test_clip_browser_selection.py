@@ -682,6 +682,144 @@ def test_marquee_selection_skips_disabled_and_hidden_clips(qapp, source, monkeyp
     assert selected_ids == {"c1"}
 
 
+def test_toggle_disabled_emits_disabled_clips_changed_signal(qapp, source):
+    """ClipBrowser should signal toggle intent rather than reach into MainWindow."""
+    from ui.clip_browser import ClipBrowser
+
+    browser = ClipBrowser()
+    clips = [make_test_clip("c1"), make_test_clip("c2")]
+    browser.add_clips([(clip, source) for clip in clips])
+
+    received = []
+    browser.disabled_clips_changed.connect(lambda ids: received.append(list(ids)))
+
+    # Without an undo stack the fallback path runs (no signal expected).
+    browser.toggle_disabled(["c1"])
+    assert received == []
+
+    # Wire a fake window with an undo_stack so the signal path is taken.
+    class FakeUndoStack:
+        def __init__(self):
+            self.pushed = []
+
+        def push(self, command):
+            self.pushed.append(command)
+            command.redo()
+
+    fake_window = type(
+        "FakeWindow",
+        (),
+        {
+            "undo_stack": FakeUndoStack(),
+            "project": type("FakeProject", (), {
+                "clips_by_id": {clip.id: clip for clip in clips},
+                "_dirty": False,
+                "_notify_observers": lambda *_a, **_k: None,
+                "toggle_clips_disabled": lambda self, ids: [
+                    setattr(c, "disabled", not c.disabled)
+                    or c
+                    for c in [
+                        self.clips_by_id[i] for i in ids if i in self.clips_by_id
+                    ]
+                ],
+            })(),
+        },
+    )()
+    browser.window = lambda fw=fake_window: fw  # type: ignore[assignment]
+
+    browser.toggle_disabled(["c2"])
+    assert received == [["c2"]]
+
+
+def test_get_selected_clips_filters_hidden_in_non_virtual_mode(
+    qapp, source, monkeypatch
+):
+    """Selection result must include only visible clips regardless of mode.
+
+    Previously, virtual mode returned only visible clips while non-virtual
+    returned all selected clips. The same project crossing the
+    VIRTUALIZATION_THRESHOLD must not return different selection sets.
+    """
+    from core.analysis.shots import get_display_name
+    from ui.clip_browser import ClipBrowser
+
+    close_up_label = get_display_name("close-up")
+
+    browser = ClipBrowser()
+    clips = [
+        make_test_clip("c0", shot_type="close-up"),
+        make_test_clip("c1", shot_type="wide"),
+        make_test_clip("c2", shot_type="close-up"),
+    ]
+    browser.add_clips([(clip, source) for clip in clips])
+
+    browser.set_selection(["c0", "c1", "c2"])
+
+    # No filter: all selected clips visible.
+    assert {c.id for c in browser.get_selected_clips()} == {"c0", "c1", "c2"}
+
+    # Apply a filter that hides "c1".
+    browser._filter_state.shot_type = {close_up_label}
+
+    selected_visible = {c.id for c in browser.get_selected_clips()}
+    assert "c1" not in selected_visible
+    assert selected_visible == {"c0", "c2"}
+
+
+def test_virtual_add_clip_coalesces_consecutive_rebuilds(qapp, source, monkeypatch):
+    """Per-clip add_clip in virtual mode should coalesce into a single deferred rebuild."""
+    from ui.clip_browser import ClipBrowser
+
+    browser = ClipBrowser()
+    browser.resize(700, 500)
+
+    initial = [make_test_clip(f"v{i}", source_id=source.id) for i in range(5)]
+    browser.set_virtual_clips([(clip, source) for clip in initial])
+    qapp.processEvents()
+
+    # Replace _do_rebuild_grid so we can count how many real rebuilds run.
+    actual_rebuilds = []
+    original = browser._do_rebuild_grid
+    monkeypatch.setattr(
+        browser,
+        "_do_rebuild_grid",
+        lambda: actual_rebuilds.append(True) or original(),
+    )
+
+    new_clips = [make_test_clip(f"new-{i}", source_id=source.id) for i in range(10)]
+    for clip in new_clips:
+        browser.add_clip(clip, source)
+
+    # All 10 add_clip calls should coalesce: _rebuild_pending guards subsequent calls.
+    # Only one rebuild should be scheduled before processEvents flushes the timer.
+    qapp.processEvents()
+    assert len(actual_rebuilds) <= 2, (
+        f"Expected coalesced rebuild (<=2), got {len(actual_rebuilds)}"
+    )
+
+
+def test_virtual_clear_realized_widgets_reuses_source_headers(qapp, source):
+    """SourceGroupHeader widgets should be reused across rebuilds, not torn down."""
+    from ui.clip_browser import ClipBrowser
+
+    browser = ClipBrowser()
+    browser.resize(700, 500)
+
+    clips = [make_test_clip(f"v{i}", source_id=source.id) for i in range(50)]
+    browser.set_virtual_clips([(clip, source) for clip in clips])
+    qapp.processEvents()
+
+    assert source.id in browser._source_headers
+    header_before = browser._source_headers[source.id]
+
+    # Force a rebuild — header should still be the same widget afterwards.
+    browser.refresh_layout()
+    browser._rebuild_grid()
+    qapp.processEvents()
+
+    assert browser._source_headers.get(source.id) is header_before
+
+
 def test_export_request_forwards_clicked_clip_and_source(qapp, source):
     from ui.clip_browser import ClipBrowser
 

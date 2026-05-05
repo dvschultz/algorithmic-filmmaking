@@ -674,6 +674,7 @@ class Project:
         self.active_sequence_index = min(active_sequence_index, max(0, len(self.sequences) - 1))
 
         self._dirty: bool = False
+        self._mutation_generation: int = 0
         self._observers: list[Callable[[str, Any], None]] = []
 
     # --- Sequence compatibility property ---
@@ -709,7 +710,7 @@ class Project:
             sequence: The Sequence to add
         """
         self.sequences.append(sequence)
-        self._dirty = True
+        self.mark_dirty()
         self._notify_observers("sequences_changed", self.sequences)
 
     def remove_sequence(self, index: int) -> None:
@@ -739,7 +740,7 @@ class Project:
             # Removed before active — adjust index to keep pointing at same sequence
             self.active_sequence_index -= 1
 
-        self._dirty = True
+        self.mark_dirty()
         self._notify_observers("sequences_changed", self.sequences)
         self._notify_observers("active_sequence_changed", self.active_sequence_index)
 
@@ -889,7 +890,7 @@ class Project:
         """
         self._sources.append(source)
         self._invalidate_caches()
-        self._dirty = True
+        self.mark_dirty()
         self._notify_observers("source_added", source)
 
     def remove_source(self, source_id: str) -> Optional[Source]:
@@ -912,7 +913,7 @@ class Project:
         self._clips = [c for c in self._clips if c.source_id != source_id]
         self._frames = [f for f in self._frames if f.source_id != source_id]
         self._invalidate_caches()
-        self._dirty = True
+        self.mark_dirty()
         self._notify_observers("source_removed", source)
         return source
 
@@ -944,7 +945,7 @@ class Project:
             return None
         for key, value in kwargs.items():
             setattr(source, key, value)
-        self._dirty = True
+        self.mark_dirty()
         self._notify_observers("source_updated", source)
         return source
 
@@ -956,7 +957,7 @@ class Project:
         """
         self._audio_sources.append(audio_source)
         self._invalidate_caches()
-        self._dirty = True
+        self.mark_dirty()
         self._notify_observers("audio_sources_changed", self._audio_sources)
 
     def remove_audio_source(self, audio_source_id: str) -> Optional[AudioSource]:
@@ -973,7 +974,7 @@ class Project:
             return None
         self._audio_sources.remove(audio)
         self._invalidate_caches()
-        self._dirty = True
+        self.mark_dirty()
         self._notify_observers("audio_sources_changed", self._audio_sources)
         return audio
 
@@ -989,7 +990,7 @@ class Project:
         """
         self._clips.extend(clips)
         self._invalidate_caches()
-        self._dirty = True
+        self.mark_dirty()
         self._notify_observers("clips_added", clips)
 
     def update_clips(self, clips: list[Clip]) -> None:
@@ -1001,7 +1002,7 @@ class Project:
             clips: Updated clips
         """
         # Clips are updated in-place, just notify and mark dirty
-        self._dirty = True
+        self.mark_dirty()
         self._notify_observers("clips_updated", clips)
 
     def remove_clips(self, clip_ids: list[str]) -> list[Clip]:
@@ -1018,7 +1019,7 @@ class Project:
         self._clips = [c for c in self._clips if c.id not in ids_to_remove]
         if removed:
             self._invalidate_caches()
-            self._dirty = True
+            self.mark_dirty()
             self._notify_observers("clips_removed", removed)
         return removed
 
@@ -1038,7 +1039,7 @@ class Project:
                 clip.disabled = not clip.disabled
                 toggled.append(clip)
         if toggled:
-            self._dirty = True
+            self.mark_dirty()
             self._notify_observers("clips_updated", toggled)
         return toggled
 
@@ -1057,7 +1058,7 @@ class Project:
         self._clips = [c for c in self._clips if c.source_id != source_id]
         self._clips.extend(new_clips)
         self._invalidate_caches()
-        self._dirty = True
+        self.mark_dirty()
         self._notify_observers("clips_added", new_clips)
 
     # --- Frame state operations ---
@@ -1070,7 +1071,7 @@ class Project:
         """
         self._frames.extend(frames)
         self._invalidate_caches()
-        self._dirty = True
+        self.mark_dirty()
         self._notify_observers("frames_added", frames)
 
     def remove_frames(self, frame_ids: list[str]) -> list[Frame]:
@@ -1087,7 +1088,7 @@ class Project:
         self._frames = [f for f in self._frames if f.id not in ids_to_remove]
         if removed:
             self._invalidate_caches()
-            self._dirty = True
+            self.mark_dirty()
             self._notify_observers("frames_removed", removed)
         return removed
 
@@ -1122,7 +1123,7 @@ class Project:
             return None
         for key, value in kwargs.items():
             setattr(frame, key, value)
-        self._dirty = True
+        self.mark_dirty()
         self._notify_observers("frames_updated", [frame])
         return frame
 
@@ -1160,7 +1161,7 @@ class Project:
             track.add_clip(seq_clip)
             current_frame += seq_clip.duration_frames
 
-        self._dirty = True
+        self.mark_dirty()
         self._notify_observers("sequence_changed", frame_ids)
 
     # --- Sequence operations ---
@@ -1208,7 +1209,7 @@ class Project:
             track.add_clip(seq_clip)
             current_frame += seq_clip.duration_frames
 
-        self._dirty = True
+        self.mark_dirty()
         self._notify_observers("sequence_changed", clip_ids)
 
     def remove_from_sequence(self, clip_ids: list[str]) -> list[str]:
@@ -1236,7 +1237,7 @@ class Project:
         if removed:
             # Recalculate start frames after removal
             self._recalculate_sequence_positions()
-            self._dirty = True
+            self.mark_dirty()
             self._notify_observers("sequence_changed", removed)
 
         return removed
@@ -1255,7 +1256,7 @@ class Project:
         track.clips.clear()
 
         if count > 0:
-            self._dirty = True
+            self.mark_dirty()
             self._notify_observers("sequence_changed", [])
 
         return count
@@ -1295,7 +1296,7 @@ class Project:
         track.clips = reordered
         self._recalculate_sequence_positions()
 
-        self._dirty = True
+        self.mark_dirty()
         self._notify_observers("sequence_changed", clip_ids)
         return True
 
@@ -1317,8 +1318,14 @@ class Project:
         """Check if project has unsaved changes."""
         return self._dirty
 
+    @property
+    def mutation_generation(self) -> int:
+        """Monotonic counter incremented for every project mutation."""
+        return self._mutation_generation
+
     def mark_dirty(self) -> None:
         """Mark project as having unsaved changes."""
+        self._mutation_generation += 1
         self._dirty = True
 
     def mark_clean(self) -> None:
@@ -1326,6 +1333,36 @@ class Project:
         self._dirty = False
 
     # --- Persistence ---
+
+    def snapshot_for_save(self) -> dict:
+        """Return a deep-copied snapshot of all save-relevant project state.
+
+        Used by `SaveProjectWorker` so the background thread serializes a
+        stable view of the project even if the main thread mutates the live
+        project mid-save. The snapshot returns the same kwargs `save_project()`
+        already accepts plus the `extra_data` payload `Project.save()` builds.
+        """
+        import copy
+
+        non_active = [
+            s for i, s in enumerate(self.sequences)
+            if i != self.active_sequence_index and s
+        ]
+        extra_data = {
+            "_all_sequences": list(self.sequences),
+            "active_sequence_index": self.active_sequence_index,
+            "_additional_sequences": non_active,
+        }
+        return {
+            "sources": copy.deepcopy(self._sources),
+            "clips": copy.deepcopy(self._clips),
+            "sequence": copy.deepcopy(self.sequence),
+            "ui_state": copy.deepcopy(self.ui_state),
+            "metadata": copy.deepcopy(self.metadata),
+            "frames": copy.deepcopy(self._frames),
+            "extra_data": copy.deepcopy(extra_data),
+            "audio_sources": copy.deepcopy(self._audio_sources),
+        }
 
     def save(
         self,
