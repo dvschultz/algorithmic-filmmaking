@@ -552,6 +552,10 @@ class IntentionWorkflowCoordinator(QObject):
             return self._sources_to_process[self._current_source_index]["path"]
         return None
 
+    def get_download_urls(self) -> list[str]:
+        """Get URL inputs queued for the download phase."""
+        return list(self._urls)
+
     def get_all_clips(self) -> list:
         """Get all clips created during the workflow."""
         return self._all_clips

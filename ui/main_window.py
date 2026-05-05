@@ -8488,7 +8488,7 @@ class MainWindow(QMainWindow):
         # Start the work for the step that just started
         if self.intention_workflow:
             if step_name == "downloading":
-                self._start_intention_downloads()
+                self._start_intention_downloads(self.intention_workflow.get_download_urls())
             elif step_name == "detecting":
                 self._start_intention_detection()
             elif step_name == "thumbnails":
