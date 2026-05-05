@@ -1091,7 +1091,7 @@ class ClipBrowser(QWidget):
     def _on_scroll_changed(self, _value: int) -> None:
         """Refresh realized cards as the virtual browser scrolls."""
         if self._virtual_mode and not getattr(self, "_rebuild_pending", False):
-            if self._virtual_display_rows:
+            if self._virtual_display_rows and not self._virtual_rows_dirty:
                 first_row, last_row = self._current_virtual_render_range(
                     len(self._virtual_display_rows)
                 )
@@ -1531,6 +1531,35 @@ class ClipBrowser(QWidget):
             if thumb.isVisible() and not thumb.disabled
         })
 
+    def select_source(self, source_id: str, visible_only: bool = True) -> None:
+        """Select enabled clips from one source.
+
+        Args:
+            source_id: Source ID whose clips should become selected.
+            visible_only: When True, only clips matching active filters are selected.
+        """
+        if self._virtual_mode:
+            grouped = self._ordered_grouped_entries()
+            entries = grouped.get(source_id, [])
+            selected_ids = {
+                clip.id
+                for clip, source in entries
+                if source.id == source_id
+                and not clip.disabled
+                and (not visible_only or self._matches_entry(clip, source))
+            }
+        else:
+            selected_ids = {
+                thumb.clip.id
+                for thumb in self.thumbnails
+                if thumb.source.id == source_id
+                and not thumb.disabled
+                and (not visible_only or self._matches_filter(thumb))
+            }
+
+        self._set_selected_ids(selected_ids)
+        self._refresh_source_header_counts()
+
     def clear_selection(self) -> None:
         """Clear all selections."""
         self._set_selected_ids(set())
@@ -1563,6 +1592,53 @@ class ClipBrowser(QWidget):
                 if thumb.clip.id in self.selected_clips
             ]
         self.selection_changed.emit(selected_ids)
+
+    def _refresh_source_header_counts(self) -> None:
+        """Refresh visible source header counts without rebuilding the grid."""
+        if not self._source_headers:
+            return
+
+        if self._virtual_mode:
+            grouped = self._ordered_grouped_entries()
+            for source_id, header in self._source_headers.items():
+                entries = grouped.get(source_id, [])
+                total_count = len(entries)
+                visible_count = sum(
+                    1 for clip, source in entries if self._matches_entry(clip, source)
+                )
+                selected_count = sum(
+                    1 for clip, _source in entries if clip.id in self.selected_clips
+                )
+                header.set_clip_counts(total_count, visible_count, selected_count)
+            return
+
+        thumbs_by_source: dict[str, list[ClipThumbnail]] = {}
+        for thumb in self.thumbnails:
+            thumbs_by_source.setdefault(thumb.source.id, []).append(thumb)
+
+        for source_id, header in self._source_headers.items():
+            source_thumbs = thumbs_by_source.get(source_id, [])
+            total_count = len(source_thumbs)
+            visible_count = sum(1 for thumb in source_thumbs if self._matches_filter(thumb))
+            selected_count = sum(
+                1 for thumb in source_thumbs if thumb.clip.id in self.selected_clips
+            )
+            header.set_clip_counts(total_count, visible_count, selected_count)
+
+    def _selected_count_for_source(self, source_id: str) -> int:
+        """Return selected clip count for a source without depending on row cache."""
+        if self._virtual_mode:
+            return sum(
+                1
+                for clip, source in self._virtual_entries
+                if source.id == source_id and clip.id in self.selected_clips
+            )
+
+        return sum(
+            1
+            for thumb in self.thumbnails
+            if thumb.source.id == source_id and thumb.clip.id in self.selected_clips
+        )
 
     def _on_container_mouse_press(self, event) -> None:
         """Begin tracking an empty-space click or marquee drag."""
@@ -1721,12 +1797,18 @@ class ClipBrowser(QWidget):
         if thumb:
             thumb.set_custom_queries(custom_queries)
             selection_changed = self._sync_custom_query_filter_options()
-            self._rebuild_grid()
+            if selection_changed or self._clip_updates_require_rebuild():
+                self._rebuild_grid()
+            else:
+                self._refresh_source_header_counts()
             if selection_changed:
                 self.filters_changed.emit()
         elif self._virtual_mode and clip_id in self._source_lookup:
             selection_changed = self._sync_custom_query_filter_options()
-            self._rebuild_grid()
+            if selection_changed or self._clip_updates_require_rebuild():
+                self._rebuild_grid()
+            else:
+                self._refresh_source_header_counts()
             if selection_changed:
                 self.filters_changed.emit()
 
@@ -1742,10 +1824,16 @@ class ClipBrowser(QWidget):
         if thumb:
             thumb.set_gaze(category)
             self._update_filter_availability()
-            self._rebuild_grid()
+            if self._clip_updates_require_rebuild():
+                self._rebuild_grid()
+            else:
+                self._refresh_source_header_counts()
         elif self._virtual_mode and clip_id in self._source_lookup:
             self._update_filter_availability()
-            self._rebuild_grid()
+            if self._clip_updates_require_rebuild():
+                self._rebuild_grid()
+            else:
+                self._refresh_source_header_counts()
 
     def update_clip_thumbnail(self, clip_id: str, thumb_path: Path):
         """Update the thumbnail image for a specific clip (O(1) lookup)."""
@@ -1760,11 +1848,12 @@ class ClipBrowser(QWidget):
                 len(self._thumbnail_by_id),
             )
 
-    def update_clips(self, clips: list[Clip]):
+    def update_clips(self, clips: list[Clip], preserve_layout: bool = False):
         """Update thumbnails for the given clips (called when clips are edited).
 
         Args:
             clips: List of clips that were updated
+            preserve_layout: When True, refresh realized cards without rebuilding rows.
         """
         updated_by_id = {clip.id: clip for clip in clips}
         if self._virtual_mode and updated_by_id:
@@ -1785,9 +1874,23 @@ class ClipBrowser(QWidget):
                 thumb._update_style()  # Refresh disabled visual state
 
         selection_changed = self._sync_custom_query_filter_options()
-        self._rebuild_grid()
+        can_preserve_layout = (
+            preserve_layout and self._filter_state.enabled_filter is None
+        )
+        if can_preserve_layout or not self._clip_updates_require_rebuild():
+            self._refresh_source_header_counts()
+        else:
+            self._rebuild_grid()
         if selection_changed:
             self.filters_changed.emit()
+
+    def _clip_updates_require_rebuild(self) -> bool:
+        """Whether generic clip data updates can affect current layout/filtering."""
+        if self.has_active_filters():
+            return True
+        if hasattr(self, "sort_combo") and self.sort_combo.currentText() != "Timeline":
+            return True
+        return False
 
     def _available_custom_query_names(self) -> list[str]:
         """Return sorted custom query names present across all clips."""
@@ -2247,7 +2350,8 @@ class ClipBrowser(QWidget):
 
             for row_type, payload in rows[first_row:last_row]:
                 if row_type == "header":
-                    source_id, source, total_count, visible_count, selected_count = payload
+                    source_id, source, total_count, visible_count, _selected_count = payload
+                    selected_count = self._selected_count_for_source(source_id)
                     header = self._get_or_create_header(source_id, source.filename, total_count)
                     header.set_clip_counts(total_count, visible_count, selected_count)
                     header.set_expanded(self._group_expanded_state.get(source_id, True))
@@ -2286,6 +2390,7 @@ class ClipBrowser(QWidget):
         if source_id not in self._source_headers:
             header = SourceGroupHeader(source_id, filename, clip_count)
             header.toggled.connect(self._on_header_toggled)
+            header.select_requested.connect(self._on_header_select_requested)
             self._source_headers[source_id] = header
         return self._source_headers[source_id]
 
@@ -2293,6 +2398,10 @@ class ClipBrowser(QWidget):
         """Handle source group header toggle."""
         self._group_expanded_state[source_id] = is_expanded
         self._rebuild_grid()
+
+    def _on_header_select_requested(self, source_id: str):
+        """Handle request to select visible clips from a source group."""
+        self.select_source(source_id, visible_only=True)
 
     def expand_all_groups(self):
         """Expand all source groups."""
@@ -3107,6 +3216,9 @@ class ClipBrowser(QWidget):
         from ui.commands.toggle_clip_disabled import ToggleClipDisabledCommand
         main_win = self.window()
         if hasattr(main_win, 'undo_stack'):
+            pending = set(getattr(main_win, "_preserve_clip_update_layout_ids", set()))
+            pending.update(clip_ids)
+            setattr(main_win, "_preserve_clip_update_layout_ids", pending)
             cmd = ToggleClipDisabledCommand(main_win.project, clip_ids)
             main_win.undo_stack.push(cmd)
         else:
@@ -3122,8 +3234,10 @@ class ClipBrowser(QWidget):
         self.selected_clips.difference_update(becoming_disabled)
         for thumb in self.thumbnails:
             thumb.set_selected(thumb.clip.id in self.selected_clips)
-        if self._virtual_mode:
+        if self._filter_state.enabled_filter is not None:
             self._rebuild_grid()
+        else:
+            self._refresh_source_header_counts()
 
         if self.selected_clips != selection_before:
             self._emit_selection_changed()

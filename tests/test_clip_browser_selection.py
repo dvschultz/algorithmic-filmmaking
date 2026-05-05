@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QRect
+from PySide6.QtCore import Qt, QRect
 from PySide6.QtTest import QTest
 
 from models.clip import Source
@@ -59,6 +59,165 @@ def test_select_all_excludes_disabled_clips(qapp, source, monkeypatch):
 
     selected_ids = {clip.id for clip in browser.get_selected_clips()}
     assert selected_ids == {"c2", "c4"}
+
+
+def test_select_source_replaces_selection_with_enabled_source_clips(qapp, source):
+    from ui.clip_browser import ClipBrowser
+
+    other_source = Source(
+        id="src-2",
+        file_path=Path("/test/other.mp4"),
+        duration_seconds=10.0,
+        fps=30.0,
+        width=1280,
+        height=720,
+    )
+    browser = ClipBrowser()
+    clips = [
+        make_test_clip("s1-a", source_id=source.id),
+        make_test_clip("s1-b", source_id=source.id),
+        make_test_clip("s2-a", source_id=other_source.id),
+        make_test_clip("s2-b", source_id=other_source.id),
+    ]
+    clips[3].disabled = True
+
+    browser.add_clips(
+        [(clips[0], source), (clips[1], source)]
+        + [(clips[2], other_source), (clips[3], other_source)]
+    )
+    browser.set_selection(["s1-a"])
+
+    browser.select_source(other_source.id)
+
+    selected_ids = {clip.id for clip in browser.get_selected_clips()}
+    assert selected_ids == {"s2-a"}
+
+
+def test_select_source_respects_active_filters(qapp, source):
+    from ui.clip_browser import ClipBrowser
+
+    browser = ClipBrowser()
+    clips = [
+        make_test_clip("wide", source_id=source.id, shot_type="wide shot"),
+        make_test_clip("close", source_id=source.id, shot_type="close-up"),
+    ]
+    browser.add_clips([(clip, source) for clip in clips])
+    browser._filter_state.shot_type = {"Close-up"}
+
+    browser.select_source(source.id)
+
+    selected_ids = {clip.id for clip in browser.get_selected_clips()}
+    assert selected_ids == {"close"}
+
+
+def test_source_header_select_button_selects_that_source(qapp, source):
+    from ui.clip_browser import ClipBrowser
+
+    browser = ClipBrowser()
+    clips = [make_test_clip("c1"), make_test_clip("c2")]
+    browser.add_clips([(clip, source) for clip in clips])
+    qapp.processEvents()
+
+    header = browser._source_headers[source.id]
+    QTest.mouseClick(header.select_button, Qt.LeftButton)
+
+    selected_ids = {clip.id for clip in browser.get_selected_clips()}
+    assert selected_ids == {"c1", "c2"}
+    assert header.is_expanded is True
+
+
+def test_select_source_updates_header_without_rebuilding_grid(qapp, source, monkeypatch):
+    from ui.clip_browser import ClipBrowser
+
+    browser = ClipBrowser()
+    clips = [make_test_clip("c1"), make_test_clip("c2")]
+    browser.add_clips([(clip, source) for clip in clips])
+    qapp.processEvents()
+
+    rebuilds = []
+    monkeypatch.setattr(browser, "_rebuild_grid", lambda *a, **k: rebuilds.append(True))
+
+    browser.select_source(source.id)
+
+    assert rebuilds == []
+    assert browser._source_headers[source.id].count_label.text() == "(2 clips • 2 selected)"
+
+
+def test_virtual_select_source_uses_all_filtered_source_data(qapp, source):
+    from ui.clip_browser import ClipBrowser
+
+    other_source = Source(
+        id="src-2",
+        file_path=Path("/test/other.mp4"),
+        duration_seconds=10.0,
+        fps=30.0,
+        width=1280,
+        height=720,
+    )
+    browser = ClipBrowser()
+    clips = [make_test_clip(f"s1-{i}", source_id=source.id) for i in range(40)]
+    other_clips = [
+        make_test_clip(f"s2-{i}", source_id=other_source.id) for i in range(40)
+    ]
+    other_clips[5].disabled = True
+
+    browser.set_virtual_clips(
+        [(clip, source) for clip in clips]
+        + [(clip, other_source) for clip in other_clips]
+    )
+    qapp.processEvents()
+
+    browser.select_source(other_source.id)
+
+    selected_ids = {clip.id for clip in browser.get_selected_clips()}
+    assert selected_ids == {clip.id for clip in other_clips if not clip.disabled}
+
+
+def test_virtual_select_source_does_not_invalidate_rows_or_rebuild(
+    qapp, source, monkeypatch
+):
+    from ui.clip_browser import ClipBrowser
+
+    browser = ClipBrowser()
+    browser.resize(700, 500)
+    clips = [make_test_clip(f"v{i}", source_id=source.id) for i in range(40)]
+
+    browser.set_virtual_clips([(clip, source) for clip in clips])
+    qapp.processEvents()
+    browser._get_virtual_rows()
+    browser._virtual_rows_dirty = False
+
+    rebuilds = []
+    invalidations = []
+    monkeypatch.setattr(browser, "_rebuild_grid", lambda *a, **k: rebuilds.append(True))
+    monkeypatch.setattr(
+        browser, "_invalidate_virtual_rows", lambda: invalidations.append(True)
+    )
+
+    browser.select_source(source.id)
+
+    assert rebuilds == []
+    assert invalidations == []
+    assert browser._virtual_rows_dirty is False
+
+
+def test_virtual_header_selection_count_is_live_with_cached_rows(qapp, source):
+    from ui.clip_browser import ClipBrowser
+
+    browser = ClipBrowser()
+    browser.resize(700, 500)
+    clips = [make_test_clip(f"v{i}", source_id=source.id) for i in range(8)]
+
+    browser.set_virtual_clips([(clip, source) for clip in clips])
+    qapp.processEvents()
+    rows = browser._get_virtual_rows()
+    header_row = next(payload for row_type, payload in rows if row_type == "header")
+    assert header_row[-1] == 0
+
+    browser.select_source(source.id)
+    browser._do_rebuild_virtual_grid()
+
+    assert browser._source_headers[source.id].count_label.text() == "(8 clips • 8 selected)"
 
 
 def test_add_clips_bulk_populates_lookup_once(qapp, source, monkeypatch):
@@ -285,6 +444,156 @@ def test_toggle_disabled_does_not_select_first_clip(qapp, source):
 
     assert browser.get_selected_clips() == []
     assert "c1" not in browser.selected_clips
+
+
+def test_virtual_toggle_disabled_updates_in_place_without_rebuild(
+    qapp, source, monkeypatch
+):
+    from ui.clip_browser import ClipBrowser
+
+    browser = ClipBrowser()
+    browser.resize(700, 500)
+    clips = [make_test_clip(f"v{i}", source_id=source.id) for i in range(40)]
+
+    browser.set_virtual_clips([(clip, source) for clip in clips])
+    qapp.processEvents()
+    browser._get_virtual_rows()
+    browser._virtual_rows_dirty = False
+    browser.set_selection(["v3"])
+
+    rebuilds = []
+    invalidations = []
+    monkeypatch.setattr(browser, "_rebuild_grid", lambda *a, **k: rebuilds.append(True))
+    monkeypatch.setattr(
+        browser, "_invalidate_virtual_rows", lambda: invalidations.append(True)
+    )
+
+    browser.toggle_disabled(["v3"])
+
+    assert clips[3].disabled is True
+    assert "v3" not in browser.selected_clips
+    assert rebuilds == []
+    assert invalidations == []
+    assert browser._virtual_rows_dirty is False
+
+
+def test_toggle_disabled_rebuilds_when_enabled_filter_changes_visibility(
+    qapp, source, monkeypatch
+):
+    from ui.clip_browser import ClipBrowser
+
+    browser = ClipBrowser()
+    clips = [make_test_clip("c1"), make_test_clip("c2")]
+    browser.add_clips([(clip, source) for clip in clips])
+    browser._filter_state.enabled_filter = True
+
+    rebuilds = []
+    monkeypatch.setattr(browser, "_rebuild_grid", lambda *a, **k: rebuilds.append(True))
+
+    browser.toggle_disabled(["c1"])
+
+    assert rebuilds == [True]
+
+
+def test_update_clips_can_preserve_virtual_layout(qapp, source, monkeypatch):
+    from ui.clip_browser import ClipBrowser
+
+    browser = ClipBrowser()
+    browser.resize(700, 500)
+    clips = [make_test_clip(f"v{i}", source_id=source.id) for i in range(20)]
+
+    browser.set_virtual_clips([(clip, source) for clip in clips])
+    qapp.processEvents()
+    browser._get_virtual_rows()
+    browser._virtual_rows_dirty = False
+    clips[2].disabled = True
+
+    rebuilds = []
+    invalidations = []
+    monkeypatch.setattr(browser, "_rebuild_grid", lambda *a, **k: rebuilds.append(True))
+    monkeypatch.setattr(
+        browser, "_invalidate_virtual_rows", lambda: invalidations.append(True)
+    )
+
+    browser.update_clips([clips[2]], preserve_layout=True)
+
+    assert rebuilds == []
+    assert invalidations == []
+    assert browser._virtual_rows_dirty is False
+
+
+def test_update_clips_rebuilds_with_preserve_layout_when_enabled_filter_active(
+    qapp, source, monkeypatch
+):
+    from ui.clip_browser import ClipBrowser
+
+    browser = ClipBrowser()
+    clips = [make_test_clip("c1", source_id=source.id)]
+    browser.add_clips([(clips[0], source)])
+    browser._filter_state.enabled_filter = True
+    clips[0].disabled = True
+
+    rebuilds = []
+    monkeypatch.setattr(browser, "_rebuild_grid", lambda *a, **k: rebuilds.append(True))
+
+    browser.update_clips([clips[0]], preserve_layout=True)
+
+    assert rebuilds == [True]
+
+
+def test_update_clip_gaze_updates_card_without_rebuild_when_unfiltered(
+    qapp, source, monkeypatch
+):
+    from ui.clip_browser import ClipBrowser
+
+    browser = ClipBrowser()
+    clip = make_test_clip("c1", source_id=source.id)
+    browser.add_clips([(clip, source)])
+
+    rebuilds = []
+    monkeypatch.setattr(browser, "_rebuild_grid", lambda *a, **k: rebuilds.append(True))
+
+    browser.update_clip_gaze("c1", "looking_left")
+
+    assert rebuilds == []
+    assert browser._thumbnail_by_id["c1"].clip.gaze_category == "looking_left"
+
+
+def test_update_clip_gaze_rebuilds_when_gaze_filter_active(qapp, source, monkeypatch):
+    from ui.clip_browser import ClipBrowser
+
+    browser = ClipBrowser()
+    clip = make_test_clip("c1", source_id=source.id)
+    browser.add_clips([(clip, source)])
+    browser._filter_state.gaze_filter = "looking_left"
+
+    rebuilds = []
+    monkeypatch.setattr(browser, "_rebuild_grid", lambda *a, **k: rebuilds.append(True))
+
+    browser.update_clip_gaze("c1", "looking_left")
+
+    assert rebuilds == [True]
+
+
+def test_update_clip_custom_queries_updates_badge_without_rebuild_when_unfiltered(
+    qapp, source, monkeypatch
+):
+    from ui.clip_browser import ClipBrowser
+
+    browser = ClipBrowser()
+    clip = make_test_clip("c1", source_id=source.id)
+    browser.add_clips([(clip, source)])
+
+    rebuilds = []
+    monkeypatch.setattr(browser, "_rebuild_grid", lambda *a, **k: rebuilds.append(True))
+
+    browser.update_clip_custom_queries(
+        "c1",
+        [{"query": "contains a face", "match": True, "confidence": 0.9}],
+    )
+
+    assert rebuilds == []
+    assert browser._thumbnail_by_id["c1"].clip.custom_queries[0]["query"] == "contains a face"
 
 
 def test_marquee_selection_replaces_previous_selection(qapp, source, monkeypatch):

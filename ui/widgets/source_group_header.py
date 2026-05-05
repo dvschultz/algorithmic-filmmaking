@@ -1,6 +1,6 @@
 """Collapsible source group header for ClipBrowser."""
 
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QToolButton
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QKeyEvent
 
@@ -15,9 +15,11 @@ class SourceGroupHeader(QFrame):
 
     Signals:
         toggled: Emitted with (source_id, is_expanded) when header is clicked
+        select_requested: Emitted with source_id when the select button is clicked
     """
 
     toggled = Signal(str, bool)  # (source_id, is_expanded)
+    select_requested = Signal(str)  # source_id
 
     def __init__(
         self,
@@ -85,6 +87,14 @@ class SourceGroupHeader(QFrame):
         self._update_count_label()
         layout.addWidget(self.count_label)
 
+        self.select_button = QToolButton()
+        self.select_button.setText("Select")
+        self.select_button.setToolTip("Select visible clips from this source")
+        self.select_button.setAccessibleName(f"Select clips from {self._filename}")
+        self.select_button.setCursor(Qt.PointingHandCursor)
+        self.select_button.clicked.connect(self._on_select_clicked)
+        layout.addWidget(self.select_button)
+
     def _update_chevron(self):
         """Update chevron icon based on expanded state."""
         icon = "▼" if self._is_expanded else "▶"
@@ -94,16 +104,15 @@ class SourceGroupHeader(QFrame):
         """Update the clip count label text."""
         if self._visible_clip_count == self._total_clip_count:
             # No filter active - show total
-            count_text = f"({self._total_clip_count} clips)"
+            count_text = f"{self._total_clip_count} clips"
         else:
             # Filter active - show "X of Y"
-            count_text = f"({self._visible_clip_count} of {self._total_clip_count})"
+            count_text = f"{self._visible_clip_count} of {self._total_clip_count}"
 
-        # Add selection indicator if collapsed and has selections
-        if not self._is_expanded and self._selected_count > 0:
-            count_text = f"({self._total_clip_count} clips \u2022 {self._selected_count} selected)"
+        if self._selected_count > 0:
+            count_text = f"{count_text} \u2022 {self._selected_count} selected"
 
-        self.count_label.setText(count_text)
+        self.count_label.setText(f"({count_text})")
 
     def _update_style(self):
         """Update visual style based on state."""
@@ -125,6 +134,19 @@ class SourceGroupHeader(QFrame):
         self.count_label.setStyleSheet(
             f"font-size: 11px; color: {theme().text_muted};"
         )
+        self.select_button.setStyleSheet(f"""
+            QToolButton {{
+                color: {theme().text_primary};
+                background-color: {theme().background_secondary};
+                border: 1px solid {theme().border_secondary};
+                border-radius: 3px;
+                padding: 2px 8px;
+            }}
+            QToolButton:hover {{
+                background-color: {theme().card_hover};
+                border-color: {theme().border_focus};
+            }}
+        """)
 
     @property
     def is_expanded(self) -> bool:
@@ -144,6 +166,10 @@ class SourceGroupHeader(QFrame):
         self._update_chevron()
         self._update_count_label()
         self.toggled.emit(self.source_id, self._is_expanded)
+
+    def _on_select_clicked(self):
+        """Request selection of clips from this source."""
+        self.select_requested.emit(self.source_id)
 
     def set_clip_counts(
         self,

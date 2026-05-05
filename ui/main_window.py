@@ -1847,11 +1847,24 @@ class MainWindow(QMainWindow):
         Args:
             clips: List of updated clips
         """
+        updated_ids = {clip.id for clip in clips}
+        preserve_ids = set(getattr(self, "_preserve_clip_update_layout_ids", set()))
+        preserve_layout = bool(updated_ids and updated_ids.issubset(preserve_ids))
+        if preserve_layout:
+            remaining = preserve_ids - updated_ids
+            if remaining:
+                self._preserve_clip_update_layout_ids = remaining
+            elif hasattr(self, "_preserve_clip_update_layout_ids"):
+                delattr(self, "_preserve_clip_update_layout_ids")
+
         # Update clip browsers in both tabs
         if hasattr(self, 'cut_tab') and hasattr(self.cut_tab, 'clip_browser'):
-            self.cut_tab.clip_browser.update_clips(clips)
+            self.cut_tab.clip_browser.update_clips(clips, preserve_layout=preserve_layout)
         if hasattr(self, 'analyze_tab') and hasattr(self.analyze_tab, 'clip_browser'):
-            self.analyze_tab.clip_browser.update_clips(clips)
+            self.analyze_tab.clip_browser.update_clips(
+                clips,
+                preserve_layout=preserve_layout,
+            )
             self._auto_include_analyzed_clips(clips)
 
     def _auto_include_analyzed_clips(self, clips: list) -> None:
