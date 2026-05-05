@@ -273,6 +273,14 @@ class TestSceneDetectorGrayscaleIntegration:
         assert _frame_num_to_int(FakeFrameTimecode()) == 42
         assert _frame_num_to_int(42) == 42
 
+    def test_scene_detect_fps_normalized_to_float(self):
+        """PySceneDetect may expose rational frame rates; project models store floats."""
+        from fractions import Fraction
+
+        from core.scene_detect import _fps_to_float
+
+        assert _fps_to_float(Fraction(30000, 1001)) == 30000 / 1001
+
     def test_grayscale_video_sets_luma_only(self, tmp_path):
         """SceneDetector should auto-detect grayscale and use luma-only detection."""
         from core.scene_detect import SceneDetector, DetectionConfig

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-05-05T00:37:28.242520+00:00",
+  "updated_at": "2026-05-05T01:06:05.999748+00:00",
   "patterns": [
     {
       "signature": "unknown-component|unknown-cause|linux-pyside6-distribution-packaging",
@@ -131,6 +131,21 @@
       ],
       "symptom_examples": [
         "macOS native updater metadata missing falls back to browser checks"
+      ],
+      "playbook_skill": null
+    },
+    {
+      "signature": "cut_tab|thumbnail_ready_required_for_clip_card|ffmpeg-rational-ss",
+      "title": "Cut tab hides new clips when thumbnail generation fails with rational FFmpeg seek time",
+      "problem_type": "runtime_error",
+      "occurrences": 1,
+      "first_seen": "2026-05-05T01:06:05.999651+00:00",
+      "last_seen": "2026-05-05T01:06:05.999733+00:00",
+      "solution_refs": [
+        "docs/solutions/ui-bugs/cut-tab-clips-hidden-after-thumbnail-failure.md"
+      ],
+      "symptom_examples": [
+        "Cut tab hides new clips when thumbnail generation fails with rational FFmpeg seek time"
       ],
       "playbook_skill": null
     }

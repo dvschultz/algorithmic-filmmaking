@@ -24,6 +24,11 @@ def _frame_num_to_int(frame_num) -> int:
     return int(frame_num)
 
 
+def _fps_to_float(fps) -> float:
+    """Normalize PySceneDetect/OpenCV frame rates to plain floats."""
+    return float(fps)
+
+
 @dataclass
 class DetectionConfig:
     """Configuration for scene detection."""
@@ -384,7 +389,7 @@ class SceneDetector:
         source = Source(
             file_path=video_path,
             duration_seconds=video.duration.get_seconds(),
-            fps=video.frame_rate,
+            fps=_fps_to_float(video.frame_rate),
             width=video.frame_size[0],
             height=video.frame_size[1],
         )
@@ -464,7 +469,7 @@ class SceneDetector:
         source = Source(
             file_path=video_path,
             duration_seconds=video.duration.get_seconds(),
-            fps=video.frame_rate,
+            fps=_fps_to_float(video.frame_rate),
             width=video.frame_size[0],
             height=video.frame_size[1],
         )

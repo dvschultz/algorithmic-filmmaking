@@ -5495,6 +5495,7 @@ class MainWindow(QMainWindow):
 
         # Remove old clips for this source from the Cut tab UI (handles re-analysis case)
         self.cut_tab.remove_clips_for_source(self.current_source.id)
+        self.cut_tab.add_clips([(clip, self.current_source) for clip in clips])
 
         # Remove orphaned clips from Analyze tab (clips that no longer exist)
         valid_clip_ids = set(self.clips_by_id.keys())
@@ -5508,7 +5509,10 @@ class MainWindow(QMainWindow):
         self._stop_worker_safely(self.thumbnail_worker, "thumbnail")
         logger.info("Creating ThumbnailWorker...")
         self.thumbnail_worker = ThumbnailWorker(
-            source, clips, cache_dir=self.settings.thumbnail_cache_dir
+            self.current_source,
+            clips,
+            cache_dir=self.settings.thumbnail_cache_dir,
+            sources_by_id=self.sources_by_id,
         )
         self.thumbnail_worker.progress.connect(self._on_thumbnail_progress)
         self.thumbnail_worker.thumbnail_ready.connect(self._on_thumbnail_ready)
@@ -5550,12 +5554,15 @@ class MainWindow(QMainWindow):
         logger.info(f"_on_thumbnail_ready called: clip_id={clip_id}, thumb_path={thumb_path}")
         clip = self.clips_by_id.get(clip_id)
         if clip:
+            thumb_path_obj = Path(thumb_path)
+            clip.thumbnail_path = thumb_path_obj
             # Look up the clip's actual source, not current_source which may have changed
             clip_source = self.sources_by_id.get(clip.source_id)
             if clip_source:
                 logger.info(f"Found clip {clip_id}, source={clip_source.id}, adding to cut_tab")
                 # Add to Cut tab (primary clip browser for detection)
                 self.cut_tab.add_clip(clip, clip_source)
+                self.cut_tab.update_clip_thumbnail(clip_id, thumb_path_obj)
             else:
                 logger.warning(f"Source not found for clip {clip_id}: source_id={clip.source_id}")
         else:

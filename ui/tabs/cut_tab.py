@@ -278,6 +278,19 @@ class CutTab(BaseTab):
             self._clips.append(clip)
             self.clip_count_label.setText(f"{len(self._clips)} clips")
 
+    def add_clips(self, clip_source_pairs: list[tuple[object, object]]):
+        """Add multiple clips to the browser in one batch."""
+        if not clip_source_pairs:
+            return
+        if self.state_stack.currentIndex() != self.STATE_CLIPS:
+            self.state_stack.setCurrentIndex(self.STATE_CLIPS)
+        self.clip_browser.add_clips(clip_source_pairs)
+        for clip, _source in clip_source_pairs:
+            if clip not in self._clips:
+                self._clips.append(clip)
+        self.clip_count_label.setText(f"{len(self._clips)} clips")
+        self._update_selection_ui()
+
     def clear_clips(self):
         """Clear all clips from the browser."""
         self.clip_browser.clear()

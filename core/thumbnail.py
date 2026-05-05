@@ -1,6 +1,7 @@
 """Thumbnail generation using FFmpeg."""
 
 import logging
+import math
 import os
 import subprocess
 import shutil
@@ -12,6 +13,22 @@ from core.binary_resolver import find_binary, get_subprocess_kwargs
 from core.paths import is_frozen
 
 logger = logging.getLogger(__name__)
+
+
+def _coerce_seconds(value) -> float:
+    """Convert numeric/timecode-like values to finite float seconds."""
+    if hasattr(value, "get_seconds"):
+        value = value.get_seconds()
+    seconds = float(value)
+    if not math.isfinite(seconds):
+        raise ValueError(f"Invalid timestamp: {value!r}")
+    return max(0.0, seconds)
+
+
+def _ffmpeg_timestamp_arg(value) -> str:
+    """Format timestamps as decimal seconds accepted by FFmpeg."""
+    seconds = _coerce_seconds(value)
+    return f"{seconds:.6f}".rstrip("0").rstrip(".") or "0"
 
 
 class ThumbnailGenerator:
@@ -67,6 +84,7 @@ class ThumbnailGenerator:
         Returns:
             Path to generated thumbnail
         """
+        timestamp_seconds = _coerce_seconds(timestamp_seconds)
         if output_path is None:
             # Generate cache path based on video and timestamp
             video_hash = str(hash(str(video_path) + str(timestamp_seconds)))[-8:]
@@ -80,7 +98,7 @@ class ThumbnailGenerator:
         cmd = [
             self.ffmpeg_path,
             "-y",  # Overwrite
-            "-ss", str(timestamp_seconds),  # Seek to timestamp
+            "-ss", _ffmpeg_timestamp_arg(timestamp_seconds),  # Seek to timestamp
             "-i", str(video_path),
             "-vframes", "1",  # Extract 1 frame
             "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2",
@@ -126,6 +144,8 @@ class ThumbnailGenerator:
             Path to generated thumbnail
         """
         # Take thumbnail at 1/3 into the clip for a representative frame
+        start_seconds = _coerce_seconds(start_seconds)
+        end_seconds = _coerce_seconds(end_seconds)
         duration = end_seconds - start_seconds
         timestamp = start_seconds + (duration / 3)
 
