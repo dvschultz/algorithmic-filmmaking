@@ -2829,41 +2829,41 @@ def search_internet_archive(
 )
 def download_video(url: str, output_dir: Optional[str] = None) -> dict:
     """Download video using the Python API."""
-    # Determine download directory
     if output_dir:
         valid, error, validated_dir = validate_path(output_dir)
         if not valid:
             return {"error": f"Invalid output directory: {error}"}
         download_path = validated_dir
     else:
-        # Use settings download directory
         settings = load_settings()
         download_path = settings.download_dir
 
     try:
-        downloader = VideoDownloader(download_dir=download_path)
+        from core.spine.downloads import download_videos as _impl
 
-        # Validate URL first
-        valid, error = downloader.is_valid_url(url)
-        if not valid:
-            return {"error": error}
+        result = _impl([url], download_path)
+        if not result.get("success"):
+            err = result.get("error", {})
+            return {"error": err.get("message") or err.get("code") or "Download failed"}
 
-        # Download the video
-        result = downloader.download(url)
+        payload = result["result"]
+        if payload["succeeded"]:
+            entry = payload["succeeded"][0]
+            return {
+                "success": True,
+                "file_path": entry["file_path"],
+                "title": entry["title"],
+                "duration": entry["duration"],
+                "message": f"Downloaded: {entry['title']}",
+            }
 
-        if not result.success:
-            return {"error": result.error or "Download failed"}
+        if payload["failed"]:
+            entry = payload["failed"][0]
+            return {"error": entry.get("error_message") or "Download failed"}
 
-        return {
-            "success": True,
-            "file_path": str(result.file_path) if result.file_path else None,
-            "title": result.title,
-            "duration": result.duration,
-            "message": f"Downloaded: {result.title}"
-        }
+        return {"error": "Download did not produce a result"}
 
     except RuntimeError as e:
-        # yt-dlp not found or other runtime errors
         return {"error": str(e)}
     except Exception as e:
         logger.exception("Video download failed")

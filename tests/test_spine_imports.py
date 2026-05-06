@@ -43,6 +43,7 @@ SPINE_MODULES: tuple[str, ...] = (
     "core.spine.sources",
     "core.spine.detect",
     "core.spine.analyze",
+    "core.spine.downloads",
 )
 
 

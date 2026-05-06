@@ -669,6 +669,83 @@ async def start_transcribe(
 
 
 @mcp.tool()
+async def start_download_videos(
+    urls: Annotated[list[str], "List of video URLs to download (max 10)"],
+    output_dir: Annotated[
+        Optional[str],
+        "Output directory (defaults to settings.download_dir)",
+    ] = None,
+    idempotency_key: Annotated[
+        Optional[str], "Optional idempotency key (max 255 chars)"
+    ] = None,
+    ctx: Context = None,
+) -> str:
+    """Start a job that downloads each URL in ``urls`` to ``output_dir``.
+
+    Per-URL granularity: cancellation observed between URLs. Per-URL
+    failures (geo-block, DRM, deleted) are aggregated into the result;
+    one failure does not poison the batch.
+    """
+    from scene_ripper_mcp.security import validate_path
+
+    if not urls:
+        return json.dumps(
+            {
+                "success": False,
+                "error": {"code": "no_urls", "message": "No URLs provided"},
+            }
+        )
+    if len(urls) > 10:
+        return json.dumps(
+            {
+                "success": False,
+                "error": {
+                    "code": "too_many_urls",
+                    "message": "Maximum 10 URLs per batch",
+                },
+            }
+        )
+
+    if output_dir:
+        valid, error, target = validate_path(output_dir, must_be_dir=True)
+        if not valid:
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": {"code": "invalid_output_dir", "message": error},
+                }
+            )
+    else:
+        from core.settings import load_settings
+
+        target = load_settings().download_dir
+
+    canonical_target = str(target)
+
+    def run(progress_callback, cancel_event):
+        from core.spine.downloads import download_videos
+
+        return download_videos(
+            urls,
+            target,
+            progress_callback=progress_callback,
+            cancel_event=cancel_event,
+        )
+
+    return _start_job(
+        ctx,
+        kind="download_videos",
+        args={"urls": urls, "output_dir": canonical_target},
+        # Downloads do not target a specific project; the per-project
+        # mutex is bypassed (project_path=None).
+        project_path=None,
+        project_mtime_at_start=None,
+        idempotency_key=idempotency_key,
+        run=run,
+    )
+
+
+@mcp.tool()
 async def start_detect_scenes_new_project(
     video_path: Annotated[str, "Absolute path to video file"],
     output_project_path: Annotated[

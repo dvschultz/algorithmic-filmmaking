@@ -130,28 +130,33 @@ async def download_video(
 def _download_video_sync(url, output_path):
     """Synchronous body for ``download_video`` (offloaded via ``asyncio.to_thread``)."""
     try:
-        from core.downloader import VideoDownloader
+        from core.spine.downloads import download_videos as _impl
 
-        downloader = VideoDownloader(download_dir=output_path)
+        spine_result = _impl([url], output_path)
+        if not spine_result.get("success"):
+            return json.dumps(spine_result)
 
-        # Validate URL first
-        valid, error = downloader.is_valid_url(url)
-        if not valid:
-            return json.dumps({"success": False, "error": error})
-
-        result = downloader.download(url)
-
-        if result.success:
+        payload = spine_result["result"]
+        if payload["succeeded"]:
+            entry = payload["succeeded"][0]
             return json.dumps(
                 {
                     "success": True,
-                    "file_path": str(result.file_path),
-                    "title": result.title,
-                    "duration": result.duration,
+                    "file_path": entry["file_path"],
+                    "title": entry["title"],
+                    "duration": entry["duration"],
                 }
             )
-        else:
-            return json.dumps({"success": False, "error": result.error})
+        if payload["failed"]:
+            entry = payload["failed"][0]
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": entry.get("error_message")
+                    or entry.get("error_code"),
+                }
+            )
+        return json.dumps({"success": False, "error": "No result"})
     except Exception as e:
         logger.exception("Video download failed")
         return json.dumps({"success": False, "error": str(e)})
@@ -197,45 +202,41 @@ async def download_videos(
 def _download_videos_sync(urls, output_path):
     """Synchronous body for ``download_videos`` (offloaded via ``asyncio.to_thread``)."""
     try:
-        from core.downloader import VideoDownloader
+        from core.spine.downloads import download_videos as _impl
 
-        downloader = VideoDownloader(download_dir=output_path)
+        spine_result = _impl(urls, output_path)
+        if not spine_result.get("success"):
+            return json.dumps(spine_result)
 
+        payload = spine_result["result"]
+        # Preserve the existing per-URL result envelope shape so callers
+        # don't notice the spine refactor.
         results = []
-        successful = 0
-        failed = 0
-
-        for url in urls:
-            # Validate URL
-            valid, error = downloader.is_valid_url(url)
-            if not valid:
-                results.append({"url": url, "success": False, "error": error})
-                failed += 1
-                continue
-
-            # Download
-            result = downloader.download(url)
-
-            if result.success:
-                results.append(
-                    {
-                        "url": url,
-                        "success": True,
-                        "file_path": str(result.file_path),
-                        "title": result.title,
-                    }
-                )
-                successful += 1
-            else:
-                results.append({"url": url, "success": False, "error": result.error})
-                failed += 1
+        for entry in payload["succeeded"]:
+            results.append(
+                {
+                    "url": entry["url"],
+                    "success": True,
+                    "file_path": entry["file_path"],
+                    "title": entry["title"],
+                    "duration": entry["duration"],
+                }
+            )
+        for entry in payload["failed"]:
+            results.append(
+                {
+                    "url": entry["url"],
+                    "success": False,
+                    "error": entry.get("error_message", entry.get("error_code")),
+                }
+            )
 
         return json.dumps(
             {
-                "success": successful > 0,
+                "success": True,
+                "successful": len(payload["succeeded"]),
+                "failed": len(payload["failed"]),
                 "total": len(urls),
-                "successful": successful,
-                "failed": failed,
                 "results": results,
             }
         )
