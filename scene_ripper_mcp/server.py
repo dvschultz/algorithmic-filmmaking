@@ -86,6 +86,7 @@ from scene_ripper_mcp.tools import analyze  # noqa: F401, E402
 from scene_ripper_mcp.tools import clips  # noqa: F401, E402
 from scene_ripper_mcp.tools import sequence  # noqa: F401, E402
 from scene_ripper_mcp.tools import export  # noqa: F401, E402
+from scene_ripper_mcp.tools import jobs  # noqa: F401, E402
 
 
 def main():
