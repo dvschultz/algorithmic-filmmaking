@@ -1987,7 +1987,7 @@ class TestStaccatoTool:
         main_window = Mock()
         main_window.sequence_tab = Mock()
 
-        with patch("core.chat_tools._validate_path", return_value=(True, "", Path("/test/audio.mp3"))), \
+        with patch("core.chat_tools.validate_path", return_value=(True, "", Path("/test/audio.mp3"))), \
              patch("core.analysis.audio.analyze_music_file", return_value=AudioAnalysis(beat_times=[1.0], duration_seconds=2.0)):
             result = generate_staccato(
                 project,

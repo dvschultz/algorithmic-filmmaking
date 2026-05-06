@@ -12,7 +12,6 @@ during chat interactions. Tools are split into two categories:
 
 import inspect
 import logging
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, get_type_hints
@@ -25,6 +24,7 @@ from core.youtube_api import (
 )
 from core.downloader import VideoDownloader
 from core.settings import load_settings
+from core.spine.security import validate_path
 from core.constants import (
     VALID_ASPECT_RATIOS,
     VALID_COLOR_PALETTES,
@@ -44,86 +44,6 @@ def _get_plan_controller(main_window) -> PlanController:
             "PlanController must be initialized during MainWindow setup"
         )
     return controller
-
-
-def _validate_path(path_str: str, must_exist: bool = False, allow_relative: bool = False) -> tuple[bool, str, Optional[Path]]:
-    """Validate a file path for security.
-
-    Args:
-        path_str: Path string to validate
-        must_exist: Whether the path must exist
-        allow_relative: Whether to allow relative paths
-
-    Returns:
-        Tuple of (is_valid, error_message, resolved_path)
-    """
-    if not path_str:
-        return False, "Path cannot be empty", None
-
-    # Check for path traversal attempts in raw string BEFORE any parsing
-    # This prevents bypass via Path() normalization
-    if ".." in path_str:
-        return False, f"Path traversal not allowed: {path_str}", None
-
-    try:
-        path = Path(path_str)
-
-        # Resolve to absolute path
-        resolved = path.resolve()
-
-        # Check for absolute path requirement
-        if not allow_relative and not path.is_absolute():
-            return False, f"Only absolute paths are allowed: {path_str}", None
-
-        # Check existence if required
-        if must_exist and not resolved.exists():
-            return False, f"Path does not exist: {path_str}", None
-
-        # Ensure path is within user's home directory or common safe locations
-        home = Path.home()
-        safe_roots = [
-            home,
-            Path("/tmp").resolve(),  # Resolve symlinks (macOS: /tmp -> /private/tmp)
-            Path(tempfile.gettempdir()).resolve(),
-        ]
-
-        # Platform-specific safe roots
-        import sys
-        if sys.platform == "darwin":
-            safe_roots.extend([
-                Path("/var/folders"),
-                Path("/Volumes"),
-                Path("/private/tmp"),
-            ])
-        elif sys.platform == "win32":
-            # Allow all existing drive roots (users store videos on D:\, E:\, etc.)
-            import string
-            for letter in string.ascii_uppercase:
-                drive = Path(f"{letter}:\\")
-                if drive.exists():
-                    safe_roots.append(drive)
-
-        is_safe = any(
-            _is_path_under(resolved, safe_root)
-            for safe_root in safe_roots
-        )
-
-        if not is_safe:
-            return False, f"Path must be within home directory or temp: {path_str}", None
-
-        return True, "", resolved
-
-    except Exception as e:
-        return False, f"Invalid path: {e}", None
-
-
-def _is_path_under(path: Path, root: Path) -> bool:
-    """Check if path is under root directory."""
-    try:
-        path.relative_to(root)
-        return True
-    except ValueError:
-        return False
 
 
 def _truncate_for_agent(text: str | None, limit: int = 1200) -> str | None:
@@ -1858,7 +1778,7 @@ def update_sequence(
         updated_fields["fps"] = fps
 
     if music_path is not None:
-        is_valid, err_msg, validated_path = _validate_path(music_path, must_exist=True)
+        is_valid, err_msg, validated_path = validate_path(music_path, must_exist=True)
         if not is_valid:
             return {"success": False, "error": err_msg}
         project.sequence.music_path = str(validated_path)
@@ -2697,7 +2617,7 @@ def export_sequence(
 
     # Determine output path
     if output_path:
-        valid, error, validated_path = _validate_path(output_path)
+        valid, error, validated_path = validate_path(output_path)
         if not valid:
             return {"success": False, "error": f"Invalid output path: {error}"}
         video_path = validated_path
@@ -2787,7 +2707,7 @@ def export_edl(project, output_path: Optional[str] = None) -> dict:
 
     # Determine output path
     if output_path:
-        valid, error, validated_path = _validate_path(output_path)
+        valid, error, validated_path = validate_path(output_path)
         if not valid:
             return {"success": False, "error": f"Invalid output path: {error}"}
         edl_path = validated_path
@@ -2870,7 +2790,7 @@ def export_dataset(
 
     # Determine output path
     if output_path:
-        valid, error, validated_path = _validate_path(output_path)
+        valid, error, validated_path = validate_path(output_path)
         if not valid:
             return {"success": False, "error": f"Invalid output path: {error}"}
         json_path = validated_path
@@ -2956,7 +2876,7 @@ def save_project(project, path: Optional[str] = None) -> dict:
     """Save project state to JSON file."""
     # Determine save path
     if path:
-        valid, error, validated_path = _validate_path(path)
+        valid, error, validated_path = validate_path(path)
         if not valid:
             return {"success": False, "error": f"Invalid path: {error}"}
         save_path = validated_path
@@ -3021,12 +2941,9 @@ def load_project(path: str, main_window=None) -> dict:
     """Load project from file."""
     from core.project import Project, ProjectLoadError, MissingSourceError
 
-    valid, error, validated_path = _validate_path(path, must_exist=True)
+    valid, error, validated_path = validate_path(path, must_be_file=True)
     if not valid:
         return {"success": False, "error": f"Invalid path: {error}"}
-
-    if not validated_path.is_file():
-        return {"success": False, "error": f"Path is not a file: {path}"}
 
     if main_window is None:
         return {"success": False, "error": "Cannot load project: main window not available"}
@@ -3476,12 +3393,9 @@ def detect_scenes(
     from core.scene_detect import SceneDetector, DetectionConfig
 
     # Validate video path
-    valid, error, video = _validate_path(video_path, must_exist=True)
+    valid, error, video = validate_path(video_path, must_be_file=True)
     if not valid:
         return {"success": False, "error": error}
-
-    if not video.is_file():
-        return {"success": False, "error": f"Path is not a file: {video_path}"}
 
     try:
         # Check if source already exists in project (by resolved file path)
@@ -3741,7 +3655,7 @@ def download_video(url: str, output_dir: Optional[str] = None) -> dict:
     """Download video using the Python API."""
     # Determine download directory
     if output_dir:
-        valid, error, validated_dir = _validate_path(output_dir)
+        valid, error, validated_dir = validate_path(output_dir)
         if not valid:
             return {"error": f"Invalid output directory: {error}"}
         download_path = validated_dir
@@ -3814,7 +3728,7 @@ def download_videos(
 
     # Determine download directory
     if output_dir:
-        valid, error, validated_dir = _validate_path(output_dir)
+        valid, error, validated_dir = validate_path(output_dir)
         if not valid:
             return {"success": False, "error": f"Invalid output directory: {error}"}
         download_path = validated_dir
@@ -3864,12 +3778,9 @@ def import_video(main_window, path: str) -> dict:
         Dict with source_id and metadata if successful
     """
     # Validate path
-    valid, error, video_path = _validate_path(path, must_exist=True)
+    valid, error, video_path = validate_path(path, must_be_file=True)
     if not valid:
         return {"success": False, "error": error}
-
-    if not video_path.is_file():
-        return {"success": False, "error": f"Path is not a file: {path}"}
 
     if video_path.suffix.lower() not in {'.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v'}:
         return {"success": False, "error": f"Unsupported video format: {video_path.suffix}"}
@@ -5423,7 +5334,7 @@ def generate_rose_hobart(
     # Extract reference faces from all provided images
     ref_embeddings = []
     for path_str in paths:
-        is_valid, err_msg, validated_path = _validate_path(path_str, must_exist=True)
+        is_valid, err_msg, validated_path = validate_path(path_str, must_exist=True)
         if not is_valid:
             return {"success": False, "error": err_msg}
         ref_faces = extract_faces_from_image(validated_path)
@@ -6281,7 +6192,7 @@ def generate_staccato(
         }
 
     # Validate audio path
-    is_valid, err_msg, validated_path = _validate_path(audio_path, must_exist=True)
+    is_valid, err_msg, validated_path = validate_path(audio_path, must_exist=True)
     if not is_valid:
         return {"success": False, "error": err_msg}
 
@@ -6767,7 +6678,7 @@ def import_frames(project, file_paths: list[str]) -> dict:
     frames_dir.mkdir(parents=True, exist_ok=True)
 
     for path_str in file_paths:
-        valid, err_msg, resolved = _validate_path(path_str, must_exist=True)
+        valid, err_msg, resolved = validate_path(path_str, must_exist=True)
         if not valid:
             errors.append(f"{path_str}: {err_msg}")
             continue
@@ -7495,7 +7406,7 @@ def export_srt(
 
     # Determine output path
     if output_path:
-        valid, error, validated_path = _validate_path(output_path)
+        valid, error, validated_path = validate_path(output_path)
         if not valid:
             return {"success": False, "error": f"Invalid output path: {error}"}
         srt_path = validated_path
@@ -7581,7 +7492,7 @@ def export_clips(
 
     # Determine output directory
     if output_dir:
-        valid, error, validated_path = _validate_path(output_dir)
+        valid, error, validated_path = validate_path(output_dir)
         if not valid:
             return {"success": False, "error": f"Invalid output directory: {error}"}
         out_path = validated_path
@@ -7665,7 +7576,7 @@ def export_bundle(
     """
     # Determine output path
     if output_path:
-        valid, error, validated_path = _validate_path(output_path)
+        valid, error, validated_path = validate_path(output_path)
         if not valid:
             return {"success": False, "error": f"Invalid output path: {error}"}
         dest_dir = validated_path
