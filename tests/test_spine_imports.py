@@ -30,6 +30,17 @@ SPINE_MODULES: tuple[str, ...] = (
     "core.spine.security",
     "core.spine.url_security",
     "core.spine.project_io",
+    "core.spine._agent_formatting",
+    "core.spine.audio_sources",
+    "core.spine.clips",
+    "core.spine.exports",
+    "core.spine.frames",
+    "core.spine.glossary",
+    "core.spine.project_save",
+    "core.spine.queries",
+    "core.spine.sequence_analysis",
+    "core.spine.settings_io",
+    "core.spine.sources",
 )
 
 
