@@ -1,9 +1,9 @@
 """YouTube search and download MCP tools."""
 
+import asyncio
 import json
 import logging
 import os
-from pathlib import Path
 from typing import Annotated, Optional
 
 from mcp.server.fastmcp import Context
@@ -124,10 +124,12 @@ async def download_video(
         settings = load_settings()
         output_path = settings.download_dir
 
-    try:
-        if ctx:
-            await ctx.report_progress(0.0, "Starting download...")
+    return await asyncio.to_thread(_download_video_sync, url, output_path)
 
+
+def _download_video_sync(url, output_path):
+    """Synchronous body for ``download_video`` (offloaded via ``asyncio.to_thread``)."""
+    try:
         from core.downloader import VideoDownloader
 
         downloader = VideoDownloader(download_dir=output_path)
@@ -137,15 +139,7 @@ async def download_video(
         if not valid:
             return json.dumps({"success": False, "error": error})
 
-        # Download with progress callback
-        async def progress_callback(progress: float, message: str):
-            if ctx:
-                await ctx.report_progress(progress / 100.0, message)
-
         result = downloader.download(url)
-
-        if ctx:
-            await ctx.report_progress(1.0, "Complete")
 
         if result.success:
             return json.dumps(
@@ -197,6 +191,11 @@ async def download_videos(
         settings = load_settings()
         output_path = settings.download_dir
 
+    return await asyncio.to_thread(_download_videos_sync, urls, output_path)
+
+
+def _download_videos_sync(urls, output_path):
+    """Synchronous body for ``download_videos`` (offloaded via ``asyncio.to_thread``)."""
     try:
         from core.downloader import VideoDownloader
 
@@ -206,10 +205,7 @@ async def download_videos(
         successful = 0
         failed = 0
 
-        for i, url in enumerate(urls):
-            if ctx:
-                await ctx.report_progress(i / len(urls), f"Downloading {i + 1}/{len(urls)}...")
-
+        for url in urls:
             # Validate URL
             valid, error = downloader.is_valid_url(url)
             if not valid:
@@ -233,9 +229,6 @@ async def download_videos(
             else:
                 results.append({"url": url, "success": False, "error": result.error})
                 failed += 1
-
-        if ctx:
-            await ctx.report_progress(1.0, "Complete")
 
         return json.dumps(
             {

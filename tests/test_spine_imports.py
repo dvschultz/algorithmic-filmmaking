@@ -29,6 +29,7 @@ SPINE_MODULES: tuple[str, ...] = (
     "core.spine",
     "core.spine.security",
     "core.spine.url_security",
+    "core.spine.project_io",
 )
 
 

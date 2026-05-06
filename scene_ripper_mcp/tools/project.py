@@ -1,5 +1,6 @@
 """Project management MCP tools."""
 
+import asyncio
 import json
 import logging
 from typing import Annotated
@@ -33,9 +34,20 @@ async def get_project_info(
         return json.dumps({"success": False, "error": error})
 
     try:
-        from core.project import load_project
+        from core.project import MissingSourceError
+        from core.spine.project_io import load_with_mtime
 
-        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(path)
+        try:
+            project, _mtime = load_with_mtime(path)
+        except MissingSourceError as e:
+            return json.dumps({
+                "success": False,
+                "error": {"code": "source_files_missing", "message": str(e)},
+            })
+
+        clips = project.clips
+        metadata = project.metadata
+        sequence = project.sequence
 
         # Compute analysis statistics
         has_colors = sum(1 for c in clips if c.dominant_colors)
@@ -53,7 +65,7 @@ async def get_project_info(
                 "project": {
                     "path": str(path),
                     "name": metadata.name,
-                    "source_count": len(sources),
+                    "source_count": len(project.sources),
                     "clip_count": len(clips),
                     "sequence_clip_count": sequence_clip_count,
                     "clips_with_colors": has_colors,
@@ -72,7 +84,7 @@ async def get_project_info(
 @mcp.tool()
 async def detect_scenes(
     video_path: Annotated[str, "Absolute path to video file"],
-    output_project: Annotated[str, "Path for output project JSON"],
+    output_project: Annotated[str, "Path for output .sceneripper project file"],
     sensitivity: Annotated[float, "Detection sensitivity (1.0=more scenes, 10.0=fewer)"] = 3.0,
     min_scene_length: Annotated[float, "Minimum scene length in seconds"] = 0.5,
     ctx: Context = None,
@@ -91,9 +103,6 @@ async def detect_scenes(
     Returns:
         JSON with detection results and clip count
     """
-    if ctx:
-        await ctx.report_progress(0.0, "Validating paths...")
-
     valid, error, video = validate_video_path(video_path)
     if not valid:
         return json.dumps({"success": False, "error": f"Video: {error}"})
@@ -102,12 +111,16 @@ async def detect_scenes(
     if not valid:
         return json.dumps({"success": False, "error": f"Output: {error}"})
 
-    try:
-        if ctx:
-            await ctx.report_progress(0.1, "Running scene detection...")
+    return await asyncio.to_thread(
+        _detect_scenes_sync, video, output, sensitivity, min_scene_length
+    )
 
-        from core.scene_detect import SceneDetector, DetectionConfig
-        from core.project import save_project, ProjectMetadata
+
+def _detect_scenes_sync(video, output, sensitivity, min_scene_length):
+    """Synchronous body for ``detect_scenes`` (offloaded via ``asyncio.to_thread``)."""
+    try:
+        from core.project import Project, ProjectMetadata
+        from core.scene_detect import DetectionConfig, SceneDetector
 
         # Configure and run detection
         config = DetectionConfig(
@@ -118,28 +131,17 @@ async def detect_scenes(
         detector = SceneDetector(config)
         source, clips = detector.detect_scenes(video)
 
-        if ctx:
-            await ctx.report_progress(0.8, "Creating project...")
+        # Build a fresh Project and add the detected source + clips through model methods.
+        project = Project.new(name=video.stem)
+        project.metadata = ProjectMetadata(name=video.stem)
+        project.add_source(source)
+        if clips:
+            project.add_clips(clips)
 
-        # Create metadata
-        metadata = ProjectMetadata(name=video.stem)
-
-        # Save project
         output.parent.mkdir(parents=True, exist_ok=True)
-        success = save_project(
-            filepath=output,
-            sources=[source],
-            clips=clips,
-            sequence=None,
-            metadata=metadata,
-            audio_sources=[],
-        )
-
+        success = project.save(output)
         if not success:
             return json.dumps({"success": False, "error": "Failed to save project"})
-
-        if ctx:
-            await ctx.report_progress(1.0, "Complete")
 
         # Calculate total duration
         total_duration = sum(c.duration_seconds(source.fps) for c in clips)
@@ -179,19 +181,13 @@ async def create_project(
         return json.dumps({"success": False, "error": error})
 
     try:
-        from core.project import save_project, ProjectMetadata
+        from core.project import Project, ProjectMetadata
 
-        metadata = ProjectMetadata(name=name)
+        project = Project.new(name=name)
+        project.metadata = ProjectMetadata(name=name)
 
         path.parent.mkdir(parents=True, exist_ok=True)
-        success = save_project(
-            filepath=path,
-            sources=[],
-            clips=[],
-            sequence=None,
-            metadata=metadata,
-            audio_sources=[],
-        )
+        success = project.save(path)
 
         if success:
             return json.dumps(
@@ -293,19 +289,30 @@ async def import_video(
     if not valid:
         return json.dumps({"success": False, "error": f"Video: {error}"})
 
+    return await asyncio.to_thread(
+        _import_video_sync, proj_path, vid_path, detect_scenes_flag, sensitivity
+    )
+
+
+def _import_video_sync(proj_path, vid_path, detect_scenes_flag, sensitivity):
+    """Synchronous body for ``import_video`` (offloaded via ``asyncio.to_thread``)."""
     try:
-        from core.project import load_project, save_project
-        from core.scene_detect import SceneDetector, DetectionConfig
+        from core.project import MissingSourceError
+        from core.scene_detect import DetectionConfig, SceneDetector
+        from core.spine.project_io import (
+            ProjectModifiedExternally,
+            load_with_mtime,
+            save_with_mtime_check,
+        )
         from models.clip import Source
 
-        if ctx:
-            await ctx.report_progress(0.1, "Loading project...")
-
-        # Load existing project
-        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(proj_path)
-
-        if ctx:
-            await ctx.report_progress(0.2, "Analyzing video...")
+        try:
+            project, mtime = load_with_mtime(proj_path)
+        except MissingSourceError as e:
+            return json.dumps({
+                "success": False,
+                "error": {"code": "source_files_missing", "message": str(e)},
+            })
 
         # Create source and optionally detect scenes
         if detect_scenes_flag:
@@ -316,7 +323,6 @@ async def import_video(
             )
             detector = SceneDetector(config)
             source, new_clips = detector.detect_scenes(vid_path)
-            clips.extend(new_clips)
         else:
             # Create source without scene detection
             from scenedetect.backends.opencv import VideoStreamCv2
@@ -331,27 +337,22 @@ async def import_video(
             )
             new_clips = []
 
-        sources.append(source)
+        project.add_source(source)
+        if new_clips:
+            project.add_clips(new_clips)
 
-        if ctx:
-            await ctx.report_progress(0.8, "Saving project...")
-
-        # Save updated project
-        success = save_project(
-            filepath=proj_path,
-            sources=sources,
-            clips=clips,
-            sequence=sequence,
-            ui_state=ui_state,
-            metadata=metadata,
-            audio_sources=audio_sources,
-        )
-
-        if not success:
-            return json.dumps({"success": False, "error": "Failed to save project"})
-
-        if ctx:
-            await ctx.report_progress(1.0, "Complete")
+        try:
+            save_with_mtime_check(project, proj_path, mtime)
+        except ProjectModifiedExternally as exc:
+            return json.dumps({
+                "success": False,
+                "error": {
+                    "code": "project_modified_externally",
+                    "path": str(exc.path),
+                    "expected_mtime": exc.expected_mtime,
+                    "current_mtime": exc.current_mtime,
+                },
+            })
 
         return json.dumps(
             {
@@ -359,8 +360,8 @@ async def import_video(
                 "source_id": source.id,
                 "source_path": str(vid_path),
                 "clips_created": len(new_clips),
-                "total_sources": len(sources),
-                "total_clips": len(clips),
+                "total_sources": len(project.sources),
+                "total_clips": len(project.clips),
             }
         )
     except Exception as e:
@@ -386,15 +387,22 @@ async def list_sources(
         return json.dumps({"success": False, "error": error})
 
     try:
-        from core.project import load_project
+        from core.project import MissingSourceError
+        from core.spine.project_io import load_with_mtime
 
-        sources, clips, _, _, _, _, audio_sources = load_project(path)
+        try:
+            project, _mtime = load_with_mtime(path)
+        except MissingSourceError as e:
+            return json.dumps({
+                "success": False,
+                "error": {"code": "source_files_missing", "message": str(e)},
+            })
+
+        clips_by_source = project.clips_by_source
 
         source_list = []
-        for source in sources:
-            # Count clips for this source
-            source_clips = [c for c in clips if c.source_id == source.id]
-
+        for source in project.sources:
+            source_clips = clips_by_source.get(source.id, [])
             source_list.append(
                 {
                     "id": source.id,
@@ -442,51 +450,57 @@ async def remove_source(
         return json.dumps({"success": False, "error": error})
 
     try:
-        from core.project import load_project, save_project
-
-        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(path)
-
-        # Find and remove source
-        source_to_remove = None
-        for i, source in enumerate(sources):
-            if source.id == source_id:
-                source_to_remove = sources.pop(i)
-                break
-
-        if not source_to_remove:
-            return json.dumps({"success": False, "error": f"Source not found: {source_id}"})
-
-        # Remove associated clips
-        original_clip_count = len(clips)
-        clips = [c for c in clips if c.source_id != source_id]
-        removed_clips = original_clip_count - len(clips)
-
-        # Remove from sequence if present
-        if sequence:
-            for track in sequence.tracks:
-                track.clips = [c for c in track.clips if c.source_id != source_id]
-
-        # Save updated project
-        success = save_project(
-            filepath=path,
-            sources=sources,
-            clips=clips,
-            sequence=sequence,
-            ui_state=ui_state,
-            metadata=metadata,
-            audio_sources=audio_sources,
+        from core.project import MissingSourceError
+        from core.spine.project_io import (
+            ProjectModifiedExternally,
+            load_with_mtime,
+            save_with_mtime_check,
         )
 
-        if not success:
-            return json.dumps({"success": False, "error": "Failed to save project"})
+        try:
+            project, mtime = load_with_mtime(path)
+        except MissingSourceError as e:
+            return json.dumps({
+                "success": False,
+                "error": {"code": "source_files_missing", "message": str(e)},
+            })
+
+        source_to_remove = project.sources_by_id.get(source_id)
+        if source_to_remove is None:
+            return json.dumps({"success": False, "error": f"Source not found: {source_id}"})
+
+        original_clip_count = len(project.clips)
+
+        # Remove the source (also drops associated clips and frames).
+        project.remove_source(source_id)
+
+        removed_clips = original_clip_count - len(project.clips)
+
+        # Remove from sequence if present
+        if project.sequence is not None:
+            for track in project.sequence.tracks:
+                track.clips = [c for c in track.clips if c.source_id != source_id]
+
+        try:
+            save_with_mtime_check(project, path, mtime)
+        except ProjectModifiedExternally as exc:
+            return json.dumps({
+                "success": False,
+                "error": {
+                    "code": "project_modified_externally",
+                    "path": str(exc.path),
+                    "expected_mtime": exc.expected_mtime,
+                    "current_mtime": exc.current_mtime,
+                },
+            })
 
         return json.dumps(
             {
                 "success": True,
                 "removed_source": source_to_remove.filename,
                 "removed_clips": removed_clips,
-                "remaining_sources": len(sources),
-                "remaining_clips": len(clips),
+                "remaining_sources": len(project.sources),
+                "remaining_clips": len(project.clips),
             }
         )
     except Exception as e:
@@ -517,12 +531,19 @@ async def list_audio_sources(
         return json.dumps({"success": False, "error": error})
 
     try:
-        from core.project import load_project
+        from core.project import MissingSourceError
+        from core.spine.project_io import load_with_mtime
 
-        _sources, _clips, _seq, _meta, _ui, _frames, audio_sources = load_project(path)
+        try:
+            project, _mtime = load_with_mtime(path)
+        except MissingSourceError as e:
+            return json.dumps({
+                "success": False,
+                "error": {"code": "source_files_missing", "message": str(e)},
+            })
 
         payload = []
-        for a in audio_sources:
+        for a in project.audio_sources:
             payload.append({
                 "id": a.id,
                 "filename": a.filename,
@@ -567,11 +588,18 @@ async def get_audio_source(
         return json.dumps({"success": False, "error": error})
 
     try:
-        from core.project import load_project
+        from core.project import MissingSourceError
+        from core.spine.project_io import load_with_mtime
 
-        _sources, _clips, _seq, _meta, _ui, _frames, audio_sources = load_project(path)
+        try:
+            project, _mtime = load_with_mtime(path)
+        except MissingSourceError as e:
+            return json.dumps({
+                "success": False,
+                "error": {"code": "source_files_missing", "message": str(e)},
+            })
 
-        match = next((a for a in audio_sources if a.id == audio_source_id), None)
+        match = project.get_audio_source(audio_source_id)
         if match is None:
             return json.dumps({
                 "success": False,
