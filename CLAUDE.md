@@ -32,9 +32,12 @@ ui/                  (20 files)  # Main window, chat, player, browser, theme
 core/                (43 files)  # Business logic, FFmpeg, settings, project, LLM
   analysis/          (17 files)  # Color, shots, brightness, volume, embeddings, OCR, faces, cinematography, gaze
   remix/             (16 files)  # Sequencer algorithms (one file per algorithm)
+  spine/             (16 files)  # GUI-agnostic shared tool implementations (no PySide6/mpv/av imports)
 models/              (7 files)   # Source, Clip, Frame, SequenceClip, Sequence, CinematographyAnalysis, Plan
 cli/                 (15 files)  # Click CLI with detect, analyze, transcribe, youtube, export commands
-scene_ripper_mcp/    (3 files)   # MCP server for external agent access
+scene_ripper_mcp/                # MCP server for external agent access
+  tools/                         #   Tool registrations (project / clips / sequence / analyze / export / youtube / jobs)
+  jobs/                          #   SQLite-backed jobs framework (store, runtime, per-project mutex)
 tests/              (101 files)  # 1760 tests
 docs/user-guide/                 # End-user documentation
 docs/solutions/                  # Documented solutions (bugs, best practices), YAML frontmatter (module, tags, problem_type)
@@ -108,7 +111,10 @@ Always use `core/settings.py` (`load_settings()`). Key paths: `settings.download
 Agent capabilities mirror user capabilities (navigate tabs, select clips, trigger analysis, modify sequence). Tools return `{"success": True/False, "result": data}`.
 
 ### MCP Server
-`scene_ripper_mcp/server.py` exposes project operations to external agents. Entry point: `scene-ripper-mcp` (defined in `pyproject.toml`).
+`scene_ripper_mcp/server.py` exposes project operations to external agents. Entry point: `scene-ripper-mcp` (defined in `pyproject.toml`). Long-running ops (scene detection, analysis, downloads) are split into `start_*` / `get_job_status` / `get_job_result` / `cancel_job` tools backed by the `scene_ripper_mcp/jobs/` framework (SQLite store, per-project mutex, ThreadPoolExecutor runtime). Caller-facing reference: `docs/user-guide/headless-mcp.md`.
+
+### Spine Layering
+`core/spine/` is the GUI-agnostic shared layer below both `core/chat_tools.py` (the GUI agent) and `scene_ripper_mcp/tools/*` (the MCP server). Both surfaces import from spine; neither imports the other. Spine modules MUST NOT import PySide6, mpv, av, faster_whisper, paddleocr, or mlx_vlm at module top level — `tests/test_spine_imports.py` is the boundary test that enforces this. Heavy or GUI-bound deps go inside function bodies (lazy import). New project-only tool implementations belong in `core/spine/<topic>.py`; the chat-tools and MCP wrappers are thin delegations.
 
 ### Card-Based UI
 Sequence tab uses `ui/widgets/sorting_card.py` / `sorting_card_grid.py` for visual clip arrangement with drag-drop.

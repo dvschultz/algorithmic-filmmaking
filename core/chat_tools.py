@@ -324,7 +324,7 @@ def complete_plan_step(main_window, result_summary: Optional[str] = None) -> dic
 @tools.register(
     description="Get current plan execution status including which step is active. Use this to check progress or remind yourself what step you're on.",
     requires_project=False,
-    modifies_gui_state=False
+    modifies_gui_state=True
 )
 def get_plan_status(main_window) -> dict:
     """Get current plan status and step information.
@@ -3812,7 +3812,7 @@ def generate_eyes_without_a_face(
                 "Call this before generate_reference_guided to discover which dimension weights "
                 "are valid (e.g. color requires color analysis, embedding requires embeddings).",
     requires_project=True,
-    modifies_gui_state=False
+    modifies_gui_state=True
 )
 def get_available_dimensions(project, main_window) -> dict:
     """Check which reference-guided matching dimensions have data.
@@ -4394,7 +4394,7 @@ def generate_rose_hobart(
     description="Get the current state of the sequence tab including selected algorithm, "
                 "parameters, preview clips, and timeline clips.",
     requires_project=True,
-    modifies_gui_state=False
+    modifies_gui_state=True
 )
 def get_remix_state(project, main_window) -> dict:
     """Get current state of the remix/sequence UI.

@@ -1,9 +1,10 @@
 ---
 title: "feat: Headless agent-callable MCP with shared tool spine"
 type: feat
-status: active
+status: completed
 date: 2026-05-05
 deepened: 2026-05-05
+completed: 2026-05-06
 origin: docs/brainstorms/2026-05-05-headless-agent-mcp-requirements.md
 ---
 
