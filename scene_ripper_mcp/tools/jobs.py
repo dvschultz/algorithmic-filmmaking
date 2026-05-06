@@ -436,6 +436,238 @@ async def start_detect_scenes_bulk(
     )
 
 
+def _make_analyze_runner(spine_fn_name: str, *, save_after: bool = True, **op_kwargs):
+    """Build the closure for an analyze-style start_* tool.
+
+    The closure loads the project, runs the spine fn with the supplied
+    ``op_kwargs``, and (when ``save_after``) saves with the mtime guard.
+    Returns the spine result dict, or — when the save aborts —
+    annotates it with ``project_modified_externally``.
+    """
+
+    def runner(path, mtime, clip_ids):
+        from core.project import MissingSourceError
+        from core.spine import analyze as analyze_module
+        from core.spine.project_io import (
+            ProjectModifiedExternally,
+            load_with_mtime,
+            save_with_mtime_check,
+        )
+
+        def run(progress_callback, cancel_event):
+            try:
+                project, captured_mtime = load_with_mtime(path)
+            except MissingSourceError as exc:
+                return {
+                    "success": False,
+                    "error": {
+                        "code": "source_files_missing",
+                        "message": str(exc),
+                    },
+                }
+
+            spine_fn = getattr(analyze_module, spine_fn_name)
+            result = spine_fn(
+                project,
+                clip_ids,
+                progress_callback=progress_callback,
+                cancel_event=cancel_event,
+                **op_kwargs,
+            )
+            if not save_after:
+                return result
+            try:
+                save_with_mtime_check(project, path, captured_mtime)
+            except ProjectModifiedExternally as exc:
+                return {
+                    "success": False,
+                    "error": {
+                        "code": "project_modified_externally",
+                        "path": str(exc.path),
+                        "expected_mtime": exc.expected_mtime,
+                        "current_mtime": exc.current_mtime,
+                    },
+                    "result": result.get("result"),
+                }
+            return result
+
+        return run
+
+    return runner
+
+
+@mcp.tool()
+async def start_analyze_colors(
+    project_path: Annotated[str, "Absolute path to .sceneripper project file"],
+    clip_ids: Annotated[
+        Optional[list[str]],
+        "Optional list of clip IDs to analyze (default: all clips)",
+    ] = None,
+    num_colors: Annotated[
+        int, "Number of dominant colors to extract per clip (1-10)"
+    ] = 5,
+    idempotency_key: Annotated[
+        Optional[str], "Optional idempotency key (max 255 chars)"
+    ] = None,
+    ctx: Context = None,
+) -> str:
+    """Start a job that extracts dominant colors for the given clips.
+
+    Per-clip granularity: cancellable between clips. Skip-existing is on
+    by default — clips with ``dominant_colors`` already populated are
+    untouched, which makes re-issuing after a crashed/cancelled run resume
+    where it left off.
+    """
+    from scene_ripper_mcp.security import validate_project_path
+    from core.project import MissingSourceError
+    from core.spine.project_io import load_with_mtime
+
+    valid, error, path = validate_project_path(project_path)
+    if not valid:
+        return json.dumps({"success": False, "error": error})
+
+    canonical = str(path)
+
+    try:
+        _project, mtime = load_with_mtime(path)
+    except MissingSourceError as exc:
+        return json.dumps(
+            {
+                "success": False,
+                "error": {"code": "source_files_missing", "message": str(exc)},
+            }
+        )
+
+    runner_factory = _make_analyze_runner("analyze_colors", num_colors=num_colors)
+    run = runner_factory(path, mtime, clip_ids)
+
+    return _start_job(
+        ctx,
+        kind="analyze_colors",
+        args={
+            "project_path": canonical,
+            "clip_ids": clip_ids,
+            "num_colors": num_colors,
+        },
+        project_path=canonical,
+        project_mtime_at_start=mtime,
+        idempotency_key=idempotency_key,
+        run=run,
+    )
+
+
+@mcp.tool()
+async def start_analyze_shots(
+    project_path: Annotated[str, "Absolute path to .sceneripper project file"],
+    clip_ids: Annotated[
+        Optional[list[str]],
+        "Optional list of clip IDs to classify (default: all clips)",
+    ] = None,
+    idempotency_key: Annotated[
+        Optional[str], "Optional idempotency key (max 255 chars)"
+    ] = None,
+    ctx: Context = None,
+) -> str:
+    """Start a job that classifies shot type per clip.
+
+    Requires thumbnails for each clip on disk; clips without thumbnails
+    surface as ``thumbnail_missing`` failures (this op does not generate
+    thumbnails — that's a separate concern).
+    """
+    from scene_ripper_mcp.security import validate_project_path
+    from core.project import MissingSourceError
+    from core.spine.project_io import load_with_mtime
+
+    valid, error, path = validate_project_path(project_path)
+    if not valid:
+        return json.dumps({"success": False, "error": error})
+
+    canonical = str(path)
+
+    try:
+        _project, mtime = load_with_mtime(path)
+    except MissingSourceError as exc:
+        return json.dumps(
+            {
+                "success": False,
+                "error": {"code": "source_files_missing", "message": str(exc)},
+            }
+        )
+
+    runner_factory = _make_analyze_runner("analyze_shots")
+    run = runner_factory(path, mtime, clip_ids)
+
+    return _start_job(
+        ctx,
+        kind="analyze_shots",
+        args={"project_path": canonical, "clip_ids": clip_ids},
+        project_path=canonical,
+        project_mtime_at_start=mtime,
+        idempotency_key=idempotency_key,
+        run=run,
+    )
+
+
+@mcp.tool()
+async def start_transcribe(
+    project_path: Annotated[str, "Absolute path to .sceneripper project file"],
+    clip_ids: Annotated[
+        Optional[list[str]],
+        "Optional list of clip IDs to transcribe (default: all clips)",
+    ] = None,
+    model: Annotated[
+        str, "Whisper model size: tiny / base / small / medium / large"
+    ] = "base",
+    language: Annotated[
+        Optional[str], "ISO language code (default: auto-detect)"
+    ] = None,
+    idempotency_key: Annotated[
+        Optional[str], "Optional idempotency key (max 255 chars)"
+    ] = None,
+    ctx: Context = None,
+) -> str:
+    """Start a per-clip transcription job."""
+    from scene_ripper_mcp.security import validate_project_path
+    from core.project import MissingSourceError
+    from core.spine.project_io import load_with_mtime
+
+    valid, error, path = validate_project_path(project_path)
+    if not valid:
+        return json.dumps({"success": False, "error": error})
+
+    canonical = str(path)
+
+    try:
+        _project, mtime = load_with_mtime(path)
+    except MissingSourceError as exc:
+        return json.dumps(
+            {
+                "success": False,
+                "error": {"code": "source_files_missing", "message": str(exc)},
+            }
+        )
+
+    runner_factory = _make_analyze_runner(
+        "transcribe", model=model, language=language
+    )
+    run = runner_factory(path, mtime, clip_ids)
+
+    return _start_job(
+        ctx,
+        kind="transcribe",
+        args={
+            "project_path": canonical,
+            "clip_ids": clip_ids,
+            "model": model,
+            "language": language,
+        },
+        project_path=canonical,
+        project_mtime_at_start=mtime,
+        idempotency_key=idempotency_key,
+        run=run,
+    )
+
+
 @mcp.tool()
 async def start_detect_scenes_new_project(
     video_path: Annotated[str, "Absolute path to video file"],
