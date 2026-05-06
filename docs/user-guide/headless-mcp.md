@@ -7,7 +7,9 @@ drive without the GUI running. Long-running operations are split into a
 multi-film analysis.
 
 This guide is the caller-facing reference: the lifecycle, the structured
-errors, idempotency, and the recommended polling cadence.
+errors, idempotency, and the recommended polling cadence. For a
+walkthrough with a concrete example, see
+[`headless-mcp-tutorial.md`](./headless-mcp-tutorial.md).
 
 ## Quick start
 
