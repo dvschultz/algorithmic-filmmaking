@@ -2597,71 +2597,40 @@ def detect_scenes(
     luma_only: bool | None = None,
 ) -> dict:
     """Run scene detection using Python API and add clips to project."""
-    from core.scene_detect import SceneDetector, DetectionConfig
-
-    # Validate video path
     valid, error, video = validate_path(video_path, must_be_file=True)
     if not valid:
         return {"success": False, "error": error}
 
     try:
-        # Check if source already exists in project (by resolved file path)
-        # Use resolve() to handle symlinks and relative paths consistently
-        resolved_video = video.resolve()
-        existing_source = None
-        for s in project.sources:
-            try:
-                if s.file_path.resolve() == resolved_video:
-                    existing_source = s
-                    break
-            except (OSError, ValueError):
-                # Handle edge cases where resolve() might fail
-                if s.file_path == video:
-                    existing_source = s
-                    break
+        from core.spine.detect import detect_scenes_for_video
 
-        # Create detector with configured sensitivity
-        config = DetectionConfig(threshold=sensitivity, luma_only=luma_only)
-        detector = SceneDetector(config)
+        result = detect_scenes_for_video(
+            project, video, sensitivity=sensitivity, luma_only=luma_only
+        )
+        if not result.get("success"):
+            err = result.get("error", {})
+            return {"success": False, "error": err.get("message") or err.get("code") or "detection failed"}
 
-        # Run detection
-        source, clips = detector.detect_scenes(video)
+        payload = result["result"]
+        source = project.sources_by_id.get(payload["source_id"])
+        clips = [c for c in project.clips if c.source_id == payload["source_id"]]
 
-        # If source already exists, use that source ID and update clips
-        if existing_source:
-            source = existing_source
-            # Mark source as analyzed
-            source.analyzed = True
-            # Update clip source IDs to match existing source
-            for clip in clips:
-                clip.source_id = source.id
-        else:
-            # Mark source as analyzed
-            source.analyzed = True
-            # Add new source using proper Project method (invalidates caches, notifies observers)
-            project.add_source(source)
-
-        if not clips:
+        if payload["clip_count"] == 0:
             return {
                 "success": True,
                 "clips_detected": 0,
-                "source_id": source.id,
-                "source_name": video.name,
-                "message": f"No scene cuts detected in {video.name}. "
-                           "Try a lower sensitivity value, or the video may be a single continuous shot."
+                "source_id": payload["source_id"],
+                "source_name": payload["source_name"],
+                "message": f"No scene cuts detected in {payload['source_name']}. "
+                           "Try a lower sensitivity value, or the video may be a single continuous shot.",
             }
-
-        # Add clips using proper Project method (invalidates caches, notifies observers)
-        project.add_clips(clips)
-
-        message = f"Detected {len(clips)} scenes in {video.name} and added to project"
 
         return {
             "success": True,
-            "clips_detected": len(clips),
-            "clip_ids": [clip.id for clip in clips],
-            "source_id": source.id,
-            "source_name": source.filename,
+            "clips_detected": payload["clip_count"],
+            "clip_ids": payload["clip_ids"],
+            "source_id": payload["source_id"],
+            "source_name": payload["source_name"],
             "detected_clips": [
                 _clip_summary_for_agent(project, clip, source)
                 for clip in clips[:20]
@@ -2671,7 +2640,7 @@ def detect_scenes(
                 "source name, and timing ranges. Do not invent clip descriptions."
             ),
             "is_fallback_clip": False,
-            "message": message
+            "message": f"Detected {payload['clip_count']} scenes in {payload['source_name']} and added to project",
         }
 
     except FileNotFoundError as e:

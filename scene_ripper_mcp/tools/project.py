@@ -119,41 +119,24 @@ async def detect_scenes(
 def _detect_scenes_sync(video, output, sensitivity, min_scene_length):
     """Synchronous body for ``detect_scenes`` (offloaded via ``asyncio.to_thread``)."""
     try:
-        from core.project import Project, ProjectMetadata
-        from core.scene_detect import DetectionConfig, SceneDetector
+        from core.spine.detect import detect_scenes_new_project
 
-        # Configure and run detection
-        config = DetectionConfig(
-            threshold=sensitivity,
-            min_scene_length=int(min_scene_length * 30),  # Convert to frames at 30fps estimate
-            use_adaptive=True,
+        result = detect_scenes_new_project(
+            video,
+            output,
+            sensitivity=sensitivity,
         )
-        detector = SceneDetector(config)
-        source, clips = detector.detect_scenes(video)
+        if not result.get("success"):
+            return json.dumps(result)
 
-        # Build a fresh Project and add the detected source + clips through model methods.
-        project = Project.new(name=video.stem)
-        project.metadata = ProjectMetadata(name=video.stem)
-        project.add_source(source)
-        if clips:
-            project.add_clips(clips)
-
-        output.parent.mkdir(parents=True, exist_ok=True)
-        success = project.save(output)
-        if not success:
-            return json.dumps({"success": False, "error": "Failed to save project"})
-
-        # Calculate total duration
-        total_duration = sum(c.duration_seconds(source.fps) for c in clips)
-
+        payload = result["result"]
         return json.dumps(
             {
                 "success": True,
-                "project_path": str(output),
+                "project_path": payload["project_path"],
                 "source": str(video),
-                "clip_count": len(clips),
-                "total_duration": total_duration,
-                "fps": source.fps,
+                "clip_count": payload["clip_count"],
+                "source_id": payload["source_id"],
             }
         )
     except Exception as e:

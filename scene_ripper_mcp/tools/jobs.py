@@ -296,3 +296,202 @@ async def purge_old_jobs(
     except BaseException as exc:  # noqa: BLE001
         logger.exception("purge_old_jobs failed")
         return json.dumps(_wrap_error(exc))
+
+
+# =============================================================================
+# start_* tools — long-running ops dispatched through the jobs framework.
+# =============================================================================
+
+
+def _start_job(
+    ctx: Context,
+    *,
+    kind: str,
+    args: dict,
+    project_path: Optional[str],
+    project_mtime_at_start: Optional[float],
+    idempotency_key: Optional[str],
+    run,
+) -> str:
+    """Common path for start_* tools: validate, submit, wrap errors."""
+    from scene_ripper_mcp.jobs.runtime import InvalidIdempotencyKeyError
+
+    try:
+        runtime = _lifespan(ctx)["job_runtime"]
+        try:
+            result = runtime.submit(
+                kind=kind,
+                args=args,
+                run=run,
+                project_path=project_path,
+                project_mtime_at_start=project_mtime_at_start,
+                idempotency_key=idempotency_key,
+            )
+        except InvalidIdempotencyKeyError as exc:
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "invalid_idempotency_key",
+                        "message": str(exc),
+                    },
+                }
+            )
+        return json.dumps({"success": True, **result})
+    except BaseException as exc:  # noqa: BLE001
+        logger.exception("start_%s failed", kind)
+        return json.dumps(_wrap_error(exc))
+
+
+@mcp.tool()
+async def start_detect_scenes_bulk(
+    project_path: Annotated[str, "Absolute path to .sceneripper project file"],
+    source_ids: Annotated[
+        list[str],
+        "List of source IDs to detect scenes on (use list_sources to discover)",
+    ],
+    sensitivity: Annotated[
+        float, "Detection sensitivity (1.0=more scenes, 10.0=fewer)"
+    ] = 3.0,
+    idempotency_key: Annotated[
+        Optional[str],
+        "Optional idempotency key (max 255 chars) — same key + same project = "
+        "same job",
+    ] = None,
+    ctx: Context = None,
+) -> str:
+    """Start a bulk scene-detection job over an existing project's sources.
+
+    Returns ``{task_id, status: "queued", poll_interval}`` immediately.
+    Poll with ``get_job_status``; fetch the result with ``get_job_result``
+    after status reaches a terminal value.
+
+    Per-source granularity: cancellation is observed between sources;
+    per-source failures are aggregated into the result, never raised
+    mid-batch.
+    """
+    from core.project import MissingSourceError
+    from scene_ripper_mcp.security import validate_project_path
+    from core.spine.project_io import load_with_mtime, save_with_mtime_check
+
+    valid, error, path = validate_project_path(project_path)
+    if not valid:
+        return json.dumps({"success": False, "error": error})
+
+    canonical = str(path)
+
+    # Load project once at submit time so the closure captures it (the worker
+    # mutates project.sources clips, then save_with_mtime_check writes).
+    try:
+        project, mtime = load_with_mtime(path)
+    except MissingSourceError as exc:
+        return json.dumps(
+            {
+                "success": False,
+                "error": {"code": "source_files_missing", "message": str(exc)},
+            }
+        )
+
+    def run(progress_callback, cancel_event):
+        from core.spine.detect import detect_scenes_bulk
+        from core.spine.project_io import (
+            ProjectModifiedExternally,
+            save_with_mtime_check,
+        )
+
+        result = detect_scenes_bulk(
+            project,
+            source_ids,
+            sensitivity=sensitivity,
+            progress_callback=progress_callback,
+            cancel_event=cancel_event,
+        )
+        try:
+            save_with_mtime_check(project, path, mtime)
+        except ProjectModifiedExternally as exc:
+            return {
+                "success": False,
+                "error": {
+                    "code": "project_modified_externally",
+                    "path": str(exc.path),
+                    "expected_mtime": exc.expected_mtime,
+                    "current_mtime": exc.current_mtime,
+                },
+                "result": result.get("result"),
+            }
+        return result
+
+    return _start_job(
+        ctx,
+        kind="detect_scenes_bulk",
+        args={
+            "project_path": canonical,
+            "source_ids": source_ids,
+            "sensitivity": sensitivity,
+        },
+        project_path=canonical,
+        project_mtime_at_start=mtime,
+        idempotency_key=idempotency_key,
+        run=run,
+    )
+
+
+@mcp.tool()
+async def start_detect_scenes_new_project(
+    video_path: Annotated[str, "Absolute path to video file"],
+    output_project_path: Annotated[
+        str, "Path for the output .sceneripper project file (will be created)"
+    ],
+    sensitivity: Annotated[
+        float, "Detection sensitivity (1.0=more scenes, 10.0=fewer)"
+    ] = 3.0,
+    idempotency_key: Annotated[
+        Optional[str],
+        "Optional idempotency key (max 255 chars)",
+    ] = None,
+    ctx: Context = None,
+) -> str:
+    """Start a job that creates a fresh project from a video file and runs
+    scene detection on it.
+
+    Returns ``{task_id, status, poll_interval}`` immediately. Poll
+    ``get_job_status`` and fetch with ``get_job_result``.
+    """
+    from scene_ripper_mcp.security import validate_project_path, validate_video_path
+
+    valid, error, video = validate_video_path(video_path)
+    if not valid:
+        return json.dumps({"success": False, "error": f"Video: {error}"})
+
+    valid, error, output = validate_project_path(
+        output_project_path, must_exist=False
+    )
+    if not valid:
+        return json.dumps({"success": False, "error": f"Output: {error}"})
+
+    canonical_output = str(output)
+
+    def run(progress_callback, cancel_event):
+        from core.spine.detect import detect_scenes_new_project
+
+        return detect_scenes_new_project(
+            video,
+            output,
+            sensitivity=sensitivity,
+            progress_callback=progress_callback,
+            cancel_event=cancel_event,
+        )
+
+    return _start_job(
+        ctx,
+        kind="detect_scenes_new_project",
+        args={
+            "video_path": str(video),
+            "output_project_path": canonical_output,
+            "sensitivity": sensitivity,
+        },
+        project_path=canonical_output,
+        project_mtime_at_start=None,
+        idempotency_key=idempotency_key,
+        run=run,
+    )
