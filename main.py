@@ -146,6 +146,12 @@ def main():
     runtime_smoke_target = os.environ.get(RUNTIME_SMOKE_TARGET_ENV, "").strip()
 
     if runtime_smoke_target:
+        # Smoke targets may bare-`import mpv`; the real app defers that import
+        # until playback starts and patches ctypes.util.find_library first, so
+        # mirror the prep here before dispatching.
+        if is_frozen():
+            from ui.video_player import _prepare_frozen_mpv_import
+            _prepare_frozen_mpv_import()
         completed_target = run_runtime_smoke_target(runtime_smoke_target)
         logger.info("Runtime smoke test '%s' completed successfully", completed_target)
         return 0
