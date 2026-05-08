@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 
 from .base_tab import BaseTab
-from ui.clip_browser import ClipBrowser
+from ui.clip_browser import ClipBrowser, VIRTUALIZATION_THRESHOLD
 from ui.widgets import EmptyStateWidget
 from ui.widgets.active_filter_chips import ActiveFilterChips
 from ui.widgets.filter_sidebar import FilterSidebar
@@ -220,6 +220,10 @@ class CutTab(BaseTab):
     def _on_filters_changed(self):
         """Handle filter changes - clear selection and update UI."""
         self.clear_selection()
+        self._update_clip_count_label()
+
+    def _update_clip_count_label(self):
+        """Update clip count text, including active filter visibility."""
         visible = self.clip_browser.get_visible_clip_count()
         total = self.clip_browser.get_total_clip_count()
         if self.clip_browser.has_active_filters():
@@ -267,6 +271,28 @@ class CutTab(BaseTab):
                 self.state_stack.setCurrentIndex(self.STATE_NO_VIDEO)
         self._update_selection_ui()
 
+    def set_clip_source_pairs(self, clip_source_pairs: list[tuple[object, object]]):
+        """Replace the browser contents with the provided clip/source pairs."""
+        self.clip_browser.clear()
+        self._clips = [clip for clip, _source in clip_source_pairs]
+
+        if not clip_source_pairs:
+            self.clip_count_label.setText("")
+            if self._current_source:
+                self.state_stack.setCurrentIndex(self.STATE_NO_CLIPS)
+            else:
+                self.state_stack.setCurrentIndex(self.STATE_NO_VIDEO)
+            self._update_selection_ui()
+            return
+
+        self.state_stack.setCurrentIndex(self.STATE_CLIPS)
+        if len(clip_source_pairs) >= VIRTUALIZATION_THRESHOLD:
+            self.clip_browser.set_virtual_clips(clip_source_pairs)
+        else:
+            self.clip_browser.add_clips(clip_source_pairs)
+        self._update_clip_count_label()
+        self._update_selection_ui()
+
     def add_clip(self, clip, source):
         """Add a single clip to the browser (called during thumbnail generation)."""
         # Switch to clips state if not already showing clips
@@ -276,7 +302,7 @@ class CutTab(BaseTab):
         # Track clip and update count
         if clip not in self._clips:
             self._clips.append(clip)
-            self.clip_count_label.setText(f"{len(self._clips)} clips")
+            self._update_clip_count_label()
 
     def add_clips(self, clip_source_pairs: list[tuple[object, object]]):
         """Add multiple clips to the browser in one batch."""
@@ -288,7 +314,7 @@ class CutTab(BaseTab):
         for clip, _source in clip_source_pairs:
             if clip not in self._clips:
                 self._clips.append(clip)
-        self.clip_count_label.setText(f"{len(self._clips)} clips")
+        self._update_clip_count_label()
         self._update_selection_ui()
 
     def clear_clips(self):
@@ -303,11 +329,7 @@ class CutTab(BaseTab):
         self.clip_browser.remove_clips_for_source(source_id)
         # Update internal clip list
         self._clips = [c for c in self._clips if c.source_id != source_id]
-        # Update count label
-        if self._clips:
-            self.clip_count_label.setText(f"{len(self._clips)} clips")
-        else:
-            self.clip_count_label.setText("")
+        self._update_clip_count_label()
         self._update_selection_ui()
 
     def update_clip_colors(self, clip_id: str, colors: list):

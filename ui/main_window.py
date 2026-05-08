@@ -1053,6 +1053,29 @@ class MainWindow(QMainWindow):
 
         logger.debug(f"Refreshed Sequence tab with {len(all_clips)} clips from {len(self.sources_by_id)} sources")
 
+    def _cut_tab_clip_source_pairs(self) -> list[tuple[Clip, Source]]:
+        """Return all project clips with resolvable sources for the Cut tab."""
+        clip_source_pairs = []
+        for clip in self.clips:
+            source = self.sources_by_id.get(clip.source_id)
+            if not source:
+                logger.warning(
+                    "Skipping Cut tab sync for clip %s with unknown source %s",
+                    clip.id,
+                    clip.source_id,
+                )
+                continue
+            clip_source_pairs.append((clip, source))
+        return clip_source_pairs
+
+    def _sync_cut_tab_clip_browser(self) -> None:
+        """Synchronize the Cut tab browser with all project clips."""
+        if self.current_source:
+            self.cut_tab.set_source(self.current_source)
+        elif self.sources:
+            self.cut_tab.set_source(self.sources[0])
+        self.cut_tab.set_clip_source_pairs(self._cut_tab_clip_source_pairs())
+
     # --- Worker lifecycle management ---
 
     def _stop_worker_safely(self, worker: Optional[QThread], name: str, timeout_ms: int = 3000) -> None:
@@ -5639,7 +5662,7 @@ class MainWindow(QMainWindow):
         # Update Cut tab with ALL clips from ALL sources (clips accumulate as sources are detected)
         # This ensures the clip count label and _clips list match the browser contents
         logger.info(f"_on_thumbnails_finished: total {len(self.clips)} clips from {len(self.sources)} sources")
-        self.cut_tab.set_clips(self.clips)
+        self._sync_cut_tab_clip_browser()
 
         # Refresh sequence tab with ALL clips from ALL sources
         self._refresh_sequence_tab_clips()
@@ -9134,7 +9157,7 @@ class MainWindow(QMainWindow):
             self.cut_tab.set_source(sources[0])
 
         # Sync all clips to Cut tab
-        self.cut_tab.set_clips(self.clips)
+        self._sync_cut_tab_clip_browser()
 
     def _on_intention_thumbnails_finished(self, generation: int = 0):
         """Handle thumbnail generation completion during intention workflow.
