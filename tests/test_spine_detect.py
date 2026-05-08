@@ -17,8 +17,6 @@ import threading
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 from core.spine.detect import (
     detect_scenes_bulk,
     detect_scenes_for_source,
@@ -60,6 +58,41 @@ def _stub_detect_returns(source, clips):
     )
 
 
+class _FakeSettings:
+    def __init__(self, thumbnail_cache_dir: Path):
+        self.thumbnail_cache_dir = thumbnail_cache_dir
+
+
+class _FakeThumbnailGenerator:
+    def __init__(self, cache_dir: Path):
+        self.cache_dir = cache_dir
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def generate_clip_thumbnail(
+        self,
+        video_path,
+        start_seconds,
+        end_seconds,
+        output_path=None,
+        width=320,
+        height=180,
+    ):
+        output_path = output_path or self.cache_dir / "generated.jpg"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"thumb")
+        return output_path
+
+
+def _stub_thumbnail_generation(tmp_path: Path):
+    return patch.multiple(
+        "core.thumbnail",
+        ThumbnailGenerator=_FakeThumbnailGenerator,
+    ), patch(
+        "core.settings.load_settings",
+        return_value=_FakeSettings(tmp_path / "thumbs"),
+    )
+
+
 def test_detect_scenes_for_source_replaces_clips(tmp_path):
     from models.clip import Clip
 
@@ -76,6 +109,26 @@ def test_detect_scenes_for_source_replaces_clips(tmp_path):
     assert result["result"]["source_id"] == source.id
     assert result["result"]["clip_count"] == 3
     assert {c.id for c in project.clips} == {"c-0", "c-1", "c-2"}
+
+
+def test_detect_scenes_for_source_generates_clip_thumbnails(tmp_path):
+    from models.clip import Clip
+
+    project, source, _ = _build_project_with_source(tmp_path)
+    new_clips = [
+        Clip(id="c-1", source_id=source.id, start_frame=0, end_frame=30),
+        Clip(id="c-2", source_id=source.id, start_frame=30, end_frame=60),
+    ]
+    thumb_patch, settings_patch = _stub_thumbnail_generation(tmp_path)
+
+    with _stub_detect_returns(source, new_clips), thumb_patch, settings_patch:
+        result = detect_scenes_for_source(project, source.id, sensitivity=3.0)
+
+    assert result["success"] is True
+    thumbnails = result["result"]["thumbnails"]
+    assert len(thumbnails["generated"]) == 2
+    assert thumbnails["failed"] == []
+    assert all(c.thumbnail_path and c.thumbnail_path.exists() for c in project.clips)
 
 
 def test_detect_scenes_for_source_unknown_source(tmp_path):
@@ -190,6 +243,37 @@ def test_detect_scenes_new_project_creates_and_saves(tmp_path):
     assert output.exists()
 
 
+def test_detect_scenes_new_project_persists_generated_thumbnails(tmp_path):
+    from core.project import load_project
+    from models.clip import Clip, Source
+
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"fake")
+    output = tmp_path / "new.sceneripper"
+
+    detected_source = Source(
+        id="src-new",
+        file_path=video,
+        duration_seconds=60.0,
+        fps=30.0,
+        width=1920,
+        height=1080,
+    )
+    detected_clips = [
+        Clip(id="c-1", source_id=detected_source.id, start_frame=0, end_frame=30)
+    ]
+    thumb_patch, settings_patch = _stub_thumbnail_generation(tmp_path)
+
+    with _stub_detect_returns(detected_source, detected_clips), thumb_patch, settings_patch:
+        result = detect_scenes_new_project(video, output, sensitivity=3.0)
+
+    assert result["success"] is True
+    _sources, clips, *_ = load_project(output)
+    assert len(clips) == 1
+    assert clips[0].thumbnail_path is not None
+    assert clips[0].thumbnail_path.exists()
+
+
 def test_detect_scenes_bulk_aggregates_failures(tmp_path):
     from core.project import Project
     from models.clip import Clip, Source
@@ -226,7 +310,7 @@ def test_detect_scenes_bulk_aggregates_failures(tmp_path):
 
 def test_detect_scenes_bulk_cancellation(tmp_path):
     from core.project import Project
-    from models.clip import Clip, Source
+    from models.clip import Source
 
     project = Project.new(name="t")
     video = tmp_path / "v.mp4"
