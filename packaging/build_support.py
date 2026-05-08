@@ -1,7 +1,5 @@
 """Build helpers for frozen desktop distribution assets."""
 
-from __future__ import annotations
-
 import base64
 import binascii
 import os
