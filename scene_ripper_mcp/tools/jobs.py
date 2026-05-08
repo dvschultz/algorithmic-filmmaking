@@ -372,7 +372,7 @@ async def start_detect_scenes_bulk(
     """
     from core.project import MissingSourceError
     from scene_ripper_mcp.security import validate_project_path
-    from core.spine.project_io import load_with_mtime, save_with_mtime_check
+    from core.spine.project_io import load_with_mtime
 
     valid, error, path = validate_project_path(project_path)
     if not valid:
@@ -601,6 +601,101 @@ async def start_analyze_shots(
         ctx,
         kind="analyze_shots",
         args={"project_path": canonical, "clip_ids": clip_ids},
+        project_path=canonical,
+        project_mtime_at_start=mtime,
+        idempotency_key=idempotency_key,
+        run=run,
+    )
+
+
+@mcp.tool()
+async def start_generate_thumbnails(
+    project_path: Annotated[str, "Absolute path to .sceneripper project file"],
+    clip_ids: Annotated[
+        Optional[list[str]],
+        "Optional list of clip IDs to process (default: all clips)",
+    ] = None,
+    force: Annotated[
+        bool,
+        "Regenerate thumbnails even when clip.thumbnail_path already exists",
+    ] = False,
+    idempotency_key: Annotated[
+        Optional[str], "Optional idempotency key (max 255 chars)"
+    ] = None,
+    ctx: Context = None,
+) -> str:
+    """Start a job that generates/backfills thumbnails for project clips.
+
+    Existing on-disk thumbnails are skipped unless ``force`` is true. This
+    is useful as a repair step before thumbnail-dependent analysis tools
+    such as ``start_analyze_shots``.
+    """
+    from scene_ripper_mcp.security import validate_project_path
+    from core.project import MissingSourceError
+    from core.spine.project_io import load_with_mtime
+
+    valid, error, path = validate_project_path(project_path)
+    if not valid:
+        return json.dumps({"success": False, "error": error})
+
+    canonical = str(path)
+
+    try:
+        _project, mtime = load_with_mtime(path)
+    except MissingSourceError as exc:
+        return json.dumps(
+            {
+                "success": False,
+                "error": {"code": "source_files_missing", "message": str(exc)},
+            }
+        )
+
+    def run(progress_callback, cancel_event):
+        from core.project import MissingSourceError
+        from core.spine.project_io import (
+            ProjectModifiedExternally,
+            load_with_mtime,
+            save_with_mtime_check,
+        )
+        from core.spine.thumbnails import generate_thumbnails
+
+        try:
+            project, captured_mtime = load_with_mtime(path)
+        except MissingSourceError as exc:
+            return {
+                "success": False,
+                "error": {
+                    "code": "source_files_missing",
+                    "message": str(exc),
+                },
+            }
+
+        result = generate_thumbnails(
+            project,
+            clip_ids,
+            force=force,
+            progress_callback=progress_callback,
+            cancel_event=cancel_event,
+        )
+        try:
+            save_with_mtime_check(project, path, captured_mtime)
+        except ProjectModifiedExternally as exc:
+            return {
+                "success": False,
+                "error": {
+                    "code": "project_modified_externally",
+                    "path": str(exc.path),
+                    "expected_mtime": exc.expected_mtime,
+                    "current_mtime": exc.current_mtime,
+                },
+                "result": result.get("result"),
+            }
+        return result
+
+    return _start_job(
+        ctx,
+        kind="generate_thumbnails",
+        args={"project_path": canonical, "clip_ids": clip_ids, "force": force},
         project_path=canonical,
         project_mtime_at_start=mtime,
         idempotency_key=idempotency_key,

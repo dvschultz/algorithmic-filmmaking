@@ -33,81 +33,29 @@ def _check_cancel(cancel_event: Optional[threading.Event]) -> bool:
     return cancel_event is not None and cancel_event.is_set()
 
 
-def _generate_clip_thumbnails(
+def _generate_detected_clip_thumbnails(
     source,
     clips: list,
     *,
     progress_callback: Optional[Callable[[float, str], None]] = None,
-    progress_start: float = 0.85,
-    progress_end: float = 0.98,
     cancel_event: Optional[threading.Event] = None,
 ) -> dict:
     """Best-effort thumbnail generation for newly detected clips."""
-    if not clips:
-        return {"generated": [], "failed": []}
+    from core.spine.thumbnails import generate_clip_thumbnails
 
-    try:
-        from core.settings import load_settings
-        from core.thumbnail import ThumbnailGenerator
+    result = generate_clip_thumbnails(
+        [(clip, source) for clip in clips],
+        progress_callback=progress_callback,
+        progress_start=0.85,
+        progress_end=0.98,
+        cancel_event=cancel_event,
+    )
+    return {
+        "generated": result["succeeded"],
+        "failed": result["failed"],
+        "skipped": result["skipped"],
+    }
 
-        settings = load_settings()
-        generator = ThumbnailGenerator(cache_dir=settings.thumbnail_cache_dir)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Thumbnail generation unavailable: %s", exc)
-        return {
-            "generated": [],
-            "failed": [
-                {
-                    "clip_id": clip.id,
-                    "code": "thumbnail_generation_unavailable",
-                    "message": str(exc),
-                }
-                for clip in clips
-            ],
-        }
-
-    generated: list[dict] = []
-    failed: list[dict] = []
-    total = len(clips)
-    progress_span = max(0.0, progress_end - progress_start)
-
-    for i, clip in enumerate(clips):
-        if _check_cancel(cancel_event):
-            failed.extend(
-                {"clip_id": c.id, "code": "cancelled"}
-                for c in clips[i:]
-            )
-            break
-
-        if progress_callback is not None:
-            progress = progress_start + (progress_span * (i / total))
-            progress_callback(progress, f"Generating thumbnails ({i + 1}/{total})")
-
-        try:
-            output_path = generator.cache_dir / f"clip_{clip.id}.jpg"
-            thumbnail_path = generator.generate_clip_thumbnail(
-                video_path=source.file_path,
-                start_seconds=clip.start_time(source.fps),
-                end_seconds=clip.end_time(source.fps),
-                output_path=output_path,
-                width=320,
-                height=180,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Failed to generate thumbnail for clip %s: %s", clip.id, exc)
-            failed.append(
-                {
-                    "clip_id": clip.id,
-                    "code": "thumbnail_generation_failed",
-                    "message": str(exc),
-                }
-            )
-            continue
-
-        clip.thumbnail_path = Path(thumbnail_path)
-        generated.append({"clip_id": clip.id, "path": str(clip.thumbnail_path)})
-
-    return {"generated": generated, "failed": failed}
 
 
 def detect_scenes_for_source(
@@ -178,7 +126,7 @@ def detect_scenes_for_source(
         clip.source_id = source.id
     source.analyzed = True
 
-    thumbnails = _generate_clip_thumbnails(
+    thumbnails = _generate_detected_clip_thumbnails(
         source,
         clips,
         progress_callback=progress_callback,
@@ -256,7 +204,7 @@ def detect_scenes_for_video(
         for clip in clips:
             clip.source_id = source.id
         source.analyzed = True
-        thumbnails = _generate_clip_thumbnails(
+        thumbnails = _generate_detected_clip_thumbnails(
             source,
             clips,
             progress_callback=progress_callback,
@@ -266,7 +214,7 @@ def detect_scenes_for_video(
     else:
         source = detected_source
         source.analyzed = True
-        thumbnails = _generate_clip_thumbnails(
+        thumbnails = _generate_detected_clip_thumbnails(
             source,
             clips,
             progress_callback=progress_callback,

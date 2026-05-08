@@ -52,6 +52,7 @@ walkthrough with a concrete example, see
 |---|---|
 | `start_detect_scenes_bulk` | Scene-detect every source in a project |
 | `start_detect_scenes_new_project` | Create a fresh project from a video file and detect scenes |
+| `start_generate_thumbnails` | Generate/backfill clip thumbnails for downstream visual analysis |
 | `start_analyze_colors` | Extract dominant colors per clip |
 | `start_analyze_shots` | Classify shot type (wide / medium / close-up / xclose) |
 | `start_transcribe` | Whisper transcription per clip |

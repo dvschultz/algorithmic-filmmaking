@@ -31,6 +31,7 @@ from scene_ripper_mcp.tools.jobs import (
     get_job_status,
     list_jobs,
     purge_old_jobs,
+    start_generate_thumbnails,
 )
 
 
@@ -60,6 +61,55 @@ def _wait_for_status(store, task_id, expected, timeout=5.0):
             return status
         time.sleep(0.02)
     raise AssertionError(f"timeout waiting for {targets}; last={status!r}")
+
+
+class _FakeSettings:
+    def __init__(self, thumbnail_cache_dir):
+        self.thumbnail_cache_dir = thumbnail_cache_dir
+
+
+class _FakeThumbnailGenerator:
+    def __init__(self, cache_dir):
+        self.cache_dir = cache_dir
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def generate_clip_thumbnail(
+        self,
+        video_path,
+        start_seconds,
+        end_seconds,
+        output_path=None,
+        width=320,
+        height=180,
+    ):
+        output_path = output_path or self.cache_dir / "generated.jpg"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"thumb")
+        return output_path
+
+
+def _make_project_file(tmp_path):
+    from core.project import Project
+    from models.clip import Clip, Source
+
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"fake")
+    project_path = tmp_path / "project.sceneripper"
+
+    project = Project.new(name="project")
+    source = Source(
+        id="src-1",
+        file_path=video,
+        duration_seconds=60.0,
+        fps=30.0,
+        width=1920,
+        height=1080,
+    )
+    clip = Clip(id="clip-1", source_id=source.id, start_frame=0, end_frame=30)
+    project.add_source(source)
+    project.add_clips([clip])
+    assert project.save(project_path)
+    return project_path
 
 
 @pytest.mark.asyncio
@@ -192,7 +242,7 @@ async def test_list_jobs_returns_safe_projection(lifespan_ctx):
 @pytest.mark.asyncio
 async def test_list_jobs_status_filter(lifespan_ctx):
     ctx, store, _ = lifespan_ctx
-    queued = store.insert(kind="x", args={}, status=STATUS_QUEUED)
+    store.insert(kind="x", args={}, status=STATUS_QUEUED)
     completed = store.insert(kind="x", args={}, status=STATUS_COMPLETED)
 
     out = json.loads(
@@ -229,3 +279,32 @@ async def test_purge_old_jobs_negative_days_rejected(lifespan_ctx):
     out = json.loads(await purge_old_jobs(days=-5, ctx=ctx))
     assert out["success"] is False
     assert out["error"]["code"] == "invalid_days"
+
+
+@pytest.mark.asyncio
+async def test_start_generate_thumbnails_saves_project_paths(lifespan_ctx, tmp_path, monkeypatch):
+    from core.project import load_project
+
+    ctx, store, _runtime = lifespan_ctx
+    project_path = _make_project_file(tmp_path)
+
+    monkeypatch.setattr(
+        "core.settings.load_settings",
+        lambda: _FakeSettings(tmp_path / "thumbs"),
+    )
+    monkeypatch.setattr("core.thumbnail.ThumbnailGenerator", _FakeThumbnailGenerator)
+
+    out = json.loads(
+        await start_generate_thumbnails(project_path=str(project_path), ctx=ctx)
+    )
+
+    assert out["success"] is True
+    _wait_for_status(store, out["task_id"], STATUS_COMPLETED)
+
+    result = json.loads(await get_job_result(task_id=out["task_id"], ctx=ctx))
+    assert result["success"] is True
+    assert len(result["result"]["result"]["succeeded"]) == 1
+
+    _sources, clips, *_ = load_project(project_path)
+    assert clips[0].thumbnail_path is not None
+    assert clips[0].thumbnail_path.exists()
