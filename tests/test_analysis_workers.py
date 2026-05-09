@@ -794,6 +794,81 @@ class TestDescriptionWorkerRetries:
         assert len(attempts) == 1
 
 
+# --- CustomQueryWorker ---
+
+class TestCustomQueryWorkerTaskBuilding:
+    def test_parallelism_clamped(self):
+        from ui.workers.custom_query_worker import CustomQueryWorker
+
+        worker = CustomQueryWorker([], "person", {}, tier="cloud", parallelism=100)
+        assert worker._parallelism == 5  # Max is 5
+
+        worker = CustomQueryWorker([], "person", {}, tier="cloud", parallelism=0)
+        assert worker._parallelism == 1  # Min is 1
+
+    def test_local_tier_forces_serial_parallelism(self):
+        from ui.workers.custom_query_worker import CustomQueryWorker
+
+        worker = CustomQueryWorker([], "person", {}, tier="local", parallelism=5)
+        assert worker._parallelism == 1
+
+    @patch("ui.workers.custom_query_worker.load_settings")
+    def test_default_local_setting_forces_serial_parallelism(self, mock_load_settings):
+        from core.settings import Settings
+        from ui.workers.custom_query_worker import CustomQueryWorker
+
+        mock_load_settings.return_value = Settings(description_model_tier="local")
+
+        worker = CustomQueryWorker([], "person", {}, parallelism=5)
+        assert worker._parallelism == 1
+
+    def test_local_run_processes_tasks_on_worker_thread(
+        self, monkeypatch, thumbnail_path
+    ):
+        import threading
+
+        from ui.workers.custom_query_worker import CustomQueryWorker
+
+        clip = _make_clip_with_thumb("clip-1", thumbnail_path)
+        worker = CustomQueryWorker(
+            [clip],
+            "person",
+            {},
+            tier="local",
+            parallelism=5,
+            skip_existing=False,
+        )
+        caller_thread_id = threading.get_ident()
+        evaluation_thread_ids = []
+        results = []
+
+        monkeypatch.setattr(
+            "core.analysis.description.is_model_loaded",
+            lambda: True,
+        )
+
+        def _evaluate_custom_query(*_args, **_kwargs):
+            evaluation_thread_ids.append(threading.get_ident())
+            return True, 0.9, "local-test-model"
+
+        monkeypatch.setattr(
+            "core.analysis.custom_query.evaluate_custom_query",
+            _evaluate_custom_query,
+        )
+        worker.query_result_ready.connect(
+            lambda clip_id, query, match, confidence, model: results.append(
+                (clip_id, query, match, confidence, model)
+            )
+        )
+
+        worker.run()
+
+        assert evaluation_thread_ids == [caller_thread_id]
+        assert results == [
+            ("clip-1", "person", True, 0.9, "local-test-model")
+        ]
+
+
 # --- Settings round-trip ---
 
 class TestAnalysisParallelismSettings:
