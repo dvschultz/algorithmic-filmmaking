@@ -1,9 +1,9 @@
 """YouTube search and download MCP tools."""
 
+import asyncio
 import json
 import logging
 import os
-from pathlib import Path
 from typing import Annotated, Optional
 
 from mcp.server.fastmcp import Context
@@ -124,40 +124,39 @@ async def download_video(
         settings = load_settings()
         output_path = settings.download_dir
 
+    return await asyncio.to_thread(_download_video_sync, url, output_path)
+
+
+def _download_video_sync(url, output_path):
+    """Synchronous body for ``download_video`` (offloaded via ``asyncio.to_thread``)."""
     try:
-        if ctx:
-            await ctx.report_progress(0.0, "Starting download...")
+        from core.spine.downloads import download_videos as _impl
 
-        from core.downloader import VideoDownloader
+        spine_result = _impl([url], output_path)
+        if not spine_result.get("success"):
+            return json.dumps(spine_result)
 
-        downloader = VideoDownloader(download_dir=output_path)
-
-        # Validate URL first
-        valid, error = downloader.is_valid_url(url)
-        if not valid:
-            return json.dumps({"success": False, "error": error})
-
-        # Download with progress callback
-        async def progress_callback(progress: float, message: str):
-            if ctx:
-                await ctx.report_progress(progress / 100.0, message)
-
-        result = downloader.download(url)
-
-        if ctx:
-            await ctx.report_progress(1.0, "Complete")
-
-        if result.success:
+        payload = spine_result["result"]
+        if payload["succeeded"]:
+            entry = payload["succeeded"][0]
             return json.dumps(
                 {
                     "success": True,
-                    "file_path": str(result.file_path),
-                    "title": result.title,
-                    "duration": result.duration,
+                    "file_path": entry["file_path"],
+                    "title": entry["title"],
+                    "duration": entry["duration"],
                 }
             )
-        else:
-            return json.dumps({"success": False, "error": result.error})
+        if payload["failed"]:
+            entry = payload["failed"][0]
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": entry.get("error_message")
+                    or entry.get("error_code"),
+                }
+            )
+        return json.dumps({"success": False, "error": "No result"})
     except Exception as e:
         logger.exception("Video download failed")
         return json.dumps({"success": False, "error": str(e)})
@@ -197,52 +196,47 @@ async def download_videos(
         settings = load_settings()
         output_path = settings.download_dir
 
+    return await asyncio.to_thread(_download_videos_sync, urls, output_path)
+
+
+def _download_videos_sync(urls, output_path):
+    """Synchronous body for ``download_videos`` (offloaded via ``asyncio.to_thread``)."""
     try:
-        from core.downloader import VideoDownloader
+        from core.spine.downloads import download_videos as _impl
 
-        downloader = VideoDownloader(download_dir=output_path)
+        spine_result = _impl(urls, output_path)
+        if not spine_result.get("success"):
+            return json.dumps(spine_result)
 
+        payload = spine_result["result"]
+        # Preserve the existing per-URL result envelope shape so callers
+        # don't notice the spine refactor.
         results = []
-        successful = 0
-        failed = 0
-
-        for i, url in enumerate(urls):
-            if ctx:
-                await ctx.report_progress(i / len(urls), f"Downloading {i + 1}/{len(urls)}...")
-
-            # Validate URL
-            valid, error = downloader.is_valid_url(url)
-            if not valid:
-                results.append({"url": url, "success": False, "error": error})
-                failed += 1
-                continue
-
-            # Download
-            result = downloader.download(url)
-
-            if result.success:
-                results.append(
-                    {
-                        "url": url,
-                        "success": True,
-                        "file_path": str(result.file_path),
-                        "title": result.title,
-                    }
-                )
-                successful += 1
-            else:
-                results.append({"url": url, "success": False, "error": result.error})
-                failed += 1
-
-        if ctx:
-            await ctx.report_progress(1.0, "Complete")
+        for entry in payload["succeeded"]:
+            results.append(
+                {
+                    "url": entry["url"],
+                    "success": True,
+                    "file_path": entry["file_path"],
+                    "title": entry["title"],
+                    "duration": entry["duration"],
+                }
+            )
+        for entry in payload["failed"]:
+            results.append(
+                {
+                    "url": entry["url"],
+                    "success": False,
+                    "error": entry.get("error_message", entry.get("error_code")),
+                }
+            )
 
         return json.dumps(
             {
-                "success": successful > 0,
+                "success": True,
+                "successful": len(payload["succeeded"]),
+                "failed": len(payload["failed"]),
                 "total": len(urls),
-                "successful": successful,
-                "failed": failed,
                 "results": results,
             }
         )

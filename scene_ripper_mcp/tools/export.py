@@ -2,7 +2,6 @@
 
 import json
 import logging
-from pathlib import Path
 from typing import Annotated, Optional
 
 from mcp.server.fastmcp import Context
@@ -43,23 +42,26 @@ async def export_clips(
         return json.dumps({"success": False, "error": f"Output: {error}"})
 
     try:
-        from core.project import load_project
         from core.ffmpeg import FFmpegProcessor
+        from core.project import MissingSourceError
+        from core.spine.project_io import load_with_mtime
 
-        if ctx:
-            await ctx.report_progress(0.1, "Loading project...")
+        try:
+            project, _mtime = load_with_mtime(proj_path)
+        except MissingSourceError as e:
+            return json.dumps({
+                "success": False,
+                "error": {"code": "source_files_missing", "message": str(e)},
+            })
 
-        sources, clips, _, _, _, _, audio_sources = load_project(proj_path)
-
-        # Build source lookup
-        sources_by_id = {s.id: s for s in sources}
+        sources_by_id = project.sources_by_id
 
         # Filter clips if specific IDs provided
         if clip_ids:
             clip_ids_set = set(clip_ids)
-            clips_to_export = [c for c in clips if c.id in clip_ids_set]
+            clips_to_export = [c for c in project.clips if c.id in clip_ids_set]
         else:
-            clips_to_export = clips
+            clips_to_export = list(project.clips)
 
         if not clips_to_export:
             return json.dumps({"success": False, "error": "No clips to export"})
@@ -151,24 +153,31 @@ async def export_sequence(
         return json.dumps({"success": False, "error": f"Output: {error}"})
 
     try:
-        from core.project import load_project
+        from core.project import MissingSourceError
         from core.sequence_export import export_sequence as do_export
+        from core.spine.project_io import load_with_mtime
 
         if ctx:
             await ctx.report_progress(0.1, "Loading project...")
 
-        sources, clips, sequence, _, _, _, audio_sources = load_project(proj_path)
+        try:
+            project, _mtime = load_with_mtime(proj_path)
+        except MissingSourceError as e:
+            return json.dumps({
+                "success": False,
+                "error": {"code": "source_files_missing", "message": str(e)},
+            })
 
+        sequence = project.sequence
         if not sequence:
             return json.dumps({"success": False, "error": "No sequence in project"})
 
         if not sequence.get_all_clips():
             return json.dumps({"success": False, "error": "Sequence is empty"})
 
-        # Build lookups
-        sources_dict = {s.id: s for s in sources}
+        sources_dict = project.sources_by_id
         clips_dict = {}
-        for clip in clips:
+        for clip in project.clips:
             source = sources_dict.get(clip.source_id)
             if source:
                 clips_dict[clip.id] = (clip, source)
@@ -178,12 +187,6 @@ async def export_sequence(
 
         if ctx:
             await ctx.report_progress(0.2, "Rendering sequence...")
-
-        # Progress wrapper
-        async def progress_cb(progress: float, message: str):
-            if ctx:
-                # Scale to 0.2-1.0 range
-                await ctx.report_progress(0.2 + progress * 0.8, message)
 
         success = do_export(
             sequence=sequence,
@@ -240,22 +243,29 @@ async def export_edl(
         return json.dumps({"success": False, "error": f"Output: {error}"})
 
     try:
-        from core.project import load_project
-        from core.edl_export import export_edl as do_export, EDLExportConfig
+        from core.edl_export import EDLExportConfig, export_edl as do_export
+        from core.project import MissingSourceError
+        from core.spine.project_io import load_with_mtime
 
         if ctx:
             await ctx.report_progress(0.1, "Loading project...")
 
-        sources, clips, sequence, _, _, _, audio_sources = load_project(proj_path)
+        try:
+            project, _mtime = load_with_mtime(proj_path)
+        except MissingSourceError as e:
+            return json.dumps({
+                "success": False,
+                "error": {"code": "source_files_missing", "message": str(e)},
+            })
 
+        sequence = project.sequence
         if not sequence:
             return json.dumps({"success": False, "error": "No sequence in project"})
 
         if not sequence.get_all_clips():
             return json.dumps({"success": False, "error": "Sequence is empty"})
 
-        # Build source lookup
-        sources_dict = {s.id: s for s in sources}
+        sources_dict = project.sources_by_id
 
         # Ensure output has .edl extension
         if not out_path.suffix.lower() == ".edl":
@@ -319,14 +329,22 @@ async def export_dataset(
         return json.dumps({"success": False, "error": f"Output: {error}"})
 
     try:
-        from core.project import load_project
-        from core.dataset_export import export_dataset as do_export, DatasetExportConfig
+        from core.dataset_export import DatasetExportConfig, export_dataset as do_export
+        from core.project import MissingSourceError
+        from core.spine.project_io import load_with_mtime
 
         if ctx:
             await ctx.report_progress(0.1, "Loading project...")
 
-        sources, clips, _, _, _, _, audio_sources = load_project(proj_path)
+        try:
+            project, _mtime = load_with_mtime(proj_path)
+        except MissingSourceError as e:
+            return json.dumps({
+                "success": False,
+                "error": {"code": "source_files_missing", "message": str(e)},
+            })
 
+        sources = project.sources
         if not sources:
             return json.dumps({"success": False, "error": "No sources in project"})
 
@@ -341,9 +359,8 @@ async def export_dataset(
             await ctx.report_progress(0.2, "Building dataset...")
 
         # Export for first source (dataset_export expects single source)
-        # For multi-source projects, export each source separately or use a wrapper
         source = sources[0]
-        source_clips = [c for c in clips if c.source_id == source.id]
+        source_clips = project.clips_by_source.get(source.id, [])
 
         config = DatasetExportConfig(
             output_path=out_path,
@@ -400,12 +417,26 @@ async def export_full_dataset(
 
     try:
         from datetime import datetime
-        from core.project import load_project
+
+        from core.project import MissingSourceError
+        from core.spine.project_io import load_with_mtime
 
         if ctx:
             await ctx.report_progress(0.1, "Loading project...")
 
-        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(proj_path)
+        try:
+            project, _mtime = load_with_mtime(proj_path)
+        except MissingSourceError as e:
+            return json.dumps({
+                "success": False,
+                "error": {"code": "source_files_missing", "message": str(e)},
+            })
+
+        metadata = project.metadata
+        sources = project.sources
+        clips = project.clips
+        sequence = project.sequence
+        sources_by_id = project.sources_by_id
 
         # Build comprehensive export
         export_data = {
@@ -425,10 +456,6 @@ async def export_full_dataset(
         if ctx:
             await ctx.report_progress(0.3, "Processing sources...")
 
-        # Build source lookup
-        sources_by_id = {s.id: s for s in sources}
-
-        # Add sources
         for source in sources:
             export_data["sources"].append(
                 {
@@ -445,7 +472,6 @@ async def export_full_dataset(
         if ctx:
             await ctx.report_progress(0.5, "Processing clips...")
 
-        # Add clips
         for clip in clips:
             source = sources_by_id.get(clip.source_id)
             fps = source.fps if source else 30.0
@@ -481,7 +507,6 @@ async def export_full_dataset(
         if ctx:
             await ctx.report_progress(0.7, "Processing sequence...")
 
-        # Add sequence if present
         if sequence:
             seq_data = {
                 "id": sequence.id,

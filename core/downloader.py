@@ -10,10 +10,10 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 from dataclasses import dataclass
-from urllib.parse import urlparse
 
 from core.binary_resolver import find_binary, get_subprocess_env, get_subprocess_kwargs
 from core.paths import get_managed_bin_dir, is_frozen
+from core.spine.url_security import validate_url as _spine_validate_url
 
 logger = logging.getLogger(__name__)
 
@@ -169,21 +169,6 @@ class DownloadResult:
 class VideoDownloader:
     """Downloads videos from YouTube, Vimeo, and other supported sites."""
 
-    # Whitelist of allowed domains for security
-    ALLOWED_DOMAINS = {
-        # YouTube
-        "youtube.com",
-        "www.youtube.com",
-        "youtu.be",
-        # Vimeo
-        "vimeo.com",
-        "www.vimeo.com",
-        "player.vimeo.com",
-        # Internet Archive
-        "archive.org",
-        "www.archive.org",
-    }
-
     def __init__(self, download_dir: Optional[Path] = None):
         self.ytdlp_path = self._find_ytdlp()
 
@@ -208,44 +193,12 @@ class VideoDownloader:
         return path
 
     def is_valid_url(self, url: str) -> tuple[bool, str]:
+        """Check if URL is from an allowed domain with safe scheme.
+
+        Delegates to ``core.spine.url_security.validate_url`` so the GUI
+        agent, downloader, and MCP server share a single validator.
         """
-        Check if URL is from an allowed domain with safe scheme.
-
-        Returns:
-            Tuple of (is_valid, error_message)
-        """
-        try:
-            parsed = urlparse(url)
-
-            # Validate scheme first - only allow HTTP/HTTPS
-            if parsed.scheme not in ("http", "https"):
-                return False, "Only HTTP/HTTPS URLs are supported"
-
-            host = parsed.netloc.lower()
-
-            if not host:
-                return False, "Invalid URL format"
-
-            # Remove port if present (e.g., youtube.com:443)
-            if ":" in host:
-                host = host.rsplit(":", 1)[0]
-
-            # Remove credentials if present (e.g., user:pass@youtube.com)
-            if "@" in host:
-                host = host.rsplit("@", 1)[-1]
-
-            # Check against whitelist
-            if host in self.ALLOWED_DOMAINS:
-                return True, ""
-
-            # Check for Internet Archive CDN pattern (ia800.us.archive.org, etc.)
-            if host.endswith(".us.archive.org"):
-                return True, ""
-
-            return False, f"Domain not supported: {host}. Supported: YouTube, Vimeo, Internet Archive"
-
-        except (ValueError, AttributeError) as e:
-            return False, f"URL parsing error: {e}"
+        return _spine_validate_url(url)
 
     def get_video_info(self, url: str, include_format_details: bool = False) -> dict:
         """

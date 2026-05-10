@@ -1,9 +1,10 @@
 """Analysis MCP tools for color extraction, shot classification, and transcription."""
 
+import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated
 
 from mcp.server.fastmcp import Context
 
@@ -35,30 +36,39 @@ async def analyze_colors(
     if not valid:
         return json.dumps({"success": False, "error": error})
 
+    return await asyncio.to_thread(_analyze_colors_sync, path, num_colors)
+
+
+def _analyze_colors_sync(path, num_colors):
+    """Synchronous body for ``analyze_colors`` (offloaded via ``asyncio.to_thread``)."""
     try:
-        from core.project import load_project, save_project
-        from core.analysis.color import extract_dominant_colors, classify_color_palette
-        from core.thumbnail import get_thumbnail_path
+        from core.analysis.color import extract_dominant_colors
+        from core.project import MissingSourceError
+        from core.spine.project_io import (
+            ProjectModifiedExternally,
+            load_with_mtime,
+            save_with_mtime_check,
+        )
 
-        if ctx:
-            await ctx.report_progress(0.1, "Loading project...")
+        try:
+            project, mtime = load_with_mtime(path)
+        except MissingSourceError as e:
+            return json.dumps({
+                "success": False,
+                "error": {"code": "source_files_missing", "message": str(e)},
+            })
 
-        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(path)
-
+        clips = project.clips
         if not clips:
             return json.dumps({"success": False, "error": "No clips in project"})
 
-        # Build source lookup
-        sources_by_id = {s.id: s for s in sources}
+        sources_by_id = project.sources_by_id
 
         analyzed_count = 0
         skipped_count = 0
+        updated: list = []
 
-        for i, clip in enumerate(clips):
-            if ctx:
-                progress = 0.1 + (0.8 * i / len(clips))
-                await ctx.report_progress(progress, f"Analyzing clip {i + 1}/{len(clips)}...")
-
+        for clip in clips:
             source = sources_by_id.get(clip.source_id)
             if not source or not source.file_path.exists():
                 skipped_count += 1
@@ -74,28 +84,25 @@ async def analyze_colors(
             if colors:
                 clip.dominant_colors = colors
                 analyzed_count += 1
+                updated.append(clip)
             else:
                 skipped_count += 1
 
-        if ctx:
-            await ctx.report_progress(0.9, "Saving project...")
+        if updated:
+            project.update_clips(updated)
 
-        # Save updated project
-        success = save_project(
-            filepath=path,
-            sources=sources,
-            clips=clips,
-            sequence=sequence,
-            ui_state=ui_state,
-            metadata=metadata,
-            audio_sources=audio_sources,
-        )
-
-        if not success:
-            return json.dumps({"success": False, "error": "Failed to save project"})
-
-        if ctx:
-            await ctx.report_progress(1.0, "Complete")
+        try:
+            save_with_mtime_check(project, path, mtime)
+        except ProjectModifiedExternally as exc:
+            return json.dumps({
+                "success": False,
+                "error": {
+                    "code": "project_modified_externally",
+                    "path": str(exc.path),
+                    "expected_mtime": exc.expected_mtime,
+                    "current_mtime": exc.current_mtime,
+                },
+            })
 
         return json.dumps(
             {
@@ -130,32 +137,41 @@ async def analyze_shots(
     if not valid:
         return json.dumps({"success": False, "error": error})
 
+    return await asyncio.to_thread(_analyze_shots_sync, path)
+
+
+def _analyze_shots_sync(path):
+    """Synchronous body for ``analyze_shots`` (offloaded via ``asyncio.to_thread``)."""
     try:
-        from core.project import load_project, save_project
         from core.analysis.shots import classify_shot_type
+        from core.project import MissingSourceError
+        from core.spine.project_io import (
+            ProjectModifiedExternally,
+            load_with_mtime,
+            save_with_mtime_check,
+        )
         from core.thumbnail import get_thumbnail_path
 
-        if ctx:
-            await ctx.report_progress(0.1, "Loading project...")
+        try:
+            project, mtime = load_with_mtime(path)
+        except MissingSourceError as e:
+            return json.dumps({
+                "success": False,
+                "error": {"code": "source_files_missing", "message": str(e)},
+            })
 
-        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(path)
-
+        clips = project.clips
         if not clips:
             return json.dumps({"success": False, "error": "No clips in project"})
 
-        # Build source lookup
-        sources_by_id = {s.id: s for s in sources}
+        sources_by_id = project.sources_by_id
 
         analyzed_count = 0
         skipped_count = 0
-        shot_type_counts = {}
+        shot_type_counts: dict = {}
+        updated: list = []
 
-        for i, clip in enumerate(clips):
-            if ctx:
-                progress = 0.1 + (0.8 * i / len(clips))
-                await ctx.report_progress(progress, f"Classifying clip {i + 1}/{len(clips)}...")
-
-            # Get thumbnail path
+        for clip in clips:
             source = sources_by_id.get(clip.source_id)
             if not source:
                 skipped_count += 1
@@ -169,34 +185,30 @@ async def analyze_shots(
                     skipped_count += 1
                     continue
 
-            # Classify shot type
-            shot_type, confidence = classify_shot_type(thumb_path)
+            shot_type, _confidence = classify_shot_type(thumb_path)
             if shot_type != "unknown":
                 clip.shot_type = shot_type
                 analyzed_count += 1
                 shot_type_counts[shot_type] = shot_type_counts.get(shot_type, 0) + 1
+                updated.append(clip)
             else:
                 skipped_count += 1
 
-        if ctx:
-            await ctx.report_progress(0.9, "Saving project...")
+        if updated:
+            project.update_clips(updated)
 
-        # Save updated project
-        success = save_project(
-            filepath=path,
-            sources=sources,
-            clips=clips,
-            sequence=sequence,
-            ui_state=ui_state,
-            metadata=metadata,
-            audio_sources=audio_sources,
-        )
-
-        if not success:
-            return json.dumps({"success": False, "error": "Failed to save project"})
-
-        if ctx:
-            await ctx.report_progress(1.0, "Complete")
+        try:
+            save_with_mtime_check(project, path, mtime)
+        except ProjectModifiedExternally as exc:
+            return json.dumps({
+                "success": False,
+                "error": {
+                    "code": "project_modified_externally",
+                    "path": str(exc.path),
+                    "expected_mtime": exc.expected_mtime,
+                    "current_mtime": exc.current_mtime,
+                },
+            })
 
         return json.dumps(
             {
@@ -236,6 +248,11 @@ async def transcribe(
     if not valid:
         return json.dumps({"success": False, "error": error})
 
+    return await asyncio.to_thread(_transcribe_sync, path, model, language)
+
+
+def _transcribe_sync(path, model, language):
+    """Synchronous body for ``transcribe`` (offloaded via ``asyncio.to_thread``)."""
     try:
         from core.transcription import is_faster_whisper_available
 
@@ -247,36 +264,40 @@ async def transcribe(
                 }
             )
 
-        from core.project import load_project, save_project
+        from core.project import MissingSourceError
+        from core.spine.project_io import (
+            ProjectModifiedExternally,
+            load_with_mtime,
+            save_with_mtime_check,
+        )
         from core.transcription import transcribe_clip
 
-        if ctx:
-            await ctx.report_progress(0.1, "Loading project...")
+        try:
+            project, mtime = load_with_mtime(path)
+        except MissingSourceError as e:
+            return json.dumps({
+                "success": False,
+                "error": {"code": "source_files_missing", "message": str(e)},
+            })
 
-        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(path)
-
+        clips = project.clips
         if not clips:
             return json.dumps({"success": False, "error": "No clips in project"})
 
-        # Build source lookup
-        sources_by_id = {s.id: s for s in sources}
+        sources_by_id = project.sources_by_id
 
         transcribed_count = 0
         skipped_count = 0
         total_segments = 0
+        updated: list = []
 
-        for i, clip in enumerate(clips):
-            if ctx:
-                progress = 0.1 + (0.8 * i / len(clips))
-                await ctx.report_progress(progress, f"Transcribing clip {i + 1}/{len(clips)}...")
-
+        for clip in clips:
             source = sources_by_id.get(clip.source_id)
             if not source or not source.file_path.exists():
                 skipped_count += 1
                 continue
 
             try:
-                # Transcribe the clip
                 segments = transcribe_clip(
                     video_path=source.file_path,
                     start_time=clip.start_time(source.fps),
@@ -289,31 +310,28 @@ async def transcribe(
                     clip.transcript = segments
                     transcribed_count += 1
                     total_segments += len(segments)
+                    updated.append(clip)
                 else:
                     skipped_count += 1
             except Exception as e:
                 logger.warning(f"Failed to transcribe clip {clip.id}: {e}")
                 skipped_count += 1
 
-        if ctx:
-            await ctx.report_progress(0.9, "Saving project...")
+        if updated:
+            project.update_clips(updated)
 
-        # Save updated project
-        success = save_project(
-            filepath=path,
-            sources=sources,
-            clips=clips,
-            sequence=sequence,
-            ui_state=ui_state,
-            metadata=metadata,
-            audio_sources=audio_sources,
-        )
-
-        if not success:
-            return json.dumps({"success": False, "error": "Failed to save project"})
-
-        if ctx:
-            await ctx.report_progress(1.0, "Complete")
+        try:
+            save_with_mtime_check(project, path, mtime)
+        except ProjectModifiedExternally as exc:
+            return json.dumps({
+                "success": False,
+                "error": {
+                    "code": "project_modified_externally",
+                    "path": str(exc.path),
+                    "expected_mtime": exc.expected_mtime,
+                    "current_mtime": exc.current_mtime,
+                },
+            })
 
         return json.dumps(
             {
@@ -350,9 +368,18 @@ async def get_analysis_status(
         return json.dumps({"success": False, "error": error})
 
     try:
-        from core.project import load_project
+        from core.project import MissingSourceError
+        from core.spine.project_io import load_with_mtime
 
-        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(path)
+        try:
+            project, _mtime = load_with_mtime(path)
+        except MissingSourceError as e:
+            return json.dumps({
+                "success": False,
+                "error": {"code": "source_files_missing", "message": str(e)},
+            })
+
+        clips = project.clips
 
         # Count analysis types
         has_colors = sum(1 for c in clips if c.dominant_colors)
@@ -362,7 +389,7 @@ async def get_analysis_status(
         has_notes = sum(1 for c in clips if c.notes)
 
         # Shot type distribution
-        shot_types = {}
+        shot_types: dict = {}
         for c in clips:
             if c.shot_type:
                 shot_types[c.shot_type] = shot_types.get(c.shot_type, 0) + 1

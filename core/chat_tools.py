@@ -12,7 +12,6 @@ during chat interactions. Tools are split into two categories:
 
 import inspect
 import logging
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, get_type_hints
@@ -25,6 +24,7 @@ from core.youtube_api import (
 )
 from core.downloader import VideoDownloader
 from core.settings import load_settings
+from core.spine.security import validate_path
 from core.constants import (
     VALID_ASPECT_RATIOS,
     VALID_COLOR_PALETTES,
@@ -46,193 +46,17 @@ def _get_plan_controller(main_window) -> PlanController:
     return controller
 
 
-def _validate_path(path_str: str, must_exist: bool = False, allow_relative: bool = False) -> tuple[bool, str, Optional[Path]]:
-    """Validate a file path for security.
-
-    Args:
-        path_str: Path string to validate
-        must_exist: Whether the path must exist
-        allow_relative: Whether to allow relative paths
-
-    Returns:
-        Tuple of (is_valid, error_message, resolved_path)
-    """
-    if not path_str:
-        return False, "Path cannot be empty", None
-
-    # Check for path traversal attempts in raw string BEFORE any parsing
-    # This prevents bypass via Path() normalization
-    if ".." in path_str:
-        return False, f"Path traversal not allowed: {path_str}", None
-
-    try:
-        path = Path(path_str)
-
-        # Resolve to absolute path
-        resolved = path.resolve()
-
-        # Check for absolute path requirement
-        if not allow_relative and not path.is_absolute():
-            return False, f"Only absolute paths are allowed: {path_str}", None
-
-        # Check existence if required
-        if must_exist and not resolved.exists():
-            return False, f"Path does not exist: {path_str}", None
-
-        # Ensure path is within user's home directory or common safe locations
-        home = Path.home()
-        safe_roots = [
-            home,
-            Path("/tmp").resolve(),  # Resolve symlinks (macOS: /tmp -> /private/tmp)
-            Path(tempfile.gettempdir()).resolve(),
-        ]
-
-        # Platform-specific safe roots
-        import sys
-        if sys.platform == "darwin":
-            safe_roots.extend([
-                Path("/var/folders"),
-                Path("/Volumes"),
-                Path("/private/tmp"),
-            ])
-        elif sys.platform == "win32":
-            # Allow all existing drive roots (users store videos on D:\, E:\, etc.)
-            import string
-            for letter in string.ascii_uppercase:
-                drive = Path(f"{letter}:\\")
-                if drive.exists():
-                    safe_roots.append(drive)
-
-        is_safe = any(
-            _is_path_under(resolved, safe_root)
-            for safe_root in safe_roots
-        )
-
-        if not is_safe:
-            return False, f"Path must be within home directory or temp: {path_str}", None
-
-        return True, "", resolved
-
-    except Exception as e:
-        return False, f"Invalid path: {e}", None
-
-
-def _is_path_under(path: Path, root: Path) -> bool:
-    """Check if path is under root directory."""
-    try:
-        path.relative_to(root)
-        return True
-    except ValueError:
-        return False
-
-
-def _truncate_for_agent(text: str | None, limit: int = 1200) -> str | None:
-    """Keep tool payloads concise enough for reliable agent summaries."""
-    if not text:
-        return None
-    value = str(text).strip()
-    if len(value) <= limit:
-        return value
-    return value[: limit - 3].rstrip() + "..."
-
-
-def _clip_summary_for_agent(project, clip, source=None, index: int | None = None) -> dict:
-    """Compact, factual clip context for LLM-facing tool results."""
-    if source is None:
-        source = project.sources_by_id.get(clip.source_id)
-    fps = source.fps if source else 30.0
-    row = {
-        "clip_id": clip.id,
-        "source_id": clip.source_id,
-        "source_name": source.filename if source else None,
-        "start_seconds": round(clip.start_time(fps), 3),
-        "duration_seconds": round(clip.duration_seconds(fps), 3),
-    }
-    if index is not None:
-        row["sequence_index"] = index
-    if getattr(clip, "description", None):
-        row["description"] = _truncate_for_agent(clip.description, 240)
-    if getattr(clip, "shot_type", None):
-        row["shot_type"] = clip.shot_type
-    return row
-
-
-def _summarize_clip_sequence_for_agent(
-    project,
-    clip_entries: list,
-    *,
-    limit: int = 20,
-) -> dict:
-    """Summarize ordered clip entries returned by sequence/remix tools."""
-    clips = []
-    total_duration = 0.0
-    for index, entry in enumerate(clip_entries):
-        if isinstance(entry, dict):
-            clip = project.clips_by_id.get(entry.get("id") or entry.get("clip_id"))
-            source = project.sources_by_id.get(entry.get("source_id") or "")
-            if source is None and clip is not None:
-                source = project.sources_by_id.get(clip.source_id)
-            duration = entry.get("duration") or entry.get("duration_seconds")
-        else:
-            clip = entry[0] if entry else None
-            source = entry[1] if len(entry) > 1 else None
-            if len(entry) > 3 and isinstance(entry[2], (int, float)) and isinstance(entry[3], (int, float)):
-                fps = source.fps if source else 30.0
-                duration = (entry[3] - entry[2]) / fps
-            else:
-                duration = entry[2] if len(entry) > 2 and isinstance(entry[2], (int, float)) else None
-
-        if clip is None:
-            continue
-        if duration is None:
-            fps = source.fps if source else 30.0
-            duration = clip.duration_seconds(fps)
-        total_duration += float(duration)
-        if len(clips) < limit:
-            row = _clip_summary_for_agent(project, clip, source, index=index + 1)
-            row["sequence_duration_seconds"] = round(float(duration), 3)
-            clips.append(row)
-
-    return {
-        "ordered_clip_count": len(clip_entries),
-        "summarized_clip_count": len(clips),
-        "total_duration_seconds": round(total_duration, 3),
-        "clips": clips,
-        "response_guidance": (
-            "Summarize this generated sequence using only these ordered clips, "
-            "durations, source names, and stated tool parameters. Do not invent "
-            "visual details or rationale that is not present in the payload."
-        ),
-    }
-
-
-def _add_sequence_summary_for_agent(project, result: dict, clip_entries: list | None = None) -> dict:
-    """Attach a compact ordered sequence summary to a successful tool result."""
-    if not result.get("success"):
-        return result
-    entries = clip_entries
-    if entries is None:
-        entries = result.get("clips", [])
-    if entries:
-        result["sequence_summary"] = _summarize_clip_sequence_for_agent(project, entries)
-    return result
-
-
-def _summarize_report_for_agent(report: str, sections: list[str], output_format: str) -> dict:
-    """Return report metadata and a bounded excerpt for chat responses."""
-    excerpt_limit = 6000 if output_format == "markdown" else 3000
-    return {
-        "format": output_format,
-        "sections_included": sections,
-        "character_count": len(report),
-        "word_count": len(report.split()) if output_format == "markdown" else 0,
-        "is_truncated": len(report) > excerpt_limit,
-        "report_excerpt": _truncate_for_agent(report, excerpt_limit),
-        "response_guidance": (
-            "Use report_excerpt for the chat response. Do not paste the full report "
-            "unless the user explicitly asks for it; mention when the report is truncated."
-        ),
-    }
+# Agent-formatting helpers live in core.spine._agent_formatting so spine impls
+# don't have to reach back into this module. Re-exported here as private names
+# to keep legacy imports working.
+from core.spine._agent_formatting import (
+    add_sequence_summary_for_agent as _add_sequence_summary_for_agent,
+    append_gaze_fields as _append_gaze_fields,
+    clip_summary_for_agent as _clip_summary_for_agent,
+    summarize_clip_sequence_for_agent as _summarize_clip_sequence_for_agent,
+    summarize_report_for_agent as _summarize_report_for_agent,
+    truncate_for_agent as _truncate_for_agent,
+)
 
 
 # Timeout values for tools (in seconds)
@@ -500,7 +324,7 @@ def complete_plan_step(main_window, result_summary: Optional[str] = None) -> dic
 @tools.register(
     description="Get current plan execution status including which step is active. Use this to check progress or remind yourself what step you're on.",
     requires_project=False,
-    modifies_gui_state=False
+    modifies_gui_state=True
 )
 def get_plan_status(main_window) -> dict:
     """Get current plan status and step information.
@@ -538,25 +362,8 @@ def fail_plan_step(main_window, error: str, action: str = "stop") -> dict:
 )
 def get_project_state(project) -> dict:
     """Get current project information."""
-    return {
-        "success": True,
-        "name": project.metadata.name,
-        "path": str(project.path) if project.path else "Unsaved",
-        "sources": [
-            {
-                "id": s.id,
-                "name": s.file_path.name if s.file_path else "Unknown",
-                "duration": s.duration_seconds,
-                "fps": s.fps,
-                "analyzed": s.analyzed,
-                "clips": len(project.clips_by_source.get(s.id, [])),
-            }
-            for s in project.sources
-        ],
-        "clip_count": len(project.clips),
-        "sequence_length": len(project.sequence.tracks[0].clips) if project.sequence else 0,
-        "is_dirty": project.is_dirty
-    }
+    from core.spine.queries import get_project_state as _impl
+    return _impl(project)
 
 
 @tools.register(
@@ -566,30 +373,9 @@ def get_project_state(project) -> dict:
     modifies_project_state=False
 )
 def list_sources(project) -> dict:
-    """List all video sources in the project.
-
-    Returns:
-        Dict with success status and list of sources with metadata
-    """
-    sources = []
-    for s in project.sources:
-        clip_count = len(project.clips_by_source.get(s.id, []))
-        sources.append({
-            "id": s.id,
-            "filename": s.file_path.name if s.file_path else "Unknown",
-            "duration": s.duration_seconds,
-            "fps": s.fps,
-            "width": s.width,
-            "height": s.height,
-            "clip_count": clip_count,
-            "analyzed": s.analyzed,
-        })
-
-    return {
-        "success": True,
-        "sources": sources,
-        "count": len(sources),
-    }
+    """List all video sources in the project."""
+    from core.spine.sources import list_sources as _impl
+    return _impl(project)
 
 
 @tools.register(
@@ -603,29 +389,9 @@ def list_sources(project) -> dict:
     modifies_project_state=False,
 )
 def list_audio_sources(project) -> dict:
-    """List all imported audio sources in the project.
-
-    Returns:
-        Dict with success status and list of audio sources with metadata.
-    """
-    audio_sources = []
-    for a in project.audio_sources:
-        audio_sources.append({
-            "id": a.id,
-            "filename": a.filename,
-            "duration": a.duration_seconds,
-            "duration_str": a.duration_str,
-            "sample_rate": a.sample_rate,
-            "channels": a.channels,
-            "transcribed": bool(a.transcript),
-            "transcript_segment_count": len(a.transcript) if a.transcript else 0,
-        })
-
-    return {
-        "success": True,
-        "audio_sources": audio_sources,
-        "count": len(audio_sources),
-    }
+    """List all imported audio sources in the project."""
+    from core.spine.audio_sources import list_audio_sources as _impl
+    return _impl(project)
 
 
 @tools.register(
@@ -643,41 +409,8 @@ def get_audio_source(project, audio_source_id: str) -> dict:
     Args:
         audio_source_id: ID of the audio source (use list_audio_sources to find IDs).
     """
-    audio = project.get_audio_source(audio_source_id)
-    if audio is None:
-        return {
-            "success": False,
-            "error": (
-                f"Audio source '{audio_source_id}' not found. "
-                "Use list_audio_sources to see available IDs."
-            ),
-        }
-
-    transcript_payload = None
-    if audio.transcript:
-        transcript_payload = [
-            {
-                "start_time": seg.start_time,
-                "end_time": seg.end_time,
-                "text": seg.text,
-                "confidence": seg.confidence,
-            }
-            for seg in audio.transcript
-        ]
-
-    return {
-        "success": True,
-        "audio_source": {
-            "id": audio.id,
-            "filename": audio.filename,
-            "file_path": str(audio.file_path),
-            "duration": audio.duration_seconds,
-            "duration_str": audio.duration_str,
-            "sample_rate": audio.sample_rate,
-            "channels": audio.channels,
-            "transcript": transcript_payload,
-        },
-    }
+    from core.spine.audio_sources import get_audio_source as _impl
+    return _impl(project, audio_source_id)
 
 
 @tools.register(
@@ -696,62 +429,8 @@ def import_audio_source(project, file_path: str) -> dict:
     Args:
         file_path: Absolute or project-relative path to the audio file.
     """
-    from pathlib import Path
-
-    from core.audio_formats import is_audio_file
-    from core.ffmpeg import FFmpegProcessor
-    from models.audio_source import AudioSource
-
-    path = Path(file_path).expanduser()
-    if not path.is_absolute() and getattr(project, "path", None):
-        path = project.path.parent / path
-    if not path.exists():
-        return {"success": False, "error": f"File not found: {file_path}"}
-    if not is_audio_file(path):
-        return {
-            "success": False,
-            "error": (
-                f"Unsupported audio format: {path.suffix or '<no extension>'}. "
-                "Supported: .mp3, .wav, .flac, .m4a, .aac, .ogg."
-            ),
-        }
-
-    try:
-        processor = FFmpegProcessor()
-    except RuntimeError as exc:
-        return {"success": False, "error": f"FFmpeg unavailable: {exc}"}
-
-    if not processor.ffprobe_available:
-        return {"success": False, "error": "FFprobe is not available"}
-
-    try:
-        info = processor.get_audio_info(path)
-    except ValueError:
-        return {"success": False, "error": f"Not an audio file: {path.name}"}
-    except RuntimeError as exc:
-        return {"success": False, "error": f"Failed to probe audio: {exc}"}
-
-    duration = info.get("duration", 0.0)
-    if duration <= 0:
-        return {
-            "success": False,
-            "error": f"Audio file has zero duration: {path.name}",
-        }
-
-    audio = AudioSource(
-        file_path=path,
-        duration_seconds=duration,
-        sample_rate=info.get("sample_rate", 0),
-        channels=info.get("channels", 0),
-    )
-    project.add_audio_source(audio)
-
-    return {
-        "success": True,
-        "audio_source_id": audio.id,
-        "filename": audio.filename,
-        "duration": audio.duration_seconds,
-    }
+    from core.spine.audio_sources import import_audio_source as _impl
+    return _impl(project, file_path)
 
 
 @tools.register(
@@ -849,6 +528,16 @@ ASPECT_RATIO_RANGES = {
 }
 
 
+def _append_gaze_fields(clip, clip_data: dict) -> None:
+    """Append gaze fields to clip_data dict if present on the clip."""
+    if clip.gaze_yaw is not None:
+        clip_data["gaze_yaw"] = round(clip.gaze_yaw, 2)
+    if clip.gaze_pitch is not None:
+        clip_data["gaze_pitch"] = round(clip.gaze_pitch, 2)
+    if clip.gaze_category is not None:
+        clip_data["gaze_category"] = clip.gaze_category
+
+
 @tools.register(
     description=(
         "Filter clips by criteria. Returns matching clips with their metadata. "
@@ -870,18 +559,6 @@ ASPECT_RATIO_RANGES = {
     requires_project=True,
     modifies_gui_state=False
 )
-
-
-def _append_gaze_fields(clip, clip_data: dict) -> None:
-    """Append gaze fields to clip_data dict if present on the clip."""
-    if clip.gaze_yaw is not None:
-        clip_data["gaze_yaw"] = round(clip.gaze_yaw, 2)
-    if clip.gaze_pitch is not None:
-        clip_data["gaze_pitch"] = round(clip.gaze_pitch, 2)
-    if clip.gaze_category is not None:
-        clip_data["gaze_category"] = clip.gaze_category
-
-
 def filter_clips(
     project,
     shot_type: Optional[str] = None,
@@ -947,252 +624,8 @@ def filter_clips(
     Returns:
         List of matching clips with metadata
     """
-    import numpy as np
-
-    # If similar_to_clip_id is specified, look up the anchor clip and validate
-    anchor_embedding = None
-    if similar_to_clip_id:
-        anchor_clip = project.clips_by_id.get(similar_to_clip_id)
-        if not anchor_clip:
-            return []  # Invalid anchor clip ID — return empty
-        emb = anchor_clip.embedding
-        if emb is not None:
-            anchor_arr = np.array(emb, dtype=np.float64)
-            if np.linalg.norm(anchor_arr) > 0:
-                anchor_embedding = anchor_arr
-
-    results = []
-
-    for clip in project.clips:
-        # Get source for FPS and dimensions
-        source = project.sources_by_id.get(clip.source_id)
-        fps = source.fps if source else 30.0
-
-        # Calculate duration in seconds
-        duration = (clip.end_frame - clip.start_frame) / fps
-
-        # Apply shot_type filter
-        if shot_type and getattr(clip, 'shot_type', None) != shot_type:
-            continue
-
-        # Apply has_speech filter
-        if has_speech is not None:
-            clip_has_speech = bool(getattr(clip, 'transcript', None))
-            if clip_has_speech != has_speech:
-                continue
-
-        # Apply duration filters
-        if min_duration is not None and duration < min_duration:
-            continue
-        if max_duration is not None and duration > max_duration:
-            continue
-
-        # Apply aspect ratio filter
-        if aspect_ratio and aspect_ratio in ASPECT_RATIO_RANGES:
-            if not source or source.width == 0 or source.height == 0:
-                continue  # Skip clips without dimensions
-            source_aspect = source.width / source.height
-            min_ratio, max_ratio = ASPECT_RATIO_RANGES[aspect_ratio]
-            if not (min_ratio <= source_aspect <= max_ratio):
-                continue
-
-        # Apply transcript search filter
-        if search_query:
-            transcript_text = clip.get_transcript_text()
-            if not transcript_text:
-                continue
-            if search_query.lower() not in transcript_text.lower():
-                continue
-
-        # Apply description search filter
-        if search_description:
-            description = getattr(clip, 'description', None)
-            if not description:
-                continue
-            if search_description.lower() not in description.lower():
-                continue
-
-        # Apply has_object filter (case-insensitive substring across both label sources)
-        if has_object is not None:
-            object_labels = getattr(clip, 'object_labels', None) or []
-            detected_objects = getattr(clip, 'detected_objects', None) or []
-            detected_labels = [d.get("label", "") for d in detected_objects]
-            all_labels = object_labels + detected_labels
-            search_lower = has_object.lower()
-            if not any(search_lower in label.lower() for label in all_labels):
-                continue
-
-        # Apply min_people filter
-        if min_people is not None:
-            person_count = getattr(clip, 'person_count', None) or 0
-            if person_count < min_people:
-                continue
-
-        # Apply max_people filter
-        if max_people is not None:
-            person_count = getattr(clip, 'person_count', None) or 0
-            if person_count > max_people:
-                continue
-
-        # Apply has_faces filter
-        if has_faces is not None:
-            clip_has_faces = bool(clip.face_embeddings)
-            if clip_has_faces != has_faces:
-                continue
-
-        # Apply gaze_category filter
-        if gaze_category and getattr(clip, 'gaze_category', None) != gaze_category:
-            continue
-
-        # Apply brightness range filters
-        if min_brightness is not None:
-            brightness = getattr(clip, 'average_brightness', None)
-            if brightness is None or brightness < min_brightness:
-                continue
-        if max_brightness is not None:
-            brightness = getattr(clip, 'average_brightness', None)
-            if brightness is None or brightness > max_brightness:
-                continue
-
-        # Apply volume range filters
-        if min_volume is not None:
-            volume = getattr(clip, 'rms_volume', None)
-            if volume is None or volume < min_volume:
-                continue
-        if max_volume is not None:
-            volume = getattr(clip, 'rms_volume', None)
-            if volume is None or volume > max_volume:
-                continue
-
-        # Apply OCR text search filter
-        if search_ocr_text:
-            combined = clip.combined_text
-            if not combined:
-                continue
-            if search_ocr_text.lower() not in combined.lower():
-                continue
-
-        # Apply tags search filter
-        if search_tags:
-            clip_tags = getattr(clip, 'tags', None) or []
-            if not clip_tags:
-                continue
-            tags_text = " ".join(clip_tags)
-            if search_tags.lower() not in tags_text.lower():
-                continue
-
-        # Apply notes search filter
-        if search_notes:
-            clip_notes = getattr(clip, 'notes', None) or ""
-            if not clip_notes:
-                continue
-            if search_notes.lower() not in clip_notes.lower():
-                continue
-
-        # Apply cinematography field filters
-        if cinematography_shot_size:
-            cine = getattr(clip, 'cinematography', None)
-            if not cine or cine.shot_size != cinematography_shot_size:
-                continue
-        if cinematography_camera_angle:
-            cine = getattr(clip, 'cinematography', None)
-            if not cine or cine.camera_angle != cinematography_camera_angle:
-                continue
-        if cinematography_camera_movement:
-            cine = getattr(clip, 'cinematography', None)
-            if not cine or cine.camera_movement != cinematography_camera_movement:
-                continue
-        if cinematography_lighting_style:
-            cine = getattr(clip, 'cinematography', None)
-            if not cine or cine.lighting_style != cinematography_lighting_style:
-                continue
-        if cinematography_subject_count:
-            cine = getattr(clip, 'cinematography', None)
-            if not cine or cine.subject_count != cinematography_subject_count:
-                continue
-        if cinematography_emotional_intensity:
-            cine = getattr(clip, 'cinematography', None)
-            if not cine or cine.emotional_intensity != cinematography_emotional_intensity:
-                continue
-        if cinematography_suggested_pacing:
-            cine = getattr(clip, 'cinematography', None)
-            if not cine or cine.suggested_pacing != cinematography_suggested_pacing:
-                continue
-
-        # Calculate aspect ratio for output
-        clip_aspect_ratio = None
-        if source and source.height > 0:
-            clip_aspect_ratio = round(source.width / source.height, 3)
-
-        # Build cinematography summary dict
-        cine_data = None
-        cine = getattr(clip, 'cinematography', None)
-        if cine:
-            cine_data = {
-                "shot_size": cine.shot_size,
-                "camera_angle": cine.camera_angle,
-                "camera_movement": cine.camera_movement,
-                "lighting_style": cine.lighting_style,
-                "subject_count": cine.subject_count,
-                "emotional_intensity": cine.emotional_intensity,
-                "suggested_pacing": cine.suggested_pacing,
-            }
-
-        clip_data = {
-            "id": clip.id,
-            "source_id": clip.source_id,
-            "source_name": source.file_path.name if source else "Unknown",
-            "duration_seconds": round(duration, 2),
-            "shot_type": getattr(clip, 'shot_type', None),
-            "has_speech": bool(getattr(clip, 'transcript', None)),
-            "dominant_colors": getattr(clip, 'dominant_colors', None),
-            "object_labels": getattr(clip, 'object_labels', None),
-            "person_count": getattr(clip, 'person_count', None),
-            "description": getattr(clip, 'description', None),
-            "width": source.width if source else None,
-            "height": source.height if source else None,
-            "aspect_ratio": clip_aspect_ratio,
-            "average_brightness": clip.average_brightness,
-            "rms_volume": clip.rms_volume,
-            "tags": clip.tags or [],
-            "notes": clip.notes or "",
-            "extracted_text": clip.combined_text,
-            "cinematography": cine_data,
-        }
-        _append_gaze_fields(clip, clip_data)
-        results.append(clip_data)
-
-    # If similar_to_clip_id was requested but anchor has no valid embedding, report it
-    if similar_to_clip_id and anchor_embedding is None:
-        return {
-            "success": False,
-            "error": f"Anchor clip '{similar_to_clip_id}' has no valid embedding. "
-                     "Run embedding analysis first (analyze_clips with 'embeddings')."
-        }
-
-    # If similar_to_clip_id is active, rank results by embedding similarity
-    if similar_to_clip_id and anchor_embedding is not None:
-        scored_results = []
-        for clip_data in results:
-            clip_obj = project.clips_by_id.get(clip_data["id"])
-            emb = clip_obj.embedding if clip_obj else None
-            if emb is not None:
-                clip_arr = np.array(emb, dtype=np.float64)
-                # Skip clips with different embedding dimensions (e.g. CLIP 512 vs DINOv2 768)
-                if clip_arr.shape != anchor_embedding.shape:
-                    continue
-                norm = np.linalg.norm(clip_arr)
-                if norm > 0:
-                    score = float(np.dot(anchor_embedding, clip_arr))
-                    clip_data["similarity_score"] = round(score, 4)
-                    scored_results.append(clip_data)
-                # Skip clips with zero-vector embeddings
-            # Skip clips without embeddings
-        # Sort by similarity descending
-        scored_results.sort(key=lambda d: d.get("similarity_score", 0.0), reverse=True)
-        return scored_results
-
-    return results
+    from core.spine.clips import filter_clips as _impl
+    return _impl(project, shot_type, has_speech, min_duration, max_duration, aspect_ratio, search_query, has_object, min_people, max_people, search_description, has_faces, gaze_category, min_brightness, max_brightness, search_ocr_text, min_volume, max_volume, search_tags, search_notes, cinematography_shot_size, cinematography_camera_angle, cinematography_camera_movement, cinematography_lighting_style, cinematography_subject_count, cinematography_emotional_intensity, cinematography_suggested_pacing, similar_to_clip_id)
 
 
 @tools.register(
@@ -1348,26 +781,8 @@ def get_clip_cinematography(project, clip_id: str) -> dict:
     Returns:
         Dict with success status and all cinematography fields
     """
-    clip = project.clips_by_id.get(clip_id)
-    if clip is None:
-        return {
-            "success": False,
-            "error": f"Clip '{clip_id}' not found. Use list_clips to see available clips."
-        }
-
-    cinematography = getattr(clip, 'cinematography', None)
-    if cinematography is None:
-        return {
-            "success": False,
-            "error": f"Clip '{clip_id}' has no cinematography analysis. "
-                     "Run cinematography analysis first via the Analyze tab."
-        }
-
-    return {
-        "success": True,
-        "clip_id": clip_id,
-        "cinematography": cinematography.to_dict(),
-    }
+    from core.spine.clips import get_clip_cinematography as _impl
+    return _impl(project, clip_id)
 
 
 @tools.register(
@@ -1756,65 +1171,8 @@ def set_sequence_gaze_filter(
 )
 def get_sequence_state(project) -> dict:
     """Return detailed sequence state."""
-    if project.sequence is None:
-        return {
-            "has_sequence": False,
-            "clips": [],
-            "total_duration_seconds": 0,
-            "clip_count": 0
-        }
-
-    sequence = project.sequence
-    fps = sequence.fps
-    clips_data = []
-
-    for track in sequence.tracks:
-        for seq_clip in track.clips:
-            # Get source clip info
-            source_clip = project.clips_by_id.get(seq_clip.source_clip_id)
-            source = project.sources_by_id.get(seq_clip.source_id)
-
-            clip_data = {
-                "id": seq_clip.id,
-                "source_clip_id": seq_clip.source_clip_id,
-                "source_id": seq_clip.source_id,
-                "source_name": source.file_path.name if source else "Unknown",
-                "track_index": seq_clip.track_index,
-                "start_frame": seq_clip.start_frame,
-                "start_time_seconds": round(seq_clip.start_time(fps), 2),
-                "duration_frames": seq_clip.duration_frames,
-                "duration_seconds": round(seq_clip.duration_seconds(fps), 2),
-                "in_point": seq_clip.in_point,
-                "out_point": seq_clip.out_point,
-                "hflip": seq_clip.hflip,
-                "vflip": seq_clip.vflip,
-                "reverse": seq_clip.reverse,
-                "prerendered_path": seq_clip.prerendered_path,
-            }
-
-            # Include source clip metadata for sorting/filtering
-            if source_clip:
-                if source_clip.dominant_colors:
-                    clip_data["dominant_colors"] = [
-                        f"#{r:02x}{g:02x}{b:02x}"
-                        for r, g, b in source_clip.dominant_colors
-                    ]
-                if source_clip.shot_type:
-                    clip_data["shot_type"] = source_clip.shot_type
-                if source_clip.description:
-                    clip_data["description"] = source_clip.description
-
-            clips_data.append(clip_data)
-
-    return {
-        "has_sequence": True,
-        "name": sequence.name,
-        "fps": fps,
-        "clips": clips_data,
-        "total_duration_frames": sequence.duration_frames,
-        "total_duration_seconds": round(sequence.duration_seconds, 2),
-        "clip_count": len(clips_data)
-    }
+    from core.spine.queries import get_sequence_state as _impl
+    return _impl(project)
 
 
 @tools.register(
@@ -1858,7 +1216,7 @@ def update_sequence(
         updated_fields["fps"] = fps
 
     if music_path is not None:
-        is_valid, err_msg, validated_path = _validate_path(music_path, must_exist=True)
+        is_valid, err_msg, validated_path = validate_path(music_path, must_exist=True)
         if not is_valid:
             return {"success": False, "error": err_msg}
         project.sequence.music_path = str(validated_path)
@@ -2697,7 +2055,7 @@ def export_sequence(
 
     # Determine output path
     if output_path:
-        valid, error, validated_path = _validate_path(output_path)
+        valid, error, validated_path = validate_path(output_path)
         if not valid:
             return {"success": False, "error": f"Invalid output path: {error}"}
         video_path = validated_path
@@ -2777,52 +2135,8 @@ def export_sequence(
 )
 def export_edl(project, output_path: Optional[str] = None) -> dict:
     """Export sequence to EDL format."""
-    from core.edl_export import export_edl as do_export, EDLExportConfig
-
-    if project.sequence is None or not project.sequence.get_all_clips():
-        return {
-            "success": False,
-            "error": "No sequence to export. Add clips to the sequence first."
-        }
-
-    # Determine output path
-    if output_path:
-        valid, error, validated_path = _validate_path(output_path)
-        if not valid:
-            return {"success": False, "error": f"Invalid output path: {error}"}
-        edl_path = validated_path
-    else:
-        # Use settings export_dir with project name
-        settings = load_settings()
-        project_name = project.metadata.name or "untitled"
-        edl_path = settings.export_dir / f"{project_name}.edl"
-
-    # Ensure parent directory exists
-    edl_path.parent.mkdir(parents=True, exist_ok=True)
-
-    config = EDLExportConfig(
-        output_path=edl_path,
-        title=project.metadata.name or "Scene Ripper Export"
-    )
-
-    success = do_export(
-        sequence=project.sequence,
-        sources=project.sources_by_id,
-        config=config
-    )
-
-    if success:
-        return {
-            "success": True,
-            "output_path": str(edl_path),
-            "clip_count": len(project.sequence.get_all_clips()),
-            "message": f"Exported {len(project.sequence.get_all_clips())} clips to EDL"
-        }
-    else:
-        return {
-            "success": False,
-            "error": "Failed to write EDL file"
-        }
+    from core.spine.exports import export_edl as _impl
+    return _impl(project, output_path)
 
 
 @tools.register(
@@ -2847,60 +2161,8 @@ def export_dataset(
     Returns:
         Dict with success status and export info
     """
-    from core.dataset_export import export_dataset as do_export, DatasetExportConfig
-
-    # Get clips to export
-    if source_id:
-        source = project.sources_by_id.get(source_id)
-        if source is None:
-            return {"success": False, "error": f"Source '{source_id}' not found"}
-        clips = [c for c in project.clips if c.source_id == source_id]
-        source_name = source.path.stem
-    else:
-        # Export all clips, using first source as primary
-        clips = project.clips
-        source = project.sources[0] if project.sources else None
-        source_name = "all_clips"
-
-    if not clips:
-        return {"success": False, "error": "No clips to export"}
-
-    if source is None:
-        return {"success": False, "error": "No source video found"}
-
-    # Determine output path
-    if output_path:
-        valid, error, validated_path = _validate_path(output_path)
-        if not valid:
-            return {"success": False, "error": f"Invalid output path: {error}"}
-        json_path = validated_path
-    else:
-        settings = load_settings()
-        json_path = settings.export_dir / f"{source_name}_dataset.json"
-
-    # Ensure parent directory exists
-    json_path.parent.mkdir(parents=True, exist_ok=True)
-
-    config = DatasetExportConfig(
-        output_path=json_path,
-        include_thumbnails=include_thumbnails,
-        pretty_print=True,
-    )
-
-    success = do_export(source=source, clips=clips, config=config)
-
-    if success:
-        return {
-            "success": True,
-            "output_path": str(json_path),
-            "clip_count": len(clips),
-            "message": f"Exported {len(clips)} clips to JSON dataset"
-        }
-    else:
-        return {
-            "success": False,
-            "error": "Failed to write dataset file"
-        }
+    from core.spine.exports import export_dataset as _impl
+    return _impl(project, output_path, include_thumbnails, source_id)
 
 
 @tools.register(
@@ -2954,62 +2216,8 @@ def set_project_name(main_window, project, name: str) -> dict:
 )
 def save_project(project, path: Optional[str] = None) -> dict:
     """Save project state to JSON file."""
-    # Determine save path
-    if path:
-        valid, error, validated_path = _validate_path(path)
-        if not valid:
-            return {"success": False, "error": f"Invalid path: {error}"}
-        save_path = validated_path
-    elif project.path:
-        save_path = project.path
-    else:
-        # New project - use export dir
-        settings = load_settings()
-        project_name = project.metadata.name or "untitled"
-        save_path = settings.export_dir / f"{project_name}.sceneripper"
-
-    # Ensure .sceneripper extension
-    if save_path.suffix.lower() != ".sceneripper":
-        save_path = save_path.with_suffix(".sceneripper")
-
-    # Validate and create parent directory
-    try:
-        save_path.parent.mkdir(parents=True, exist_ok=True)
-        # Test write access
-        test_file = save_path.parent / ".write_test"
-        test_file.touch()
-        test_file.unlink()
-    except PermissionError:
-        return {
-            "success": False,
-            "error": f"Cannot save project: No write access to '{save_path.parent}'. "
-                     "Please check directory permissions or choose a different location."
-        }
-    except OSError as e:
-        return {
-            "success": False,
-            "error": f"Cannot save project: Directory '{save_path.parent}' is not accessible ({e}). "
-                     "Please check the path or choose a different location."
-        }
-
-    try:
-        success = project.save(path=save_path)
-        if success:
-            return {
-                "success": True,
-                "path": str(save_path),
-                "message": f"Project saved to {save_path.name}"
-            }
-        else:
-            return {
-                "success": False,
-                "error": "Failed to save project"
-            }
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
+    from core.spine.project_save import save_project as _impl
+    return _impl(project, path)
 
 
 @tools.register(
@@ -3021,12 +2229,9 @@ def load_project(path: str, main_window=None) -> dict:
     """Load project from file."""
     from core.project import Project, ProjectLoadError, MissingSourceError
 
-    valid, error, validated_path = _validate_path(path, must_exist=True)
+    valid, error, validated_path = validate_path(path, must_be_file=True)
     if not valid:
         return {"success": False, "error": f"Invalid path: {error}"}
-
-    if not validated_path.is_file():
-        return {"success": False, "error": f"Path is not a file: {path}"}
 
     if main_window is None:
         return {"success": False, "error": "Cannot load project: main window not available"}
@@ -3370,89 +2575,8 @@ def show_clip_details(project, clip_id: str) -> dict:
 )
 def get_project_summary(project) -> dict:
     """Generate project summary."""
-    # Build summary
-    lines = []
-    lines.append(f"# {project.metadata.name}")
-    lines.append("")
-
-    # Project info
-    lines.append("## Project Info")
-    lines.append(f"- **Path**: {project.path or 'Unsaved'}")
-    lines.append(f"- **Created**: {project.metadata.created_at[:10]}")
-    lines.append(f"- **Modified**: {project.metadata.modified_at[:10]}")
-    lines.append(f"- **Unsaved changes**: {'Yes' if project.is_dirty else 'No'}")
-    lines.append("")
-
-    # Sources
-    lines.append(f"## Sources ({len(project.sources)} videos)")
-    if project.sources:
-        total_duration = sum(s.duration_seconds for s in project.sources)
-        lines.append(f"- **Total duration**: {total_duration:.1f}s ({total_duration/60:.1f} min)")
-        lines.append("")
-        for source in project.sources:
-            clip_count = len(project.clips_by_source.get(source.id, []))
-            analyzed = "✓" if source.analyzed else "✗"
-            lines.append(f"- {source.filename} ({source.duration_seconds:.1f}s, {clip_count} clips) [{analyzed}]")
-    else:
-        lines.append("- No sources imported yet")
-    lines.append("")
-
-    # Clips
-    disabled_count = sum(1 for c in project.clips if c.disabled)
-    enabled_count = len(project.clips) - disabled_count
-    clip_header = f"## Clips ({len(project.clips)} total"
-    if disabled_count:
-        clip_header += f", {enabled_count} enabled, {disabled_count} disabled"
-    clip_header += ")"
-    lines.append(clip_header)
-    if project.clips:
-        # Count analysis status
-        with_colors = sum(1 for c in project.clips if c.dominant_colors)
-        with_shots = sum(1 for c in project.clips if c.shot_type)
-        with_transcript = sum(1 for c in project.clips if c.transcript)
-        with_tags = sum(1 for c in project.clips if c.tags)
-        with_notes = sum(1 for c in project.clips if c.notes)
-        with_gaze = sum(1 for c in project.clips if c.gaze_category is not None)
-
-        lines.append(f"- **Color analyzed**: {with_colors}/{len(project.clips)}")
-        lines.append(f"- **Shot classified**: {with_shots}/{len(project.clips)}")
-        lines.append(f"- **Transcribed**: {with_transcript}/{len(project.clips)}")
-        lines.append(f"- **Gaze analyzed**: {with_gaze}/{len(project.clips)}")
-        lines.append(f"- **Tagged**: {with_tags}/{len(project.clips)}")
-        lines.append(f"- **With notes**: {with_notes}/{len(project.clips)}")
-
-        # List unique tags
-        all_tags = set()
-        for clip in project.clips:
-            all_tags.update(clip.tags)
-        if all_tags:
-            lines.append(f"- **Tags used**: {', '.join(sorted(all_tags))}")
-    else:
-        lines.append("- No clips detected yet")
-    lines.append("")
-
-    # Sequence
-    lines.append("## Sequence")
-    if project.sequence and project.sequence.get_all_clips():
-        seq_clips = project.sequence.get_all_clips()
-        lines.append(f"- **Clips in sequence**: {len(seq_clips)}")
-        lines.append(f"- **Total duration**: {project.sequence.duration_seconds:.1f}s")
-        lines.append(f"- **FPS**: {project.sequence.fps}")
-    else:
-        lines.append("- No sequence built yet")
-
-    summary_text = "\n".join(lines)
-
-    return {
-        "success": True,
-        "summary": summary_text,
-        "stats": {
-            "sources": len(project.sources),
-            "clips": len(project.clips),
-            "sequence_clips": len(project.sequence.get_all_clips()) if project.sequence else 0,
-            "is_dirty": project.is_dirty
-        }
-    }
+    from core.spine.queries import get_project_summary as _impl
+    return _impl(project)
 
 
 # =============================================================================
@@ -3473,74 +2597,40 @@ def detect_scenes(
     luma_only: bool | None = None,
 ) -> dict:
     """Run scene detection using Python API and add clips to project."""
-    from core.scene_detect import SceneDetector, DetectionConfig
-
-    # Validate video path
-    valid, error, video = _validate_path(video_path, must_exist=True)
+    valid, error, video = validate_path(video_path, must_be_file=True)
     if not valid:
         return {"success": False, "error": error}
 
-    if not video.is_file():
-        return {"success": False, "error": f"Path is not a file: {video_path}"}
-
     try:
-        # Check if source already exists in project (by resolved file path)
-        # Use resolve() to handle symlinks and relative paths consistently
-        resolved_video = video.resolve()
-        existing_source = None
-        for s in project.sources:
-            try:
-                if s.file_path.resolve() == resolved_video:
-                    existing_source = s
-                    break
-            except (OSError, ValueError):
-                # Handle edge cases where resolve() might fail
-                if s.file_path == video:
-                    existing_source = s
-                    break
+        from core.spine.detect import detect_scenes_for_video
 
-        # Create detector with configured sensitivity
-        config = DetectionConfig(threshold=sensitivity, luma_only=luma_only)
-        detector = SceneDetector(config)
+        result = detect_scenes_for_video(
+            project, video, sensitivity=sensitivity, luma_only=luma_only
+        )
+        if not result.get("success"):
+            err = result.get("error", {})
+            return {"success": False, "error": err.get("message") or err.get("code") or "detection failed"}
 
-        # Run detection
-        source, clips = detector.detect_scenes(video)
+        payload = result["result"]
+        source = project.sources_by_id.get(payload["source_id"])
+        clips = [c for c in project.clips if c.source_id == payload["source_id"]]
 
-        # If source already exists, use that source ID and update clips
-        if existing_source:
-            source = existing_source
-            # Mark source as analyzed
-            source.analyzed = True
-            # Update clip source IDs to match existing source
-            for clip in clips:
-                clip.source_id = source.id
-        else:
-            # Mark source as analyzed
-            source.analyzed = True
-            # Add new source using proper Project method (invalidates caches, notifies observers)
-            project.add_source(source)
-
-        if not clips:
+        if payload["clip_count"] == 0:
             return {
                 "success": True,
                 "clips_detected": 0,
-                "source_id": source.id,
-                "source_name": video.name,
-                "message": f"No scene cuts detected in {video.name}. "
-                           "Try a lower sensitivity value, or the video may be a single continuous shot."
+                "source_id": payload["source_id"],
+                "source_name": payload["source_name"],
+                "message": f"No scene cuts detected in {payload['source_name']}. "
+                           "Try a lower sensitivity value, or the video may be a single continuous shot.",
             }
-
-        # Add clips using proper Project method (invalidates caches, notifies observers)
-        project.add_clips(clips)
-
-        message = f"Detected {len(clips)} scenes in {video.name} and added to project"
 
         return {
             "success": True,
-            "clips_detected": len(clips),
-            "clip_ids": [clip.id for clip in clips],
-            "source_id": source.id,
-            "source_name": source.filename,
+            "clips_detected": payload["clip_count"],
+            "clip_ids": payload["clip_ids"],
+            "source_id": payload["source_id"],
+            "source_name": payload["source_name"],
             "detected_clips": [
                 _clip_summary_for_agent(project, clip, source)
                 for clip in clips[:20]
@@ -3550,7 +2640,7 @@ def detect_scenes(
                 "source name, and timing ranges. Do not invent clip descriptions."
             ),
             "is_fallback_clip": False,
-            "message": message
+            "message": f"Detected {payload['clip_count']} scenes in {payload['source_name']} and added to project",
         }
 
     except FileNotFoundError as e:
@@ -3739,41 +2829,41 @@ def search_internet_archive(
 )
 def download_video(url: str, output_dir: Optional[str] = None) -> dict:
     """Download video using the Python API."""
-    # Determine download directory
     if output_dir:
-        valid, error, validated_dir = _validate_path(output_dir)
+        valid, error, validated_dir = validate_path(output_dir)
         if not valid:
             return {"error": f"Invalid output directory: {error}"}
         download_path = validated_dir
     else:
-        # Use settings download directory
         settings = load_settings()
         download_path = settings.download_dir
 
     try:
-        downloader = VideoDownloader(download_dir=download_path)
+        from core.spine.downloads import download_videos as _impl
 
-        # Validate URL first
-        valid, error = downloader.is_valid_url(url)
-        if not valid:
-            return {"error": error}
+        result = _impl([url], download_path)
+        if not result.get("success"):
+            err = result.get("error", {})
+            return {"error": err.get("message") or err.get("code") or "Download failed"}
 
-        # Download the video
-        result = downloader.download(url)
+        payload = result["result"]
+        if payload["succeeded"]:
+            entry = payload["succeeded"][0]
+            return {
+                "success": True,
+                "file_path": entry["file_path"],
+                "title": entry["title"],
+                "duration": entry["duration"],
+                "message": f"Downloaded: {entry['title']}",
+            }
 
-        if not result.success:
-            return {"error": result.error or "Download failed"}
+        if payload["failed"]:
+            entry = payload["failed"][0]
+            return {"error": entry.get("error_message") or "Download failed"}
 
-        return {
-            "success": True,
-            "file_path": str(result.file_path) if result.file_path else None,
-            "title": result.title,
-            "duration": result.duration,
-            "message": f"Downloaded: {result.title}"
-        }
+        return {"error": "Download did not produce a result"}
 
     except RuntimeError as e:
-        # yt-dlp not found or other runtime errors
         return {"error": str(e)}
     except Exception as e:
         logger.exception("Video download failed")
@@ -3814,7 +2904,7 @@ def download_videos(
 
     # Determine download directory
     if output_dir:
-        valid, error, validated_dir = _validate_path(output_dir)
+        valid, error, validated_dir = validate_path(output_dir)
         if not valid:
             return {"success": False, "error": f"Invalid output directory: {error}"}
         download_path = validated_dir
@@ -3864,12 +2954,9 @@ def import_video(main_window, path: str) -> dict:
         Dict with source_id and metadata if successful
     """
     # Validate path
-    valid, error, video_path = _validate_path(path, must_exist=True)
+    valid, error, video_path = validate_path(path, must_be_file=True)
     if not valid:
         return {"success": False, "error": error}
-
-    if not video_path.is_file():
-        return {"success": False, "error": f"Path is not a file: {path}"}
 
     if video_path.suffix.lower() not in {'.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v'}:
         return {"success": False, "error": f"Unsupported video format: {video_path.suffix}"}
@@ -4504,189 +3591,8 @@ def list_sorting_algorithms(project) -> dict:
     Returns:
         Dict with algorithms list showing name, key, available status, and reason if unavailable
     """
-    # Check if clips have color analysis
-    clips = project.clips
-    has_colors = any(clip.dominant_colors for clip in clips) if clips else False
-    has_transcripts = any(clip.transcript for clip in clips) if clips else False
-
-    has_shot_type = any(clip.shot_type for clip in clips) if clips else False
-    has_text = any(clip.extracted_texts for clip in clips) if clips else False
-    has_descriptions = any(clip.description for clip in clips) if clips else False
-    has_face_embeddings = any(clip.face_embeddings for clip in clips) if clips else False
-    has_gaze = any(clip.gaze_category is not None for clip in clips) if clips else False
-
-    algorithms = [
-        {
-            "key": "shuffle",
-            "name": "Hatchet Job",
-            "description": "Randomly shuffle clips into a new order",
-            "available": True,
-            "reason": None,
-            "parameters": [
-                {"name": "seed", "type": "integer", "description": "Random seed for reproducibility (0 = random)", "default": 0},
-                {"name": "random_hflip", "type": "boolean", "description": "Randomly flip ~50% of clips horizontally at export", "default": False},
-                {"name": "random_vflip", "type": "boolean", "description": "Randomly flip ~50% of clips vertically at export", "default": False},
-                {"name": "random_reverse", "type": "boolean", "description": "Randomly reverse ~50% of clips at export", "default": False},
-            ]
-        },
-        {
-            "key": "sequential",
-            "name": "Time Capsule",
-            "description": "Keep clips in their original order",
-            "available": True,
-            "reason": None,
-            "parameters": []
-        },
-        {
-            "key": "duration",
-            "name": "Tempo Shift",
-            "description": "Order clips from shortest to longest (or reverse)",
-            "available": True,
-            "reason": None,
-            "parameters": [
-                {"name": "direction", "type": "string", "options": ["short_first", "long_first"], "default": "short_first"}
-            ]
-        },
-        {
-            "key": "color",
-            "name": "Chromatics",
-            "description": "Arrange clips along a color gradient or cycle through the spectrum",
-            "available": has_colors,
-            "reason": None if has_colors else "Run color analysis on clips first",
-            "parameters": [
-                {"name": "direction", "type": "string", "options": ["rainbow", "warm_to_cool", "cool_to_warm", "complementary"], "default": "rainbow"},
-                {"name": "no_color_handling", "type": "string", "options": ["append_end", "exclude", "sort_inline"], "default": "append_end"}
-            ]
-        },
-        {
-            "key": "brightness",
-            "name": "Into the Dark",
-            "description": "Arrange clips from light to shadow, or shadow to light (auto-computes if needed)",
-            "available": True,
-            "reason": None,
-            "parameters": [
-                {"name": "direction", "type": "string", "options": ["light_to_dark", "dark_to_light"], "default": "light_to_dark"}
-            ]
-        },
-        {
-            "key": "volume",
-            "name": "Crescendo",
-            "description": "Build from silence to thunder, or thunder to silence (auto-computes if needed)",
-            "available": True,
-            "reason": None,
-            "parameters": [
-                {"name": "direction", "type": "string", "options": ["quiet_to_loud", "loud_to_quiet"], "default": "quiet_to_loud"}
-            ]
-        },
-        {
-            "key": "shot_type",
-            "name": "Focal Ladder",
-            "description": "Arrange clips by camera shot scale",
-            "available": has_shot_type,
-            "reason": None if has_shot_type else "Run shot type classification on clips first",
-            "parameters": [
-                {"name": "direction", "type": "string", "options": ["wide_to_close", "close_to_wide"], "default": "wide_to_close"}
-            ]
-        },
-        {
-            "key": "proximity",
-            "name": "Up Close and Personal",
-            "description": "Glide from distant vistas to intimate close-ups",
-            "available": has_shot_type,
-            "reason": None if has_shot_type else "Run shot type classification on clips first",
-            "parameters": [
-                {"name": "direction", "type": "string", "options": ["far_to_near", "near_to_far"], "default": "far_to_near"}
-            ]
-        },
-        {
-            "key": "similarity_chain",
-            "name": "Human Centipede",
-            "description": "Chain clips together by visual similarity (auto-computes embeddings if needed)",
-            "available": True,
-            "reason": None,
-            "parameters": []
-        },
-        {
-            "key": "match_cut",
-            "name": "Match Cut",
-            "description": "Find hidden connections between clips using boundary frame similarity (auto-computes if needed)",
-            "available": True,
-            "reason": None,
-            "parameters": []
-        },
-        {
-            "key": "exquisite_corpus",
-            "name": "Exquisite Corpus",
-            "description": "Generate a poem from on-screen text",
-            "available": has_text,
-            "reason": None if has_text else "Run OCR/text extraction on clips first",
-            "parameters": []
-        },
-        {
-            "key": "storyteller",
-            "name": "Storyteller",
-            "description": "Create a narrative from clip descriptions",
-            "available": has_descriptions,
-            "reason": None if has_descriptions else "Run clip description analysis first",
-            "parameters": []
-        },
-        {
-            "key": "rose_hobart",
-            "name": "Rose Hobart",
-            "description": "Isolate clips featuring a specific person (requires reference image)",
-            "available": has_face_embeddings,
-            "reason": None if has_face_embeddings else "Run face detection analysis first",
-            "parameters": [
-                {"name": "reference_image_paths", "type": "array", "description": "Paths to 1-3 reference images of the person"},
-                {"name": "sensitivity", "type": "string", "options": ["strict", "balanced", "loose"], "default": "balanced"},
-                {"name": "ordering", "type": "string", "options": ["original", "duration", "color", "brightness", "confidence", "random"], "default": "original"},
-                {"name": "sampling_interval", "type": "number", "description": "Seconds between frame samples (0.25-5.0, default 1.0)"},
-            ]
-        },
-        {
-            "key": "gaze_sort",
-            "name": "Gaze Sort",
-            "description": "Arrange clips by gaze direction",
-            "available": has_gaze,
-            "reason": None if has_gaze else "Run gaze analysis on clips first",
-            "parameters": [
-                {"name": "direction", "type": "string", "options": ["left_to_right", "right_to_left", "up_to_down", "down_to_up"], "default": "left_to_right"}
-            ]
-        },
-        {
-            "key": "gaze_consistency",
-            "name": "Gaze Consistency",
-            "description": "Group clips by matching gaze direction",
-            "available": has_gaze,
-            "reason": None if has_gaze else "Run gaze analysis on clips first",
-            "parameters": []
-        },
-        {
-            "key": "cassette_tape",
-            "name": "Cassette Tape",
-            "description": "Find clips that say specific phrases (transcript-driven mixtape)",
-            "available": has_transcripts,
-            "reason": None if has_transcripts else "Run transcribe analysis on clips first",
-            "parameters": [
-                {
-                    "name": "phrases",
-                    "type": "array",
-                    "description": "List of {phrase: str, count: int} dicts. count is 1-5 matches per phrase. Use generate_cassette_tape, not generate_remix."
-                }
-            ]
-        },
-    ]
-
-    return {
-        "algorithms": algorithms,
-        "clip_count": len(clips),
-        "has_color_analysis": has_colors,
-        "reference_guided_available": True,
-        "reference_guided_note": (
-            "For matching clips to a reference video's structure, use the "
-            "generate_reference_guided tool instead of generate_remix."
-        ),
-    }
+    from core.spine.settings_io import list_sorting_algorithms as _impl
+    return _impl(project)
 
 
 @tools.register(
@@ -4906,7 +3812,7 @@ def generate_eyes_without_a_face(
                 "Call this before generate_reference_guided to discover which dimension weights "
                 "are valid (e.g. color requires color analysis, embedding requires embeddings).",
     requires_project=True,
-    modifies_gui_state=False
+    modifies_gui_state=True
 )
 def get_available_dimensions(project, main_window) -> dict:
     """Check which reference-guided matching dimensions have data.
@@ -5423,7 +4329,7 @@ def generate_rose_hobart(
     # Extract reference faces from all provided images
     ref_embeddings = []
     for path_str in paths:
-        is_valid, err_msg, validated_path = _validate_path(path_str, must_exist=True)
+        is_valid, err_msg, validated_path = validate_path(path_str, must_exist=True)
         if not is_valid:
             return {"success": False, "error": err_msg}
         ref_faces = extract_faces_from_image(validated_path)
@@ -5488,7 +4394,7 @@ def generate_rose_hobart(
     description="Get the current state of the sequence tab including selected algorithm, "
                 "parameters, preview clips, and timeline clips.",
     requires_project=True,
-    modifies_gui_state=False
+    modifies_gui_state=True
 )
 def get_remix_state(project, main_window) -> dict:
     """Get current state of the remix/sequence UI.
@@ -5523,36 +4429,8 @@ def get_settings() -> dict:
     Returns:
         Dict with success status and settings values
     """
-    settings = load_settings()
-
-    return {
-        "success": True,
-        "settings": {
-            # Directories
-            "download_dir": str(settings.download_dir),
-            "export_dir": str(settings.export_dir),
-            "thumbnail_cache_dir": str(settings.thumbnail_cache_dir),
-            # Detection
-            "default_sensitivity": settings.default_sensitivity,
-            "min_scene_length_seconds": settings.min_scene_length_seconds,
-            # Export
-            "export_quality": settings.export_quality,
-            "export_resolution": settings.export_resolution,
-            "export_fps": settings.export_fps,
-            # Transcription
-            "transcription_model": settings.transcription_model,
-            "transcription_language": settings.transcription_language,
-            # Appearance
-            "theme_preference": settings.theme_preference,
-            # YouTube (no API key)
-            "youtube_results_count": settings.youtube_results_count,
-            "youtube_parallel_downloads": settings.youtube_parallel_downloads,
-            # LLM (no API keys)
-            "llm_provider": settings.llm_provider,
-            "llm_model": settings.llm_model,
-            "llm_temperature": settings.llm_temperature,
-        }
-    }
+    from core.spine.settings_io import get_settings as _impl
+    return _impl()
 
 
 # Safe settings that can be modified by agent (no API keys, no paths)
@@ -5592,66 +4470,8 @@ def update_settings(setting_name: str, value) -> dict:
     Returns:
         Dict with success status and updated value
     """
-    if setting_name not in SAFE_SETTINGS:
-        return {
-            "success": False,
-            "error": f"Setting '{setting_name}' cannot be modified. "
-                     f"Safe settings: {', '.join(sorted(SAFE_SETTINGS.keys()))}"
-        }
-
-    spec = SAFE_SETTINGS[setting_name]
-    expected_type = spec[0]
-
-    # Type validation
-    if expected_type is float:
-        try:
-            value = float(value)
-        except (TypeError, ValueError):
-            return {"success": False, "error": f"Setting '{setting_name}' requires a number"}
-        min_val, max_val = spec[1], spec[2]
-        if not (min_val <= value <= max_val):
-            return {
-                "success": False,
-                "error": f"Setting '{setting_name}' must be between {min_val} and {max_val}"
-            }
-    elif expected_type is int:
-        try:
-            value = int(value)
-        except (TypeError, ValueError):
-            return {"success": False, "error": f"Setting '{setting_name}' requires an integer"}
-        min_val, max_val = spec[1], spec[2]
-        if not (min_val <= value <= max_val):
-            return {
-                "success": False,
-                "error": f"Setting '{setting_name}' must be between {min_val} and {max_val}"
-            }
-    elif expected_type is str:
-        value = str(value)
-        allowed_values = spec[1]
-        if allowed_values is not None and value not in allowed_values:
-            return {
-                "success": False,
-                "error": f"Setting '{setting_name}' must be one of: {', '.join(allowed_values)}"
-            }
-
-    # Load current settings
-    settings = load_settings()
-
-    # Update the setting
-    old_value = getattr(settings, setting_name)
-    setattr(settings, setting_name, value)
-
-    # Save settings
-    from core.settings import save_settings
-    save_settings(settings)
-
-    return {
-        "success": True,
-        "message": f"Updated {setting_name}: {old_value} -> {value}",
-        "setting": setting_name,
-        "old_value": old_value,
-        "new_value": value,
-    }
+    from core.spine.settings_io import update_settings as _impl
+    return _impl(setting_name, value)
 
 
 # =============================================================================
@@ -5680,53 +4500,8 @@ def search_transcripts(
     Returns:
         Dictionary with success status, query, match count, and list of matches
     """
-    if not query:
-        return {"success": False, "error": "Query cannot be empty"}
-
-    search_query = query if case_sensitive else query.lower()
-    results = []
-
-    for clip in project.clips:
-        if not clip.transcript:
-            continue
-
-        full_text = clip.get_transcript_text()
-        if not full_text:
-            continue
-
-        search_text = full_text if case_sensitive else full_text.lower()
-
-        if search_query in search_text:
-            # Find match position for context
-            pos = search_text.find(search_query)
-            start = max(0, pos - context_chars)
-            end = min(len(full_text), pos + len(query) + context_chars)
-            context = full_text[start:end]
-
-            # Add ellipsis if truncated
-            if start > 0:
-                context = "..." + context
-            if end < len(full_text):
-                context = context + "..."
-
-            source = project.sources_by_id.get(clip.source_id)
-            fps = source.fps if source else 30.0
-
-            results.append({
-                "clip_id": clip.id,
-                "source_name": source.file_path.name if source else "Unknown",
-                "match_context": context,
-                "duration_seconds": round(clip.duration_seconds(fps), 2),
-                "start_time": round(clip.start_time(fps), 2),
-                "shot_type": clip.shot_type,
-            })
-
-    return {
-        "success": True,
-        "query": query,
-        "match_count": len(results),
-        "matches": results
-    }
+    from core.spine.queries import search_transcripts as _impl
+    return _impl(project, query, case_sensitive, context_chars)
 
 
 @tools.register(
@@ -5752,95 +4527,8 @@ def find_similar_clips(
         Dictionary with success status, reference clip ID, criteria used,
         and list of similar clips with similarity scores
     """
-    from core.analysis.color import get_primary_hue
-
-    if criteria is None:
-        criteria = ["color", "shot_type"]
-
-    # Validate criteria
-    valid_criteria = ["color", "shot_type", "duration"]
-    for c in criteria:
-        if c not in valid_criteria:
-            return {
-                "success": False,
-                "error": f"Invalid criterion '{c}'. Valid criteria: {', '.join(valid_criteria)}"
-            }
-
-    reference = project.clips_by_id.get(clip_id)
-    if not reference:
-        return {"success": False, "error": f"Clip '{clip_id}' not found"}
-
-    ref_source = project.sources_by_id.get(reference.source_id)
-    ref_fps = ref_source.fps if ref_source else 30.0
-    ref_duration = reference.duration_seconds(ref_fps)
-
-    scores = []
-    for clip in project.clips:
-        if clip.id == clip_id:
-            continue
-
-        score = 0.0
-        source = project.sources_by_id.get(clip.source_id)
-        fps = source.fps if source else 30.0
-
-        # Score by shot type match
-        if "shot_type" in criteria:
-            if clip.shot_type and reference.shot_type:
-                if clip.shot_type == reference.shot_type:
-                    score += 1.0
-                # Partial match for similar shot types
-                elif clip.shot_type and reference.shot_type:
-                    # Close types get partial score
-                    close_types = {
-                        "close_up": ["extreme_close_up", "medium_close_up"],
-                        "medium_shot": ["medium_close_up", "medium_long_shot"],
-                        "wide_shot": ["medium_long_shot", "extreme_wide_shot"],
-                    }
-                    if reference.shot_type in close_types:
-                        if clip.shot_type in close_types[reference.shot_type]:
-                            score += 0.5
-
-        # Score by color similarity
-        if "color" in criteria and reference.dominant_colors and clip.dominant_colors:
-            ref_hue = get_primary_hue(reference.dominant_colors)
-            clip_hue = get_primary_hue(clip.dominant_colors)
-            hue_diff = abs(ref_hue - clip_hue)
-            if hue_diff > 180:
-                hue_diff = 360 - hue_diff
-            # Similar within 60 degrees gets full score, degrades linearly
-            score += max(0, 1.0 - hue_diff / 60)
-
-        # Score by duration similarity
-        if "duration" in criteria:
-            clip_duration = clip.duration_seconds(fps)
-            if ref_duration > 0 and clip_duration > 0:
-                duration_ratio = min(ref_duration, clip_duration) / max(ref_duration, clip_duration)
-                score += duration_ratio
-
-        if score > 0:
-            scores.append((clip, score, source))
-
-    # Sort by score descending
-    scores.sort(key=lambda x: x[1], reverse=True)
-
-    results = []
-    for clip, score, source in scores[:limit]:
-        fps = source.fps if source else 30.0
-        results.append({
-            "clip_id": clip.id,
-            "source_name": source.file_path.name if source else "Unknown",
-            "similarity_score": round(score, 2),
-            "shot_type": clip.shot_type,
-            "duration_seconds": round(clip.duration_seconds(fps), 2),
-            "has_speech": bool(clip.transcript),
-        })
-
-    return {
-        "success": True,
-        "reference_clip_id": clip_id,
-        "criteria": criteria,
-        "similar_clips": results
-    }
+    from core.spine.clips import find_similar_clips as _impl
+    return _impl(project, clip_id, criteria, limit)
 
 
 @tools.register(
@@ -5858,57 +4546,8 @@ def group_clips_by(project, criterion: str) -> dict:
         Dictionary with success status, criterion used, group count,
         and groups with clip IDs and counts
     """
-    from core.analysis.color import classify_color_palette
-
-    valid_criteria = ["color", "shot_type", "duration", "source"]
-    if criterion not in valid_criteria:
-        return {
-            "success": False,
-            "error": f"Invalid criterion '{criterion}'. Valid criteria: {', '.join(valid_criteria)}"
-        }
-
-    groups: dict[str, list[str]] = {}
-
-    for clip in project.clips:
-        source = project.sources_by_id.get(clip.source_id)
-        fps = source.fps if source else 30.0
-
-        if criterion == "shot_type":
-            key = clip.shot_type if clip.shot_type else "unknown"
-        elif criterion == "color":
-            if clip.dominant_colors:
-                key = classify_color_palette(clip.dominant_colors)
-            else:
-                key = "unanalyzed"
-        elif criterion == "duration":
-            duration = clip.duration_seconds(fps)
-            if duration < 2:
-                key = "short (<2s)"
-            elif duration < 10:
-                key = "medium (2-10s)"
-            else:
-                key = "long (>10s)"
-        elif criterion == "source":
-            key = source.file_path.name if source else "unknown"
-        else:
-            key = "unknown"
-
-        if key not in groups:
-            groups[key] = []
-        groups[key].append(clip.id)
-
-    # Format output with counts
-    formatted_groups = {
-        k: {"clip_ids": v, "count": len(v)}
-        for k, v in sorted(groups.items())
-    }
-
-    return {
-        "success": True,
-        "criterion": criterion,
-        "group_count": len(groups),
-        "groups": formatted_groups
-    }
+    from core.spine.clips import group_clips_by as _impl
+    return _impl(project, criterion)
 
 
 # =============================================================================
@@ -5933,30 +4572,8 @@ def get_film_term_definition(term: str) -> dict:
     Returns:
         Dict with success status and term data (name, category, definition)
     """
-    from core.film_glossary import get_term_definition
-
-    if not term or not term.strip():
-        return {
-            "success": False,
-            "error": "No term provided. Please specify a film term to look up."
-        }
-
-    result = get_term_definition(term)
-
-    if result:
-        return {
-            "success": True,
-            "key": result["key"],
-            "name": result["name"],
-            "category": result["category"],
-            "definition": result["definition"]
-        }
-    else:
-        return {
-            "success": False,
-            "error": f"Term '{term}' not found in glossary.",
-            "suggestion": "Try searching with search_glossary for partial matches."
-        }
+    from core.spine.glossary import get_film_term_definition as _impl
+    return _impl(term)
 
 
 @tools.register(
@@ -5979,49 +4596,8 @@ def search_glossary(query: str, category: Optional[str] = None) -> dict:
     Returns:
         Dict with success status and list of matching terms
     """
-    from core.film_glossary import search_glossary as do_search, GLOSSARY_CATEGORIES
-
-    if not query or not query.strip():
-        return {
-            "success": False,
-            "error": "No search query provided."
-        }
-
-    # Validate category if provided
-    if category and category != "All" and category not in GLOSSARY_CATEGORIES:
-        return {
-            "success": False,
-            "error": f"Invalid category '{category}'.",
-            "valid_categories": GLOSSARY_CATEGORIES
-        }
-
-    results = do_search(query, category)
-
-    if results:
-        return {
-            "success": True,
-            "query": query,
-            "category_filter": category,
-            "result_count": len(results),
-            "terms": [
-                {
-                    "key": r["key"],
-                    "name": r["name"],
-                    "category": r["category"],
-                    "definition": r["definition"]
-                }
-                for r in results
-            ]
-        }
-    else:
-        return {
-            "success": True,
-            "query": query,
-            "category_filter": category,
-            "result_count": 0,
-            "terms": [],
-            "message": f"No terms found matching '{query}'."
-        }
+    from core.spine.glossary import search_glossary as _impl
+    return _impl(query, category)
 
 
 # =============================================================================
@@ -6050,67 +4626,8 @@ def detect_audio_beats(
     Returns:
         Dict with tempo_bpm, beat_times, onset_times, downbeat_times, duration
     """
-    from pathlib import Path
-    from core.analysis.audio import (
-        analyze_music_file,
-        analyze_audio_from_video,
-        has_audio_track,
-    )
-
-    path = Path(audio_path)
-
-    if not path.exists():
-        return {
-            "success": False,
-            "error": f"File not found: {audio_path}"
-        }
-
-    # Determine if audio or video file
-    audio_extensions = {".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg"}
-    video_extensions = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
-
-    try:
-        if path.suffix.lower() in audio_extensions:
-            # Direct audio file
-            analysis = analyze_music_file(path, include_onsets=include_onsets)
-        elif path.suffix.lower() in video_extensions:
-            # Video file - extract and analyze audio
-            if not has_audio_track(path):
-                return {
-                    "success": False,
-                    "error": f"Video file has no audio track: {audio_path}"
-                }
-            analysis = analyze_audio_from_video(path, include_onsets=include_onsets)
-        else:
-            return {
-                "success": False,
-                "error": f"Unsupported file type: {path.suffix}. "
-                         f"Supported: {audio_extensions | video_extensions}"
-            }
-
-        return {
-            "success": True,
-            "file": str(path),
-            "tempo_bpm": round(analysis.tempo_bpm, 1),
-            "beat_count": len(analysis.beat_times),
-            "beat_times": [round(t, 3) for t in analysis.beat_times[:20]],  # First 20
-            "beat_times_truncated": len(analysis.beat_times) > 20,
-            "downbeat_count": len(analysis.downbeat_times),
-            "downbeat_times": [round(t, 3) for t in analysis.downbeat_times[:10]],
-            "onset_count": len(analysis.onset_times) if include_onsets else 0,
-            "onset_times": [round(t, 3) for t in analysis.onset_times[:20]] if include_onsets else [],
-            "duration_seconds": round(analysis.duration_seconds, 2),
-            "message": (
-                f"Detected {analysis.tempo_bpm:.1f} BPM with "
-                f"{len(analysis.beat_times)} beats over {analysis.duration_seconds:.1f}s"
-            )
-        }
-
-    except Exception as e:
-        return {
-            "success": False,
-            "error": f"Audio analysis failed: {str(e)}"
-        }
+    from core.spine.sequence_analysis import detect_audio_beats as _impl
+    return _impl(audio_path, include_onsets)
 
 
 @tools.register(
@@ -6139,106 +4656,8 @@ def align_sequence_to_audio(
     Returns:
         Dict with alignment suggestions for each clip
     """
-    from pathlib import Path
-    from core.analysis.audio import analyze_music_file, analyze_audio_from_video, has_audio_track
-    from core.remix.audio_sync import suggest_beat_aligned_cuts
-
-    # Validate strategy
-    valid_strategies = ("nearest", "downbeat", "onset")
-    if strategy not in valid_strategies:
-        return {
-            "success": False,
-            "error": f"Invalid strategy '{strategy}'. Use: {valid_strategies}"
-        }
-
-    # Check sequence has clips
-    if not project.sequence or not project.sequence.clips:
-        return {
-            "success": False,
-            "error": "No clips in sequence. Add clips to the sequence first."
-        }
-
-    # Load and analyze audio
-    path = Path(audio_path)
-    if not path.exists():
-        return {
-            "success": False,
-            "error": f"Audio file not found: {audio_path}"
-        }
-
-    audio_extensions = {".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg"}
-    video_extensions = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
-
-    try:
-        if path.suffix.lower() in audio_extensions:
-            audio_analysis = analyze_music_file(path)
-        elif path.suffix.lower() in video_extensions:
-            if not has_audio_track(path):
-                return {
-                    "success": False,
-                    "error": f"Video file has no audio track: {audio_path}"
-                }
-            audio_analysis = analyze_audio_from_video(path)
-        else:
-            return {
-                "success": False,
-                "error": f"Unsupported file type: {path.suffix}"
-            }
-
-        # Build clip end times from sequence
-        # Calculate cumulative end times based on clip durations
-        clip_end_times = []
-        current_time = 0.0
-
-        for seq_clip in project.sequence.clips:
-            # Find the source clip to get FPS
-            source_clip = project.clips_by_id.get(seq_clip.source_clip_id)
-            source = project.sources_by_id.get(seq_clip.source_id)
-
-            if source_clip and source:
-                duration = source_clip.duration_seconds(source.fps)
-                current_time += duration
-                clip_end_times.append((seq_clip.id, current_time))
-
-        if not clip_end_times:
-            return {
-                "success": False,
-                "error": "Could not calculate clip durations. Check source clips exist."
-            }
-
-        # Get alignment suggestions
-        suggestions = suggest_beat_aligned_cuts(
-            clip_end_times=clip_end_times,
-            audio_analysis=audio_analysis,
-            strategy=strategy,
-            max_adjustment=max_adjustment,
-        )
-
-        return {
-            "success": True,
-            "audio_file": str(path),
-            "tempo_bpm": round(audio_analysis.tempo_bpm, 1),
-            "strategy": strategy,
-            "max_adjustment": max_adjustment,
-            "sequence_clip_count": len(project.sequence.clips),
-            "suggestions_count": len(suggestions),
-            "suggestions": [s.to_dict() for s in suggestions],
-            "message": (
-                f"Found {len(suggestions)} clips that could be adjusted to align with "
-                f"{audio_analysis.tempo_bpm:.1f} BPM beats (strategy: {strategy})"
-            )
-        }
-
-    except ValueError as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
-    except Exception as e:
-        return {
-            "success": False,
-            "error": f"Alignment analysis failed: {str(e)}"
-        }
+    from core.spine.sequence_analysis import align_sequence_to_audio as _impl
+    return _impl(project, audio_path, strategy, max_adjustment)
 
 
 @tools.register(
@@ -6281,7 +4700,7 @@ def generate_staccato(
         }
 
     # Validate audio path
-    is_valid, err_msg, validated_path = _validate_path(audio_path, must_exist=True)
+    is_valid, err_msg, validated_path = validate_path(audio_path, must_exist=True)
     if not is_valid:
         return {"success": False, "error": err_msg}
 
@@ -6424,61 +4843,8 @@ def get_sequence_analysis(
     Returns:
         Dict with pacing stats, continuity warnings, and suggestions
     """
-    from core.analysis.sequence import analyze_sequence, get_pacing_curve
-    from models.sequence_analysis import GENRE_PACING_NORMS
-
-    # Check sequence exists
-    if not project.sequence:
-        return {
-            "success": False,
-            "error": "No sequence exists. Create a sequence first."
-        }
-
-    all_clips = project.sequence.get_all_clips()
-    if not all_clips:
-        return {
-            "success": False,
-            "error": "Sequence is empty. Add clips to the sequence first."
-        }
-
-    try:
-        # Run analysis
-        analysis = analyze_sequence(project.sequence, project)
-
-        result = {
-            "success": True,
-            "sequence_name": project.sequence.name,
-            "clip_count": analysis.pacing.clip_count,
-            "pacing": analysis.pacing.to_dict(),
-            "visual_consistency": analysis.visual_consistency.to_dict(),
-            "continuity_warning_count": len(analysis.continuity_warnings),
-            "continuity_warnings": [w.to_dict() for w in analysis.continuity_warnings],
-            "suggestions": analysis.suggestions,
-        }
-
-        # Add genre comparison if requested
-        if genre_comparison:
-            genre_lower = genre_comparison.lower()
-            if genre_lower in GENRE_PACING_NORMS:
-                comparison = analysis.compare_to_genre(genre_lower)
-                if comparison:
-                    result["genre_comparison"] = comparison.to_dict()
-            else:
-                result["genre_comparison_error"] = (
-                    f"Unknown genre '{genre_comparison}'. "
-                    f"Valid genres: {list(GENRE_PACING_NORMS.keys())}"
-                )
-
-        # Add pacing curve for visualization
-        result["pacing_curve"] = get_pacing_curve(project.sequence, project)
-
-        return result
-
-    except Exception as e:
-        return {
-            "success": False,
-            "error": f"Sequence analysis failed: {str(e)}"
-        }
+    from core.spine.sequence_analysis import get_sequence_analysis as _impl
+    return _impl(project, genre_comparison)
 
 
 @tools.register(
@@ -6497,53 +4863,8 @@ def check_continuity_issues(project) -> dict:
     Returns:
         Dict with list of continuity warnings and their severities
     """
-    from core.analysis.sequence import check_continuity, _resolve_source_clips
-
-    # Check sequence exists
-    if not project.sequence:
-        return {
-            "success": False,
-            "error": "No sequence exists. Create a sequence first."
-        }
-
-    all_clips = project.sequence.get_all_clips()
-    if len(all_clips) < 2:
-        return {
-            "success": True,
-            "message": "Need at least 2 clips to check continuity",
-            "warning_count": 0,
-            "warnings": []
-        }
-
-    try:
-        # Resolve clips and check continuity
-        resolved = _resolve_source_clips(all_clips, project)
-        warnings = check_continuity(resolved)
-
-        # Group by severity
-        by_severity = {"low": 0, "medium": 0, "high": 0}
-        for w in warnings:
-            by_severity[w.severity] = by_severity.get(w.severity, 0) + 1
-
-        return {
-            "success": True,
-            "sequence_name": project.sequence.name,
-            "clip_count": len(all_clips),
-            "warning_count": len(warnings),
-            "warnings_by_severity": by_severity,
-            "warnings": [w.to_dict() for w in warnings],
-            "message": (
-                f"Found {len(warnings)} potential continuity issues "
-                f"({by_severity['high']} high, {by_severity['medium']} medium, {by_severity['low']} low)"
-                if warnings else "No continuity issues detected"
-            )
-        }
-
-    except Exception as e:
-        return {
-            "success": False,
-            "error": f"Continuity check failed: {str(e)}"
-        }
+    from core.spine.sequence_analysis import check_continuity_issues as _impl
+    return _impl(project)
 
 
 # =============================================================================
@@ -6578,89 +4899,8 @@ def generate_analysis_report(
     Returns:
         Dict with report content and metadata
     """
-    from core.scene_report import (
-        generate_sequence_report,
-        generate_clips_report,
-        report_to_html,
-        REPORT_SECTIONS,
-        DEFAULT_SECTIONS,
-    )
-
-    # Validate sections
-    valid_sections = list(REPORT_SECTIONS.keys())
-    if sections:
-        invalid = [s for s in sections if s not in valid_sections]
-        if invalid:
-            return {
-                "success": False,
-                "error": f"Invalid sections: {invalid}. Valid sections: {valid_sections}"
-            }
-    else:
-        sections = DEFAULT_SECTIONS
-
-    # Validate output format
-    if output_format not in ("markdown", "html"):
-        return {
-            "success": False,
-            "error": f"Invalid output_format: {output_format}. Use 'markdown' or 'html'"
-        }
-
-    try:
-        if clip_ids:
-            # Report on specific clips
-            clips = [project.clips_by_id.get(cid) for cid in clip_ids]
-            clips = [c for c in clips if c is not None]
-
-            if not clips:
-                return {
-                    "success": False,
-                    "error": "No valid clips found for the provided IDs"
-                }
-
-            report = generate_clips_report(clips, project, title="Selected Clips Analysis")
-        else:
-            # Report on entire sequence
-            if not project.sequence:
-                return {
-                    "success": False,
-                    "error": "No sequence exists. Create a sequence first."
-                }
-
-            if not project.sequence.get_all_clips():
-                return {
-                    "success": False,
-                    "error": "Sequence is empty. Add clips to the sequence first."
-                }
-
-            report = generate_sequence_report(
-                project.sequence,
-                project,
-                sections=sections,
-                include_clip_details=include_clip_details,
-            )
-
-        # Convert to HTML if requested
-        if output_format == "html":
-            report = report_to_html(report)
-
-        report_summary = _summarize_report_for_agent(report, sections, output_format)
-        result = {
-            "success": True,
-            "format": output_format,
-            "sections_included": sections,
-            "word_count": report_summary["word_count"],
-            "report_summary": report_summary,
-            "message": f"Generated {output_format} report with {len(sections)} sections",
-        }
-        if not report_summary["is_truncated"]:
-            result["report"] = report
-        return result
-
-    except Exception as e:
-        return {
-            "success": False,
-            "error": f"Report generation failed: {str(e)}"
-        }
+    from core.spine.sequence_analysis import generate_analysis_report as _impl
+    return _impl(project, sections, include_clip_details, output_format, clip_ids)
 
 
 # =============================================================================
@@ -6767,7 +5007,7 @@ def import_frames(project, file_paths: list[str]) -> dict:
     frames_dir.mkdir(parents=True, exist_ok=True)
 
     for path_str in file_paths:
-        valid, err_msg, resolved = _validate_path(path_str, must_exist=True)
+        valid, err_msg, resolved = validate_path(path_str, must_exist=True)
         if not valid:
             errors.append(f"{path_str}: {err_msg}")
             continue
@@ -6828,40 +5068,8 @@ def list_frames(
         shot_type: Filter by shot type classification
         has_description: Filter by whether frame has a description
     """
-    frames = list(project.frames)
-
-    if source_id:
-        frames = [f for f in frames if f.source_id == source_id]
-    if clip_id:
-        frames = [f for f in frames if f.clip_id == clip_id]
-    if shot_type:
-        frames = [f for f in frames if f.shot_type == shot_type]
-    if has_description is not None:
-        if has_description:
-            frames = [f for f in frames if f.description]
-        else:
-            frames = [f for f in frames if not f.description]
-
-    results = []
-    for frame in frames:
-        results.append({
-            "id": frame.id,
-            "display_name": frame.display_name(),
-            "source_id": frame.source_id,
-            "clip_id": frame.clip_id,
-            "frame_number": frame.frame_number,
-            "analyzed": frame.analyzed,
-            "shot_type": frame.shot_type,
-            "has_description": bool(frame.description),
-            "tags": frame.tags,
-        })
-
-    return {
-        "success": True,
-        "frames": results,
-        "count": len(results),
-        "total_in_project": len(project.frames),
-    }
+    from core.spine.queries import list_frames as _impl
+    return _impl(project, source_id, clip_id, shot_type, has_description)
 
 
 @tools.register(
@@ -7103,24 +5311,8 @@ def clear_custom_queries(project, clip_ids: Optional[list[str]] = None) -> dict:
     Returns:
         Dict with success status and count of cleared clips
     """
-    clips = project.clips if clip_ids is None else [
-        project.clips_by_id[cid] for cid in clip_ids if cid in project.clips_by_id
-    ]
-
-    cleared = 0
-    for clip in clips:
-        if clip.custom_queries:
-            clip.custom_queries = []
-            cleared += 1
-
-    if cleared > 0:
-        project.mark_dirty()
-
-    return {
-        "success": True,
-        "cleared_count": cleared,
-        "total_checked": len(clips),
-    }
+    from core.spine.settings_io import clear_custom_queries as _impl
+    return _impl(project, clip_ids)
 
 
 # =============================================================================
@@ -7374,51 +5566,8 @@ def update_frame(
     Returns:
         Dict with success status and updated fields
     """
-    frame = project.frames_by_id.get(frame_id)
-    if frame is None:
-        return {"success": False, "error": f"Frame not found: {frame_id}"}
-
-    updated_fields = []
-    kwargs = {}
-
-    # Validate and prepare shot_type
-    if shot_type is not None:
-        if shot_type == "":
-            kwargs["shot_type"] = None
-            updated_fields.append("shot_type")
-        elif shot_type in VALID_SHOT_TYPES:
-            kwargs["shot_type"] = shot_type
-            updated_fields.append("shot_type")
-        else:
-            return {
-                "success": False,
-                "error": f"Invalid shot type: '{shot_type}'. Must be one of: {', '.join(sorted(VALID_SHOT_TYPES))} or empty string to clear."
-            }
-
-    # Update via project.update_frame for fields in _UPDATABLE_FRAME_FIELDS
-    if kwargs:
-        project.update_frame(frame_id, **kwargs)
-
-    # Update tags and notes directly (not in _UPDATABLE_FRAME_FIELDS)
-    if tags is not None:
-        frame.tags = list(tags)
-        updated_fields.append("tags")
-
-    if notes is not None:
-        frame.notes = notes
-        updated_fields.append("notes")
-
-    # Notify observers if we changed tags/notes directly
-    if tags is not None or notes is not None:
-        project._dirty = True
-        project._notify_observers("frames_updated", [frame])
-
-    return {
-        "success": True,
-        "frame_id": frame_id,
-        "updated_fields": updated_fields,
-        "message": f"Updated {', '.join(updated_fields)}" if updated_fields else "No fields updated"
-    }
+    from core.spine.frames import update_frame as _impl
+    return _impl(project, frame_id, tags, notes, shot_type)
 
 
 # ============================================================================
@@ -7495,7 +5644,7 @@ def export_srt(
 
     # Determine output path
     if output_path:
-        valid, error, validated_path = _validate_path(output_path)
+        valid, error, validated_path = validate_path(output_path)
         if not valid:
             return {"success": False, "error": f"Invalid output path: {error}"}
         srt_path = validated_path
@@ -7581,7 +5730,7 @@ def export_clips(
 
     # Determine output directory
     if output_dir:
-        valid, error, validated_path = _validate_path(output_dir)
+        valid, error, validated_path = validate_path(output_dir)
         if not valid:
             return {"success": False, "error": f"Invalid output directory: {error}"}
         out_path = validated_path
@@ -7665,7 +5814,7 @@ def export_bundle(
     """
     # Determine output path
     if output_path:
-        valid, error, validated_path = _validate_path(output_path)
+        valid, error, validated_path = validate_path(output_path)
         if not valid:
             return {"success": False, "error": f"Invalid output path: {error}"}
         dest_dir = validated_path

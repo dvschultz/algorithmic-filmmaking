@@ -405,6 +405,7 @@ class Settings:
     """Application settings with sensible defaults."""
 
     # Paths (use platform-appropriate defaults)
+    cache_dir: Path = field(default_factory=_get_cache_dir)
     thumbnail_cache_dir: Path = field(
         default_factory=lambda: _get_cache_dir() / "thumbnails"
     )

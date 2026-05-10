@@ -512,7 +512,13 @@ class TestSafePathRootsWindows:
 
         with patch("sys.platform", "win32"), \
              patch("pathlib.Path.exists", return_value=True):
+            # The platform-conditional SAFE_ROOTS lives in core.spine.security;
+            # scene_ripper_mcp.security is a thin re-export. Reload spine first
+            # so the drive-root branch executes, then reload the wrapper so it
+            # picks up the new SAFE_ROOTS object.
+            import core.spine.security
             import scene_ripper_mcp.security
+            importlib.reload(core.spine.security)
             importlib.reload(scene_ripper_mcp.security)
             try:
                 roots = scene_ripper_mcp.security.SAFE_ROOTS
@@ -520,6 +526,7 @@ class TestSafePathRootsWindows:
                 drive_roots = [r for r in roots if len(str(r)) <= 4 and ":" in str(r)]
                 assert len(drive_roots) > 0, "No drive roots found in SAFE_ROOTS"
             finally:
+                importlib.reload(core.spine.security)
                 importlib.reload(scene_ripper_mcp.security)
 
 

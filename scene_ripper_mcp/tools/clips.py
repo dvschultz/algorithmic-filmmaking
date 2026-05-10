@@ -34,12 +34,19 @@ async def list_clips(
         return json.dumps({"success": False, "error": error})
 
     try:
-        from core.project import load_project
+        from core.project import MissingSourceError
+        from core.spine.project_io import load_with_mtime
 
-        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(path)
+        try:
+            project, _mtime = load_with_mtime(path)
+        except MissingSourceError as e:
+            return json.dumps({
+                "success": False,
+                "error": {"code": "source_files_missing", "message": str(e)},
+            })
 
-        # Build source lookup
-        sources_by_id = {s.id: s for s in sources}
+        clips = project.clips
+        sources_by_id = project.sources_by_id
 
         # Apply pagination
         paginated_clips = clips[offset : offset + limit]
@@ -121,12 +128,19 @@ async def filter_clips(
         return json.dumps({"success": False, "error": error})
 
     try:
-        from core.project import load_project
+        from core.project import MissingSourceError
+        from core.spine.project_io import load_with_mtime
 
-        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(path)
+        try:
+            project, _mtime = load_with_mtime(path)
+        except MissingSourceError as e:
+            return json.dumps({
+                "success": False,
+                "error": {"code": "source_files_missing", "message": str(e)},
+            })
 
-        # Build source lookup
-        sources_by_id = {s.id: s for s in sources}
+        clips = project.clips
+        sources_by_id = project.sources_by_id
 
         filtered = []
         for clip in clips:
@@ -205,27 +219,22 @@ async def get_clip_metadata(
         return json.dumps({"success": False, "error": error})
 
     try:
-        from core.project import load_project
+        from core.project import MissingSourceError
+        from core.spine.project_io import load_with_mtime
 
-        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(path)
+        try:
+            project, _mtime = load_with_mtime(path)
+        except MissingSourceError as e:
+            return json.dumps({
+                "success": False,
+                "error": {"code": "source_files_missing", "message": str(e)},
+            })
 
-        # Find clip
-        clip = None
-        for c in clips:
-            if c.id == clip_id:
-                clip = c
-                break
-
+        clip = project.clips_by_id.get(clip_id)
         if not clip:
             return json.dumps({"success": False, "error": f"Clip not found: {clip_id}"})
 
-        # Get source
-        source = None
-        for s in sources:
-            if s.id == clip.source_id:
-                source = s
-                break
-
+        source = project.sources_by_id.get(clip.source_id)
         fps = source.fps if source else 30.0
 
         clip_data = {
@@ -295,17 +304,22 @@ async def add_clip_tags(
         return json.dumps({"success": False, "error": error})
 
     try:
-        from core.project import load_project, save_project
+        from core.project import MissingSourceError
+        from core.spine.project_io import (
+            ProjectModifiedExternally,
+            load_with_mtime,
+            save_with_mtime_check,
+        )
 
-        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(path)
+        try:
+            project, mtime = load_with_mtime(path)
+        except MissingSourceError as e:
+            return json.dumps({
+                "success": False,
+                "error": {"code": "source_files_missing", "message": str(e)},
+            })
 
-        # Find and update clip
-        clip = None
-        for c in clips:
-            if c.id == clip_id:
-                clip = c
-                break
-
+        clip = project.clips_by_id.get(clip_id)
         if not clip:
             return json.dumps({"success": False, "error": f"Clip not found: {clip_id}"})
 
@@ -313,20 +327,20 @@ async def add_clip_tags(
         existing_tags = set(clip.tags or [])
         new_tags = [t.strip() for t in tags if t.strip() and t.strip() not in existing_tags]
         clip.tags = list(existing_tags) + new_tags
+        project.update_clips([clip])
 
-        # Save project
-        success = save_project(
-            filepath=path,
-            sources=sources,
-            clips=clips,
-            sequence=sequence,
-            ui_state=ui_state,
-            metadata=metadata,
-            audio_sources=audio_sources,
-        )
-
-        if not success:
-            return json.dumps({"success": False, "error": "Failed to save project"})
+        try:
+            save_with_mtime_check(project, path, mtime)
+        except ProjectModifiedExternally as exc:
+            return json.dumps({
+                "success": False,
+                "error": {
+                    "code": "project_modified_externally",
+                    "path": str(exc.path),
+                    "expected_mtime": exc.expected_mtime,
+                    "current_mtime": exc.current_mtime,
+                },
+            })
 
         return json.dumps(
             {
@@ -363,17 +377,22 @@ async def remove_clip_tags(
         return json.dumps({"success": False, "error": error})
 
     try:
-        from core.project import load_project, save_project
+        from core.project import MissingSourceError
+        from core.spine.project_io import (
+            ProjectModifiedExternally,
+            load_with_mtime,
+            save_with_mtime_check,
+        )
 
-        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(path)
+        try:
+            project, mtime = load_with_mtime(path)
+        except MissingSourceError as e:
+            return json.dumps({
+                "success": False,
+                "error": {"code": "source_files_missing", "message": str(e)},
+            })
 
-        # Find and update clip
-        clip = None
-        for c in clips:
-            if c.id == clip_id:
-                clip = c
-                break
-
+        clip = project.clips_by_id.get(clip_id)
         if not clip:
             return json.dumps({"success": False, "error": f"Clip not found: {clip_id}"})
 
@@ -382,20 +401,20 @@ async def remove_clip_tags(
         original_count = len(clip.tags or [])
         clip.tags = [t for t in (clip.tags or []) if t not in tags_to_remove]
         removed_count = original_count - len(clip.tags)
+        project.update_clips([clip])
 
-        # Save project
-        success = save_project(
-            filepath=path,
-            sources=sources,
-            clips=clips,
-            sequence=sequence,
-            ui_state=ui_state,
-            metadata=metadata,
-            audio_sources=audio_sources,
-        )
-
-        if not success:
-            return json.dumps({"success": False, "error": "Failed to save project"})
+        try:
+            save_with_mtime_check(project, path, mtime)
+        except ProjectModifiedExternally as exc:
+            return json.dumps({
+                "success": False,
+                "error": {
+                    "code": "project_modified_externally",
+                    "path": str(exc.path),
+                    "expected_mtime": exc.expected_mtime,
+                    "current_mtime": exc.current_mtime,
+                },
+            })
 
         return json.dumps(
             {
@@ -432,36 +451,40 @@ async def add_clip_note(
         return json.dumps({"success": False, "error": error})
 
     try:
-        from core.project import load_project, save_project
+        from core.project import MissingSourceError
+        from core.spine.project_io import (
+            ProjectModifiedExternally,
+            load_with_mtime,
+            save_with_mtime_check,
+        )
 
-        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(path)
+        try:
+            project, mtime = load_with_mtime(path)
+        except MissingSourceError as e:
+            return json.dumps({
+                "success": False,
+                "error": {"code": "source_files_missing", "message": str(e)},
+            })
 
-        # Find and update clip
-        clip = None
-        for c in clips:
-            if c.id == clip_id:
-                clip = c
-                break
-
+        clip = project.clips_by_id.get(clip_id)
         if not clip:
             return json.dumps({"success": False, "error": f"Clip not found: {clip_id}"})
 
-        # Update note
         clip.notes = note.strip()
+        project.update_clips([clip])
 
-        # Save project
-        success = save_project(
-            filepath=path,
-            sources=sources,
-            clips=clips,
-            sequence=sequence,
-            ui_state=ui_state,
-            metadata=metadata,
-            audio_sources=audio_sources,
-        )
-
-        if not success:
-            return json.dumps({"success": False, "error": "Failed to save project"})
+        try:
+            save_with_mtime_check(project, path, mtime)
+        except ProjectModifiedExternally as exc:
+            return json.dumps({
+                "success": False,
+                "error": {
+                    "code": "project_modified_externally",
+                    "path": str(exc.path),
+                    "expected_mtime": exc.expected_mtime,
+                    "current_mtime": exc.current_mtime,
+                },
+            })
 
         return json.dumps(
             {
@@ -497,12 +520,19 @@ async def search_transcripts(
         return json.dumps({"success": False, "error": error})
 
     try:
-        from core.project import load_project
+        from core.project import MissingSourceError
+        from core.spine.project_io import load_with_mtime
 
-        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(path)
+        try:
+            project, _mtime = load_with_mtime(path)
+        except MissingSourceError as e:
+            return json.dumps({
+                "success": False,
+                "error": {"code": "source_files_missing", "message": str(e)},
+            })
 
-        # Build source lookup
-        sources_by_id = {s.id: s for s in sources}
+        clips = project.clips
+        sources_by_id = project.sources_by_id
 
         matches = []
         search_query = query if case_sensitive else query.lower()

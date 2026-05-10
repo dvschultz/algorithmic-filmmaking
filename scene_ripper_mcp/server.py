@@ -40,6 +40,7 @@ async def lifespan(server: FastMCP) -> AsyncIterator[dict]:
 
     # Load settings at startup
     from core.settings import load_settings
+    from scene_ripper_mcp.jobs import JobRuntime, JobStore
 
     settings = load_settings()
     timeout = get_tool_timeout()
@@ -47,9 +48,27 @@ async def lifespan(server: FastMCP) -> AsyncIterator[dict]:
     logger.info(f"Settings loaded: download_dir={settings.download_dir}")
     logger.info(f"Tool timeout: {timeout}s (set MCP_TOOL_TIMEOUT to customize)")
 
-    yield {"settings": settings, "tool_timeout": timeout}
+    # Wire the jobs framework (R18 boot sweep, R27 MCP-only).
+    jobs_db_path = settings.cache_dir / "jobs.db"
+    job_store = JobStore(jobs_db_path)
+    swept = job_store.mark_running_jobs_as_crashed()
+    if swept:
+        logger.warning(
+            "Boot sweep marked %d in-flight jobs as crashed (server restart).",
+            swept,
+        )
+    job_runtime = JobRuntime(job_store)
 
-    logger.info("Scene Ripper MCP Server shutting down...")
+    try:
+        yield {
+            "settings": settings,
+            "tool_timeout": timeout,
+            "job_store": job_store,
+            "job_runtime": job_runtime,
+        }
+    finally:
+        logger.info("Scene Ripper MCP Server shutting down...")
+        job_runtime.shutdown(wait=False)
 
 
 # Create the MCP server instance
@@ -67,6 +86,7 @@ from scene_ripper_mcp.tools import analyze  # noqa: F401, E402
 from scene_ripper_mcp.tools import clips  # noqa: F401, E402
 from scene_ripper_mcp.tools import sequence  # noqa: F401, E402
 from scene_ripper_mcp.tools import export  # noqa: F401, E402
+from scene_ripper_mcp.tools import jobs  # noqa: F401, E402
 
 
 def main():
