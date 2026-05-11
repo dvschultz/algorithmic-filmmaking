@@ -42,6 +42,7 @@ that). Original (un-normalized) ``text`` is preserved on each
 from __future__ import annotations
 
 import math
+import secrets
 import string
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Optional
@@ -62,9 +63,13 @@ __all__ = [
     "by_chosen_words",
     "by_frequency",
     "by_property",
+    "compose_with_llm",
     "from_word_list",
     "normalize_word",
 ]
+
+
+RepeatPolicy = Literal["round-robin", "random", "first", "longest", "shortest"]
 
 
 # ---------------------------------------------------------------------------
@@ -279,6 +284,212 @@ def by_property(
     reverse = (order == "descending")
     rows.sort(key=lambda r: (r[2], r[1]), reverse=reverse)
     return [r[0] for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Repeat-policy instance picker
+# ---------------------------------------------------------------------------
+
+
+def _pick_instance(
+    candidates: list[WordInstance],
+    *,
+    policy: RepeatPolicy,
+    counter: int,
+    rng,
+) -> WordInstance:
+    """Pick a ``WordInstance`` from ``candidates`` under a repeat policy.
+
+    ``counter`` is the per-word emission count (0-based) and is only used
+    by ``round-robin``. ``rng`` is a ``random.Random``-shaped object and
+    is only used by ``random``.
+    """
+    if not candidates:
+        # Caller should have filtered this out; defensive raise.
+        raise ValueError("_pick_instance called with empty candidate list")
+
+    if policy == "round-robin":
+        return candidates[counter % len(candidates)]
+    if policy == "random":
+        return rng.choice(candidates)
+    if policy == "first":
+        return candidates[0]
+
+    # ``longest`` / ``shortest`` sort the candidates by duration and use
+    # ``(clip_id, segment_index, word_index)`` as the tiebreak. Sorting (vs
+    # min/max with a complex key) keeps the tiebreak direction explicit:
+    # ties always resolve to the earliest (clip_id, segment_index,
+    # word_index) regardless of whether we're picking the longest or
+    # shortest duration.
+    sorted_by_dur = sorted(
+        candidates,
+        key=lambda inst: (
+            inst.end - inst.start,
+            inst.clip_id,
+            inst.segment_index,
+            inst.word_index,
+        ),
+    )
+    if policy == "shortest":
+        return sorted_by_dur[0]
+    if policy == "longest":
+        # Last entry is longest duration; among ties at max duration, the
+        # earliest (clip_id, segment_index, word_index) wins because we
+        # sort ascending and tie-broken ascending — so we walk back from
+        # the end to the first one whose duration matches the max.
+        target = sorted_by_dur[-1].end - sorted_by_dur[-1].start
+        for inst in sorted_by_dur:
+            if (inst.end - inst.start) == target:
+                return inst
+        return sorted_by_dur[-1]  # pragma: no cover — unreachable
+    raise ValueError(
+        f"policy must be one of round-robin/random/first/longest/shortest, "
+        f"got {policy!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# LLM-composed mode
+# ---------------------------------------------------------------------------
+
+
+def compose_with_llm(
+    inv: WordInventory,
+    prompt: str,
+    target_length: int,
+    repeat_policy: RepeatPolicy = "round-robin",
+    seed: Optional[int] = None,
+    *,
+    model: Optional[str] = None,
+    api_base: Optional[str] = None,
+    temperature: float = 0.7,
+    timeout: float = 120.0,
+    system_prompt: Optional[str] = None,
+    think: bool = False,
+    _completion_fn=None,
+) -> list[WordInstance]:
+    """Compose an ordered ``list[WordInstance]`` from a user prompt via Ollama.
+
+    The corpus vocabulary (``inv.by_word`` keys) is fed to Ollama as a
+    JSON-schema enum so the model can only emit corpus words. The
+    resulting words are mapped back to ``WordInstance`` objects under the
+    chosen ``repeat_policy``.
+
+    Args:
+        inv: ``WordInventory`` built from selected clips.
+        prompt: User-supplied generation prompt.
+        target_length: Target output length (used in the system prompt).
+        repeat_policy: How to choose among multiple corpus instances when
+            the LLM emits the same word more than once.
+
+            - ``"round-robin"`` (default): cycle through instances in
+              inventory order. State is per ``compose_with_llm`` call.
+            - ``"random"``: seeded ``random.choice``. Same ``seed`` →
+              identical output.
+            - ``"first"``: always the first instance in inventory order.
+            - ``"longest"`` / ``"shortest"``: by ``end - start``; ties
+              broken deterministically by ``(clip_id, segment_index,
+              word_index)``.
+        seed: Seed for ``repeat_policy="random"``. ``None`` → cryptographic
+            random seed (output non-deterministic; documented).
+        model: Ollama model name (defaults to project setting / qwen3:8b).
+        api_base: Ollama API base URL.
+        temperature: Sampling temperature for the underlying Ollama call.
+        timeout: Total HTTP timeout in seconds.
+        system_prompt: Override the default frequency-annotated system prompt.
+        _completion_fn: Test-only hook. Callable with the same signature as
+            ``core.llm_client.complete_with_enum_constraint`` returning a
+            list of words. When ``None``, the real client is used.
+
+    Returns:
+        Ordered list of ``WordInstance`` objects, one per LLM-emitted word.
+
+    Raises:
+        ValueError: empty vocabulary, ``target_length`` < 1, unknown
+            ``repeat_policy``.
+        core.llm_client.LLMEmptyResponseError: LLM produced no content.
+        core.llm_client.OllamaUnreachableError: Ollama not reachable.
+        ValueError: LLM somehow emits an OOV word (the ``format`` + enum
+            constraint should prevent this; raise loudly so the bug
+            surfaces rather than silently dropping the slot).
+    """
+    import random
+
+    if not inv.by_word:
+        raise ValueError("compose_with_llm: inventory is empty (no words to draw from)")
+    if target_length < 1:
+        raise ValueError(
+            f"compose_with_llm: target_length must be >= 1, got {target_length}"
+        )
+    if repeat_policy not in (
+        "round-robin", "random", "first", "longest", "shortest"
+    ):
+        raise ValueError(
+            "repeat_policy must be one of round-robin/random/first/longest/"
+            f"shortest, got {repeat_policy!r}"
+        )
+
+    vocabulary = sorted(inv.by_word.keys())
+    frequencies = {k: len(v) for k, v in inv.by_word.items()}
+
+    # Run the LLM. Lazy import keeps the spine module importable when
+    # llm_client's deps aren't available.
+    if _completion_fn is None:
+        from core.llm_client import complete_with_enum_constraint
+        _completion_fn = complete_with_enum_constraint
+
+    words = _completion_fn(
+        prompt=prompt,
+        vocabulary=vocabulary,
+        target_length=target_length,
+        system_prompt=system_prompt,
+        model=model,
+        api_base=api_base,
+        temperature=temperature,
+        timeout=timeout,
+        frequencies=frequencies,
+        think=think,
+    )
+
+    # Seeded RNG for the random policy.
+    if repeat_policy == "random":
+        if seed is None:
+            # Document: when ``seed is None`` we use a cryptographic seed
+            # so runs are not deterministic. Tests can pass an explicit
+            # seed for reproducibility.
+            seed = int.from_bytes(secrets.token_bytes(8), "big", signed=False)
+        rng = random.Random(seed)
+    else:
+        rng = random.Random(0)  # unused; kept non-None for the picker
+
+    # Round-robin counter is per-word.
+    counters: dict[str, int] = {}
+
+    result: list[WordInstance] = []
+    for raw in words:
+        key = normalize_word(raw)
+        candidates = inv.by_word.get(key)
+        if not candidates:
+            # The enum constraint should prevent OOV emission. If we see
+            # one anyway, fail loudly — silently dropping would hide the
+            # bug. Covers the AE4 negative case.
+            raise ValueError(
+                f"LLM emitted out-of-vocabulary word {raw!r} (normalized: "
+                f"{key!r}); the format+enum constraint should have prevented "
+                "this. Check Ollama / LiteLLM constrained-decoding support."
+            )
+
+        counter = counters.get(key, 0)
+        instance = _pick_instance(
+            candidates,
+            policy=repeat_policy,
+            counter=counter,
+            rng=rng,
+        )
+        counters[key] = counter + 1
+        result.append(instance)
+
+    return result
 
 
 def from_word_list(

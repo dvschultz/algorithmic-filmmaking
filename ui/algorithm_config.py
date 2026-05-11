@@ -8,7 +8,7 @@ macOS can hit a CoreText sbix→ImageIO crash (EXC_BAD_ACCESS at 0xbad4007
 inside CopyEmojiImage); SVG icons will replace this field in a later pass.
 """
 
-CATEGORY_ORDER = ["All", "Arrange", "Find", "Connect", "Audio", "Text", "Word", "Experimental"]
+CATEGORY_ORDER = ["All", "Arrange", "Find", "Connect", "Audio", "Text", "Word", "LLM", "Experimental"]
 
 ALGORITHM_CONFIG = {
     "color": {
@@ -200,6 +200,18 @@ ALGORITHM_CONFIG = {
         "required_analysis": ["transcription_with_words"],
         "is_dialog": True,
         "categories": ["word", "experimental"],
+    },
+    "word_llm_composer": {
+        "icon": "",
+        "label": "LLM Word Composer",
+        "description": "Compose a sentence-collage from your clips' spoken words — a local LLM drafts the sequence using only your corpus vocabulary",
+        "allow_duplicates": False,
+        # ``local_llm`` is NOT a required_analysis key — that drives the
+        # per-clip METADATA_CHECKS gate, not runtime service availability.
+        # Ollama health is checked at dialog open and inside the worker.
+        "required_analysis": ["transcription_with_words"],
+        "is_dialog": True,
+        "categories": ["word", "experimental", "llm"],
     },
 }
 

@@ -198,6 +198,41 @@ class ProviderConfig:
         return None
 
 
+class LLMEmptyResponseError(Exception):
+    """Raised when an LLM returns ``None`` or an empty response body.
+
+    Carries both the prompt that was sent and a human-readable hint so the
+    caller can surface a useful error to the user.
+
+    Per a recurring LLM gotcha, providers occasionally return ``None``
+    content without raising an exception — always validate before using
+    the response.
+    """
+
+    def __init__(self, prompt: str, hint: str) -> None:
+        self.prompt = prompt
+        self.hint = hint
+        super().__init__(f"{hint} (prompt: {prompt!r})")
+
+
+class OllamaUnreachableError(Exception):
+    """Raised when an Ollama HTTP call fails to connect or times out.
+
+    Includes a hint pointing the user at ``check_ollama_health()`` and
+    ``ollama serve``.
+    """
+
+    def __init__(self, message: str, original: Optional[Exception] = None) -> None:
+        self.original = original
+        full = (
+            f"{message} — start Ollama with 'ollama serve' or check "
+            f"check_ollama_health()."
+        )
+        if original is not None:
+            full += f" Original error: {original}"
+        super().__init__(full)
+
+
 async def check_ollama_health(api_base: str = "http://localhost:11434") -> tuple[bool, str]:
     """Check if Ollama is running and accessible.
 
@@ -592,6 +627,229 @@ def complete_with_local_fallback(
                 missing_api_key=missing_api_key,
             )
         ) from local_exc
+
+
+def complete_with_enum_constraint(
+    prompt: str,
+    vocabulary: list[str],
+    target_length: int,
+    *,
+    system_prompt: Optional[str] = None,
+    model: Optional[str] = None,
+    api_base: Optional[str] = None,
+    temperature: float = 0.7,
+    timeout: float = 120.0,
+    frequencies: Optional[dict[str, int]] = None,
+    think: bool = False,
+) -> list[str]:
+    """Run a vocabulary-constrained Ollama completion via JSON-schema enum.
+
+    Ollama supports decode-time vocabulary constraints via its ``format``
+    parameter when ``format`` carries a JSON Schema whose values include an
+    ``enum``. Note: Ollama has explicitly closed all GBNF PRs (issue
+    #6237, PR #1606); ``format``+enum is currently the only constrained-
+    decoding API exposed by Ollama. Mask construction is non-parallelized
+    in current Ollama builds — latency at large vocabulary sizes can be
+    high. The plan documents this as a deferred concern.
+
+    Implementation note — LiteLLM passthrough investigation:
+        LiteLLM 1.82.6's Ollama provider DOES forward ``response_format``
+        when supplied as ``{"type": "json_schema", "json_schema":
+        {"schema": <dict>}}`` (see ``litellm/llms/ollama/chat/transformation.py``
+        ``map_openai_params`` — it pops the schema out of ``response_format``
+        and writes it into Ollama's ``format`` field). So we COULD reach
+        Ollama through LiteLLM. We deliberately take a direct HTTP path
+        via ``httpx`` here instead: (a) it avoids LiteLLM's translation
+        layer for the most security-/correctness-sensitive call in this
+        module (the only one where a stripped/translated parameter would
+        silently corrupt output by removing the constraint), (b) it gives
+        us full control over the request timeout for this latency-prone
+        endpoint, and (c) it makes the failure modes (connection refused,
+        timeout, non-200) directly observable for ``OllamaUnreachableError``.
+
+    Args:
+        prompt: User-supplied generation prompt. Combined with ``system_prompt``
+            (or the default frequency-annotated vocabulary system prompt).
+        vocabulary: List of allowed words. Duplicates are deduplicated and
+            sorted before being passed to Ollama; the final order is also
+            used for deterministic schema generation.
+        target_length: Target ``words[]`` length used in the system prompt
+            so the model knows roughly how long an output to produce.
+            Ollama's enum constraint enforces vocabulary, not length.
+        system_prompt: Optional system message. If ``None``, a default
+            system prompt is constructed from ``vocabulary`` + (optional)
+            ``frequencies``.
+        model: Ollama model name (e.g. ``"qwen3:8b"``). Defaults to the
+            project's default local model from settings if available.
+        api_base: Ollama API base URL. Defaults to ``llm_api_base`` from
+            settings or ``http://localhost:11434``.
+        temperature: Sampling temperature for the underlying Ollama call.
+        timeout: Total HTTP timeout in seconds. Defaults to 120s because
+            enum-constrained decoding is slow at corpus scale.
+        frequencies: Optional ``{word: count}`` map used in the default
+            system prompt's frequency annotation.
+
+    Returns:
+        The parsed ``words`` array from Ollama's JSON response — a list of
+        strings drawn from ``vocabulary``.
+
+    Raises:
+        LLMEmptyResponseError: response body is ``None``/empty, JSON parse
+            fails, or the ``words`` field is missing/non-list/empty.
+        OllamaUnreachableError: HTTP connection refused, timed out, or
+            returned a non-2xx status.
+        ValueError: ``vocabulary`` is empty or ``target_length`` < 1.
+    """
+    import json
+
+    import httpx
+
+    if not vocabulary:
+        raise ValueError("complete_with_enum_constraint: vocabulary must be non-empty")
+    if target_length < 1:
+        raise ValueError(
+            f"complete_with_enum_constraint: target_length must be >= 1, got {target_length}"
+        )
+
+    # Deduplicate + sort for deterministic schema construction.
+    sorted_vocab = sorted(set(vocabulary))
+
+    if model is None or api_base is None:
+        try:
+            from core.settings import load_settings
+            _settings = load_settings()
+            if model is None:
+                model = getattr(_settings, "ollama_model", None) or "qwen3:8b"
+            if api_base is None:
+                api_base = _ollama_api_base(_settings)
+        except Exception:  # noqa: BLE001 — fall back to hard defaults
+            if model is None:
+                model = "qwen3:8b"
+            if api_base is None:
+                api_base = "http://localhost:11434"
+
+    model = _ollama_model_name(model)
+
+    if system_prompt is None:
+        if frequencies:
+            annotated = ", ".join(
+                f"{word} ({frequencies.get(word, 0)})" for word in sorted_vocab
+            )
+            vocab_section = f"Available vocabulary (frequency in parens): {annotated}."
+        else:
+            vocab_section = "Available vocabulary: " + ", ".join(sorted_vocab) + "."
+        system_prompt = (
+            "You compose short word sequences using ONLY the supplied "
+            "vocabulary. Aim for about "
+            f"{target_length} words. Respond with a single JSON object of the form "
+            "{\"words\": [...]} whose entries are drawn from the vocabulary. "
+            f"{vocab_section}"
+        )
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "words": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": sorted_vocab,
+                },
+            }
+        },
+        "required": ["words"],
+    }
+
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ],
+        "stream": False,
+        "format": schema,
+        # Disable Ollama's "thinking" mode for thinking-capable models
+        # (qwen3 etc.). Thinking-mode tokens are extra eval cost that
+        # produces no observable output here — the JSON-schema-enum
+        # constraint is the only steering we need, and the model's
+        # chain-of-thought dramatically inflates latency at corpus scale.
+        # ``think`` is ignored by non-thinking models.
+        "think": bool(think),
+        "options": {"temperature": float(temperature)},
+    }
+
+    url = api_base.rstrip("/") + "/api/chat"
+
+    try:
+        # ``with`` block guarantees connection cleanup even on cancel /
+        # timeout / unhandled exception (subprocess-cleanup-on-exception
+        # learning, adapted to httpx).
+        with httpx.Client(timeout=timeout) as client:
+            response = client.post(url, json=payload)
+    except httpx.TimeoutException as exc:
+        raise OllamaUnreachableError(
+            f"Ollama call to {url} timed out after {timeout}s — "
+            "constrained decoding can be slow at corpus scale",
+            original=exc,
+        ) from exc
+    except httpx.ConnectError as exc:
+        raise OllamaUnreachableError(
+            f"Cannot connect to Ollama at {api_base}",
+            original=exc,
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise OllamaUnreachableError(
+            f"Ollama HTTP error talking to {url}",
+            original=exc,
+        ) from exc
+
+    if response.status_code != 200:
+        raise OllamaUnreachableError(
+            f"Ollama returned status {response.status_code} from {url}: "
+            f"{response.text[:200]}",
+        )
+
+    # Validate response shape per the LLM-empty-response gotcha.
+    try:
+        body = response.json()
+    except ValueError as exc:
+        raise LLMEmptyResponseError(
+            prompt=prompt,
+            hint=f"Ollama response was not valid JSON: {exc}",
+        ) from exc
+
+    content = (body or {}).get("message", {}).get("content")
+    if not content:
+        raise LLMEmptyResponseError(
+            prompt=prompt,
+            hint="Ollama returned no content; the model may have produced an "
+                 "empty response — retry the prompt or check model availability",
+        )
+
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise LLMEmptyResponseError(
+            prompt=prompt,
+            hint=f"Ollama JSON content failed to parse: {exc}",
+        ) from exc
+
+    if not isinstance(parsed, dict) or "words" not in parsed:
+        raise LLMEmptyResponseError(
+            prompt=prompt,
+            hint="Ollama response was missing the 'words' key",
+        )
+
+    words = parsed.get("words")
+    if not isinstance(words, list) or not words:
+        raise LLMEmptyResponseError(
+            prompt=prompt,
+            hint="Ollama returned an empty or non-list 'words' field",
+        )
+
+    # All entries should be strings; the enum constraint should have
+    # prevented anything else.
+    return [str(w) for w in words]
 
 
 def create_provider_config_from_settings() -> ProviderConfig:

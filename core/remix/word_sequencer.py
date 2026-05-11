@@ -45,6 +45,8 @@ if TYPE_CHECKING:
 __all__ = [
     "MissingWordDataError",
     "generate_word_sequence",
+    "instances_to_sequence_clips",
+    "validate_word_data",
 ]
 
 
@@ -122,6 +124,102 @@ def _validate_word_data(clips: list[tuple[Any, Any]]) -> None:
         raise MissingWordDataError(missing)
 
 
+# Public alias so the LLM-composer wrapper can call into the same validation
+# logic without poking the underscore name.
+validate_word_data = _validate_word_data
+
+
+# ---------------------------------------------------------------------------
+# Frame-math helper (shared with the LLM composer)
+# ---------------------------------------------------------------------------
+
+
+def instances_to_sequence_clips(
+    instances,
+    clips: list[tuple[Any, Any]],
+    handle_frames: int = 0,
+) -> list["SequenceClip"]:
+    """Materialize a list of ``WordInstance`` into ``SequenceClip[]``.
+
+    This is the *single* implementation of the frame-math convention.
+    Both ``generate_word_sequence`` (preset modes — U4) and the LLM
+    composer (U5) call into it, so the two paths cannot drift on
+    floor/ceil/handle/clamp semantics.
+
+    Args:
+        instances: Ordered iterable of ``WordInstance`` objects.
+        clips: ``[(Clip, Source), ...]`` — same shape passed to the
+            sequencer entry points; used for fps lookup and clip-bound
+            clamping.
+        handle_frames: Symmetric handle padding (frames). Default 0.
+
+    Returns:
+        ``list[SequenceClip]`` with ``in_point``/``out_point`` set per the
+        floor / ceil / clamp convention. ``start_frame`` and
+        ``track_index`` are left at their defaults; the caller assembles
+        the timeline.
+
+    Raises:
+        ValueError: source has missing or non-positive ``fps``.
+    """
+    from models.sequence import SequenceClip
+
+    by_clip_id: dict[str, tuple[Any, Any]] = {
+        getattr(clip, "id", ""): (clip, source) for clip, source in clips
+    }
+
+    result: list[SequenceClip] = []
+    for inst in instances:
+        # Drop zero-duration words silently (rare ASR artifact).
+        if inst.end <= inst.start:
+            continue
+
+        clip, source = by_clip_id.get(inst.clip_id, (None, None))
+        if clip is None or source is None:
+            continue
+
+        raw_fps = getattr(source, "fps", None)
+        if raw_fps is None:
+            raise ValueError(
+                f"Source {getattr(source, 'id', '?')} has no fps; cannot "
+                "convert word boundaries to frames"
+            )
+        fps = float(raw_fps)
+        if fps <= 0:
+            raise ValueError(
+                f"Source {getattr(source, 'id', '?')} has non-positive fps {fps!r}"
+            )
+
+        start_frame = int(getattr(clip, "start_frame", 0))
+        end_frame = int(getattr(clip, "end_frame", start_frame))
+        clip_duration_seconds = max(0.0, (end_frame - start_frame) / fps)
+
+        handle_seconds = handle_frames / fps
+        in_seconds = max(0.0, float(inst.start) - handle_seconds)
+        out_seconds = min(clip_duration_seconds, float(inst.end) + handle_seconds)
+
+        in_point = math.floor(in_seconds * fps)
+        out_point = math.ceil(out_seconds * fps)
+
+        clip_length = end_frame - start_frame
+        in_point = max(0, min(in_point, clip_length))
+        out_point = max(0, min(out_point, clip_length))
+
+        if out_point <= in_point:
+            continue
+
+        result.append(
+            SequenceClip(
+                source_clip_id=getattr(clip, "id", ""),
+                source_id=getattr(clip, "source_id", ""),
+                in_point=in_point,
+                out_point=out_point,
+            )
+        )
+
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -156,10 +254,6 @@ def generate_word_sequence(
             ``words is None``.
         ValueError: ``mode`` is not recognized, or any source has missing fps.
     """
-    # Local import keeps the spine boundary check clean and avoids paying
-    # the import cost when the module is only being collected by pytest.
-    from models.sequence import SequenceClip
-
     if not clips:
         return []
 
@@ -169,68 +263,8 @@ def generate_word_sequence(
     # MissingWordDataError and triggers alignment.
     _validate_word_data(clips)
 
-    # Build a quick lookup by clip_id to source/clip pair for the frame math.
-    by_clip_id: dict[str, tuple[Any, Any]] = {
-        getattr(clip, "id", ""): (clip, source) for clip, source in clips
-    }
-
     inventory = build_inventory(clips)
     instances = _apply_mode(inventory, mode, mode_params)
 
-    result: list[SequenceClip] = []
-    for inst in instances:
-        # Drop zero-duration words silently (rare ASR artifact).
-        if inst.end <= inst.start:
-            continue
-
-        clip, source = by_clip_id.get(inst.clip_id, (None, None))
-        if clip is None or source is None:
-            # Defensive — should never happen since instances come from
-            # build_inventory(clips).
-            continue
-
-        # fps: explicitly convert Fraction → float per the FFmpeg
-        # fractional-duration learning.
-        raw_fps = getattr(source, "fps", None)
-        if raw_fps is None:
-            raise ValueError(
-                f"Source {getattr(source, 'id', '?')} has no fps; cannot "
-                "convert word boundaries to frames"
-            )
-        fps = float(raw_fps)
-        if fps <= 0:
-            raise ValueError(
-                f"Source {getattr(source, 'id', '?')} has non-positive fps {fps!r}"
-            )
-
-        start_frame = int(getattr(clip, "start_frame", 0))
-        end_frame = int(getattr(clip, "end_frame", start_frame))
-        clip_duration_seconds = max(0.0, (end_frame - start_frame) / fps)
-
-        handle_seconds = handle_frames / fps
-        in_seconds = max(0.0, float(inst.start) - handle_seconds)
-        out_seconds = min(clip_duration_seconds, float(inst.end) + handle_seconds)
-
-        in_point = math.floor(in_seconds * fps)
-        out_point = math.ceil(out_seconds * fps)
-
-        # Hard-clamp to clip bounds after the floor/ceil snap, in case
-        # float rounding pushed past the limits.
-        clip_length = end_frame - start_frame
-        in_point = max(0, min(in_point, clip_length))
-        out_point = max(0, min(out_point, clip_length))
-
-        # Defensive: skip slots that collapsed to zero frames.
-        if out_point <= in_point:
-            continue
-
-        result.append(
-            SequenceClip(
-                source_clip_id=getattr(clip, "id", ""),
-                source_id=getattr(clip, "source_id", ""),
-                in_point=in_point,
-                out_point=out_point,
-            )
-        )
-
-    return result
+    # Shared frame-math helper, also used by the LLM composer in U5.
+    return instances_to_sequence_clips(instances, clips, handle_frames)
