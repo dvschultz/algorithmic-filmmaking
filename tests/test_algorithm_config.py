@@ -3,8 +3,19 @@
 from ui.algorithm_config import ALGORITHM_CONFIG, CATEGORY_ORDER
 
 
-def test_category_order_has_six_entries():
-    assert CATEGORY_ORDER == ["All", "Arrange", "Find", "Connect", "Audio", "Text"]
+def test_category_order_has_expected_entries():
+    # "Word" and "Experimental" were added in U4 of the word-sequencer plan
+    # so the new ``word_sequencer`` algorithm has somewhere to live.
+    assert CATEGORY_ORDER == [
+        "All",
+        "Arrange",
+        "Find",
+        "Connect",
+        "Audio",
+        "Text",
+        "Word",
+        "Experimental",
+    ]
 
 
 def test_every_algorithm_has_categories():
@@ -35,4 +46,15 @@ def test_multi_tagged_algorithms():
 
 
 def test_algorithm_count():
-    assert len(ALGORITHM_CONFIG) == 21
+    # Bumped from 21 → 22 in U4 (added ``word_sequencer``).
+    assert len(ALGORITHM_CONFIG) == 22
+
+
+def test_word_sequencer_registered():
+    """U4 owns the ``word_sequencer`` registration end-to-end."""
+    config = ALGORITHM_CONFIG["word_sequencer"]
+    assert config["label"] == "Word Sequencer"
+    assert config["is_dialog"] is True
+    assert config["required_analysis"] == ["transcription_with_words"]
+    assert config["categories"] == ["word", "experimental"]
+    assert config["allow_duplicates"] is False

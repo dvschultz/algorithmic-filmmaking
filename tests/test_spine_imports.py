@@ -45,6 +45,7 @@ SPINE_MODULES: tuple[str, ...] = (
     "core.spine.analyze",
     "core.spine.thumbnails",
     "core.spine.downloads",
+    "core.spine.words",
 )
 
 

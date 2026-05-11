@@ -8,7 +8,7 @@ macOS can hit a CoreText sbix→ImageIO crash (EXC_BAD_ACCESS at 0xbad4007
 inside CopyEmojiImage); SVG icons will replace this field in a later pass.
 """
 
-CATEGORY_ORDER = ["All", "Arrange", "Find", "Connect", "Audio", "Text"]
+CATEGORY_ORDER = ["All", "Arrange", "Find", "Connect", "Audio", "Text", "Word", "Experimental"]
 
 ALGORITHM_CONFIG = {
     "color": {
@@ -191,6 +191,15 @@ ALGORITHM_CONFIG = {
         "required_analysis": ["gaze"],
         "is_dialog": True,
         "categories": ["find", "connect"],
+    },
+    "word_sequencer": {
+        "icon": "",
+        "label": "Word Sequencer",
+        "description": "Compose a film from individual spoken words — order them alphabetically, by frequency, or by a custom list",
+        "allow_duplicates": False,
+        "required_analysis": ["transcription_with_words"],
+        "is_dialog": True,
+        "categories": ["word", "experimental"],
     },
 }
 
