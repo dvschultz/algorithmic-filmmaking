@@ -1,6 +1,6 @@
 # Sequencer Algorithms
 
-Scene Ripper includes 21 sequencer algorithms that arrange your clips into a sequence. Each algorithm uses a different creative logic to determine the order, choose matches, or trim clips into timed slots.
+Scene Ripper includes 23 sequencer algorithms that arrange your clips into a sequence. Each algorithm uses a different creative logic to determine the order, choose matches, or trim clips into timed slots.
 
 To use a sequencer, go to the **Sequence** tab, select an algorithm from the dropdown, and click **Generate**. Some algorithms require that you run specific analysis on your clips first (in the **Analyze** tab). Others open a dialog where you configure additional options before generating.
 
@@ -49,10 +49,12 @@ Reference Guide uses duration as an optional matching dimension, but it does **n
 | Eyes Without a Face | Find / Connect | Gaze analysis | No |
 | Free Association | Connect / Text | Describe and embeddings plus an LLM | No |
 | Cassette Tape | Text / Audio | Transcribe | Yes |
+| Word Sequencer | Text | Transcribe and word-level alignment | Yes |
+| LLM Word Composer | Text | Transcribe, word-level alignment, and a local LLM (Ollama) | Yes |
 
 ## Managing Multiple Sequences
 
-A project holds any number of named sequences — run 21 different algorithms and keep every result side by side for comparison. Every algorithm run creates a new sequence instead of overwriting the previous one.
+A project holds any number of named sequences — run 23 different algorithms and keep every result side by side for comparison. Every algorithm run creates a new sequence instead of overwriting the previous one.
 
 ### Sequence dropdown
 
@@ -408,3 +410,52 @@ Find clips that say specific phrases — the transcript-driven mixtape. This is 
 - Disabled clips are excluded automatically.
 
 Cassette Tape uses local string-similarity matching (RapidFuzz `partial_ratio`). It does not require a cloud API key. It works at transcript-segment granularity, so it can trim the resulting sequence to the exact matched line instead of using the whole detected clip.
+
+### Word Sequencer
+
+Compose a film one *word* at a time. Where Cassette Tape works at transcript-segment granularity, Word Sequencer slices below the segment boundary: every emission is a single spoken word cut out of its parent clip. Opens a dialog with five ordering modes.
+
+**Required analysis:** Transcribe → Word-Level Alignment (the dialog auto-runs alignment if any selected source is missing word data)
+
+**Dialog workflow:**
+
+1. **Pick sources.** A source list shows every checked source's alignment status as a badge: `✓ aligned`, `… needs alignment`, or `⚠ unsupported language`. Uncheck rows to exclude.
+2. **Pick a mode.** The five modes are:
+
+   | Mode | What it does |
+   |------|--------------|
+   | **Alphabetical** | Every word in the corpus in lexical order. |
+   | **Chosen Words** | Subset filter — emit every instance of each word on your include list, grouped by include-list order. (E.g., "play every 'never', then every 'always', then every 'silence'.") |
+   | **By Frequency** | Every word in the corpus ordered most-frequent → least-frequent, or reverse. |
+   | **By Property** | Sort by word length (default), word duration, or log-frequency. Ascending or descending. |
+   | **User-Curated Ordered List** | You supply an exact sequence — including repeats — that materializes literally. `["the", "the", "the", "sky"]` produces four slots. |
+3. **Handle frames.** Optional padding (0–10 frames) on each side of the word boundary so consonants don't get clipped.
+4. **Generate.** Output is a hard-cut sequence of word-sized SequenceClips with frame-accurate in/out points. No crossfades, no held frames.
+
+**Tips:**
+- Word boundaries are accurate to ~20–30ms. The handle-frame spinner is the escape valve when plosives clip mid-emission.
+- **Chosen Words** vs **User-Curated** differ in two ways: chosen-words plays *every instance* of the listed words; user-curated plays *one slot per list entry*. Chosen-words groups by include-list word; user-curated is verbatim.
+- The dialog auto-runs alignment when needed — no extra confirmation modal. Cancel mid-alignment is safe; already-aligned clips persist.
+- Sources whose language isn't supported by the alignment model are shown with a `⚠ unsupported language` badge and excluded from the corpus (you can still proceed with the other checked sources).
+- Disabled clips are excluded automatically.
+
+### LLM Word Composer
+
+Same word-level slicing as Word Sequencer, but the order comes from a local LLM. Type a prompt and an Ollama model composes a sentence using only the words in your corpus — vocabulary is enforced at decode time (JSON-schema-enum constraint), so the LLM cannot emit a word you don't have.
+
+**Required analysis:** Transcribe → Word-Level Alignment. Also requires a healthy local Ollama runtime.
+
+**Dialog workflow:**
+
+1. **Pick sources.** Same source picker as Word Sequencer, with alignment badges.
+2. **Enter a prompt.** e.g., "compose a sentence about silence" or "make a question someone would ask in a dream."
+3. **Set target length.** Default 20 words; range 1–200.
+4. **Choose a repeat policy.** When the LLM emits the same word twice, which corpus instance plays each time? Round-robin (default — cycle through instances), Random (with a seed for determinism), First (always pick the first instance), Longest, or Shortest.
+5. **Generate.** The LLM drafts a sentence using only your corpus; each emitted word is mapped to a corpus instance and materialized as a hard-cut SequenceClip.
+
+**Tips:**
+- The dialog detects Ollama at open time. If Ollama isn't running, you'll see an installer prompt and the Accept button stays disabled until you start the runtime and re-check.
+- Generation cancellation is cooperative — clicking Cancel during a long generation interrupts cleanly without leaving the sequence in a half-applied state.
+- Latency scales with corpus size. ~1000 unique words takes around 30 seconds on `qwen3:8b`; much larger corpora can take several minutes. The dialog shows a progress indicator.
+- The vocabulary constraint is strict — the LLM cannot emit out-of-vocabulary words even if your prompt suggests them. If "rainstorm" is in your prompt but no clip says it, the model will choose a different word from your corpus.
+- Empty responses (LLM returned `None`) surface as an inline error so you can adjust the prompt and retry without dismissing the dialog.

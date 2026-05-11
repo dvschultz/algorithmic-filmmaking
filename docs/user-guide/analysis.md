@@ -202,6 +202,29 @@ On Apple Silicon Macs, transcription runs on the GPU via MLX for significantly f
 
 ---
 
+## Word-Level Alignment
+
+Refines an existing transcript with per-word start/end timestamps (~20–30ms accuracy). Required for the Word Sequencer and LLM Word Composer; optional but recommended for any flow that wants tight sub-clip word slicing.
+
+Two paths produce word-level data:
+
+1. **faster-whisper backend** — already computes word timestamps during transcription. No extra step needed; the data is captured automatically.
+2. **MLX backend (Apple Silicon)** and **Groq** — these don't return word timestamps from the transcription engine. Run **Run Word-Level Alignment** in the Analyze tab to fill them in using forced alignment (`ctc-forced-aligner` + Meta MMS).
+
+**Produces:**
+- Per-word start/end timestamps stored on each `TranscriptSegment`
+- Detected source language (used to pick the alignment model)
+
+**Required first:** Transcription
+**Runs:** Locally on CPU (fp32 on Apple Silicon — MPS wav2vec2 is unreliable in 2026)
+**Speed:** A few seconds per clip on modern hardware; cancellable mid-run with partial results persisted
+
+**Language support:** Whatever Meta MMS supports — most common languages including English, French, Spanish, German, Mandarin, Japanese, Arabic, and many more. Sources whose detected language isn't supported are surfaced in the Word Sequencer dialog with a "⚠ unsupported language" badge and excluded from the corpus.
+
+**Used by:** Word Sequencer, LLM Word Composer.
+
+---
+
 ## Describe
 
 Generates a natural language description of each clip — what subjects are visible, what action is happening, and what the setting looks like.

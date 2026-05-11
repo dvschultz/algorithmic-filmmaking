@@ -32,6 +32,8 @@ Source of truth: `ui/algorithm_config.py`. Dialog-based algorithms have `is_dial
 | `gaze_consistency` | Gaze Consistency | gaze | |
 | `eyes_without_a_face` | Eyes Without a Face | gaze | yes |
 | `free_association` | Free Association | describe, embeddings | yes |
+| `word_sequencer` | Word Sequencer | transcription_with_words | yes |
+| `word_llm_composer` | LLM Word Composer | transcription_with_words | yes |
 
 Algorithm implementations: `core/remix/` (one module per algorithm).
 Dialog UIs: `ui/dialogs/` (one file per dialog algorithm).
