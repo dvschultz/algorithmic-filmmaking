@@ -1,7 +1,7 @@
 ---
 title: "feat: Word Sequencer with forced-alignment-augmented transcription"
 type: feat
-status: active
+status: completed
 date: 2026-05-11
 origin: docs/brainstorms/word-sequencer-requirements.md
 ---
