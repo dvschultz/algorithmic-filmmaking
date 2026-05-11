@@ -100,7 +100,7 @@ def _patch_feature_ready_and_audio_extract(monkeypatch_audio_path):
     )
     cm.enter_context(
         patch(
-            "ui.workers.forced_alignment_worker._extract_clip_audio_wav",
+            "core.analysis.alignment.extract_audio_to_wav",
             return_value=monkeypatch_audio_path,
         )
     )
@@ -290,7 +290,7 @@ class TestForcedAlignmentWorkerEmptyInput:
         ), patch(
             "core.analysis.alignment.align_words"
         ) as mock_align, patch(
-            "ui.workers.forced_alignment_worker._extract_clip_audio_wav"
+            "core.analysis.alignment.extract_audio_to_wav"
         ) as mock_extract:
             worker = ForcedAlignmentWorker(clips=[], sources_by_id={})
             worker.clip_aligned.connect(

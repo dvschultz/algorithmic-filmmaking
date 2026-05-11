@@ -20,7 +20,6 @@ user gets a clear next step without a modal trap.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any, Optional
 
@@ -44,14 +43,24 @@ from PySide6.QtWidgets import (
 
 from core.remix.word_llm_composer import generate_llm_word_sequence  # noqa: F401 - re-exported symbol used in tests
 from core.remix.word_sequencer import MissingWordDataError
-from ui.dialogs.word_sequencer_dialog import (
-    _BADGE_ALIGNED,
-    _BADGE_MISSING_FPS,
-    _BADGE_NEEDS_ALIGNMENT,
-    _BADGE_UNSUPPORTED_LANGUAGE,
-    _classify_source,
+from ui.dialogs._word_source_picker import (
+    BADGE_ALIGNED,
+    BADGE_MISSING_FPS,
+    BADGE_NEEDS_ALIGNMENT,
+    BADGE_UNSUPPORTED_LANGUAGE,
+    WordAlignmentController,
+    classify_source_alignment,
 )
 from ui.theme import theme, Spacing, TypeScale, UISizes
+
+# Backward-compat aliases. The canonical names live in
+# ``ui.dialogs._word_source_picker``; these short-lived underscore aliases
+# keep any external imports from the previous module working.
+_BADGE_ALIGNED = BADGE_ALIGNED
+_BADGE_NEEDS_ALIGNMENT = BADGE_NEEDS_ALIGNMENT
+_BADGE_UNSUPPORTED_LANGUAGE = BADGE_UNSUPPORTED_LANGUAGE
+_BADGE_MISSING_FPS = BADGE_MISSING_FPS
+_classify_source = classify_source_alignment
 
 logger = logging.getLogger(__name__)
 
@@ -69,19 +78,17 @@ _REPEAT_POLICIES = [
 
 
 def _check_ollama_health_sync(api_base: str = "http://localhost:11434") -> tuple[bool, str]:
-    """Synchronously call the async ``check_ollama_health`` helper."""
+    """Synchronously call the async ``check_ollama_health`` helper.
+
+    Thin shim over :func:`core.llm_client.check_ollama_health_sync` so the
+    dialog has a stable default for the ``_ollama_health_fn`` injection
+    point (tests pass a stub).
+    """
     try:
-        from core.llm_client import check_ollama_health
-    except Exception as exc:  # noqa: BLE001
+        from core.llm_client import check_ollama_health_sync
+    except Exception as exc:  # noqa: BLE001 — import-time error, surface it
         return False, f"LLM client unavailable: {exc}"
-    try:
-        return asyncio.run(check_ollama_health(api_base))
-    except RuntimeError:
-        # Already inside an event loop (e.g. async test harness). Skip the
-        # probe — the worker call will surface a clear error if needed.
-        return True, ""
-    except Exception as exc:  # noqa: BLE001
-        return False, str(exc)
+    return check_ollama_health_sync(api_base)
 
 
 class WordLLMComposerDialog(QDialog):
@@ -102,9 +109,8 @@ class WordLLMComposerDialog(QDialog):
         self._project = project
         self._health_probe = _ollama_health_fn or _check_ollama_health_sync
 
-        # Worker state.
-        self._alignment_worker = None
-        self._alignment_finished_handled = False
+        # Worker state. The alignment controller owns the alignment-worker
+        # lifetime; only the LLM compose worker is owned directly here.
         self._compose_worker = None
         self._compose_finished_handled = False
         self._pending_after_alignment = False
@@ -120,9 +126,21 @@ class WordLLMComposerDialog(QDialog):
             self._clips_by_source_id.setdefault(source_id, []).append((clip, source))
 
         self._source_status: dict[str, tuple[str, Optional[str]]] = {
-            sid: _classify_source(s_clips)
+            sid: classify_source_alignment(s_clips)
             for sid, s_clips in self._clips_by_source_id.items()
         }
+
+        # Shared alignment controller — replaces the per-dialog
+        # ``ForcedAlignmentWorker`` wiring. The dialog still owns the
+        # compose worker because that's LLM-specific.
+        self._alignment_ctrl: Optional[WordAlignmentController] = None
+
+        # Validation-time inventory cache. Keyed by frozenset of checked
+        # source ids; invalidated on source-picker toggles and after
+        # alignment runs. Without this, every keystroke in the prompt
+        # input would rebuild the full corpus inventory.
+        self._inventory_cache_key: Optional[frozenset] = None
+        self._inventory_cache: Optional[Any] = None
 
         self.setWindowTitle("LLM Word Composer")
         self.setMinimumWidth(560)
@@ -179,7 +197,7 @@ class WordLLMComposerDialog(QDialog):
         layout.addWidget(sources_label)
         self._source_list = QListWidget()
         self._source_list.setMinimumHeight(120)
-        self._source_list.itemChanged.connect(self._refresh_validation)
+        self._source_list.itemChanged.connect(self._on_source_checked_changed)
         layout.addWidget(self._source_list)
 
         # --- Prompt -------------------------------------------------------
@@ -423,6 +441,31 @@ class WordLLMComposerDialog(QDialog):
             self._error_label.clear()
             self._error_label.setVisible(False)
 
+    @Slot()
+    def _on_source_checked_changed(self, _item) -> None:
+        # The set of checked sources changed → corpus changed.
+        self._invalidate_inventory_cache()
+        self._refresh_validation()
+
+    def _invalidate_inventory_cache(self) -> None:
+        """Drop the cached ``WordInventory`` so the next access rebuilds it."""
+        self._inventory_cache_key = None
+        self._inventory_cache = None
+
+    def _get_cached_inventory(self, checked_clips: list[tuple[Any, Any]]):
+        """Build (or return cached) ``WordInventory`` for the checked set."""
+        key = frozenset(self._checked_source_ids())
+        if self._inventory_cache_key == key and self._inventory_cache is not None:
+            return self._inventory_cache
+        try:
+            from core.spine.words import build_inventory
+            inv = build_inventory(checked_clips)
+        except Exception:
+            inv = None
+        self._inventory_cache_key = key
+        self._inventory_cache = inv
+        return inv
+
     def _refresh_validation(self) -> None:
         if not self._ollama_healthy:
             self._accept_btn.setEnabled(False)
@@ -439,12 +482,8 @@ class WordLLMComposerDialog(QDialog):
             self._accept_btn.setEnabled(False)
             return
 
-        try:
-            from core.spine.words import build_inventory
-            inv = build_inventory(checked)
-            corpus_size = len(inv.by_word)
-        except Exception:
-            corpus_size = 0
+        inv = self._get_cached_inventory(checked)
+        corpus_size = len(inv.by_word) if inv is not None else 0
         any_needs_alignment = any(
             self._source_status.get(sid, (_BADGE_ALIGNED, None))[0]
             == _BADGE_NEEDS_ALIGNMENT
@@ -587,9 +626,7 @@ class WordLLMComposerDialog(QDialog):
     # --------------------------------------------------------- Alignment
 
     def _start_alignment(self, pending_clips: list) -> None:
-        from ui.workers.forced_alignment_worker import ForcedAlignmentWorker
-
-        self._alignment_finished_handled = False
+        """Spawn a ``WordAlignmentController`` over the pending clips."""
         self._pending_after_alignment = True
 
         sources_by_id = {
@@ -603,20 +640,12 @@ class WordLLMComposerDialog(QDialog):
         )
         self._progress_bar.setValue(0)
 
-        worker = ForcedAlignmentWorker(
-            clips=pending_clips,
-            sources_by_id=sources_by_id,
-            skip_existing=True,
-            parent=self,
-        )
-        worker.progress.connect(self._on_alignment_progress, Qt.UniqueConnection)
-        worker.clip_aligned.connect(self._on_clip_aligned, Qt.UniqueConnection)
-        worker.alignment_completed.connect(
-            self._on_alignment_completed, Qt.UniqueConnection,
-        )
-        worker.error.connect(self._on_alignment_error, Qt.UniqueConnection)
-        self._alignment_worker = worker
-        worker.start()
+        ctrl = WordAlignmentController(self._clips, parent=self)
+        ctrl.progress.connect(self._on_alignment_progress, Qt.UniqueConnection)
+        ctrl.completed.connect(self._on_alignment_completed, Qt.UniqueConnection)
+        ctrl.error.connect(self._on_alignment_error, Qt.UniqueConnection)
+        self._alignment_ctrl = ctrl
+        ctrl.start(pending_clips, sources_by_id)
 
     @Slot(int, int)
     def _on_alignment_progress(self, current: int, total: int) -> None:
@@ -624,54 +653,18 @@ class WordLLMComposerDialog(QDialog):
             self._progress_bar.setValue(int(current / total * 100))
         self._progress_label.setText(f"Aligning clip {current} of {total}...")
 
-    @Slot(str, list)
-    def _on_clip_aligned(self, clip_id: str, words: list) -> None:
-        clip = None
-        for c, _ in self._clips:
-            if getattr(c, "id", None) == clip_id:
-                clip = c
-                break
-        if clip is None or not getattr(clip, "transcript", None):
-            return
-        segments = list(clip.transcript)
-        per_segment: list[list] = [[] for _ in segments]
-        for word in words:
-            midpoint = (float(word.start) + float(word.end)) / 2.0
-            chosen_idx: Optional[int] = None
-            for i, seg in enumerate(segments):
-                if seg.start_time <= midpoint <= seg.end_time:
-                    chosen_idx = i
-                    break
-            if chosen_idx is None:
-                chosen_idx = min(
-                    range(len(segments)),
-                    key=lambda i: min(
-                        abs(midpoint - segments[i].start_time),
-                        abs(midpoint - segments[i].end_time),
-                    ),
-                )
-            per_segment[chosen_idx].append(word)
-        for seg, seg_words in zip(segments, per_segment):
-            seg.words = seg_words
-
     @Slot(str)
     def _on_alignment_error(self, message: str) -> None:
         self._set_error(f"Alignment failed: {message}")
 
     @Slot()
     def _on_alignment_completed(self) -> None:
-        if self._alignment_finished_handled:
-            return
-        self._alignment_finished_handled = True
         for source_id, src_clips in self._clips_by_source_id.items():
-            self._source_status[source_id] = _classify_source(src_clips)
-        worker = self._alignment_worker
-        self._alignment_worker = None
-        if worker is not None:
-            try:
-                worker.wait(50)
-            except Exception:
-                pass
+            self._source_status[source_id] = classify_source_alignment(src_clips)
+        self._alignment_ctrl = None
+        # The clips' word data has changed — invalidate the inventory
+        # cache so the next ``_refresh_validation`` rebuilds.
+        self._invalidate_inventory_cache()
         if not self._pending_after_alignment:
             self._stack.setCurrentIndex(0)
             return
@@ -683,10 +676,13 @@ class WordLLMComposerDialog(QDialog):
     @Slot()
     def _on_cancel_workers(self) -> None:
         cancelled = False
-        for worker in (self._alignment_worker, self._compose_worker):
-            if worker is not None and worker.isRunning():
-                worker.cancel()
-                cancelled = True
+        ctrl = self._alignment_ctrl
+        if ctrl is not None and ctrl.is_running():
+            ctrl.cancel()
+            cancelled = True
+        if self._compose_worker is not None and self._compose_worker.isRunning():
+            self._compose_worker.cancel()
+            cancelled = True
         self._pending_after_alignment = False
         if not cancelled:
             self._stack.setCurrentIndex(0)
@@ -694,8 +690,14 @@ class WordLLMComposerDialog(QDialog):
     # --------------------------------------------------------- Lifecycle
 
     def closeEvent(self, event) -> None:  # noqa: D401
-        for worker in (self._alignment_worker, self._compose_worker):
-            if worker is not None and worker.isRunning():
-                worker.cancel()
-                worker.wait(2000)
+        ctrl = self._alignment_ctrl
+        if ctrl is not None and ctrl.is_running():
+            ctrl.cancel()
+            ctrl.wait(2000)
+        if self._compose_worker is not None and self._compose_worker.isRunning():
+            self._compose_worker.cancel()
+            try:
+                self._compose_worker.wait(2000)
+            except Exception:
+                pass
         super().closeEvent(event)

@@ -312,3 +312,44 @@ def test_zero_target_length_raises_value_error():
             prompt="p", vocabulary=["x"], target_length=0,
             model="m", api_base="http://localhost:11434",
         )
+
+
+# ---------------------------------------------------------------------------
+# check_ollama_health_sync — async-to-sync wrapper
+# ---------------------------------------------------------------------------
+
+
+def test_check_ollama_health_sync_returns_async_result():
+    """The sync wrapper proxies the async helper's tuple verbatim."""
+    from core import llm_client
+
+    async def _fake_async_probe(api_base: str = "http://localhost:11434"):
+        return False, f"fake failure: {api_base}"
+
+    with patch.object(llm_client, "check_ollama_health", _fake_async_probe):
+        healthy, message = llm_client.check_ollama_health_sync(
+            "http://example:11434",
+        )
+
+    assert healthy is False
+    assert "example:11434" in message
+
+
+def test_check_ollama_health_sync_only_swallows_runtime_error():
+    """Non-``RuntimeError`` exceptions must propagate.
+
+    The old dialog wrapper used a bare ``except Exception``; this test
+    pins the new behavior: only the nested-loop ``RuntimeError`` is
+    silently treated as "healthy".
+    """
+    from core import llm_client
+
+    class _Boom(Exception):
+        pass
+
+    async def _explode(api_base: str = "http://localhost:11434"):
+        raise _Boom("real failure")
+
+    with patch.object(llm_client, "check_ollama_health", _explode):
+        with pytest.raises(_Boom):
+            llm_client.check_ollama_health_sync("http://example:11434")

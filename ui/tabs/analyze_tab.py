@@ -418,30 +418,11 @@ class AnalyzeTab(BaseTab):
             return
 
         segments = list(clip.transcript)
-        per_segment: list[list] = [[] for _ in segments]
-
-        for word in words:
-            midpoint = (float(word.start) + float(word.end)) / 2.0
-            chosen_idx: Optional[int] = None
-            for i, seg in enumerate(segments):
-                if seg.start_time <= midpoint <= seg.end_time:
-                    chosen_idx = i
-                    break
-            if chosen_idx is None:
-                # Fall back to nearest segment by midpoint distance.
-                chosen_idx = min(
-                    range(len(segments)),
-                    key=lambda i: min(
-                        abs(midpoint - segments[i].start_time),
-                        abs(midpoint - segments[i].end_time),
-                    ),
-                )
-            per_segment[chosen_idx].append(word)
-
-        for seg, seg_words in zip(segments, per_segment):
-            # Always assign — even an empty list means "alignment ran for
-            # this segment", which is what the skip predicate checks.
-            seg.words = seg_words
+        # Distribute the flat word list back onto segments. See
+        # ``core.analysis.alignment.distribute_words_to_segments`` for the
+        # midpoint-containment + nearest-boundary fallback.
+        from core.analysis.alignment import distribute_words_to_segments
+        distribute_words_to_segments(segments, words)
 
         if self.clip_browser.is_clip_realized(clip_id):
             self.clip_browser.update_clip_transcript(clip_id, segments)

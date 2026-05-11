@@ -27,8 +27,6 @@ The temp file is cleaned up after alignment runs (success or failure).
 from __future__ import annotations
 
 import logging
-import subprocess
-import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -40,89 +38,6 @@ if TYPE_CHECKING:
     from models.clip import Clip, Source
 
 logger = logging.getLogger(__name__)
-
-
-def _extract_clip_audio_wav(
-    source_path: Path,
-    start_time: float,
-    end_time: float,
-) -> Path:
-    """Extract a clip's audio range to a temporary 16 kHz mono PCM WAV.
-
-    Mirrors the pattern in ``core.transcription.transcribe_clip``. The temp
-    file is created here; the caller is responsible for cleanup via the
-    ``try/finally`` around the alignment call.
-
-    Raises:
-        RuntimeError: FFmpeg is missing, fails to extract, or produces an
-            empty output (e.g. source has no audio track).
-    """
-    from core.binary_resolver import (
-        find_binary,
-        get_subprocess_env,
-        get_subprocess_kwargs,
-    )
-
-    ffmpeg = find_binary("ffmpeg")
-    if ffmpeg is None:
-        raise RuntimeError(
-            "FFmpeg is required for word-level alignment but was not found. "
-            "Install FFmpeg from Settings > Dependencies and try again."
-        )
-
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-        tmp_path = Path(tmp.name)
-
-    cmd = [
-        ffmpeg, "-y",
-        "-ss", str(float(start_time)),
-        "-to", str(float(end_time)),
-        "-i", str(source_path),
-        "-vn",
-        "-acodec", "pcm_s16le",
-        "-ar", "16000",
-        "-ac", "1",
-        str(tmp_path),
-    ]
-
-    try:
-        subprocess.run(
-            cmd,
-            capture_output=True,
-            check=True,
-            env=get_subprocess_env(),
-            **get_subprocess_kwargs(),
-        )
-    except subprocess.CalledProcessError as exc:
-        try:
-            tmp_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-        stderr = (
-            exc.stderr.decode("utf-8", errors="replace") if exc.stderr else ""
-        )
-        raise RuntimeError(
-            f"FFmpeg failed to extract clip audio from {source_path}: "
-            f"{stderr.strip() or exc}"
-        ) from exc
-    except FileNotFoundError as exc:
-        try:
-            tmp_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-        raise RuntimeError(f"FFmpeg binary not found: {exc}") from exc
-
-    if tmp_path.stat().st_size == 0:
-        try:
-            tmp_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-        raise RuntimeError(
-            f"FFmpeg produced an empty audio file for {source_path} "
-            "(source may have no audio stream)."
-        )
-
-    return tmp_path
 
 
 def _clip_needs_alignment(clip) -> bool:
@@ -307,10 +222,10 @@ class ForcedAlignmentWorker(CancellableWorker):
             source = self._sources_by_id[clip.source_id]
             wav_path: Optional[Path] = None
             try:
-                wav_path = _extract_clip_audio_wav(
+                wav_path = alignment_mod.extract_audio_to_wav(
                     Path(source.file_path),
-                    clip.start_time(source.fps),
-                    clip.end_time(source.fps),
+                    start_time=clip.start_time(source.fps),
+                    end_time=clip.end_time(source.fps),
                 )
 
                 if self.is_cancelled():

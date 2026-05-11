@@ -84,6 +84,69 @@ class AlignmentFFmpegError(AlignmentError):
 
 
 # ---------------------------------------------------------------------------
+# Public helpers
+# ---------------------------------------------------------------------------
+
+
+def distribute_words_to_segments(
+    segments: "list[TranscriptSegment]",
+    words: "list[WordTimestamp]",
+) -> None:
+    """Assign a flat ``list[WordTimestamp]`` back onto transcript segments.
+
+    The forced-alignment worker emits one flat word list per clip (alignment
+    runs over the concatenated text). Callers need those words distributed
+    back onto the parent ``TranscriptSegment[]`` so the existing per-segment
+    word-data shape is preserved.
+
+    For each word: assign to the first segment whose
+    ``[start_time, end_time]`` contains the word's midpoint; if no segment
+    contains it, fall back to the segment whose nearest boundary is closest
+    to the midpoint. After distribution, *every* segment in ``segments``
+    has its ``.words`` attribute assigned (to a — possibly empty — list).
+    That empty-list-vs-None distinction is load-bearing: it lets the skip
+    predicate treat a re-aligned clip as fully aligned even when individual
+    segments end up wordless.
+
+    Args:
+        segments: The clip's transcript segments. Mutated in place — each
+            segment's ``.words`` is reassigned. Empty input → no-op.
+        words: Flat word list from alignment. Empty list is fine (every
+            segment ends up with ``.words = []``).
+    """
+    if not segments:
+        return
+
+    per_segment: list[list] = [[] for _ in segments]
+    n = len(segments)
+
+    # Both inputs are time-sorted in practice; the per-word linear scan is
+    # cheap enough that we keep the simple shape here (correctness over a
+    # micro-optimization).
+    for word in words:
+        midpoint = (float(word.start) + float(word.end)) / 2.0
+        chosen_idx: Optional[int] = None
+        for i, seg in enumerate(segments):
+            if seg.start_time <= midpoint <= seg.end_time:
+                chosen_idx = i
+                break
+        if chosen_idx is None:
+            chosen_idx = min(
+                range(n),
+                key=lambda i: min(
+                    abs(midpoint - segments[i].start_time),
+                    abs(midpoint - segments[i].end_time),
+                ),
+            )
+        per_segment[chosen_idx].append(word)
+
+    for seg, seg_words in zip(segments, per_segment):
+        # Always assign — even an empty list means "alignment ran for this
+        # segment", which is what the skip predicate checks.
+        seg.words = seg_words
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -178,7 +241,7 @@ def align_words(
     if not full_text:
         return []
 
-    wav_path = _extract_audio_to_wav(audio_path_obj)
+    wav_path = extract_audio_to_wav(audio_path_obj)
     try:
         raw_word_timings = _run_alignment_engine(
             wav_path=wav_path,
@@ -290,12 +353,30 @@ def _require_ffmpeg() -> str:
     return ffmpeg_path
 
 
-def _extract_audio_to_wav(source_path: Path) -> Path:
+def extract_audio_to_wav(
+    source_path: Path,
+    start_time: Optional[float] = None,
+    end_time: Optional[float] = None,
+) -> Path:
     """Extract source audio to a temporary 16 kHz mono PCM WAV.
 
     Mirrors the pattern in ``core.transcription.transcribe_clip``. The temp
     file is created here; the caller is responsible for cleanup via the
     ``try/finally`` around the alignment call.
+
+    Args:
+        source_path: Path to the source media (video or audio file).
+        start_time: Optional start time (seconds) for a sub-range extraction.
+            When provided alongside ``end_time``, ``-ss`` / ``-to`` are
+            passed to FFmpeg so only the named range is decoded. ``None``
+            extracts the whole file.
+        end_time: Optional end time (seconds) — see ``start_time``.
+
+    Returns:
+        Path to a newly-created temporary WAV file. The caller owns cleanup.
+
+    Raises:
+        AlignmentFFmpegError: FFmpeg is missing, failed, or produced no audio.
     """
     ffmpeg = _require_ffmpeg()
 
@@ -304,8 +385,12 @@ def _extract_audio_to_wav(source_path: Path) -> Path:
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         tmp_path = Path(tmp.name)
 
-    cmd = [
-        ffmpeg, "-y",
+    cmd: list[str] = [ffmpeg, "-y"]
+    if start_time is not None:
+        cmd += ["-ss", str(float(start_time))]
+    if end_time is not None:
+        cmd += ["-to", str(float(end_time))]
+    cmd += [
         "-i", str(source_path),
         "-vn",
         "-acodec", "pcm_s16le",
@@ -442,5 +527,7 @@ __all__ = [
     "LanguageUnknownError",
     "UnsupportedLanguageError",
     "align_words",
+    "distribute_words_to_segments",
     "ensure_word_alignment_runtime_available",
+    "extract_audio_to_wav",
 ]

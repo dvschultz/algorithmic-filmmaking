@@ -263,6 +263,37 @@ async def check_ollama_health(api_base: str = "http://localhost:11434") -> tuple
         return False, f"Cannot connect to Ollama: {e}"
 
 
+def check_ollama_health_sync(api_base: str = "http://localhost:11434") -> tuple[bool, str]:
+    """Synchronous wrapper around :func:`check_ollama_health`.
+
+    Useful for sync entry points (Qt dialogs, CLI commands) that don't run
+    inside an event loop.
+
+    Behavior:
+        - When ``asyncio.run`` can be used (no running loop), the async
+          probe is awaited and its result returned verbatim.
+        - When a loop is already running (``asyncio.run`` raises
+          ``RuntimeError``), this returns ``(True, "")`` — the assumption is
+          that the caller is in an async test harness and a downstream
+          client call will surface a real error if Ollama is unreachable.
+          This branch is the *only* swallowed exception; every other
+          exception type propagates.
+
+    Args:
+        api_base: Ollama API base URL.
+
+    Returns:
+        ``(is_healthy, error_message)`` — same shape as the async helper.
+    """
+    import asyncio
+
+    try:
+        return asyncio.run(check_ollama_health(api_base))
+    except RuntimeError:
+        # Already inside an event loop — skip the probe.
+        return True, ""
+
+
 class LLMClient:
     """Unified LLM client supporting multiple providers via LiteLLM."""
 

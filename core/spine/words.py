@@ -56,8 +56,10 @@ if TYPE_CHECKING:
 
 __all__ = [
     "MissingWordsError",
+    "RepeatPolicy",
     "WordInstance",
     "WordInventory",
+    "WordMode",
     "alphabetical",
     "build_inventory",
     "by_chosen_words",
@@ -66,6 +68,17 @@ __all__ = [
     "compose_with_llm",
     "from_word_list",
     "normalize_word",
+]
+
+
+# Public mode-name Literal — the single source of truth shared by the spine
+# functions and the ``core.remix.word_sequencer`` dispatch.
+WordMode = Literal[
+    "alphabetical",
+    "by_chosen_words",
+    "by_frequency",
+    "by_property",
+    "from_word_list",
 ]
 
 

@@ -49,7 +49,7 @@ class TestAlignWordsLanguageGating(unittest.TestCase):
         """Empty segment list short-circuits before model load + ffmpeg."""
         from core.analysis import alignment
 
-        with patch.object(alignment, "_extract_audio_to_wav") as ffmpeg_mock, \
+        with patch.object(alignment, "extract_audio_to_wav") as ffmpeg_mock, \
              patch.object(alignment, "_run_alignment_engine") as engine_mock:
             result = alignment.align_words("/path/to/audio.wav", [])
 
@@ -91,7 +91,7 @@ class TestAlignWordsLanguageGating(unittest.TestCase):
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
             audio = Path(tmp.name)
         try:
-            with patch.object(alignment, "_extract_audio_to_wav") as ffmpeg_mock, \
+            with patch.object(alignment, "extract_audio_to_wav") as ffmpeg_mock, \
                  patch.object(alignment, "_run_alignment_engine") as engine_mock:
                 fake_wav = audio  # reuse the existing file for cleanup symmetry
                 ffmpeg_mock.return_value = fake_wav
@@ -131,7 +131,7 @@ class TestAlignWordsHappyPath(unittest.TestCase):
         """Helper: run align_words with mocked FFmpeg + engine."""
         from core.analysis import alignment
 
-        with patch.object(alignment, "_extract_audio_to_wav", return_value=self.fake_wav) as ffmpeg_mock, \
+        with patch.object(alignment, "extract_audio_to_wav", return_value=self.fake_wav) as ffmpeg_mock, \
              patch.object(alignment, "_run_alignment_engine", return_value=engine_output) as engine_mock:
             words = alignment.align_words(str(self.audio_path), segments)
         return words, ffmpeg_mock, engine_mock
@@ -235,7 +235,7 @@ class TestAlignWordsHappyPath(unittest.TestCase):
                 confidence=0.9, words=None, language="en",
             ),
         ]
-        with patch.object(alignment, "_extract_audio_to_wav") as ffmpeg_mock, \
+        with patch.object(alignment, "extract_audio_to_wav") as ffmpeg_mock, \
              patch.object(alignment, "_run_alignment_engine") as engine_mock:
             result = alignment.align_words(str(self.audio_path), segments)
 
@@ -248,7 +248,7 @@ class TestAlignWordsCleanup(unittest.TestCase):
     """Temp-file lifecycle around the engine call."""
 
     def test_temp_wav_is_removed_after_successful_run(self):
-        """Happy path: the temp WAV path returned by _extract_audio_to_wav is unlinked."""
+        """Happy path: the temp WAV path returned by extract_audio_to_wav is unlinked."""
         from core.analysis import alignment
 
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as src:
@@ -263,7 +263,7 @@ class TestAlignWordsCleanup(unittest.TestCase):
                 start_time=0.0, end_time=1.0, text="hello",
                 confidence=0.9, words=None, language="en",
             )
-            with patch.object(alignment, "_extract_audio_to_wav", return_value=wav_path), \
+            with patch.object(alignment, "extract_audio_to_wav", return_value=wav_path), \
                  patch.object(alignment, "_run_alignment_engine", return_value=[
                      {"start": 0.0, "end": 0.5, "text": "hello", "score": 0.9},
                  ]):
@@ -297,7 +297,7 @@ class TestAlignWordsCleanup(unittest.TestCase):
             def _boom(**kwargs):
                 raise alignment.AlignmentError("engine exploded")
 
-            with patch.object(alignment, "_extract_audio_to_wav", return_value=wav_path), \
+            with patch.object(alignment, "extract_audio_to_wav", return_value=wav_path), \
                  patch.object(alignment, "_run_alignment_engine", side_effect=_boom):
                 with self.assertRaises(alignment.AlignmentError):
                     alignment.align_words(str(src_path), [seg])
@@ -353,7 +353,7 @@ class TestAlignWordsErrors(unittest.TestCase):
                     "Install the 'word_alignment' feature first."
                 )
 
-            with patch.object(alignment, "_extract_audio_to_wav", return_value=wav_path), \
+            with patch.object(alignment, "extract_audio_to_wav", return_value=wav_path), \
                  patch.object(alignment, "_run_alignment_engine", side_effect=_fake_engine):
                 with self.assertRaises(alignment.AlignmentError) as ctx:
                     alignment.align_words(str(src_path), [seg])
@@ -369,7 +369,7 @@ class TestAlignWordsErrors(unittest.TestCase):
 
 
 class TestExtractAudioCleanup(unittest.TestCase):
-    """``_extract_audio_to_wav`` owns its temp file on the unhappy paths."""
+    """``extract_audio_to_wav`` owns its temp file on the unhappy paths."""
 
     def test_extract_failure_cleans_up_temp_wav(self):
         from core.analysis import alignment
@@ -398,7 +398,7 @@ class TestExtractAudioCleanup(unittest.TestCase):
                  patch.object(alignment.tempfile, "NamedTemporaryFile", side_effect=_capturing_tmp), \
                  patch.object(alignment.subprocess, "run", side_effect=_boom):
                 with self.assertRaises(alignment.AlignmentFFmpegError):
-                    alignment._extract_audio_to_wav(src_path)
+                    alignment.extract_audio_to_wav(src_path)
 
             self.assertIn("path", captured)
             self.assertFalse(
@@ -444,6 +444,81 @@ class TestFeatureRegistryEntry(unittest.TestCase):
         with patch.object(alignment_mod, "ensure_word_alignment_runtime_available") as ensure_mock:
             feature_registry._validate_feature_runtime("word_alignment")
         ensure_mock.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# distribute_words_to_segments
+# ---------------------------------------------------------------------------
+
+
+class TestDistributeWordsToSegments(unittest.TestCase):
+    """The flat-word-list-to-segments distribution helper."""
+
+    @staticmethod
+    def _seg(start: float, end: float) -> TranscriptSegment:
+        return TranscriptSegment(
+            start_time=start,
+            end_time=end,
+            text="x",
+            confidence=0.9,
+            words=None,
+            language="en",
+        )
+
+    def test_word_midpoint_inside_segment_assigns_there(self):
+        from core.analysis.alignment import distribute_words_to_segments
+
+        segments = [self._seg(0.0, 1.0), self._seg(1.0, 2.0), self._seg(2.0, 3.0)]
+        words = [
+            WordTimestamp(start=0.10, end=0.30, text="a"),   # mid 0.20 → seg0
+            WordTimestamp(start=1.20, end=1.80, text="b"),   # mid 1.50 → seg1
+            WordTimestamp(start=2.30, end=2.70, text="c"),   # mid 2.50 → seg2
+        ]
+        distribute_words_to_segments(segments, words)
+        self.assertEqual([w.text for w in segments[0].words], ["a"])
+        self.assertEqual([w.text for w in segments[1].words], ["b"])
+        self.assertEqual([w.text for w in segments[2].words], ["c"])
+
+    def test_word_outside_all_segments_falls_back_to_nearest(self):
+        from core.analysis.alignment import distribute_words_to_segments
+
+        segments = [self._seg(0.0, 1.0), self._seg(2.0, 3.0)]
+        words = [
+            # midpoint 1.5 → equidistant. Nearest-boundary lambda compares
+            # min(|1.5-start|, |1.5-end|): seg0 → min(1.5, 0.5)=0.5;
+            # seg1 → min(0.5, 1.5)=0.5. Tie → ``min`` picks the first (seg0).
+            WordTimestamp(start=1.4, end=1.6, text="left"),
+            # midpoint 1.8 → seg1 wins (min(1.8, 0.8)=0.8 vs seg0 min(1.8, 0.8)=0.8;
+            # tie again, picks seg0). Use a midpoint that breaks the tie:
+            WordTimestamp(start=1.7, end=1.9, text="right"),  # mid 1.8 — actually still ties
+        ]
+        # Replace with a clearer case: 1.9 → seg1 closer.
+        words = [
+            WordTimestamp(start=1.85, end=1.95, text="right"),  # mid 1.9 → seg1
+            WordTimestamp(start=1.05, end=1.15, text="left"),   # mid 1.10 → seg0
+        ]
+        distribute_words_to_segments(segments, words)
+        self.assertEqual([w.text for w in segments[0].words], ["left"])
+        self.assertEqual([w.text for w in segments[1].words], ["right"])
+
+    def test_empty_words_assigns_empty_list_to_every_segment(self):
+        from core.analysis.alignment import distribute_words_to_segments
+
+        segments = [self._seg(0.0, 1.0), self._seg(1.0, 2.0)]
+        distribute_words_to_segments(segments, [])
+        # The contract: every segment gets ``.words = []`` (not None) so the
+        # skip predicate counts the clip as aligned.
+        for seg in segments:
+            self.assertEqual(seg.words, [])
+
+    def test_empty_segments_is_a_noop(self):
+        from core.analysis.alignment import distribute_words_to_segments
+
+        # Calling with no segments must not raise — and there's nothing to
+        # mutate.
+        distribute_words_to_segments([], [
+            WordTimestamp(start=0.0, end=0.5, text="orphan"),
+        ])
 
 
 if __name__ == "__main__":

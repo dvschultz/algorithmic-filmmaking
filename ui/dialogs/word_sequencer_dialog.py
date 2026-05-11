@@ -46,6 +46,14 @@ from core.remix.word_sequencer import (
     MissingWordDataError,
     generate_word_sequence,
 )
+from ui.dialogs._word_source_picker import (
+    BADGE_ALIGNED,
+    BADGE_MISSING_FPS,
+    BADGE_NEEDS_ALIGNMENT,
+    BADGE_UNSUPPORTED_LANGUAGE,
+    WordAlignmentController,
+    classify_source_alignment,
+)
 from ui.theme import theme, Spacing, TypeScale, UISizes
 
 logger = logging.getLogger(__name__)
@@ -65,11 +73,18 @@ _MODE_OPTIONS: list[tuple[str, str]] = [
 ]
 
 
-# Per-source alignment status flags surfaced in the source picker.
-_BADGE_ALIGNED = "aligned"
-_BADGE_NEEDS_ALIGNMENT = "needs_alignment"
-_BADGE_UNSUPPORTED_LANGUAGE = "unsupported_language"
-_BADGE_MISSING_FPS = "missing_fps"
+# Backward-compatible private aliases for the per-source badge constants.
+# The canonical names live in ``ui.dialogs._word_source_picker``; these
+# aliases keep existing tests / imports working.
+_BADGE_ALIGNED = BADGE_ALIGNED
+_BADGE_NEEDS_ALIGNMENT = BADGE_NEEDS_ALIGNMENT
+_BADGE_UNSUPPORTED_LANGUAGE = BADGE_UNSUPPORTED_LANGUAGE
+_BADGE_MISSING_FPS = BADGE_MISSING_FPS
+
+# Backward-compatible alias for ``_classify_source`` (the previous
+# underscore-private name). New code should use
+# ``classify_source_alignment`` directly.
+_classify_source = classify_source_alignment
 
 
 def _parse_word_list(text: str) -> list[str]:
@@ -91,47 +106,6 @@ def _normalize_for_lookup(word: str) -> str:
     return normalize_word(word)
 
 
-def _classify_source(clips_for_source: list[tuple[Any, Any]]) -> tuple[str, Optional[str]]:
-    """Return (badge_key, language) for a source's clips.
-
-    The badge key is one of ``_BADGE_*``. The language string is the first
-    transcript language found across the source's clips, or ``None``.
-    """
-    language: Optional[str] = None
-    needs_alignment = False
-    for clip, source in clips_for_source:
-        if getattr(source, "fps", None) in (None, 0):
-            return _BADGE_MISSING_FPS, language
-        transcript = getattr(clip, "transcript", None) or []
-        for seg in transcript:
-            seg_lang = getattr(seg, "language", None)
-            if seg_lang and language is None:
-                language = seg_lang
-            if getattr(seg, "words", None) is None:
-                needs_alignment = True
-
-    if language:
-        try:
-            # Reuse the runtime / fallback gate from U2. Private name, but
-            # the only path that combines runtime introspection with the
-            # static fallback list.
-            from core.analysis.alignment import (
-                UnsupportedLanguageError,
-                _check_language_supported,
-            )
-            _check_language_supported(language)
-        except UnsupportedLanguageError:
-            return _BADGE_UNSUPPORTED_LANGUAGE, language
-        except Exception:
-            # Fail open — if the gate itself errored we don't want to lock
-            # users out of every source.
-            pass
-
-    if needs_alignment:
-        return _BADGE_NEEDS_ALIGNMENT, language
-    return _BADGE_ALIGNED, language
-
-
 class WordSequencerDialog(QDialog):
     """Modal dialog for the Word Sequencer (preset modes)."""
 
@@ -148,11 +122,9 @@ class WordSequencerDialog(QDialog):
         self._clips = list(clips or [])
         self._project = project
 
-        # Worker state. The guard flag prevents the alignment-finished slot
-        # firing twice for a single run (qthread-destroyed-duplicate-signal
-        # learning).
-        self._alignment_worker = None
-        self._alignment_finished_handled = False
+        # Worker state. The controller owns the worker lifetime; the
+        # dialog only needs to know whether an alignment is currently in
+        # flight (via ``self._alignment_ctrl is not None``).
         self._pending_after_alignment = False
 
         # Per-source classification cache, keyed by Source.id.
@@ -170,7 +142,20 @@ class WordSequencerDialog(QDialog):
             self._clips_by_source_id.setdefault(source_id, []).append((clip, source))
 
         for source_id, src_clips in self._clips_by_source_id.items():
-            self._source_status[source_id] = _classify_source(src_clips)
+            self._source_status[source_id] = classify_source_alignment(src_clips)
+
+        # Shared alignment controller — wraps the ``ForcedAlignmentWorker``
+        # lifecycle and the per-clip "distribute words back" mutation. The
+        # dialog reacts to the controller's ``completed`` / ``error``
+        # signals (see :meth:`_start_alignment`).
+        self._alignment_ctrl: Optional[WordAlignmentController] = None
+
+        # Validation-time inventory cache. Keyed by frozenset of checked
+        # source ids; invalidated on source-picker toggles and after
+        # alignment runs. Without this, every keystroke in the chosen-words
+        # or user-list inputs rebuilds the full inventory.
+        self._inventory_cache_key: Optional[frozenset] = None
+        self._inventory_cache: Optional[Any] = None
 
         self.setWindowTitle("Word Sequencer")
         self.setMinimumWidth(560)
@@ -501,7 +486,34 @@ class WordSequencerDialog(QDialog):
 
     @Slot()
     def _on_source_checked_changed(self, _item) -> None:
+        # The set of checked sources changed → corpus changed.
+        self._invalidate_inventory_cache()
         self._refresh_validation()
+
+    def _invalidate_inventory_cache(self) -> None:
+        """Drop the cached ``WordInventory`` so the next access rebuilds it."""
+        self._inventory_cache_key = None
+        self._inventory_cache = None
+
+    def _get_cached_inventory(self, checked_clips: list[tuple[Any, Any]]):
+        """Build (or return cached) ``WordInventory`` for the checked set.
+
+        Cache key is the frozenset of checked source ids — the only thing
+        that affects which clips are included in the inventory. Text
+        inputs (chosen-words / user-list) do NOT change the corpus, so
+        their textChanged signals never trigger a rebuild.
+        """
+        key = frozenset(self._checked_source_ids())
+        if self._inventory_cache_key == key and self._inventory_cache is not None:
+            return self._inventory_cache
+        try:
+            from core.spine.words import build_inventory
+            inv = build_inventory(checked_clips)
+        except Exception:
+            inv = None
+        self._inventory_cache_key = key
+        self._inventory_cache = inv
+        return inv
 
     def _refresh_validation(self) -> None:
         """Re-evaluate Accept enablement and update the inline error label."""
@@ -516,12 +528,12 @@ class WordSequencerDialog(QDialog):
         # Mode-specific corpus / list checks. These are cheap and only run
         # over the current selection's already-aligned words; clips pending
         # alignment are conservatively counted as "potentially in corpus".
-        try:
-            from core.spine.words import build_inventory
-            inv = build_inventory(checked_clips)
-            corpus = inv.by_word
-        except Exception:
-            corpus = {}
+        #
+        # The inventory is cached by checked-source-id set so that typing
+        # in the chosen-words / user-list inputs doesn't rebuild it on
+        # every keystroke (textChanged fires very frequently).
+        inv = self._get_cached_inventory(checked_clips)
+        corpus = inv.by_word if inv is not None else {}
 
         # If every clip is missing words and the corpus is empty, the dialog
         # will fall back to triggering alignment. That's fine — we let
@@ -671,9 +683,7 @@ class WordSequencerDialog(QDialog):
     # --------------------------------------------------------- Alignment
 
     def _start_alignment(self, pending_clips: list) -> None:
-        from ui.workers.forced_alignment_worker import ForcedAlignmentWorker
-
-        self._alignment_finished_handled = False
+        """Spawn a ``WordAlignmentController`` over the pending clips."""
         self._pending_after_alignment = True
 
         sources_by_id = {
@@ -687,63 +697,18 @@ class WordSequencerDialog(QDialog):
         )
         self._progress_bar.setValue(0)
 
-        worker = ForcedAlignmentWorker(
-            clips=pending_clips,
-            sources_by_id=sources_by_id,
-            skip_existing=True,
-            parent=self,
-        )
-        worker.progress.connect(self._on_alignment_progress, Qt.UniqueConnection)
-        worker.clip_aligned.connect(self._on_clip_aligned, Qt.UniqueConnection)
-        worker.alignment_completed.connect(
-            self._on_alignment_completed, Qt.UniqueConnection,
-        )
-        worker.error.connect(self._on_alignment_error, Qt.UniqueConnection)
-        self._alignment_worker = worker
-        worker.start()
+        ctrl = WordAlignmentController(self._clips, parent=self)
+        ctrl.progress.connect(self._on_alignment_progress, Qt.UniqueConnection)
+        ctrl.completed.connect(self._on_alignment_completed, Qt.UniqueConnection)
+        ctrl.error.connect(self._on_alignment_error, Qt.UniqueConnection)
+        self._alignment_ctrl = ctrl
+        ctrl.start(pending_clips, sources_by_id)
 
     @Slot(int, int)
     def _on_alignment_progress(self, current: int, total: int) -> None:
         if total > 0:
             self._progress_bar.setValue(int(current / total * 100))
         self._progress_label.setText(f"Aligning clip {current} of {total}...")
-
-    @Slot(str, list)
-    def _on_clip_aligned(self, clip_id: str, words: list) -> None:
-        """Distribute words back onto the matching clip's transcript."""
-        # Find the clip object across the dialog's selection.
-        clip = None
-        for c, _ in self._clips:
-            if getattr(c, "id", None) == clip_id:
-                clip = c
-                break
-        if clip is None or not getattr(clip, "transcript", None):
-            logger.warning(
-                "WordSequencerDialog: clip %s no longer present; dropping payload",
-                clip_id,
-            )
-            return
-
-        segments = list(clip.transcript)
-        per_segment: list[list] = [[] for _ in segments]
-        for word in words:
-            midpoint = (float(word.start) + float(word.end)) / 2.0
-            chosen_idx: Optional[int] = None
-            for i, seg in enumerate(segments):
-                if seg.start_time <= midpoint <= seg.end_time:
-                    chosen_idx = i
-                    break
-            if chosen_idx is None:
-                chosen_idx = min(
-                    range(len(segments)),
-                    key=lambda i: min(
-                        abs(midpoint - segments[i].start_time),
-                        abs(midpoint - segments[i].end_time),
-                    ),
-                )
-            per_segment[chosen_idx].append(word)
-        for seg, seg_words in zip(segments, per_segment):
-            seg.words = seg_words
 
     @Slot(str)
     def _on_alignment_error(self, message: str) -> None:
@@ -752,22 +717,15 @@ class WordSequencerDialog(QDialog):
 
     @Slot()
     def _on_alignment_completed(self) -> None:
-        if self._alignment_finished_handled:
-            return
-        self._alignment_finished_handled = True
-
         # Refresh per-source status caches so the picker would render
         # correctly if the user backs out and re-opens the dialog.
         for source_id, src_clips in self._clips_by_source_id.items():
-            self._source_status[source_id] = _classify_source(src_clips)
+            self._source_status[source_id] = classify_source_alignment(src_clips)
 
-        worker = self._alignment_worker
-        self._alignment_worker = None
-        if worker is not None:
-            try:
-                worker.wait(50)
-            except Exception:
-                pass
+        self._alignment_ctrl = None
+        # The clips' word data has changed — invalidate the inventory
+        # cache so the next ``_refresh_validation`` rebuilds.
+        self._invalidate_inventory_cache()
 
         if not self._pending_after_alignment:
             # User cancelled — bounce back to form.
@@ -780,11 +738,11 @@ class WordSequencerDialog(QDialog):
 
     @Slot()
     def _on_cancel_alignment(self) -> None:
-        worker = self._alignment_worker
-        if worker is not None and worker.isRunning():
+        ctrl = self._alignment_ctrl
+        if ctrl is not None and ctrl.is_running():
             self._pending_after_alignment = False
-            worker.cancel()
-            # The worker's alignment_completed signal will bounce the stack
+            ctrl.cancel()
+            # The controller's ``completed`` signal will bounce the stack
             # back to the form page.
         else:
             self._stack.setCurrentIndex(0)
@@ -792,8 +750,8 @@ class WordSequencerDialog(QDialog):
     # --------------------------------------------------------- Lifecycle
 
     def closeEvent(self, event) -> None:  # noqa: D401 - Qt override
-        worker = self._alignment_worker
-        if worker is not None and worker.isRunning():
-            worker.cancel()
-            worker.wait(2000)
+        ctrl = self._alignment_ctrl
+        if ctrl is not None and ctrl.is_running():
+            ctrl.cancel()
+            ctrl.wait(2000)
         super().closeEvent(event)

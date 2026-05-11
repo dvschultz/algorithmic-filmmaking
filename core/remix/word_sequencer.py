@@ -27,8 +27,11 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING, Any, Optional
 
+from typing import get_args as _get_typing_args
+
 from core.spine.words import (
     WordInstance,
+    WordMode,
     alphabetical,
     build_inventory,
     by_chosen_words,
@@ -75,16 +78,7 @@ class MissingWordDataError(Exception):
 # ---------------------------------------------------------------------------
 
 
-_MODES = {
-    "alphabetical",
-    "by_chosen_words",
-    "by_frequency",
-    "by_property",
-    "from_word_list",
-}
-
-
-def _apply_mode(inv, mode: str, mode_params: dict) -> list[WordInstance]:
+def _apply_mode(inv, mode: WordMode, mode_params: dict) -> list[WordInstance]:
     if mode == "alphabetical":
         return alphabetical(inv)
     if mode == "by_chosen_words":
@@ -104,7 +98,8 @@ def _apply_mode(inv, mode: str, mode_params: dict) -> list[WordInstance]:
             on_missing=mode_params.get("on_missing", "skip"),
         )
     raise ValueError(
-        f"Unknown word-sequencer mode {mode!r}; expected one of {sorted(_MODES)}"
+        "Unknown word-sequencer mode "
+        f"{mode!r}; expected one of {sorted(_get_typing_args(WordMode))}"
     )
 
 
@@ -227,7 +222,7 @@ def instances_to_sequence_clips(
 
 def generate_word_sequence(
     clips: list[tuple[Any, Any]],
-    mode: str,
+    mode: WordMode,
     mode_params: Optional[dict] = None,
     handle_frames: int = 0,
 ) -> list["SequenceClip"]:
