@@ -1533,7 +1533,7 @@ class SequenceTab(BaseTab):
         """
         from ui.dialogs.word_sequencer_dialog import WordSequencerDialog
 
-        dialog = WordSequencerDialog(clips=clips, project=self.project, parent=self)
+        dialog = WordSequencerDialog(clips=clips, project=self._project, parent=self)
         dialog.sequence_ready.connect(
             lambda seq_clips: self._apply_word_sequence(
                 seq_clips, clips, "word_sequencer", "Word Sequencer"
@@ -1549,7 +1549,7 @@ class SequenceTab(BaseTab):
         """
         from ui.dialogs.word_llm_composer_dialog import WordLLMComposerDialog
 
-        dialog = WordLLMComposerDialog(clips=clips, project=self.project, parent=self)
+        dialog = WordLLMComposerDialog(clips=clips, project=self._project, parent=self)
         dialog.sequence_ready.connect(
             lambda seq_clips: self._apply_word_sequence(
                 seq_clips, clips, "word_llm_composer", "LLM Word Composer"
