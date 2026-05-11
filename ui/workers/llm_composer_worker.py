@@ -60,7 +60,7 @@ class LLMComposerWorker(CancellableWorker):
         model: Optional[str] = None,
         api_base: Optional[str] = None,
         temperature: float = 0.7,
-        timeout: float = 120.0,
+        timeout: float = 600.0,
         system_prompt: Optional[str] = None,
         think: bool = False,
         parent=None,
