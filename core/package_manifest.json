@@ -103,6 +103,12 @@
       "size_mb": 200,
       "depends_on": ["torch"],
       "features": ["stem_separation"]
+    },
+    "ctc_forced_aligner": {
+      "pip_specifier": "ctc-forced-aligner>=0.1.0,<1.0",
+      "size_mb": 400,
+      "depends_on": ["torch"],
+      "features": ["word_alignment"]
     }
   }
 }
