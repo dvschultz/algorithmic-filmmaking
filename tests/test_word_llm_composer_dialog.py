@@ -183,7 +183,7 @@ def test_accept_dispatches_compose_worker(qapp, monkeypatch):
     assert starts == [("compose a quiet sentence", 7)]
 
 
-def test_compose_ready_emits_sequence(qapp):
+def test_compose_ready_routes_to_review_then_apply_emits(qapp):
     from ui.dialogs.word_llm_composer_dialog import WordLLMComposerDialog
 
     clip, source = _aligned_clip()
@@ -202,10 +202,18 @@ def test_compose_ready_emits_sequence(qapp):
             source_id=source.id,
             in_point=0,
             out_point=10,
+            rationale="silence",
         )
     ]
     dialog._on_compose_ready(fake_seq)
 
+    # Compose-ready now routes to the review page (index 3); nothing is
+    # emitted until the user clicks Apply.
+    assert captured == []
+    assert dialog._stack.currentIndex() == 3
+    assert "silence" in dialog._review_sentence.toPlainText()
+
+    dialog._on_review_apply()
     assert captured == [fake_seq]
 
 

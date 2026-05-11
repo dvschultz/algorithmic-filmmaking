@@ -177,7 +177,12 @@ class WordLLMComposerDialog(QDialog):
         self._stack.addWidget(self._build_form_page())
         self._stack.addWidget(self._build_progress_page())
         self._stack.addWidget(self._build_ollama_absent_page())
+        self._stack.addWidget(self._build_review_page())
         self._stack.setCurrentIndex(0)
+
+        # Holds the SequenceClips produced by the LLM until the user clicks
+        # Apply on the review page. Cleared after apply or regenerate.
+        self._pending_sequence_clips: list = []
 
     def _build_form_page(self) -> QWidget:
         scroll = QScrollArea()
@@ -315,6 +320,65 @@ class WordLLMComposerDialog(QDialog):
         self._progress_cancel_btn.clicked.connect(self._on_cancel_workers)
         btn_row.addWidget(self._progress_cancel_btn)
         btn_row.addStretch()
+        layout.addLayout(btn_row)
+        return page
+
+    def _build_review_page(self) -> QWidget:
+        """Page shown after the LLM returns — lets the user read the composed
+        sentence and decide whether to apply, regenerate, or edit the prompt
+        before committing to the timeline.
+        """
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(Spacing.MD)
+
+        title = QLabel("Review composed sentence")
+        title.setStyleSheet(
+            f"font-size: {TypeScale.LG}px; font-weight: bold;"
+        )
+        layout.addWidget(title)
+
+        intro = QLabel(
+            "The local LLM composed the sentence below using only words from "
+            "your corpus. Each word will play as a separate cut in the order "
+            "shown."
+        )
+        intro.setWordWrap(True)
+        intro.setStyleSheet(f"color: {theme().text_secondary};")
+        layout.addWidget(intro)
+
+        self._review_sentence = QPlainTextEdit()
+        self._review_sentence.setReadOnly(True)
+        self._review_sentence.setMinimumHeight(140)
+        self._review_sentence.setStyleSheet(
+            f"font-size: {TypeScale.LG}px; line-height: 1.5;"
+        )
+        layout.addWidget(self._review_sentence, 1)
+
+        self._review_summary = QLabel("")
+        self._review_summary.setStyleSheet(f"color: {theme().text_secondary};")
+        layout.addWidget(self._review_summary)
+
+        btn_row = QHBoxLayout()
+        edit_btn = QPushButton("Edit prompt")
+        edit_btn.setMinimumHeight(UISizes.BUTTON_MIN_HEIGHT)
+        edit_btn.clicked.connect(self._on_review_edit_prompt)
+        btn_row.addWidget(edit_btn)
+
+        btn_row.addStretch()
+
+        regen_btn = QPushButton("Regenerate")
+        regen_btn.setMinimumHeight(UISizes.BUTTON_MIN_HEIGHT)
+        regen_btn.clicked.connect(self._on_review_regenerate)
+        btn_row.addWidget(regen_btn)
+
+        apply_btn = QPushButton("Apply Sequence")
+        apply_btn.setDefault(True)
+        apply_btn.setMinimumHeight(UISizes.BUTTON_MIN_HEIGHT)
+        apply_btn.clicked.connect(self._on_review_apply)
+        btn_row.addWidget(apply_btn)
+
         layout.addLayout(btn_row)
         return page
 
@@ -611,8 +675,71 @@ class WordLLMComposerDialog(QDialog):
             )
             self._stack.setCurrentIndex(0)
             return
+
+        # Stash the result and route to the review page so the user can
+        # actually read the sentence the LLM composed (the rendered video
+        # plays the words too fast to follow). U5's
+        # ``instances_to_sequence_clips`` populates ``SequenceClip.rationale``
+        # with the original word text — we join those to reconstruct the
+        # sentence.
+        self._pending_sequence_clips = list(sequence_clips)
+        words = [
+            (sc.rationale or "").strip()
+            for sc in sequence_clips
+            if (sc.rationale or "").strip()
+        ]
+        sentence = " ".join(words) if words else "(no word text captured)"
+        self._review_sentence.setPlainText(sentence)
+
+        total_frames = sum(
+            max(0, sc.out_point - sc.in_point) for sc in sequence_clips
+        )
+        # Use the first checked source's fps as a representative rate for
+        # the duration estimate; the timeline itself sets the canonical fps.
+        first_source = None
+        for clip, source in self._checked_clips():
+            if source is not None:
+                first_source = source
+                break
+        fps = float(getattr(first_source, "fps", 24.0) or 24.0)
+        duration_s = total_frames / fps if fps > 0 else 0.0
+        self._review_summary.setText(
+            f"{len(sequence_clips)} word{'' if len(sequence_clips) == 1 else 's'} "
+            f"— total runtime ~{duration_s:.1f}s at {fps:.2f}fps."
+        )
+        logger.info("LLM Word Composer composed sentence: %s", sentence)
+        self._stack.setCurrentIndex(3)  # review page
+
+    @Slot()
+    def _on_review_apply(self) -> None:
+        """User accepted the composed sentence — emit and close."""
+        sequence_clips = self._pending_sequence_clips
+        self._pending_sequence_clips = []
+        if not sequence_clips:
+            self._set_error("No sequence to apply. Please regenerate.")
+            self._stack.setCurrentIndex(0)
+            return
         self.sequence_ready.emit(sequence_clips)
         self.accept()
+
+    @Slot()
+    def _on_review_regenerate(self) -> None:
+        """User wants a fresh take with the same prompt — re-run compose."""
+        self._pending_sequence_clips = []
+        self._review_sentence.clear()
+        self._review_summary.clear()
+        # Reuse _start_compose, which already handles the progress page
+        # and resetting the finished-handled guard.
+        self._compose_finished_handled = False
+        self._start_compose()
+
+    @Slot()
+    def _on_review_edit_prompt(self) -> None:
+        """User wants to tweak the prompt — return to form."""
+        self._pending_sequence_clips = []
+        self._review_sentence.clear()
+        self._review_summary.clear()
+        self._stack.setCurrentIndex(0)
 
     @Slot(str)
     def _on_compose_error(self, message: str) -> None:

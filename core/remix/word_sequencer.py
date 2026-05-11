@@ -209,6 +209,10 @@ def instances_to_sequence_clips(
                 source_id=getattr(clip, "source_id", ""),
                 in_point=in_point,
                 out_point=out_point,
+                # Store the word's text on the SequenceClip's rationale so
+                # callers can reconstruct the sentence (LLM Composer review
+                # page reads this) and SRT export surfaces the per-cut word.
+                rationale=str(getattr(inst, "text", "")) or None,
             )
         )
 
