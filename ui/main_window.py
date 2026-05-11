@@ -1730,6 +1730,10 @@ class MainWindow(QMainWindow):
         self.analyze_tab.clip_browser.view_details_requested.connect(self.show_clip_details)
         self.analyze_tab.clip_browser.export_requested.connect(self._on_clip_export_requested)
         self.analyze_tab.clip_browser.disabled_clips_changed.connect(self._on_disabled_clips_changed)
+        # distribute_words_to_segments mutates Clip.transcript[*].words in place;
+        # this signal makes the mutation observable to the dirty flag so the
+        # alignment data persists on save.
+        self.analyze_tab.clip_alignment_applied.connect(lambda _clip_id: self._mark_dirty())
 
         # Sequence tab signals
         self.sequence_tab.playback_requested.connect(self._on_playback_requested)

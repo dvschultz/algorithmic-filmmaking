@@ -1,6 +1,6 @@
 """Grid of sorting algorithm cards for the Sequence tab.
 
-Displays 19 sorting algorithms as clickable cards, filterable by category
+Displays sorting algorithms as clickable cards, filterable by category
 via a pill bar.
 """
 
@@ -75,6 +75,7 @@ class SortingCardGrid(QWidget):
             "free_association", "cassette_tape", "reference_guided", "signature_style",
             "rose_hobart", "staccato",
             "gaze_sort", "gaze_consistency", "eyes_without_a_face",
+            "word_sequencer", "word_llm_composer",
         ]
 
         # Create all cards (but don't add to layout yet)

@@ -272,6 +272,57 @@ class TestMetadataChecks:
         assert not METADATA_CHECKS["transcribe"](MockClip())
         assert METADATA_CHECKS["transcribe"](MockClip(transcript=[object()]))
 
+    def test_transcription_with_words_check(self):
+        """U4: METADATA_CHECKS recognizes the word-alignment key.
+
+        Without this entry, the cost-confirmation gate silently skips the
+        Word Sequencer algorithm.
+        """
+        from types import SimpleNamespace
+
+        # No transcript at all → False.
+        assert not METADATA_CHECKS["transcription_with_words"](MockClip())
+
+        # Transcript with a single segment that has ``words=None`` → False
+        # (alignment hasn't run for that segment).
+        seg_none = SimpleNamespace(words=None)
+        clip_unaligned = MockClip(transcript=[seg_none])
+        assert not METADATA_CHECKS["transcription_with_words"](clip_unaligned)
+
+        # Transcript with at least one segment carrying a non-empty word
+        # list → True.
+        seg_with_words = SimpleNamespace(words=[object()])
+        clip_aligned = MockClip(transcript=[seg_with_words])
+        assert METADATA_CHECKS["transcription_with_words"](clip_aligned)
+
+
+class TestTranscriptionWithWordsRegistered:
+    """U4: word_sequencer's required_analysis key resolves end-to-end."""
+
+    def test_key_is_in_operation_labels(self):
+        from core.cost_estimates import OPERATION_LABELS
+
+        assert "transcription_with_words" in OPERATION_LABELS
+        assert "alignment" in OPERATION_LABELS["transcription_with_words"].lower()
+
+    def test_key_is_in_time_per_clip(self):
+        from core.cost_estimates import TIME_PER_CLIP
+
+        assert "transcription_with_words" in TIME_PER_CLIP
+        assert TIME_PER_CLIP["transcription_with_words"]["local"] > 0
+
+    def test_word_sequencer_algorithm_estimate_surfaces_key(self):
+        """Running ``estimate_sequence_cost('word_sequencer', ...)`` produces a
+        non-empty estimate when clips lack word data — proving the gate
+        registered the new key.
+        """
+        clips = [MockClip(transcript=None) for _ in range(3)]
+        result = estimate_sequence_cost("word_sequencer", clips)
+        assert len(result) == 1
+        est = result[0]
+        assert est.operation == "transcription_with_words"
+        assert est.clips_needing == 3
+
 
 # --- Intention flow ---
 

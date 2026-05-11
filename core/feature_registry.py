@@ -49,6 +49,7 @@ _FULL_PACKAGE_REPAIR_FEATURES = {
     "shot_classify",
     "transcribe",
     "transcribe_mlx",
+    "word_alignment",
 }
 
 
@@ -111,6 +112,10 @@ def _validate_feature_runtime(name: str) -> None:
         from core.transcription import ensure_mlx_whisper_runtime_available
 
         ensure_mlx_whisper_runtime_available()
+    elif name == "word_alignment":
+        from core.analysis.alignment import ensure_word_alignment_runtime_available
+
+        ensure_word_alignment_runtime_available()
     elif name == "gaze_detect":
         from core.analysis.gaze import ensure_gaze_runtime_available
 
@@ -294,6 +299,13 @@ FEATURE_DEPS: dict[str, FeatureDeps] = {
         size_estimate_mb=450,
         repair_packages=["torch", "transformers", "tokenizers"],
         native_install=True,
+    ),
+    "word_alignment": FeatureDeps(
+        binaries=["ffmpeg"],
+        packages=["torch", "ctc_forced_aligner"],
+        size_estimate_mb=750,
+        repair_packages=["torch", "ctc_forced_aligner", "transformers", "tokenizers"],
+        native_install=True,  # torch has native extensions; must land in proper site-packages
     ),
 }
 

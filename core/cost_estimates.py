@@ -37,6 +37,10 @@ TIME_PER_CLIP: dict[str, dict[str, float]] = {
     "cinematography": {"local": 3.0, "cloud": 1.0},  # local: mlx-vlm 7B; cloud: Gemini
     "face_embeddings": {"local": 2.0},  # ~2s per clip (30 frames x ~50ms each + overhead)
     "gaze": {"local": 1.5},
+    # Word-level alignment: CPU-only on Apple Silicon, ctc-forced-aligner pass
+    # over a clip's audio. Conservative — covers transcript-already-present
+    # case (faster-whisper retro-align) and pure-MLX case.
+    "transcription_with_words": {"local": 30.0},
 }
 
 # Per-clip dollar costs (cloud tiers only)
@@ -71,6 +75,7 @@ OPERATION_LABELS: dict[str, str] = {
     "cinematography": "Rich Analysis",
     "face_embeddings": "Detect Faces",
     "gaze": "Detect Gaze",
+    "transcription_with_words": "Word-level alignment",
 }
 
 # Map operation key to a function that checks if a clip has that metadata
@@ -87,6 +92,14 @@ METADATA_CHECKS: dict[str, callable] = {
     "cinematography": lambda clip: bool(clip.cinematography),
     "face_embeddings": lambda clip: bool(clip.face_embeddings),
     "gaze": lambda clip: clip.gaze_category is not None,
+    # Word-level alignment is satisfied when at least one segment has had
+    # alignment run against it. ``None`` means alignment hasn't run yet;
+    # ``[]`` means alignment ran and produced no words (silence /
+    # instrumental) — both states are "complete" for the cost gate, so we
+    # check ``is not None`` rather than truthiness.
+    "transcription_with_words": lambda clip: bool(
+        clip.transcript and any(seg.words is not None for seg in clip.transcript)
+    ),
 }
 
 # Default parallelism by operation (used when no settings provided)

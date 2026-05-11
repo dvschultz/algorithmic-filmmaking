@@ -662,6 +662,14 @@ class SequenceTab(BaseTab):
             self._apply_chromatic_bar_to_sequence("staccato")
             self._show_staccato_dialog(clips)
             return
+        if algorithm == "word_sequencer":
+            self._apply_chromatic_bar_to_sequence("word_sequencer")
+            self._show_word_sequencer_dialog(clips)
+            return
+        if algorithm == "word_llm_composer":
+            self._apply_chromatic_bar_to_sequence("word_llm_composer")
+            self._show_word_llm_composer_dialog(clips)
+            return
 
         self._apply_algorithm(algorithm, clips, no_color_handling=no_color_handling)
 
@@ -804,6 +812,12 @@ class SequenceTab(BaseTab):
                 return
             if algorithm == "cassette_tape":
                 self._show_cassette_tape_dialog(clips)
+                return
+            if algorithm == "word_sequencer":
+                self._show_word_sequencer_dialog(clips)
+                return
+            if algorithm == "word_llm_composer":
+                self._show_word_llm_composer_dialog(clips)
                 return
 
         # Compute cost estimates for this algorithm
@@ -1508,6 +1522,134 @@ class SequenceTab(BaseTab):
             logger.error(f"Failed to apply Staccato sequence: {e}")
             QMessageBox.critical(self, "Error", f"Failed to apply sequence:\n{e}")
 
+        finally:
+            self._algorithm_running = False
+
+    def _show_word_sequencer_dialog(self, clips: list):
+        """Show the Word Sequencer dialog for preset-mode word sequencing.
+
+        Args:
+            clips: List of (Clip, Source) tuples to process.
+        """
+        from ui.dialogs.word_sequencer_dialog import WordSequencerDialog
+
+        dialog = WordSequencerDialog(clips=clips, project=self.project, parent=self)
+        dialog.sequence_ready.connect(
+            lambda seq_clips: self._apply_word_sequence(
+                seq_clips, clips, "word_sequencer", "Word Sequencer"
+            )
+        )
+        dialog.exec()
+
+    def _show_word_llm_composer_dialog(self, clips: list):
+        """Show the LLM Word Composer dialog for prompt-driven word sequencing.
+
+        Args:
+            clips: List of (Clip, Source) tuples to process.
+        """
+        from ui.dialogs.word_llm_composer_dialog import WordLLMComposerDialog
+
+        dialog = WordLLMComposerDialog(clips=clips, project=self.project, parent=self)
+        dialog.sequence_ready.connect(
+            lambda seq_clips: self._apply_word_sequence(
+                seq_clips, clips, "word_llm_composer", "LLM Word Composer"
+            )
+        )
+        dialog.exec()
+
+    def _apply_word_sequence(
+        self,
+        sequence_clips: list,
+        clips: list,
+        algorithm_key: str,
+        display_label: str,
+    ):
+        """Apply a sequence emitted by a word-based dialog.
+
+        Both word dialogs emit ``list[SequenceClip]`` (in-points / out-points
+        already set by ``instances_to_sequence_clips``) — this helper places
+        each entry on track 0 at sequential ``start_frame`` positions and
+        wraps everything in a fresh ``Sequence`` on the project.
+        """
+        if not sequence_clips:
+            logger.warning("No clips in %s sequence", display_label)
+            return
+
+        try:
+            sources_by_clip_id = {
+                getattr(clip, "id", ""): source for clip, source in clips
+            }
+
+            self._create_and_activate_sequence(algorithm_key)
+            self.timeline.clear_timeline()
+
+            # Pick the fps from the first source so the timeline has a
+            # canonical frame rate. Word sequences may mix sources but the
+            # SequenceClip frame coords are clip-relative; the timeline
+            # frame rate is decorative for word films.
+            first_clip = sequence_clips[0]
+            first_source = sources_by_clip_id.get(first_clip.source_clip_id)
+            if first_source is None:
+                # Fall back to the first clip's source from the dialog input.
+                first_source = clips[0][1] if clips else None
+            if first_source is not None:
+                fps = float(getattr(first_source, "fps", 30.0) or 30.0)
+                self.timeline.set_fps(fps)
+                self.video_player.load_video(first_source.file_path)
+
+            current_frame = 0
+            preview_clips: list[tuple] = []
+            clip_lookup = {
+                getattr(clip, "id", ""): clip for clip, _ in clips
+            }
+            for seq_clip in sequence_clips:
+                clip_id = seq_clip.source_clip_id
+                clip = clip_lookup.get(clip_id)
+                source = sources_by_clip_id.get(clip_id)
+                if clip is None or source is None:
+                    continue
+                duration = seq_clip.out_point - seq_clip.in_point
+                if duration <= 0:
+                    continue
+                self.timeline.add_clip(
+                    clip,
+                    source,
+                    track_index=0,
+                    start_frame=current_frame,
+                    in_point=clip.start_frame + seq_clip.in_point,
+                    out_point=clip.start_frame + seq_clip.out_point,
+                )
+                current_frame += duration
+                self.clip_added.emit(clip, source)
+                preview_clips.append((clip, source))
+
+            self.timeline_preview.set_clips(preview_clips, self._sources)
+            self.timeline._on_zoom_fit()
+
+            self.algorithm_dropdown.blockSignals(True)
+            if self.algorithm_dropdown.findText(display_label) == -1:
+                self.algorithm_dropdown.addItem(display_label)
+            self.algorithm_dropdown.setCurrentText(display_label)
+            self.algorithm_dropdown.blockSignals(False)
+
+            self._current_algorithm = algorithm_key
+
+            sequence = self.timeline.get_sequence()
+            sequence.algorithm = algorithm_key
+            self._apply_chromatic_bar_to_sequence(algorithm_key)
+            self._update_chromatic_bar_controls(algorithm_key)
+            self._emit_chromatic_bar_setting_changed()
+
+            self._set_state(self.STATE_TIMELINE)
+
+            logger.info(
+                "Applied %d clips from %s", len(preview_clips), display_label,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Failed to apply %s sequence: %s", display_label, exc)
+            QMessageBox.critical(
+                self, "Error", f"Failed to apply sequence:\n{exc}",
+            )
         finally:
             self._algorithm_running = False
 

@@ -3,8 +3,21 @@
 from ui.algorithm_config import ALGORITHM_CONFIG, CATEGORY_ORDER
 
 
-def test_category_order_has_six_entries():
-    assert CATEGORY_ORDER == ["All", "Arrange", "Find", "Connect", "Audio", "Text"]
+def test_category_order_has_expected_entries():
+    # "Word" and "Experimental" were added in U4 of the word-sequencer plan
+    # so the new ``word_sequencer`` algorithm has somewhere to live; "LLM"
+    # was added in U5 for the ``word_llm_composer`` algorithm.
+    assert CATEGORY_ORDER == [
+        "All",
+        "Arrange",
+        "Find",
+        "Connect",
+        "Audio",
+        "Text",
+        "Word",
+        "LLM",
+        "Experimental",
+    ]
 
 
 def test_every_algorithm_has_categories():
@@ -35,4 +48,28 @@ def test_multi_tagged_algorithms():
 
 
 def test_algorithm_count():
-    assert len(ALGORITHM_CONFIG) == 21
+    # Bumped from 21 → 22 in U4 (added ``word_sequencer``).
+    # Bumped from 22 → 23 in U5 (added ``word_llm_composer``).
+    assert len(ALGORITHM_CONFIG) == 23
+
+
+def test_word_sequencer_registered():
+    """U4 owns the ``word_sequencer`` registration end-to-end."""
+    config = ALGORITHM_CONFIG["word_sequencer"]
+    assert config["label"] == "Word Sequencer"
+    assert config["is_dialog"] is True
+    assert config["required_analysis"] == ["transcription_with_words"]
+    assert config["categories"] == ["word", "experimental"]
+    assert config["allow_duplicates"] is False
+
+
+def test_word_llm_composer_registered():
+    """U5 owns the ``word_llm_composer`` registration end-to-end."""
+    config = ALGORITHM_CONFIG["word_llm_composer"]
+    assert config["label"] == "LLM Word Composer"
+    assert config["is_dialog"] is True
+    # local_llm is NOT in required_analysis — Ollama availability is a
+    # runtime check, not per-clip metadata. Plan U5 is explicit.
+    assert config["required_analysis"] == ["transcription_with_words"]
+    assert config["categories"] == ["word", "experimental", "llm"]
+    assert config["allow_duplicates"] is False
