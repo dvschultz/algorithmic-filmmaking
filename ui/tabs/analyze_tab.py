@@ -1,6 +1,7 @@
 """Analyze tab for clip analysis features."""
 
 import logging
+from typing import Optional
 
 from PySide6.QtWidgets import (
     QVBoxLayout,
@@ -12,7 +13,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QSplitter,
 )
-from PySide6.QtCore import Signal, Qt, QTimer
+from PySide6.QtCore import Signal, Qt, QTimer, Slot
 
 from .base_tab import BaseTab
 from ui.clip_browser import ClipBrowser, VIRTUALIZATION_THRESHOLD
@@ -47,6 +48,14 @@ class AnalyzeTab(BaseTab):
     clips_cleared = Signal()
     selection_changed = Signal(list)  # list[str] selected clip IDs
     clips_changed = Signal(list)  # list[str] current clip IDs in tab
+    # Emitted when the forced-alignment handler writes word data back onto a
+    # clip's transcript segments, so the main window can mark the project
+    # dirty and propagate to other tabs. Payload: clip_id.
+    clip_alignment_applied = Signal(str)
+    # Emitted when the forced-alignment worker run finishes (success,
+    # cancellation, or error). Lets the main window clear any global
+    # progress-bar / status-bar state it was showing for this run.
+    forced_alignment_finished = Signal()
 
     # State constants for stacked widget
     STATE_NO_CLIPS = 0
@@ -61,6 +70,13 @@ class AnalyzeTab(BaseTab):
         self._pending_browser_clip_ids: list[str] = []
         self._is_analyzing = False
         self._disabled_quick_ops: set[str] = set()
+        # Forced-alignment worker state. The guard flag (per
+        # docs/solutions/runtime-errors/qthread-destroyed-duplicate-signal-delivery-20260124.md
+        # and the pyside6-duplicate-signal-guard skill) prevents the
+        # alignment-finished handler firing twice for a single run; it
+        # resets at click-start so subsequent runs work.
+        self._forced_alignment_worker = None
+        self._alignment_finished_handled = False
         if filter_state is None:
             from core.filter_state import FilterState
             filter_state = FilterState()
@@ -126,6 +142,21 @@ class AnalyzeTab(BaseTab):
         self.analyze_btn.setEnabled(False)
         self.analyze_btn.clicked.connect(self._on_analyze_click)
         controls.addWidget(self.analyze_btn)
+
+        # Run Word-Level Alignment button — sits in the same controls row as
+        # the Transcribe quick-run dropdown and the Analyze... picker, since
+        # alignment is a transcription post-step. Disabled until at least one
+        # selected clip has a transcript (which is the gating prerequisite
+        # for forced alignment).
+        self.alignment_btn = QPushButton("Run Word-Level Alignment")
+        self.alignment_btn.setMinimumHeight(UISizes.BUTTON_MIN_HEIGHT)
+        self.alignment_btn.setToolTip(
+            "Produce per-word timestamps for selected clips that have a "
+            "transcript. Required for the Word Sequencer."
+        )
+        self.alignment_btn.setEnabled(False)
+        self.alignment_btn.clicked.connect(self._on_alignment_click)
+        controls.addWidget(self.alignment_btn)
 
         # Filter sidebar toggle
         self.filter_toggle_btn = QPushButton("Filters")
@@ -282,6 +313,179 @@ class AnalyzeTab(BaseTab):
         dialog = GlossaryDialog(self)
         dialog.exec()
 
+    # ------------------------------------------------------------------ #
+    # Forced-alignment dispatch                                          #
+    # ------------------------------------------------------------------ #
+
+    def _select_clips_for_alignment(self) -> list:
+        """Return clips eligible for alignment from the current selection.
+
+        Falls back to all clips currently in the Analyze tab when nothing is
+        selected (matching the button-enablement rule in
+        ``_refresh_alignment_button_enablement``). Clips without a transcript
+        are filtered out — the worker filters again, but we surface a clean
+        set so the status messages are accurate.
+        """
+        selected = self.clip_browser.get_selected_clips()
+        candidates = selected if selected else self.get_clips()
+        return [c for c in candidates if getattr(c, "transcript", None)]
+
+    def _on_alignment_click(self):
+        """Dispatch the forced-alignment worker over the eligible clips."""
+        if self._forced_alignment_worker is not None:
+            # A previous run is still active — ignore double-clicks.
+            logger.info(
+                "Forced alignment ignored: a previous run is still in progress"
+            )
+            return
+
+        clips = self._select_clips_for_alignment()
+        if not clips:
+            logger.info(
+                "Forced alignment requested but no eligible clips were found"
+            )
+            return
+
+        # Reset the guard flag at click-start so re-runs work (per the
+        # qthread-destroyed-duplicate-signal-delivery learning).
+        self._alignment_finished_handled = False
+
+        from ui.workers.forced_alignment_worker import ForcedAlignmentWorker
+
+        worker = ForcedAlignmentWorker(
+            clips=clips,
+            sources_by_id=self._sources_by_id,
+        )
+        # Qt.UniqueConnection prevents duplicate slot registration on
+        # repeated runs (the worker object is fresh, but defensive in depth
+        # against future refactors that share workers).
+        worker.progress.connect(
+            self._on_alignment_progress, Qt.UniqueConnection
+        )
+        worker.clip_aligned.connect(
+            self._on_clip_aligned, Qt.UniqueConnection
+        )
+        worker.error.connect(
+            self._on_alignment_error, Qt.UniqueConnection
+        )
+        worker.alignment_completed.connect(
+            self._on_alignment_completed, Qt.UniqueConnection
+        )
+        worker.finished.connect(worker.deleteLater)
+        worker.finished.connect(self._on_alignment_thread_finished)
+
+        self._forced_alignment_worker = worker
+
+        # Surface "alignment running" in the same row the Transcribe quick
+        # run uses by repurposing the analyze button's text — there is no
+        # dedicated analyze-tab progress widget today, and the plan
+        # explicitly says "do not create a new one".
+        self.alignment_btn.setEnabled(False)
+        self.alignment_btn.setText("Aligning...")
+
+        logger.info(
+            "Starting ForcedAlignmentWorker for %d clip(s)", len(clips)
+        )
+        worker.start()
+
+    @Slot(int, int)
+    def _on_alignment_progress(self, current: int, total: int) -> None:
+        """Surface forced-alignment progress in the analyze button label."""
+        if total <= 0:
+            return
+        self.alignment_btn.setText(f"Aligning... ({current}/{total})")
+
+    @Slot(str, list)
+    def _on_clip_aligned(self, clip_id: str, words: list) -> None:
+        """Write per-word timestamps back onto the clip's transcript.
+
+        The worker emits a flat ``list[WordTimestamp]`` across all segments
+        of the clip (alignment runs over the concatenated text). We
+        distribute words back to segments using each word's midpoint: a word
+        whose midpoint falls within ``[seg.start_time, seg.end_time]`` is
+        assigned to that segment. Any words that fall outside every segment
+        (rare — typically a tiny boundary slop) attach to the nearest
+        segment by midpoint distance. Segments that end up with no words
+        are set to ``[]`` so the skip predicate treats the clip as aligned
+        on the next run (per U3's idempotency contract).
+        """
+        clip = self._clips_by_id.get(clip_id)
+        if clip is None or not getattr(clip, "transcript", None):
+            logger.warning(
+                "Forced alignment: clip %s no longer present; dropping payload",
+                clip_id,
+            )
+            return
+
+        segments = list(clip.transcript)
+        per_segment: list[list] = [[] for _ in segments]
+
+        for word in words:
+            midpoint = (float(word.start) + float(word.end)) / 2.0
+            chosen_idx: Optional[int] = None
+            for i, seg in enumerate(segments):
+                if seg.start_time <= midpoint <= seg.end_time:
+                    chosen_idx = i
+                    break
+            if chosen_idx is None:
+                # Fall back to nearest segment by midpoint distance.
+                chosen_idx = min(
+                    range(len(segments)),
+                    key=lambda i: min(
+                        abs(midpoint - segments[i].start_time),
+                        abs(midpoint - segments[i].end_time),
+                    ),
+                )
+            per_segment[chosen_idx].append(word)
+
+        for seg, seg_words in zip(segments, per_segment):
+            # Always assign — even an empty list means "alignment ran for
+            # this segment", which is what the skip predicate checks.
+            seg.words = seg_words
+
+        if self.clip_browser.is_clip_realized(clip_id):
+            self.clip_browser.update_clip_transcript(clip_id, segments)
+
+        self._refresh_alignment_button_enablement()
+        # Notify the main window so it can mark the project dirty without
+        # the analyze tab itself reaching into Project state.
+        self.clip_alignment_applied.emit(clip_id)
+
+    @Slot(str)
+    def _on_alignment_error(self, message: str) -> None:
+        """Log alignment errors. Surfaced to the user via the main window
+        when wired (the analyze tab keeps its own status quiet so the same
+        widget the Transcribe path uses is the canonical surface)."""
+        logger.warning("Forced alignment reported errors: %s", message)
+
+    @Slot()
+    def _on_alignment_completed(self) -> None:
+        """Handle ``alignment_completed`` — the worker's main-thread signal
+        that emits exactly once at the end of each run, success or otherwise.
+
+        Guarded by ``_alignment_finished_handled`` per the
+        qthread-destroyed-duplicate-signal-delivery learning. The
+        ``finished`` QThread signal (separate, fired by Qt itself when the
+        thread terminates) clears the worker reference in
+        ``_on_alignment_thread_finished``.
+        """
+        if self._alignment_finished_handled:
+            logger.debug(
+                "_on_alignment_completed already handled; ignoring duplicate"
+            )
+            return
+        self._alignment_finished_handled = True
+        # Restore the button label; enablement is recomputed by the
+        # thread-finished handler once the worker reference is cleared.
+        self.alignment_btn.setText("Run Word-Level Alignment")
+        self.forced_alignment_finished.emit()
+
+    @Slot()
+    def _on_alignment_thread_finished(self) -> None:
+        """Drop the worker reference once Qt has finished the thread."""
+        self._forced_alignment_worker = None
+        self._refresh_alignment_button_enablement()
+
     def _on_clip_selected(self, clip):
         """Handle clip selection."""
         self.clip_selected.emit(clip)
@@ -289,6 +493,7 @@ class AnalyzeTab(BaseTab):
     def _on_browser_selection_changed(self, _clip_ids: list[str]):
         """Handle selection changes from the clip browser."""
         self._update_selection_ui()
+        self._refresh_alignment_button_enablement()
 
     def _update_selection_ui(self):
         """Update selection count label and notify parent."""
@@ -299,6 +504,25 @@ class AnalyzeTab(BaseTab):
         else:
             self.selection_label.setText("")
         self.selection_changed.emit([c.id for c in selected])
+
+    def _refresh_alignment_button_enablement(self) -> None:
+        """Enable the alignment button only when at least one selected clip
+        has a transcript. Falls back to enabling when ANY tab clip has a
+        transcript (so the user has an affordance even before selecting),
+        but disables while a worker is already running."""
+        if self._is_analyzing or self._forced_alignment_worker is not None:
+            self.alignment_btn.setEnabled(False)
+            return
+
+        selected_clips = self.clip_browser.get_selected_clips()
+        # Per the plan: "Disabled when no selected clip has a transcript;
+        # enabled otherwise." When nothing is selected, fall back to "any
+        # clip in the tab" so the button is discoverable.
+        candidate_clips = selected_clips or self.get_clips()
+        has_transcript = any(
+            getattr(c, "transcript", None) for c in candidate_clips
+        )
+        self.alignment_btn.setEnabled(bool(has_transcript))
 
     def _on_clip_double_clicked(self, clip):
         """Handle clip double-click."""
@@ -329,6 +553,7 @@ class AnalyzeTab(BaseTab):
 
         self._refresh_quick_run_availability()
         self.analyze_btn.setEnabled(controls_enabled)
+        self._refresh_alignment_button_enablement()
 
         if has_clips:
             self.clip_count_label.setText(f"{count} clips")
@@ -567,6 +792,7 @@ class AnalyzeTab(BaseTab):
             if self.clip_browser.is_clip_realized(clip_id):
                 self.clip_browser.update_clip_transcript(clip_id, segments)
             self._refresh_quick_run_availability()
+            self._refresh_alignment_button_enablement()
 
     def update_clip_extracted_text(self, clip_id: str, texts: list):
         """Update extracted text for a clip."""
