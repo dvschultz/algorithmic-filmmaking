@@ -289,9 +289,13 @@ def check_ollama_health_sync(api_base: str = "http://localhost:11434") -> tuple[
 
     try:
         return asyncio.run(check_ollama_health(api_base))
-    except RuntimeError:
-        # Already inside an event loop — skip the probe.
-        return True, ""
+    except RuntimeError as exc:
+        # Only swallow the "loop already running" case — any other RuntimeError
+        # (corrupted loop, error inside the coroutine) must propagate, otherwise
+        # the dialog gate silently believes Ollama is healthy.
+        if "loop" in str(exc).lower() and "running" in str(exc).lower():
+            return True, ""
+        raise
 
 
 class LLMClient:

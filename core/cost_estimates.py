@@ -92,13 +92,13 @@ METADATA_CHECKS: dict[str, callable] = {
     "cinematography": lambda clip: bool(clip.cinematography),
     "face_embeddings": lambda clip: bool(clip.face_embeddings),
     "gaze": lambda clip: clip.gaze_category is not None,
-    # Word-level alignment is satisfied when at least one segment has a
-    # ``words`` list. ``None`` segments mean alignment hasn't run yet;
-    # ``[]`` means alignment ran but produced no words and is still
-    # "complete" — but for cost-estimate purposes any populated list is
-    # the signal we care about.
+    # Word-level alignment is satisfied when at least one segment has had
+    # alignment run against it. ``None`` means alignment hasn't run yet;
+    # ``[]`` means alignment ran and produced no words (silence /
+    # instrumental) — both states are "complete" for the cost gate, so we
+    # check ``is not None`` rather than truthiness.
     "transcription_with_words": lambda clip: bool(
-        clip.transcript and any(seg.words for seg in clip.transcript)
+        clip.transcript and any(seg.words is not None for seg in clip.transcript)
     ),
 }
 

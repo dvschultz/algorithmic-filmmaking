@@ -1608,6 +1608,9 @@ class SequenceTab(BaseTab):
                 source = sources_by_clip_id.get(clip_id)
                 if clip is None or source is None:
                     continue
+                duration = seq_clip.out_point - seq_clip.in_point
+                if duration <= 0:
+                    continue
                 self.timeline.add_clip(
                     clip,
                     source,
@@ -1616,9 +1619,6 @@ class SequenceTab(BaseTab):
                     in_point=clip.start_frame + seq_clip.in_point,
                     out_point=clip.start_frame + seq_clip.out_point,
                 )
-                duration = seq_clip.out_point - seq_clip.in_point
-                if duration <= 0:
-                    continue
                 current_frame += duration
                 self.clip_added.emit(clip, source)
                 preview_clips.append((clip, source))

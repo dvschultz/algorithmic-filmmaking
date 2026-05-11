@@ -180,7 +180,7 @@ def instances_to_sequence_clips(
                 "convert word boundaries to frames"
             )
         fps = float(raw_fps)
-        if fps <= 0:
+        if not math.isfinite(fps) or fps <= 0:
             raise ValueError(
                 f"Source {getattr(source, 'id', '?')} has non-positive fps {fps!r}"
             )
@@ -191,7 +191,7 @@ def instances_to_sequence_clips(
 
         handle_seconds = handle_frames / fps
         in_seconds = max(0.0, float(inst.start) - handle_seconds)
-        out_seconds = min(clip_duration_seconds, float(inst.end) + handle_seconds)
+        out_seconds = max(0.0, min(clip_duration_seconds, float(inst.end) + handle_seconds))
 
         in_point = math.floor(in_seconds * fps)
         out_point = math.ceil(out_seconds * fps)
