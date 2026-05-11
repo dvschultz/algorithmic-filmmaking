@@ -556,7 +556,11 @@ class WordLLMComposerDialog(QDialog):
         self._progress_label.setText(
             f"Calling local LLM to generate {self._length_spin.value()} words..."
         )
-        self._progress_bar.setValue(0)
+        # Ollama's enum-constrained decode is non-streaming from our side —
+        # we sit blocked on the POST for the whole generation, so a
+        # determinate bar would jump 0% → 100% with nothing in between.
+        # Use indeterminate ("busy") mode instead.
+        self._progress_bar.setRange(0, 0)
         # Lock the prompt while generating.
         self._prompt_input.setReadOnly(True)
 
@@ -590,6 +594,9 @@ class WordLLMComposerDialog(QDialog):
         if self._compose_finished_handled:
             return
         self._compose_finished_handled = True
+        # Restore determinate progress for any future use of this dialog.
+        self._progress_bar.setRange(0, 100)
+        self._progress_bar.setValue(0)
         self._prompt_input.setReadOnly(False)
         worker = self._compose_worker
         self._compose_worker = None
@@ -612,6 +619,8 @@ class WordLLMComposerDialog(QDialog):
         if self._compose_finished_handled:
             return
         self._compose_finished_handled = True
+        self._progress_bar.setRange(0, 100)
+        self._progress_bar.setValue(0)
         self._prompt_input.setReadOnly(False)
         worker = self._compose_worker
         self._compose_worker = None
