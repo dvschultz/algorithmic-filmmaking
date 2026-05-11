@@ -614,8 +614,15 @@ def _transcribe_video_mlx(
             progress_callback(0.3, "Transcribing with MLX Whisper...")
 
         # MLX transcribe also resolves ``./mlx_models/<name>`` relative to CWD.
+        # Pass the user's language setting through; without it, MLX runs
+        # language detection per clip and hallucinates exotic codes (jw, nn,
+        # etc.) on short / silent / music clips.
+        mlx_language = language if language and language != "auto" else None
         with _chdir_for_mlx():
-            result = mlx_model.transcribe(audio_path=str(tmp_path))
+            result = mlx_model.transcribe(
+                audio_path=str(tmp_path),
+                language=mlx_language,
+            )
 
         if progress_callback:
             progress_callback(0.8, "Processing segments...")
@@ -694,8 +701,12 @@ def transcribe_clip(
 
         if resolved == "mlx-whisper":
             mlx_model = get_mlx_model(model_name)
+            mlx_language = language if language and language != "auto" else None
             with _chdir_for_mlx():
-                result = mlx_model.transcribe(audio_path=str(tmp_path))
+                result = mlx_model.transcribe(
+                    audio_path=str(tmp_path),
+                    language=mlx_language,
+                )
             return _parse_mlx_result(result)
 
         # faster-whisper backend
