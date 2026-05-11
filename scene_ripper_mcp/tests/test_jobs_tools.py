@@ -31,8 +31,11 @@ from scene_ripper_mcp.tools.jobs import (
     get_job_status,
     list_jobs,
     purge_old_jobs,
+    start_analyze_clips,
+    start_describe,
     start_generate_thumbnails,
 )
+from scene_ripper_mcp.tools.clips import filter_clips, get_clip_metadata, list_clips
 
 
 @pytest.fixture
@@ -308,3 +311,152 @@ async def test_start_generate_thumbnails_saves_project_paths(lifespan_ctx, tmp_p
     _sources, clips, *_ = load_project(project_path)
     assert clips[0].thumbnail_path is not None
     assert clips[0].thumbnail_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_start_describe_job_saves_description(lifespan_ctx, tmp_path, monkeypatch):
+    from core.project import load_project
+
+    ctx, store, _runtime = lifespan_ctx
+    project_path = _make_project_file(tmp_path)
+
+    def fake_describe(project, clip_ids=None, **_kwargs):
+        clip = project.clips_by_id["clip-1"]
+        clip.description = "A person standing in a doorway."
+        clip.description_model = "fake-vlm"
+        clip.description_frames = 1
+        return {
+            "success": True,
+            "result": {
+                "succeeded": [{"clip_id": clip.id, "model": "fake-vlm"}],
+                "failed": [],
+                "skipped": [],
+                "total_clips": 1,
+            },
+        }
+
+    monkeypatch.setattr("core.spine.analyze.describe", fake_describe)
+
+    out = json.loads(await start_describe(project_path=str(project_path), ctx=ctx))
+
+    assert out["success"] is True
+    _wait_for_status(store, out["task_id"], STATUS_COMPLETED)
+
+    _sources, clips, *_ = load_project(project_path)
+    assert clips[0].description == "A person standing in a doorway."
+    assert clips[0].description_model == "fake-vlm"
+
+
+@pytest.mark.asyncio
+async def test_start_analyze_clips_uses_canonical_operation_map(
+    lifespan_ctx, tmp_path, monkeypatch
+):
+    from core.project import load_project
+    from core.spine import analyze as analyze_module
+
+    ctx, store, _runtime = lifespan_ctx
+    project_path = _make_project_file(tmp_path)
+
+    def fake_custom_query(project, clip_ids=None, query=None, **_kwargs):
+        clip = project.clips_by_id["clip-1"]
+        clip.custom_queries = [
+            {
+                "query": query,
+                "match": True,
+                "confidence": 0.91,
+                "model": "fake-vlm",
+            }
+        ]
+        return {
+            "success": True,
+            "result": {
+                "succeeded": [{"clip_id": clip.id, "query": query, "match": True}],
+                "failed": [],
+                "skipped": [],
+                "total_clips": 1,
+            },
+        }
+
+    monkeypatch.setitem(
+        analyze_module.ANALYZE_CLIP_OPERATION_MAP,
+        "custom_query",
+        fake_custom_query,
+    )
+
+    out = json.loads(
+        await start_analyze_clips(
+            project_path=str(project_path),
+            operations=["custom_query"],
+            query="person",
+            ctx=ctx,
+        )
+    )
+
+    assert out["success"] is True
+    _wait_for_status(store, out["task_id"], STATUS_COMPLETED)
+
+    _sources, clips, *_ = load_project(project_path)
+    assert clips[0].custom_queries == [
+        {
+            "query": "person",
+            "match": True,
+            "confidence": 0.91,
+            "model": "fake-vlm",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_clip_tools_expose_agent_context_parity(tmp_path):
+    from core.project import load_project
+
+    project_path = _make_project_file(tmp_path)
+    sources, clips, *_ = load_project(project_path)
+    clip = clips[0]
+    clip.description = "A bright red sign above a doorway."
+    clip.description_model = "fake-vlm"
+    clip.detected_objects = [{"label": "sign", "confidence": 0.82}]
+    clip.person_count = 0
+    clip.gaze_yaw = 1.2
+    clip.gaze_pitch = -0.4
+    clip.gaze_category = "at_camera"
+    clip.custom_queries = [
+        {
+            "query": "red sign",
+            "match": True,
+            "confidence": 0.88,
+            "model": "fake-vlm",
+        }
+    ]
+    from core.project import Project
+
+    project = Project.new(name="project")
+    for source in sources:
+        project.add_source(source)
+    project.add_clips([clip])
+    assert project.save(project_path)
+
+    listed = json.loads(await list_clips(project_path=str(project_path)))
+    row = listed["clips"][0]
+    assert row["description"] == "A bright red sign above a doorway."
+    assert row["detected_object_labels"] == ["sign"]
+    assert row["gaze"]["category"] == "at_camera"
+    assert row["custom_queries"][0]["query"] == "red sign"
+
+    detail = json.loads(
+        await get_clip_metadata(project_path=str(project_path), clip_id=clip.id)
+    )
+    analysis = detail["clip"]["analysis"]
+    assert analysis["description"] == "A bright red sign above a doorway."
+    assert analysis["detected_objects"][0]["label"] == "sign"
+    assert analysis["gaze"]["category"] == "at_camera"
+
+    filtered = json.loads(
+        await filter_clips(
+            project_path=str(project_path),
+            has_description=True,
+            has_objects=True,
+            custom_query="red sign",
+        )
+    )
+    assert filtered["filtered_count"] == 1

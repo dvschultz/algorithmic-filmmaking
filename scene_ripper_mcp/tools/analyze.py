@@ -385,6 +385,15 @@ async def get_analysis_status(
         has_colors = sum(1 for c in clips if c.dominant_colors)
         has_shots = sum(1 for c in clips if c.shot_type)
         has_transcripts = sum(1 for c in clips if c.transcript)
+        has_classification = sum(1 for c in clips if c.object_labels)
+        has_objects = sum(1 for c in clips if c.detected_objects)
+        has_descriptions = sum(1 for c in clips if c.description)
+        has_text = sum(1 for c in clips if c.extracted_texts)
+        has_cinematography = sum(1 for c in clips if c.cinematography)
+        has_faces = sum(1 for c in clips if c.face_embeddings is not None)
+        has_gaze = sum(1 for c in clips if c.gaze_category is not None)
+        has_embeddings = sum(1 for c in clips if c.embedding is not None)
+        has_custom_queries = sum(1 for c in clips if c.custom_queries)
         has_tags = sum(1 for c in clips if c.tags)
         has_notes = sum(1 for c in clips if c.notes)
 
@@ -414,6 +423,42 @@ async def get_analysis_status(
                         "analyzed": has_transcripts,
                         "pending": len(clips) - has_transcripts,
                         "percentage": (has_transcripts / len(clips) * 100) if clips else 0,
+                    },
+                    "classification": {
+                        "analyzed": has_classification,
+                        "pending": len(clips) - has_classification,
+                    },
+                    "objects": {
+                        "analyzed": has_objects,
+                        "pending": len(clips) - has_objects,
+                    },
+                    "descriptions": {
+                        "analyzed": has_descriptions,
+                        "pending": len(clips) - has_descriptions,
+                    },
+                    "text": {
+                        "analyzed": has_text,
+                        "pending": len(clips) - has_text,
+                    },
+                    "cinematography": {
+                        "analyzed": has_cinematography,
+                        "pending": len(clips) - has_cinematography,
+                    },
+                    "faces": {
+                        "analyzed": has_faces,
+                        "pending": len(clips) - has_faces,
+                    },
+                    "gaze": {
+                        "analyzed": has_gaze,
+                        "pending": len(clips) - has_gaze,
+                    },
+                    "embeddings": {
+                        "analyzed": has_embeddings,
+                        "pending": len(clips) - has_embeddings,
+                    },
+                    "custom_queries": {
+                        "analyzed": has_custom_queries,
+                        "pending": len(clips) - has_custom_queries,
                     },
                 },
                 "metadata": {

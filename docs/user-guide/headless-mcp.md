@@ -53,10 +53,26 @@ walkthrough with a concrete example, see
 | `start_detect_scenes_bulk` | Scene-detect every source in a project |
 | `start_detect_scenes_new_project` | Create a fresh project from a video file and detect scenes |
 | `start_generate_thumbnails` | Generate/backfill clip thumbnails for downstream visual analysis |
+| `start_analyze_clips` | Canonical multi-operation analysis job using UI operation keys |
 | `start_analyze_colors` | Extract dominant colors per clip |
 | `start_analyze_shots` | Classify shot type (wide / medium / close-up / xclose) |
+| `start_analyze_classify` | Classify thumbnail content with ImageNet labels |
+| `start_detect_objects` | Detect objects and person counts |
+| `start_extract_text` | Extract visible text with OCR/VLM fallback |
 | `start_transcribe` | Whisper transcription per clip |
+| `start_describe` | Generate VLM descriptions |
+| `start_analyze_cinematography` | Generate rich film-language analysis |
+| `start_detect_faces` | Extract face embeddings |
+| `start_analyze_gaze` | Estimate gaze direction |
+| `start_generate_embeddings` | Extract DINOv2 visual embeddings |
+| `start_custom_query` | Run a yes/no visual query against clips |
 | `start_download_videos` | Bulk video downloads (YouTube / Vimeo / Internet Archive) |
+
+`start_analyze_clips` accepts the same operation keys used by the GUI
+Analyze tab: `colors`, `shots`, `classify`, `detect_objects`,
+`extract_text`, `transcribe`, `describe`, `cinematography`,
+`face_embeddings`, `gaze`, `embeddings`, and `custom_query`. When using
+`custom_query`, pass the query text in the `query` argument.
 
 Every `start_*` returns immediately with `{task_id, status, poll_interval}`.
 The job runs in a background thread; the response payload is **not**

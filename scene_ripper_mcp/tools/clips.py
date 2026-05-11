@@ -77,6 +77,36 @@ async def list_clips(
             if clip.transcript:
                 clip_data["has_transcript"] = True
                 clip_data["transcript_preview"] = clip.get_transcript_text()[:100]
+            if clip.object_labels:
+                clip_data["object_labels"] = clip.object_labels[:10]
+            if clip.detected_objects:
+                clip_data["detected_object_labels"] = sorted(
+                    {d.get("label", "") for d in clip.detected_objects if d.get("label")}
+                )
+            if clip.person_count is not None:
+                clip_data["person_count"] = clip.person_count
+            if clip.description:
+                clip_data["description"] = clip.description[:500]
+                clip_data["description_model"] = clip.description_model
+            if clip.extracted_texts:
+                clip_data["extracted_text"] = clip.combined_text
+            if clip.custom_queries:
+                clip_data["custom_queries"] = clip.custom_queries
+            if clip.cinematography:
+                clip_data["cinematography"] = clip.cinematography.to_dict()
+            if clip.face_embeddings is not None:
+                clip_data["face_count"] = len(clip.face_embeddings)
+            if clip.gaze_category is not None:
+                clip_data["gaze"] = {
+                    "yaw": clip.gaze_yaw,
+                    "pitch": clip.gaze_pitch,
+                    "category": clip.gaze_category,
+                }
+            if clip.embedding is not None:
+                clip_data["embedding"] = {
+                    "model": clip.embedding_model,
+                    "dimension": len(clip.embedding),
+                }
             if clip.tags:
                 clip_data["tags"] = clip.tags
             if clip.notes:
@@ -103,6 +133,13 @@ async def filter_clips(
     project_path: Annotated[str, "Path to project file"],
     shot_type: Annotated[Optional[str], "Filter by shot type"] = None,
     has_speech: Annotated[Optional[bool], "Filter by speech presence"] = None,
+    has_description: Annotated[Optional[bool], "Filter by description presence"] = None,
+    has_objects: Annotated[Optional[bool], "Filter by object detection presence"] = None,
+    has_faces: Annotated[Optional[bool], "Filter by face detection presence"] = None,
+    gaze_category: Annotated[Optional[str], "Filter by gaze category"] = None,
+    has_text: Annotated[Optional[bool], "Filter by OCR text presence"] = None,
+    has_cinematography: Annotated[Optional[bool], "Filter by rich cinematography presence"] = None,
+    custom_query: Annotated[Optional[str], "Filter to latest matching custom query"] = None,
     min_duration: Annotated[Optional[float], "Minimum duration in seconds"] = None,
     max_duration: Annotated[Optional[float], "Maximum duration in seconds"] = None,
     tags: Annotated[Optional[list[str]], "Filter by tags (any match)"] = None,
@@ -155,6 +192,25 @@ async def filter_clips(
                 clip_has_speech = bool(clip.transcript and clip.get_transcript_text().strip())
                 if has_speech != clip_has_speech:
                     continue
+            if has_description is not None and has_description != bool(clip.description):
+                continue
+            if has_objects is not None and has_objects != bool(clip.detected_objects):
+                continue
+            if has_faces is not None and has_faces != bool(clip.face_embeddings):
+                continue
+            if gaze_category and clip.gaze_category != gaze_category:
+                continue
+            if has_text is not None and has_text != bool(clip.combined_text):
+                continue
+            if has_cinematography is not None and has_cinematography != bool(clip.cinematography):
+                continue
+            if custom_query:
+                matches = [
+                    q for q in (clip.custom_queries or [])
+                    if q.get("query") == custom_query
+                ]
+                if not matches or matches[-1].get("match") is not True:
+                    continue
             if min_duration is not None and duration < min_duration:
                 continue
             if max_duration is not None and duration > max_duration:
@@ -174,6 +230,15 @@ async def filter_clips(
                     "duration": duration,
                     "shot_type": clip.shot_type,
                     "has_transcript": bool(clip.transcript),
+                    "has_description": bool(clip.description),
+                    "has_objects": bool(clip.detected_objects),
+                    "person_count": clip.person_count,
+                    "has_faces": bool(clip.face_embeddings),
+                    "gaze_category": clip.gaze_category,
+                    "has_text": bool(clip.combined_text),
+                    "has_cinematography": bool(clip.cinematography),
+                    "has_embedding": bool(clip.embedding),
+                    "custom_queries": clip.custom_queries,
                     "tags": clip.tags,
                 }
             )
@@ -186,6 +251,13 @@ async def filter_clips(
                 "filters_applied": {
                     "shot_type": shot_type,
                     "has_speech": has_speech,
+                    "has_description": has_description,
+                    "has_objects": has_objects,
+                    "has_faces": has_faces,
+                    "gaze_category": gaze_category,
+                    "has_text": has_text,
+                    "has_cinematography": has_cinematography,
+                    "custom_query": custom_query,
                     "min_duration": min_duration,
                     "max_duration": max_duration,
                     "tags": tags,
@@ -259,6 +331,62 @@ async def get_clip_metadata(
                 "dominant_colors": (
                     [{"r": c[0], "g": c[1], "b": c[2]} for c in clip.dominant_colors]
                     if clip.dominant_colors
+                    else None
+                ),
+                "object_labels": clip.object_labels,
+                "detected_objects": clip.detected_objects,
+                "person_count": clip.person_count,
+                "description": clip.description,
+                "description_model": clip.description_model,
+                "description_frames": clip.description_frames,
+                "extracted_texts": (
+                    [text.to_dict() for text in clip.extracted_texts]
+                    if clip.extracted_texts
+                    else None
+                ),
+                "combined_text": clip.combined_text,
+                "custom_queries": clip.custom_queries,
+                "cinematography": (
+                    clip.cinematography.to_dict()
+                    if clip.cinematography
+                    else None
+                ),
+                "face_count": (
+                    len(clip.face_embeddings)
+                    if clip.face_embeddings is not None
+                    else None
+                ),
+                "faces": (
+                    [
+                        {
+                            "bbox": face.get("bbox"),
+                            "confidence": face.get("confidence"),
+                            **(
+                                {"frame_number": face["frame_number"]}
+                                if "frame_number" in face
+                                else {}
+                            ),
+                        }
+                        for face in clip.face_embeddings
+                    ]
+                    if clip.face_embeddings
+                    else None
+                ),
+                "gaze": (
+                    {
+                        "yaw": clip.gaze_yaw,
+                        "pitch": clip.gaze_pitch,
+                        "category": clip.gaze_category,
+                    }
+                    if clip.gaze_category is not None
+                    else None
+                ),
+                "embedding": (
+                    {
+                        "model": clip.embedding_model,
+                        "dimension": len(clip.embedding),
+                    }
+                    if clip.embedding is not None
                     else None
                 ),
             },

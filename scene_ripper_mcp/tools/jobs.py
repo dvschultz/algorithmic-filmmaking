@@ -496,6 +496,57 @@ def _make_analyze_runner(spine_fn_name: str, *, save_after: bool = True, **op_kw
     return runner
 
 
+async def _start_spine_analyze_job(
+    *,
+    ctx: Context,
+    project_path: str,
+    kind: str,
+    spine_fn_name: str,
+    clip_ids: Optional[list[str]],
+    idempotency_key: Optional[str],
+    args: Optional[dict] = None,
+    op_kwargs: Optional[dict] = None,
+) -> str:
+    """Validate project and enqueue a standard spine analysis job."""
+    from scene_ripper_mcp.security import validate_project_path
+    from core.project import MissingSourceError
+    from core.spine.project_io import load_with_mtime
+
+    valid, error, path = validate_project_path(project_path)
+    if not valid:
+        return json.dumps({"success": False, "error": error})
+
+    canonical = str(path)
+
+    try:
+        _project, mtime = load_with_mtime(path)
+    except MissingSourceError as exc:
+        return json.dumps(
+            {
+                "success": False,
+                "error": {"code": "source_files_missing", "message": str(exc)},
+            }
+        )
+
+    op_kwargs = op_kwargs or {}
+    runner_factory = _make_analyze_runner(spine_fn_name, **op_kwargs)
+    run = runner_factory(path, mtime, clip_ids)
+
+    payload = {"project_path": canonical, "clip_ids": clip_ids}
+    if args:
+        payload.update(args)
+
+    return _start_job(
+        ctx,
+        kind=kind,
+        args=payload,
+        project_path=canonical,
+        project_mtime_at_start=mtime,
+        idempotency_key=idempotency_key,
+        run=run,
+    )
+
+
 @mcp.tool()
 async def start_analyze_colors(
     project_path: Annotated[str, "Absolute path to .sceneripper project file"],
@@ -760,6 +811,228 @@ async def start_transcribe(
         project_mtime_at_start=mtime,
         idempotency_key=idempotency_key,
         run=run,
+    )
+
+
+@mcp.tool()
+async def start_analyze_classify(
+    project_path: Annotated[str, "Absolute path to .sceneripper project file"],
+    clip_ids: Annotated[Optional[list[str]], "Optional clip IDs (default: all clips)"] = None,
+    top_k: Annotated[int, "Maximum labels per clip"] = 5,
+    threshold: Annotated[float, "Minimum label confidence"] = 0.1,
+    idempotency_key: Annotated[Optional[str], "Optional idempotency key (max 255 chars)"] = None,
+    ctx: Context = None,
+) -> str:
+    """Start a job that classifies thumbnail content with ImageNet labels."""
+    return await _start_spine_analyze_job(
+        ctx=ctx,
+        project_path=project_path,
+        kind="analyze_classify",
+        spine_fn_name="classify_content",
+        clip_ids=clip_ids,
+        idempotency_key=idempotency_key,
+        args={"top_k": top_k, "threshold": threshold},
+        op_kwargs={"top_k": top_k, "threshold": threshold},
+    )
+
+
+@mcp.tool()
+async def start_detect_objects(
+    project_path: Annotated[str, "Absolute path to .sceneripper project file"],
+    clip_ids: Annotated[Optional[list[str]], "Optional clip IDs (default: all clips)"] = None,
+    confidence: Annotated[float, "Minimum detection confidence"] = 0.5,
+    detect_all: Annotated[bool, "Detect all objects, not only people"] = True,
+    idempotency_key: Annotated[Optional[str], "Optional idempotency key (max 255 chars)"] = None,
+    ctx: Context = None,
+) -> str:
+    """Start a job that detects objects and person counts on clip thumbnails."""
+    return await _start_spine_analyze_job(
+        ctx=ctx,
+        project_path=project_path,
+        kind="detect_objects",
+        spine_fn_name="detect_objects",
+        clip_ids=clip_ids,
+        idempotency_key=idempotency_key,
+        args={"confidence": confidence, "detect_all": detect_all},
+        op_kwargs={"confidence": confidence, "detect_all": detect_all},
+    )
+
+
+@mcp.tool()
+async def start_extract_text(
+    project_path: Annotated[str, "Absolute path to .sceneripper project file"],
+    clip_ids: Annotated[Optional[list[str]], "Optional clip IDs (default: all clips)"] = None,
+    num_keyframes: Annotated[int, "Keyframes to sample per clip (1-5)"] = 3,
+    use_vlm_fallback: Annotated[bool, "Use VLM fallback for weak OCR results"] = True,
+    vlm_model: Annotated[Optional[str], "Optional VLM model override"] = None,
+    vlm_only: Annotated[bool, "Skip OCR and use only VLM extraction"] = False,
+    idempotency_key: Annotated[Optional[str], "Optional idempotency key (max 255 chars)"] = None,
+    ctx: Context = None,
+) -> str:
+    """Start a job that extracts visible text from clips."""
+    op_kwargs = {
+        "num_keyframes": num_keyframes,
+        "use_vlm_fallback": use_vlm_fallback,
+        "vlm_model": vlm_model,
+        "vlm_only": vlm_only,
+    }
+    return await _start_spine_analyze_job(
+        ctx=ctx,
+        project_path=project_path,
+        kind="extract_text",
+        spine_fn_name="extract_text",
+        clip_ids=clip_ids,
+        idempotency_key=idempotency_key,
+        args=op_kwargs,
+        op_kwargs=op_kwargs,
+    )
+
+
+@mcp.tool()
+async def start_describe(
+    project_path: Annotated[str, "Absolute path to .sceneripper project file"],
+    clip_ids: Annotated[Optional[list[str]], "Optional clip IDs (default: all clips)"] = None,
+    tier: Annotated[Optional[str], "Model tier override: local or cloud"] = None,
+    prompt: Annotated[Optional[str], "Optional description prompt override"] = None,
+    idempotency_key: Annotated[Optional[str], "Optional idempotency key (max 255 chars)"] = None,
+    ctx: Context = None,
+) -> str:
+    """Start a job that generates VLM clip descriptions."""
+    return await _start_spine_analyze_job(
+        ctx=ctx,
+        project_path=project_path,
+        kind="describe",
+        spine_fn_name="describe",
+        clip_ids=clip_ids,
+        idempotency_key=idempotency_key,
+        args={"tier": tier, "prompt": prompt},
+        op_kwargs={"tier": tier, "prompt": prompt},
+    )
+
+
+@mcp.tool()
+async def start_analyze_cinematography(
+    project_path: Annotated[str, "Absolute path to .sceneripper project file"],
+    clip_ids: Annotated[Optional[list[str]], "Optional clip IDs (default: all clips)"] = None,
+    mode: Annotated[Optional[str], "Input mode override: frame or video"] = None,
+    model: Annotated[Optional[str], "Optional VLM model override"] = None,
+    idempotency_key: Annotated[Optional[str], "Optional idempotency key (max 255 chars)"] = None,
+    ctx: Context = None,
+) -> str:
+    """Start a job that runs rich cinematography analysis."""
+    return await _start_spine_analyze_job(
+        ctx=ctx,
+        project_path=project_path,
+        kind="analyze_cinematography",
+        spine_fn_name="cinematography",
+        clip_ids=clip_ids,
+        idempotency_key=idempotency_key,
+        args={"mode": mode, "model": model},
+        op_kwargs={"mode": mode, "model": model},
+    )
+
+
+@mcp.tool()
+async def start_detect_faces(
+    project_path: Annotated[str, "Absolute path to .sceneripper project file"],
+    clip_ids: Annotated[Optional[list[str]], "Optional clip IDs (default: all clips)"] = None,
+    sample_interval: Annotated[float, "Seconds between sampled frames"] = 1.0,
+    idempotency_key: Annotated[Optional[str], "Optional idempotency key (max 255 chars)"] = None,
+    ctx: Context = None,
+) -> str:
+    """Start a job that extracts face embeddings."""
+    return await _start_spine_analyze_job(
+        ctx=ctx,
+        project_path=project_path,
+        kind="detect_faces",
+        spine_fn_name="face_embeddings",
+        clip_ids=clip_ids,
+        idempotency_key=idempotency_key,
+        args={"sample_interval": sample_interval},
+        op_kwargs={"sample_interval": sample_interval},
+    )
+
+
+@mcp.tool()
+async def start_analyze_gaze(
+    project_path: Annotated[str, "Absolute path to .sceneripper project file"],
+    clip_ids: Annotated[Optional[list[str]], "Optional clip IDs (default: all clips)"] = None,
+    sample_interval: Annotated[float, "Seconds between sampled frames"] = 1.0,
+    idempotency_key: Annotated[Optional[str], "Optional idempotency key (max 255 chars)"] = None,
+    ctx: Context = None,
+) -> str:
+    """Start a job that estimates gaze direction."""
+    return await _start_spine_analyze_job(
+        ctx=ctx,
+        project_path=project_path,
+        kind="analyze_gaze",
+        spine_fn_name="gaze",
+        clip_ids=clip_ids,
+        idempotency_key=idempotency_key,
+        args={"sample_interval": sample_interval},
+        op_kwargs={"sample_interval": sample_interval},
+    )
+
+
+@mcp.tool()
+async def start_generate_embeddings(
+    project_path: Annotated[str, "Absolute path to .sceneripper project file"],
+    clip_ids: Annotated[Optional[list[str]], "Optional clip IDs (default: all clips)"] = None,
+    idempotency_key: Annotated[Optional[str], "Optional idempotency key (max 255 chars)"] = None,
+    ctx: Context = None,
+) -> str:
+    """Start a job that extracts DINOv2 visual embeddings."""
+    return await _start_spine_analyze_job(
+        ctx=ctx,
+        project_path=project_path,
+        kind="generate_embeddings",
+        spine_fn_name="embeddings",
+        clip_ids=clip_ids,
+        idempotency_key=idempotency_key,
+    )
+
+
+@mcp.tool()
+async def start_custom_query(
+    project_path: Annotated[str, "Absolute path to .sceneripper project file"],
+    query: Annotated[str, "Natural-language visual query to evaluate"],
+    clip_ids: Annotated[Optional[list[str]], "Optional clip IDs (default: all clips)"] = None,
+    tier: Annotated[Optional[str], "Model tier override: local or cloud"] = None,
+    idempotency_key: Annotated[Optional[str], "Optional idempotency key (max 255 chars)"] = None,
+    ctx: Context = None,
+) -> str:
+    """Start a job that evaluates a custom visual query against clips."""
+    return await _start_spine_analyze_job(
+        ctx=ctx,
+        project_path=project_path,
+        kind="custom_query",
+        spine_fn_name="custom_query",
+        clip_ids=clip_ids,
+        idempotency_key=idempotency_key,
+        args={"query": query, "tier": tier},
+        op_kwargs={"query": query, "tier": tier},
+    )
+
+
+@mcp.tool()
+async def start_analyze_clips(
+    project_path: Annotated[str, "Absolute path to .sceneripper project file"],
+    operations: Annotated[list[str], "UI analysis operation keys to run"],
+    clip_ids: Annotated[Optional[list[str]], "Optional clip IDs (default: all clips)"] = None,
+    query: Annotated[Optional[str], "Required when operations includes custom_query"] = None,
+    idempotency_key: Annotated[Optional[str], "Optional idempotency key (max 255 chars)"] = None,
+    ctx: Context = None,
+) -> str:
+    """Start one canonical job for any UI analysis operation list."""
+    return await _start_spine_analyze_job(
+        ctx=ctx,
+        project_path=project_path,
+        kind="analyze_clips",
+        spine_fn_name="analyze_clips",
+        clip_ids=clip_ids,
+        idempotency_key=idempotency_key,
+        args={"operations": operations, "query": query},
+        op_kwargs={"operations": operations, "query": query},
     )
 
 
