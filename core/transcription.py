@@ -254,6 +254,47 @@ def _resolve_backend(backend: str = "auto") -> str:
 
 
 @dataclass
+class WordTimestamp:
+    """A single word with start/end timestamps from forced alignment or word-level ASR.
+
+    Times are in the same frame of reference as the parent ``TranscriptSegment``
+    (clip-relative seconds when produced from per-clip transcription/alignment).
+
+    ``probability`` is optional because different backends surface different
+    confidence metrics: ``faster-whisper`` reports a per-word probability,
+    while forced aligners (e.g. ``ctc-forced-aligner``) emit a different
+    signal that may or may not be normalized into this field.
+    """
+
+    start: float  # clip-relative seconds
+    end: float
+    text: str
+    probability: Optional[float] = None
+
+    def to_dict(self) -> dict:
+        """Serialize to dictionary for JSON export."""
+        data: dict = {
+            "start": self.start,
+            "end": self.end,
+            "text": self.text,
+        }
+        if self.probability is not None:
+            data["probability"] = self.probability
+        return data
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "WordTimestamp":
+        """Deserialize from dictionary."""
+        probability = data.get("probability")
+        return cls(
+            start=data.get("start", 0.0),
+            end=data.get("end", 0.0),
+            text=data.get("text", ""),
+            probability=probability if probability is None else float(probability),
+        )
+
+
+@dataclass
 class TranscriptSegment:
     """A segment of transcribed speech."""
 
@@ -261,24 +302,59 @@ class TranscriptSegment:
     end_time: float
     text: str
     confidence: float = 0.0
+    # Word-level timestamps. ``None`` means "no word data surfaced yet" (legacy
+    # transcripts, or MLX transcripts before forced alignment runs). ``[]`` means
+    # "alignment ran and produced no words" (silence / instrumental). The two
+    # states are deliberately distinct and must not be conflated.
+    words: Optional[list[WordTimestamp]] = None
+    # ISO 639-1 detected language for this segment (e.g. ``"en"``). Populated
+    # from ``faster-whisper``'s ``info.language`` or MLX's ``result["language"]``.
+    # ``None`` only for transcripts produced before U1 (legacy project files).
+    language: Optional[str] = None
 
     def to_dict(self) -> dict:
         """Serialize to dictionary for JSON export."""
-        return {
+        data: dict = {
             "start_time": self.start_time,
             "end_time": self.end_time,
             "text": self.text,
             "confidence": self.confidence,
         }
+        # Only emit the new keys when they carry information so old project
+        # files stay byte-comparable after a round trip through code that
+        # didn't populate them.
+        if self.words is not None:
+            data["words"] = [w.to_dict() for w in self.words]
+        if self.language is not None:
+            data["language"] = self.language
+        return data
 
     @classmethod
     def from_dict(cls, data: dict) -> "TranscriptSegment":
-        """Deserialize from dictionary."""
+        """Deserialize from dictionary.
+
+        Back-compat: legacy segments lacking ``words`` and ``language`` keys
+        deserialize with ``words=None`` and ``language=None``. The distinction
+        between ``words=None`` (no data surfaced) and ``words=[]`` (alignment
+        ran, found nothing) is preserved.
+        """
+        if "words" in data:
+            raw_words = data["words"]
+            words: Optional[list[WordTimestamp]] = (
+                [WordTimestamp.from_dict(w) for w in raw_words]
+                if raw_words is not None
+                else None
+            )
+        else:
+            words = None
+
         return cls(
             start_time=data.get("start_time", 0.0),
             end_time=data.get("end_time", 0.0),
             text=data.get("text", ""),
             confidence=data.get("confidence", 0.0),
+            words=words,
+            language=data.get("language"),
         )
 
 
@@ -426,6 +502,33 @@ def transcribe_video(
     return _transcribe_video_faster_whisper(video_path, model_name, language, progress_callback)
 
 
+def _build_word_timestamps(raw_words) -> Optional[list[WordTimestamp]]:
+    """Convert faster-whisper's per-segment .words iterable to WordTimestamp objects.
+
+    Returns ``None`` when the upstream segment did not surface word data
+    (defensive — ``word_timestamps=True`` should always populate this, but
+    callers should not crash when it's missing). Returns ``[]`` when the
+    segment surfaced an explicit empty list.
+    """
+    if raw_words is None:
+        return None
+    result: list[WordTimestamp] = []
+    for w in raw_words:
+        text = getattr(w, "word", None)
+        if text is None:
+            text = getattr(w, "text", "")
+        probability = getattr(w, "probability", None)
+        result.append(
+            WordTimestamp(
+                start=float(getattr(w, "start", 0.0)),
+                end=float(getattr(w, "end", 0.0)),
+                text=str(text).strip(),
+                probability=float(probability) if probability is not None else None,
+            )
+        )
+    return result
+
+
 def _transcribe_video_faster_whisper(
     video_path: Path,
     model_name: str,
@@ -449,6 +552,8 @@ def _transcribe_video_faster_whisper(
     if progress_callback:
         progress_callback(0.5, "Processing segments...")
 
+    detected_language = getattr(info, "language", None)
+
     results = []
     for segment in segments:
         results.append(
@@ -457,6 +562,8 @@ def _transcribe_video_faster_whisper(
                 end_time=segment.end,
                 text=segment.text.strip(),
                 confidence=segment.avg_logprob,
+                words=_build_word_timestamps(getattr(segment, "words", None)),
+                language=detected_language,
             )
         )
 
@@ -600,6 +707,8 @@ def transcribe_clip(
             vad_filter=True,
         )
 
+        detected_language = getattr(info, "language", None)
+
         results = []
         for segment in segments:
             results.append(
@@ -608,6 +717,8 @@ def transcribe_clip(
                     end_time=segment.end,
                     text=segment.text.strip(),
                     confidence=segment.avg_logprob,
+                    words=_build_word_timestamps(getattr(segment, "words", None)),
+                    language=detected_language,
                 )
             )
 
@@ -633,10 +744,14 @@ def _parse_mlx_result(result: dict) -> list[TranscriptSegment]:
             standard Whisper HOP_LENGTH=160, SAMPLE_RATE=16000).
 
     Returns:
-        List of TranscriptSegment objects
+        List of TranscriptSegment objects. ``language`` is populated from
+        ``result["language"]`` (previously discarded); ``words`` is left as
+        ``None`` — U2's forced-alignment pass fills it in.
     """
     # Whisper mel frames → seconds: frames / (SAMPLE_RATE / HOP_LENGTH)
     _FRAMES_PER_SECOND = 100.0  # 16000 / 160
+
+    detected_language = result.get("language")
 
     segments_out = []
     for seg in result.get("segments", []):
@@ -648,6 +763,8 @@ def _parse_mlx_result(result: dict) -> list[TranscriptSegment]:
                     end_time=seg.get("end", 0.0),
                     text=seg.get("text", "").strip(),
                     confidence=0.0,
+                    words=None,
+                    language=detected_language,
                 )
             )
         elif isinstance(seg, (list, tuple)) and len(seg) >= 3:
@@ -658,6 +775,8 @@ def _parse_mlx_result(result: dict) -> list[TranscriptSegment]:
                     end_time=float(seg[1]) / _FRAMES_PER_SECOND,
                     text=str(seg[2]).strip(),
                     confidence=0.0,
+                    words=None,
+                    language=detected_language,
                 )
             )
         else:
