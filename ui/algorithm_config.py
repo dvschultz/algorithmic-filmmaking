@@ -8,7 +8,7 @@ macOS can hit a CoreText sbix→ImageIO crash (EXC_BAD_ACCESS at 0xbad4007
 inside CopyEmojiImage); SVG icons will replace this field in a later pass.
 """
 
-CATEGORY_ORDER = ["All", "Arrange", "Find", "Connect", "Audio", "Text", "Word", "LLM", "Experimental"]
+CATEGORY_ORDER = ["All", "Arrange", "Find", "Connect", "Audio", "Text"]
 
 ALGORITHM_CONFIG = {
     "color": {
@@ -199,7 +199,7 @@ ALGORITHM_CONFIG = {
         "allow_duplicates": False,
         "required_analysis": ["transcription_with_words"],
         "is_dialog": True,
-        "categories": ["word", "experimental"],
+        "categories": ["text"],
     },
     "word_llm_composer": {
         "icon": "",
@@ -211,7 +211,7 @@ ALGORITHM_CONFIG = {
         # Ollama health is checked at dialog open and inside the worker.
         "required_analysis": ["transcription_with_words"],
         "is_dialog": True,
-        "categories": ["word", "experimental", "llm"],
+        "categories": ["text"],
     },
 }
 

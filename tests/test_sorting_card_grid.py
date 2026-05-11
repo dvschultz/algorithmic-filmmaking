@@ -14,12 +14,12 @@ app = QApplication.instance() or QApplication(sys.argv)
 
 
 EXPECTED_COUNTS = {
-    "All": 21,
+    "All": 23,
     "Arrange": 10,  # +1 for cassette_tape
     "Find": 4,
     "Connect": 6,  # +1 for free_association
     "Audio": 4,  # +1 for cassette_tape
-    "Text": 3,  # +1 for free_association
+    "Text": 6,  # exquisite_corpus, storyteller, free_association, reference_guided, word_sequencer, word_llm_composer
 }
 
 ARRANGE_KEYS = {
@@ -28,7 +28,14 @@ ARRANGE_KEYS = {
     "cassette_tape",
 }
 
-TEXT_KEYS = {"exquisite_corpus", "storyteller", "free_association"}
+TEXT_KEYS = {
+    "exquisite_corpus",
+    "storyteller",
+    "free_association",
+    "reference_guided",
+    "word_sequencer",
+    "word_llm_composer",
+}
 
 
 def _visible_keys(grid: SortingCardGrid) -> set[str]:
@@ -87,9 +94,9 @@ class TestCategoryFiltering:
 
     def test_reflow_text_to_all(self):
         self.grid.set_category("Text")
-        assert len(_visible_keys(self.grid)) == 3
+        assert len(_visible_keys(self.grid)) == 6
         self.grid.set_category("All")
-        assert len(_visible_keys(self.grid)) == 21
+        assert len(_visible_keys(self.grid)) == 23
 
     def test_selection_cleared_on_hidden_card(self):
         # Select a card in Arrange
