@@ -685,6 +685,10 @@ class WordLLMComposerDialog(QDialog):
             ctrl.cancel()
             cancelled = True
         if self._compose_worker is not None and self._compose_worker.isRunning():
+            # Mark the compose result as already handled *before* cancelling
+            # so a queued `sequence_ready` emission from the in-flight call
+            # cannot race the cancel and silently accept the dialog.
+            self._compose_finished_handled = True
             self._compose_worker.cancel()
             cancelled = True
         self._pending_after_alignment = False
