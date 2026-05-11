@@ -662,6 +662,10 @@ class WordLLMComposerDialog(QDialog):
         for source_id, src_clips in self._clips_by_source_id.items():
             self._source_status[source_id] = classify_source_alignment(src_clips)
         self._alignment_ctrl = None
+        # The controller mutated Clip.transcript[*].words in place; mark the
+        # project dirty so the new alignment data survives save.
+        if self._project is not None:
+            self._project.mark_dirty()
         # The clips' word data has changed — invalidate the inventory
         # cache so the next ``_refresh_validation`` rebuilds.
         self._invalidate_inventory_cache()
