@@ -105,7 +105,7 @@
       "features": ["stem_separation"]
     },
     "ctc_forced_aligner": {
-      "pip_specifier": "ctc-forced-aligner>=0.1.0,<1.0",
+      "pip_specifier": "ctc-forced-aligner @ git+https://github.com/MahmoudAshraf97/ctc-forced-aligner.git",
       "size_mb": 400,
       "depends_on": ["torch"],
       "features": ["word_alignment"]
