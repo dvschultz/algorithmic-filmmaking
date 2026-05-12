@@ -4854,6 +4854,10 @@ class MainWindow(QMainWindow):
             # Refresh sidebar if it's showing this clip
             if hasattr(self, 'clip_details_sidebar'):
                 self.clip_details_sidebar.refresh_shot_type_if_showing(clip_id, clip.shot_type)
+                self.clip_details_sidebar.refresh_cinematography_if_showing(
+                    clip_id,
+                    cinematography,
+                )
             self._mark_dirty()
             return
         # Try frame

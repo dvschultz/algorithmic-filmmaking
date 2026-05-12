@@ -11,8 +11,7 @@ Provides a dismissable sidebar displaying detailed clip information:
 """
 
 import logging
-from pathlib import Path
-from typing import Optional, TYPE_CHECKING
+from typing import Optional
 
 from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtWidgets import (
@@ -23,7 +22,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QScrollArea,
-    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -35,9 +33,6 @@ from ui.widgets.editable_label import EditableLabel
 from ui.widgets.editable_text_area import EditableTextArea
 from ui.widgets.shot_type_dropdown import ShotTypeDropdown
 from ui.widgets.editable_transcript import EditableTranscriptWidget
-
-if TYPE_CHECKING:
-    from core.transcription import TranscriptSegment
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +58,7 @@ class ClipDetailsSidebar(QDockWidget):
     - Editable shot type dropdown
     - Editable transcript with timestamps
     - Dominant colors display
+    - Rich cinematography analysis (read-only)
     - Extracted text from OCR (read-only)
     """
 
@@ -180,6 +176,20 @@ class ClipDetailsSidebar(QDockWidget):
         self.shot_type_dropdown = ShotTypeDropdown()
         self.shot_type_dropdown.value_changed.connect(self._on_shot_type_changed)
         content_layout.addWidget(self.shot_type_dropdown)
+
+        # Rich Analysis section (read-only)
+        self.cinematography_header = QLabel("Rich Analysis")
+        self._apply_section_header_style(self.cinematography_header)
+        content_layout.addWidget(self.cinematography_header)
+
+        self.cinematography_label = QLabel("")
+        self.cinematography_label.setWordWrap(True)
+        content_layout.addWidget(self.cinematography_label)
+
+        self.cinematography_meta_label = QLabel("")
+        self._apply_muted_style(self.cinematography_meta_label)
+        self.cinematography_meta_label.setVisible(False)
+        content_layout.addWidget(self.cinematography_meta_label)
 
         # Gaze section (read-only)
         self.gaze_header = QLabel("Gaze Direction")
@@ -311,6 +321,7 @@ class ClipDetailsSidebar(QDockWidget):
         self._apply_section_header_style(self.metadata_header)
         self._apply_section_header_style(self.colors_header)
         self._apply_section_header_style(self.shot_type_header)
+        self._apply_section_header_style(self.cinematography_header)
         self._apply_section_header_style(self.gaze_header)
         self._apply_section_header_style(self.description_header)
         self._apply_section_header_style(self.extracted_text_header)
@@ -322,10 +333,12 @@ class ClipDetailsSidebar(QDockWidget):
         self._apply_muted_style(self.source_label)
         self._apply_muted_style(self.description_meta_label)
         self._apply_muted_style(self.extracted_text_meta_label)
+        self._apply_muted_style(self.cinematography_meta_label)
         self._apply_muted_style(self.person_count_label)
 
         # Re-render data-driven sections with current clip
         if self._clip_ref:
+            self._update_cinematography(self._clip_ref.cinematography)
             self._update_gaze(self._clip_ref)
             self._update_colors(self._clip_ref.dominant_colors)
             self._update_custom_queries(self._clip_ref.custom_queries)
@@ -464,6 +477,9 @@ class ClipDetailsSidebar(QDockWidget):
         # Shot type (editable)
         self.shot_type_dropdown.setValue(clip.shot_type)
 
+        # Rich Analysis (read-only)
+        self._update_cinematography(clip.cinematography)
+
         # Gaze (read-only)
         self._update_gaze(clip)
 
@@ -583,6 +599,7 @@ class ClipDetailsSidebar(QDockWidget):
 
         # Clear other fields
         self.shot_type_dropdown.setValue(None)
+        self._set_cinematography_placeholder("Select a single clip to view details")
         self.gaze_header.setVisible(False)
         self.gaze_info_label.setVisible(False)
         self._update_colors(None)
@@ -644,6 +661,131 @@ class ClipDetailsSidebar(QDockWidget):
         """
         self.detected_objects_label.setText(text)
         self.detected_objects_label.setStyleSheet(f"color: {theme().text_muted}; font-style: italic;")
+
+    def _set_cinematography_placeholder(self, text: str):
+        """Set rich analysis label to placeholder style."""
+        self.cinematography_label.setText(text)
+        self.cinematography_label.setStyleSheet(
+            f"color: {theme().text_muted}; font-style: italic;"
+        )
+        self.cinematography_meta_label.setVisible(False)
+
+    def _has_cinematography_value(self, value) -> bool:
+        """Return True when a cinematography field is worth displaying."""
+        if value is None:
+            return False
+        normalized = str(value).strip().lower()
+        return normalized not in {"", "unknown", "n/a", "none"}
+
+    def _format_cinematography_value(self, value, *, preserve_case: bool = False) -> str:
+        """Format a cinematography enum-like value for display."""
+        text = str(value).strip()
+        if preserve_case:
+            return text
+        return text.replace("_", " ").replace("-", " ").title()
+
+    def _format_cinematography_parts(self, cinematography, attributes: list[str]) -> list[str]:
+        """Collect formatted values for a group of cinematography attributes."""
+        parts = []
+        for attribute in attributes:
+            value = getattr(cinematography, attribute, None)
+            if self._has_cinematography_value(value):
+                parts.append(self._format_cinematography_value(value))
+        return parts
+
+    def _update_cinematography(self, cinematography):
+        """Update the rich cinematography analysis display."""
+        if not cinematography:
+            self._set_cinematography_placeholder("Run Rich Analysis to analyze...")
+            return
+
+        lines = []
+
+        shot_size = getattr(cinematography, "shot_size", None)
+        if self._has_cinematography_value(shot_size):
+            shot_line = (
+                f"Shot Size: "
+                f"{self._format_cinematography_value(shot_size, preserve_case=True)}"
+            )
+            confidence = getattr(cinematography, "shot_size_confidence", 0.0) or 0.0
+            if confidence > 0:
+                shot_line += f" ({confidence:.0%})"
+            lines.append(shot_line)
+
+        camera_parts = self._format_cinematography_parts(
+            cinematography,
+            ["camera_angle", "angle_effect", "camera_position"],
+        )
+        dutch_tilt = getattr(cinematography, "dutch_tilt", None)
+        if self._has_cinematography_value(dutch_tilt):
+            camera_parts.append(
+                f"Dutch Tilt: {self._format_cinematography_value(dutch_tilt)}"
+            )
+        if camera_parts:
+            lines.append(f"Camera: {', '.join(camera_parts)}")
+
+        movement = getattr(cinematography, "camera_movement", None)
+        if self._has_cinematography_value(movement):
+            movement_text = self._format_cinematography_value(movement)
+            direction = getattr(cinematography, "movement_direction", None)
+            if self._has_cinematography_value(direction):
+                movement_text += f" {self._format_cinematography_value(direction).lower()}"
+            lines.append(f"Movement: {movement_text}")
+
+        composition_parts = self._format_cinematography_parts(
+            cinematography,
+            ["subject_position", "headroom", "lead_room", "balance"],
+        )
+        if composition_parts:
+            lines.append(f"Composition: {', '.join(composition_parts)}")
+
+        subject_parts = self._format_cinematography_parts(
+            cinematography,
+            ["subject_count", "subject_type"],
+        )
+        if subject_parts:
+            lines.append(f"Subject: {', '.join(subject_parts)}")
+
+        focus_parts = self._format_cinematography_parts(
+            cinematography,
+            ["focus_type", "background_type", "estimated_lens_type"],
+        )
+        if focus_parts:
+            lines.append(f"Focus/Lens: {', '.join(focus_parts)}")
+
+        lighting_parts = self._format_cinematography_parts(
+            cinematography,
+            ["lighting_style", "lighting_direction", "light_quality", "color_temperature"],
+        )
+        if lighting_parts:
+            lines.append(f"Lighting: {', '.join(lighting_parts)}")
+
+        pace_parts = self._format_cinematography_parts(
+            cinematography,
+            ["emotional_intensity", "suggested_pacing"],
+        )
+        if pace_parts:
+            lines.append(f"Mood/Pacing: {', '.join(pace_parts)}")
+
+        if not lines:
+            self._set_cinematography_placeholder("Rich analysis has no displayable fields")
+            return
+
+        self.cinematography_label.setText("\n".join(lines))
+        self.cinematography_label.setStyleSheet(f"color: {theme().text_primary};")
+
+        meta_parts = []
+        analysis_model = getattr(cinematography, "analysis_model", None)
+        if analysis_model:
+            meta_parts.append(f"Generated by {analysis_model}")
+        analysis_mode = getattr(cinematography, "analysis_mode", None)
+        if self._has_cinematography_value(analysis_mode):
+            meta_parts.append(f"{analysis_mode} mode")
+        if meta_parts:
+            self.cinematography_meta_label.setText(" · ".join(meta_parts))
+            self.cinematography_meta_label.setVisible(True)
+        else:
+            self.cinematography_meta_label.setVisible(False)
 
     def _update_custom_queries(self, custom_queries: Optional[list[dict]]):
         """Update the custom query section."""
@@ -896,6 +1038,7 @@ class ClipDetailsSidebar(QDockWidget):
         self.metadata_label.setText("")
         self._update_colors(None)
         self.shot_type_dropdown.setValue(None)
+        self._set_cinematography_placeholder("Run Rich Analysis to analyze...")
         self.gaze_header.setVisible(False)
         self.gaze_info_label.setVisible(False)
         self.transcript_edit.setSegments(None)
@@ -943,6 +1086,16 @@ class ClipDetailsSidebar(QDockWidget):
             self._block_editable_signals(True)
             self.shot_type_dropdown.setValue(shot_type)
             self._block_editable_signals(False)
+
+    def refresh_cinematography_if_showing(self, clip_id: str, cinematography):
+        """Refresh rich analysis if showing the given clip.
+
+        Lightweight refresh for cinematography analysis completion.
+        """
+        if self._clip_ref and self._clip_ref.id == clip_id:
+            logger.debug(f"Refreshing sidebar rich analysis for clip: {clip_id}")
+            self._clip_ref.cinematography = cinematography
+            self._update_cinematography(cinematography)
 
     def refresh_gaze_if_showing(self, clip_id: str):
         """Refresh the gaze direction display if showing the given clip.
