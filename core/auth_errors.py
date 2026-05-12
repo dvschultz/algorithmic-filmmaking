@@ -27,6 +27,7 @@ window opens settings rather than spawning a separate OAuthWorker.
 
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Optional
 
 # Re-export the error types so callers have a single import point.
@@ -40,12 +41,29 @@ from core.codex_client import (
 )
 
 
-# Stable category strings — U5's re-auth dialog branches on these.
-CATEGORY_TOKEN_REQUIRED = "token_required"
-CATEGORY_TOKEN_EXPIRED = "token_expired"
-CATEGORY_QUOTA_EXCEEDED = "quota_exceeded"
-CATEGORY_CODEX_BACKEND = "codex_backend"
-CATEGORY_NONE = "none"
+class AuthErrorCategory(StrEnum):
+    """Stable category strings U5's re-auth dialog branches on.
+
+    StrEnum (Python 3.11+) means ``AuthErrorCategory.TOKEN_REQUIRED ==
+    "token_required"`` is True, so any existing string-comparison
+    callers keep working unchanged. Matches the precedent set by
+    ``core.update_models.UpdateChannel``.
+    """
+
+    TOKEN_REQUIRED = "token_required"
+    TOKEN_EXPIRED = "token_expired"
+    QUOTA_EXCEEDED = "quota_exceeded"
+    CODEX_BACKEND = "codex_backend"
+    NONE = "none"
+
+
+# Backwards-compatible module-level constant aliases. Callers that
+# import the bare names keep working; new code prefers the enum.
+CATEGORY_TOKEN_REQUIRED = AuthErrorCategory.TOKEN_REQUIRED
+CATEGORY_TOKEN_EXPIRED = AuthErrorCategory.TOKEN_EXPIRED
+CATEGORY_QUOTA_EXCEEDED = AuthErrorCategory.QUOTA_EXCEEDED
+CATEGORY_CODEX_BACKEND = AuthErrorCategory.CODEX_BACKEND
+CATEGORY_NONE = AuthErrorCategory.NONE
 
 
 def classify_subscription_error(exc: BaseException) -> str:
@@ -102,6 +120,7 @@ def user_message_for_category(category: str, raw_message: Optional[str] = None) 
 
 
 __all__ = [
+    "AuthErrorCategory",
     "CATEGORY_TOKEN_REQUIRED",
     "CATEGORY_TOKEN_EXPIRED",
     "CATEGORY_QUOTA_EXCEEDED",

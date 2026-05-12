@@ -40,14 +40,29 @@ Codex endpoint differs.
 from __future__ import annotations
 
 import logging
-import re
 from typing import Optional, Tuple
 
 import httpx
 
 from core.spine.chatgpt_auth import CODEX_COMPLETION_ENDPOINT
+from core.spine.log_redaction import redact_bearer_tokens as _sanitize_for_log
 
 logger = logging.getLogger(__name__)
+
+
+# Module-level httpx client reused across calls so a batch of N analyses
+# in subscription mode shares one TLS handshake + one HTTP/1.1 keepalive
+# connection instead of paying ~100-300ms per clip on cold TLS. Lazily
+# created on first call; closed by Python's atexit cleanup.
+_shared_client: Optional[httpx.Client] = None
+
+
+def _get_shared_client() -> httpx.Client:
+    """Return the module-level httpx.Client, creating it on first use."""
+    global _shared_client
+    if _shared_client is None:
+        _shared_client = httpx.Client()
+    return _shared_client
 
 
 # --- Errors -----------------------------------------------------------------
@@ -144,28 +159,6 @@ def coerce_model_for_codex(model: str) -> str:
             return target
     # Non-prefixed gpt-* models pass through.
     return model
-
-
-# --- Bearer-token redaction -------------------------------------------------
-
-
-_AUTHORIZATION_PATTERN = re.compile(
-    r"(?i)(authorization\s*[:=]\s*bearer\s+)\S+"
-)
-
-
-def _sanitize_for_log(text: str) -> str:
-    """Redact bearer-token values from any free-form text.
-
-    Best-effort: matches the common ``Authorization: Bearer <token>``
-    pattern (case insensitive). Always run on any string that might
-    transit through a logger or an Exception message — httpx error
-    strings, in particular, can include the full request representation
-    with headers.
-    """
-    if not text:
-        return text
-    return _AUTHORIZATION_PATTERN.sub(r"\1[REDACTED]", text)
 
 
 # --- Low-level HTTP helper --------------------------------------------------
@@ -290,11 +283,8 @@ def complete(
     """
     coerced_model = coerce_model_for_codex(model)
     payload = {"model": coerced_model, "messages": messages, **kwargs}
-    if client is None:
-        with httpx.Client() as owned:
-            raw = _post_completion(owned, token_blob=token_blob, payload=payload)
-    else:
-        raw = _post_completion(client, token_blob=token_blob, payload=payload)
+    active_client = client if client is not None else _get_shared_client()
+    raw = _post_completion(active_client, token_blob=token_blob, payload=payload)
     return _wrap_response(raw)
 
 

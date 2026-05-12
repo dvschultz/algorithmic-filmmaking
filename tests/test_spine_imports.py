@@ -38,6 +38,7 @@ SPINE_MODULES: tuple[str, ...] = (
     "core.spine.exports",
     "core.spine.frames",
     "core.spine.glossary",
+    "core.spine.log_redaction",
     "core.spine.project_save",
     "core.spine.queries",
     "core.spine.sequence_analysis",

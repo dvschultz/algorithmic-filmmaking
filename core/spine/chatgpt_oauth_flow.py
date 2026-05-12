@@ -65,6 +65,7 @@ from core.spine.chatgpt_auth import (
     SCOPES,
     TOKEN_ENDPOINT,
 )
+from core.spine.log_redaction import redact_bearer_tokens as _redact_authorization
 
 logger = logging.getLogger(__name__)
 
@@ -312,6 +313,13 @@ class _LoopbackHandler(http.server.BaseHTTPRequestHandler):
 class _LoopbackServer(http.server.HTTPServer):
     """HTTPServer subclass that holds the single captured result."""
 
+    # ``OAuthWorker._run_listener_with_cancellation`` (U4) wraps the
+    # listener in short slices to make user cancellation observable, so
+    # the server is bound and torn down repeatedly during one flow.
+    # ``SO_REUSEADDR`` lets the rebind succeed inside the kernel's
+    # TIME_WAIT window instead of failing spuriously a few seconds in.
+    allow_reuse_address = True
+
     def __init__(self, server_address, RequestHandlerClass):
         super().__init__(server_address, RequestHandlerClass)
         self.result_code: Optional[str] = None
@@ -373,18 +381,6 @@ def run_loopback_listener(
 
 
 # --- Token exchange ----------------------------------------------------------
-
-
-def _redact_authorization(message: str) -> str:
-    """Best-effort redaction of bearer tokens in error messages."""
-    # Match common Authorization header patterns; replace value half.
-    import re
-
-    return re.sub(
-        r"(?i)(authorization\s*[:=]\s*bearer\s+)\S+",
-        r"\1[REDACTED]",
-        message,
-    )
 
 
 def _post_token_endpoint(

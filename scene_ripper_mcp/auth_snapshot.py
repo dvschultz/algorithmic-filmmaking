@@ -63,16 +63,17 @@ def take_auth_snapshot() -> AuthSnapshot:
     subsequent LLM call.
     """
     from core.settings import get_chatgpt_oauth_token, load_settings
+    from core.spine.chatgpt_auth import AuthMode
 
     settings = load_settings()
-    if settings.auth_mode != "subscription":
-        return AuthSnapshot(auth_mode="api_key", access_token=None)
+    if settings.auth_mode != AuthMode.SUBSCRIPTION:
+        return AuthSnapshot(auth_mode=AuthMode.API_KEY.value, access_token=None)
     blob = get_chatgpt_oauth_token()
     if not blob:
-        return AuthSnapshot(auth_mode="subscription", access_token=None)
+        return AuthSnapshot(auth_mode=AuthMode.SUBSCRIPTION.value, access_token=None)
     access_token = blob.get("access_token")
     return AuthSnapshot(
-        auth_mode="subscription",
+        auth_mode=AuthMode.SUBSCRIPTION.value,
         access_token=access_token if isinstance(access_token, str) else None,
     )
 

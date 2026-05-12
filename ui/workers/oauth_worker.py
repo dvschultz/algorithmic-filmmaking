@@ -38,6 +38,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from enum import StrEnum
 from typing import Optional
 
 from PySide6.QtCore import Signal
@@ -47,14 +48,27 @@ from ui.workers.base import CancellableWorker
 logger = logging.getLogger(__name__)
 
 
-# Auth failure categories surfaced to the settings dialog. Stable strings —
-# the dialog branches on the value, so keep them consistent with the U5
-# error-path test scenarios.
-AUTH_FAILED_CANCELLED = "cancelled"
-AUTH_FAILED_TIMEOUT = "timeout"
-AUTH_FAILED_NETWORK = "network"
-AUTH_FAILED_REJECTED = "rejected"
-AUTH_FAILED_MALFORMED = "malformed"
+class OAuthFailureCategory(StrEnum):
+    """OAuth failure categories the settings dialog branches on.
+
+    StrEnum (Python 3.11+) so ``category == "cancelled"`` continues to
+    work for the existing string-comparison call sites. Matches the
+    precedent set by ``core.update_models.UpdateChannel``.
+    """
+
+    CANCELLED = "cancelled"
+    TIMEOUT = "timeout"
+    NETWORK = "network"
+    REJECTED = "rejected"
+    MALFORMED = "malformed"
+
+
+# Backwards-compatible module-level constant aliases.
+AUTH_FAILED_CANCELLED = OAuthFailureCategory.CANCELLED
+AUTH_FAILED_TIMEOUT = OAuthFailureCategory.TIMEOUT
+AUTH_FAILED_NETWORK = OAuthFailureCategory.NETWORK
+AUTH_FAILED_REJECTED = OAuthFailureCategory.REJECTED
+AUTH_FAILED_MALFORMED = OAuthFailureCategory.MALFORMED
 
 
 class OAuthWorker(CancellableWorker):

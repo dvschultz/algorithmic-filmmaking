@@ -67,6 +67,7 @@ from core.settings import (
     set_chatgpt_oauth_token,
     clear_chatgpt_oauth_token,
 )
+from core.spine.chatgpt_auth import AuthMode
 from core.llm_client import get_provider_models
 from core.update_models import UpdateChannel
 from ui.theme import theme, UISizes
@@ -324,7 +325,8 @@ class SettingsDialog(QDialog):
         # _oauth_in_progress mirrors OAuthWorker's _finished_handled guard
         # at the dialog level — gates the Sign In button, the auth-mode
         # radios, and the OK button while a flow is running.
-        self._oauth_worker = None
+        # _has_oauth_token is cached from the keyring at load time to keep
+        # _refresh_signin_row / _refresh_ok_gate off the keyring read path.
         self._oauth_in_progress = False
         self._has_oauth_token = False
 
@@ -1329,8 +1331,8 @@ class SettingsDialog(QDialog):
         )
         worker.auth_complete.connect(self._on_auth_complete, Qt.UniqueConnection)
         worker.auth_failed.connect(self._on_auth_failed, Qt.UniqueConnection)
-        # Keep a reference so the QThread isn't garbage-collected mid-run.
-        self._oauth_worker = worker
+        # Worker stays alive because parent=self gives Qt ownership of it;
+        # no explicit reference field needed.
         self._oauth_in_progress = True
         self.signin_status_lbl.setText("Opening browser…")
         self._refresh_signin_row()
@@ -2132,7 +2134,7 @@ class SettingsDialog(QDialog):
         # identity row reflects whether a token blob is in keyring.
         token_blob = get_chatgpt_oauth_token()
         self._has_oauth_token = token_blob is not None
-        if self.settings.auth_mode == "subscription":
+        if self.settings.auth_mode == AuthMode.SUBSCRIPTION:
             self.auth_mode_subscription_radio.setChecked(True)
         else:
             self.auth_mode_apikey_radio.setChecked(True)
@@ -2280,9 +2282,9 @@ class SettingsDialog(QDialog):
 
         # Auth mode — the radio is the source of truth in the dialog.
         if self.auth_mode_subscription_radio.isChecked():
-            self.settings.auth_mode = "subscription"
+            self.settings.auth_mode = AuthMode.SUBSCRIPTION.value
         else:
-            self.settings.auth_mode = "api_key"
+            self.settings.auth_mode = AuthMode.API_KEY.value
         self.settings.youtube_results_count = self.youtube_results_spin.value()
         self.settings.youtube_parallel_downloads = self.youtube_parallel_spin.value()
 

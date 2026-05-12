@@ -42,7 +42,7 @@ import asyncio
 import threading
 import time
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from typing import Optional, Tuple
 
 
@@ -69,12 +69,16 @@ REFRESH_LOCK: threading.Lock = threading.Lock()
 REFRESH_LOCK_ASYNC: asyncio.Lock = asyncio.Lock()
 
 
-class AuthMode(str, Enum):
+class AuthMode(StrEnum):
     """User's selected authentication mode for LLM features.
 
-    Inherits from ``str`` so callers can compare directly with the JSON
-    string values stored in ``Settings.auth_mode`` without explicit
-    conversion (``AuthMode.API_KEY == "api_key"`` is True).
+    ``StrEnum`` (Python 3.11+) makes member values plain strings — so
+    ``AuthMode.API_KEY == "api_key"`` and ``str(AuthMode.API_KEY) ==
+    "api_key"`` are both True. This lets callers compare directly with
+    the JSON string values stored in ``Settings.auth_mode`` without
+    explicit conversion. Matches the repo precedent in
+    ``core.update_models`` (UpdateChannel, UpdateAvailability,
+    UpdateCapability).
     """
 
     API_KEY = "api_key"
