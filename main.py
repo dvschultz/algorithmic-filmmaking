@@ -43,6 +43,25 @@ def _setup_frozen_environment():
         import subprocess
         subprocess._USE_POSIX_SPAWN = False
 
+    # Inject the bundled bin directory into the process-global PATH so
+    # libraries that shell out by bare binary name (e.g.
+    # ``lightning-whisper-mlx`` calling ``subprocess.run(["ffmpeg", ...])``
+    # via PATH lookup) can find the bundled tools. Our own subprocess
+    # calls already use ``get_subprocess_env()`` which augments PATH for
+    # one-shot calls, but third-party libraries don't go through that
+    # helper — they use ``os.environ`` directly. Without this, the
+    # bundled app can't transcribe because MLX whisper's internal ffmpeg
+    # call falls back to system PATH and fails with
+    # ``FileNotFoundError: 'ffmpeg'``.
+    from core.paths import get_bundled_bin_dir
+    bundled_bin = str(get_bundled_bin_dir())
+    if bundled_bin:
+        existing_path = os.environ.get("PATH", "")
+        path_parts = existing_path.split(os.pathsep) if existing_path else []
+        if bundled_bin not in path_parts:
+            path_parts.insert(0, bundled_bin)
+            os.environ["PATH"] = os.pathsep.join(path_parts)
+
     ensure_app_dirs()
 
     # Add managed packages dir to sys.path so on-demand packages are importable
