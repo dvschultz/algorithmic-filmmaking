@@ -31,7 +31,18 @@ def _setup_frozen_environment():
     - Creates application directories (bin, packages, logs)
     - Adds managed packages dir to sys.path for on-demand packages
     - Configures file-based logging to ~/Library/Logs/Scene Ripper/
+    - On macOS: disables posix_spawn for subprocess so background-thread
+      subprocess.run() calls don't randomly fail with FileNotFoundError
+      on absolute paths to bundled binaries.
     """
+    # macOS PyInstaller bundles + thread-pool subprocess.run() = sporadic
+    # FileNotFoundError even with an existing, accessible absolute path.
+    # Force fork+exec (instead of posix_spawn) globally before any thread
+    # is created. Slightly slower per spawn; reliable across threading.
+    if sys.platform == "darwin":
+        import subprocess
+        subprocess._USE_POSIX_SPAWN = False
+
     ensure_app_dirs()
 
     # Add managed packages dir to sys.path so on-demand packages are importable

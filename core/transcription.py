@@ -736,7 +736,21 @@ def transcribe_clip(
         return results
 
     except FileNotFoundError as e:
-        raise FFmpegNotFoundError() from e
+        # subprocess.run raises FileNotFoundError when it cannot *exec* the
+        # binary — not when an input file is missing. The historical remap
+        # to FFmpegNotFoundError masks two distinct failure modes:
+        # (1) ffmpeg genuinely missing from disk, and (2) ffmpeg exists but
+        # exec blocked (macOS hardened runtime / quarantine / posix_spawn
+        # glitch from worker threads in PyInstaller bundles). Disambiguate.
+        if not Path(str(_ffmpeg)).is_file():
+            raise FFmpegNotFoundError() from e
+        raise TranscriptionError(
+            f"FFmpeg exists at {_ffmpeg} but subprocess.run failed to "
+            f"exec it: {e}. On macOS this usually means the .app bundle "
+            f"is quarantined or the bundled ffmpeg lacks exec entitlements. "
+            f"Try: xattr -dr com.apple.quarantine "
+            f"'/Applications/Scene Ripper.app' — or run from source."
+        ) from e
     except subprocess.CalledProcessError as e:
         logger.warning(f"FFmpeg failed to extract audio: {e.stderr.decode() if e.stderr else e}")
         return []
