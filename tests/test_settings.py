@@ -34,6 +34,10 @@ from core.settings import (
     ENV_CONFIG_PATH,
     ENV_SENSITIVITY,
     ENV_WHISPER_MODEL,
+    ENV_GROQ_API_KEY,
+    get_groq_api_key,
+    set_groq_api_key,
+    is_api_key_from_env,
 )
 
 
@@ -225,6 +229,32 @@ class TestKeyringCompatibility:
             LEGACY_KEYRING_SERVICES[0],
             "youtube_api_key",
         )
+
+
+class TestGroqAPIKey:
+    """Tests for Groq API key storage and environment override behavior."""
+
+    def test_get_groq_api_key_prefers_environment(self):
+        with patch.dict(os.environ, {ENV_GROQ_API_KEY: "env-groq-key"}):
+            assert get_groq_api_key() == "env-groq-key"
+            assert is_api_key_from_env("groq")
+
+    def test_get_groq_api_key_falls_back_to_keyring(self):
+        with patch.dict(os.environ, {}, clear=True):
+            with patch(
+                "core.settings._get_provider_api_key_from_keyring",
+                return_value="keyring-groq-key",
+            ) as get_key:
+                assert get_groq_api_key() == "keyring-groq-key"
+                get_key.assert_called_once_with("groq_api_key")
+
+    def test_set_groq_api_key_uses_keyring(self):
+        with patch(
+            "core.settings._set_provider_api_key_in_keyring",
+            return_value=True,
+        ) as set_key:
+            assert set_groq_api_key("gsk-test") is True
+            set_key.assert_called_once_with("groq_api_key", "gsk-test")
 
 
 class TestEnvironmentVariables:

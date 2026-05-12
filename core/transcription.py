@@ -208,11 +208,9 @@ def is_mlx_whisper_available() -> bool:
         if platform.machine() != "arm64" or platform.system() != "Darwin":
             _mlx_whisper_available = False
         else:
-            try:
-                import lightning_whisper_mlx  # noqa: F401
-                _mlx_whisper_available = True
-            except ImportError:
-                _mlx_whisper_available = False
+            _mlx_whisper_available = (
+                importlib.util.find_spec("lightning_whisper_mlx") is not None
+            )
     return _mlx_whisper_available
 
 
@@ -836,15 +834,20 @@ def _transcribe_cloud_groq(
     Returns:
         List of TranscriptSegment objects
     """
-    import os
+    from core.settings import get_groq_api_key
 
-    api_key = os.environ.get("GROQ_API_KEY")
+    api_key = get_groq_api_key()
     if not api_key:
         logger.error("GROQ_API_KEY not set; cannot use Groq transcription")
         raise TranscriptionError(
-            "GROQ_API_KEY environment variable not set. "
-            "Get a key at https://console.groq.com"
+            "Groq API key is not configured. Add it in Settings > API Keys "
+            "or set GROQ_API_KEY. Get a key at https://console.groq.com"
         )
+
+    # LiteLLM's Groq transcription adapter reads GROQ_API_KEY from the
+    # environment. Mirror the keyring value into this process without writing it
+    # to the JSON settings file.
+    os.environ.setdefault("GROQ_API_KEY", api_key)
 
     if progress_callback:
         progress_callback(0.1, "Preparing audio for Groq cloud transcription...")

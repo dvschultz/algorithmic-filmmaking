@@ -34,6 +34,7 @@ KEYRING_OPENAI_API_KEY = "openai_api_key"
 KEYRING_GEMINI_API_KEY = "gemini_api_key"
 KEYRING_OPENROUTER_API_KEY = "openrouter_api_key"
 KEYRING_REPLICATE_API_KEY = "replicate_api_key"
+KEYRING_GROQ_API_KEY = "groq_api_key"
 
 # Config schema version
 CONFIG_VERSION = "1.0"
@@ -60,6 +61,7 @@ ENV_OPENAI_API_KEY = "OPENAI_API_KEY"
 ENV_GEMINI_API_KEY = "GEMINI_API_KEY"
 ENV_OPENROUTER_API_KEY = "OPENROUTER_API_KEY"
 ENV_REPLICATE_API_KEY = "REPLICATE_API_TOKEN"
+ENV_GROQ_API_KEY = "GROQ_API_KEY"
 
 
 def _get_api_key_from_keyring() -> str:
@@ -215,11 +217,23 @@ def set_replicate_api_key(api_key: str) -> bool:
     return _set_provider_api_key_in_keyring(KEYRING_REPLICATE_API_KEY, api_key)
 
 
+def get_groq_api_key() -> str:
+    """Get Groq API key with priority: env var > keyring."""
+    if api_key := os.environ.get(ENV_GROQ_API_KEY):
+        return api_key
+    return _get_provider_api_key_from_keyring(KEYRING_GROQ_API_KEY)
+
+
+def set_groq_api_key(api_key: str) -> bool:
+    """Store Groq API key in system keyring."""
+    return _set_provider_api_key_in_keyring(KEYRING_GROQ_API_KEY, api_key)
+
+
 def is_api_key_from_env(provider: str) -> bool:
     """Check if a provider's API key is set via environment variable.
 
     Args:
-        provider: Provider name (anthropic, openai, gemini, openrouter)
+        provider: Provider name (anthropic, openai, gemini, openrouter, replicate, groq)
 
     Returns:
         True if the API key is set via environment variable
@@ -230,6 +244,7 @@ def is_api_key_from_env(provider: str) -> bool:
         "gemini": ENV_GEMINI_API_KEY,
         "openrouter": ENV_OPENROUTER_API_KEY,
         "replicate": ENV_REPLICATE_API_KEY,
+        "groq": ENV_GROQ_API_KEY,
     }
     env_var = env_map.get(provider)
     return bool(env_var and os.environ.get(env_var))
@@ -239,7 +254,7 @@ def get_api_key_for_model(model: str) -> str:
     """Resolve the API key based on the LiteLLM model name's provider prefix.
 
     Inspects the model string for provider hints (gemini, claude/anthropic, gpt/openai,
-    openrouter) and returns the matching provider key. This lets callers route to a
+    groq, openrouter) and returns the matching provider key. This lets callers route to a
     cloud model that doesn't match the user's default `llm_provider` setting.
 
     Why: The Storyteller / Exquisite Corpus / Free Association sequencers pick their
@@ -260,6 +275,8 @@ def get_api_key_for_model(model: str) -> str:
         return get_anthropic_api_key()
     if "gpt" in m or m.startswith("openai/"):
         return get_openai_api_key()
+    if "groq" in m or m.startswith("groq/"):
+        return get_groq_api_key()
     if "openrouter" in m:
         return get_openrouter_api_key()
     return ""

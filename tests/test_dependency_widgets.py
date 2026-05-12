@@ -138,6 +138,30 @@ def test_description_gate_attempts_preferred_install_before_cpu_fallback(monkeyp
     assert prompts == ["describe_local"]
 
 
+def test_analysis_gate_prompts_alternate_when_preferred_install_fails(monkeypatch):
+    class Harness:
+        def __init__(self):
+            self.settings = SimpleNamespace(transcription_backend="auto")
+
+    prompts = []
+
+    monkeypatch.setattr(
+        "ui.main_window.get_operation_feature_candidates",
+        lambda *_args, **_kwargs: ["transcribe_mlx", "transcribe"],
+    )
+    monkeypatch.setattr(
+        "core.feature_registry.check_feature_ready",
+        lambda _feature: (False, ["package:missing"]),
+    )
+    monkeypatch.setattr(
+        "ui.widgets.dependency_widgets.prompt_feature_download",
+        lambda feature_name, *_args, **_kwargs: prompts.append(feature_name) or feature_name == "transcribe",
+    )
+
+    assert MainWindow._ensure_analysis_operation_available(Harness(), "transcribe") is True
+    assert prompts == ["transcribe_mlx", "transcribe"]
+
+
 def test_description_gate_uses_fresh_preferred_install_when_available(monkeypatch):
     class Harness:
         def __init__(self):
@@ -160,3 +184,21 @@ def test_description_gate_uses_fresh_preferred_install_when_available(monkeypatc
 
     assert MainWindow._ensure_analysis_operation_available(Harness(), "describe") is True
     assert prompts == []
+
+
+def test_groq_transcription_gate_requires_api_key(monkeypatch):
+    class Harness:
+        def __init__(self):
+            self.settings = SimpleNamespace(transcription_backend="groq")
+            self.status = []
+            self.status_bar = SimpleNamespace(showMessage=lambda message: self.status.append(message))
+
+    monkeypatch.setattr("core.settings.get_groq_api_key", lambda: "")
+
+    harness = Harness()
+
+    assert MainWindow._ensure_analysis_operation_available(harness, "transcribe") is False
+    assert harness.status == [
+        "Groq transcription selected but no Groq API key is configured. "
+        "Add it in Settings > API Keys."
+    ]

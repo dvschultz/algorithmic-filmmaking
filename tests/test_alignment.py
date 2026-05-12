@@ -243,6 +243,91 @@ class TestAlignWordsHappyPath(unittest.TestCase):
         ffmpeg_mock.assert_not_called()
         engine_mock.assert_not_called()
 
+    def test_ctc_target_too_long_retries_by_segment(self):
+        """Dense whole-clip text falls back to per-segment alignment."""
+        from core.analysis import alignment
+
+        segments = [
+            TranscriptSegment(
+                start_time=0.0, end_time=1.0, text="hello",
+                confidence=0.9, words=None, language="en",
+            ),
+            TranscriptSegment(
+                start_time=1.0, end_time=2.0, text="world",
+                confidence=0.9, words=None, language="en",
+            ),
+        ]
+        wavs = []
+        for _ in range(3):
+            handle = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+            handle.write(b"fake-wav")
+            handle.close()
+            wavs.append(Path(handle.name))
+
+        engine_outputs = [
+            RuntimeError("targets length is too long for CTC."),
+            [{"start": 0.1, "end": 0.4, "text": "hello", "score": 0.9}],
+            [{"start": 0.2, "end": 0.6, "text": "world", "score": 0.8}],
+        ]
+
+        try:
+            with patch.object(alignment, "extract_audio_to_wav", side_effect=wavs) as ffmpeg_mock, \
+                 patch.object(alignment, "_run_alignment_engine", side_effect=engine_outputs) as engine_mock:
+                words = alignment.align_words(str(self.audio_path), segments)
+        finally:
+            for wav in wavs:
+                wav.unlink(missing_ok=True)
+
+        self.assertEqual([w.text for w in words], ["hello", "world"])
+        self.assertAlmostEqual(words[0].start, 0.1)
+        self.assertAlmostEqual(words[1].start, 1.2)
+        self.assertEqual(ffmpeg_mock.call_count, 3)
+        ffmpeg_mock.assert_any_call(self.audio_path)
+        ffmpeg_mock.assert_any_call(self.audio_path, start_time=0.0, end_time=1.0)
+        ffmpeg_mock.assert_any_call(self.audio_path, start_time=1.0, end_time=2.0)
+        self.assertEqual(engine_mock.call_count, 3)
+
+    def test_ctc_target_too_long_segment_gets_approximate_words(self):
+        """A still-too-dense segment gets approximate word timings."""
+        from core.analysis import alignment
+
+        segments = [
+            TranscriptSegment(
+                start_time=0.0, end_time=1.0, text="dense dense dense",
+                confidence=0.9, words=None, language="en",
+            ),
+            TranscriptSegment(
+                start_time=1.0, end_time=2.0, text="ok",
+                confidence=0.9, words=None, language="en",
+            ),
+        ]
+        wavs = []
+        for _ in range(3):
+            handle = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+            handle.write(b"fake-wav")
+            handle.close()
+            wavs.append(Path(handle.name))
+
+        engine_outputs = [
+            RuntimeError("targets length is too long for CTC."),
+            RuntimeError("targets length is too long for CTC."),
+            [{"start": 0.0, "end": 0.3, "text": "ok", "score": 0.8}],
+        ]
+
+        try:
+            with patch.object(alignment, "extract_audio_to_wav", side_effect=wavs), \
+                 patch.object(alignment, "_run_alignment_engine", side_effect=engine_outputs):
+                words = alignment.align_words(str(self.audio_path), segments)
+        finally:
+            for wav in wavs:
+                wav.unlink(missing_ok=True)
+
+        self.assertEqual([w.text for w in words], ["dense", "dense", "dense", "ok"])
+        self.assertAlmostEqual(words[0].start, 0.0)
+        self.assertAlmostEqual(words[0].end, 1.0 / 3.0)
+        self.assertIsNone(words[0].probability)
+        self.assertAlmostEqual(words[-1].start, 1.0)
+
 
 class TestAlignWordsCleanup(unittest.TestCase):
     """Temp-file lifecycle around the engine call."""

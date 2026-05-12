@@ -693,6 +693,18 @@ class MainWindow(QMainWindow):
 
         return prompt_feature_download("video_download", self)
 
+    def _analysis_operation_configuration_error(self, op_key: str) -> Optional[str]:
+        """Return a user-facing configuration error for an operation, if any."""
+        if op_key == "transcribe" and getattr(self.settings, "transcription_backend", "auto") == "groq":
+            from core.settings import get_groq_api_key
+
+            if not get_groq_api_key():
+                return (
+                    "Groq transcription selected but no Groq API key is configured. "
+                    "Add it in Settings > API Keys."
+                )
+        return None
+
     def _ensure_analysis_operation_available(
         self,
         op_key: str,
@@ -701,6 +713,13 @@ class MainWindow(QMainWindow):
         description_tier: Optional[str] = None,
     ) -> bool:
         """Prompt for installable analysis dependencies when required."""
+        config_error = MainWindow._analysis_operation_configuration_error(self, op_key)
+        if config_error:
+            logger.warning(config_error)
+            if hasattr(self, "status_bar"):
+                self.status_bar.showMessage(config_error)
+            return False
+
         feature_candidates = get_operation_feature_candidates(
             op_key,
             self.settings,
@@ -730,7 +749,28 @@ class MainWindow(QMainWindow):
         available = prompt_feature_download(preferred_feature, self)
         if prompt_cache is not None:
             prompt_cache[preferred_feature] = available
-        return available or alternate_available
+        if available or alternate_available:
+            return True
+
+        for feature_name in feature_candidates[1:]:
+            if prompt_cache is not None and feature_name in prompt_cache:
+                if prompt_cache[feature_name]:
+                    return True
+                continue
+
+            ready, _ = check_feature_ready(feature_name)
+            if ready:
+                if prompt_cache is not None:
+                    prompt_cache[feature_name] = True
+                return True
+
+            available = prompt_feature_download(feature_name, self)
+            if prompt_cache is not None:
+                prompt_cache[feature_name] = available
+            if available:
+                return True
+
+        return False
 
     def _filter_available_analysis_operations(
         self,
@@ -3811,6 +3851,13 @@ class MainWindow(QMainWindow):
         # Pipeline entry points should prompt before launch, but keep a
         # non-interactive guard here so internal calls fail safely.
         from core.feature_registry import check_feature_ready
+
+        config_error = MainWindow._analysis_operation_configuration_error(self, "transcribe")
+        if config_error:
+            logger.warning("Transcription skipped: %s", config_error)
+            self.status_bar.showMessage(config_error)
+            self._on_analysis_phase_worker_finished("transcribe")
+            return
 
         feature_candidates = get_operation_feature_candidates("transcribe", self.settings)
         if feature_candidates and not any(check_feature_ready(name)[0] for name in feature_candidates):

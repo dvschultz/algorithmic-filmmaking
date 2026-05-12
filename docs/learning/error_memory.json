@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-05-05T02:47:21.599303+00:00",
+  "updated_at": "2026-05-12T04:22:42.685667+00:00",
   "patterns": [
     {
       "signature": "unknown-component|unknown-cause|linux-pyside6-distribution-packaging",
@@ -162,6 +162,37 @@
       ],
       "symptom_examples": [
         "macOS libmpv and PyAV load duplicate FFmpeg dylibs"
+      ],
+      "playbook_skill": null
+    },
+    {
+      "signature": "transcription_dependencies|transcribe_mlx_install_failed|auto_fallback_not_attempted",
+      "title": "Transcription Auto mode stuck on failed MLX install",
+      "problem_type": "runtime_error",
+      "occurrences": 1,
+      "first_seen": "2026-05-12T03:55:52.024896+00:00",
+      "last_seen": "2026-05-12T03:55:52.025089+00:00",
+      "solution_refs": [
+        "docs/solutions/runtime-errors/transcription-mlx-auto-fallback-groq-key-20260512.md"
+      ],
+      "symptom_examples": [
+        "Native pip install failed for lightning-whisper-mlx>=0.0.10,<1.0, tiktoken>=0.7.0,<0.8; Skipping analysis operations with unavailable dependencies: ['transcribe']"
+      ],
+      "playbook_skill": null
+    },
+    {
+      "signature": "forced_alignment|ctc_target_too_long|whole_clip_transcript_too_dense",
+      "title": "Forced alignment CTC target length exceeds audio emissions",
+      "problem_type": "runtime_error",
+      "occurrences": 2,
+      "first_seen": "2026-05-12T04:07:59.548590+00:00",
+      "last_seen": "2026-05-12T04:22:42.685588+00:00",
+      "solution_refs": [
+        "docs/solutions/runtime-errors/forced-alignment-ctc-target-too-long-20260512.md"
+      ],
+      "symptom_examples": [
+        "Forced alignment reported errors: targets length is too long for CTC.",
+        "Skipping forced alignment for transcript segment: target text is too long for the available audio"
       ],
       "playbook_skill": null
     }

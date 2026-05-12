@@ -34,10 +34,6 @@ from core.settings import (
     get_cache_size,
     format_size,
     is_from_environment,
-    get_env_overridden_settings,
-    QUALITY_PRESETS,
-    RESOLUTION_PRESETS,
-    FPS_PRESETS,
     ENV_YOUTUBE_API_KEY,
     ENV_CACHE_DIR,
     ENV_DOWNLOAD_DIR,
@@ -50,6 +46,7 @@ from core.settings import (
     ENV_GEMINI_API_KEY,
     ENV_OPENROUTER_API_KEY,
     ENV_REPLICATE_API_KEY,
+    ENV_GROQ_API_KEY,
     get_anthropic_api_key,
     set_anthropic_api_key,
     get_openai_api_key,
@@ -60,6 +57,8 @@ from core.settings import (
     set_openrouter_api_key,
     get_replicate_api_key,
     set_replicate_api_key,
+    get_groq_api_key,
+    set_groq_api_key,
     is_api_key_from_env,
 )
 from core.llm_client import get_provider_models
@@ -78,6 +77,12 @@ VLM_MODELS = [
     "gpt-5.4-nano",
     "claude-sonnet-4-6",
     "claude-haiku-4-5",
+]
+
+GROQ_TRANSCRIPTION_MODELS = [
+    "whisper-large-v3-turbo",
+    "distil-whisper-large-v3-en",
+    "whisper-large-v3",
 ]
 
 
@@ -268,6 +273,8 @@ class SettingsDialog(QDialog):
             export_fps=settings.export_fps,
             transcription_model=settings.transcription_model,
             transcription_language=settings.transcription_language,
+            transcription_backend=settings.transcription_backend,
+            transcription_cloud_model=settings.transcription_cloud_model,
             theme_preference=settings.theme_preference,
             youtube_api_key=settings.youtube_api_key,
             youtube_results_count=settings.youtube_results_count,
@@ -463,6 +470,26 @@ class SettingsDialog(QDialog):
         transcription_group = QGroupBox("Transcription")
         transcription_layout = QVBoxLayout(transcription_group)
 
+        # Backend selection
+        backend_layout = QHBoxLayout()
+        backend_layout.addWidget(QLabel("Backend:"))
+
+        self.transcription_backend_combo = QComboBox()
+        self.transcription_backend_combo.addItem("Auto - MLX on Apple Silicon, otherwise faster-whisper", "auto")
+        self.transcription_backend_combo.addItem("faster-whisper - Local CPU/CUDA", "faster-whisper")
+        self.transcription_backend_combo.addItem("MLX Whisper - Local Apple Silicon GPU", "mlx-whisper")
+        self.transcription_backend_combo.addItem("Groq - Cloud Whisper API", "groq")
+        self.transcription_backend_combo.setToolTip(
+            "Choose where transcription runs.\n"
+            "Groq uses the cloud and requires a Groq API key in Settings > API Keys."
+        )
+        self.transcription_backend_combo.currentIndexChanged.connect(
+            self._on_transcription_backend_changed
+        )
+        backend_layout.addWidget(self.transcription_backend_combo)
+
+        transcription_layout.addLayout(backend_layout)
+
         # Model selection
         model_layout = QHBoxLayout()
         self.whisper_model_lbl = QLabel("Whisper Model:")
@@ -482,6 +509,20 @@ class SettingsDialog(QDialog):
         model_layout.addWidget(self.transcription_model_combo)
 
         transcription_layout.addLayout(model_layout)
+
+        # Cloud model selection
+        cloud_model_layout = QHBoxLayout()
+        self.transcription_cloud_model_lbl = QLabel("Groq Model:")
+        cloud_model_layout.addWidget(self.transcription_cloud_model_lbl)
+
+        self.transcription_cloud_model_combo = QComboBox()
+        self.transcription_cloud_model_combo.addItems(GROQ_TRANSCRIPTION_MODELS)
+        self.transcription_cloud_model_combo.setToolTip(
+            "Groq Whisper model used when Backend is set to Groq."
+        )
+        cloud_model_layout.addWidget(self.transcription_cloud_model_combo)
+
+        transcription_layout.addLayout(cloud_model_layout)
 
         # Language selection
         lang_layout = QHBoxLayout()
@@ -1014,6 +1055,26 @@ class SettingsDialog(QDialog):
 
         llm_layout.addLayout(replicate_layout)
 
+        # Groq API Key
+        groq_layout = QHBoxLayout()
+        self.groq_api_key_lbl = QLabel("Groq:")
+        self.groq_api_key_lbl.setFixedWidth(100)
+        groq_layout.addWidget(self.groq_api_key_lbl)
+
+        self.groq_api_key_edit = QLineEdit()
+        self.groq_api_key_edit.setEchoMode(QLineEdit.Password)
+        self.groq_api_key_edit.setPlaceholderText("gsk_...")
+        groq_layout.addWidget(self.groq_api_key_edit)
+
+        self.groq_show_btn = QPushButton("Show")
+        self.groq_show_btn.setCheckable(True)
+        self.groq_show_btn.toggled.connect(
+            lambda show: self._toggle_llm_key_visibility(self.groq_api_key_edit, self.groq_show_btn, show)
+        )
+        groq_layout.addWidget(self.groq_show_btn)
+
+        llm_layout.addLayout(groq_layout)
+
         # LLM Help text
         llm_help_label = QLabel(
             "API keys are stored securely in your system keyring. "
@@ -1294,9 +1355,8 @@ class SettingsDialog(QDialog):
         from core.binary_resolver import find_binary, is_bundled_binary_path
         from core.dependency_manager import (
             get_python_version,
-            is_binary_available,
         )
-        from core.feature_registry import FEATURE_DEPS, check_feature, get_feature_size_estimate
+        from core.feature_registry import get_feature_size_estimate
 
         tab = QWidget()
         tab_layout = QVBoxLayout(tab)
@@ -1511,7 +1571,6 @@ class SettingsDialog(QDialog):
     def _download_binary(self, name: str):
         """Download a binary tool via the dependency manager."""
         from core.dependency_manager import (
-            ensure_deno,
             ensure_ffmpeg,
             ensure_ffprobe,
             update_deno,
@@ -1574,6 +1633,17 @@ class SettingsDialog(QDialog):
         is_cpu = (index == 0)
         self.vision_cpu_combo.setEnabled(is_cpu)
         self.vision_cloud_combo.setEnabled(not is_cpu)
+
+    def _on_transcription_backend_changed(self, index: int):
+        """Enable/disable transcription model fields based on selected backend."""
+        backend = self.transcription_backend_combo.itemData(index)
+        is_groq = backend == "groq"
+        self.transcription_model_combo.setEnabled(
+            not is_groq and not is_from_environment("transcription_model")
+        )
+        self.whisper_model_lbl.setEnabled(not is_groq)
+        self.transcription_cloud_model_combo.setEnabled(is_groq)
+        self.transcription_cloud_model_lbl.setEnabled(is_groq)
 
     def _on_cine_tier_changed(self, index: int):
         """Enable/disable Rich Analysis fields based on selected tier."""
@@ -1732,9 +1802,19 @@ class SettingsDialog(QDialog):
         self.fps_combo.setCurrentIndex(fps_map.get(self.settings.export_fps, 0))
 
         # Transcription
+        backend_idx = self.transcription_backend_combo.findData(
+            self.settings.transcription_backend
+        )
+        self.transcription_backend_combo.setCurrentIndex(max(0, backend_idx))
+
         model_map = {"tiny.en": 0, "small.en": 1, "medium.en": 2, "large-v3": 3}
         self.transcription_model_combo.setCurrentIndex(
             model_map.get(self.settings.transcription_model, 1)
+        )
+
+        self._set_combo_text(
+            self.transcription_cloud_model_combo,
+            self.settings.transcription_cloud_model,
         )
 
         lang_map = {"en": 0, "auto": 1}
@@ -1746,6 +1826,9 @@ class SettingsDialog(QDialog):
         self._apply_env_indicator_to_widget(
             self.transcription_model_combo, self.whisper_model_lbl,
             "transcription_model", ENV_WHISPER_MODEL
+        )
+        self._on_transcription_backend_changed(
+            self.transcription_backend_combo.currentIndex()
         )
 
         # Vision Description
@@ -1827,6 +1910,7 @@ class SettingsDialog(QDialog):
         self.openai_api_key_edit.setText(get_openai_api_key())
         self.gemini_api_key_edit.setText(get_gemini_api_key())
         self.openrouter_api_key_edit.setText(get_openrouter_api_key())
+        self.groq_api_key_edit.setText(get_groq_api_key())
 
         # Apply environment override indicators for LLM API keys
         self._apply_llm_env_override("anthropic", self.anthropic_api_key_edit,
@@ -1841,6 +1925,9 @@ class SettingsDialog(QDialog):
         self._apply_llm_env_override("openrouter", self.openrouter_api_key_edit,
                                       self.openrouter_api_key_lbl, self.openrouter_show_btn,
                                       ENV_OPENROUTER_API_KEY)
+        self._apply_llm_env_override("groq", self.groq_api_key_edit,
+                                      self.groq_api_key_lbl, self.groq_show_btn,
+                                      ENV_GROQ_API_KEY)
 
         # Replicate API key
         self.replicate_api_key_edit.setText(get_replicate_api_key())
@@ -1918,6 +2005,9 @@ class SettingsDialog(QDialog):
         self.settings.export_fps = fps_values[self.fps_combo.currentIndex()]
 
         # Transcription
+        self.settings.transcription_backend = self.transcription_backend_combo.currentData()
+        self.settings.transcription_cloud_model = self.transcription_cloud_model_combo.currentText()
+
         model_values = ["tiny.en", "small.en", "medium.en", "large-v3"]
         self.settings.transcription_model = model_values[self.transcription_model_combo.currentIndex()]
 
@@ -2170,6 +2260,8 @@ class SettingsDialog(QDialog):
             set_openrouter_api_key(self.openrouter_api_key_edit.text())
         if not is_api_key_from_env("replicate"):
             set_replicate_api_key(self.replicate_api_key_edit.text())
+        if not is_api_key_from_env("groq"):
+            set_groq_api_key(self.groq_api_key_edit.text())
 
     def get_settings(self) -> Settings:
         """Get the current settings (after dialog closes)."""
@@ -2190,6 +2282,8 @@ class SettingsDialog(QDialog):
             or self.settings.export_fps != self.original_settings.export_fps
             or self.settings.transcription_model != self.original_settings.transcription_model
             or self.settings.transcription_language != self.original_settings.transcription_language
+            or self.settings.transcription_backend != self.original_settings.transcription_backend
+            or self.settings.transcription_cloud_model != self.original_settings.transcription_cloud_model
             or self.settings.description_model_tier != self.original_settings.description_model_tier
             or self.settings.description_model_local != self.original_settings.description_model_local
             or self.settings.description_model_cloud != self.original_settings.description_model_cloud

@@ -7,6 +7,7 @@ Covers:
 """
 
 import json
+from unittest.mock import patch
 
 from core.settings import Settings, _settings_to_json, _load_from_json
 
@@ -188,3 +189,23 @@ class TestGroqCloudTranscription:
         from core.transcription import _resolve_backend
         resolved = _resolve_backend("auto")
         assert resolved != "groq"
+
+    def test_groq_transcription_uses_configured_key(self, tmp_path, monkeypatch):
+        """Groq transcription should use the app-stored key, not only env setup."""
+        from core.transcription import _transcribe_cloud_groq
+
+        audio_path = tmp_path / "clip.wav"
+        audio_path.write_bytes(b"fake wav data")
+        monkeypatch.delenv("GROQ_API_KEY", raising=False)
+
+        class Response:
+            segments = [
+                {"start": 0.0, "end": 1.0, "text": "hello"}
+            ]
+
+        with patch("core.settings.get_groq_api_key", return_value="gsk-test"), \
+             patch("litellm.transcription", return_value=Response()) as transcription:
+            segments = _transcribe_cloud_groq(audio_path)
+
+        assert segments[0].text == "hello"
+        assert transcription.call_args.kwargs["model"] == "groq/whisper-large-v3-turbo"

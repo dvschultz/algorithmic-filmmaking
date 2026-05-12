@@ -429,11 +429,11 @@ Compose a film one *word* at a time. Where Cassette Tape works at transcript-seg
    | **By Frequency** | Every word in the corpus ordered most-frequent → least-frequent, or reverse. |
    | **By Property** | Sort by word length (default), word duration, or log-frequency. Ascending or descending. |
    | **User-Curated Ordered List** | You supply an exact sequence — including repeats — that materializes literally. `["the", "the", "the", "sky"]` produces four slots. |
-3. **Handle frames.** Optional padding (0–10 frames) on each side of the word boundary so consonants don't get clipped.
+3. **Frame Padding.** Optional padding (0–10 frames) on each side of the word boundary so consonants don't get clipped.
 4. **Generate.** Output is a hard-cut sequence of word-sized SequenceClips with frame-accurate in/out points. No crossfades, no held frames.
 
 **Tips:**
-- Word boundaries are accurate to ~20–30ms. The handle-frame spinner is the escape valve when plosives clip mid-emission.
+- Word boundaries are accurate to ~20–30ms. The Frame Padding spinner is the escape valve when plosives clip mid-emission.
 - **Chosen Words** vs **User-Curated** differ in two ways: chosen-words plays *every instance* of the listed words; user-curated plays *one slot per list entry*. Chosen-words groups by include-list word; user-curated is verbatim.
 - The dialog auto-runs alignment when needed — no extra confirmation modal. Cancel mid-alignment is safe; already-aligned clips persist.
 - Sources whose language isn't supported by the alignment model are shown with a `⚠ unsupported language` badge and excluded from the corpus (you can still proceed with the other checked sources).

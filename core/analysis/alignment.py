@@ -44,6 +44,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_CTC_TARGET_TOO_LONG = "targets length is too long for ctc"
+
 
 # ---------------------------------------------------------------------------
 # Exceptions
@@ -243,11 +245,26 @@ def align_words(
 
     wav_path = extract_audio_to_wav(audio_path_obj)
     try:
-        raw_word_timings = _run_alignment_engine(
-            wav_path=wav_path,
-            text=full_text,
-            language=language,
-        )
+        try:
+            raw_word_timings = _run_alignment_engine(
+                wav_path=wav_path,
+                text=full_text,
+                language=language,
+            )
+        except Exception as exc:
+            if not _is_ctc_target_too_long_error(exc):
+                raise
+            logger.warning(
+                "Whole-clip forced alignment target is too long for CTC; "
+                "retrying %d transcript segment(s) independently",
+                len(non_empty_segments),
+            )
+            return _align_segments_individually(
+                audio_path_obj,
+                non_empty_segments,
+                language,
+                WordTimestamp,
+            )
     finally:
         # Always clean up the temp WAV, even if alignment raises.
         try:
@@ -266,6 +283,133 @@ def align_words(
         )
         for entry in raw_word_timings
     ]
+
+
+def _is_ctc_target_too_long_error(exc: BaseException) -> bool:
+    """Return True for the aligner error raised when text exceeds CTC frames."""
+    return _CTC_TARGET_TOO_LONG in str(exc).lower()
+
+
+def _align_segments_individually(
+    audio_path_obj: Path,
+    segments: "list[TranscriptSegment]",
+    language: str,
+    word_timestamp_cls,
+) -> "list[WordTimestamp]":
+    """Fallback alignment path for dense clips whose full text is too long.
+
+    ``ctc-forced-aligner`` can reject a whole clip when the concatenated target
+    token sequence is longer than the audio emission sequence. Retrying each
+    transcript segment against its own audio subrange keeps one dense/hallucinated
+    segment from failing the entire clip. Segment failures with the same CTC
+    length error fall back to approximate evenly spaced word timings; other
+    failures still propagate.
+    """
+    words = []
+    for seg in segments:
+        text = (seg.text or "").strip()
+        if not text:
+            continue
+
+        start_time = max(0.0, float(seg.start_time))
+        end_time = max(start_time, float(seg.end_time))
+        if end_time <= start_time:
+            continue
+
+        segment_wav = extract_audio_to_wav(
+            audio_path_obj,
+            start_time=start_time,
+            end_time=end_time,
+        )
+        try:
+            try:
+                raw_segment_words = _run_alignment_engine(
+                    wav_path=segment_wav,
+                    text=text,
+                    language=language,
+                )
+            except Exception as exc:
+                if _is_ctc_target_too_long_error(exc):
+                    logger.info(
+                        "Using approximate word timing for transcript segment %.3f-%.3f: "
+                        "target text is too long for CTC alignment",
+                        start_time,
+                        end_time,
+                    )
+                    words.extend(
+                        _make_approximate_word_timestamps(
+                            text,
+                            start_time,
+                            end_time,
+                            word_timestamp_cls,
+                        )
+                    )
+                    continue
+                raise
+        finally:
+            try:
+                segment_wav.unlink(missing_ok=True)
+            except OSError as cleanup_exc:
+                logger.warning(
+                    "Failed to remove temp segment alignment WAV %s: %s",
+                    segment_wav,
+                    cleanup_exc,
+                )
+
+        for entry in raw_segment_words:
+            raw_start = start_time + float(entry["start"])
+            raw_end = start_time + float(entry["end"])
+            word_start = min(max(start_time, raw_start), end_time)
+            word_end = min(max(word_start, raw_end), end_time)
+            words.append(
+                word_timestamp_cls(
+                    start=word_start,
+                    end=word_end,
+                    text=str(entry["text"]),
+                    probability=(
+                        float(entry["score"]) if entry.get("score") is not None else None
+                    ),
+                )
+            )
+
+    return words
+
+
+def _make_approximate_word_timestamps(
+    text: str,
+    start_time: float,
+    end_time: float,
+    word_timestamp_cls,
+) -> "list[WordTimestamp]":
+    """Create deterministic fallback word timings inside a transcript segment.
+
+    This is intentionally a last resort for CTC target-length failures. It is
+    less accurate than forced alignment, but preserves word-sequencer usability
+    for very short or over-dense transcript segments instead of leaving the
+    segment wordless.
+    """
+    raw_words = [word for word in text.split() if word]
+    if not raw_words:
+        return []
+
+    duration = max(0.0, float(end_time) - float(start_time))
+    if duration <= 0.0:
+        return []
+
+    step = duration / len(raw_words)
+    approx_words = []
+    for idx, word in enumerate(raw_words):
+        word_start = float(start_time) + (idx * step)
+        word_end = float(start_time) + ((idx + 1) * step)
+        approx_words.append(
+            word_timestamp_cls(
+                start=word_start,
+                end=min(word_end, float(end_time)),
+                text=word,
+                probability=None,
+            )
+        )
+    return approx_words
 
 
 # ---------------------------------------------------------------------------

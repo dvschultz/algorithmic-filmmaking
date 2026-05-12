@@ -310,9 +310,9 @@ class WordSequencerDialog(QDialog):
         ul_layout.addWidget(self._userlist_match_label)
         layout.addWidget(self._userlist_container)
 
-        # --- Handle-frames -----------------------------------------------
+        # --- Frame padding -----------------------------------------------
         handle_row = QHBoxLayout()
-        handle_label = QLabel("Handle frames")
+        handle_label = QLabel("Frame Padding")
         handle_label.setMinimumWidth(UISizes.FORM_LABEL_WIDTH)
         handle_row.addWidget(handle_label)
         self._handle_spin = QSpinBox()
