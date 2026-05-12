@@ -96,7 +96,7 @@ def classify_shot_cloud(
         ValueError: If no API key is configured for the model's provider
         RuntimeError: If classification fails
     """
-    import litellm
+    from core.llm_client import complete_routed
 
     from core.analysis.shots import SHOT_TYPES
     from core.settings import get_gemini_api_key, load_settings
@@ -149,7 +149,7 @@ def classify_shot_cloud(
     ]
 
     try:
-        response = litellm.completion(
+        response = complete_routed(
             model=model,
             messages=messages,
             api_key=api_key,

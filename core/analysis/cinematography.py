@@ -556,9 +556,9 @@ def analyze_cinematography_frame(
     ]
 
     try:
-        import litellm
+        from core.llm_client import complete_routed
 
-        response = litellm.completion(
+        response = complete_routed(
             model=llm_model,
             messages=messages,
             api_key=api_key,
@@ -689,9 +689,9 @@ def analyze_cinematography_video(
             }
         ]
 
-        import litellm
+        from core.llm_client import complete_routed
 
-        response = litellm.completion(
+        response = complete_routed(
             model=llm_model,
             messages=messages,
             api_key=api_key,

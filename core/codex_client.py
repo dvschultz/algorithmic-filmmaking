@@ -232,6 +232,41 @@ def _post_completion(
 # --- Public API -------------------------------------------------------------
 
 
+class _NamespaceDict(dict):
+    """Dict that also supports attribute access for OpenAI-shape responses.
+
+    Call sites today do ``response.choices[0].message.content`` against
+    litellm's ModelResponse (a pydantic object). Subscription-mode responses
+    come from us as plain JSON dicts; wrapping them in this class keeps the
+    call sites unchanged. ``getattr(response.choices[0], 'finish_reason',
+    default)`` continues to work because attribute access falls back to
+    dict lookup with the same default semantics as a missing key.
+
+    Nested dicts and list elements are wrapped on the way in so the whole
+    response tree is uniformly accessible.
+    """
+
+    def __getattr__(self, name):
+        try:
+            return self[name]
+        except KeyError as exc:
+            raise AttributeError(name) from exc
+
+    def __setattr__(self, name, value):
+        self[name] = value
+
+
+def _wrap_response(obj):
+    """Recursively wrap dicts/lists so attribute access works downstream."""
+    if isinstance(obj, dict):
+        return _NamespaceDict(
+            {k: _wrap_response(v) for k, v in obj.items()}
+        )
+    if isinstance(obj, list):
+        return [_wrap_response(item) for item in obj]
+    return obj
+
+
 def complete(
     token_blob: dict,
     *,
@@ -257,8 +292,10 @@ def complete(
     payload = {"model": coerced_model, "messages": messages, **kwargs}
     if client is None:
         with httpx.Client() as owned:
-            return _post_completion(owned, token_blob=token_blob, payload=payload)
-    return _post_completion(client, token_blob=token_blob, payload=payload)
+            raw = _post_completion(owned, token_blob=token_blob, payload=payload)
+    else:
+        raw = _post_completion(client, token_blob=token_blob, payload=payload)
+    return _wrap_response(raw)
 
 
 async def stream_complete(

@@ -319,10 +319,10 @@ def describe_video_cloud(
     ]
 
     try:
-        import litellm
+        from core.llm_client import complete_routed
 
         logger.info(f"Calling LiteLLM with video, model={model}")
-        response = litellm.completion(
+        response = complete_routed(
             model=model,
             messages=messages,
             api_key=api_key,
@@ -677,10 +677,10 @@ def describe_frame_cloud(image_path: Path, prompt: str = "Describe this image.")
     ]
 
     try:
-        import litellm
+        from core.llm_client import complete_routed
 
         logger.info(f"Calling LiteLLM with model={model}")
-        response = litellm.completion(
+        response = complete_routed(
             model=model,
             messages=messages,
             api_key=api_key,

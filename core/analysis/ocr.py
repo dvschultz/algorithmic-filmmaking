@@ -211,7 +211,7 @@ def _vlm_text_extraction(
     Returns:
         Tuple of (text, confidence) where confidence is estimated.
     """
-    import litellm
+    from core.llm_client import complete_routed
     from core.analysis.description import encode_image_base64
     from core.settings import load_settings, get_gemini_api_key, get_openai_api_key, get_anthropic_api_key
 
@@ -262,7 +262,7 @@ Do not add any commentary or descriptions."""
     ]
 
     logger.debug(f"Calling VLM for text extraction with model={model}")
-    response = litellm.completion(
+    response = complete_routed(
         model=model,
         messages=messages,
         api_key=api_key,
