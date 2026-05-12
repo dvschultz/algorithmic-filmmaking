@@ -904,3 +904,121 @@ def create_provider_config_from_settings() -> ProviderConfig:
         api_base=settings.llm_api_base or None,
         temperature=settings.llm_temperature,
     )
+
+
+def complete_routed(
+    *,
+    model: str,
+    messages: list,
+    api_key: Optional[str] = None,
+    **kwargs,
+):
+    """LLM-routing chokepoint — branches on the active auth mode at call time.
+
+    This is the single seam every LLM-backed feature should call instead of
+    ``litellm.completion`` directly. When ``auth_mode == "api_key"`` (the
+    default), behavior is bit-identical to today's call sites — the
+    function calls ``litellm.completion`` with the same signature and
+    returns the same response shape (R8 unchanged invariant).
+
+    When ``auth_mode == "subscription"``, the call routes through
+    :func:`core.codex_client.complete` against OpenAI's Codex backend using
+    the user's stored OAuth token. Non-OpenAI model names are coerced to
+    Codex-supported OpenAI substitutes by
+    :func:`core.codex_client.coerce_model_for_codex` (R-A2).
+
+    Token refresh: a 401 from the Codex backend triggers one transparent
+    refresh attempt (via :func:`core.spine.chatgpt_oauth_flow.refresh_token_blob`)
+    serialized through the module-level lock from
+    :mod:`core.spine.chatgpt_auth` (R-S5). On successful refresh, the call
+    is retried once. A second 401 propagates as ``TokenExpiredError`` for
+    U8's UI layer to surface.
+
+    Args:
+        model: model identifier as the caller already knows it; coerced
+            internally in subscription mode.
+        messages: chat messages list, same shape as ``litellm.completion``.
+        api_key: explicit API key override (API-key mode only; ignored in
+            subscription mode).
+        **kwargs: passed through to the underlying backend.
+
+    Returns:
+        Response dict in OpenAI Chat Completions shape.
+
+    Raises:
+        :class:`core.codex_client.TokenMissingError` when subscription
+        mode is active but no token blob is stored.
+
+        :class:`core.codex_client.TokenExpiredError` when the Codex
+        backend rejects the token and a refresh also fails.
+
+        :class:`core.codex_client.QuotaExceededError` when the Codex
+        backend returns 429.
+
+        :class:`core.codex_client.CodexBackendError` on other Codex
+        backend failures.
+    """
+    # Lazy imports keep startup cost flat and avoid pulling core/spine
+    # into module-init order when nobody calls this helper.
+    from core.spine.chatgpt_auth import (
+        AuthMode,
+        REFRESH_LOCK,
+        load_active_auth,
+    )
+
+    mode, _identity = load_active_auth()
+    if mode == AuthMode.API_KEY:
+        import litellm
+
+        # Preserve the existing api_key resolution behavior — callers
+        # that pass api_key=... still win; otherwise it stays None and
+        # litellm reads from env/keyring as before.
+        return litellm.completion(
+            model=model, messages=messages, api_key=api_key, **kwargs
+        )
+
+    # auth_mode == "subscription"
+    from core import codex_client
+    from core.settings import (
+        get_chatgpt_oauth_token,
+        set_chatgpt_oauth_token,
+    )
+
+    blob = get_chatgpt_oauth_token()
+    if not blob:
+        raise codex_client.TokenMissingError(
+            "Subscription auth mode is active but no token is stored. "
+            "Sign in again from Settings."
+        )
+
+    try:
+        return codex_client.complete(blob, model=model, messages=messages, **kwargs)
+    except codex_client.TokenExpiredError:
+        # Single refresh-and-retry attempt serialized across this process.
+        refresh_token_value = blob.get("refresh_token") or ""
+        if not refresh_token_value:
+            raise
+        # Lock is shared with any other in-flight LLM call in this process.
+        # The "check after acquire" idiom skips the actual refresh when a
+        # parallel caller already refreshed (R-S5).
+        with REFRESH_LOCK:
+            current_blob = get_chatgpt_oauth_token()
+            if (
+                current_blob
+                and current_blob.get("access_token") != blob.get("access_token")
+            ):
+                # Another caller already refreshed.
+                fresh_blob = current_blob
+            else:
+                from core.spine.chatgpt_oauth_flow import refresh_token_blob
+
+                refreshed = refresh_token_blob(refresh_token_value)
+                fresh_blob = refreshed.as_dict()
+                # Persist the refreshed blob. If keyring write fails, the
+                # current call still uses the in-memory blob; the next
+                # call will see the failure and surface re-auth.
+                set_chatgpt_oauth_token(fresh_blob)
+        # Retry once with the fresh blob — a second 401 propagates.
+        return codex_client.complete(
+            fresh_blob, model=model, messages=messages, **kwargs
+        )
