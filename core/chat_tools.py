@@ -135,7 +135,12 @@ def _python_type_to_json_schema(python_type: type) -> dict:
                 "type": "array",
                 "items": _python_type_to_json_schema(args[0])
             }
-        return {"type": "array"}
+        # Bare ``list`` annotation — emit a permissive but valid ``items``
+        # schema. Vertex AI / Gemini reject array schemas without ``items``
+        # (litellm.BadRequestError "missing field"). ``string`` is a safe
+        # fallback for most agent use cases; tools that actually pass dicts
+        # or numbers should annotate as ``list[dict]`` / ``list[int]``.
+        return {"type": "array", "items": {"type": "string"}}
 
     # Handle dict[K, V] -> object
     if origin is dict:
@@ -4013,7 +4018,7 @@ def generate_storyteller(
 def generate_cassette_tape(
     project,
     main_window,
-    phrases: list,
+    phrases: list[dict],
 ) -> dict:
     """Generate a Cassette Tape phrase-driven sequence.
 
