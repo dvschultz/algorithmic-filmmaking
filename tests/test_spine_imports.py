@@ -32,6 +32,7 @@ SPINE_MODULES: tuple[str, ...] = (
     "core.spine.project_io",
     "core.spine._agent_formatting",
     "core.spine.audio_sources",
+    "core.spine.chatgpt_auth",
     "core.spine.clips",
     "core.spine.exports",
     "core.spine.frames",
