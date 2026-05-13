@@ -479,7 +479,7 @@ def load_project(
     validation_errors = _validate_project_structure(data)
     if validation_errors:
         raise ProjectLoadError(
-            f"Invalid project file structure:\n  - " + "\n  - ".join(validation_errors)
+            "Invalid project file structure:\n  - " + "\n  - ".join(validation_errors)
         )
 
     # Validate version using semantic comparison
@@ -1321,11 +1321,11 @@ class Project:
     @property
     def mutation_generation(self) -> int:
         """Monotonic counter incremented for every project mutation."""
-        return self._mutation_generation
+        return getattr(self, "_mutation_generation", 0)
 
     def mark_dirty(self) -> None:
         """Mark project as having unsaved changes."""
-        self._mutation_generation += 1
+        self._mutation_generation = self.mutation_generation + 1
         self._dirty = True
 
     def mark_clean(self) -> None:

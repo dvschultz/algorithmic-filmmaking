@@ -3,6 +3,10 @@
 The Scene Ripper chat agent has access to 117 tools organized by category. You don't need to call these by name — just describe what you want in natural language and the agent will use the right tool. This reference is for understanding what's possible.
 
 > Type `/help` in the chat panel to see a condensed version of this list.
+>
+> For external agents using Scene Ripper without the desktop GUI, see
+> [Headless MCP](headless-mcp.md) and the
+> [Headless MCP Tutorial](headless-mcp-tutorial.md).
 
 ---
 

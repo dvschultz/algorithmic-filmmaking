@@ -26,7 +26,7 @@ jobs:
         run: choco install ffmpeg -y
 
       - name: Install dependencies
-        run: pip install -r requirements-core.txt pytest pytest-asyncio
+        run: pip install -r requirements-core.txt -e ".[mcp]" pytest pytest-asyncio
 
       - name: Run tests
         env:

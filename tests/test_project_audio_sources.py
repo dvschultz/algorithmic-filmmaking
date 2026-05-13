@@ -3,9 +3,7 @@
 import json
 from pathlib import Path
 
-import pytest
-
-from core.project import Project, save_project, load_project
+from core.project import Project, save_project
 from models.audio_source import AudioSource
 
 
@@ -119,6 +117,8 @@ class TestProjectAudioSourcePersistence:
     def test_malformed_audio_source_entry_is_skipped(self, tmp_path):
         """A malformed audio_sources entry is logged and skipped, not fatal."""
         project_path = tmp_path / "p.sceneripper"
+        audio_file = tmp_path / "song.wav"
+        audio_file.write_bytes(b"")
         data = {
             "id": "proj-1",
             "project_name": "Test",
@@ -132,7 +132,7 @@ class TestProjectAudioSourcePersistence:
                 "not-a-dict",  # garbage
                 {  # valid one mixed in
                     "id": "aud-good",
-                    "file_path": "/tmp/song.wav",
+                    "file_path": str(audio_file),
                     "duration_seconds": 30.0,
                     "sample_rate": 44100,
                     "channels": 2,
