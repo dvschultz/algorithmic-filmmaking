@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QRadioButton,
     QDoubleSpinBox,
     QSpinBox,
     QCheckBox,
@@ -24,7 +25,8 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QScrollArea,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QUrl, Slot
+from PySide6.QtGui import QDesktopServices
 
 from ui.widgets.styled_slider import StyledSlider
 
@@ -60,7 +62,12 @@ from core.settings import (
     get_groq_api_key,
     set_groq_api_key,
     is_api_key_from_env,
+    # ChatGPT subscription OAuth (U1)
+    get_chatgpt_oauth_token,
+    set_chatgpt_oauth_token,
+    clear_chatgpt_oauth_token,
 )
+from core.spine.chatgpt_auth import AuthMode
 from core.llm_client import get_provider_models
 from core.update_models import UpdateChannel
 from ui.theme import theme, UISizes
@@ -313,6 +320,15 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("Settings")
         self.setMinimumSize(1000, 400)
         self.setModal(True)
+
+        # ChatGPT subscription auth state (U5)
+        # _oauth_in_progress mirrors OAuthWorker's _finished_handled guard
+        # at the dialog level — gates the Sign In button, the auth-mode
+        # radios, and the OK button while a flow is running.
+        # _has_oauth_token is cached from the keyring at load time to keep
+        # _refresh_signin_row / _refresh_ok_gate off the keyring read path.
+        self._oauth_in_progress = False
+        self._has_oauth_token = False
 
         self._setup_ui()
         self._load_settings()
@@ -951,6 +967,12 @@ class SettingsDialog(QDialog):
         tab = QWidget()
         layout = QVBoxLayout(tab)
 
+        # ChatGPT subscription auth — sits above the per-provider API keys
+        # because it's the primary path for the "I already have ChatGPT Plus"
+        # power user. The two paths coexist; one is active at a time per
+        # auth_mode.
+        layout.addWidget(self._create_chatgpt_auth_group())
+
         # LLM API Keys group
         llm_group = QGroupBox("LLM Provider API Keys")
         llm_layout = QVBoxLayout(llm_group)
@@ -1166,6 +1188,202 @@ class SettingsDialog(QDialog):
         else:
             edit.setEchoMode(QLineEdit.Password)
             btn.setText("Show")
+
+    # ---------- ChatGPT subscription auth (U5) ----------
+
+    def _create_chatgpt_auth_group(self) -> QGroupBox:
+        """Build the auth-mode toggle group at the top of the API Keys tab.
+
+        Layout: a radio pair selecting auth_mode, plus a dynamic
+        sign-in/sign-out row below. The radios drive the rest of the
+        widget — when API-key mode is selected the per-provider key
+        fields below this group remain the authoritative input; when
+        subscription mode is selected the user authenticates here.
+        """
+        group = QGroupBox("OpenAI Authentication")
+        layout = QVBoxLayout(group)
+
+        intro = QLabel(
+            "Use your ChatGPT Plus/Pro subscription, or supply an OpenAI "
+            "API key below."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        # Radio pair — the source of truth for auth_mode.
+        self.auth_mode_subscription_radio = QRadioButton(
+            "Sign in with ChatGPT (use my Plus/Pro subscription)"
+        )
+        self.auth_mode_apikey_radio = QRadioButton("Use OpenAI API key (below)")
+        self.auth_mode_subscription_radio.toggled.connect(
+            self._on_auth_mode_radio_toggled
+        )
+        layout.addWidget(self.auth_mode_subscription_radio)
+        layout.addWidget(self.auth_mode_apikey_radio)
+
+        # Sign-in row — visibility flips between "Sign in" and identity+Sign out.
+        self._signin_row = QHBoxLayout()
+        self.sign_in_btn = QPushButton("Sign in with ChatGPT")
+        self.sign_in_btn.clicked.connect(self._on_sign_in_clicked)
+        self._signin_row.addWidget(self.sign_in_btn)
+
+        self.signin_identity_lbl = QLabel("")
+        self._signin_row.addWidget(self.signin_identity_lbl)
+
+        self.sign_out_btn = QPushButton("Sign out")
+        self.sign_out_btn.clicked.connect(self._on_sign_out_clicked)
+        self._signin_row.addWidget(self.sign_out_btn)
+
+        self._signin_row.addStretch()
+        layout.addLayout(self._signin_row)
+
+        self.signin_status_lbl = QLabel("")
+        self.signin_status_lbl.setWordWrap(True)
+        layout.addWidget(self.signin_status_lbl)
+
+        return group
+
+    def _refresh_signin_row(self):
+        """Show/hide sign-in vs identity+sign-out widgets based on state."""
+        is_subscription = self.auth_mode_subscription_radio.isChecked()
+
+        # While OAuth is in flight, lock the radios and the sign-in button
+        # (R-U1, R-U2). API-key fields below stay unaffected.
+        self.auth_mode_subscription_radio.setEnabled(not self._oauth_in_progress)
+        self.auth_mode_apikey_radio.setEnabled(not self._oauth_in_progress)
+
+        if not is_subscription:
+            self.sign_in_btn.setVisible(False)
+            self.signin_identity_lbl.setVisible(False)
+            self.sign_out_btn.setVisible(False)
+            self.signin_status_lbl.setVisible(False)
+            self._refresh_ok_gate()
+            return
+
+        if self._oauth_in_progress:
+            self.sign_in_btn.setText("Waiting for browser…")
+            self.sign_in_btn.setEnabled(False)
+            self.sign_in_btn.setVisible(True)
+            self.signin_identity_lbl.setVisible(False)
+            self.sign_out_btn.setVisible(False)
+        elif self._has_oauth_token:
+            self.sign_in_btn.setVisible(False)
+            email = (self.settings.chatgpt_account_email or "Signed in (ChatGPT Plus)").strip()
+            self.signin_identity_lbl.setText(f"Signed in as {email}")
+            self.signin_identity_lbl.setVisible(True)
+            self.sign_out_btn.setVisible(True)
+        else:
+            self.sign_in_btn.setText("Sign in with ChatGPT")
+            self.sign_in_btn.setEnabled(True)
+            self.sign_in_btn.setVisible(True)
+            self.signin_identity_lbl.setVisible(False)
+            self.sign_out_btn.setVisible(False)
+
+        self._refresh_ok_gate()
+
+    def _refresh_ok_gate(self):
+        """Disable OK when subscription mode is selected but no token exists.
+
+        Prevents the silent-broken state where a user picks the radio,
+        forgets to click Sign In, hits OK, then sees "TokenMissingError"
+        on every LLM call. R-U3 in the doc-review pass.
+        """
+        if not hasattr(self, "button_box") or self.button_box is None:
+            return
+        ok_btn = self.button_box.button(QDialogButtonBox.Ok)
+        if ok_btn is None:
+            return
+
+        if (
+            self.auth_mode_subscription_radio.isChecked()
+            and not self._has_oauth_token
+            and not self._oauth_in_progress
+        ):
+            ok_btn.setEnabled(False)
+            self.signin_status_lbl.setText(
+                "Sign in first to use ChatGPT subscription mode."
+            )
+        else:
+            ok_btn.setEnabled(True)
+            if not self._oauth_in_progress:
+                self.signin_status_lbl.setText("")
+
+    @Slot()
+    def _on_auth_mode_radio_toggled(self, _checked: bool = False):
+        """Auth-mode radio changed — refresh the sign-in row state."""
+        self._refresh_signin_row()
+
+    @Slot()
+    def _on_sign_in_clicked(self):
+        """Start the OAuthWorker flow for Sign in with ChatGPT."""
+        if self._oauth_in_progress:
+            return
+        # Lazy import — only pulled in when the user clicks. Keeps the
+        # initial dialog open cheap and avoids cyclic-import hazards.
+        from ui.workers.oauth_worker import OAuthWorker
+
+        worker = OAuthWorker(parent=self)
+        # Qt.UniqueConnection guards us against accidental double-wiring
+        # if the slot is connected twice — the symmetric in-worker guard
+        # lives in OAuthWorker._emit_terminal_*.
+        worker.authorization_url_ready.connect(
+            self._on_auth_url_ready, Qt.UniqueConnection
+        )
+        worker.auth_complete.connect(self._on_auth_complete, Qt.UniqueConnection)
+        worker.auth_failed.connect(self._on_auth_failed, Qt.UniqueConnection)
+        # Worker stays alive because parent=self gives Qt ownership of it;
+        # no explicit reference field needed.
+        self._oauth_in_progress = True
+        self.signin_status_lbl.setText("Opening browser…")
+        self._refresh_signin_row()
+        worker.start()
+
+    @Slot()
+    def _on_sign_out_clicked(self):
+        """Clear the stored OAuth token and reset the identity display."""
+        clear_chatgpt_oauth_token()
+        self.settings.chatgpt_account_email = ""
+        self._has_oauth_token = False
+        self.signin_status_lbl.setText("Signed out. Sign in again to continue.")
+        self._refresh_signin_row()
+
+    @Slot(str)
+    def _on_auth_url_ready(self, url: str):
+        """Worker says the OAuth URL is ready — open it in the browser."""
+        # Defense in depth: validate scheme before handing to the OS.
+        # Mirrors docs/solutions/security-issues/url-scheme-validation-bypass.md.
+        if not url.startswith("https://"):
+            logger.error("Refusing to open non-HTTPS authorization URL")
+            return
+        QDesktopServices.openUrl(QUrl(url))
+
+    @Slot(dict)
+    def _on_auth_complete(self, blob: dict):
+        """OAuth flow succeeded — persist the blob and update the dialog."""
+        if not set_chatgpt_oauth_token(blob):
+            self._oauth_in_progress = False
+            self.signin_status_lbl.setText(
+                "Sign in succeeded but secure storage was unavailable. "
+                "Install a system keychain or use API-key mode."
+            )
+            self._refresh_signin_row()
+            return
+
+        account_email = blob.get("account_email", "") or ""
+        if isinstance(account_email, str):
+            self.settings.chatgpt_account_email = account_email
+        # The subscription radio remains selected; user clicks OK to apply.
+        self._has_oauth_token = True
+        self._oauth_in_progress = False
+        self.signin_status_lbl.setText("Signed in. Click OK to apply.")
+        self._refresh_signin_row()
+
+    @Slot(str, str)
+    def _on_auth_failed(self, category: str, user_message: str):
+        """OAuth flow failed — display the friendly message; leave state untouched."""
+        self._oauth_in_progress = False
+        self.signin_status_lbl.setText(user_message)
+        self._refresh_signin_row()
 
     def _toggle_api_key_visibility(self, show: bool):
         """Toggle API key visibility."""
@@ -1912,6 +2130,16 @@ class SettingsDialog(QDialog):
         self.openrouter_api_key_edit.setText(get_openrouter_api_key())
         self.groq_api_key_edit.setText(get_groq_api_key())
 
+        # ChatGPT subscription auth state — radio reflects auth_mode,
+        # identity row reflects whether a token blob is in keyring.
+        token_blob = get_chatgpt_oauth_token()
+        self._has_oauth_token = token_blob is not None
+        if self.settings.auth_mode == AuthMode.SUBSCRIPTION:
+            self.auth_mode_subscription_radio.setChecked(True)
+        else:
+            self.auth_mode_apikey_radio.setChecked(True)
+        self._refresh_signin_row()
+
         # Apply environment override indicators for LLM API keys
         self._apply_llm_env_override("anthropic", self.anthropic_api_key_edit,
                                       self.anthropic_api_key_lbl, self.anthropic_show_btn,
@@ -2051,6 +2279,12 @@ class SettingsDialog(QDialog):
 
         # YouTube
         self.settings.youtube_api_key = self.youtube_api_key_edit.text()
+
+        # Auth mode — the radio is the source of truth in the dialog.
+        if self.auth_mode_subscription_radio.isChecked():
+            self.settings.auth_mode = AuthMode.SUBSCRIPTION.value
+        else:
+            self.settings.auth_mode = AuthMode.API_KEY.value
         self.settings.youtube_results_count = self.youtube_results_spin.value()
         self.settings.youtube_parallel_downloads = self.youtube_parallel_spin.value()
 

@@ -36,6 +36,9 @@ KEYRING_OPENROUTER_API_KEY = "openrouter_api_key"
 KEYRING_REPLICATE_API_KEY = "replicate_api_key"
 KEYRING_GROQ_API_KEY = "groq_api_key"
 
+# ChatGPT subscription auth (Sign in with ChatGPT) — OAuth token blob
+KEYRING_CHATGPT_OAUTH_TOKEN = "chatgpt_oauth_token"
+
 # Config schema version
 CONFIG_VERSION = "1.0"
 
@@ -227,6 +230,98 @@ def get_groq_api_key() -> str:
 def set_groq_api_key(api_key: str) -> bool:
     """Store Groq API key in system keyring."""
     return _set_provider_api_key_in_keyring(KEYRING_GROQ_API_KEY, api_key)
+
+
+# ChatGPT subscription OAuth token helpers
+#
+# Stored as a single JSON-serialized blob under one keyring key. The blob shape
+# is opaque to settings.py; core/spine/chatgpt_auth.py owns the schema. Writing
+# the full blob atomically avoids the partial-update race that separate fields
+# would create during a refresh.
+#
+# Intentionally NOT exposed via env var: OAuth tokens are short-lived secrets
+# with refresh semantics. API keys have env-var overrides for power users;
+# subscription tokens are keyring-only.
+
+def _is_plaintext_keyring_backend(keyring_module) -> bool:
+    """True when the active keyring backend stores credentials in plaintext.
+
+    Linux systems without a Secret Service provider fall back to
+    `keyrings.alt.file.PlaintextKeyring`, which writes credentials in
+    base64-encoded plaintext to disk. OAuth refresh tokens are higher-value
+    than API keys and warrant fail-closed behavior here — API-key mode
+    remains available as the alternative path.
+    """
+    try:
+        backend_cls = keyring_module.get_keyring().__class__
+    except Exception:
+        return False
+    backend_name = backend_cls.__name__
+    backend_module = (backend_cls.__module__ or "")
+    return backend_name == "PlaintextKeyring" or backend_module.startswith("keyrings.alt")
+
+
+def get_chatgpt_oauth_token() -> Optional[dict]:
+    """Retrieve the stored ChatGPT OAuth token blob.
+
+    Returns None when no token is stored, the keyring is unreadable, or the
+    stored value is malformed JSON. Malformed blobs are self-cleared to break
+    the perpetual `TokenMissingError` loop a partial-write crash could cause.
+    """
+    try:
+        import keyring
+        blob_json = _get_password_from_keyring_services(keyring, KEYRING_CHATGPT_OAUTH_TOKEN)
+        if not blob_json:
+            return None
+        return json.loads(blob_json)
+    except json.JSONDecodeError as e:
+        logger.warning(f"Stored ChatGPT OAuth token is malformed JSON; clearing: {e}")
+        clear_chatgpt_oauth_token()
+        return None
+    except Exception as e:
+        logger.debug(f"Could not read ChatGPT OAuth token from keyring: {e}")
+        return None
+
+
+def set_chatgpt_oauth_token(token_blob: Optional[dict]) -> bool:
+    """Store the ChatGPT OAuth token blob in secure OS storage.
+
+    Refuses the write (returns False, logs error, no entry created) when the
+    active keyring backend is a plaintext fallback. Passing None deletes the
+    stored entry.
+    """
+    try:
+        import keyring
+        if token_blob is None:
+            _delete_password_from_keyring_services(keyring, KEYRING_CHATGPT_OAUTH_TOKEN)
+            return True
+        if _is_plaintext_keyring_backend(keyring):
+            backend_cls = keyring.get_keyring().__class__
+            logger.error(
+                "Refusing to store ChatGPT OAuth token: active keyring backend "
+                f"({backend_cls.__module__}.{backend_cls.__name__}) writes "
+                "credentials in plaintext. Install a system keychain "
+                "(GNOME Keyring, KWallet, Windows Credential Manager) or use "
+                "API-key mode."
+            )
+            return False
+        blob_json = json.dumps(token_blob)
+        keyring.set_password(KEYRING_SERVICE, KEYRING_CHATGPT_OAUTH_TOKEN, blob_json)
+        return True
+    except Exception as e:
+        logger.warning(f"Could not write ChatGPT OAuth token to keyring: {e}")
+        return False
+
+
+def clear_chatgpt_oauth_token() -> bool:
+    """Remove the ChatGPT OAuth token blob from secure storage."""
+    try:
+        import keyring
+        _delete_password_from_keyring_services(keyring, KEYRING_CHATGPT_OAUTH_TOKEN)
+        return True
+    except Exception as e:
+        logger.warning(f"Could not clear ChatGPT OAuth token from keyring: {e}")
+        return False
 
 
 def is_api_key_from_env(provider: str) -> bool:
@@ -481,6 +576,14 @@ class Settings:
     anthropic_model: str = "claude-sonnet-4-5-20250929"
     gemini_model: str = "gemini-2.5-flash"
     openrouter_model: str = "anthropic/claude-sonnet-4"
+
+    # ChatGPT subscription auth (Sign in with ChatGPT)
+    # auth_mode = "api_key" preserves existing behavior; "subscription" routes
+    # LLM calls through the user's ChatGPT Plus/Pro quota. The OAuth token
+    # itself lives in keyring (KEYRING_CHATGPT_OAUTH_TOKEN); only the mode
+    # selection and the display-only account identity persist here.
+    auth_mode: str = "api_key"  # api_key, subscription
+    chatgpt_account_email: str = ""  # display-only identity, non-secret
 
     # Vision Description Settings
     description_model_tier: str = "local"  # local, cloud (legacy: cpu, gpu)
@@ -766,6 +869,15 @@ def _load_from_json(config_path: Path, settings: Settings) -> Settings:
         if "parallel_downloads" in youtube:
             settings.youtube_parallel_downloads = int(youtube["parallel_downloads"])
 
+    # Auth section (ChatGPT OAuth token comes from keyring, not JSON)
+    if auth := data.get("auth"):
+        mode = auth.get("mode")
+        if isinstance(mode, str) and mode in ("api_key", "subscription"):
+            settings.auth_mode = mode
+        email = auth.get("chatgpt_account_email")
+        if isinstance(email, str):
+            settings.chatgpt_account_email = email
+
     # LLM section (API key comes from keyring, not JSON)
     if llm := data.get("llm"):
         if val := llm.get("provider"):
@@ -960,6 +1072,11 @@ def _settings_to_json(settings: Settings) -> dict:
             "gemini_model": settings.gemini_model,
             "openrouter_model": settings.openrouter_model,
             # Note: API key is NOT stored here - it goes to keyring
+        },
+        "auth": {
+            "mode": settings.auth_mode,
+            "chatgpt_account_email": settings.chatgpt_account_email,
+            # Note: OAuth token blob is NOT stored here - it goes to keyring
         },
         "description": {
             "model_tier": settings.description_model_tier,

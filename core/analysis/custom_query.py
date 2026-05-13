@@ -155,9 +155,9 @@ def evaluate_custom_query_cloud(
     ]
 
     try:
-        import litellm
+        from core.llm_client import complete_routed
 
-        response = litellm.completion(
+        response = complete_routed(
             model=model,
             messages=messages,
             api_key=api_key,

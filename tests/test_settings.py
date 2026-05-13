@@ -432,8 +432,23 @@ class TestJSONSettings:
                     assert "appearance" in data
                     assert "youtube" in data
 
-                    # API key should NOT be in JSON
-                    assert "api_key" not in json.dumps(data)
+                    # Credential field NAMES should NOT be in JSON — keys live in keyring.
+                    # The literal string "api_key" can appear as a value (auth.mode = "api_key"
+                    # is a legitimate mode name distinct from any credential).
+                    json_str = json.dumps(data)
+                    for credential_field in (
+                        "youtube_api_key",
+                        "openai_api_key",
+                        "anthropic_api_key",
+                        "gemini_api_key",
+                        "groq_api_key",
+                        "openrouter_api_key",
+                        "replicate_api_key",
+                        "chatgpt_oauth_token",
+                    ):
+                        assert credential_field not in json_str, (
+                            f"Sensitive field {credential_field!r} leaked into JSON"
+                        )
 
     def test_load_settings_nonexistent_file(self):
         """Test loading settings when config file doesn't exist."""
@@ -694,3 +709,190 @@ class TestSequenceSelectedCategory:
                 with patch("core.settings._get_api_key_from_keyring", return_value=""):
                     loaded = load_settings()
                     assert loaded.sequence_selected_category == "All"
+
+
+class TestChatGPTOAuthToken:
+    """Tests for the ChatGPT subscription OAuth token blob storage.
+
+    The token is a JSON-serialized blob under a single keyring key.
+    Plaintext backends (Linux without Secret Service) must be refused —
+    OAuth refresh tokens warrant fail-closed behavior on insecure storage.
+    """
+
+    def _make_fake_keyring(self, *, backend_module="keyring.backends.macOS", backend_name="Keyring"):
+        """Build a MagicMock standing in for the `keyring` module."""
+        backend_cls = type(backend_name, (), {})
+        backend_cls.__module__ = backend_module
+        backend_instance = backend_cls()
+
+        keyring = MagicMock()
+        keyring.get_keyring.return_value = backend_instance
+        # Storage simulating successful set/get with no prior value
+        keyring.get_password.side_effect = [None]
+        return keyring
+
+    def test_round_trip_set_then_get(self):
+        """Setting a blob then reading it back returns an equal dict."""
+        from core.settings import (
+            get_chatgpt_oauth_token,
+            set_chatgpt_oauth_token,
+            KEYRING_CHATGPT_OAUTH_TOKEN,
+            KEYRING_SERVICE,
+        )
+
+        keyring = self._make_fake_keyring()
+        stored = {"value": None}
+
+        def fake_set(service, key, value):
+            stored["value"] = value
+        def fake_get(service, key):
+            return stored["value"]
+
+        keyring.set_password.side_effect = fake_set
+        keyring.get_password.side_effect = lambda service, key: fake_get(service, key)
+
+        blob = {
+            "access_token": "at_abc",
+            "refresh_token": "rt_xyz",
+            "id_token": "id_def",
+            "expires_at_unix": 1747000000,
+            "account_email": "derrick@example.com",
+        }
+
+        with patch.dict(sys.modules, {"keyring": keyring}):
+            assert set_chatgpt_oauth_token(blob) is True
+            keyring.set_password.assert_called_once()
+            args = keyring.set_password.call_args.args
+            assert args[0] == KEYRING_SERVICE
+            assert args[1] == KEYRING_CHATGPT_OAUTH_TOKEN
+            # Stored value is JSON-serialized
+            assert json.loads(args[2]) == blob
+
+            assert get_chatgpt_oauth_token() == blob
+
+    def test_set_none_deletes_entry(self):
+        """Setting None clears the stored token via the delete path."""
+        from core.settings import set_chatgpt_oauth_token
+
+        keyring = self._make_fake_keyring()
+        # Make a mock errors module so delete-path doesn't blow up
+        keyring.errors = MagicMock()
+        keyring.errors.PasswordDeleteError = type("PasswordDeleteError", (Exception,), {})
+
+        with patch.dict(sys.modules, {"keyring": keyring}):
+            assert set_chatgpt_oauth_token(None) is True
+            assert keyring.delete_password.called
+            keyring.set_password.assert_not_called()
+
+    def test_get_returns_none_when_no_token(self):
+        """get_chatgpt_oauth_token returns None when no entry is stored."""
+        from core.settings import get_chatgpt_oauth_token
+
+        keyring = MagicMock()
+        keyring.get_password.return_value = None
+
+        with patch.dict(sys.modules, {"keyring": keyring}):
+            assert get_chatgpt_oauth_token() is None
+
+    def test_get_self_clears_on_malformed_json(self):
+        """Malformed JSON is logged and the entry is cleared to break retry loops."""
+        from core.settings import get_chatgpt_oauth_token
+
+        keyring = MagicMock()
+        keyring.errors = MagicMock()
+        keyring.errors.PasswordDeleteError = type("PasswordDeleteError", (Exception,), {})
+        keyring.get_password.return_value = "this is not json {"
+
+        with patch.dict(sys.modules, {"keyring": keyring}):
+            assert get_chatgpt_oauth_token() is None
+            assert keyring.delete_password.called
+
+    def test_set_refuses_plaintext_keyring_backend(self):
+        """A PlaintextKeyring backend is refused; no entry is created."""
+        from core.settings import set_chatgpt_oauth_token
+
+        keyring = self._make_fake_keyring(
+            backend_module="keyrings.alt.file",
+            backend_name="PlaintextKeyring",
+        )
+
+        with patch.dict(sys.modules, {"keyring": keyring}):
+            assert set_chatgpt_oauth_token({"access_token": "at_abc"}) is False
+            keyring.set_password.assert_not_called()
+
+    def test_set_refuses_any_keyrings_alt_backend(self):
+        """Anything from keyrings.alt is treated as plaintext-equivalent."""
+        from core.settings import set_chatgpt_oauth_token
+
+        keyring = self._make_fake_keyring(
+            backend_module="keyrings.alt.pyfs",
+            backend_name="EncryptedKeyring",
+        )
+
+        with patch.dict(sys.modules, {"keyring": keyring}):
+            assert set_chatgpt_oauth_token({"access_token": "at_abc"}) is False
+            keyring.set_password.assert_not_called()
+
+    def test_set_accepts_macos_keychain_backend(self):
+        """The macOS Keychain backend is accepted; the blob is written."""
+        from core.settings import set_chatgpt_oauth_token
+
+        keyring = self._make_fake_keyring(
+            backend_module="keyring.backends.macOS",
+            backend_name="Keyring",
+        )
+
+        with patch.dict(sys.modules, {"keyring": keyring}):
+            assert set_chatgpt_oauth_token({"access_token": "at_abc"}) is True
+            keyring.set_password.assert_called_once()
+
+
+class TestAuthModeSettings:
+    """Tests for the auth_mode and chatgpt_account_email Settings fields."""
+
+    def test_auth_mode_defaults_to_api_key(self):
+        """New Settings instances default to api_key mode for backward compat."""
+        s = Settings()
+        assert s.auth_mode == "api_key"
+        assert s.chatgpt_account_email == ""
+
+    def test_auth_mode_persists_through_save_and_load(self):
+        """Setting subscription mode survives the JSON round trip."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.json"
+            with patch("core.settings._get_config_path", return_value=config_path):
+                with patch("core.settings._get_api_key_from_keyring", return_value=""):
+                    s = Settings()
+                    s.auth_mode = "subscription"
+                    s.chatgpt_account_email = "derrick@example.com"
+                    assert save_settings(s) is True
+
+                    loaded = load_settings()
+                    assert loaded.auth_mode == "subscription"
+                    assert loaded.chatgpt_account_email == "derrick@example.com"
+
+    def test_load_without_auth_section_keeps_defaults(self):
+        """A config.json without 'auth' loads cleanly with api_key mode default."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.json"
+            config_path.write_text(json.dumps({"version": "1.0"}))
+
+            with patch("core.settings._get_config_path", return_value=config_path):
+                with patch("core.settings._get_api_key_from_keyring", return_value=""):
+                    loaded = load_settings()
+                    assert loaded.auth_mode == "api_key"
+                    assert loaded.chatgpt_account_email == ""
+
+    def test_load_rejects_unknown_auth_mode(self):
+        """Unknown mode strings are ignored; the default applies."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.json"
+            config_path.write_text(json.dumps({
+                "version": "1.0",
+                "auth": {"mode": "garbage"},
+            }))
+
+            with patch("core.settings._get_config_path", return_value=config_path):
+                with patch("core.settings._get_api_key_from_keyring", return_value=""):
+                    loaded = load_settings()
+                    assert loaded.auth_mode == "api_key"
