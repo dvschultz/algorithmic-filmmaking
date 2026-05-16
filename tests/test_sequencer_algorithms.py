@@ -605,6 +605,30 @@ class TestGenerateSequenceIntegration:
         result = generate_sequence("match_cut", clips, 3)
         assert len(result) == 3
 
+    def test_dialog_only_algorithm_key_raises_not_implemented(self):
+        from core.remix import generate_sequence
+        source = _make_source()
+        clips = [
+            (_make_clip("a"), source),
+            (_make_clip("b"), source),
+        ]
+
+        with pytest.raises(NotImplementedError, match="dialog-only"):
+            generate_sequence("storyteller", clips, 2)
+
+    def test_unknown_algorithm_still_returns_clipped_input_order(self):
+        from core.remix import generate_sequence
+        source = _make_source()
+        clips = [
+            (_make_clip("a"), source),
+            (_make_clip("b"), source),
+            (_make_clip("c"), source),
+        ]
+
+        result = generate_sequence("unknown_algorithm", clips, 2)
+        ids = [c.id for c, _ in result]
+        assert ids == ["a", "b"]
+
 
 # -- Deserialization Validation ------------------------------------------------
 

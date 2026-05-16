@@ -190,9 +190,14 @@ def test_text_state_preserved_across_mode_switch(qapp):
     assert "the the apple" in dialog._userlist_input.toPlainText()
 
 
-def test_unsupported_language_source_disabled(qapp):
+def test_unsupported_language_source_disabled(qapp, monkeypatch):
     from ui.dialogs.word_sequencer_dialog import WordSequencerDialog
     from PySide6.QtCore import Qt
+
+    monkeypatch.setattr(
+        "ui.dialogs._word_source_picker._language_is_supported",
+        lambda language: language != "xx",
+    )
 
     aligned_clip, aligned_source = _make_aligned_clip()
     bad_clip, bad_source = _make_unsupported_lang_clip()
@@ -293,7 +298,6 @@ def test_accept_with_unaligned_triggers_alignment_worker(qapp, monkeypatch):
     class FakeAlignmentWorker:
         def __init__(self, *, clips, sources_by_id, skip_existing, parent=None):
             self._clips = clips
-            from PySide6.QtCore import Signal
 
             # Use real Signal-shaped attribute holders so .connect works.
             class _Sig:

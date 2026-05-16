@@ -46,13 +46,16 @@ from core.remix.word_sequencer import (
     MissingWordDataError,
     generate_word_sequence,
 )
+from core.spine.words import normalize_word
 from ui.dialogs._word_source_picker import (
     BADGE_ALIGNED,
     BADGE_MISSING_FPS,
     BADGE_NEEDS_ALIGNMENT,
     BADGE_UNSUPPORTED_LANGUAGE,
     WordAlignmentController,
+    alignable_pending_clips,
     classify_source_alignment,
+    format_source_row,
 )
 from ui.theme import theme, Spacing, TypeScale, UISizes
 
@@ -73,20 +76,6 @@ _MODE_OPTIONS: list[tuple[str, str]] = [
 ]
 
 
-# Backward-compatible private aliases for the per-source badge constants.
-# The canonical names live in ``ui.dialogs._word_source_picker``; these
-# aliases keep existing tests / imports working.
-_BADGE_ALIGNED = BADGE_ALIGNED
-_BADGE_NEEDS_ALIGNMENT = BADGE_NEEDS_ALIGNMENT
-_BADGE_UNSUPPORTED_LANGUAGE = BADGE_UNSUPPORTED_LANGUAGE
-_BADGE_MISSING_FPS = BADGE_MISSING_FPS
-
-# Backward-compatible alias for ``_classify_source`` (the previous
-# underscore-private name). New code should use
-# ``classify_source_alignment`` directly.
-_classify_source = classify_source_alignment
-
-
 def _parse_word_list(text: str) -> list[str]:
     """Tokenize a user-entered word list (comma / whitespace / newline)."""
     if not text:
@@ -98,12 +87,6 @@ def _parse_word_list(text: str) -> list[str]:
             if piece:
                 parts.append(piece)
     return parts
-
-
-def _normalize_for_lookup(word: str) -> str:
-    """Lazy import of the spine normalizer to keep this module light."""
-    from core.spine.words import normalize_word
-    return normalize_word(word)
 
 
 class WordSequencerDialog(QDialog):
@@ -392,16 +375,16 @@ class WordSequencerDialog(QDialog):
         for source_id, src_clips in self._clips_by_source_id.items():
             source = self._sources_by_id.get(source_id)
             badge_key, language = self._source_status.get(
-                source_id, (_BADGE_ALIGNED, None)
+                source_id, (BADGE_ALIGNED, None)
             )
-            label = self._format_source_row(source, src_clips, badge_key, language)
+            label = format_source_row(source, src_clips, badge_key, language)
             item = QListWidgetItem(label)
             item.setData(Qt.UserRole, source_id)
-            disabled = badge_key in (_BADGE_UNSUPPORTED_LANGUAGE, _BADGE_MISSING_FPS)
+            disabled = badge_key in (BADGE_UNSUPPORTED_LANGUAGE, BADGE_MISSING_FPS)
             if disabled:
                 item.setFlags(item.flags() & ~Qt.ItemIsEnabled)
                 item.setCheckState(Qt.Unchecked)
-                if badge_key == _BADGE_UNSUPPORTED_LANGUAGE:
+                if badge_key == BADGE_UNSUPPORTED_LANGUAGE:
                     item.setToolTip(
                         f"alignment model does not support {language!r}; "
                         "source unavailable for word-level sequencing"
@@ -413,34 +396,6 @@ class WordSequencerDialog(QDialog):
                 item.setCheckState(Qt.Checked)
             self._source_list.addItem(item)
         self._source_list.blockSignals(False)
-
-    def _format_source_row(
-        self,
-        source: Any,
-        src_clips: list[tuple[Any, Any]],
-        badge_key: str,
-        language: Optional[str],
-    ) -> str:
-        filename = (
-            getattr(source, "filename", None)
-            or str(getattr(source, "file_path", "")) or "unknown"
-        )
-        duration = getattr(source, "duration_seconds", None)
-        if duration is None:
-            # Try a derived duration_str if present.
-            duration_str = getattr(source, "duration_str", "?")
-        else:
-            duration_str = f"{float(duration):.1f}s"
-
-        if badge_key == _BADGE_ALIGNED:
-            badge = "✓ aligned"
-        elif badge_key == _BADGE_NEEDS_ALIGNMENT:
-            badge = "… needs alignment"
-        elif badge_key == _BADGE_UNSUPPORTED_LANGUAGE:
-            badge = f"⚠ unsupported language ({language})"
-        else:  # missing fps
-            badge = "⚠ missing fps"
-        return f"{filename}  ·  {duration_str}  ·  {badge}  ·  {len(src_clips)} clip(s)"
 
     def _checked_clips(self) -> list[tuple[Any, Any]]:
         out: list[tuple[Any, Any]] = []
@@ -454,12 +409,7 @@ class WordSequencerDialog(QDialog):
 
     def _alignable_pending_clips(self) -> list:
         """Return ``Clip`` objects from checked sources missing word data."""
-        pending: list = []
-        for clip, _source in self._checked_clips():
-            transcript = getattr(clip, "transcript", None) or []
-            if any(getattr(seg, "words", None) is None for seg in transcript):
-                pending.append(clip)
-        return pending
+        return alignable_pending_clips(self._checked_clips())
 
     def _selected_mode_key(self) -> str:
         return _MODE_OPTIONS[self._mode_combo.currentIndex()][0]
@@ -539,8 +489,8 @@ class WordSequencerDialog(QDialog):
         # will fall back to triggering alignment. That's fine — we let
         # Accept stay enabled in that case so the user can opt into the run.
         any_needs_alignment = any(
-            self._source_status.get(item_source_id, (_BADGE_ALIGNED, None))[0]
-            == _BADGE_NEEDS_ALIGNMENT
+            self._source_status.get(item_source_id, (BADGE_ALIGNED, None))[0]
+            == BADGE_NEEDS_ALIGNMENT
             for item_source_id in self._checked_source_ids()
         )
 
@@ -553,7 +503,7 @@ class WordSequencerDialog(QDialog):
 
         if mode == "by_chosen_words":
             entries = _parse_word_list(self._chosen_words_input.toPlainText())
-            normalized = [_normalize_for_lookup(w) for w in entries]
+            normalized = [normalize_word(w) for w in entries]
             normalized = [w for w in normalized if w]
             found = [w for w in normalized if w in corpus]
             if normalized:
@@ -575,7 +525,7 @@ class WordSequencerDialog(QDialog):
 
         if mode == "from_word_list":
             entries = _parse_word_list(self._userlist_input.toPlainText())
-            normalized = [_normalize_for_lookup(w) for w in entries]
+            normalized = [normalize_word(w) for w in entries]
             normalized = [w for w in normalized if w]
             unrecognized = [w for w in normalized if w not in corpus]
             if normalized:

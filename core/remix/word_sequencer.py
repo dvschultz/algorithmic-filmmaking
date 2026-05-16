@@ -41,7 +41,6 @@ from core.spine.words import (
 )
 
 if TYPE_CHECKING:
-    from models.clip import Clip, Source
     from models.sequence import SequenceClip
 
 
@@ -108,7 +107,7 @@ def _apply_mode(inv, mode: WordMode, mode_params: dict) -> list[WordInstance]:
 # ---------------------------------------------------------------------------
 
 
-def _validate_word_data(clips: list[tuple[Any, Any]]) -> None:
+def validate_word_data(clips: list[tuple[Any, Any]]) -> None:
     """Raise ``MissingWordDataError`` if any selected clip has unaligned segments."""
     missing: list[str] = []
     for clip, _source in clips:
@@ -117,11 +116,6 @@ def _validate_word_data(clips: list[tuple[Any, Any]]) -> None:
             missing.append(getattr(clip, "id", ""))
     if missing:
         raise MissingWordDataError(missing)
-
-
-# Public alias so the LLM-composer wrapper can call into the same validation
-# logic without poking the underscore name.
-validate_word_data = _validate_word_data
 
 
 # ---------------------------------------------------------------------------
@@ -260,7 +254,7 @@ def generate_word_sequence(
 
     # Validation must happen BEFORE any frame math — the dialog catches
     # MissingWordDataError and triggers alignment.
-    _validate_word_data(clips)
+    validate_word_data(clips)
 
     inventory = build_inventory(clips)
     instances = _apply_mode(inventory, mode, mode_params)

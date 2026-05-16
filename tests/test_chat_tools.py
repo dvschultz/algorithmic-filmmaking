@@ -7,6 +7,7 @@ import pytest
 
 from core.analysis.audio import AudioAnalysis
 from core.project import Project
+from core.transcription import WordTimestamp
 from models.clip import Source, Clip
 
 # Import shared test helpers from conftest.py
@@ -1602,6 +1603,35 @@ class TestAnalyzeGazeTool:
 
 class TestGazeDataInClipListings:
     """Tests for gaze data inclusion in clip listing tools."""
+
+    def test_list_clips_includes_word_alignment_status(self):
+        """Test that list_clips reports whether transcript word data exists."""
+        from core.chat_tools import list_clips
+
+        project = _create_chat_test_project()
+        aligned_empty = make_test_clip("clip-aligned-empty", transcript_text="Hello world")
+        aligned_empty.transcript[0].words = []
+        aligned_words = make_test_clip("clip-aligned-words", transcript_text="Has words")
+        aligned_words.transcript[0].words = [
+            WordTimestamp(text="Has", start=0.0, end=0.5, probability=0.9)
+        ]
+        unaligned = make_test_clip("clip-unaligned", transcript_text="Missing words")
+        no_transcript = Clip(
+            id="clip-no-transcript",
+            source_id="src-1",
+            start_frame=0,
+            end_frame=90,
+        )
+        project.add_clips([aligned_empty, aligned_words, unaligned, no_transcript])
+
+        result = list_clips(main_window=None, project=project)
+
+        assert result["success"] is True
+        by_id = {clip["id"]: clip for clip in result["clips"]}
+        assert by_id["clip-aligned-empty"]["has_word_alignment"] is True
+        assert by_id["clip-aligned-words"]["has_word_alignment"] is True
+        assert by_id["clip-unaligned"]["has_word_alignment"] is False
+        assert by_id["clip-no-transcript"]["has_word_alignment"] is False
 
     def test_list_clips_includes_gaze_when_present(self):
         """Test that list_clips includes gaze fields for analyzed clips."""

@@ -50,7 +50,6 @@ from typing import TYPE_CHECKING, Literal, Optional
 if TYPE_CHECKING:
     # Project models — type-only imports keep the spine module loadable
     # without triggering downstream imports we don't need at runtime.
-    from core.transcription import TranscriptSegment
     from models.clip import Clip, Source
 
 

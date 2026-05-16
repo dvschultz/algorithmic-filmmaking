@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -76,9 +77,43 @@ class TestAlignWordsLanguageGating(unittest.TestCase):
             start_time=0.0, end_time=1.0, text="hello",
             confidence=0.9, words=None, language="xx",
         )
-        with self.assertRaises(UnsupportedLanguageError) as ctx:
+        with patch("importlib.import_module", side_effect=ModuleNotFoundError), \
+             self.assertRaises(UnsupportedLanguageError) as ctx:
             align_words("/path/to/audio.wav", [seg])
         self.assertEqual(ctx.exception.language, "xx")
+
+    def test_runtime_without_supported_languages_skips_static_gate(self):
+        """Installed runtime with no exported language list lets model raise later."""
+        from core.analysis import alignment
+
+        def _fake_import_module(name):
+            if name == "ctc_forced_aligner":
+                return types.SimpleNamespace()
+            if name == "ctc_forced_aligner.alignment_utils":
+                return types.SimpleNamespace()
+            raise AssertionError(f"unexpected import: {name}")
+
+        with patch("importlib.import_module", side_effect=_fake_import_module):
+            alignment._check_language_supported("xx")
+            self.assertTrue(alignment.is_language_supported("xx"))
+
+    def test_runtime_supported_languages_still_rejects_unknown_code(self):
+        """If the runtime exposes a language list, keep the explicit error."""
+        from core.analysis import alignment
+
+        def _fake_import_module(name):
+            if name == "ctc_forced_aligner":
+                return types.SimpleNamespace()
+            if name == "ctc_forced_aligner.alignment_utils":
+                return types.SimpleNamespace(SUPPORTED_LANGUAGES={"en": "eng"})
+            raise AssertionError(f"unexpected import: {name}")
+
+        with patch("importlib.import_module", side_effect=_fake_import_module), \
+             self.assertRaises(alignment.UnsupportedLanguageError):
+            alignment._check_language_supported("xx")
+
+        with patch("importlib.import_module", side_effect=_fake_import_module):
+            self.assertFalse(alignment.is_language_supported("xx"))
 
     def test_language_is_read_from_first_segment(self):
         """Language passes through to the alignment engine call."""

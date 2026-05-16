@@ -714,6 +714,9 @@ def list_clips(
             "duration_seconds": round(duration, 2),
             "shot_type": getattr(clip, 'shot_type', None),
             "has_speech": bool(getattr(clip, 'transcript', None)),
+            "has_word_alignment": bool(
+                clip.transcript and any(getattr(seg, "words", None) is not None for seg in clip.transcript)
+            ),
             "dominant_colors": getattr(clip, 'dominant_colors', None),
             "object_labels": getattr(clip, 'object_labels', None),
             "person_count": getattr(clip, 'person_count', None),

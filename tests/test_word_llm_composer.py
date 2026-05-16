@@ -17,11 +17,9 @@ import os
 import time
 from dataclasses import dataclass
 from typing import Optional
-from unittest.mock import patch
 
 import pytest
 
-from core.llm_client import LLMEmptyResponseError, OllamaUnreachableError
 from core.remix.word_llm_composer import (
     MissingWordDataError,
     generate_llm_word_sequence,

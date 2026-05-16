@@ -155,20 +155,21 @@ def distribute_words_to_segments(
 
 # Languages supported by the MMS-based ``ctc-forced-aligner`` model.
 #
-# Mirrors the ISO 639-1 / ISO 639-3 set covered by Meta's MMS-1B-ALL alignment
-# model (the default backend the library ships with). The runtime canonical
-# list lives inside ``ctc_forced_aligner`` (queried via
-# ``ctc_forced_aligner.alignment_utils.SUPPORTED_LANGUAGES`` when the package is
-# importable), but we keep a small, conservative subset here so the language
-# pre-check can run without importing the heavy module.
+# Mirrors a small ISO 639-1 subset covered by Meta's MMS-1B-ALL alignment model
+# (the default backend the library ships with). Some runtime versions expose a
+# broader language list from
+# ``ctc_forced_aligner.alignment_utils.SUPPORTED_LANGUAGES``; others do not.
+# We keep this conservative subset so the pre-install/test path can still
+# reject obviously unsupported language codes without importing the heavy
+# module.
 #
-# This static set is treated as authoritative for the unit-test path; if the
-# real runtime can prove a language is also supported, ``_check_language_supported``
-# delegates to the runtime when available.
+# This static set is authoritative only when the runtime package is not
+# importable. Once the runtime is installed, missing/changed language-list APIs
+# should not block alignment before the model gets a chance to run.
 _FALLBACK_SUPPORTED_ISO_639_1: frozenset[str] = frozenset(
     {
-        # A small, high-confidence subset — used only when the runtime
-        # SUPPORTED_LANGUAGES lookup is unavailable.
+        # A small, high-confidence subset used only before the runtime is
+        # installed.
         "en", "fr", "de", "es", "it", "pt", "nl", "pl", "ru", "uk", "cs",
         "sv", "no", "da", "fi", "tr", "el", "ro", "hu", "bg", "hr", "sk",
         "sl", "lt", "lv", "et", "ar", "fa", "he", "hi", "bn", "ta", "te",
@@ -442,27 +443,34 @@ def ensure_word_alignment_runtime_available():
 def _check_language_supported(language: str) -> None:
     """Raise ``UnsupportedLanguageError`` when the language can't be aligned.
 
-    Tries the runtime's authoritative ``SUPPORTED_LANGUAGES`` map first; falls
-    back to a conservative static list when the runtime isn't installed. This
-    lets the test path validate language gating without requiring the heavy
-    dependency.
+    Tries the runtime's ``SUPPORTED_LANGUAGES`` map when available; falls back
+    to a conservative static list only when the runtime isn't installed. If the
+    runtime package is importable but no language list is exported, the gate is
+    intentionally loose and the aligner/model raises later.
     """
     code = (language or "").lower().strip()
     if not code:
         raise UnsupportedLanguageError(language)
 
+    import importlib
+
     try:
-        # Local import: heavy dep is optional at module load time.
-        from ctc_forced_aligner.alignment_utils import (
-            SUPPORTED_LANGUAGES,  # type: ignore[attr-defined]
-        )
+        # Local import: optional dep is not touched at module load time.
+        importlib.import_module("ctc_forced_aligner")
     except Exception:
-        # ctc-forced-aligner isn't installed (or its API changed). Use the
-        # static fallback so language gating still works in the test / pre-install
-        # path. The runtime will raise its own clear error later if the language
-        # is rejected by the real model.
+        # ctc-forced-aligner isn't installed. Use the static fallback so
+        # language gating still works in the test / pre-install path.
         if code not in _FALLBACK_SUPPORTED_ISO_639_1:
             raise UnsupportedLanguageError(language)
+        return
+
+    try:
+        alignment_utils = importlib.import_module("ctc_forced_aligner.alignment_utils")
+        SUPPORTED_LANGUAGES = alignment_utils.SUPPORTED_LANGUAGES
+    except Exception:
+        # Runtime is present, but this package/version does not expose an
+        # authoritative language list. Do not reject MMS-capable codes based on
+        # our conservative fallback; let the real aligner/model report failures.
         return
 
     # Runtime present: SUPPORTED_LANGUAGES is typically a dict whose keys cover
@@ -484,6 +492,20 @@ def _check_language_supported(language: str) -> None:
         pass
 
     raise UnsupportedLanguageError(language)
+
+
+def is_language_supported(language: str) -> bool:
+    """Return whether the alignment gate accepts ``language``.
+
+    This is the public, non-raising API for UI code that only needs to decide
+    whether to disable a source in advance. The alignment runtime can still
+    reject a language later when no authoritative language list is available.
+    """
+    try:
+        _check_language_supported(language)
+    except UnsupportedLanguageError:
+        return False
+    return True
 
 
 def _require_ffmpeg() -> str:
@@ -674,4 +696,5 @@ __all__ = [
     "distribute_words_to_segments",
     "ensure_word_alignment_runtime_available",
     "extract_audio_to_wav",
+    "is_language_supported",
 ]

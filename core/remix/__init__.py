@@ -396,6 +396,13 @@ def generate_sequence(
         return result + without_gaze
 
     else:
+        if _is_dialog_only_algorithm(algorithm):
+            raise NotImplementedError(
+                f"Algorithm {algorithm!r} is dialog-only and cannot be generated "
+                "with core.remix.generate_sequence(); use its dialog/direct "
+                "generator instead."
+            )
+
         # Sequential - use original order
         return clips_to_use
 
@@ -420,6 +427,18 @@ def assign_random_transforms(
         seq_clip.hflip = bool(transform_options.get("hflip")) and rng.random() < 0.5
         seq_clip.vflip = bool(transform_options.get("vflip")) and rng.random() < 0.5
         seq_clip.reverse = bool(transform_options.get("reverse")) and rng.random() < 0.5
+
+
+def _is_dialog_only_algorithm(algorithm: str) -> bool:
+    """Return whether an unhandled registered algorithm requires a dialog."""
+    try:
+        from ui.algorithm_config import ALGORITHM_CONFIG
+    except Exception as e:
+        logger.warning("Could not load algorithm config for fallback check: %s", e)
+        return False
+
+    config = ALGORITHM_CONFIG.get(algorithm.lower())
+    return bool(config and config.get("is_dialog"))
 
 
 def _auto_compute_brightness(clips: List[Tuple[Any, Any]]) -> None:

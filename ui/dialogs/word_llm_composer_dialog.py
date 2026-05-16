@@ -41,26 +41,18 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from core.remix.word_llm_composer import generate_llm_word_sequence  # noqa: F401 - re-exported symbol used in tests
-from core.remix.word_sequencer import MissingWordDataError
+from core.llm_client import check_ollama_health_sync
 from ui.dialogs._word_source_picker import (
     BADGE_ALIGNED,
     BADGE_MISSING_FPS,
     BADGE_NEEDS_ALIGNMENT,
     BADGE_UNSUPPORTED_LANGUAGE,
     WordAlignmentController,
+    alignable_pending_clips,
     classify_source_alignment,
+    format_source_row,
 )
 from ui.theme import theme, Spacing, TypeScale, UISizes
-
-# Backward-compat aliases. The canonical names live in
-# ``ui.dialogs._word_source_picker``; these short-lived underscore aliases
-# keep any external imports from the previous module working.
-_BADGE_ALIGNED = BADGE_ALIGNED
-_BADGE_NEEDS_ALIGNMENT = BADGE_NEEDS_ALIGNMENT
-_BADGE_UNSUPPORTED_LANGUAGE = BADGE_UNSUPPORTED_LANGUAGE
-_BADGE_MISSING_FPS = BADGE_MISSING_FPS
-_classify_source = classify_source_alignment
 
 logger = logging.getLogger(__name__)
 
@@ -75,20 +67,6 @@ _REPEAT_POLICIES = [
     ("longest", "Longest"),
     ("shortest", "Shortest"),
 ]
-
-
-def _check_ollama_health_sync(api_base: str = "http://localhost:11434") -> tuple[bool, str]:
-    """Synchronously call the async ``check_ollama_health`` helper.
-
-    Thin shim over :func:`core.llm_client.check_ollama_health_sync` so the
-    dialog has a stable default for the ``_ollama_health_fn`` injection
-    point (tests pass a stub).
-    """
-    try:
-        from core.llm_client import check_ollama_health_sync
-    except Exception as exc:  # noqa: BLE001 — import-time error, surface it
-        return False, f"LLM client unavailable: {exc}"
-    return check_ollama_health_sync(api_base)
 
 
 class WordLLMComposerDialog(QDialog):
@@ -107,7 +85,7 @@ class WordLLMComposerDialog(QDialog):
         super().__init__(parent)
         self._clips = list(clips or [])
         self._project = project
-        self._health_probe = _ollama_health_fn or _check_ollama_health_sync
+        self._health_probe = _ollama_health_fn or check_ollama_health_sync
 
         # Worker state. The alignment controller owns the alignment-worker
         # lifetime; only the LLM compose worker is owned directly here.
@@ -424,16 +402,16 @@ class WordLLMComposerDialog(QDialog):
         for source_id, src_clips in self._clips_by_source_id.items():
             source = self._sources_by_id.get(source_id)
             badge_key, language = self._source_status.get(
-                source_id, (_BADGE_ALIGNED, None)
+                source_id, (BADGE_ALIGNED, None)
             )
-            label = self._format_source_row(source, src_clips, badge_key, language)
+            label = format_source_row(source, src_clips, badge_key, language)
             item = QListWidgetItem(label)
             item.setData(Qt.UserRole, source_id)
-            disabled = badge_key in (_BADGE_UNSUPPORTED_LANGUAGE, _BADGE_MISSING_FPS)
+            disabled = badge_key in (BADGE_UNSUPPORTED_LANGUAGE, BADGE_MISSING_FPS)
             if disabled:
                 item.setFlags(item.flags() & ~Qt.ItemIsEnabled)
                 item.setCheckState(Qt.Unchecked)
-                if badge_key == _BADGE_UNSUPPORTED_LANGUAGE:
+                if badge_key == BADGE_UNSUPPORTED_LANGUAGE:
                     item.setToolTip(
                         f"alignment model does not support {language!r}; "
                         "source unavailable for word-level sequencing"
@@ -446,32 +424,6 @@ class WordLLMComposerDialog(QDialog):
             self._source_list.addItem(item)
         self._source_list.blockSignals(False)
 
-    def _format_source_row(
-        self,
-        source: Any,
-        src_clips: list[tuple[Any, Any]],
-        badge_key: str,
-        language: Optional[str],
-    ) -> str:
-        filename = (
-            getattr(source, "filename", None)
-            or str(getattr(source, "file_path", "")) or "unknown"
-        )
-        duration = getattr(source, "duration_seconds", None)
-        if duration is None:
-            duration_str = getattr(source, "duration_str", "?")
-        else:
-            duration_str = f"{float(duration):.1f}s"
-        if badge_key == _BADGE_ALIGNED:
-            badge = "✓ aligned"
-        elif badge_key == _BADGE_NEEDS_ALIGNMENT:
-            badge = "… needs alignment"
-        elif badge_key == _BADGE_UNSUPPORTED_LANGUAGE:
-            badge = f"⚠ unsupported language ({language})"
-        else:
-            badge = "⚠ missing fps"
-        return f"{filename}  ·  {duration_str}  ·  {badge}  ·  {len(src_clips)} clip(s)"
-
     def _checked_clips(self) -> list[tuple[Any, Any]]:
         out: list[tuple[Any, Any]] = []
         for i in range(self._source_list.count()):
@@ -483,12 +435,7 @@ class WordLLMComposerDialog(QDialog):
         return out
 
     def _alignable_pending_clips(self) -> list:
-        pending: list = []
-        for clip, _source in self._checked_clips():
-            transcript = getattr(clip, "transcript", None) or []
-            if any(getattr(seg, "words", None) is None for seg in transcript):
-                pending.append(clip)
-        return pending
+        return alignable_pending_clips(self._checked_clips())
 
     # ------------------------------------------------------------ Slots
 
@@ -549,8 +496,8 @@ class WordLLMComposerDialog(QDialog):
         inv = self._get_cached_inventory(checked)
         corpus_size = len(inv.by_word) if inv is not None else 0
         any_needs_alignment = any(
-            self._source_status.get(sid, (_BADGE_ALIGNED, None))[0]
-            == _BADGE_NEEDS_ALIGNMENT
+            self._source_status.get(sid, (BADGE_ALIGNED, None))[0]
+            == BADGE_NEEDS_ALIGNMENT
             for sid in self._checked_source_ids()
         )
         if corpus_size == 0 and not any_needs_alignment:

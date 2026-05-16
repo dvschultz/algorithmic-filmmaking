@@ -38,7 +38,9 @@ __all__ = [
     "BADGE_NEEDS_ALIGNMENT",
     "BADGE_UNSUPPORTED_LANGUAGE",
     "WordAlignmentController",
+    "alignable_pending_clips",
     "classify_source_alignment",
+    "format_source_row",
 ]
 
 
@@ -51,6 +53,16 @@ BADGE_ALIGNED = "aligned"
 BADGE_NEEDS_ALIGNMENT = "needs_alignment"
 BADGE_UNSUPPORTED_LANGUAGE = "unsupported_language"
 BADGE_MISSING_FPS = "missing_fps"
+
+
+def _language_is_supported(language: str) -> bool:
+    """Return whether the alignment stack supports ``language``.
+
+    This indirection keeps tests able to stub the gate without importing the
+    heavy optional alignment runtime.
+    """
+    from core.analysis.alignment import is_language_supported
+    return bool(is_language_supported(language))
 
 
 def classify_source_alignment(
@@ -91,16 +103,8 @@ def classify_source_alignment(
 
     if language:
         try:
-            # Reuse the runtime / fallback gate from U2. We deliberately
-            # call the underscore name from a single place (here) instead
-            # of every dialog.
-            from core.analysis.alignment import (
-                UnsupportedLanguageError,
-                _check_language_supported,
-            )
-            _check_language_supported(language)
-        except UnsupportedLanguageError:
-            return BADGE_UNSUPPORTED_LANGUAGE, language
+            if not _language_is_supported(language):
+                return BADGE_UNSUPPORTED_LANGUAGE, language
         except Exception:
             # Fail open — if the gate itself errored we don't want to lock
             # users out of every source.
@@ -109,6 +113,44 @@ def classify_source_alignment(
     if needs_alignment:
         return BADGE_NEEDS_ALIGNMENT, language
     return BADGE_ALIGNED, language
+
+
+def format_source_row(
+    source: Any,
+    src_clips: list[tuple[Any, Any]],
+    badge_key: str,
+    language: Optional[str],
+) -> str:
+    """Format the shared word-source picker row label."""
+    filename = (
+        getattr(source, "filename", None)
+        or str(getattr(source, "file_path", "")) or "unknown"
+    )
+    duration = getattr(source, "duration_seconds", None)
+    if duration is None:
+        duration_str = getattr(source, "duration_str", "?")
+    else:
+        duration_str = f"{float(duration):.1f}s"
+
+    if badge_key == BADGE_ALIGNED:
+        badge = "✓ aligned"
+    elif badge_key == BADGE_NEEDS_ALIGNMENT:
+        badge = "… needs alignment"
+    elif badge_key == BADGE_UNSUPPORTED_LANGUAGE:
+        badge = f"⚠ unsupported language ({language})"
+    else:
+        badge = "⚠ missing fps"
+    return f"{filename}  ·  {duration_str}  ·  {badge}  ·  {len(src_clips)} clip(s)"
+
+
+def alignable_pending_clips(checked_clips: list[tuple[Any, Any]]) -> list:
+    """Return checked ``Clip`` objects missing word-level data."""
+    pending: list = []
+    for clip, _source in checked_clips:
+        transcript = getattr(clip, "transcript", None) or []
+        if any(getattr(seg, "words", None) is None for seg in transcript):
+            pending.append(clip)
+    return pending
 
 
 # ---------------------------------------------------------------------------
