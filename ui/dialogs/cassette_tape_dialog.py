@@ -266,7 +266,7 @@ class CassetteTapeDialog(QDialog):
         super().__init__(parent)
         self.all_clips = clips
         self.sources_by_id = sources_by_id
-        self.project = project
+        self._project = project
         self.worker: Optional[CassetteTapeWorker] = None
         self.matches_by_phrase: dict[str, list[MatchResult]] = {}
         self._match_rows: list[_MatchRow] = []

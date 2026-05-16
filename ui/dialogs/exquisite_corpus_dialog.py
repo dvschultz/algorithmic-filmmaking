@@ -64,7 +64,7 @@ class ExquisiteCorpusDialog(QDialog):
         super().__init__(parent)
         self.clips = clips
         self.sources_by_id = sources_by_id
-        self.project = project
+        self._project = project
         self.extraction_results = {}
         self.poem_lines = []
         self.worker = None

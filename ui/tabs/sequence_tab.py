@@ -1437,7 +1437,7 @@ class SequenceTab(BaseTab):
         """
         from ui.dialogs.staccato_dialog import StaccatoDialog
 
-        dialog = StaccatoDialog(clips=clips, project=self.project, parent=self)
+        dialog = StaccatoDialog(clips=clips, project=self._project, parent=self)
         dialog.sequence_ready.connect(
             lambda seq_clips: self._apply_staccato_sequence(seq_clips, dialog.music_path)
         )

@@ -1,6 +1,8 @@
 """Tests for the audio source picker in StaccatoDialog (U5)."""
 
 import os
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -110,6 +112,95 @@ def test_combo_empty_project_shows_placeholder_and_import_new(qapp, patched_dial
     assert combo.itemData(2) == StaccatoDialog._IMPORT_NEW_SENTINEL
     # No music_path set
     assert dialog._music_path is None
+
+
+def test_empty_project_prompts_for_audio_when_dialog_is_shown(qapp, monkeypatch):
+    from core.project import Project
+    from ui.dialogs.staccato_dialog import StaccatoDialog
+
+    project = Project.new()
+    prompts = []
+
+    monkeypatch.setattr(StaccatoDialog, "_analyze_audio", lambda self: None)
+    monkeypatch.setattr(
+        StaccatoDialog,
+        "_on_import_new_audio",
+        lambda self: prompts.append(True),
+    )
+
+    dialog = StaccatoDialog(clips=[], project=project)
+    dialog.show()
+    qapp.processEvents()
+
+    assert prompts == [True]
+    dialog.deleteLater()
+    qapp.processEvents()
+
+
+def test_sequence_tab_staccato_route_passes_project_to_dialog(qapp, monkeypatch):
+    from core.project import Project
+    from models.clip import Clip, Source
+    from ui.dialogs import staccato_dialog
+    from ui.tabs.sequence_tab import SequenceTab
+
+    project = Project.new()
+    source = Source(id="src-1", file_path=Path("/tmp/test.mp4"), fps=24.0)
+    clip = Clip(id="clip-1", source_id=source.id, start_frame=0, end_frame=24)
+    tab = SequenceTab()
+    tab.set_project(project)
+    tab.set_available_clips(
+        [(clip, source)],
+        all_clips=[clip],
+        sources_by_id={source.id: source},
+    )
+    tab._gui_state = SimpleNamespace(analyze_selected_ids=[clip.id], cut_selected_ids=[])
+
+    captured = {}
+
+    class FakeSignal:
+        def connect(self, callback):
+            captured["callback"] = callback
+
+    class FakeStaccatoDialog:
+        def __init__(self, clips, project=None, parent=None):
+            captured["clips"] = clips
+            captured["project"] = project
+            captured["parent"] = parent
+            self.music_path = None
+            self.sequence_ready = FakeSignal()
+
+        def exec(self):
+            captured["exec"] = True
+
+    monkeypatch.setattr(staccato_dialog, "StaccatoDialog", FakeStaccatoDialog)
+
+    tab._on_card_clicked("staccato")
+
+    assert captured["clips"] == [(clip, source)]
+    assert captured["project"] is project
+    assert captured["parent"] is tab
+    assert captured["exec"] is True
+
+
+def test_sequence_tab_uses_private_project_attribute():
+    source = Path("ui/tabs/sequence_tab.py").read_text()
+
+    assert "self.project" not in source
+    assert "self._project" in source
+
+
+def test_dialog_sequencers_use_private_project_attribute():
+    dialog_paths = [
+        Path("ui/dialogs/cassette_tape_dialog.py"),
+        Path("ui/dialogs/exquisite_corpus_dialog.py"),
+        Path("ui/dialogs/free_association_dialog.py"),
+        Path("ui/dialogs/storyteller_dialog.py"),
+    ]
+
+    for path in dialog_paths:
+        source = path.read_text()
+        assert "self.project" not in source, path
+        assert "self._project" in source, path
 
 
 def test_selecting_existing_source_updates_music_path(qapp, make_audio, patched_dialog):

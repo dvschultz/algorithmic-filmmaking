@@ -78,7 +78,7 @@ class FreeAssociationDialog(QDialog):
         super().__init__(parent)
         self.clips = list(clips)
         self.sources_by_id = sources_by_id
-        self.project = project
+        self._project = project
 
         # Dialog state (source of truth — not kept on the worker)
         # sequence_built parallels rationales; rationales[0] is always None

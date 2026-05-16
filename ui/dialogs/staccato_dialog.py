@@ -302,6 +302,7 @@ class StaccatoDialog(QDialog):
         self._handler_executed = False
         self._sequence_data = None
         self._debug_info = None
+        self._auto_prompt_import_on_show = False
         self._onset_analysis_dirty = False
         self._detection_change_timer = QTimer(self)
         self._detection_change_timer.setSingleShot(True)
@@ -318,6 +319,20 @@ class StaccatoDialog(QDialog):
     def music_path(self) -> Path | None:
         """The music file used for this staccato sequence."""
         return self._music_path
+
+    def showEvent(self, event):
+        """Prompt for an audio file when Staccato opens with no audio library."""
+        super().showEvent(event)
+        if self._auto_prompt_import_on_show:
+            self._auto_prompt_import_on_show = False
+            QTimer.singleShot(0, self._prompt_for_initial_audio_import)
+
+    def _prompt_for_initial_audio_import(self) -> None:
+        if not self.isVisible() or self._music_path is not None:
+            return
+        if self._project is not None and self._project.audio_sources:
+            return
+        self._on_import_new_audio()
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -366,6 +381,10 @@ class StaccatoDialog(QDialog):
         self._audio_combo.setMinimumWidth(UISizes.COMBO_BOX_MIN_WIDTH)
         self._audio_combo.currentIndexChanged.connect(self._on_audio_combo_changed)
         file_row.addWidget(self._audio_combo, 1)
+
+        self._import_audio_btn = QPushButton("Import Audio")
+        self._import_audio_btn.clicked.connect(self._on_import_new_audio)
+        file_row.addWidget(self._import_audio_btn)
         layout.addLayout(file_row)
 
         # Stem separation controls
@@ -633,12 +652,14 @@ class StaccatoDialog(QDialog):
         audio_sources = list(self._project.audio_sources) if self._project is not None else []
 
         if not audio_sources:
-            self._audio_combo.addItem("No audio sources — import one below", None)
+            self._audio_combo.addItem("No audio sources yet", None)
             # Disable that placeholder so it's never picked as a real source
             model = self._audio_combo.model()
             item = model.item(0) if hasattr(model, "item") else None
             if item is not None:
                 item.setEnabled(False)
+            if selected_audio_source_id is None:
+                self._auto_prompt_import_on_show = True
         else:
             for audio in audio_sources:
                 label = f"{audio.filename} ({audio.duration_str})"

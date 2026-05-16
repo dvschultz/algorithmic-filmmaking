@@ -123,7 +123,7 @@ class StorytellerDialog(QDialog):
         super().__init__(parent)
         self.clips = clips
         self.sources_by_id = sources_by_id
-        self.project = project
+        self._project = project
         self.narrative_lines = []
         self.worker = None
         self._generation_failed = False
