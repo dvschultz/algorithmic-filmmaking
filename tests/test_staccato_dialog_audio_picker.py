@@ -183,7 +183,7 @@ def test_sequence_tab_staccato_route_passes_project_to_dialog(qapp, monkeypatch)
 
 
 def test_sequence_tab_uses_private_project_attribute():
-    source = Path("ui/tabs/sequence_tab.py").read_text()
+    source = Path("ui/tabs/sequence_tab.py").read_text(encoding="utf-8")
 
     assert "self.project" not in source
     assert "self._project" in source
@@ -198,7 +198,7 @@ def test_dialog_sequencers_use_private_project_attribute():
     ]
 
     for path in dialog_paths:
-        source = path.read_text()
+        source = path.read_text(encoding="utf-8")
         assert "self.project" not in source, path
         assert "self._project" in source, path
 
