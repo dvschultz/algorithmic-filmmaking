@@ -11,14 +11,13 @@ These tests pin the contract the U4 word-sequencer feature relies on:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 import pytest
 
 from core.spine.words import (
     MissingWordsError,
-    WordInstance,
     WordInventory,
     alphabetical,
     build_inventory,
@@ -26,6 +25,7 @@ from core.spine.words import (
     by_frequency,
     by_property,
     from_word_list,
+    normalize_word,
 )
 from core.transcription import TranscriptSegment, WordTimestamp
 
@@ -126,6 +126,10 @@ class TestBuildInventory:
         inv = build_inventory([(clip, MockSource())])
         assert list(inv.by_word.keys()) == ["don't"]
         assert len(inv.by_word["don't"]) == 2
+
+    def test_normalization_drops_non_printable_control_characters(self):
+        assert normalize_word("\x00Hello\u200b!") == "hello"
+        assert normalize_word("\u200b") == ""
 
     def test_by_clip_groups_words_by_clip_id(self):
         clip_a = MockClip(id="A", transcript=[_seg([("alpha", 0.0, 0.5), ("beta", 0.6, 1.0)])])
@@ -327,6 +331,21 @@ class TestByProperty:
         # Two least-frequent words first (singletons), then the doubled "a"s.
         words = [w.text for w in result]
         assert words[-2:] == ["a", "a"]
+
+    def test_identical_property_values_use_lexical_tiebreak(self):
+        clip = MockClip(
+            transcript=[
+                _seg(
+                    [
+                        ("beta", 0.0, 0.4),
+                        ("alfa", 0.5, 0.9),
+                    ]
+                )
+            ]
+        )
+        inv = build_inventory([(clip, MockSource())])
+        result = by_property(inv, key="length", order="ascending")
+        assert [w.text for w in result] == ["alfa", "beta"]
 
 
 # ---------------------------------------------------------------------------

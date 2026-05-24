@@ -82,6 +82,23 @@ def _make_aligned_clip(clip_id: str = "clip-1", source_id: str = "src-1") -> tup
     return clip, source
 
 
+def test_classify_source_alignment_flags_missing_transcript():
+    from ui.dialogs._word_source_picker import (
+        BADGE_NEEDS_TRANSCRIPTION,
+        classify_source_alignment,
+        format_source_row,
+    )
+
+    clip, source = _make_aligned_clip()
+    clip.transcript = None
+
+    badge, language = classify_source_alignment([(clip, source)])
+
+    assert badge == BADGE_NEEDS_TRANSCRIPTION
+    assert language is None
+    assert "needs transcription" in format_source_row(source, [(clip, source)], badge, language)
+
+
 def _make_unaligned_clip(clip_id: str = "clip-2", source_id: str = "src-2") -> tuple:
     source = Source(
         id=source_id,

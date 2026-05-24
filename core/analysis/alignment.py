@@ -182,15 +182,19 @@ _FALLBACK_SUPPORTED_ISO_639_1: frozenset[str] = frozenset(
 def align_words(
     audio_path: str,
     transcript_segments: "list[TranscriptSegment]",
+    *,
+    extract_audio: bool = True,
 ) -> "list[WordTimestamp]":
     """Produce word-level timestamps for a clip's audio.
 
     Args:
-        audio_path: Path to the clip's source media (video or audio file). The
-            function extracts a 16 kHz mono WAV from this path via FFmpeg
-            before running the alignment model. ``WordTimestamp.start`` /
-            ``.end`` returned here are clip-relative seconds — the same frame
-            of reference as ``TranscriptSegment.start_time``.
+        audio_path: Path to the clip's source media or a pre-extracted 16 kHz
+            mono WAV. By default, the function extracts a 16 kHz mono WAV via
+            FFmpeg before running the alignment model. Pass
+            ``extract_audio=False`` when the caller already owns a suitable WAV
+            to avoid a second FFmpeg pass. ``WordTimestamp.start`` / ``.end``
+            returned here are clip-relative seconds — the same frame of
+            reference as ``TranscriptSegment.start_time``.
         transcript_segments: The transcript for the clip. Language is read off
             ``transcript_segments[0].language``; passing legacy segments with
             ``language is None`` raises ``LanguageUnknownError``.
@@ -244,7 +248,7 @@ def align_words(
     if not full_text:
         return []
 
-    wav_path = extract_audio_to_wav(audio_path_obj)
+    wav_path = extract_audio_to_wav(audio_path_obj) if extract_audio else audio_path_obj
     try:
         try:
             raw_word_timings = _run_alignment_engine(
@@ -267,11 +271,13 @@ def align_words(
                 WordTimestamp,
             )
     finally:
-        # Always clean up the temp WAV, even if alignment raises.
-        try:
-            wav_path.unlink(missing_ok=True)
-        except OSError as cleanup_exc:
-            logger.warning("Failed to remove temp alignment WAV %s: %s", wav_path, cleanup_exc)
+        # Only clean up WAVs created by this function. Callers that pass
+        # extract_audio=False still own the file and its lifecycle.
+        if extract_audio:
+            try:
+                wav_path.unlink(missing_ok=True)
+            except OSError as cleanup_exc:
+                logger.warning("Failed to remove temp alignment WAV %s: %s", wav_path, cleanup_exc)
 
     return [
         WordTimestamp(
@@ -591,6 +597,12 @@ def extract_audio_to_wav(
         except OSError:
             pass
         raise AlignmentFFmpegError(f"FFmpeg binary not found: {exc}") from exc
+    except BaseException:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
     if tmp_path.stat().st_size == 0:
         # Defensive: FFmpeg can succeed but produce no audio (e.g. video-only

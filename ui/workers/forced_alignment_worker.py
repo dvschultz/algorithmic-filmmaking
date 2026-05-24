@@ -232,7 +232,11 @@ class ForcedAlignmentWorker(CancellableWorker):
                     self._log_cancelled()
                     break
 
-                words = alignment_mod.align_words(str(wav_path), clip.transcript)
+                words = alignment_mod.align_words(
+                    str(wav_path),
+                    clip.transcript,
+                    extract_audio=False,
+                )
                 self.clip_aligned.emit(clip.id, list(words))
             except Exception as exc:  # noqa: BLE001 — surface per-clip errors
                 self._log_error(str(exc), clip.id)

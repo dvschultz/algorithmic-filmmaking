@@ -148,11 +148,12 @@ class WordInventory:
 def normalize_word(word: str) -> str:
     """Normalize a single word for indexing.
 
-    Lowercase + strip surrounding ASCII punctuation. Internal punctuation
-    (apostrophes inside contractions, hyphens inside hyphenated words) is
-    preserved.
+    Lowercase, remove non-printable control/format characters, and strip
+    surrounding ASCII punctuation. Internal punctuation (apostrophes inside
+    contractions, hyphens inside hyphenated words) is preserved.
     """
-    return word.strip().strip(string.punctuation).lower()
+    printable = "".join(ch for ch in str(word) if ch.isprintable())
+    return printable.strip().strip(string.punctuation).lower()
 
 
 # ---------------------------------------------------------------------------

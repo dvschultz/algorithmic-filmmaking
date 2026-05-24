@@ -77,6 +77,18 @@ def test_ollama_absent_shows_install_page(qapp):
     assert dialog._accept_btn.isEnabled() is False
 
 
+def test_llm_composer_worker_default_timeout_is_dialog_safe(qapp):
+    from ui.workers.llm_composer_worker import LLMComposerWorker
+
+    worker = LLMComposerWorker(
+        clips=[],
+        prompt="test",
+        target_length=1,
+    )
+
+    assert worker._timeout == 30.0
+
+
 def test_ollama_healthy_shows_form(qapp):
     from ui.dialogs.word_llm_composer_dialog import WordLLMComposerDialog
 

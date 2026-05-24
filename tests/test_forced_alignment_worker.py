@@ -7,8 +7,7 @@ complications in the test environment.
 U3 of the Word Sequencer plan.
 """
 
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -147,7 +146,7 @@ class TestForcedAlignmentWorkerCancelContract:
 
         call_count = {"n": 0}
 
-        def fake_align_words(audio_path, segments):
+        def fake_align_words(audio_path, segments, **kwargs):
             # Pretend we did the work and return one word per call.
             call_count["n"] += 1
             words = [_make_word(0.0, 0.5, "fakeword")]
@@ -206,7 +205,7 @@ class TestForcedAlignmentWorkerHappyPath:
         progress_events: list[tuple[int, int]] = []
         completions: list[bool] = []
 
-        def fake_align_words(audio_path, segments):
+        def fake_align_words(audio_path, segments, **kwargs):
             return [_make_word(0.0, 0.5, "word")]
 
         with _patch_feature_ready_and_audio_extract(fake_wav), patch(
@@ -373,6 +372,10 @@ class TestForcedAlignmentWorkerSkipPredicate:
         # Only the partially-aligned and unaligned clips should run.
         assert sorted(ready_calls) == ["c-partial", "c-unaligned"]
         assert mock_align.call_count == 2
+        assert all(
+            call.kwargs.get("extract_audio") is False
+            for call in mock_align.call_args_list
+        )
 
     def test_clip_with_no_transcript_is_skipped(
         self, qapp_fixture, english_source, tmp_path
@@ -431,7 +434,7 @@ class TestForcedAlignmentWorkerErrorPath:
 
         call_count = {"n": 0}
 
-        def fake_align_words(audio_path, segments):
+        def fake_align_words(audio_path, segments, **kwargs):
             call_count["n"] += 1
             if call_count["n"] == 2:
                 raise RuntimeError("Simulated alignment failure")
@@ -481,7 +484,7 @@ class TestForcedAlignmentWorkerErrorPath:
         errors: list[str] = []
         completions: list[bool] = []
 
-        def boom(audio_path, segments):
+        def boom(audio_path, segments, **kwargs):
             raise UnsupportedLanguageError("xx")
 
         with _patch_feature_ready_and_audio_extract(fake_wav), patch(

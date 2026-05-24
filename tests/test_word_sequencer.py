@@ -209,6 +209,16 @@ class TestMissingFps:
                 mode_params={},
             )
 
+    def test_nan_fps_raises(self):
+        clip = MockClip(transcript=[_seg([("a", 0.0, 0.5)])])
+        src = MockSource(fps=float("nan"))
+        with pytest.raises(ValueError, match="fps"):
+            generate_word_sequence(
+                clips=[(clip, src)],
+                mode="alphabetical",
+                mode_params={},
+            )
+
 
 # ---------------------------------------------------------------------------
 # Mode plumbing

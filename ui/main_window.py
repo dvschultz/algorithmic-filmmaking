@@ -1716,6 +1716,10 @@ class MainWindow(QMainWindow):
         """Open the settings dialog."""
         # Disable path settings if background operations are running
         paths_disabled = self._is_any_worker_running()
+        try:
+            self.settings.youtube_api_key = get_youtube_api_key()
+        except Exception as exc:
+            logger.debug("Could not hydrate YouTube key before opening settings: %s", exc)
         dialog = SettingsDialog(self.settings, paths_disabled=paths_disabled, parent=self)
         if dialog.exec() == SettingsDialog.Accepted:
             self.settings = dialog.get_settings()

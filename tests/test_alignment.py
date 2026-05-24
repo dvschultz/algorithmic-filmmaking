@@ -205,6 +205,31 @@ class TestAlignWordsHappyPath(unittest.TestCase):
         ffmpeg_mock.assert_called_once_with(self.audio_path)
         engine_mock.assert_called_once()
 
+    def test_pre_extracted_wav_skips_second_ffmpeg_pass(self):
+        """Callers that already extracted a clip WAV can avoid double extraction."""
+        from core.analysis import alignment
+
+        segments = [
+            TranscriptSegment(
+                start_time=0.0, end_time=1.0, text="hello",
+                confidence=0.9, words=None, language="en",
+            ),
+        ]
+        with patch.object(alignment, "extract_audio_to_wav") as ffmpeg_mock, \
+             patch.object(alignment, "_run_alignment_engine", return_value=[
+                 {"start": 0.0, "end": 0.5, "text": "hello", "score": 0.9},
+             ]) as engine_mock:
+            words = alignment.align_words(
+                str(self.fake_wav),
+                segments,
+                extract_audio=False,
+            )
+
+        self.assertEqual([word.text for word in words], ["hello"])
+        ffmpeg_mock.assert_not_called()
+        engine_mock.assert_called_once()
+        self.assertTrue(self.fake_wav.exists(), "Caller-owned WAV should not be deleted")
+
     def test_word_count_matches_engine_output(self):
         """The output count tracks the engine — not the transcript."""
         segments = [
@@ -533,6 +558,71 @@ class TestExtractAudioCleanup(unittest.TestCase):
                 captured["path"].exists(),
                 "Failed extraction must clean up its temp WAV",
             )
+        finally:
+            src_path.unlink(missing_ok=True)
+
+    def test_base_exception_during_extract_cleans_up_temp_wav(self):
+        from core.analysis import alignment
+        import subprocess as _subprocess
+
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as src:
+            src_path = Path(src.name)
+
+        try:
+            captured: dict[str, Path] = {}
+            real_named_tmp = tempfile.NamedTemporaryFile
+
+            def _capturing_tmp(*args, **kwargs):
+                handle = real_named_tmp(*args, **kwargs)
+                captured["path"] = Path(handle.name)
+                return handle
+
+            def _boom(*args, **kwargs):
+                raise _subprocess.TimeoutExpired(cmd=args[0], timeout=10)
+
+            with patch.object(alignment, "_require_ffmpeg", return_value="/usr/bin/ffmpeg"), \
+                 patch.object(alignment.tempfile, "NamedTemporaryFile", side_effect=_capturing_tmp), \
+                 patch.object(alignment.subprocess, "run", side_effect=_boom):
+                with self.assertRaises(_subprocess.TimeoutExpired):
+                    alignment.extract_audio_to_wav(src_path)
+
+            self.assertIn("path", captured)
+            self.assertFalse(
+                captured["path"].exists(),
+                "Unexpected extract exceptions must clean up the temp WAV",
+            )
+        finally:
+            src_path.unlink(missing_ok=True)
+
+    def test_extract_range_adds_start_and_end_args(self):
+        from core.analysis import alignment
+
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as src:
+            src_path = Path(src.name)
+
+        captured: dict[str, list[str]] = {}
+
+        def _fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            Path(cmd[-1]).write_bytes(b"wav")
+            return None
+
+        try:
+            with patch.object(alignment, "_require_ffmpeg", return_value="/usr/bin/ffmpeg"), \
+                 patch.object(alignment.subprocess, "run", side_effect=_fake_run):
+                wav_path = alignment.extract_audio_to_wav(
+                    src_path,
+                    start_time=1.25,
+                    end_time=2.5,
+                )
+
+            try:
+                self.assertIn("-ss", captured["cmd"])
+                self.assertIn("1.25", captured["cmd"])
+                self.assertIn("-to", captured["cmd"])
+                self.assertIn("2.5", captured["cmd"])
+            finally:
+                wav_path.unlink(missing_ok=True)
         finally:
             src_path.unlink(missing_ok=True)
 

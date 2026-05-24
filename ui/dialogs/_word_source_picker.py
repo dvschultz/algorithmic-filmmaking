@@ -36,6 +36,7 @@ __all__ = [
     "BADGE_ALIGNED",
     "BADGE_MISSING_FPS",
     "BADGE_NEEDS_ALIGNMENT",
+    "BADGE_NEEDS_TRANSCRIPTION",
     "BADGE_UNSUPPORTED_LANGUAGE",
     "WordAlignmentController",
     "alignable_pending_clips",
@@ -50,6 +51,7 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 BADGE_ALIGNED = "aligned"
+BADGE_NEEDS_TRANSCRIPTION = "needs_transcription"
 BADGE_NEEDS_ALIGNMENT = "needs_alignment"
 BADGE_UNSUPPORTED_LANGUAGE = "unsupported_language"
 BADGE_MISSING_FPS = "missing_fps"
@@ -82,6 +84,7 @@ def classify_source_alignment(
 
         - ``BADGE_MISSING_FPS`` — the source has no ``fps`` (we can't convert
           word boundaries to frames; the source is hard-unavailable).
+        - ``BADGE_NEEDS_TRANSCRIPTION`` — at least one clip has no transcript.
         - ``BADGE_UNSUPPORTED_LANGUAGE`` — the alignment model rejects the
           detected language; source is unavailable for word sequencing.
         - ``BADGE_NEEDS_ALIGNMENT`` — at least one segment has
@@ -89,17 +92,25 @@ def classify_source_alignment(
         - ``BADGE_ALIGNED`` — every segment already has word data.
     """
     language: Optional[str] = None
+    needs_transcription = False
     needs_alignment = False
     for clip, source in clips_for_source:
         if getattr(source, "fps", None) in (None, 0):
             return BADGE_MISSING_FPS, language
-        transcript = getattr(clip, "transcript", None) or []
+        transcript = getattr(clip, "transcript", None)
+        if transcript is None:
+            needs_transcription = True
+            continue
+        transcript = transcript or []
         for seg in transcript:
             seg_lang = getattr(seg, "language", None)
             if seg_lang and language is None:
                 language = seg_lang
             if getattr(seg, "words", None) is None:
                 needs_alignment = True
+
+    if needs_transcription:
+        return BADGE_NEEDS_TRANSCRIPTION, language
 
     if language:
         try:
@@ -134,6 +145,8 @@ def format_source_row(
 
     if badge_key == BADGE_ALIGNED:
         badge = "✓ aligned"
+    elif badge_key == BADGE_NEEDS_TRANSCRIPTION:
+        badge = "… needs transcription"
     elif badge_key == BADGE_NEEDS_ALIGNMENT:
         badge = "… needs alignment"
     elif badge_key == BADGE_UNSUPPORTED_LANGUAGE:

@@ -51,6 +51,7 @@ from ui.dialogs._word_source_picker import (
     BADGE_ALIGNED,
     BADGE_MISSING_FPS,
     BADGE_NEEDS_ALIGNMENT,
+    BADGE_NEEDS_TRANSCRIPTION,
     BADGE_UNSUPPORTED_LANGUAGE,
     WordAlignmentController,
     alignable_pending_clips,
@@ -380,7 +381,11 @@ class WordSequencerDialog(QDialog):
             label = format_source_row(source, src_clips, badge_key, language)
             item = QListWidgetItem(label)
             item.setData(Qt.UserRole, source_id)
-            disabled = badge_key in (BADGE_UNSUPPORTED_LANGUAGE, BADGE_MISSING_FPS)
+            disabled = badge_key in (
+                BADGE_UNSUPPORTED_LANGUAGE,
+                BADGE_MISSING_FPS,
+                BADGE_NEEDS_TRANSCRIPTION,
+            )
             if disabled:
                 item.setFlags(item.flags() & ~Qt.ItemIsEnabled)
                 item.setCheckState(Qt.Unchecked)
@@ -388,6 +393,10 @@ class WordSequencerDialog(QDialog):
                     item.setToolTip(
                         f"alignment model does not support {language!r}; "
                         "source unavailable for word-level sequencing"
+                    )
+                elif badge_key == BADGE_NEEDS_TRANSCRIPTION:
+                    item.setToolTip(
+                        "source has clips without transcripts; transcribe it before word sequencing"
                     )
                 else:
                     item.setToolTip("source missing fps metadata")

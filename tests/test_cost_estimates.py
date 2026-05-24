@@ -7,9 +7,7 @@ from typing import Optional
 from core.cost_estimates import (
     estimate_sequence_cost,
     estimate_intention_cost,
-    TIERED_OPERATIONS,
     METADATA_CHECKS,
-    OperationEstimate,
 )
 
 
@@ -288,6 +286,11 @@ class TestMetadataChecks:
         seg_none = SimpleNamespace(words=None)
         clip_unaligned = MockClip(transcript=[seg_none])
         assert not METADATA_CHECKS["transcription_with_words"](clip_unaligned)
+
+        # ``words=[]`` means alignment ran and produced no words.
+        seg_empty_words = SimpleNamespace(words=[])
+        clip_empty_aligned = MockClip(transcript=[seg_empty_words])
+        assert METADATA_CHECKS["transcription_with_words"](clip_empty_aligned)
 
         # Transcript with at least one segment carrying a non-empty word
         # list → True.
