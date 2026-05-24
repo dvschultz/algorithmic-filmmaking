@@ -1,6 +1,7 @@
 """Tests for optional packaging runtime helpers."""
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -129,6 +130,31 @@ def test_collect_windows_ffmpeg_binaries_rejects_duplicate_required_binaries(tmp
 
     with pytest.raises(RuntimeError, match="Expected exactly one ffmpeg.exe"):
         collect_windows_ffmpeg_binaries(tmp_path)
+
+
+def test_windows_runtime_manifest_assets_match_download_urls():
+    """Windows runtime pins should point at the exact archives they stage."""
+    manifest_path = PROJECT_ROOT / "packaging" / "windows" / "runtime-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    for name, entry in manifest.items():
+        asset_name = entry["asset_name"]
+        url = entry["url"]
+        assert url.startswith("https://github.com/")
+        assert url.endswith(f"/{asset_name}"), name
+        assert len(entry["sha256"]) == 64
+        assert all(char in "0123456789abcdef" for char in entry["sha256"].lower())
+
+
+def test_windows_runtime_stager_rejects_html_downloads():
+    """Runtime staging should fail clearly when GitHub returns an HTML error page."""
+    script = (PROJECT_ROOT / "packaging" / "windows" / "stage-runtimes.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert "MaximumRedirection" in script
+    assert "Downloaded HTML instead of archive" in script
+    assert "runtime-manifest.json URL" in script
 
 
 def test_collect_macos_ffmpeg_binaries_collects_staged_runtime(tmp_path):

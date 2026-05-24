@@ -23,7 +23,55 @@ function Download-AndVerifyAsset {
         [Parameter(Mandatory = $true)][string]$ExpectedSha256
     )
 
-    Invoke-WebRequest -Uri $Url -OutFile $Destination
+    $parentDir = Split-Path -Parent $Destination
+    if ($parentDir) {
+        New-Item -ItemType Directory -Force -Path $parentDir | Out-Null
+    }
+
+    $headers = @{
+        "User-Agent" = "SceneRipperWindowsBuild/1.0"
+    }
+
+    $lastError = $null
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        try {
+            Invoke-WebRequest -Uri $Url -OutFile $Destination -Headers $headers -MaximumRedirection 5
+            $lastError = $null
+            break
+        } catch {
+            $lastError = $_
+            if ($attempt -lt 3) {
+                Start-Sleep -Seconds (2 * $attempt)
+            }
+        }
+    }
+
+    if ($lastError) {
+        throw "Failed to download $(Split-Path $Destination -Leaf) from $Url after 3 attempts: $lastError"
+    }
+
+    if (-not (Test-Path $Destination)) {
+        throw "Download did not create expected archive: $Destination"
+    }
+
+    $fileInfo = Get-Item $Destination
+    if ($fileInfo.Length -lt 1024) {
+        throw "Downloaded archive is unexpectedly small: $Destination ($($fileInfo.Length) bytes)"
+    }
+
+    $stream = [System.IO.File]::OpenRead($Destination)
+    try {
+        $readLength = [Math]::Min(512, [int]$stream.Length)
+        $prefixBytes = New-Object byte[] $readLength
+        [void]$stream.Read($prefixBytes, 0, $readLength)
+    } finally {
+        $stream.Dispose()
+    }
+    $prefixText = [System.Text.Encoding]::ASCII.GetString($prefixBytes)
+    if ($prefixText -match '(?is)^\s*<!doctype\s+html|^\s*<html\b|github\.com.+Page not found') {
+        throw "Downloaded HTML instead of archive for $(Split-Path $Destination -Leaf). Check runtime-manifest.json URL: $Url"
+    }
+
     $actualSha256 = (Get-FileHash -Path $Destination -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($actualSha256 -ne $ExpectedSha256.ToLowerInvariant()) {
         throw "SHA256 mismatch for $(Split-Path $Destination -Leaf). Expected $ExpectedSha256, got $actualSha256"

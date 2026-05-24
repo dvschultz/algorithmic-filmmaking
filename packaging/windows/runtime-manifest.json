@@ -1,8 +1,8 @@
 {
   "mpv": {
-    "asset_name": "mpv-dev-x86_64-20260307-git-f9190e5.7z",
-    "url": "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260307/mpv-dev-x86_64-20260307-git-f9190e5.7z",
-    "sha256": "274db632b4a1849f392e2044bbeafd1e7079acd04b3eb281a03a9769a1c48bf6"
+    "asset_name": "mpv-dev-x86_64-20260524-git-9e06c32.7z",
+    "url": "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260524/mpv-dev-x86_64-20260524-git-9e06c32.7z",
+    "sha256": "3dd0754d2a95ba2f09b030d9a21d437c901e2103c0bdaf3e988763461ebc5447"
   },
   "ffmpeg": {
     "asset_name": "ffmpeg-n8.1-11-g75d37c499d-win64-gpl-8.1.zip",

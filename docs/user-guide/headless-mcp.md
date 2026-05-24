@@ -76,6 +76,58 @@ scene_ripper export sequence /path/to/video.sceneripper -o ./out.mp4
 scene_ripper test-youtube-key
 ```
 
+Common MCP recipes:
+
+```
+# Create a new project from a source video and detect scenes
+start_detect_scenes_new_project(
+    video_path="/path/to/video.mp4",
+    project_path="/path/to/video.sceneripper",
+    sensitivity=3.0,
+    idempotency_key="video-detect-v1",
+)
+
+# Transcribe existing project clips
+start_transcribe(
+    project_path="/path/to/video.sceneripper",
+    model_name="base",
+    language="en",
+    idempotency_key="video-transcribe-v1",
+)
+
+# Download several videos for a batch project
+start_download_videos(
+    urls=[
+        "https://www.youtube.com/watch?v=...",
+        "https://vimeo.com/...",
+    ],
+    download_dir="/path/to/downloads",
+    idempotency_key="batch-download-v1",
+)
+```
+
+Headless configuration is environment-first. Set cloud provider keys in
+the shell that launches the CLI or MCP server:
+
+```bash
+export OPENAI_API_KEY=sk-...
+export ANTHROPIC_API_KEY=sk-ant-...
+export GEMINI_API_KEY=...
+export YOUTUBE_API_KEY=...
+```
+
+For local LLM workflows, run Ollama before launching the agent and select
+an Ollama model in the calling tool or project settings:
+
+```bash
+ollama serve
+ollama pull llama3.1
+```
+
+Ollama does not need an API key. Cloud keys are still required for cloud
+VLM/LLM operations such as Gemini descriptions or OpenAI-backed text
+workflows.
+
 For local HTTP MCP testing:
 
 ```bash
