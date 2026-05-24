@@ -20,11 +20,24 @@ import platform
 import subprocess
 import tempfile
 import threading
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
 from core.binary_resolver import find_binary, get_subprocess_env, get_subprocess_kwargs
+from core.transcription_models import (
+    FFmpegNotFoundError,
+    FasterWhisperNotInstalledError,
+    ModelDownloadError,
+    TranscriptSegment,
+    TranscriptionError,
+    WordTimestamp,
+)
+from core.transcription_segmentation import refine_transcript_segments
+from core.transcription_storage import (
+    estimate_transcription_required_disk_bytes,
+    format_bytes,
+    validate_transcription_disk_space,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -152,35 +165,6 @@ MLX_DISTIL_MODELS = {
 }
 
 
-class TranscriptionError(Exception):
-    """Base exception for transcription errors."""
-    pass
-
-
-class FFmpegNotFoundError(TranscriptionError):
-    """Raised when FFmpeg is required but unavailable."""
-
-    def __init__(self):
-        super().__init__(
-            "FFmpeg is required for transcription but was not found. "
-            "Install FFmpeg from Settings > Dependencies and try again."
-        )
-
-
-class FasterWhisperNotInstalledError(TranscriptionError):
-    """Raised when faster-whisper is not installed."""
-    def __init__(self):
-        super().__init__(
-            "faster-whisper is not installed. "
-            "Install it with: pip install faster-whisper"
-        )
-
-
-class ModelDownloadError(TranscriptionError):
-    """Raised when model download fails."""
-    pass
-
-
 def is_faster_whisper_available() -> bool:
     """Check if faster-whisper is installed without importing PyAV."""
     global _faster_whisper_available
@@ -249,111 +233,6 @@ def _resolve_backend(backend: str = "auto") -> str:
     if is_mlx_whisper_available():
         return "mlx-whisper"
     return "faster-whisper"
-
-
-@dataclass
-class WordTimestamp:
-    """A single word with start/end timestamps from forced alignment or word-level ASR.
-
-    Times are in the same frame of reference as the parent ``TranscriptSegment``
-    (clip-relative seconds when produced from per-clip transcription/alignment).
-
-    ``probability`` is optional because different backends surface different
-    confidence metrics: ``faster-whisper`` reports a per-word probability,
-    while forced aligners (e.g. ``ctc-forced-aligner``) emit a different
-    signal that may or may not be normalized into this field.
-    """
-
-    start: float  # clip-relative seconds
-    end: float
-    text: str
-    probability: Optional[float] = None
-
-    def to_dict(self) -> dict:
-        """Serialize to dictionary for JSON export."""
-        data: dict = {
-            "start": self.start,
-            "end": self.end,
-            "text": self.text,
-        }
-        if self.probability is not None:
-            data["probability"] = self.probability
-        return data
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "WordTimestamp":
-        """Deserialize from dictionary."""
-        probability = data.get("probability")
-        return cls(
-            start=data.get("start", 0.0),
-            end=data.get("end", 0.0),
-            text=data.get("text", ""),
-            probability=probability if probability is None else float(probability),
-        )
-
-
-@dataclass
-class TranscriptSegment:
-    """A segment of transcribed speech."""
-
-    start_time: float  # seconds from clip start
-    end_time: float
-    text: str
-    confidence: float = 0.0
-    # Word-level timestamps. ``None`` means "no word data surfaced yet" (legacy
-    # transcripts, or MLX transcripts before forced alignment runs). ``[]`` means
-    # "alignment ran and produced no words" (silence / instrumental). The two
-    # states are deliberately distinct and must not be conflated.
-    words: Optional[list[WordTimestamp]] = None
-    # ISO 639-1 detected language for this segment (e.g. ``"en"``). Populated
-    # from ``faster-whisper``'s ``info.language`` or MLX's ``result["language"]``.
-    # ``None`` only for transcripts produced before U1 (legacy project files).
-    language: Optional[str] = None
-
-    def to_dict(self) -> dict:
-        """Serialize to dictionary for JSON export."""
-        data: dict = {
-            "start_time": self.start_time,
-            "end_time": self.end_time,
-            "text": self.text,
-            "confidence": self.confidence,
-        }
-        # Only emit the new keys when they carry information so old project
-        # files stay byte-comparable after a round trip through code that
-        # didn't populate them.
-        if self.words is not None:
-            data["words"] = [w.to_dict() for w in self.words]
-        if self.language is not None:
-            data["language"] = self.language
-        return data
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "TranscriptSegment":
-        """Deserialize from dictionary.
-
-        Back-compat: legacy segments lacking ``words`` and ``language`` keys
-        deserialize with ``words=None`` and ``language=None``. The distinction
-        between ``words=None`` (no data surfaced) and ``words=[]`` (alignment
-        ran, found nothing) is preserved.
-        """
-        if "words" in data:
-            raw_words = data["words"]
-            words: Optional[list[WordTimestamp]] = (
-                [WordTimestamp.from_dict(w) for w in raw_words]
-                if raw_words is not None
-                else None
-            )
-        else:
-            words = None
-
-        return cls(
-            start_time=data.get("start_time", 0.0),
-            end_time=data.get("end_time", 0.0),
-            text=data.get("text", ""),
-            confidence=data.get("confidence", 0.0),
-            words=words,
-            language=data.get("language"),
-        )
 
 
 def get_model(model_name: str = "small.en"):
@@ -469,6 +348,8 @@ def transcribe_video(
     language: str = "en",
     backend: str = "auto",
     progress_callback: Optional[Callable[[float, str], None]] = None,
+    segmentation_mode: str = "backend",
+    segment_max_seconds: float = 12.0,
 ) -> list[TranscriptSegment]:
     """Transcribe audio from a video file.
 
@@ -478,6 +359,8 @@ def transcribe_video(
         language: Language code (e.g., "en", "es", "auto")
         backend: "auto", "faster-whisper", "mlx-whisper", or "groq"
         progress_callback: Optional callback(progress, message)
+        segmentation_mode: "backend", "sentence", "phrase", or "fixed"
+        segment_max_seconds: Max segment length for fixed segmentation
 
     Returns:
         List of TranscriptSegment objects
@@ -492,12 +375,32 @@ def transcribe_video(
     resolved = _resolve_backend(backend)
 
     if resolved == "groq":
-        return _transcribe_cloud_groq(video_path, language, progress_callback)
+        return _transcribe_cloud_groq(
+            video_path,
+            language,
+            segmentation_mode,
+            segment_max_seconds,
+            progress_callback,
+        )
 
     if resolved == "mlx-whisper":
-        return _transcribe_video_mlx(video_path, model_name, language, progress_callback)
+        return _transcribe_video_mlx(
+            video_path,
+            model_name,
+            language,
+            segmentation_mode,
+            segment_max_seconds,
+            progress_callback,
+        )
 
-    return _transcribe_video_faster_whisper(video_path, model_name, language, progress_callback)
+    return _transcribe_video_faster_whisper(
+        video_path,
+        model_name,
+        language,
+        segmentation_mode,
+        segment_max_seconds,
+        progress_callback,
+    )
 
 
 def _build_word_timestamps(raw_words) -> Optional[list[WordTimestamp]]:
@@ -531,6 +434,8 @@ def _transcribe_video_faster_whisper(
     video_path: Path,
     model_name: str,
     language: str,
+    segmentation_mode: str,
+    segment_max_seconds: float,
     progress_callback: Optional[Callable[[float, str], None]] = None,
 ) -> list[TranscriptSegment]:
     """Transcribe using faster-whisper backend."""
@@ -568,13 +473,19 @@ def _transcribe_video_faster_whisper(
     if progress_callback:
         progress_callback(1.0, f"Transcribed {len(results)} segments")
 
-    return results
+    return refine_transcript_segments(
+        results,
+        mode=segmentation_mode,
+        max_seconds=segment_max_seconds,
+    )
 
 
 def _transcribe_video_mlx(
     video_path: Path,
     model_name: str,
     language: str,
+    segmentation_mode: str,
+    segment_max_seconds: float,
     progress_callback: Optional[Callable[[float, str], None]] = None,
 ) -> list[TranscriptSegment]:
     """Transcribe using lightning-whisper-mlx backend.
@@ -625,7 +536,11 @@ def _transcribe_video_mlx(
         if progress_callback:
             progress_callback(0.8, "Processing segments...")
 
-        return _parse_mlx_result(result)
+        return refine_transcript_segments(
+            _parse_mlx_result(result),
+            mode=segmentation_mode,
+            max_seconds=segment_max_seconds,
+        )
 
     except subprocess.CalledProcessError as e:
         logger.error(f"FFmpeg audio extraction failed: {e.stderr.decode() if e.stderr else e}")
@@ -641,6 +556,8 @@ def transcribe_clip(
     model_name: str = "small.en",
     language: str = "en",
     backend: str = "auto",
+    segmentation_mode: str = "backend",
+    segment_max_seconds: float = 12.0,
 ) -> list[TranscriptSegment]:
     """Transcribe a specific clip range from a video.
 
@@ -653,6 +570,8 @@ def transcribe_clip(
         model_name: Whisper model to use (ignored for groq backend)
         language: Language code
         backend: "auto", "faster-whisper", "mlx-whisper", or "groq"
+        segmentation_mode: "backend", "sentence", "phrase", or "fixed"
+        segment_max_seconds: Max segment length for fixed segmentation
 
     Returns:
         List of TranscriptSegment objects with times relative to clip start
@@ -695,7 +614,12 @@ def transcribe_clip(
             return []
 
         if resolved == "groq":
-            return _transcribe_cloud_groq(tmp_path, language)
+            return _transcribe_cloud_groq(
+                tmp_path,
+                language,
+                segmentation_mode,
+                segment_max_seconds,
+            )
 
         if resolved == "mlx-whisper":
             mlx_model = get_mlx_model(model_name)
@@ -705,7 +629,11 @@ def transcribe_clip(
                     audio_path=str(tmp_path),
                     language=mlx_language,
                 )
-            return _parse_mlx_result(result)
+            return refine_transcript_segments(
+                _parse_mlx_result(result),
+                mode=segmentation_mode,
+                max_seconds=segment_max_seconds,
+            )
 
         # faster-whisper backend
         model = get_model(model_name)
@@ -731,7 +659,11 @@ def transcribe_clip(
                 )
             )
 
-        return results
+        return refine_transcript_segments(
+            results,
+            mode=segmentation_mode,
+            max_seconds=segment_max_seconds,
+        )
 
     except FileNotFoundError as e:
         # subprocess.run raises FileNotFoundError when it cannot *exec* the
@@ -820,6 +752,8 @@ _DEFAULT_GROQ_MODEL = "whisper-large-v3-turbo"
 def _transcribe_cloud_groq(
     audio_path: Path,
     language: str = "en",
+    segmentation_mode: str = "backend",
+    segment_max_seconds: float = 12.0,
     progress_callback: Optional[Callable[[float, str], None]] = None,
 ) -> list[TranscriptSegment]:
     """Transcribe using Groq cloud API via LiteLLM.
@@ -829,6 +763,8 @@ def _transcribe_cloud_groq(
     Args:
         audio_path: Path to audio/video file
         language: Language code
+        segmentation_mode: "backend", "sentence", "phrase", or "fixed"
+        segment_max_seconds: Max segment length for fixed segmentation
         progress_callback: Optional callback(progress, message)
 
     Returns:
@@ -941,7 +877,11 @@ def _transcribe_cloud_groq(
             progress_callback(1.0, f"Groq transcribed {len(segments)} segments")
 
         logger.info(f"Groq cloud transcription: {len(segments)} segments from {audio_path.name}")
-        return segments
+        return refine_transcript_segments(
+            segments,
+            mode=segmentation_mode,
+            max_seconds=segment_max_seconds,
+        )
 
     except Exception as e:
         logger.error(f"Groq cloud transcription failed: {e}")

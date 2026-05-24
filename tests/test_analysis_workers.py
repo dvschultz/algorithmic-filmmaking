@@ -519,6 +519,71 @@ class TestTranscriptionWorkerErrors:
         assert "clip-2" in errors[0]
         assert "audio extraction failed" in errors[0]
 
+    def test_low_disk_space_aborts_before_model_load(self, source, monkeypatch, tmp_path):
+        from ui.workers.transcription_worker import TranscriptionWorker
+
+        clips = [make_test_clip("clip-1")]
+        worker = TranscriptionWorker(
+            clips,
+            source,
+            backend="faster-whisper",
+            skip_existing=False,
+            model_cache_dir=tmp_path,
+            min_free_disk_gb=3.0,
+        )
+
+        monkeypatch.setattr("core.binary_resolver.find_binary", lambda _name: "/usr/bin/ffmpeg")
+        monkeypatch.setattr(
+            "core.transcription_storage.validate_transcription_disk_space",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("low disk")),
+        )
+        monkeypatch.setattr(
+            "core.transcription.get_model",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("model should not load after disk preflight failure")
+            ),
+        )
+
+        errors = []
+        completed = []
+        worker.error.connect(errors.append)
+        worker.transcription_completed.connect(lambda: completed.append(True))
+
+        worker.run()
+
+        assert completed == [True]
+        assert errors == ["low disk"]
+
+    def test_status_signal_reports_model_load_and_elapsed_time(self, source, monkeypatch, tmp_path):
+        from ui.workers.transcription_worker import TranscriptionWorker
+
+        clips = [make_test_clip("clip-1")]
+        worker = TranscriptionWorker(
+            clips,
+            source,
+            backend="faster-whisper",
+            skip_existing=False,
+            model_cache_dir=tmp_path,
+            min_free_disk_gb=0.5,
+        )
+
+        monkeypatch.setattr("core.binary_resolver.find_binary", lambda _name: "/usr/bin/ffmpeg")
+        monkeypatch.setattr("core.transcription_storage.validate_transcription_disk_space", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr("core.transcription.get_model", lambda *_args, **_kwargs: object())
+        monkeypatch.setattr(worker, "_process_task", lambda task: (task.clip_id, [], None, False))
+
+        statuses = []
+        completed = []
+        worker.status.connect(statuses.append)
+        worker.transcription_completed.connect(lambda: completed.append(True))
+
+        worker.run()
+
+        assert completed == [True]
+        assert any("checking disk space" in message for message in statuses)
+        assert any("loading faster-whisper model" in message for message in statuses)
+        assert any("completed in" in message for message in statuses)
+
 
 # --- ClassificationWorker ---
 
@@ -879,6 +944,9 @@ class TestAnalysisParallelismSettings:
         assert s.color_analysis_parallelism == 4
         assert s.description_parallelism == 3
         assert s.transcription_parallelism == 2
+        assert s.transcription_min_free_disk_gb == 3.0
+        assert s.transcription_segmentation_mode == "backend"
+        assert s.transcription_segment_max_seconds == 12.0
         assert s.local_model_parallelism == 1
 
     def test_json_round_trip(self, tmp_path):
@@ -888,12 +956,18 @@ class TestAnalysisParallelismSettings:
         s.color_analysis_parallelism = 6
         s.description_parallelism = 4
         s.transcription_parallelism = 3
+        s.transcription_min_free_disk_gb = 6.5
+        s.transcription_segmentation_mode = "fixed"
+        s.transcription_segment_max_seconds = 8.0
         s.local_model_parallelism = 2
 
         data = _settings_to_json(s)
         assert data["analysis"]["color_analysis_parallelism"] == 6
         assert data["analysis"]["description_parallelism"] == 4
         assert data["analysis"]["transcription_parallelism"] == 3
+        assert data["transcription"]["min_free_disk_gb"] == 6.5
+        assert data["transcription"]["segmentation_mode"] == "fixed"
+        assert data["transcription"]["segment_max_seconds"] == 8.0
         assert data["analysis"]["local_model_parallelism"] == 2
 
         # Round-trip through JSON load
@@ -906,4 +980,7 @@ class TestAnalysisParallelismSettings:
         assert loaded.color_analysis_parallelism == 6
         assert loaded.description_parallelism == 4
         assert loaded.transcription_parallelism == 3
+        assert loaded.transcription_min_free_disk_gb == 6.5
+        assert loaded.transcription_segmentation_mode == "fixed"
+        assert loaded.transcription_segment_max_seconds == 8.0
         assert loaded.local_model_parallelism == 2

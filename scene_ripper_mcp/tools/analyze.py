@@ -299,11 +299,11 @@ def _transcribe_sync(path, model, language):
 
             try:
                 segments = transcribe_clip(
-                    video_path=source.file_path,
+                    source_path=source.file_path,
                     start_time=clip.start_time(source.fps),
                     end_time=clip.end_time(source.fps),
                     model_name=model,
-                    language=language if language != "auto" else None,
+                    language=language,
                 )
 
                 if segments:

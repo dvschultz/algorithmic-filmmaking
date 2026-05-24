@@ -6,6 +6,7 @@ mlx-whisper backends.
 """
 
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,6 +50,7 @@ class TranscriptionWorker(CancellableWorker):
     """
 
     progress = Signal(int, int)  # current, total
+    status = Signal(str)
     transcript_ready = Signal(str, list)  # clip_id, segments
     transcription_completed = Signal()
 
@@ -61,12 +63,21 @@ class TranscriptionWorker(CancellableWorker):
         parallelism: int = 2,
         skip_existing: bool = True,
         backend: str = "auto",
+        model_cache_dir: Path | None = None,
+        min_free_disk_gb: float = 3.0,
+        segmentation_mode: str = "backend",
+        segment_max_seconds: float = 12.0,
         parent=None,
     ):
         super().__init__(parent)
         self._model_name = model_name
         self._language = language
         self._backend = self._resolve_backend(backend)
+        self._requested_backend = backend
+        self._model_cache_dir = model_cache_dir
+        self._min_free_disk_gb = min_free_disk_gb
+        self._segmentation_mode = segmentation_mode
+        self._segment_max_seconds = segment_max_seconds
         requested_parallelism = min(max(1, parallelism), 4)
         self._parallelism = 1 if self._backend == "mlx-whisper" else requested_parallelism
         self._tasks = self._build_tasks(clips, source, skip_existing)
@@ -124,6 +135,8 @@ class TranscriptionWorker(CancellableWorker):
                 self._model_name,
                 self._language,
                 backend=self._backend,
+                segmentation_mode=self._segmentation_mode,
+                segment_max_seconds=self._segment_max_seconds,
             )
             return task.clip_id, segments, None, False
         except (FFmpegNotFoundError, FasterWhisperNotInstalledError, ModelDownloadError) as e:
@@ -133,6 +146,7 @@ class TranscriptionWorker(CancellableWorker):
 
     def run(self):
         """Execute transcription on all clips."""
+        started_at = time.monotonic()
         self._log_start()
 
         total = len(self._tasks)
@@ -155,21 +169,53 @@ class TranscriptionWorker(CancellableWorker):
 
         logger.info(
             f"Starting transcription: {total} clips, "
-            f"parallelism={self._parallelism}"
+            f"backend={self._backend}, parallelism={self._parallelism}"
         )
+
+        if self._backend != "groq":
+            try:
+                from core.settings import load_settings
+                from core.transcription_storage import validate_transcription_disk_space
+
+                cache_dir = self._model_cache_dir or load_settings().model_cache_dir
+                self.status.emit("Transcribe: checking disk space for Whisper model and temp audio...")
+                validate_transcription_disk_space(
+                    self._model_name,
+                    self._backend,
+                    cache_dir,
+                    self._min_free_disk_gb,
+                )
+            except Exception as e:
+                self.error.emit(str(e))
+                self.transcription_completed.emit()
+                self._log_complete()
+                return
 
         # Pre-load Whisper model so user sees download status
         if self._backend != "groq":
             try:
-                from core.transcription import get_model, get_mlx_model, is_mlx_whisper_available
+                from core.transcription import (
+                    WHISPER_MODELS,
+                    get_model,
+                    get_mlx_model,
+                    is_mlx_whisper_available,
+                )
 
                 self.progress.emit(0, total)
+                model_info = WHISPER_MODELS.get(self._model_name, {})
+                model_size = model_info.get("size", "unknown size")
+                self.status.emit(
+                    f"Transcribe: loading {self._backend} model "
+                    f"{self._model_name} ({model_size}); first run may download it..."
+                )
                 if self._backend in ("auto", "mlx-whisper") and is_mlx_whisper_available():
                     get_mlx_model(self._model_name)
                 else:
                     get_model(self._model_name)
+                self.status.emit(f"Transcribe: model ready; processing {total} clips...")
             except Exception as e:
                 self.error.emit(f"Failed to load Whisper model: {e}")
+                self.transcription_completed.emit()
                 self._log_complete()
                 return
 
@@ -218,5 +264,7 @@ class TranscriptionWorker(CancellableWorker):
         if errors:
             self.error.emit(_summarize_errors(errors))
 
+        elapsed = time.monotonic() - started_at
+        self.status.emit(f"Transcription completed in {elapsed:.1f}s")
         self.transcription_completed.emit()
         self._log_complete()

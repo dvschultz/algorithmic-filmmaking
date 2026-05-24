@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QScrollArea,
 )
-from PySide6.QtCore import Qt, QUrl, Slot
+from PySide6.QtCore import Qt, QThread, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices
 
 from ui.widgets.styled_slider import StyledSlider
@@ -71,8 +71,31 @@ from core.spine.chatgpt_auth import AuthMode
 from core.llm_client import get_provider_models
 from core.update_models import UpdateChannel
 from ui.theme import theme, UISizes
+from ui.transcription_settings_section import build_transcription_settings_group
 
 logger = logging.getLogger(__name__)
+
+
+class YouTubeKeyValidationWorker(QThread):
+    """Validate a YouTube API key without blocking the settings dialog."""
+
+    validation_completed = Signal(bool, str)
+
+    def __init__(self, api_key: str, parent=None):
+        super().__init__(parent)
+        self._api_key = api_key
+
+    def run(self) -> None:
+        try:
+            from core.youtube_api import validate_youtube_api_key
+
+            ok, message = validate_youtube_api_key(self._api_key)
+        except ImportError as exc:
+            ok, message = False, f"Missing YouTube API dependency: {exc}"
+        except Exception as exc:
+            logger.exception("YouTube API key validation failed")
+            ok, message = False, f"YouTube API key test failed: {exc}"
+        self.validation_completed.emit(ok, message)
 
 # Shared list of cloud LLM/VLM models for vision, text extraction, and sequencing
 VLM_MODELS = [
@@ -329,6 +352,7 @@ class SettingsDialog(QDialog):
         # _refresh_signin_row / _refresh_ok_gate off the keyring read path.
         self._oauth_in_progress = False
         self._has_oauth_token = False
+        self._youtube_key_worker: YouTubeKeyValidationWorker | None = None
 
         self._setup_ui()
         self._load_settings()
@@ -482,83 +506,9 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(detection_group)
 
-        # Transcription group
-        transcription_group = QGroupBox("Transcription")
-        transcription_layout = QVBoxLayout(transcription_group)
-
-        # Backend selection
-        backend_layout = QHBoxLayout()
-        backend_layout.addWidget(QLabel("Backend:"))
-
-        self.transcription_backend_combo = QComboBox()
-        self.transcription_backend_combo.addItem("Auto - MLX on Apple Silicon, otherwise faster-whisper", "auto")
-        self.transcription_backend_combo.addItem("faster-whisper - Local CPU/CUDA", "faster-whisper")
-        self.transcription_backend_combo.addItem("MLX Whisper - Local Apple Silicon GPU", "mlx-whisper")
-        self.transcription_backend_combo.addItem("Groq - Cloud Whisper API", "groq")
-        self.transcription_backend_combo.setToolTip(
-            "Choose where transcription runs.\n"
-            "Groq uses the cloud and requires a Groq API key in Settings > API Keys."
+        layout.addWidget(
+            build_transcription_settings_group(self, GROQ_TRANSCRIPTION_MODELS)
         )
-        self.transcription_backend_combo.currentIndexChanged.connect(
-            self._on_transcription_backend_changed
-        )
-        backend_layout.addWidget(self.transcription_backend_combo)
-
-        transcription_layout.addLayout(backend_layout)
-
-        # Model selection
-        model_layout = QHBoxLayout()
-        self.whisper_model_lbl = QLabel("Whisper Model:")
-        model_layout.addWidget(self.whisper_model_lbl)
-
-        self.transcription_model_combo = QComboBox()
-        self.transcription_model_combo.addItems([
-            "tiny.en - Fast, basic accuracy (39MB)",
-            "small.en - Good balance (244MB)",
-            "medium.en - Better accuracy (769MB)",
-            "large-v3 - Best accuracy (1.5GB)",
-        ])
-        self.transcription_model_combo.setToolTip(
-            "Larger models are more accurate but slower.\n"
-            "Models are downloaded on first use."
-        )
-        model_layout.addWidget(self.transcription_model_combo)
-
-        transcription_layout.addLayout(model_layout)
-
-        # Cloud model selection
-        cloud_model_layout = QHBoxLayout()
-        self.transcription_cloud_model_lbl = QLabel("Groq Model:")
-        cloud_model_layout.addWidget(self.transcription_cloud_model_lbl)
-
-        self.transcription_cloud_model_combo = QComboBox()
-        self.transcription_cloud_model_combo.addItems(GROQ_TRANSCRIPTION_MODELS)
-        self.transcription_cloud_model_combo.setToolTip(
-            "Groq Whisper model used when Backend is set to Groq."
-        )
-        cloud_model_layout.addWidget(self.transcription_cloud_model_combo)
-
-        transcription_layout.addLayout(cloud_model_layout)
-
-        # Language selection
-        lang_layout = QHBoxLayout()
-        lang_layout.addWidget(QLabel("Language:"))
-
-        self.transcription_lang_combo = QComboBox()
-        self.transcription_lang_combo.addItems([
-            "English",
-            "Auto-detect",
-        ])
-        self.transcription_lang_combo.setToolTip(
-            "Select 'Auto-detect' for multi-language content.\n"
-            "English is faster for English-only content."
-        )
-        lang_layout.addWidget(self.transcription_lang_combo)
-
-        lang_layout.addStretch()
-        transcription_layout.addLayout(lang_layout)
-
-        layout.addWidget(transcription_group)
 
         # Vision Description group
         vision_group = QGroupBox("Vision Description")
@@ -1127,6 +1077,10 @@ class SettingsDialog(QDialog):
         self.show_key_btn.toggled.connect(self._toggle_api_key_visibility)
         key_layout.addWidget(self.show_key_btn)
 
+        self.test_youtube_key_btn = QPushButton("Test")
+        self.test_youtube_key_btn.clicked.connect(self._test_youtube_api_key)
+        key_layout.addWidget(self.test_youtube_key_btn)
+
         youtube_layout.addLayout(key_layout)
 
         # Help text (hidden when API key is already set)
@@ -1393,6 +1347,55 @@ class SettingsDialog(QDialog):
         else:
             self.youtube_api_key_edit.setEchoMode(QLineEdit.Password)
             self.show_key_btn.setText("Show")
+
+    def _test_youtube_api_key(self):
+        """Test the YouTube Data API key currently entered in the dialog."""
+        if self._youtube_key_worker is not None and self._youtube_key_worker.isRunning():
+            return
+
+        api_key = self.youtube_api_key_edit.text().strip()
+        if not api_key:
+            QMessageBox.warning(
+                self,
+                "YouTube API Key",
+                "Enter a YouTube Data API key before testing.",
+            )
+            return
+
+        self.test_youtube_key_btn.setEnabled(False)
+        self.test_youtube_key_btn.setText("Testing...")
+        worker = YouTubeKeyValidationWorker(api_key, parent=self)
+        worker.validation_completed.connect(self._on_youtube_key_test_complete, Qt.UniqueConnection)
+        worker.finished.connect(worker.deleteLater)
+        worker.finished.connect(self._on_youtube_key_worker_finished)
+        self._youtube_key_worker = worker
+        worker.start()
+
+    @Slot(bool, str)
+    def _on_youtube_key_test_complete(self, ok: bool, message: str):
+        """Show the YouTube key validation result on the UI thread."""
+        if ok:
+            QMessageBox.information(self, "YouTube API Key", message)
+        else:
+            QMessageBox.warning(self, "YouTube API Key", message)
+
+    @Slot()
+    def _on_youtube_key_worker_finished(self):
+        """Reset YouTube key test controls after the background check exits."""
+        self._youtube_key_worker = None
+        self.test_youtube_key_btn.setText("Test")
+        self.test_youtube_key_btn.setEnabled(True)
+
+    def reject(self):
+        """Prevent closing while a key-validation worker is still running."""
+        if self._youtube_key_worker is not None and self._youtube_key_worker.isRunning():
+            QMessageBox.information(
+                self,
+                "YouTube API Key",
+                "Wait for the YouTube API key test to finish before closing Settings.",
+            )
+            return
+        super().reject()
 
     def _update_youtube_help_visibility(self):
         """Show help link only when no API key is entered."""
@@ -1860,8 +1863,14 @@ class SettingsDialog(QDialog):
             not is_groq and not is_from_environment("transcription_model")
         )
         self.whisper_model_lbl.setEnabled(not is_groq)
+        self.transcription_disk_spin.setEnabled(not is_groq)
         self.transcription_cloud_model_combo.setEnabled(is_groq)
         self.transcription_cloud_model_lbl.setEnabled(is_groq)
+
+    def _on_transcript_segmentation_changed(self, index: int):
+        """Enable fixed-duration controls only for fixed segmentation."""
+        mode = self.transcription_segmentation_combo.itemData(index)
+        self.transcription_segment_seconds_spin.setEnabled(mode == "fixed")
 
     def _on_cine_tier_changed(self, index: int):
         """Enable/disable Rich Analysis fields based on selected tier."""
@@ -2029,6 +2038,14 @@ class SettingsDialog(QDialog):
         self.transcription_model_combo.setCurrentIndex(
             model_map.get(self.settings.transcription_model, 1)
         )
+        self.transcription_disk_spin.setValue(self.settings.transcription_min_free_disk_gb)
+        segmentation_idx = self.transcription_segmentation_combo.findData(
+            self.settings.transcription_segmentation_mode
+        )
+        self.transcription_segmentation_combo.setCurrentIndex(max(0, segmentation_idx))
+        self.transcription_segment_seconds_spin.setValue(
+            self.settings.transcription_segment_max_seconds
+        )
 
         self._set_combo_text(
             self.transcription_cloud_model_combo,
@@ -2047,6 +2064,9 @@ class SettingsDialog(QDialog):
         )
         self._on_transcription_backend_changed(
             self.transcription_backend_combo.currentIndex()
+        )
+        self._on_transcript_segmentation_changed(
+            self.transcription_segmentation_combo.currentIndex()
         )
 
         # Vision Description
@@ -2238,6 +2258,9 @@ class SettingsDialog(QDialog):
 
         model_values = ["tiny.en", "small.en", "medium.en", "large-v3"]
         self.settings.transcription_model = model_values[self.transcription_model_combo.currentIndex()]
+        self.settings.transcription_min_free_disk_gb = self.transcription_disk_spin.value()
+        self.settings.transcription_segmentation_mode = self.transcription_segmentation_combo.currentData()
+        self.settings.transcription_segment_max_seconds = self.transcription_segment_seconds_spin.value()
 
         lang_values = ["en", "auto"]
         self.settings.transcription_language = lang_values[self.transcription_lang_combo.currentIndex()]
@@ -2471,6 +2494,14 @@ class SettingsDialog(QDialog):
 
     def _on_accept(self):
         """Handle OK button click."""
+        if self._youtube_key_worker is not None and self._youtube_key_worker.isRunning():
+            QMessageBox.information(
+                self,
+                "YouTube API Key",
+                "Wait for the YouTube API key test to finish before saving Settings.",
+            )
+            return
+
         valid, error = self._validate()
         if not valid:
             QMessageBox.warning(self, "Invalid Settings", error)
@@ -2518,6 +2549,9 @@ class SettingsDialog(QDialog):
             or self.settings.transcription_language != self.original_settings.transcription_language
             or self.settings.transcription_backend != self.original_settings.transcription_backend
             or self.settings.transcription_cloud_model != self.original_settings.transcription_cloud_model
+            or self.settings.transcription_min_free_disk_gb != self.original_settings.transcription_min_free_disk_gb
+            or self.settings.transcription_segmentation_mode != self.original_settings.transcription_segmentation_mode
+            or self.settings.transcription_segment_max_seconds != self.original_settings.transcription_segment_max_seconds
             or self.settings.description_model_tier != self.original_settings.description_model_tier
             or self.settings.description_model_local != self.original_settings.description_model_local
             or self.settings.description_model_cloud != self.original_settings.description_model_cloud

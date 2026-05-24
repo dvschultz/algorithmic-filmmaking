@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "recording-issue-capture"
+version = "0.1.0"
+description = "Transcribe recordings, extract actionable ideas, and publish them as issues."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "openai>=1.0.0",
+]
+
+[project.optional-dependencies]
+local = ["faster-whisper>=1.0.0"]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+recording-issues = "recording_issues.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

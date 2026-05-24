@@ -7,8 +7,12 @@ import pytest
 
 from core.transcription import (
     FFmpegNotFoundError,
+    TranscriptionError,
     TranscriptSegment,
     WordTimestamp,
+    estimate_transcription_required_disk_bytes,
+    refine_transcript_segments,
+    validate_transcription_disk_space,
     _parse_mlx_result,
     transcribe_clip,
     transcribe_video,
@@ -72,6 +76,143 @@ def test_transcribe_clip_missing_ffmpeg_raises_clear_error(monkeypatch):
             end_time=5.0,
             backend="faster-whisper",
         )
+
+
+def test_validate_transcription_disk_space_rejects_low_free_space(monkeypatch, tmp_path):
+    """Local Whisper should fail before download when model cache disk is too low."""
+    monkeypatch.setattr(
+        "core.transcription_storage.shutil.disk_usage",
+        lambda _path: type("Usage", (), {"free": 128 * 1024 * 1024})(),
+    )
+
+    with pytest.raises(TranscriptionError, match="Not enough free disk space"):
+        validate_transcription_disk_space(
+            "large-v3",
+            "faster-whisper",
+            tmp_path,
+            min_free_disk_gb=3.0,
+        )
+
+
+def test_validate_transcription_disk_space_skips_cloud_backend(tmp_path):
+    """Groq transcription should not require local Whisper model storage."""
+    validate_transcription_disk_space(
+        "large-v3",
+        "groq",
+        tmp_path / "missing-cache-dir",
+        min_free_disk_gb=100.0,
+    )
+
+
+def test_estimate_transcription_disk_space_uses_model_size_floor():
+    """Large models should require more than the configurable minimum floor."""
+    small_floor = estimate_transcription_required_disk_bytes(
+        "tiny.en",
+        "faster-whisper",
+        min_free_disk_gb=1.0,
+    )
+    large_floor = estimate_transcription_required_disk_bytes(
+        "large-v3",
+        "faster-whisper",
+        min_free_disk_gb=1.0,
+    )
+
+    assert large_floor > small_floor
+
+
+def test_refine_transcript_segments_splits_sentence_boundaries():
+    segment = TranscriptSegment(
+        start_time=0.0,
+        end_time=9.0,
+        text="First sentence. Second sentence? Third.",
+        confidence=0.5,
+        language="en",
+    )
+
+    refined = refine_transcript_segments([segment], mode="sentence", max_seconds=12.0)
+
+    assert [seg.text for seg in refined] == ["First sentence.", "Second sentence?", "Third."]
+    assert refined[0].start_time == 0.0
+    assert refined[-1].end_time == 9.0
+    assert all(seg.language == "en" for seg in refined)
+
+
+def test_refine_transcript_segments_preserves_word_timestamp_subsets():
+    segment = TranscriptSegment(
+        start_time=0.0,
+        end_time=4.0,
+        text="First sentence. Second sentence.",
+        confidence=0.5,
+        language="en",
+        words=[
+            WordTimestamp(start=0.1, end=0.5, text="First"),
+            WordTimestamp(start=0.6, end=1.1, text="sentence."),
+            WordTimestamp(start=2.1, end=2.6, text="Second"),
+            WordTimestamp(start=2.7, end=3.4, text="sentence."),
+        ],
+    )
+
+    refined = refine_transcript_segments([segment], mode="sentence", max_seconds=12.0)
+
+    assert [word.text for word in refined[0].words or []] == ["First", "sentence."]
+    assert [word.text for word in refined[1].words or []] == ["Second", "sentence."]
+
+
+def test_refine_transcript_segments_splits_fixed_duration():
+    segment = TranscriptSegment(
+        start_time=0.0,
+        end_time=30.0,
+        text="one two three four five six",
+        confidence=0.5,
+        language="en",
+    )
+
+    refined = refine_transcript_segments([segment], mode="fixed", max_seconds=10.0)
+
+    assert len(refined) == 3
+    assert [seg.start_time for seg in refined] == [0.0, 10.0, 20.0]
+    assert refined[-1].end_time == 30.0
+    assert "one" in refined[0].text
+
+
+def test_refine_transcript_segments_preserves_backend_boundaries():
+    segment = TranscriptSegment(start_time=0.0, end_time=30.0, text="keep this together")
+
+    assert refine_transcript_segments([segment], mode="backend", max_seconds=2.0) == [segment]
+
+
+def test_transcribe_clip_passes_language_to_mlx(monkeypatch, tmp_path):
+    """MLX backend should honor the configured language instead of auto-detecting."""
+    calls = {}
+    audio_path = tmp_path / "clip.wav"
+
+    class FakeModel:
+        def transcribe(self, **kwargs):
+            calls.update(kwargs)
+            return {"segments": []}
+
+    def fake_run(cmd, **_kwargs):
+        audio_path.write_bytes(b"audio")
+        Path(cmd[-1]).write_bytes(b"audio")
+
+    monkeypatch.setattr("core.transcription._has_audio_stream", lambda _path: True)
+    monkeypatch.setattr("core.transcription._resolve_backend", lambda _backend: "mlx-whisper")
+    monkeypatch.setattr("core.transcription._require_ffmpeg", lambda: "ffmpeg")
+    monkeypatch.setattr("core.transcription.subprocess.run", fake_run)
+    monkeypatch.setattr("core.transcription.get_subprocess_env", lambda: {})
+    monkeypatch.setattr("core.transcription.get_subprocess_kwargs", lambda: {})
+    monkeypatch.setattr("core.transcription.get_mlx_model", lambda _model: FakeModel())
+
+    transcribe_clip(
+        tmp_path / "video.mp4",
+        start_time=0.0,
+        end_time=5.0,
+        model_name="tiny.en",
+        language="en",
+        backend="mlx-whisper",
+    )
+
+    assert calls["language"] == "en"
 
 
 # ---------------------------------------------------------------------------

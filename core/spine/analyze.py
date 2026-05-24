@@ -285,11 +285,10 @@ def transcribe(
 
         try:
             segments = transcribe_clip(
-                video_path=source.file_path,
-                start_frame=clip.start_frame,
-                end_frame=clip.end_frame,
-                fps=source.fps,
-                model_size=model,
+                source_path=source.file_path,
+                start_time=clip.start_time(source.fps),
+                end_time=clip.end_time(source.fps),
+                model_name=model,
                 language=language,
             )
         except Exception as exc:  # noqa: BLE001

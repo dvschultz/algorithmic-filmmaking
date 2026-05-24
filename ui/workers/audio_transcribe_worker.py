@@ -35,6 +35,8 @@ class AudioTranscribeWorker(CancellableWorker):
         model_name: str = "small.en",
         language: str = "en",
         backend: str = "auto",
+        segmentation_mode: str = "backend",
+        segment_max_seconds: float = 12.0,
         parent=None,
     ):
         super().__init__(parent)
@@ -42,6 +44,8 @@ class AudioTranscribeWorker(CancellableWorker):
         self._model_name = model_name
         self._language = language
         self._backend = backend
+        self._segmentation_mode = segmentation_mode
+        self._segment_max_seconds = segment_max_seconds
 
     def run(self) -> None:
         self._log_start()
@@ -68,6 +72,8 @@ class AudioTranscribeWorker(CancellableWorker):
                     model_name=self._model_name,
                     language=self._language,
                     backend=self._backend,
+                    segmentation_mode=self._segmentation_mode,
+                    segment_max_seconds=self._segment_max_seconds,
                     progress_callback=progress_cb,
                 )
             except Exception as exc:

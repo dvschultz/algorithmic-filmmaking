@@ -54,6 +54,7 @@ from core.settings import (
     validate_download_dir,
     get_default_download_dir,
     is_download_dir_from_env,
+    get_youtube_api_key,
 )
 from core.youtube_api import (
     YouTubeSearchClient,
@@ -101,7 +102,7 @@ from ui.workers.sequence_preview_worker import SequencePreviewWorker
 from core.gui_state import GUIState
 from core.plan_controller import PlanController
 from core.intention_workflow import IntentionWorkflowCoordinator, WorkflowState
-from core.app_version import get_app_version, get_release_channel
+from core.app_version import get_app_version, get_build_channel, get_build_identity, get_release_channel
 from core.update_service import UpdateService
 
 # Set up logging
@@ -808,8 +809,11 @@ class MainWindow(QMainWindow):
         super().__init__()
         MainWindow._instance_count += 1
         self._instance_id = MainWindow._instance_count
+        self._build_identity = get_build_identity()
+        self._title_build_suffix = f"{get_app_version()} [{get_build_channel()}]"
         logger.info(f"=== MAINWINDOW INIT START (instance #{self._instance_id}) ===")
-        self.setWindowTitle("Scene Ripper - Algorithmic Filmmaking")
+        logger.info("Scene Ripper build identity: %s", self._build_identity)
+        self.setWindowTitle(f"Scene Ripper {self._title_build_suffix}")
         self.setMinimumSize(1200, 800)
         # Start at screen size
         screen = self.screen().availableGeometry()
@@ -817,11 +821,11 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)
 
         # Migrate QSettings to JSON on first launch (if needed)
-        if migrate_from_qsettings():
+        if migrate_from_qsettings(read_keyring=False):
             logger.info("Settings migrated from QSettings to JSON")
 
         # Load settings
-        self.settings = load_settings()
+        self.settings = load_settings(read_keyring=False)
         logger.info(f"Loaded settings: sensitivity={self.settings.default_sensitivity}")
         self._log_bridge = get_in_app_log_bridge()
         self._log_bridge.install()
@@ -1259,6 +1263,11 @@ class MainWindow(QMainWindow):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Drop a video file to begin")
+
+        self.build_label = QLabel(self._build_identity)
+        self.build_label.setToolTip("Running Scene Ripper build")
+        self.build_label.setStyleSheet(f"color: {theme().text_secondary}; padding-right: {Spacing.MD}px;")
+        self.status_bar.addPermanentWidget(self.build_label)
 
         # Queue indicator (permanent widget on right side)
         self.queue_label = QLabel("")
@@ -1754,6 +1763,7 @@ class MainWindow(QMainWindow):
         # Cut tab signals
         self.cut_tab.clip_dragged_to_timeline.connect(self._on_clip_dragged_to_timeline)
         self.cut_tab.analyze_selected_requested.connect(self._on_analyze_selected_from_cut)
+        self.cut_tab.detect_current_requested.connect(self._on_cut_detect_current_requested)
         self.cut_tab.selection_changed.connect(self._on_cut_selection_changed)
         self.cut_tab.clip_browser.filters_changed.connect(self._on_cut_filters_changed)
         self.cut_tab.clip_browser.view_details_requested.connect(self.show_clip_details)
@@ -2282,6 +2292,7 @@ class MainWindow(QMainWindow):
         self._chat_worker.gui_tool_cancelled.connect(self._on_gui_tool_cancelled)
         self._chat_worker.complete.connect(self._on_chat_complete)
         self._chat_worker.error.connect(self._on_chat_error)
+        self._chat_worker.auth_failed.connect(self._on_chat_auth_failed)
 
         # Workflow progress for compound operations
         self._chat_worker.workflow_progress.connect(self._on_workflow_progress)
@@ -2651,6 +2662,13 @@ class MainWindow(QMainWindow):
         """Handle chat error."""
         logger.error(f"Chat error: {error}")
         self.chat_panel.on_stream_error(error)
+
+    def _on_chat_auth_failed(self, category: str, user_message: str):
+        """Handle subscription-auth failures from the chat worker."""
+        logger.info("Chat auth failure category=%s", category)
+        if category in ("token_required", "token_expired"):
+            self.status_bar.showMessage(user_message)
+            QTimer.singleShot(0, self._on_settings_click)
 
     # =========================================================================
     # Plan Execution Flow
@@ -3403,7 +3421,15 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage(f"Already transcribed: {audio.filename}")
             return
 
-        worker = AudioTranscribeWorker(audio, parent=self)
+        worker = AudioTranscribeWorker(
+            audio,
+            model_name=self.settings.transcription_model,
+            language=self.settings.transcription_language,
+            backend=self.settings.transcription_backend,
+            segmentation_mode=self.settings.transcription_segmentation_mode,
+            segment_max_seconds=self.settings.transcription_segment_max_seconds,
+            parent=self,
+        )
         self._active_audio_transcribes.add(worker)
 
         worker.transcript_ready.connect(self._on_audio_transcript_ready)
@@ -3503,6 +3529,17 @@ class MainWindow(QMainWindow):
             self.analyze_tab.add_clips(clip_ids)
             self.tab_widget.setCurrentWidget(self.analyze_tab)
             self._run_analysis_pipeline(clips, operations)
+
+    def _on_cut_detect_current_requested(self, mode: str, config: dict):
+        """Run scene detection from the Cut tab's prominent controls."""
+        if not self.current_source:
+            QMessageBox.information(
+                self,
+                "No Source Selected",
+                "Select or import a source before cutting scenes.",
+            )
+            return
+        self._start_detection(mode, config)
 
     # ------------------------------------------------------------------
     # Analysis Pipeline: Quick Run / Picker / Phase-Based Engine
@@ -3905,9 +3942,16 @@ class MainWindow(QMainWindow):
             f"Transcribing {len(clips)} clips ({remaining + 1} sources remaining)..."
         )
 
-        self._stop_worker_safely(self.transcription_worker, "Transcription")
-
         logger.info(f"Creating TranscriptionWorker for source {source_id} ({len(clips)} clips)")
+        self._start_transcription_worker(
+            clips,
+            source,
+            self._on_pipeline_source_transcription_finished,
+        )
+
+    def _start_transcription_worker(self, clips: list, source: Source, completed_slot) -> None:
+        """Create, wire, and start the shared transcription worker."""
+        self._stop_worker_safely(self.transcription_worker, "Transcription")
         self.transcription_worker = TranscriptionWorker(
             clips,
             source,
@@ -3915,15 +3959,23 @@ class MainWindow(QMainWindow):
             self.settings.transcription_language,
             parallelism=self.settings.transcription_parallelism,
             backend=self.settings.transcription_backend,
+            model_cache_dir=self.settings.model_cache_dir,
+            min_free_disk_gb=self.settings.transcription_min_free_disk_gb,
+            segmentation_mode=self.settings.transcription_segmentation_mode,
+            segment_max_seconds=self.settings.transcription_segment_max_seconds,
         )
         self.transcription_worker.progress.connect(self._on_transcription_progress)
+        self.transcription_worker.status.connect(self.status_bar.showMessage)
         self.transcription_worker.transcript_ready.connect(self._on_transcript_ready)
         self.transcription_worker.transcription_completed.connect(
-            self._on_pipeline_source_transcription_finished, Qt.UniqueConnection
+            completed_slot,
+            Qt.UniqueConnection,
         )
         self.transcription_worker.error.connect(self._on_transcription_error)
         self.transcription_worker.finished.connect(self.transcription_worker.deleteLater)
-        self.transcription_worker.finished.connect(lambda: setattr(self, 'transcription_worker', None))
+        self.transcription_worker.finished.connect(
+            lambda: setattr(self, "transcription_worker", None)
+        )
         self.transcription_worker.start()
 
     @Slot()
@@ -5057,26 +5109,11 @@ class MainWindow(QMainWindow):
                 f"Transcribing {len(next_clips)} clips (source {current_source_num}/{total_sources})..."
             )
 
-            # Safely stop previous worker before creating new one
-            self._stop_worker_safely(self.transcription_worker, "Transcription")
-
-            # Start worker for next source
-            self.transcription_worker = TranscriptionWorker(
+            self._start_transcription_worker(
                 next_clips,
                 next_source,
-                self.settings.transcription_model,
-                self.settings.transcription_language,
-                parallelism=self.settings.transcription_parallelism,
-                backend=self.settings.transcription_backend,
+                self._on_agent_transcription_finished,
             )
-            self.transcription_worker.progress.connect(self._on_transcription_progress)
-            self.transcription_worker.transcript_ready.connect(self._on_transcript_ready)
-            self.transcription_worker.transcription_completed.connect(self._on_agent_transcription_finished, Qt.UniqueConnection)
-            self.transcription_worker.error.connect(self._on_transcription_error)
-            # Clean up thread safely after it finishes
-            self.transcription_worker.finished.connect(self.transcription_worker.deleteLater)
-            self.transcription_worker.finished.connect(lambda: setattr(self, 'transcription_worker', None))
-            self.transcription_worker.start()
             return
 
         # All sources processed - finalize
@@ -5307,6 +5344,9 @@ class MainWindow(QMainWindow):
 
     def _on_youtube_search(self, query: str, video_duration: str = "", video_definition: str = ""):
         """Handle YouTube search request."""
+        if not self.settings.youtube_api_key:
+            self.settings.youtube_api_key = get_youtube_api_key()
+
         if not self.settings.youtube_api_key:
             QMessageBox.warning(
                 self,
@@ -5539,6 +5579,15 @@ class MainWindow(QMainWindow):
             # Visual mode uses DetectionConfig
             visual_config = DetectionConfig(
                 threshold=config_dict.get("threshold", 3.0),
+                min_scene_length=int(
+                    float(
+                        config_dict.get(
+                            "min_scene_length_seconds",
+                            self.settings.min_scene_length_seconds,
+                        )
+                    )
+                    * 30
+                ),
                 use_adaptive=(mode == "adaptive"),
                 luma_only=config_dict.get("luma_only"),
             )
@@ -7890,27 +7939,11 @@ class MainWindow(QMainWindow):
         sources_info = f" (source 1/{len(source_queue)})" if len(source_queue) > 1 else ""
         self.status_bar.showMessage(f"Transcribing {len(first_clips)} clips{sources_info}...")
 
-        # Safely stop any existing worker before creating new one
-        self._stop_worker_safely(self.transcription_worker, "Transcription")
-
-        # Start worker for first source
-        from PySide6.QtCore import Qt
-        self.transcription_worker = TranscriptionWorker(
+        self._start_transcription_worker(
             first_clips,
             first_source,
-            self.settings.transcription_model,
-            self.settings.transcription_language,
-            parallelism=self.settings.transcription_parallelism,
-            backend=self.settings.transcription_backend,
+            self._on_agent_transcription_finished,
         )
-        self.transcription_worker.progress.connect(self._on_transcription_progress)
-        self.transcription_worker.transcript_ready.connect(self._on_transcript_ready)
-        self.transcription_worker.transcription_completed.connect(self._on_agent_transcription_finished, Qt.UniqueConnection)
-        self.transcription_worker.error.connect(self._on_transcription_error)
-        # Clean up thread safely after it finishes
-        self.transcription_worker.finished.connect(self.transcription_worker.deleteLater)
-        self.transcription_worker.finished.connect(lambda: setattr(self, 'transcription_worker', None))
-        self.transcription_worker.start()
 
         return True
 
@@ -9895,7 +9928,7 @@ class MainWindow(QMainWindow):
 
     def _update_window_title(self):
         """Update window title to reflect project state."""
-        base_title = "Scene Ripper"
+        base_title = f"Scene Ripper {self._title_build_suffix}"
         if self.current_project_path:
             title = f"{base_title} - {self.current_project_path.name}"
         elif self.current_source:
