@@ -191,6 +191,31 @@ class TestCLIMain:
         assert "export" in result.output
 
 
+class TestYouTubeKeyCommand:
+    """Tests for YouTube API key validation command."""
+
+    @pytest.fixture
+    def runner(self):
+        register_commands()
+        return CliRunner()
+
+    def test_test_youtube_key_requires_key(self, runner):
+        with patch.dict(os.environ, {}, clear=True), \
+             patch("core.settings._get_config_path", return_value=Path("/missing/config.json")), \
+             patch("core.settings._get_api_key_from_keyring", return_value=""):
+            result = runner.invoke(cli, ["test-youtube-key"])
+
+        assert result.exit_code == ExitCode.VALIDATION_ERROR
+        assert "not configured" in result.output
+
+    def test_test_youtube_key_reports_success(self, runner):
+        with patch("core.youtube_api.validate_youtube_api_key", return_value=(True, "ok")):
+            result = runner.invoke(cli, ["test-youtube-key", "--api-key", "test_key"])
+
+        assert result.exit_code == ExitCode.SUCCESS
+        assert "ok" in result.output
+
+
 class TestDetectCommand:
     """Tests for the detect command."""
 

@@ -458,9 +458,10 @@ def _check_language_supported(language: str) -> None:
         # Local import: optional dep is not touched at module load time.
         importlib.import_module("ctc_forced_aligner")
     except Exception:
-        # ctc-forced-aligner isn't installed. Use the static fallback so
-        # language gating still works in the test / pre-install path.
-        if code not in _FALLBACK_SUPPORTED_ISO_639_1:
+        # ctc-forced-aligner isn't installed. Accept plausible ISO 639-style
+        # codes so MMS-supported languages are not blocked by our conservative
+        # fallback before the real model has a chance to run.
+        if not (1 < len(code) <= 3 and code.isalpha()):
             raise UnsupportedLanguageError(language)
         return
 

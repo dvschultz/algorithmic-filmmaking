@@ -17,6 +17,9 @@ _VERSION_RESOURCE = "core/app_version.txt"
 _BUILD_VERSION_RESOURCE = "core/app_build_version.txt"
 _UPDATE_CHANNEL_ENV = "APP_UPDATE_CHANNEL"
 _UPDATE_CHANNEL_RESOURCE = "core/app_update_channel.txt"
+_BUILD_CHANNEL_ENV = "APP_BUILD_CHANNEL"
+_COMMIT_ENV_VARS = ("APP_COMMIT_SHA", "GIT_COMMIT", "GITHUB_SHA")
+_COMMIT_RESOURCE = "core/app_commit.txt"
 
 
 def get_app_version() -> str:
@@ -85,6 +88,48 @@ def get_release_channel() -> str:
     return "stable"
 
 
+def get_build_channel() -> str:
+    """Return a human-facing build channel including source/bundled context."""
+    if env_channel := os.environ.get(_BUILD_CHANNEL_ENV, "").strip():
+        return env_channel
+
+    channel = get_release_channel()
+    prefix = "bundled" if is_frozen() else "source"
+    return f"{prefix}/{channel}"
+
+
+def get_git_commit() -> str:
+    """Return a short commit identifier for the running build when available."""
+    for env_var in _COMMIT_ENV_VARS:
+        if commit := os.environ.get(env_var, "").strip():
+            return commit[:12]
+
+    try:
+        path = get_resource_path(_COMMIT_RESOURCE)
+    except Exception as exc:
+        logger.debug("Could not resolve bundled commit resource: %s", exc)
+        path = None
+
+    if path and path.exists():
+        try:
+            commit = path.read_text(encoding="utf-8").strip()
+            if commit:
+                return commit[:12]
+        except Exception as exc:
+            logger.debug("Could not read bundled commit resource %s: %s", path, exc)
+
+    return _commit_from_git()
+
+
+def get_build_identity() -> str:
+    """Return compact version/channel/commit text for UI and logs."""
+    parts = [f"v{get_display_version()}", get_build_channel()]
+    commit = get_git_commit()
+    if commit:
+        parts.append(commit)
+    return " ".join(parts)
+
+
 def _version_from_env() -> str:
     return os.environ.get("APP_VERSION", "").strip()
 
@@ -144,6 +189,26 @@ def _version_from_git() -> str:
         )
     except Exception as exc:
         logger.debug("Could not derive app version from git tags: %s", exc)
+        return ""
+
+    return result.stdout.strip()
+
+
+def _commit_from_git() -> str:
+    if is_frozen():
+        return ""
+
+    project_root = Path(__file__).resolve().parent.parent
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short=12", "HEAD"],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except Exception as exc:
+        logger.debug("Could not derive git commit: %s", exc)
         return ""
 
     return result.stdout.strip()

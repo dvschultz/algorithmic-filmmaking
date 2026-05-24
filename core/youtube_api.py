@@ -292,6 +292,18 @@ class YouTubeSearchClient:
             self._handle_http_error(e)
             raise  # Unreachable, but makes control flow explicit for type checkers
 
+    def validate_key(self) -> None:
+        """Validate the API key with a lightweight YouTube Data API request."""
+        try:
+            self._youtube.videos().list(
+                part="id",
+                chart="mostPopular",
+                maxResults=1,
+            ).execute()
+        except HttpError as e:
+            self._handle_http_error(e)
+            raise  # Unreachable, but makes control flow explicit for type checkers
+
     def _get_thumbnail_url(self, snippet: dict) -> str:
         """Get best available thumbnail URL."""
         thumbnails = snippet.get("thumbnails", {})
@@ -333,3 +345,18 @@ class YouTubeSearchClient:
             raise YouTubeAPIError(f"Invalid request: {error}")
 
         raise YouTubeAPIError(f"YouTube API error: {error}")
+
+
+def validate_youtube_api_key(api_key: str) -> tuple[bool, str]:
+    """Return whether a YouTube Data API key can make authenticated requests."""
+    try:
+        client = YouTubeSearchClient(api_key)
+        client.validate_key()
+    except InvalidAPIKeyError as exc:
+        return False, str(exc)
+    except QuotaExceededError as exc:
+        return False, str(exc)
+    except YouTubeAPIError as exc:
+        return False, str(exc)
+
+    return True, "YouTube Data API key is valid."

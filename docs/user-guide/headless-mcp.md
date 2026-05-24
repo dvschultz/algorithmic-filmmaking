@@ -44,6 +44,44 @@ walkthrough with a concrete example, see
       "result": {"succeeded": [...], "failed": [...]}}
    ```
 
+## CLI Setup And Examples
+
+The MCP server and CLI are installed from the same source checkout:
+
+```bash
+python -m pip install -e .[mcp]
+scene_ripper --help
+scene-ripper-mcp --transport stdio
+```
+
+Use the CLI when you want a direct shell workflow and MCP when an agent
+needs to keep jobs running, poll status, and fetch results later.
+
+Common CLI commands:
+
+```bash
+# Create a project by detecting scenes in a video
+scene_ripper detect /path/to/video.mp4
+
+# Transcribe clips in an existing project
+scene_ripper transcribe /path/to/video.sceneripper
+
+# Run visual analysis
+scene_ripper analyze describe /path/to/video.sceneripper
+
+# Export a sequence
+scene_ripper export sequence /path/to/video.sceneripper -o ./out.mp4
+
+# Test YouTube API credentials
+scene_ripper test-youtube-key
+```
+
+For local HTTP MCP testing:
+
+```bash
+scene-ripper-mcp --transport http --port 8765
+```
+
 ## Tool surface
 
 ### Long-running ops (start / poll / fetch / cancel)

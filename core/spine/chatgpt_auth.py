@@ -67,6 +67,26 @@ SCOPES: Tuple[str, ...] = ("openid", "profile", "email", "offline_access")
 # as GUI-only-refresh; the MCP process does not hold either of these locks.
 REFRESH_LOCK: threading.Lock = threading.Lock()
 REFRESH_LOCK_ASYNC: asyncio.Lock = asyncio.Lock()
+_AUTH_STATE_VERSION = 0
+_AUTH_STATE_LOCK = threading.Lock()
+_cached_state: tuple[
+    int,
+    "AuthMode",
+    Optional["AuthIdentity"],
+    Optional[str],
+] | None = None
+
+
+def bump_auth_version() -> None:
+    """Invalidate cached auth state after settings or token mutations."""
+    global _AUTH_STATE_VERSION
+    with _AUTH_STATE_LOCK:
+        _AUTH_STATE_VERSION += 1
+
+
+def _auth_version() -> int:
+    with _AUTH_STATE_LOCK:
+        return _AUTH_STATE_VERSION
 
 
 class AuthMode(StrEnum):
@@ -139,22 +159,40 @@ def load_active_auth() -> Tuple[AuthMode, Optional[AuthIdentity]]:
     without restart) structurally easy: every consumer naturally picks up
     the latest state without dedicated propagation code.
     """
-    # Lazy imports keep the spine boundary intact: settings.py is already
-    # spine-safe but importing it at module scope here would couple our
-    # import order to settings' module init. Function-scope keeps both
-    # modules independently importable in any order.
+    mode, identity, _access_token = _load_active_auth_state()
+    return mode, identity
+
+
+def load_active_auth_snapshot() -> tuple[AuthMode, Optional[AuthIdentity], Optional[str]]:
+    """Return cached auth mode, identity, and access token for MCP snapshots."""
+    return _load_active_auth_state()
+
+
+def _load_active_auth_state() -> tuple[AuthMode, Optional[AuthIdentity], Optional[str]]:
+    """Read or return cached auth state keyed by the auth-version counter."""
+    global _cached_state
+
+    current_version = _auth_version()
+    cached = _cached_state
+    if cached and cached[0] == current_version:
+        return cached[1], cached[2], cached[3]
+
     from core.settings import (
         get_chatgpt_oauth_token,
         load_settings,
     )
 
-    settings = load_settings()
+    settings = load_settings(read_keyring=False)
     if settings.auth_mode != AuthMode.SUBSCRIPTION.value:
-        return AuthMode.API_KEY, None
+        state = (current_version, AuthMode.API_KEY, None, None)
+        _cached_state = state
+        return state[1], state[2], state[3]
 
     blob = get_chatgpt_oauth_token()
     if not blob:
-        return AuthMode.SUBSCRIPTION, None
+        state = (current_version, AuthMode.SUBSCRIPTION, None, None)
+        _cached_state = state
+        return state[1], state[2], state[3]
 
     # Extract identity fields with defensive defaults. The blob schema is
     # documented in core/settings.py:set_chatgpt_oauth_token and produced
@@ -175,4 +213,8 @@ def load_active_auth() -> Tuple[AuthMode, Optional[AuthIdentity]]:
         account_email=account_email,
         expires_at_unix=expires_at_unix,
     )
-    return AuthMode.SUBSCRIPTION, identity
+    raw_access_token = blob.get("access_token")
+    access_token = raw_access_token if isinstance(raw_access_token, str) else None
+    state = (current_version, AuthMode.SUBSCRIPTION, identity, access_token)
+    _cached_state = state
+    return state[1], state[2], state[3]

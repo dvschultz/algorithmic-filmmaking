@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QStackedWidget,
     QVBoxLayout,
@@ -67,6 +68,8 @@ _REPEAT_POLICIES = [
     ("longest", "Longest"),
     ("shortest", "Shortest"),
 ]
+
+_PROMPT_EDITOR_MIN_HEIGHT = 168
 
 
 class WordLLMComposerDialog(QDialog):
@@ -193,9 +196,14 @@ class WordLLMComposerDialog(QDialog):
         self._prompt_input.setPlaceholderText(
             "e.g., 'compose a sentence about silence'"
         )
-        self._prompt_input.setMinimumHeight(80)
+        self._prompt_input.setMinimumHeight(_PROMPT_EDITOR_MIN_HEIGHT)
+        self._prompt_input.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.MinimumExpanding,
+        )
+        self._prompt_input.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         self._prompt_input.textChanged.connect(self._refresh_validation)
-        layout.addWidget(self._prompt_input)
+        layout.addWidget(self._prompt_input, 1)
 
         # --- Target length -----------------------------------------------
         length_row = QHBoxLayout()
@@ -434,9 +442,6 @@ class WordLLMComposerDialog(QDialog):
             out.extend(self._clips_by_source_id.get(source_id, []))
         return out
 
-    def _alignable_pending_clips(self) -> list:
-        return alignable_pending_clips(self._checked_clips())
-
     # ------------------------------------------------------------ Slots
 
     @Slot(int)
@@ -550,7 +555,7 @@ class WordLLMComposerDialog(QDialog):
         checked = self._checked_clips()
         if not checked:
             return
-        pending = self._alignable_pending_clips()
+        pending = alignable_pending_clips(self._checked_clips())
         if pending:
             self._start_alignment(pending)
             return

@@ -63,4 +63,17 @@ For unguarded deletions, a confirmation dialog appears: "Delete "[name]" and its
 - Use the **YouTube** search panel to download from YouTube
 - Click **Cut All New Videos** to run scene detection on any CUT-less sources
 
+## Recommended Import Settings
+
+Scene Ripper works best when the source media matches the experiment you want to run. Long 4K files are useful as masters, but they slow down download, thumbnailing, transcription, object detection, and every downstream analysis pass.
+
+For fast iteration:
+
+- Prefer 720p or 1080p sources for visual analysis and sequence building
+- Use 480p downloads for broad YouTube research passes where image detail is not important
+- Trim multi-hour tutorials, livestreams, and lectures into smaller files before importing when you only need a section
+- Keep plenty of free disk space before importing batches; thumbnails, downloaded videos, transcripts, and optional model runtimes can grow quickly
+
+Before importing very high-resolution or very long videos, expect slower processing and larger cache usage. If a workflow starts to feel heavy, make a proxy copy at a lower resolution and import that first, then return to the master only for final export.
+
 See [Analysis Operations](analysis.md) for what you can do with clips once videos are cut.

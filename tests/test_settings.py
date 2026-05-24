@@ -35,6 +35,7 @@ from core.settings import (
     ENV_SENSITIVITY,
     ENV_WHISPER_MODEL,
     ENV_GROQ_API_KEY,
+    get_youtube_api_key,
     get_groq_api_key,
     set_groq_api_key,
     is_api_key_from_env,
@@ -461,6 +462,23 @@ class TestJSONSettings:
                     # Should return defaults
                     assert settings.default_sensitivity == 3.0
                     assert settings.transcription_model == "medium.en"
+
+    def test_load_settings_can_skip_keyring_reads(self):
+        """Main-window startup can load preferences without prompting for credentials."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "nonexistent.json"
+
+            with patch("core.settings._get_config_path", return_value=config_path), \
+                 patch("core.settings._get_api_key_from_keyring") as get_key:
+                settings = load_settings(read_keyring=False)
+
+        get_key.assert_not_called()
+        assert settings.youtube_api_key == ""
+
+    def test_get_youtube_api_key_reads_keyring_on_demand(self):
+        with patch.dict(os.environ, {}, clear=True), \
+             patch("core.settings._get_api_key_from_keyring", return_value="keyring_key"):
+            assert get_youtube_api_key() == "keyring_key"
 
     def test_load_settings_invalid_json(self):
         """Test loading settings with invalid JSON file."""

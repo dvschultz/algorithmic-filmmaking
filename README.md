@@ -23,11 +23,20 @@ Scene Ripper analyzes video files to detect scene boundaries, enriches clips wit
 
 Release process for maintainers: [docs/releases.md](docs/releases.md)
 
+### Requirements
+
+- macOS 13 Ventura or newer on Apple Silicon for the downloadable app
+- Windows 10/11 64-bit or a recent x86_64 Linux desktop for packaged builds
+- Python 3.11+ when running from source
+- At least 5 GB free disk space for the app, FFmpeg, cached thumbnails, and optional model/runtime downloads; 10 GB+ is recommended if you use local transcription, face detection, or large video imports
+
+Downloaded runtimes and caches live under the platform app-support directory: `~/Library/Application Support/Scene Ripper/` on macOS, `%LOCALAPPDATA%\Scene Ripper\` on Windows, and `~/.local/share/scene-ripper/` on Linux. Logs live in `~/Library/Logs/Scene Ripper/` on macOS and under the app-support `logs/` directory elsewhere.
+
 ### Linux
 
 **Option 1: AppImage (Recommended)**
 
-Download the latest AppImage from [Releases](https://github.com/dvschultz/algorithmic-filmmaking/releases):
+Download the latest AppImage from [Releases](https://github.com/dvschultz/algorithmic-filmmaking/releases). Open the newest release, expand **Assets**, and choose the `Scene_Ripper-*-x86_64.AppImage` file:
 
 ```bash
 # Download (replace VERSION with actual version)
@@ -60,9 +69,9 @@ python main.py
 
 **Downloadable app (Apple Silicon)**
 
-Download the latest DMG from [Releases](https://github.com/dvschultz/algorithmic-filmmaking/releases), open it, and drag `Scene Ripper.app` into `Applications`.
+Download the latest DMG from [Releases](https://github.com/dvschultz/algorithmic-filmmaking/releases). Open the newest release, expand **Assets**, choose the Apple Silicon macOS DMG, open it, and drag `Scene Ripper.app` into `Applications`.
 
-On first launch, the app downloads FFmpeg and other optional dependencies as needed.
+On first launch, the app downloads FFmpeg and other optional dependencies as needed. macOS may ask for Keychain access when you save or use API keys; allow it if you want Scene Ripper to read stored credentials. You can avoid Keychain prompts by using environment variables such as `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `YOUTUBE_API_KEY`.
 
 If you plan to use face detection features such as Rose Hobart on a new Mac, install Xcode Command Line Tools first:
 
@@ -92,7 +101,7 @@ python main.py
 
 **Downloadable app**
 
-Download the latest Windows installer from [Releases](https://github.com/dvschultz/algorithmic-filmmaking/releases) and run the `SceneRipper-Setup-*.exe` installer.
+Download the latest Windows installer from [Releases](https://github.com/dvschultz/algorithmic-filmmaking/releases). Open the newest release, expand **Assets**, choose `SceneRipper-Setup-*.exe`, and run the installer.
 
 The first run downloads FFmpeg and other optional dependencies when features need them. Early unsigned builds may trigger a Windows SmartScreen warning.
 

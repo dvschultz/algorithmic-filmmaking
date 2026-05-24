@@ -91,6 +91,13 @@ def _set_api_key_in_keyring(api_key: str) -> bool:
         return False
 
 
+def get_youtube_api_key() -> str:
+    """Get YouTube API key with priority: env var > keyring."""
+    if env_key := os.environ.get(ENV_YOUTUBE_API_KEY, "").strip():
+        return env_key
+    return _get_api_key_from_keyring()
+
+
 def _get_llm_api_key_from_keyring() -> str:
     """Retrieve LLM API key from system keyring."""
     try:
@@ -294,6 +301,7 @@ def set_chatgpt_oauth_token(token_blob: Optional[dict]) -> bool:
         import keyring
         if token_blob is None:
             _delete_password_from_keyring_services(keyring, KEYRING_CHATGPT_OAUTH_TOKEN)
+            _bump_chatgpt_auth_cache()
             return True
         if _is_plaintext_keyring_backend(keyring):
             backend_cls = keyring.get_keyring().__class__
@@ -307,6 +315,7 @@ def set_chatgpt_oauth_token(token_blob: Optional[dict]) -> bool:
             return False
         blob_json = json.dumps(token_blob)
         keyring.set_password(KEYRING_SERVICE, KEYRING_CHATGPT_OAUTH_TOKEN, blob_json)
+        _bump_chatgpt_auth_cache()
         return True
     except Exception as e:
         logger.warning(f"Could not write ChatGPT OAuth token to keyring: {e}")
@@ -318,10 +327,21 @@ def clear_chatgpt_oauth_token() -> bool:
     try:
         import keyring
         _delete_password_from_keyring_services(keyring, KEYRING_CHATGPT_OAUTH_TOKEN)
+        _bump_chatgpt_auth_cache()
         return True
     except Exception as e:
         logger.warning(f"Could not clear ChatGPT OAuth token from keyring: {e}")
         return False
+
+
+def _bump_chatgpt_auth_cache() -> None:
+    """Invalidate ChatGPT subscription-auth caches without coupling imports."""
+    try:
+        from core.spine.chatgpt_auth import bump_auth_version
+
+        bump_auth_version()
+    except Exception:
+        logger.debug("Could not invalidate ChatGPT auth cache", exc_info=True)
 
 
 def is_api_key_from_env(provider: str) -> bool:
@@ -544,6 +564,9 @@ class Settings:
     transcription_language: str = "en"  # en, auto, or specific language code
     transcription_backend: str = "auto"  # auto, faster-whisper, mlx-whisper, groq
     transcription_cloud_model: str = "whisper-large-v3-turbo"  # Groq cloud model
+    transcription_min_free_disk_gb: float = 3.0  # Warn before local Whisper if below this floor
+    transcription_segmentation_mode: str = "backend"  # backend, sentence, phrase, fixed
+    transcription_segment_max_seconds: float = 12.0  # fixed segmentation chunk size
 
     # Appearance
     theme_preference: str = "system"  # system, light, dark
@@ -826,6 +849,12 @@ def _load_from_json(config_path: Path, settings: Settings) -> Settings:
             settings.transcription_backend = val
         if val := transcription.get("cloud_model"):
             settings.transcription_cloud_model = val
+        if "min_free_disk_gb" in transcription:
+            settings.transcription_min_free_disk_gb = float(transcription["min_free_disk_gb"])
+        if val := transcription.get("segmentation_mode"):
+            settings.transcription_segmentation_mode = str(val)
+        if "segment_max_seconds" in transcription:
+            settings.transcription_segment_max_seconds = float(transcription["segment_max_seconds"])
 
     # Export section
     if export := data.get("export"):
@@ -1035,6 +1064,9 @@ def _settings_to_json(settings: Settings) -> dict:
             "language": settings.transcription_language,
             "backend": settings.transcription_backend,
             "cloud_model": settings.transcription_cloud_model,
+            "min_free_disk_gb": settings.transcription_min_free_disk_gb,
+            "segmentation_mode": settings.transcription_segmentation_mode,
+            "segment_max_seconds": settings.transcription_segment_max_seconds,
         },
         "export": {
             "quality": settings.export_quality,
@@ -1128,7 +1160,7 @@ def _settings_to_json(settings: Settings) -> dict:
     }
 
 
-def load_settings() -> Settings:
+def load_settings(read_keyring: bool = True) -> Settings:
     """Load settings with priority: env vars > JSON config > defaults.
 
     This function is Qt-free and works in headless environments.
@@ -1146,8 +1178,8 @@ def load_settings() -> Settings:
     if config_path.exists():
         settings = _load_from_json(config_path, settings)
 
-    # 2. Load API keys from keyring (if not already set from JSON, which doesn't store them)
-    if not settings.youtube_api_key:
+    # 2. Load API keys from keyring only when the caller needs credentials.
+    if read_keyring and not settings.youtube_api_key:
         settings.youtube_api_key = _get_api_key_from_keyring()
 
     # 3. Apply environment variable overrides (highest priority)
@@ -1232,6 +1264,7 @@ def save_settings(settings: Settings) -> bool:
 
         # Re-sync model cache env in case the path changed
         _sync_model_cache_env(settings.model_cache_dir)
+        _bump_chatgpt_auth_cache()
 
         logger.info(f"Settings saved to {config_path}")
         return True
@@ -1272,7 +1305,7 @@ def migrate_from_xdg_config() -> bool:
         return False
 
 
-def migrate_from_qsettings() -> bool:
+def migrate_from_qsettings(read_keyring: bool = True) -> bool:
     """Migrate settings from QSettings to JSON (one-time operation).
 
     Called by GUI on first launch if JSON doesn't exist but QSettings does.
@@ -1333,8 +1366,9 @@ def migrate_from_qsettings() -> bool:
         if qsettings.contains("appearance/theme_preference"):
             settings.theme_preference = qsettings.value("appearance/theme_preference")
 
-        # Load YouTube settings (API key already in keyring)
-        settings.youtube_api_key = _get_api_key_from_keyring()
+        # Load YouTube settings only when the caller explicitly wants credentials.
+        if read_keyring:
+            settings.youtube_api_key = _get_api_key_from_keyring()
         if qsettings.contains("youtube/results_count"):
             settings.youtube_results_count = int(qsettings.value("youtube/results_count"))
         if qsettings.contains("youtube/parallel_downloads"):

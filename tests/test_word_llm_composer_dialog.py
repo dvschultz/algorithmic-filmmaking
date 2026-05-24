@@ -132,6 +132,25 @@ def test_validation_requires_prompt(qapp):
     assert dialog._accept_btn.isEnabled() is True
 
 
+def test_prompt_editor_has_room_for_long_prompts(qapp):
+    from PySide6.QtWidgets import QSizePolicy
+
+    from ui.dialogs.word_llm_composer_dialog import WordLLMComposerDialog
+
+    clip, source = _aligned_clip()
+    dialog = WordLLMComposerDialog(
+        clips=[(clip, source)],
+        project=None,
+        _ollama_health_fn=lambda: (True, ""),
+    )
+
+    assert dialog._prompt_input.minimumHeight() >= 160
+    assert (
+        dialog._prompt_input.sizePolicy().verticalPolicy()
+        == QSizePolicy.Policy.MinimumExpanding
+    )
+
+
 def test_accept_dispatches_compose_worker(qapp, monkeypatch):
     from ui.dialogs.word_llm_composer_dialog import WordLLMComposerDialog
 

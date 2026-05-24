@@ -144,6 +144,40 @@ PROVIDER_MODELS = {
     ],
 }
 
+MODEL_ALIASES = {
+    "gemini": {
+        "gemini-3-flash-preview": "gemini-2.5-flash",
+        "gemini-2.0-flash": "gemini-2.5-flash",
+        "gemini-pro": "gemini-2.5-pro",
+    },
+    "openrouter": {
+        "google/gemini-2.0-flash": "google/gemini-2.5-flash",
+    },
+}
+
+
+def resolve_model_alias(provider: str, model: str) -> str:
+    """Map renamed provider model IDs to a current configured model ID."""
+    if not model:
+        return model
+    provider_key = (provider or "").lower()
+    normalized = model.removeprefix("gemini/").removeprefix("anthropic/").removeprefix("openrouter/")
+    return MODEL_ALIASES.get(provider_key, {}).get(normalized, normalized)
+
+
+def validate_provider_model(provider: str, model: str) -> tuple[bool, str]:
+    """Return whether a model is known after alias resolution."""
+    resolved = resolve_model_alias(provider, model)
+    known = {model_id for model_id, _label in get_provider_models(provider)}
+    if resolved in known:
+        return True, resolved
+    if not known:
+        return False, f"Unknown provider '{provider}'"
+    return (
+        False,
+        f"Unknown {provider} model '{model}'. Choose one of: {', '.join(sorted(known))}",
+    )
+
 
 def get_provider_models(provider: str) -> list[tuple[str, str]]:
     """Get available models for a provider as (model_id, display_name) tuples.
@@ -187,7 +221,10 @@ class ProviderConfig:
             ProviderType.OPENROUTER: "openrouter/",
         }
         prefix = prefixes.get(self.provider, "")
-        return f"{prefix}{self.model}"
+        model = resolve_model_alias(self.provider.value, self.model)
+        if prefix and model.startswith(prefix):
+            return model
+        return f"{prefix}{model}"
 
     def get_api_base(self) -> Optional[str]:
         """Get API base URL, with defaults for local provider."""
@@ -231,6 +268,24 @@ class OllamaUnreachableError(Exception):
         if original is not None:
             full += f" Original error: {original}"
         super().__init__(full)
+
+
+def normalize_provider_error(provider: str, error: Exception | str) -> str:
+    """Map provider failures to short actionable messages for UI surfaces."""
+    text = str(error)
+    lowered = text.lower()
+    provider_name = (provider or "provider").title()
+    if "api key" in lowered or "unauthorized" in lowered or "401" in lowered:
+        return f"{provider_name} rejected the API key. Check Settings > API Keys and test the connection."
+    if "quota" in lowered or "rate limit" in lowered or "429" in lowered:
+        return f"{provider_name} quota or rate limit was reached. Try again later or switch providers."
+    if "missing" in lowered and "field" in lowered:
+        return f"{provider_name} rejected the request as incomplete. Check the selected model and provider settings."
+    if "invalid argument" in lowered or "400" in lowered:
+        return f"{provider_name} rejected the request. Check that the selected model is still available."
+    if provider == "local" and ("connect" in lowered or "refused" in lowered):
+        return "Ollama is not running. Start it with 'ollama serve' or switch providers."
+    return f"{provider_name} request failed: {text}"
 
 
 async def check_ollama_health(api_base: str = "http://localhost:11434") -> tuple[bool, str]:

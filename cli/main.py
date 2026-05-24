@@ -103,6 +103,7 @@ def register_commands() -> None:
     cli.add_command(analyze.analyze)
     cli.add_command(transcribe.transcribe)
     cli.add_command(export.export)
+    cli.add_command(youtube.test_youtube_key, name="test-youtube-key")
     cli.add_command(youtube.search)
     cli.add_command(youtube.download)
 

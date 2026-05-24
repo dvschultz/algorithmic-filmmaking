@@ -1,10 +1,8 @@
 """Centralized binary resolution for external tools (FFmpeg, yt-dlp, etc.).
 
-Replaces scattered shutil.which() calls with a single lookup chain:
-  1. Managed bin dir (~/Library/Application Support/Scene Ripper/bin/)
-  2. Bundled bin dir inside frozen apps
-  3. Common Homebrew / user paths (for macOS GUI apps that lack shell PATH)
-  4. Standard PATH via shutil.which()
+Replaces scattered shutil.which() calls with a single lookup chain. Frozen apps
+prefer their bundled runtime binaries first so old managed downloads cannot
+shadow the signed FFmpeg/FFprobe shipped with the app.
 """
 
 import logging
@@ -52,8 +50,8 @@ def find_binary(name: str) -> Optional[str]:
     """Find an external binary by name.
 
     Search order:
-      1. Managed bin dir (when running as frozen app or always if dir exists)
-      2. Bundled app runtime directories in frozen builds
+      1. Bundled app runtime directories in frozen builds
+      2. Managed bin dir
       3. Extra search paths (Homebrew, user local)
       4. Standard PATH via shutil.which()
 
@@ -66,15 +64,7 @@ def find_binary(name: str) -> Optional[str]:
     # On Windows, check both the bare name and with .exe suffix
     suffixes = [".exe", ""] if sys.platform == "win32" else [""]
 
-    # 1. Check managed bin directory
-    managed_dir = get_managed_bin_dir()
-    for suffix in suffixes:
-        managed_path = managed_dir / (name + suffix)
-        if managed_path.is_file():
-            logger.debug(f"Found {name} in managed bin dir: {managed_path}")
-            return str(managed_path)
-
-    # 2. Check bundled runtime directories in frozen apps
+    # 1. Check bundled runtime directories in frozen apps
     if is_frozen():
         base_path = get_base_path()
         executable_dir = Path(sys.executable).resolve().parent
@@ -94,6 +84,14 @@ def find_binary(name: str) -> Optional[str]:
                 if candidate.is_file():
                     logger.debug(f"Found {name} in bundled runtime: {candidate}")
                     return str(candidate)
+
+    # 2. Check managed bin directory
+    managed_dir = get_managed_bin_dir()
+    for suffix in suffixes:
+        managed_path = managed_dir / (name + suffix)
+        if managed_path.is_file():
+            logger.debug(f"Found {name} in managed bin dir: {managed_path}")
+            return str(managed_path)
 
     # 3. Check extra search paths (especially important for macOS GUI apps)
     for search_dir in _EXTRA_SEARCH_PATHS + _USER_SEARCH_PATHS:
@@ -166,23 +164,21 @@ def get_subprocess_env() -> dict:
     path = env.get("PATH", "")
     path_parts = path.split(os.pathsep)
 
-    # Prepend managed bin dir
-    managed_bin = str(get_managed_bin_dir())
-    if managed_bin not in path_parts:
-        path_parts.insert(0, managed_bin)
-
-    extra_insert_index = 1
+    extra_insert_index = 0
     if is_frozen():
         bundled_bins = [
             str(get_bundled_bin_dir()),
             str(Path(sys.executable).resolve().parent / "bin"),
         ]
-        insertion_index = 1
         for bundled_bin in bundled_bins:
             if bundled_bin not in path_parts:
-                path_parts.insert(insertion_index, bundled_bin)
-                insertion_index += 1
-        extra_insert_index = insertion_index
+                path_parts.insert(extra_insert_index, bundled_bin)
+                extra_insert_index += 1
+
+    managed_bin = str(get_managed_bin_dir())
+    if managed_bin not in path_parts:
+        path_parts.insert(extra_insert_index, managed_bin)
+        extra_insert_index += 1
 
     # Add common paths that GUI apps miss
     for p in _EXTRA_SEARCH_PATHS + _USER_SEARCH_PATHS:
@@ -192,3 +188,30 @@ def get_subprocess_env() -> dict:
 
     env["PATH"] = os.pathsep.join(path_parts)
     return env
+
+
+def log_resolved_binary(name: str) -> str | None:
+    """Log the resolved binary path and first version line for diagnostics."""
+    path = find_binary(name)
+    if path is None:
+        logger.warning("%s binary not resolved", name)
+        return None
+
+    version = "version unavailable"
+    try:
+        result = subprocess.run(
+            [path, "-version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            **get_subprocess_kwargs(),
+        )
+        output_lines = (result.stdout or result.stderr or "").splitlines()
+        if output_lines:
+            version = output_lines[0].strip() or version
+    except Exception as exc:
+        version = f"version check failed: {exc}"
+
+    location = "bundled" if is_bundled_binary_path(path) else "external"
+    logger.info("Resolved %s binary: path=%s location=%s %s", name, path, location, version)
+    return path

@@ -19,7 +19,12 @@ except ImportError:
     RateLimitError = None
 
 from core.chat_tools import get_tool_timeout, tools as tool_registry
-from core.llm_client import LLMClient, ProviderConfig, check_ollama_health
+from core.llm_client import (
+    LLMClient,
+    ProviderConfig,
+    check_ollama_health,
+    normalize_provider_error,
+)
 from core.tool_executor import ToolExecutor
 
 # Maximum iterations for the agent tool loop. Prevents infinite loops when the
@@ -176,6 +181,7 @@ class ChatAgentWorker(QThread):
     workflow_progress = Signal(str, int, int)  # step_name, current, total (for compound operations)
     complete = Signal(str, list)  # final response text, tool_history
     error = Signal(str)  # error message
+    auth_failed = Signal(str, str)  # category, user message
 
     # GUI sync signals - emitted after tool execution to update GUI components
     youtube_search_completed = Signal(str, list)  # query, list of video dicts
@@ -351,6 +357,19 @@ class ChatAgentWorker(QThread):
                 logger.exception("Error in agent loop")
                 # Provide user-friendly message for rate limit errors
                 error_msg = str(e)
+                from core.auth_errors import (
+                    CATEGORY_NONE,
+                    classify_subscription_error,
+                    user_message_for_category,
+                )
+
+                auth_category = classify_subscription_error(e)
+                if auth_category != CATEGORY_NONE:
+                    user_message = user_message_for_category(auth_category, error_msg)
+                    self.auth_failed.emit(auth_category, user_message)
+                    self.error.emit(user_message)
+                    return
+
                 if RateLimitError and isinstance(e, RateLimitError):
                     error_msg = (
                         "Rate limit exceeded. The conversation has grown too large "
@@ -362,6 +381,11 @@ class ChatAgentWorker(QThread):
                         "Rate limit exceeded. The conversation has grown too large "
                         "for your API tier's token limit. Try clearing the chat history "
                         "or waiting a minute before trying again."
+                    )
+                else:
+                    error_msg = normalize_provider_error(
+                        self.config.provider.value,
+                        e,
                     )
                 self.error.emit(error_msg)
                 return

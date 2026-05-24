@@ -25,7 +25,7 @@ class CutTab(BaseTab):
         clip_selected: Emitted when a clip is selected (clip: Clip)
         clip_double_clicked: Emitted when a clip is double-clicked (clip: Clip)
         clip_dragged_to_timeline: Emitted when a clip is dragged to timeline (clip: Clip)
-        analyze_selected_requested: Emitted when clips are sent to Analyze tab (clip_ids: list[str])
+    analyze_selected_requested: Emitted when clips are sent to Analyze tab (clip_ids: list[str])
     """
 
     clip_selected = Signal(object)  # Clip
@@ -33,6 +33,7 @@ class CutTab(BaseTab):
     clip_dragged_to_timeline = Signal(object)  # Clip
     analyze_selected_requested = Signal(list)  # list[str] clip IDs
     selection_changed = Signal(list)  # list[str] selected clip IDs
+    detect_current_requested = Signal(str, dict)  # mode, config
 
     # State constants for stacked widget
     STATE_NO_VIDEO = 0
@@ -91,6 +92,16 @@ class CutTab(BaseTab):
         controls.setContentsMargins(10, 10, 10, 10)
 
         # Analyze Selected button
+        self.cut_standard_btn = QPushButton("Cut Standard")
+        self.cut_standard_btn.setToolTip("Detect scenes with standard settings: sensitivity 3.0, minimum 0.5 seconds")
+        self.cut_standard_btn.clicked.connect(self._on_cut_standard_click)
+        controls.addWidget(self.cut_standard_btn)
+
+        self.cut_fast_btn = QPushButton("Cut Fast")
+        self.cut_fast_btn.setToolTip("Detect fast-cut/trailer scenes: sensitivity 5.0, minimum 0.33 seconds")
+        self.cut_fast_btn.clicked.connect(self._on_cut_fast_click)
+        controls.addWidget(self.cut_fast_btn)
+
         self.analyze_btn = QPushButton("Analyze Selected")
         self.analyze_btn.setToolTip("Send selected clips to Analyze tab")
         self.analyze_btn.setEnabled(False)
@@ -200,6 +211,20 @@ class CutTab(BaseTab):
         if selected_clips:
             clip_ids = [clip.id for clip in selected_clips]
             self.analyze_selected_requested.emit(clip_ids)
+
+    def _on_cut_standard_click(self):
+        """Request standard scene detection for the current source."""
+        self.detect_current_requested.emit(
+            "adaptive",
+            {"threshold": 3.0, "min_scene_length_seconds": 0.5},
+        )
+
+    def _on_cut_fast_click(self):
+        """Request fast-cut scene detection for the current source."""
+        self.detect_current_requested.emit(
+            "adaptive",
+            {"threshold": 5.0, "min_scene_length_seconds": 0.33},
+        )
 
     def _on_clip_selected(self, clip):
         """Handle clip selection."""

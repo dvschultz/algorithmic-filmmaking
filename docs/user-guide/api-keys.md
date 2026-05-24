@@ -8,6 +8,10 @@ API keys are stored securely in your system's keyring (macOS Keychain, Windows C
 
 Environment variables take priority over stored keys. If you set `ANTHROPIC_API_KEY` in your shell, Scene Ripper will use that instead of whatever is saved in settings.
 
+Your operating system may show a Keychain or credential-manager prompt the first time Scene Ripper saves or reads a key. That prompt is expected for API-key features. Allow access to use the saved key, deny it if you want to skip the feature, or use environment variables to avoid stored-key access entirely.
+
+Scene Ripper redacts common API-key formats from in-app logs and chat exports, but avoid pasting live keys into project notes, prompts, filenames, or issue reports.
+
 ## Which Keys Do I Need?
 
 You don't need all of these. Most users need just one or two.
@@ -241,12 +245,21 @@ The YouTube API key enables searching for videos and fetching metadata directly 
 2. Go to the **API Keys** tab
 3. Scroll down to the **YouTube Data API** section
 4. Paste your key in the API key field
-5. Click **Save**
+5. Click **Test** to verify that the key can call the YouTube Data API
+6. Click **Save**
+
+If the test reports an invalid key, confirm that the **YouTube Data API v3** is enabled for the same Google Cloud project that owns the key. If it reports quota exhaustion, wait for the daily quota reset or use another Google Cloud project.
 
 ### Environment Variable Alternative
 
 ```bash
 export YOUTUBE_API_KEY=your-key-here
+```
+
+CLI users can test the configured key without opening the GUI:
+
+```bash
+scene_ripper test-youtube-key
 ```
 
 ### Pricing

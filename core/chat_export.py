@@ -5,7 +5,8 @@ import os
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+
+from core.redaction import redact_secrets, redact_text
 
 
 @dataclass
@@ -47,7 +48,7 @@ def _sanitize_path_in_content(content: str) -> str:
         return content
 
     home_dir = os.path.expanduser("~")
-    return content.replace(home_dir, "~")
+    return redact_text(content.replace(home_dir, "~"))
 
 
 def _format_tool_call_markdown(tool_call: dict, include_args: bool = False) -> str:
@@ -69,11 +70,14 @@ def _format_tool_call_markdown(tool_call: dict, include_args: bool = False) -> s
         args_str = func.get("arguments", "{}")
         try:
             args = json.loads(args_str) if isinstance(args_str, str) else args_str
+            args = redact_secrets(args)
             if args:
                 args_formatted = json.dumps(args, indent=2)
                 lines.append(f"> **Arguments:**\n> ```json\n> {args_formatted}\n> ```")
         except json.JSONDecodeError:
-            pass
+            redacted_args = redact_text(str(args_str))
+            if redacted_args:
+                lines.append(f"> **Arguments:** `{redacted_args}`")
 
     return "\n".join(lines)
 
@@ -269,7 +273,7 @@ def export_chat_as_json(
         sanitized = msg.copy()
         if "content" in sanitized:
             sanitized["content"] = _sanitize_path_in_content(sanitized["content"])
-        sanitized_messages.append(sanitized)
+        sanitized_messages.append(redact_secrets(sanitized))
 
     # Build JSON structure
     export_data = {

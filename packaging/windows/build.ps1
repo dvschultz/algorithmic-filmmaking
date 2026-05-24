@@ -82,18 +82,18 @@ if (-not $bundledMpvDll) {
     Write-Host "Bundled mpv runtime DLL missing from dist/Scene Ripper/" -ForegroundColor Red
     exit 1
 }
-$bundledFfmpegExe = Get-ChildItem -Path (Join-Path $projectRoot "dist\Scene Ripper") -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
+$bundledFfmpegExe = @(Get-ChildItem -Path (Join-Path $projectRoot "dist\Scene Ripper") -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
     $_.Name -eq "ffmpeg.exe"
-} | Select-Object -First 1
-if (-not $bundledFfmpegExe) {
-    Write-Host "Bundled ffmpeg.exe missing from dist/Scene Ripper/" -ForegroundColor Red
+})
+if ($bundledFfmpegExe.Count -ne 1) {
+    Write-Host "Expected exactly one bundled ffmpeg.exe in dist/Scene Ripper/; found $($bundledFfmpegExe.Count)" -ForegroundColor Red
     exit 1
 }
-$bundledFfprobeExe = Get-ChildItem -Path (Join-Path $projectRoot "dist\Scene Ripper") -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
+$bundledFfprobeExe = @(Get-ChildItem -Path (Join-Path $projectRoot "dist\Scene Ripper") -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
     $_.Name -eq "ffprobe.exe"
-} | Select-Object -First 1
-if (-not $bundledFfprobeExe) {
-    Write-Host "Bundled ffprobe.exe missing from dist/Scene Ripper/" -ForegroundColor Red
+})
+if ($bundledFfprobeExe.Count -ne 1) {
+    Write-Host "Expected exactly one bundled ffprobe.exe in dist/Scene Ripper/; found $($bundledFfprobeExe.Count)" -ForegroundColor Red
     exit 1
 }
 $bundledWinSparkleDll = Get-ChildItem -Path (Join-Path $projectRoot "dist\Scene Ripper") -Recurse -File -ErrorAction SilentlyContinue | Where-Object {

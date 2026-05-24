@@ -12,6 +12,43 @@ from cli.utils.progress import create_progress_callback
 
 
 @click.command()
+@click.option(
+    "--api-key",
+    envvar="YOUTUBE_API_KEY",
+    default=None,
+    help="YouTube Data API key to test. Defaults to configured key.",
+)
+@click.pass_context
+def test_youtube_key(ctx: click.Context, api_key: Optional[str]) -> None:
+    """Test the configured YouTube Data API key."""
+    try:
+        from core.youtube_api import validate_youtube_api_key
+    except ImportError as e:
+        exit_with(ExitCode.DEPENDENCY_MISSING, f"Missing dependency: {e}")
+
+    config = CLIConfig.load()
+    key_to_test = api_key or config.youtube_api_key
+    if not key_to_test:
+        exit_with(
+            ExitCode.VALIDATION_ERROR,
+            "YouTube API key not configured. Set YOUTUBE_API_KEY or save one in Settings > API Keys.",
+        )
+
+    ok, message = validate_youtube_api_key(key_to_test)
+    as_json = ctx.obj.get("json", False)
+    if as_json:
+        output_result({"success": ok, "message": message}, as_json=True)
+        if not ok:
+            raise click.exceptions.Exit(ExitCode.VALIDATION_ERROR)
+        return
+
+    if ok:
+        output_success(message)
+    else:
+        exit_with(ExitCode.VALIDATION_ERROR, message)
+
+
+@click.command()
 @click.argument("query")
 @click.option(
     "--max-results",
@@ -148,7 +185,7 @@ def search(
                     video.matches_resolution(resolution) and
                     video.matches_max_size(max_size)):
                     filtered_videos.append(video)
-            except Exception as e:
+            except Exception:
                 # If metadata fetch fails, skip the video when filtering
                 output_info(f"  Skipping {video.title[:30]}... (metadata fetch failed)")
 
@@ -219,7 +256,7 @@ def search(
 
         click.echo()
         click.echo("To download, copy the number and run:")
-        click.echo(f"  scene_ripper download https://youtube.com/watch?v=VIDEO_ID")
+        click.echo("  scene_ripper download https://youtube.com/watch?v=VIDEO_ID")
 
 
 @click.command()
@@ -264,7 +301,7 @@ def download(
         scene_ripper download https://youtube.com/watch?v=xyz --detect
     """
     try:
-        from core.downloader import VideoDownloader, DownloadResult
+        from core.downloader import VideoDownloader
     except ImportError as e:
         exit_with(ExitCode.DEPENDENCY_MISSING, f"Missing dependency: {e}")
 

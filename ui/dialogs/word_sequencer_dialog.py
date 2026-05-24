@@ -407,10 +407,6 @@ class WordSequencerDialog(QDialog):
             out.extend(self._clips_by_source_id.get(source_id, []))
         return out
 
-    def _alignable_pending_clips(self) -> list:
-        """Return ``Clip`` objects from checked sources missing word data."""
-        return alignable_pending_clips(self._checked_clips())
-
     def _selected_mode_key(self) -> str:
         return _MODE_OPTIONS[self._mode_combo.currentIndex()][0]
 
@@ -569,7 +565,7 @@ class WordSequencerDialog(QDialog):
         if not checked_clips:
             return
 
-        pending = self._alignable_pending_clips()
+        pending = alignable_pending_clips(self._checked_clips())
         if pending:
             # Auto-run alignment over the pending clips. Once the worker
             # completes, re-enter accept logic via _pending_after_alignment.

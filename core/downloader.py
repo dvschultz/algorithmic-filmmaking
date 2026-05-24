@@ -1,7 +1,6 @@
 """Video downloader using yt-dlp for YouTube/Vimeo support."""
 
 import logging
-import os
 import subprocess
 import re
 import json
@@ -13,6 +12,7 @@ from dataclasses import dataclass
 
 from core.binary_resolver import find_binary, get_subprocess_env, get_subprocess_kwargs
 from core.paths import get_managed_bin_dir, is_frozen
+from core.redaction import redact_text
 from core.spine.url_security import validate_url as _spine_validate_url
 
 logger = logging.getLogger(__name__)
@@ -155,6 +155,25 @@ def _format_yt_dlp_error(output_lines: list[str], *, deno_solver_ran: bool = Fal
     return "Download failed. Check URL and try again."
 
 
+def _format_yt_dlp_diagnostics(
+    *,
+    exit_code: int | None,
+    output_lines: list[str],
+    command: list[str] | None = None,
+) -> str:
+    """Build a concise diagnostic block for logs/UI copy actions."""
+    lines = []
+    if exit_code is not None:
+        lines.append(f"yt-dlp exit code: {exit_code}")
+    if command:
+        lines.append(f"command: {redact_text(' '.join(command))}")
+    snippet = [redact_text(line) for line in output_lines[-10:] if line]
+    if snippet:
+        lines.append("recent output:")
+        lines.extend(snippet)
+    return "\n".join(lines)
+
+
 @dataclass
 class DownloadResult:
     """Result of a video download."""
@@ -164,6 +183,8 @@ class DownloadResult:
     title: Optional[str] = None
     duration: Optional[float] = None
     error: Optional[str] = None
+    exit_code: Optional[int] = None
+    diagnostics: Optional[str] = None
 
 
 class VideoDownloader:
@@ -249,13 +270,27 @@ class VideoDownloader:
                     output_lines = [
                         line for line in (result.stderr or result.stdout).splitlines() if line.strip()
                     ]
-                    raise RuntimeError(_format_yt_dlp_error(output_lines))
+                    message = _format_yt_dlp_error(output_lines)
+                    diagnostics = _format_yt_dlp_diagnostics(
+                        exit_code=result.returncode,
+                        output_lines=output_lines,
+                        command=cmd,
+                    )
+                    logger.error("yt-dlp metadata failed:\n%s", diagnostics)
+                    raise RuntimeError(f"{message}\n\nDiagnostics:\n{diagnostics}")
 
         if result.returncode != 0 and not result.stdout.strip():
             output_lines = [
                 line for line in (result.stderr or result.stdout).splitlines() if line.strip()
             ]
-            raise RuntimeError(_format_yt_dlp_error(output_lines))
+            message = _format_yt_dlp_error(output_lines)
+            diagnostics = _format_yt_dlp_diagnostics(
+                exit_code=result.returncode,
+                output_lines=output_lines,
+                command=cmd,
+            )
+            logger.error("yt-dlp metadata failed:\n%s", diagnostics)
+            raise RuntimeError(f"{message}\n\nDiagnostics:\n{diagnostics}")
 
         # Parse first JSON object (in case of multi-file items outputting multiple JSON lines)
         data = json.loads(result.stdout.strip().split('\n')[0])
@@ -333,7 +368,7 @@ class VideoDownloader:
             info = self.get_video_info(url)
             title = info["title"]
         except Exception as e:
-            return DownloadResult(success=False, error=str(e))
+            return DownloadResult(success=False, error=str(e), diagnostics=str(e))
 
         if progress_callback:
             progress_callback(5, f"Downloading: {title}")
@@ -367,14 +402,30 @@ class VideoDownloader:
         # Run download with progress parsing
         # Use augmented environment to ensure Deno is findable for challenge solver
         env = get_subprocess_env()
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            env=env,
-            **get_subprocess_kwargs(),
-        )
+        try:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                env=env,
+                **get_subprocess_kwargs(),
+            )
+        except OSError as exc:
+            diagnostics = _format_yt_dlp_diagnostics(
+                exit_code=None,
+                output_lines=[str(exc)],
+                command=cmd,
+            )
+            logger.error("yt-dlp failed to start:\n%s", diagnostics)
+            return DownloadResult(
+                success=False,
+                error=(
+                    "yt-dlp could not be started. Install or repair yt-dlp from "
+                    "Settings > Dependencies and try again."
+                ),
+                diagnostics=diagnostics,
+            )
 
         output_file = None
         cancelled = False
@@ -483,9 +534,16 @@ class VideoDownloader:
                 )
             if error_msg.startswith("Download failed:") and last_error:
                 error_msg = last_error
+            diagnostics = _format_yt_dlp_diagnostics(
+                exit_code=process.returncode,
+                output_lines=recent_lines,
+                command=cmd,
+            )
             return DownloadResult(
                 success=False,
-                error=error_msg
+                error=f"{error_msg}\n\nDiagnostics:\n{diagnostics}",
+                exit_code=process.returncode,
+                diagnostics=diagnostics,
             )
 
         # Find the output file if we didn't catch it

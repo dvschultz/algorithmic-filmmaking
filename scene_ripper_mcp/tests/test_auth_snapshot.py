@@ -11,6 +11,7 @@ from unittest.mock import patch
 import pytest
 
 from core.settings import Settings
+from core.spine.chatgpt_auth import bump_auth_version
 from scene_ripper_mcp.auth_snapshot import (
     AuthSnapshot,
     snapshot_still_valid,
@@ -22,6 +23,13 @@ def _settings(mode: str) -> Settings:
     s = Settings()
     s.auth_mode = mode
     return s
+
+
+@pytest.fixture(autouse=True)
+def _fresh_auth_cache():
+    bump_auth_version()
+    yield
+    bump_auth_version()
 
 
 class TestTakeAuthSnapshot:

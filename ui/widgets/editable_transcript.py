@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QScrollArea,
     QFrame,
 )
 
@@ -42,6 +41,7 @@ class TranscriptSegmentWidget(QFrame):
         self._index = index
         self._segment = segment
         self._is_editing = False
+        self._is_search_match = False
 
         self._setup_ui()
         self._apply_style()
@@ -89,6 +89,14 @@ class TranscriptSegmentWidget(QFrame):
                 background-color: {theme().background_tertiary};
             }}
         """)
+        if self._is_search_match:
+            self.setStyleSheet(f"""
+                QFrame {{
+                    background-color: {theme().background_tertiary};
+                    border-left: 3px solid {theme().accent_blue};
+                    border-radius: 4px;
+                }}
+            """)
 
         self.time_label.setStyleSheet(f"""
             color: {theme().text_muted};
@@ -184,15 +192,22 @@ class TranscriptSegmentWidget(QFrame):
             if self._is_editing:
                 self._cancel_editing()
 
+    def set_search_match(self, matched: bool):
+        """Mark this segment as the active transcript search match."""
+        self._is_search_match = matched
+        self._apply_style()
+
 
 class EditableTranscriptWidget(QWidget):
     """Widget displaying editable transcript segments.
 
     Signals:
         segments_changed(list): Emitted when any segment text is edited
+        segment_selected(int, float): Emitted when search jumps to a segment
     """
 
     segments_changed = Signal(list)  # list[TranscriptSegment]
+    segment_selected = Signal(int, float)  # segment_index, start_time
 
     def __init__(self, parent=None):
         """Create editable transcript widget.
@@ -203,6 +218,8 @@ class EditableTranscriptWidget(QWidget):
         super().__init__(parent)
         self._segments: list["TranscriptSegment"] = []
         self._segment_widgets: list[TranscriptSegmentWidget] = []
+        self._search_matches: list[int] = []
+        self._active_match = -1
         self._change_in_progress = False
 
         self._setup_ui()
@@ -212,7 +229,21 @@ class EditableTranscriptWidget(QWidget):
         """Build the widget UI."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        layout.setSpacing(4)
+
+        search_layout = QHBoxLayout()
+        search_layout.setContentsMargins(0, 0, 0, 0)
+        search_layout.setSpacing(6)
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("Search transcript")
+        self.search_edit.textChanged.connect(self._on_search_changed)
+        self.search_edit.returnPressed.connect(self._jump_to_next_match)
+        search_layout.addWidget(self.search_edit)
+
+        self.search_count_label = QLabel("")
+        self._apply_search_count_style()
+        search_layout.addWidget(self.search_count_label)
+        layout.addLayout(search_layout)
 
         # Container for segment widgets
         self.container = QWidget()
@@ -232,6 +263,19 @@ class EditableTranscriptWidget(QWidget):
     def _apply_style(self):
         """Apply theme-aware styling."""
         self._apply_empty_style()
+        self._apply_search_count_style()
+        self.search_edit.setStyleSheet(f"""
+            QLineEdit {{
+                color: {theme().text_primary};
+                background-color: {theme().background_secondary};
+                border: 1px solid {theme().border};
+                border-radius: 4px;
+                padding: 4px 6px;
+            }}
+            QLineEdit:focus {{
+                border: 1px solid {theme().border_focus};
+            }}
+        """)
         for widget in self._segment_widgets:
             widget._apply_style()
 
@@ -241,6 +285,14 @@ class EditableTranscriptWidget(QWidget):
             color: {theme().text_muted};
             font-style: italic;
             padding: 8px;
+        """)
+
+    def _apply_search_count_style(self):
+        """Apply styling to the search count label."""
+        self.search_count_label.setStyleSheet(f"""
+            color: {theme().text_muted};
+            font-size: 11px;
+            min-width: 42px;
         """)
 
     def setSegments(self, segments: Optional[list["TranscriptSegment"]]):
@@ -255,6 +307,8 @@ class EditableTranscriptWidget(QWidget):
         for widget in self._segment_widgets:
             widget.deleteLater()
         self._segment_widgets.clear()
+        self._search_matches = []
+        self._active_match = -1
 
         self._segments = segments or []
 
@@ -269,6 +323,7 @@ class EditableTranscriptWidget(QWidget):
                 self.container_layout.insertWidget(i, widget)
                 self._segment_widgets.append(widget)
 
+        self._on_search_changed(self.search_edit.text())
         self._change_in_progress = False
 
     def segments(self) -> list["TranscriptSegment"]:
@@ -283,6 +338,7 @@ class EditableTranscriptWidget(QWidget):
         self._change_in_progress = True
 
         # Segment is already updated in-place by the widget
+        self._on_search_changed(self.search_edit.text())
         self.segments_changed.emit(self._segments)
 
         self._change_in_progress = False
@@ -290,5 +346,47 @@ class EditableTranscriptWidget(QWidget):
     def setEnabled(self, enabled: bool):
         """Enable or disable editing."""
         super().setEnabled(enabled)
+        self.search_edit.setEnabled(enabled)
         for widget in self._segment_widgets:
             widget.setEnabled(enabled)
+
+    @Slot(str)
+    def _on_search_changed(self, query: str):
+        """Update transcript search matches and jump to the first match."""
+        normalized = query.strip().lower()
+        self._search_matches = []
+        self._active_match = -1
+        for widget in self._segment_widgets:
+            widget.set_search_match(False)
+
+        if not normalized:
+            self.search_count_label.setText("")
+            return
+
+        self._search_matches = [
+            index
+            for index, segment in enumerate(self._segments)
+            if normalized in (segment.text or "").lower()
+        ]
+        self.search_count_label.setText(str(len(self._search_matches)))
+        if self._search_matches:
+            self._active_match = 0
+            self._activate_match()
+
+    @Slot()
+    def _jump_to_next_match(self):
+        """Cycle search focus to the next matching segment."""
+        if not self._search_matches:
+            return
+        self._active_match = (self._active_match + 1) % len(self._search_matches)
+        self._activate_match()
+
+    def _activate_match(self):
+        """Highlight and focus the current search match."""
+        for widget in self._segment_widgets:
+            widget.set_search_match(False)
+        segment_index = self._search_matches[self._active_match]
+        widget = self._segment_widgets[segment_index]
+        widget.set_search_match(True)
+        widget.setFocus(Qt.OtherFocusReason)
+        self.segment_selected.emit(segment_index, self._segments[segment_index].start_time)

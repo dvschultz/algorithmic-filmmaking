@@ -110,6 +110,27 @@ def test_collect_windows_ffmpeg_binaries_collects_staged_runtime(tmp_path):
     assert ("avcodec-61.dll", "bin") in bundled
 
 
+def test_collect_windows_ffmpeg_binaries_rejects_duplicate_required_binaries(tmp_path):
+    """Windows packaging should not bundle ambiguous duplicate FFmpeg executables."""
+    runtime_dir = (
+        tmp_path
+        / "packaging"
+        / "runtime"
+        / "ffmpeg"
+        / "windows"
+    )
+    nested_dir = runtime_dir / "nested"
+    nested_dir.mkdir(parents=True)
+    (runtime_dir / "ffmpeg.exe").write_text("binary", encoding="utf-8")
+    (runtime_dir / "ffprobe.exe").write_text("binary", encoding="utf-8")
+    (nested_dir / "ffmpeg.exe").write_text("duplicate", encoding="utf-8")
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="Expected exactly one ffmpeg.exe"):
+        collect_windows_ffmpeg_binaries(tmp_path)
+
+
 def test_collect_macos_ffmpeg_binaries_collects_staged_runtime(tmp_path):
     """Staged macOS FFmpeg runtime files should bundle under bin/."""
     runtime_dir = (
@@ -128,6 +149,27 @@ def test_collect_macos_ffmpeg_binaries_collects_staged_runtime(tmp_path):
     bundled = {(Path(src).name, destination.replace("\\", "/")) for src, destination in collected}
     assert ("ffmpeg", "bin") in bundled
     assert ("ffprobe", "bin") in bundled
+
+
+def test_collect_macos_ffmpeg_binaries_rejects_duplicate_required_binaries(tmp_path):
+    """macOS packaging should not bundle ambiguous duplicate FFmpeg binaries."""
+    runtime_dir = (
+        tmp_path
+        / "packaging"
+        / "runtime"
+        / "ffmpeg"
+        / "macos"
+    )
+    nested_dir = runtime_dir / "nested"
+    nested_dir.mkdir(parents=True)
+    (runtime_dir / "ffmpeg").write_text("binary", encoding="utf-8")
+    (runtime_dir / "ffprobe").write_text("binary", encoding="utf-8")
+    (nested_dir / "ffprobe").write_text("duplicate", encoding="utf-8")
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="Expected exactly one ffprobe"):
+        collect_macos_ffmpeg_binaries(tmp_path)
 
 
 def test_collect_macos_model_datas_collects_staged_runtime(tmp_path):

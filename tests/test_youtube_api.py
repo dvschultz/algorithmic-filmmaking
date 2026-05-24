@@ -2,7 +2,7 @@
 
 import pytest
 from datetime import timedelta
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import patch, MagicMock
 
 from core.youtube_api import (
     YouTubeSearchClient,
@@ -11,7 +11,7 @@ from core.youtube_api import (
     YouTubeAPIError,
     QuotaExceededError,
     InvalidAPIKeyError,
-    DURATION_RANGES,
+    validate_youtube_api_key,
 )
 
 
@@ -92,7 +92,7 @@ class TestYouTubeSearchClient:
     @patch("core.youtube_api.build")
     def test_init_creates_client(self, mock_build):
         """Test that valid API key creates client."""
-        client = YouTubeSearchClient("valid_api_key")
+        YouTubeSearchClient("valid_api_key")
         mock_build.assert_called_once_with(
             "youtube",
             "v3",
@@ -242,6 +242,40 @@ class TestYouTubeSearchClient:
         assert isinstance(result, YouTubeSearchResult)
         assert len(result.videos) == 0
         assert result.total_results == 0
+
+    @patch("core.youtube_api.build")
+    def test_validate_key_uses_lightweight_videos_request(self, mock_build):
+        """Validate should avoid an expensive search request."""
+        mock_youtube = MagicMock()
+        mock_build.return_value = mock_youtube
+
+        client = YouTubeSearchClient("test_key")
+        client.validate_key()
+
+        mock_youtube.videos().list.assert_called_once_with(
+            part="id",
+            chart="mostPopular",
+            maxResults=1,
+        )
+
+
+@patch("core.youtube_api.YouTubeSearchClient")
+def test_validate_youtube_api_key_success(mock_client_cls):
+    """Top-level validation helper should return structured success."""
+    ok, message = validate_youtube_api_key("test_key")
+
+    assert ok is True
+    assert "valid" in message
+    mock_client_cls.return_value.validate_key.assert_called_once_with()
+
+
+@patch("core.youtube_api.YouTubeSearchClient", side_effect=InvalidAPIKeyError("bad key"))
+def test_validate_youtube_api_key_invalid(mock_client_cls):
+    """Top-level validation helper should return structured failure."""
+    ok, message = validate_youtube_api_key("bad")
+
+    assert ok is False
+    assert message == "bad key"
 
 
 class TestMatchesDuration:

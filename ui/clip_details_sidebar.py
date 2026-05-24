@@ -238,6 +238,7 @@ class ClipDetailsSidebar(QDockWidget):
 
         self.transcript_edit = EditableTranscriptWidget()
         self.transcript_edit.segments_changed.connect(self._on_transcript_changed)
+        self.transcript_edit.segment_selected.connect(self._on_transcript_segment_selected)
         content_layout.addWidget(self.transcript_edit)
 
         # Object Labels section (EDITABLE)
@@ -406,6 +407,14 @@ class ClipDetailsSidebar(QDockWidget):
         self._clip_ref.transcript = segments if segments else None
         self._emit_clip_edit()
         self._change_in_progress = False
+
+    @Slot(int, float)
+    def _on_transcript_segment_selected(self, _segment_index: int, start_time: float):
+        """Seek preview to a searched transcript segment."""
+        if not self._source_ref or not self._clip_ref:
+            return
+        clip_start = self._clip_ref.start_time(self._source_ref.fps)
+        self.video_player.seek_to(clip_start + start_time)
 
     @Slot(str)
     def _on_object_labels_changed(self, new_value: str):

@@ -7,6 +7,7 @@ import threading
 from collections import deque
 
 from PySide6.QtCore import QObject, Signal
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QPushButton,
@@ -15,6 +16,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from core.diagnostics import build_diagnostics_report
+from core.redaction import SecretRedactionFilter
 from ui.theme import Spacing
 
 
@@ -70,6 +73,7 @@ class _InAppLogHandler(logging.Handler):
         self.setFormatter(
             logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
         )
+        self.addFilter(SecretRedactionFilter())
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -93,6 +97,9 @@ class LogViewerWidget(QWidget):
 
         controls = QHBoxLayout()
         controls.addStretch(1)
+        copy_btn = QPushButton("Copy Diagnostics")
+        copy_btn.clicked.connect(self._copy_diagnostics)
+        controls.addWidget(copy_btn)
         clear_btn = QPushButton("Clear")
         clear_btn.clicked.connect(self._clear_view)
         controls.addWidget(clear_btn)
@@ -119,6 +126,12 @@ class LogViewerWidget(QWidget):
     def _clear_view(self) -> None:
         self._bridge.clear_buffer()
         self.text_edit.clear()
+
+    def _copy_diagnostics(self) -> None:
+        report = build_diagnostics_report(self._bridge.recent_lines())
+        clipboard = QGuiApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setText(report)
 
 
 _bridge_singleton: InAppLogBridge | None = None

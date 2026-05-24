@@ -3,7 +3,14 @@
 from pathlib import Path
 from unittest.mock import patch
 
-from core.app_version import get_app_version, get_machine_version, get_release_channel
+from core.app_version import (
+    get_app_version,
+    get_build_channel,
+    get_build_identity,
+    get_git_commit,
+    get_machine_version,
+    get_release_channel,
+)
 
 
 def test_get_app_version_prefers_env_var():
@@ -50,3 +57,25 @@ def test_get_release_channel_reads_bundled_channel(tmp_path):
     with patch.dict("os.environ", {}, clear=True), \
          patch("core.app_version.get_resource_path", return_value=channel_file):
         assert get_release_channel() == "beta"
+
+
+def test_get_build_channel_marks_source_checkout():
+    """Source checkouts should make the running channel visible."""
+    with patch.dict("os.environ", {}, clear=True), \
+         patch("core.app_version.is_frozen", return_value=False), \
+         patch("core.app_version.get_release_channel", return_value="stable"):
+        assert get_build_channel() == "source/stable"
+
+
+def test_get_git_commit_prefers_env_var():
+    """Commit metadata should be available without shelling out in packaged builds."""
+    with patch.dict("os.environ", {"GITHUB_SHA": "abcdef1234567890"}, clear=False):
+        assert get_git_commit() == "abcdef123456"
+
+
+def test_get_build_identity_includes_version_channel_and_commit():
+    """The UI/log identity should distinguish similar-looking builds."""
+    with patch("core.app_version.get_display_version", return_value="1.2.3"), \
+         patch("core.app_version.get_build_channel", return_value="source/beta"), \
+         patch("core.app_version.get_git_commit", return_value="abcdef1"):
+        assert get_build_identity() == "v1.2.3 source/beta abcdef1"

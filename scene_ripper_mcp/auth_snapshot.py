@@ -62,19 +62,16 @@ def take_auth_snapshot() -> AuthSnapshot:
     against it via :func:`snapshot_still_valid` before each
     subsequent LLM call.
     """
-    from core.settings import get_chatgpt_oauth_token, load_settings
-    from core.spine.chatgpt_auth import AuthMode
+    from core.spine.chatgpt_auth import AuthMode, load_active_auth_snapshot
 
-    settings = load_settings()
-    if settings.auth_mode != AuthMode.SUBSCRIPTION:
+    mode, _identity, access_token = load_active_auth_snapshot()
+    if mode != AuthMode.SUBSCRIPTION:
         return AuthSnapshot(auth_mode=AuthMode.API_KEY.value, access_token=None)
-    blob = get_chatgpt_oauth_token()
-    if not blob:
+    if not access_token:
         return AuthSnapshot(auth_mode=AuthMode.SUBSCRIPTION.value, access_token=None)
-    access_token = blob.get("access_token")
     return AuthSnapshot(
         auth_mode=AuthMode.SUBSCRIPTION.value,
-        access_token=access_token if isinstance(access_token, str) else None,
+        access_token=access_token,
     )
 
 

@@ -69,18 +69,26 @@ class TestAlignWordsLanguageGating(unittest.TestCase):
         with self.assertRaises(LanguageUnknownError):
             align_words("/path/to/audio.wav", [seg])
 
-    def test_unsupported_language_raises_unsupported_language_error(self):
-        """An ISO code outside the supported set → UnsupportedLanguageError."""
+    def test_invalid_language_code_raises_unsupported_language_error(self):
+        """Malformed codes are rejected before model load."""
         from core.analysis.alignment import UnsupportedLanguageError, align_words
 
         seg = TranscriptSegment(
             start_time=0.0, end_time=1.0, text="hello",
-            confidence=0.9, words=None, language="xx",
+            confidence=0.9, words=None, language="not-a-code1",
         )
         with patch("importlib.import_module", side_effect=ModuleNotFoundError), \
              self.assertRaises(UnsupportedLanguageError) as ctx:
             align_words("/path/to/audio.wav", [seg])
-        self.assertEqual(ctx.exception.language, "xx")
+        self.assertEqual(ctx.exception.language, "not-a-code1")
+
+    def test_runtime_absent_accepts_plausible_iso_code(self):
+        """Pre-install gating should not reject MMS-supported language codes."""
+        from core.analysis import alignment
+
+        with patch("importlib.import_module", side_effect=ModuleNotFoundError):
+            alignment._check_language_supported("jw")
+            self.assertTrue(alignment.is_language_supported("jw"))
 
     def test_runtime_without_supported_languages_skips_static_gate(self):
         """Installed runtime with no exported language list lets model raise later."""

@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import logging
+import math
+import subprocess
 import sys
 import tempfile
+import wave
 from pathlib import Path
 
 import cv2
 import numpy as np
 
+from core.binary_resolver import find_binary, is_bundled_binary_path, get_subprocess_kwargs
 from core.project import Project
 from core.scene_detect import DetectionConfig, SceneDetector
 from models.clip import Clip, Source
@@ -21,7 +25,7 @@ RUNTIME_SMOKE_TARGET_ENV = "SCENE_RIPPER_RUNTIME_SMOKE_TEST_TARGET"
 
 def get_runtime_smoke_targets() -> tuple[str, ...]:
     """Return the supported frozen runtime smoke targets."""
-    return ("imports", "project", "scene-detect", "updater")
+    return ("imports", "project", "scene-detect", "transcription", "updater")
 
 
 def run_runtime_smoke_target(target: str) -> str:
@@ -31,6 +35,7 @@ def run_runtime_smoke_target(target: str) -> str:
         "imports": _run_imports_smoke,
         "project": _run_project_smoke,
         "scene-detect": _run_scene_detect_smoke,
+        "transcription": _run_transcription_smoke,
         "updater": _run_updater_smoke,
     }
     handler = handlers.get(normalized)
@@ -128,6 +133,54 @@ def _run_scene_detect_smoke() -> None:
             raise RuntimeError(f"Expected at least 3 clips from synthetic scene detect, got {len(clips)}.")
 
 
+def _run_transcription_smoke() -> None:
+    """Validate the FFmpeg path used by transcription audio extraction."""
+    from core.paths import is_frozen
+    from core.transcription import _require_ffmpeg
+
+    ffmpeg = _require_ffmpeg()
+    ffprobe = find_binary("ffprobe")
+    if ffprobe is None:
+        raise RuntimeError("ffprobe is required for transcription smoke but was not resolved.")
+
+    if is_frozen():
+        for name, binary in {"ffmpeg": ffmpeg, "ffprobe": ffprobe}.items():
+            if not is_bundled_binary_path(binary):
+                raise RuntimeError(f"Frozen app resolved {name} outside bundled runtime: {binary}")
+
+    with tempfile.TemporaryDirectory(prefix="scene-ripper-transcription-smoke-") as tmp:
+        tmp_path = Path(tmp)
+        source_wav = tmp_path / "source.wav"
+        extracted_wav = tmp_path / "extracted.wav"
+        _create_synthetic_audio(source_wav)
+
+        result = subprocess.run(
+            [
+                ffmpeg,
+                "-y",
+                "-ss", "0",
+                "-to", "0.5",
+                "-i", str(source_wav),
+                "-vn",
+                "-acodec", "pcm_s16le",
+                "-ar", "16000",
+                "-ac", "1",
+                str(extracted_wav),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            **get_subprocess_kwargs(),
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                "FFmpeg transcription smoke extraction failed: "
+                f"{(result.stderr or result.stdout).strip()}"
+            )
+        if not extracted_wav.is_file() or extracted_wav.stat().st_size == 0:
+            raise RuntimeError("FFmpeg transcription smoke produced no extracted audio.")
+
+
 def _run_updater_smoke() -> None:
     """Validate bundled Windows updater availability metadata."""
     if sys.platform != "win32":
@@ -171,4 +224,19 @@ def _create_synthetic_scene_video(path: Path) -> Path:
     writer.release()
     if not path.exists():
         raise RuntimeError(f"Synthetic runtime smoke video was not created: {path}")
+    return path
+
+
+def _create_synthetic_audio(path: Path) -> Path:
+    """Create a tiny mono WAV file that FFmpeg can trim like transcription input."""
+    sample_rate = 16000
+    duration_seconds = 1.0
+    amplitude = 12000
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        for index in range(int(sample_rate * duration_seconds)):
+            value = int(amplitude * math.sin(2 * math.pi * 440 * index / sample_rate))
+            wav.writeframesraw(value.to_bytes(2, byteorder="little", signed=True))
     return path

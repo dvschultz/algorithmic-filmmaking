@@ -138,17 +138,17 @@ jobs:
           if (-not $bundledWinSparkleDll) {
             throw "Bundled WinSparkle.dll missing from dist output"
           }
-          $bundledFfmpegExe = Get-ChildItem -Path "dist/Scene Ripper" -Recurse -File | Where-Object {
+          $bundledFfmpegExe = @(Get-ChildItem -Path "dist/Scene Ripper" -Recurse -File | Where-Object {
             $_.Name -eq "ffmpeg.exe"
-          } | Select-Object -First 1
-          if (-not $bundledFfmpegExe) {
-            throw "Bundled ffmpeg.exe missing from dist output"
+          })
+          if ($bundledFfmpegExe.Count -ne 1) {
+            throw "Expected exactly one bundled ffmpeg.exe in dist output; found $($bundledFfmpegExe.Count)"
           }
-          $bundledFfprobeExe = Get-ChildItem -Path "dist/Scene Ripper" -Recurse -File | Where-Object {
+          $bundledFfprobeExe = @(Get-ChildItem -Path "dist/Scene Ripper" -Recurse -File | Where-Object {
             $_.Name -eq "ffprobe.exe"
-          } | Select-Object -First 1
-          if (-not $bundledFfprobeExe) {
-            throw "Bundled ffprobe.exe missing from dist output"
+          })
+          if ($bundledFfprobeExe.Count -ne 1) {
+            throw "Expected exactly one bundled ffprobe.exe in dist output; found $($bundledFfprobeExe.Count)"
           }
 
           if ($env:UPDATER_ENABLED -eq "true") {
@@ -372,6 +372,7 @@ jobs:
           Invoke-SceneRipperSmokeTarget -Target "imports"
           Invoke-SceneRipperSmokeTarget -Target "project"
           Invoke-SceneRipperSmokeTarget -Target "scene-detect"
+          Invoke-SceneRipperSmokeTarget -Target "transcription"
           if ($env:UPDATER_ENABLED -eq "true") {
             Invoke-SceneRipperSmokeTarget -Target "updater"
           } else {

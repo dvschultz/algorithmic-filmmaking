@@ -11,7 +11,7 @@ import logging
 import os
 import sys
 
-from core.app_version import get_app_version
+from core.app_version import get_app_version, get_build_identity
 from core.paths import (
     is_frozen,
     get_managed_package_search_paths,
@@ -22,6 +22,7 @@ from core.runtime_smoke import (
     RUNTIME_SMOKE_TARGET_ENV,
     run_runtime_smoke_target,
 )
+from core.redaction import SecretRedactionFilter
 from core.single_instance import acquire_single_instance_lock, release_single_instance_lock
 
 
@@ -95,6 +96,11 @@ def _setup_frozen_environment():
         logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     )
     logging.getLogger().addHandler(file_handler)
+    file_handler.addFilter(SecretRedactionFilter())
+
+    from core.binary_resolver import log_resolved_binary
+    log_resolved_binary("ffmpeg")
+    log_resolved_binary("ffprobe")
 
 
 # Set up logging early
@@ -102,6 +108,8 @@ logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
+for handler in logging.getLogger().handlers:
+    handler.addFilter(SecretRedactionFilter())
 logger = logging.getLogger(__name__)
 STARTUP_SMOKE_TEST_ENV = "SCENE_RIPPER_STARTUP_SMOKE_TEST"
 
@@ -109,7 +117,7 @@ STARTUP_SMOKE_TEST_ENV = "SCENE_RIPPER_STARTUP_SMOKE_TEST"
 if is_frozen():
     _setup_frozen_environment()
 
-import platform
+import platform  # noqa: E402
 
 # Pre-import torch BEFORE PySide6 to prevent "function '_has_torch_function'
 # already has a docstring" RuntimeError. This conflict occurs when torch's C
@@ -120,9 +128,9 @@ try:
 except (ImportError, RuntimeError):
     pass
 
-from PySide6.QtWidgets import QApplication, QMessageBox
-from ui.main_window import MainWindow
-from ui.theme import theme
+from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
+from ui.main_window import MainWindow  # noqa: E402
+from ui.theme import theme  # noqa: E402
 
 # Fix LC_NUMERIC before any MPV usage — PySide6 may override this on import.
 # MPV requires 'C' locale for numeric parsing (decimal points vs commas).
@@ -171,6 +179,7 @@ def main():
     logger.info("PID: %s", os.getpid())
     logger.info(f"sys.argv: {sys.argv}")
     logger.info(f"Frozen: {is_frozen()}")
+    logger.info("Build identity: %s", get_build_identity())
 
     startup_smoke_test = os.environ.get(STARTUP_SMOKE_TEST_ENV) == "1"
     runtime_smoke_target = os.environ.get(RUNTIME_SMOKE_TARGET_ENV, "").strip()

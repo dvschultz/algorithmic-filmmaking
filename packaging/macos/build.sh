@@ -229,12 +229,14 @@ fi
 
 echo "==> .app bundle created: ${APP_PATH}"
 du -sh "$APP_PATH"
-if ! find "$APP_PATH" -name "ffmpeg" | grep -q .; then
-    echo "ERROR: bundled ffmpeg binary not found in ${APP_PATH}"
+FFMPEG_COUNT=$(find "$APP_PATH" -type f -name "ffmpeg" | wc -l | tr -d ' ')
+FFPROBE_COUNT=$(find "$APP_PATH" -type f -name "ffprobe" | wc -l | tr -d ' ')
+if [ "$FFMPEG_COUNT" -ne 1 ]; then
+    echo "ERROR: expected exactly one bundled ffmpeg binary in ${APP_PATH}; found ${FFMPEG_COUNT}"
     exit 1
 fi
-if ! find "$APP_PATH" -name "ffprobe" | grep -q .; then
-    echo "ERROR: bundled ffprobe binary not found in ${APP_PATH}"
+if [ "$FFPROBE_COUNT" -ne 1 ]; then
+    echo "ERROR: expected exactly one bundled ffprobe binary in ${APP_PATH}; found ${FFPROBE_COUNT}"
     exit 1
 fi
 

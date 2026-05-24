@@ -10,7 +10,13 @@ from core.runtime_smoke import (
 
 def test_runtime_smoke_targets_are_stable():
     """Smoke targets should enumerate the release validation surfaces."""
-    assert get_runtime_smoke_targets() == ("imports", "project", "scene-detect", "updater")
+    assert get_runtime_smoke_targets() == (
+        "imports",
+        "project",
+        "scene-detect",
+        "transcription",
+        "updater",
+    )
 
 
 def test_project_runtime_smoke_passes():
@@ -21,6 +27,11 @@ def test_project_runtime_smoke_passes():
 def test_scene_detect_runtime_smoke_passes():
     """Scene detection runtime smoke should detect multiple synthetic clips."""
     assert run_runtime_smoke_target("scene-detect") == "scene-detect"
+
+
+def test_transcription_runtime_smoke_passes():
+    """Transcription smoke should exercise FFmpeg audio extraction."""
+    assert run_runtime_smoke_target("transcription") == "transcription"
 
 
 def test_runtime_smoke_rejects_unknown_target():

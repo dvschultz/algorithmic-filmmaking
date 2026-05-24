@@ -27,9 +27,17 @@ from core.spine.chatgpt_auth import (
     REDIRECT_URI_HOST,
     SCOPES,
     TOKEN_ENDPOINT,
+    bump_auth_version,
     is_token_expired,
     load_active_auth,
 )
+
+
+@pytest.fixture(autouse=True)
+def _fresh_auth_cache():
+    bump_auth_version()
+    yield
+    bump_auth_version()
 
 
 class TestEndpointConstants:
@@ -188,18 +196,20 @@ class TestLoadActiveAuth:
             assert mode == AuthMode.SUBSCRIPTION
             assert identity is None
 
-    def test_load_reads_fresh_state_on_every_call(self):
-        """Two consecutive calls reflect a settings change between them.
-
-        Guards the read-at-call-time discipline that makes AE5 work: no
-        caching of mode or identity inside load_active_auth.
-        """
+    def test_load_uses_cache_until_auth_version_changes(self):
+        """Repeated calls avoid disk/keyring reads until settings invalidates auth."""
         settings_first = self._make_settings("api_key")
         settings_second = self._make_settings("subscription")
 
-        with patch("core.settings.load_settings", side_effect=[settings_first, settings_second]), \
+        bump_auth_version()
+        with patch("core.settings.load_settings", side_effect=[settings_first, settings_second]) as load_settings, \
              patch("core.settings.get_chatgpt_oauth_token", return_value=None):
             mode1, _ = load_active_auth()
             mode2, _ = load_active_auth()
+            assert load_settings.call_count == 1
             assert mode1 == AuthMode.API_KEY
-            assert mode2 == AuthMode.SUBSCRIPTION
+            assert mode2 == AuthMode.API_KEY
+
+            bump_auth_version()
+            mode3, _ = load_active_auth()
+            assert mode3 == AuthMode.SUBSCRIPTION

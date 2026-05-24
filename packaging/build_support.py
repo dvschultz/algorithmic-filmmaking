@@ -562,6 +562,29 @@ def _prefix_runtime_destination(
     return prefixed
 
 
+def _validate_single_collected_binaries(
+    collected: list[tuple[str, str]],
+    required_names: tuple[str, ...],
+    runtime_dir: Path,
+    *,
+    case_sensitive: bool,
+) -> None:
+    """Ensure each required runtime binary is bundled exactly once."""
+    names = [Path(src).name for src, _ in collected]
+    for required_name in required_names:
+        if case_sensitive:
+            matches = [name for name in names if name == required_name]
+        else:
+            required_folded = required_name.casefold()
+            matches = [name for name in names if name.casefold() == required_folded]
+
+        if len(matches) != 1:
+            raise RuntimeError(
+                f"Expected exactly one {required_name} in FFmpeg runtime {runtime_dir}, "
+                f"found {len(matches)}."
+            )
+
+
 def collect_windows_ffmpeg_binaries(project_root: Path) -> list[tuple[str, str]]:
     """Collect staged Windows FFmpeg runtime files for PyInstaller."""
     runtime_dir = find_windows_ffmpeg_runtime_dir(project_root)
@@ -572,9 +595,12 @@ def collect_windows_ffmpeg_binaries(project_root: Path) -> list[tuple[str, str]]
         )
 
     collected = _prefix_runtime_destination(_collect_runtime_files(runtime_dir), "bin")
-    bundled_names = {Path(src).name.lower() for src, _ in collected}
-    if not all(name.lower() in bundled_names for name in WINDOWS_FFMPEG_BINARY_NAMES):
-        raise RuntimeError(f"Missing FFmpeg runtime binaries in {runtime_dir}")
+    _validate_single_collected_binaries(
+        collected,
+        WINDOWS_FFMPEG_BINARY_NAMES,
+        runtime_dir,
+        case_sensitive=False,
+    )
     return collected
 
 
@@ -603,9 +629,12 @@ def collect_macos_ffmpeg_binaries(project_root: Path) -> list[tuple[str, str]]:
         )
 
     collected = _prefix_runtime_destination(_collect_runtime_files(runtime_dir), "bin")
-    bundled_names = {Path(src).name for src, _ in collected}
-    if not all(name in bundled_names for name in MACOS_FFMPEG_BINARY_NAMES):
-        raise RuntimeError(f"Missing FFmpeg runtime binaries in {runtime_dir}")
+    _validate_single_collected_binaries(
+        collected,
+        MACOS_FFMPEG_BINARY_NAMES,
+        runtime_dir,
+        case_sensitive=True,
+    )
     return collected
 
 

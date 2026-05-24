@@ -8,14 +8,13 @@ Provides:
 """
 
 from PySide6.QtCore import Qt, Signal, Slot, QTimer, QEvent
-from PySide6.QtGui import QKeyEvent, QStandardItem, QPalette, QColor, QTextCursor
+from PySide6.QtGui import QPalette, QColor, QTextCursor
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QScrollArea,
-    QSizePolicy,
     QStyledItemDelegate,
     QStyleOptionViewItem,
     QTextEdit,
@@ -34,6 +33,7 @@ from core.settings import (
     get_gemini_api_key,
     get_openrouter_api_key,
 )
+from core.llm_client import check_ollama_health_sync
 
 
 class DisabledItemDelegate(QStyledItemDelegate):
@@ -168,6 +168,16 @@ class ChatPanel(QWidget):
         self.provider_combo.setItemDelegate(DisabledItemDelegate(self.provider_combo))
 
         header.addWidget(self.provider_combo)
+
+        self.provider_test_button = QPushButton("Test")
+        self.provider_test_button.setToolTip("Test the selected chat provider")
+        self.provider_test_button.setStyleSheet(header_button_style)
+        self.provider_test_button.clicked.connect(self._on_test_provider_clicked)
+        header.addWidget(self.provider_test_button)
+
+        self.provider_status_label = QLabel("")
+        self.provider_status_label.setStyleSheet(f"color: {theme().text_secondary};")
+        header.addWidget(self.provider_status_label)
 
         # Disable providers without API keys (deferred to allow full init)
         QTimer.singleShot(0, self.update_provider_availability)
@@ -432,7 +442,27 @@ class ChatPanel(QWidget):
             "OpenRouter": "openrouter",
         }
         provider = provider_map.get(text, "local")
+        self.provider_status_label.setText("")
         self.provider_changed.emit(provider)
+
+    def _on_test_provider_clicked(self):
+        """Run a lightweight provider health check."""
+        provider = self.get_provider()
+        if provider == "local":
+            ok, message = check_ollama_health_sync()
+            self.provider_status_label.setText("Ollama running" if ok else message)
+            return
+
+        key_getters = {
+            "openai": get_openai_api_key,
+            "anthropic": get_anthropic_api_key,
+            "gemini": get_gemini_api_key,
+            "openrouter": get_openrouter_api_key,
+        }
+        has_key = bool(key_getters.get(provider, lambda: "")())
+        self.provider_status_label.setText(
+            "API key configured" if has_key else "API key missing"
+        )
 
     def _set_streaming_state(self, is_streaming: bool):
         """Update UI state for streaming.
