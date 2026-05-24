@@ -200,7 +200,10 @@ class TestYouTubeKeyCommand:
         return CliRunner()
 
     def test_test_youtube_key_requires_key(self, runner):
-        with patch.dict(os.environ, {}, clear=True), \
+        home_vars = {k: v for k, v in os.environ.items()
+                     if k in ("HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH",
+                              "APPDATA", "LOCALAPPDATA", "SYSTEMROOT", "WINDIR")}
+        with patch.dict(os.environ, home_vars, clear=True), \
              patch("core.settings._get_config_path", return_value=Path("/missing/config.json")), \
              patch("core.settings._get_api_key_from_keyring", return_value=""):
             result = runner.invoke(cli, ["test-youtube-key"])

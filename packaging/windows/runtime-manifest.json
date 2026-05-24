@@ -5,9 +5,9 @@
     "sha256": "3dd0754d2a95ba2f09b030d9a21d437c901e2103c0bdaf3e988763461ebc5447"
   },
   "ffmpeg": {
-    "asset_name": "ffmpeg-n8.1-11-g75d37c499d-win64-gpl-8.1.zip",
-    "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-05-03-13-13/ffmpeg-n8.1-11-g75d37c499d-win64-gpl-8.1.zip",
-    "sha256": "8d6f568d83e70177568f42cb487238f74fa4b079b7cd36c92ff96c494f8fc380"
+    "asset_name": "ffmpeg-n8.1.1-8-gb21e00eda5-win64-gpl-8.1.zip",
+    "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-05-24-13-16/ffmpeg-n8.1.1-8-gb21e00eda5-win64-gpl-8.1.zip",
+    "sha256": "fe99b6a7e667000943d5d60fcbe156d988726d0a1c88ff4204e2665827d6f643"
   },
   "winsparkle": {
     "asset_name": "WinSparkle-0.9.2.zip",
