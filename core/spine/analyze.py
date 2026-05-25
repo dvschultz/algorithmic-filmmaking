@@ -880,10 +880,25 @@ def analyze_clips(
             kwargs["query"] = query
             # Custom query appends user-authored query runs by default.
             kwargs["skip_existing"] = False
+        sub_start = index / total_ops
+        sub_span = 1.0 / total_ops
+
+        def _operation_progress(sub_progress: float, message: str, *, _op=op) -> None:
+            if progress_callback is None:
+                return
+            try:
+                normalized = max(0.0, min(1.0, float(sub_progress)))
+            except (TypeError, ValueError):
+                normalized = 0.0
+            progress_callback(
+                sub_start + normalized * sub_span,
+                f"{_op}: {message}" if message else _op,
+            )
+
         result = ANALYZE_CLIP_OPERATION_MAP[op](
             project,
             clip_ids,
-            progress_callback=None,
+            progress_callback=_operation_progress if progress_callback is not None else None,
             cancel_event=cancel_event,
             **kwargs,
         )

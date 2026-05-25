@@ -13,9 +13,7 @@ import threading
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
-from core.spine.analyze import analyze_colors, analyze_shots, transcribe
+from core.spine.analyze import analyze_clips, analyze_colors, analyze_shots, transcribe
 
 
 def _build_project(tmp_path: Path, n_clips: int = 3, populate_colors: int = 0):
@@ -279,3 +277,21 @@ def test_transcribe_empty_segments_treated_as_success(tmp_path):
     assert len(result["result"]["succeeded"]) == 1
     assert result["result"]["succeeded"][0]["segment_count"] == 0
     assert project.clips[0].transcript == []
+
+
+def test_analyze_clips_maps_operation_progress_into_parent_range(tmp_path):
+    project = _build_project(tmp_path, n_clips=2)
+    progress = []
+
+    with patch("core.analysis.color.extract_dominant_colors", return_value=[(1, 2, 3)]), \
+         patch("core.analysis.shots.classify_shot_type", return_value=("wide", 0.9)):
+        result = analyze_clips(
+            project,
+            operations=["colors", "shots"],
+            progress_callback=lambda pct, msg: progress.append((pct, msg)),
+        )
+
+    assert result["success"] is True
+    assert any(0.0 < pct < 0.5 and "colors:" in msg for pct, msg in progress)
+    assert any(0.5 < pct < 1.0 and "shots:" in msg for pct, msg in progress)
+    assert progress[-1][0] == 1.0

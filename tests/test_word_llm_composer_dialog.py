@@ -266,6 +266,34 @@ def test_compose_error_keeps_dialog_open(qapp):
     assert "empty response" in dialog._error_label.text()
 
 
+def test_close_during_alignment_cancels_worker(qapp):
+    from PySide6.QtGui import QCloseEvent
+    from ui.dialogs.word_llm_composer_dialog import WordLLMComposerDialog
+
+    clip, source = _aligned_clip()
+    dialog = WordLLMComposerDialog(
+        clips=[(clip, source)],
+        project=None,
+        _ollama_health_fn=lambda: (True, ""),
+    )
+    calls: list[str] = []
+
+    class FakeController:
+        def is_running(self):
+            return True
+
+        def cancel(self):
+            calls.append("cancel")
+
+        def wait(self, ms):
+            calls.append(f"wait:{ms}")
+
+    dialog._alignment_ctrl = FakeController()
+    dialog.closeEvent(QCloseEvent())
+
+    assert calls == ["cancel", "wait:2000"]
+
+
 def test_empty_corpus_disables_accept(qapp):
     """With no source clips at all, accept stays disabled."""
     from ui.dialogs.word_llm_composer_dialog import WordLLMComposerDialog

@@ -32,6 +32,9 @@ class TestModuleImportBoundary(unittest.TestCase):
         # from this Python environment. The pure-import path should not pull
         # ``ctc_forced_aligner`` or ``torch`` into sys.modules.
         sys.modules.pop("core.analysis.alignment", None)
+        for name in list(sys.modules):
+            if name == "ctc_forced_aligner" or name.startswith("ctc_forced_aligner."):
+                sys.modules.pop(name, None)
 
         import core.analysis.alignment  # noqa: F401
 

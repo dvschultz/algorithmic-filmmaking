@@ -15,11 +15,14 @@ Scene Ripper analyzes video files to detect scene boundaries, enriches clips wit
 - Integrated chat agent for AI-assisted editing
 - Thumbnail grid browser with collapsible source headers
 - 21 sequencing modes including sort, similarity, audio, text, gaze, reference, and drawing-guided workflows
+- DINOv2 Visual Match for visual similarity workflows ([details](docs/user-guide/visual-match.md))
 - Export individual clips or complete sequences
 - YouTube/Internet Archive import
 - Project save/load with full state persistence
 
 ## Installation
+
+Detailed install guide: [docs/user-guide/installation.md](docs/user-guide/installation.md)
 
 Release process for maintainers: [docs/releases.md](docs/releases.md)
 
@@ -69,7 +72,9 @@ python main.py
 
 **Downloadable app (Apple Silicon)**
 
-Download the latest DMG from [Releases](https://github.com/dvschultz/algorithmic-filmmaking/releases). Open the newest release, expand **Assets**, choose the Apple Silicon macOS DMG, open it, and drag `Scene Ripper.app` into `Applications`.
+Download the latest DMG from [Releases](https://github.com/dvschultz/algorithmic-filmmaking/releases/latest). Open the newest release, expand **Assets**, choose the Apple Silicon macOS DMG, open it, and drag `Scene Ripper.app` into `Applications`.
+
+The downloadable macOS app requires macOS 13 Ventura or newer and Apple Silicon. The app bundle declares this minimum system version so older macOS versions should refuse launch before startup.
 
 On first launch, the app downloads FFmpeg and other optional dependencies as needed. macOS may ask for Keychain access when you save or use API keys; allow it if you want Scene Ripper to read stored credentials. You can avoid Keychain prompts by using environment variables such as `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `YOUTUBE_API_KEY`.
 
@@ -101,7 +106,7 @@ python main.py
 
 **Downloadable app**
 
-Download the latest Windows installer from [Releases](https://github.com/dvschultz/algorithmic-filmmaking/releases). Open the newest release, expand **Assets**, choose `SceneRipper-Setup-*.exe`, and run the installer.
+Download the latest Windows installer from [Releases](https://github.com/dvschultz/algorithmic-filmmaking/releases/latest). Open the newest release, expand **Assets**, choose `SceneRipper-Setup-*.exe`, and run the installer.
 
 The first run downloads FFmpeg and other optional dependencies when features need them. Early unsigned builds may trigger a Windows SmartScreen warning.
 

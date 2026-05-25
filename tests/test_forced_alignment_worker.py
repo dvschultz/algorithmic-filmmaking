@@ -416,6 +416,37 @@ class TestForcedAlignmentWorkerSkipPredicate:
 
 
 class TestForcedAlignmentWorkerErrorPath:
+    def test_feature_install_failure_emits_error_and_completed(
+        self, qapp_fixture, english_source
+    ):
+        from ui.workers.forced_alignment_worker import ForcedAlignmentWorker
+
+        clip = _make_clip_with_transcript(
+            "c1",
+            [_make_segment(0.0, 2.0, "needs alignment")],
+        )
+
+        errors: list[str] = []
+        completions: list[bool] = []
+
+        with patch("core.feature_registry.check_feature_ready", return_value=(False, ["torch"])), \
+             patch("core.feature_registry.install_for_feature", return_value=False), \
+             patch("core.analysis.alignment.extract_audio_to_wav") as mock_extract, \
+             patch("core.analysis.alignment.align_words") as mock_align:
+            worker = ForcedAlignmentWorker(
+                clips=[clip],
+                sources_by_id={english_source.id: english_source},
+            )
+            worker.error.connect(lambda msg: errors.append(msg))
+            worker.alignment_completed.connect(lambda: completions.append(True))
+            worker.run()
+
+        assert len(errors) == 1
+        assert "Could not install" in errors[0]
+        assert completions == [True]
+        mock_extract.assert_not_called()
+        mock_align.assert_not_called()
+
     def test_align_words_exception_emits_error_and_continues(
         self, qapp_fixture, english_source, tmp_path
     ):

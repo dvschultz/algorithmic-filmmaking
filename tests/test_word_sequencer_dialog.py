@@ -298,6 +298,79 @@ def test_accept_emits_sequence_for_alphabetical(qapp):
         assert sc.source_clip_id == clip.id
 
 
+def test_close_during_alignment_cancels_worker(qapp):
+    from PySide6.QtGui import QCloseEvent
+    from ui.dialogs.word_sequencer_dialog import WordSequencerDialog
+
+    clip, source = _make_aligned_clip()
+    dialog = WordSequencerDialog(clips=[(clip, source)], project=None)
+    calls: list[str] = []
+
+    class FakeController:
+        def is_running(self):
+            return True
+
+        def cancel(self):
+            calls.append("cancel")
+
+        def wait(self, ms):
+            calls.append(f"wait:{ms}")
+
+    dialog._alignment_ctrl = FakeController()
+    dialog.closeEvent(QCloseEvent())
+
+    assert calls == ["cancel", "wait:2000"]
+
+
+def test_try_generate_missing_word_data_shows_error(qapp, monkeypatch):
+    from core.remix.word_sequencer import MissingWordDataError
+    from ui.dialogs.word_sequencer_dialog import WordSequencerDialog
+
+    clip, source = _make_aligned_clip()
+    dialog = WordSequencerDialog(clips=[(clip, source)], project=None)
+    monkeypatch.setattr(
+        "ui.dialogs.word_sequencer_dialog.generate_word_sequence",
+        lambda *args, **kwargs: (_ for _ in ()).throw(MissingWordDataError(["clip-1"])),
+    )
+
+    dialog._try_generate()
+
+    assert dialog._stack.currentIndex() == 0
+    assert "clip-1" in dialog._error_label.text()
+
+
+def test_try_generate_empty_result_shows_error(qapp, monkeypatch):
+    from ui.dialogs.word_sequencer_dialog import WordSequencerDialog
+
+    clip, source = _make_aligned_clip()
+    dialog = WordSequencerDialog(clips=[(clip, source)], project=None)
+    monkeypatch.setattr(
+        "ui.dialogs.word_sequencer_dialog.generate_word_sequence",
+        lambda *args, **kwargs: [],
+    )
+
+    dialog._try_generate()
+
+    assert dialog._stack.currentIndex() == 0
+    assert "produced no clips" in dialog._error_label.text()
+
+
+def test_try_generate_value_error_shows_error(qapp, monkeypatch):
+    from ui.dialogs.word_sequencer_dialog import WordSequencerDialog
+
+    clip, source = _make_aligned_clip()
+    dialog = WordSequencerDialog(clips=[(clip, source)], project=None)
+    monkeypatch.setattr(
+        "ui.dialogs.word_sequencer_dialog.generate_word_sequence",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("bad fps")),
+    )
+
+    dialog._try_generate()
+
+    assert dialog._stack.currentIndex() == 0
+    assert "bad fps" in dialog._error_label.text()
+
+
 def test_accept_with_unaligned_triggers_alignment_worker(qapp, monkeypatch):
     """Accept with missing word data must start ForcedAlignmentWorker, not
     call the sequencer directly."""
