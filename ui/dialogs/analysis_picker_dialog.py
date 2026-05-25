@@ -10,8 +10,6 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFrame,
 )
-from PySide6.QtCore import Qt
-
 from ui.theme import theme, TypeScale, Spacing
 from core.analysis_availability import compute_disabled_operations
 from core.analysis_operations import (
@@ -138,6 +136,13 @@ class AnalysisPickerDialog(QDialog):
 
         layout.addLayout(bulk_row)
 
+        self._force_rerun_cb = QCheckBox("Force re-run completed analysis")
+        self._force_rerun_cb.setToolTip(
+            "Allow completed operations to run again and replace existing results."
+        )
+        self._force_rerun_cb.stateChanged.connect(self._on_force_rerun_changed)
+        layout.addWidget(self._force_rerun_cb)
+
         # Dialog buttons
         button_box = QDialogButtonBox(
             QDialogButtonBox.Cancel | QDialogButtonBox.Ok
@@ -185,6 +190,26 @@ class AnalysisPickerDialog(QDialog):
         self._save_selection()
         self.accept()
 
+    def _on_force_rerun_changed(self):
+        """Enable or disable already-complete operations for forced reruns."""
+        force = self.force_rerun()
+        for key in self._disabled_ops:
+            cb = self._checkboxes.get(key)
+            op = OPERATIONS_BY_KEY.get(key)
+            if cb is None or op is None:
+                continue
+            cb.setEnabled(force)
+            if force:
+                cb.setToolTip(
+                    f"{op.tooltip}\n\nForce re-run will replace existing results."
+                )
+            else:
+                cb.setChecked(False)
+                cb.setToolTip(
+                    f"{op.tooltip}\n\nAlready analyzed for all clips in this selection."
+                )
+        self._update_run_button()
+
     def _apply_theme(self):
         """Update styling when theme changes."""
         pass  # Theme is applied via parent stylesheet cascade
@@ -196,3 +221,7 @@ class AnalysisPickerDialog(QDialog):
             List of operation key strings (e.g. ["colors", "shots", "transcribe"])
         """
         return [key for key, cb in self._checkboxes.items() if cb.isChecked()]
+
+    def force_rerun(self) -> bool:
+        """Return whether completed selected operations should be re-run."""
+        return self._force_rerun_cb.isChecked()

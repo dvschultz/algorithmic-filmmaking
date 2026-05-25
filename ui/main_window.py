@@ -81,6 +81,7 @@ from ui.clip_details_sidebar import ClipDetailsSidebar
 from ui.dialogs import IntentionImportDialog, AnalysisPickerDialog, URLImportDialog
 from ui.log_viewer import LogViewerWidget, get_in_app_log_bridge
 from core.analysis_dependencies import get_operation_feature_candidates
+from core.analysis_availability import clear_operation_results
 from core.analysis_operations import (
     OPERATIONS_BY_KEY,
     PHASE_ORDER,
@@ -3532,7 +3533,11 @@ class MainWindow(QMainWindow):
             # Add clips to Analyze tab and switch
             self.analyze_tab.add_clips(clip_ids)
             self.tab_widget.setCurrentWidget(self.analyze_tab)
-            self._run_analysis_pipeline(clips, operations)
+            self._run_analysis_pipeline(
+                clips,
+                operations,
+                force_rerun=dialog.force_rerun(),
+            )
 
     def _on_cut_detect_current_requested(self, mode: str, config: dict):
         """Run scene detection from the Cut tab's prominent controls."""
@@ -3567,9 +3572,19 @@ class MainWindow(QMainWindow):
             operations = dialog.selected_operations()
             if operations:
                 save_settings(self.settings)
-                self._run_analysis_pipeline(clips, operations)
+                self._run_analysis_pipeline(
+                    clips,
+                    operations,
+                    force_rerun=dialog.force_rerun(),
+                )
 
-    def _run_analysis_pipeline(self, clips: list, operations: list[str]):
+    def _run_analysis_pipeline(
+        self,
+        clips: list,
+        operations: list[str],
+        *,
+        force_rerun: bool = False,
+    ):
         """Central entry point for running analysis operations.
 
         Organizes operations into phases (local → sequential → cloud) and
@@ -3582,6 +3597,8 @@ class MainWindow(QMainWindow):
         Args:
             clips: List of Clip objects to analyze
             operations: List of operation keys to run
+            force_rerun: Clear selected operation results before dispatch so
+                workers process clips even when prior results exist.
         """
         if not clips or not operations:
             return
@@ -3616,6 +3633,15 @@ class MainWindow(QMainWindow):
         valid_ops = self._filter_available_analysis_operations(valid_ops)
         if not valid_ops:
             return
+
+        if force_rerun:
+            cleared = clear_operation_results(clips, valid_ops)
+            if cleared:
+                logger.info(
+                    "Cleared %d existing analysis result field(s) before forced rerun",
+                    cleared,
+                )
+                self._mark_dirty()
 
         for op_key in valid_ops:
             self._reset_analysis_run_error(op_key)

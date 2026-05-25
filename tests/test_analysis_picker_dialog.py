@@ -60,6 +60,36 @@ def test_dialog_select_all_skips_disabled_operations(qapp):
     assert dialog._checkboxes["shots"].isChecked() is True
 
 
+def test_force_rerun_enables_completed_operations(qapp):
+    from ui.dialogs.analysis_picker_dialog import AnalysisPickerDialog
+
+    clip = make_test_clip("c1", dominant_colors=[(10, 20, 30)])
+    settings = _Settings(selected=[])
+
+    dialog = AnalysisPickerDialog(
+        clip_count=1,
+        scope_label="selected clips",
+        settings=settings,
+        clips=[clip],
+    )
+
+    colors_cb = dialog._checkboxes["colors"]
+    assert colors_cb.isEnabled() is False
+
+    dialog._force_rerun_cb.setChecked(True)
+    assert dialog.force_rerun() is True
+    assert colors_cb.isEnabled() is True
+
+    colors_cb.setChecked(True)
+    assert dialog.selected_operations() == ["colors"]
+    assert dialog._run_btn.isEnabled() is True
+
+    dialog._force_rerun_cb.setChecked(False)
+    assert colors_cb.isEnabled() is False
+    assert colors_cb.isChecked() is False
+    assert dialog._run_btn.isEnabled() is False
+
+
 def test_dialog_run_disabled_when_every_operation_complete(qapp):
     from ui.dialogs.analysis_picker_dialog import AnalysisPickerDialog
 

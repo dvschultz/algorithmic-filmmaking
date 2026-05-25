@@ -7,12 +7,11 @@ Behavior under test:
   - _run_analysis_pipeline filters out disabled clips before running.
 """
 
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from models.clip import Clip, Source
+from models.clip import Clip
 from tests.conftest import make_test_clip
 
 
@@ -182,6 +181,7 @@ class TestPipelineSkipsDisabledClips:
             _reset_analysis_run_error=lambda op: None,
             _filter_available_analysis_operations=lambda ops: ops,
             _start_next_analysis_phase=lambda: None,
+            _mark_dirty=lambda: None,
         )
 
     def test_disabled_clips_dropped_before_pipeline_state_stored(self, qapp):
@@ -210,3 +210,29 @@ class TestPipelineSkipsDisabledClips:
 
         # Pipeline returned early — no state stored.
         assert harness._analysis_clips is None
+
+    def test_force_rerun_clears_selected_results_before_dispatch(self, qapp):
+        from ui.main_window import MainWindow
+
+        dirty_calls = []
+        harness = self._make_harness()
+        harness._mark_dirty = lambda: dirty_calls.append(True)
+        clip = make_test_clip(
+            "a",
+            dominant_colors=[(1, 2, 3)],
+            shot_type="wide",
+            transcript_text="hello",
+        )
+
+        MainWindow._run_analysis_pipeline(
+            harness,
+            [clip],
+            ["colors", "shots"],
+            force_rerun=True,
+        )
+
+        assert clip.dominant_colors is None
+        assert clip.shot_type is None
+        assert clip.transcript is not None
+        assert dirty_calls == [True]
+        assert harness._analysis_selected_ops == ["colors", "shots"]
