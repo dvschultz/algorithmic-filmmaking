@@ -2,7 +2,7 @@
 
 ## Overview
 
-Video scene detection, analysis, and algorithmic editing application with 16 sequencer algorithms, integrated AI agent, and MCP server. Dependencies auto-install on demand via `core/feature_registry.py`.
+Video scene detection, analysis, and algorithmic editing application with 23 sequencer algorithms, integrated AI agent, and MCP server. Dependencies auto-install on demand via `core/feature_registry.py`.
 
 ## Technology Stack
 
@@ -15,30 +15,33 @@ Video scene detection, analysis, and algorithmic editing application with 16 seq
 - **Audio**: librosa (analysis), Demucs (stem separation)
 - **LLM**: LiteLLM (multi-provider)
 - **YouTube**: google-api-python-client
-- **MCP Server**: `scene_ripper_mcp/` (3 files)
-- **Python**: 3.11+ | **Deps**: `requirements-core.txt` (always), `requirements-optional.txt` (heavy ML)
+- **MCP Server**: `scene_ripper_mcp/` (server + tools/ + schemas/ + jobs/, stdio and HTTP transports)
+- **Python**: 3.11+ | **Deps**: `requirements-core.txt` (always), `requirements-optional.txt` (heavy ML), `requirements.txt` (full source-dev set)
 
 ## Project Structure
 
 ```
 main.py                          # GUI entry point
 pyproject.toml                   # Metadata, CLI + MCP entry points
-ui/                  (20 files)  # Main window, chat, player, browser, theme
-  tabs/              (8 tabs)    # collect, cut, analyze, frames, sequence, generate, render
-  dialogs/           (15 files)  # Algorithm-specific config dialogs
-  workers/           (16 files)  # QThread workers (base.py = CancellableWorker)
-  widgets/           (17 files)  # Cards, grids, timeline preview, empty states
-  timeline/          (7 files)   # Timeline widget, tracks, clips, playhead
-core/                (43 files)  # Business logic, FFmpeg, settings, project, LLM
-  analysis/          (17 files)  # Color, shots, brightness, volume, embeddings, OCR, faces, cinematography, gaze
-  remix/             (16 files)  # Sequencer algorithms (one file per algorithm)
-  spine/             (16 files)  # GUI-agnostic shared tool implementations (no PySide6/mpv/av imports)
-models/              (7 files)   # Source, Clip, Frame, SequenceClip, Sequence, CinematographyAnalysis, Plan
+ui/                  (21 files)  # Main window, chat, player, browser, theme, algorithm_config
+  tabs/              (6 wired)   # collect, cut, analyze, frames, sequence, render (generate_tab.py exists but is unmounted stub)
+  dialogs/           (20 files)  # Algorithm-specific config dialogs
+  workers/           (24 files)  # QThread workers (base.py = CancellableWorker + is_transient_provider_error)
+  widgets/           (24 files)  # Cards, grids, timeline preview, empty states
+  timeline/          (8 files)   # Timeline widget, tracks, clips, playhead
+  commands/          (1 file)    # QUndoCommand subclasses (toggle_clip_disabled, ...)
+core/                (54 files)  # Business logic, FFmpeg, settings, project, LLM
+  analysis/          (18 files)  # Color, shots, brightness, volume, embeddings, OCR, faces, cinematography, gaze
+  remix/             (20 files)  # Sequencer algorithm implementations (23 algorithms registered in ui/algorithm_config.py)
+  spine/             (23 files)  # GUI-agnostic shared tool implementations (no PySide6/mpv/av imports)
+models/              (8 files)   # Source, Clip, Frame, SequenceClip, Sequence, AudioSource, CinematographyAnalysis, SequenceAnalysis, Plan
 cli/                 (15 files)  # Click CLI with detect, analyze, transcribe, youtube, export commands
 scene_ripper_mcp/                # MCP server for external agent access
   tools/                         #   Tool registrations (project / clips / sequence / analyze / export / youtube / jobs)
+  schemas/                       #   Pydantic input schemas for MCP tools
   jobs/                          #   SQLite-backed jobs framework (store, runtime, per-project mutex)
-tests/              (101 files)  # 1760 tests
+  security.py, auth_snapshot.py  #   Auth/permission gating for headless callers
+tests/              (170 files)  # 2701 tests
 docs/user-guide/                 # End-user documentation
 docs/solutions/                  # Documented solutions (bugs, best practices), YAML frontmatter (module, tags, problem_type)
 ```
@@ -70,18 +73,23 @@ Frame[] (extracted images)                    add to sequence
 
 **SequenceClip** (`models/sequence.py`): `id`, `source_clip_id`, `source_id`, `frame_id`, `track_index`, `start_frame`, `in_point`, `out_point`, `hold_frames`, `hflip`, `vflip`, `reverse`, `prerendered_path`
 
-**Project** (`core/project.py`): Single source of truth. Always use `add_source()`, `add_clips()`, etc. — never append directly. Methods invalidate caches (`sources_by_id`, `clips_by_id`, `clips_by_source`) and notify observers.
+**AudioSource** (`models/audio_source.py`): Imported audio files (music, podcast, voiceover). Not cut into clips and never appear in sequencer output — feed audio-consuming tools like Staccato and transcription.
+
+**SequenceAnalysis** (`models/sequence_analysis.py`): Sequence-level metrics (pacing, continuity, visual consistency) computed across multiple clips. **Not persisted** — cached in memory, invalidated when sequence changes. Includes `GENRE_PACING_NORMS` for comparison.
+
+**Project** (`core/project.py`): Single source of truth. Always use `add_source()`, `add_clips()`, `add_audio_source()`, etc. — never append directly. Methods invalidate caches (`sources_by_id`, `clips_by_id`, `clips_by_source`) and notify observers.
 
 ## Tabs
 
+Six tabs are wired in `ui/main_window.py`: Collect, Cut, Analyze, Frames, Sequence, Render. `ui/tabs/generate_tab.py` exists but is **not mounted** — treat it as a stub.
+
 | Tab | Purpose |
 |-----|---------|
-| **Collect** | Import local videos, search/download from YouTube |
+| **Collect** | Import local videos and audio, search/download from YouTube and Internet Archive |
 | **Cut** | Scene detection (sensitivity 1.0-10.0), clip browsing |
-| **Analyze** | Describe, classify shots, detect objects/faces, OCR, colors, transcribe, cinematography |
+| **Analyze** | Describe, classify shots, detect objects/faces, OCR, colors, transcribe, cinematography, gaze |
 | **Frames** | Extract and browse individual frames from clips |
-| **Sequence** | Card-based sorting with 16 algorithms, drag-drop reorder, filter by metadata |
-| **Generate** | Generation tools |
+| **Sequence** | Card-based sorting with 23 algorithms, drag-drop reorder, filter by metadata |
 | **Render** | Export as MP4, EDL, SRT, individual clips, dataset bundles |
 
 Sequencer algorithm reference: see `.claude/rules/sequencer-algorithms.md` (loads automatically when editing remix/dialog files).
@@ -89,7 +97,10 @@ Sequencer algorithm reference: see `.claude/rules/sequencer-algorithms.md` (load
 ## Key Patterns
 
 ### Background Workers
-All workers inherit `CancellableWorker` (`ui/workers/base.py`). Workers emit `progress(n, total)`, `clip_ready(clip)`, `error(message)`, `finished()`. Main thread updates UI. User can cancel.
+All workers inherit `CancellableWorker` (`ui/workers/base.py`). Workers emit `progress(n, total)`, `clip_ready(clip)`, `error(message)`, `finished()`. Main thread updates UI. User can cancel. VLM/LLM workers use `is_transient_provider_error()` from `ui/workers/base.py` to retry transient 429/5xx/network failures with exponential backoff; `summarize_clip_errors()` builds the user-facing batch error summary.
+
+### Undo Commands
+User-undoable actions use QUndoCommand subclasses in `ui/commands/` (e.g., `ToggleClipDisabledCommand`). Push commands onto the main window's QUndoStack rather than mutating the project directly.
 
 ### Feature Registry
 `core/feature_registry.py` maps features to binary/package dependencies. Call `check_feature(name)` to test availability, `install_for_feature(name)` to auto-install. The UI shows install prompts when deps are missing.
@@ -111,7 +122,7 @@ Always use `core/settings.py` (`load_settings()`). Key paths: `settings.download
 Agent capabilities mirror user capabilities (navigate tabs, select clips, trigger analysis, modify sequence). Tools return `{"success": True/False, "result": data}`.
 
 ### MCP Server
-`scene_ripper_mcp/server.py` exposes project operations to external agents. Entry point: `scene-ripper-mcp` (defined in `pyproject.toml`). Long-running ops (scene detection, analysis, downloads) are split into `start_*` / `get_job_status` / `get_job_result` / `cancel_job` tools backed by the `scene_ripper_mcp/jobs/` framework (SQLite store, per-project mutex, ThreadPoolExecutor runtime). Caller-facing reference: `docs/user-guide/headless-mcp.md`.
+`scene_ripper_mcp/server.py` exposes project operations to external agents. Entry point: `scene-ripper-mcp` (defined in `pyproject.toml`). Supports stdio and HTTP transports (`--transport stdio` / `--transport http --port 8765`). Long-running ops (scene detection, analysis, downloads) are split into `start_*` / `get_job_status` / `get_job_result` / `cancel_job` tools backed by the `scene_ripper_mcp/jobs/` framework (SQLite store, per-project mutex, ThreadPoolExecutor runtime). Tool input shapes are pinned by Pydantic schemas in `scene_ripper_mcp/schemas/`. Permission gating lives in `security.py` and `auth_snapshot.py`. Caller-facing reference: `docs/user-guide/headless-mcp.md`.
 
 ### Spine Layering
 `core/spine/` is the GUI-agnostic shared layer below both `core/chat_tools.py` (the GUI agent) and `scene_ripper_mcp/tools/*` (the MCP server). Both surfaces import from spine; neither imports the other. Spine modules MUST NOT import PySide6, mpv, av, faster_whisper, paddleocr, or mlx_vlm at module top level — `tests/test_spine_imports.py` is the boundary test that enforces this. Heavy or GUI-bound deps go inside function bodies (lazy import). New project-only tool implementations belong in `core/spine/<topic>.py`; the chat-tools and MCP wrappers are thin delegations.
@@ -124,7 +135,7 @@ See `.claude/rules/ui-consistency.md` (loads automatically when editing ui/ file
 
 ## Testing
 
-56 test files, 1153 tests. Run: `pytest tests/` or `pytest tests/test_specific.py -v`.
+170 test files, ~2700 tests in `tests/`. Plus a separate MCP suite under `scene_ripper_mcp/tests/`. Run: `pytest tests/`, `pytest scene_ripper_mcp/tests/`, or `pytest tests/test_specific.py -v`.
 
 ### Bug Fixes: Prove It Pattern
 
