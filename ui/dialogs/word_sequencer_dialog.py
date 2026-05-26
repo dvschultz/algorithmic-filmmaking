@@ -57,6 +57,7 @@ from ui.dialogs._word_source_picker import (
     alignable_pending_clips,
     classify_source_alignment,
     format_source_row,
+    partition_clips_for_sequencing,
 )
 from ui.theme import theme, Spacing, TypeScale, UISizes
 
@@ -110,6 +111,14 @@ class WordSequencerDialog(QDialog):
         # dialog only needs to know whether an alignment is currently in
         # flight (via ``self._alignment_ctrl is not None``).
         self._pending_after_alignment = False
+
+        # GH #106: clip ids that have already been routed through forced
+        # alignment at least once this session. Used to break the accept-loop
+        # deadlock — clips whose alignment failed (typically Whisper
+        # language mis-detection) stay with ``words is None`` forever, so
+        # re-running alignment on them produces the same outcome. We track
+        # them and skip-with-warning instead of looping.
+        self._attempted_alignment_clip_ids: set[str] = set()
 
         # Per-source classification cache, keyed by Source.id.
         self._source_status: dict[str, tuple[str, Optional[str]]] = {}
@@ -569,31 +578,49 @@ class WordSequencerDialog(QDialog):
 
     @Slot()
     def _on_accept(self) -> None:
-        """Build the sequence; auto-run alignment if needed."""
+        """Build the sequence; auto-run alignment if needed.
+
+        Partitions checked clips into ready / needs-alignment / skipped
+        buckets. Skipped clips are ones we already tried to align and
+        failed for — re-running alignment on them would deadlock the
+        dialog (GH #106), so we surface them as a warning instead.
+        """
         checked_clips = self._checked_clips()
         if not checked_clips:
             return
 
-        pending = alignable_pending_clips(self._checked_clips())
-        if pending:
-            # Auto-run alignment over the pending clips. Once the worker
-            # completes, re-enter accept logic via _pending_after_alignment.
-            self._start_alignment(pending)
+        _ready, needs_alignment, _skipped = partition_clips_for_sequencing(
+            checked_clips, self._attempted_alignment_clip_ids
+        )
+        if needs_alignment:
+            self._start_alignment(needs_alignment)
             return
 
         self._try_generate()
 
     def _try_generate(self) -> None:
+        ready_clips, _needs_alignment, skipped_ids = partition_clips_for_sequencing(
+            self._checked_clips(), self._attempted_alignment_clip_ids
+        )
+
+        if not ready_clips:
+            self._set_error(
+                "No clips could be word-aligned — alignment failed for: "
+                + ", ".join(skipped_ids)
+            )
+            self._stack.setCurrentIndex(0)
+            return
+
         try:
             sequence_clips = generate_word_sequence(
-                self._checked_clips(),
+                ready_clips,
                 mode=self._selected_mode_key(),
                 mode_params=self._collect_mode_params(),
                 handle_frames=self._handle_spin.value(),
             )
         except MissingWordDataError as exc:
-            # Alignment must have failed for some clips; fall through to
-            # surfacing the message without dismissing the dialog.
+            # Defensive: partition should have filtered these out. If we
+            # still hit this, surface and break out instead of looping.
             self._set_error(str(exc))
             self._stack.setCurrentIndex(0)
             return
@@ -613,6 +640,18 @@ class WordSequencerDialog(QDialog):
             )
             self._stack.setCurrentIndex(0)
             return
+
+        if skipped_ids:
+            # Non-fatal: surface so the user knows some clips were dropped.
+            logger.info(
+                "Word Sequencer skipped %d unalignable clip(s): %s",
+                len(skipped_ids),
+                skipped_ids,
+            )
+            self._set_error(
+                f"Skipped {len(skipped_ids)} unalignable clip(s): "
+                + ", ".join(skipped_ids)
+            )
 
         self.sequence_ready.emit(sequence_clips)
         self.accept()
@@ -640,6 +679,15 @@ class WordSequencerDialog(QDialog):
     def _start_alignment(self, pending_clips: list) -> None:
         """Spawn a ``WordAlignmentController`` over the pending clips."""
         self._pending_after_alignment = True
+
+        # Record that we've now attempted alignment on these — if alignment
+        # fails for any of them, the partition helper will route them to
+        # the "skipped" bucket on subsequent accept attempts instead of
+        # re-triggering this worker (GH #106).
+        for clip in pending_clips:
+            clip_id = getattr(clip, "id", None)
+            if clip_id:
+                self._attempted_alignment_clip_ids.add(clip_id)
 
         sources_by_id = {
             src.id: src for src in self._sources_by_id.values() if src is not None

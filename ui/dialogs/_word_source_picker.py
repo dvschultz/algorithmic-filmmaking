@@ -42,6 +42,7 @@ __all__ = [
     "alignable_pending_clips",
     "classify_source_alignment",
     "format_source_row",
+    "partition_clips_for_sequencing",
 ]
 
 
@@ -164,6 +165,59 @@ def alignable_pending_clips(checked_clips: list[tuple[Any, Any]]) -> list:
         if any(getattr(seg, "words", None) is None for seg in transcript):
             pending.append(clip)
     return pending
+
+
+def _clip_is_word_aligned(clip: Any) -> bool:
+    """Return True if every transcript segment has populated word data."""
+    transcript = getattr(clip, "transcript", None) or []
+    return all(getattr(seg, "words", None) is not None for seg in transcript)
+
+
+def partition_clips_for_sequencing(
+    checked_clips: list[tuple[Any, Any]],
+    attempted_clip_ids: set[str],
+) -> tuple[list[tuple[Any, Any]], list, list[str]]:
+    """Bucket checked clips into ready / needs-alignment / skipped.
+
+    The word-sequencer dialogs need three buckets, not two, to avoid the
+    accept-loop deadlock (GH #106): clips that were already aligned, clips
+    that still need alignment, and clips for which alignment was already
+    attempted and failed (these must NOT be retried — re-running alignment
+    on the same input produces the same result and traps the user).
+
+    Args:
+        checked_clips: ``(Clip, Source)`` tuples the user selected.
+        attempted_clip_ids: Clip ids that have already been routed through
+            ``ForcedAlignmentWorker`` at least once during this dialog
+            session. The dialog accumulates this across runs.
+
+    Returns:
+        ``(ready_clip_pairs, needs_alignment_clips, skipped_clip_ids)``.
+
+        - ``ready_clip_pairs`` is the subset of ``checked_clips`` whose
+          transcripts are fully word-aligned and can be fed straight into
+          ``generate_word_sequence``.
+        - ``needs_alignment_clips`` is the ``Clip`` objects that still have
+          ``words is None`` somewhere AND have not been attempted yet — the
+          dialog should run alignment on these.
+        - ``skipped_clip_ids`` is the ids of clips that were attempted but
+          remain unaligned (alignment failed for them — typically Whisper
+          language mis-detection on short/silent/music clips). The dialog
+          should surface these as a warning, not re-trigger alignment.
+    """
+    ready: list[tuple[Any, Any]] = []
+    needs_alignment: list = []
+    skipped: list[str] = []
+    for pair in checked_clips:
+        clip = pair[0]
+        clip_id = getattr(clip, "id", "")
+        if _clip_is_word_aligned(clip):
+            ready.append(pair)
+        elif clip_id in attempted_clip_ids:
+            skipped.append(clip_id)
+        else:
+            needs_alignment.append(clip)
+    return ready, needs_alignment, skipped
 
 
 # ---------------------------------------------------------------------------

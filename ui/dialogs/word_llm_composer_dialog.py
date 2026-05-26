@@ -53,6 +53,7 @@ from ui.dialogs._word_source_picker import (
     alignable_pending_clips,
     classify_source_alignment,
     format_source_row,
+    partition_clips_for_sequencing,
 )
 from ui.theme import theme, Spacing, TypeScale, UISizes
 
@@ -97,6 +98,12 @@ class WordLLMComposerDialog(QDialog):
         self._compose_finished_handled = False
         self._pending_after_alignment = False
         self._ollama_healthy = False
+
+        # GH #106: see WordSequencerDialog. Track clips already routed
+        # through alignment so the accept loop doesn't retry them forever
+        # when alignment failed (typically Whisper language mis-detection).
+        self._attempted_alignment_clip_ids: set[str] = set()
+        self._last_skipped_clip_ids: list[str] = []
 
         self._sources_by_id: dict[str, Any] = {}
         self._clips_by_source_id: dict[str, list[tuple[Any, Any]]] = {}
@@ -564,9 +571,19 @@ class WordLLMComposerDialog(QDialog):
         checked = self._checked_clips()
         if not checked:
             return
-        pending = alignable_pending_clips(self._checked_clips())
-        if pending:
-            self._start_alignment(pending)
+        # GH #106: partition into ready / needs-alignment / skipped so we
+        # don't redrive alignment on clips that already failed it.
+        ready, needs_alignment, skipped_ids = partition_clips_for_sequencing(
+            checked, self._attempted_alignment_clip_ids
+        )
+        if needs_alignment:
+            self._start_alignment(needs_alignment)
+            return
+        if not ready:
+            self._set_error(
+                "No clips could be word-aligned — alignment failed for: "
+                + ", ".join(skipped_ids)
+            )
             return
         self._start_compose()
 
@@ -574,6 +591,15 @@ class WordLLMComposerDialog(QDialog):
 
     def _start_compose(self) -> None:
         from ui.workers.llm_composer_worker import LLMComposerWorker
+
+        # GH #106: feed only fully-aligned clips to the worker; clips that
+        # were attempted but failed alignment are dropped here. The worker
+        # would otherwise raise MissingWordDataError and the dialog would
+        # bounce the user back to retry.
+        ready, _needs, skipped_ids = partition_clips_for_sequencing(
+            self._checked_clips(), self._attempted_alignment_clip_ids
+        )
+        self._last_skipped_clip_ids = list(skipped_ids)
 
         self._compose_finished_handled = False
         self._stack.setCurrentIndex(1)
@@ -593,7 +619,7 @@ class WordLLMComposerDialog(QDialog):
         seed = self._seed_spin.value() if policy == "random" else None
 
         worker = LLMComposerWorker(
-            clips=self._checked_clips(),
+            clips=ready,
             prompt=self._prompt_input.toPlainText().strip(),
             target_length=self._length_spin.value(),
             repeat_policy=policy,
@@ -636,6 +662,17 @@ class WordLLMComposerDialog(QDialog):
             )
             self._stack.setCurrentIndex(0)
             return
+
+        if self._last_skipped_clip_ids:
+            logger.info(
+                "LLM Word Composer skipped %d unalignable clip(s): %s",
+                len(self._last_skipped_clip_ids),
+                self._last_skipped_clip_ids,
+            )
+            self._set_error(
+                f"Skipped {len(self._last_skipped_clip_ids)} unalignable clip(s): "
+                + ", ".join(self._last_skipped_clip_ids)
+            )
 
         # Stash the result and route to the review page so the user can
         # actually read the sentence the LLM composed (the rendered video
@@ -725,6 +762,13 @@ class WordLLMComposerDialog(QDialog):
     def _start_alignment(self, pending_clips: list) -> None:
         """Spawn a ``WordAlignmentController`` over the pending clips."""
         self._pending_after_alignment = True
+
+        # GH #106: record attempted clip ids so the next accept doesn't
+        # redrive alignment on the same clips if it fails for some of them.
+        for clip in pending_clips:
+            clip_id = getattr(clip, "id", None)
+            if clip_id:
+                self._attempted_alignment_clip_ids.add(clip_id)
 
         sources_by_id = {
             src.id: src for src in self._sources_by_id.values() if src is not None

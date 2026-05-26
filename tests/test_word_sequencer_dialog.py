@@ -445,3 +445,173 @@ def test_user_curated_list_match_preview(qapp):
     text = dialog._userlist_match_label.text()
     assert "4 slots" in text
     assert "1 unrecognized" in text
+
+
+# ---------------------------------------------------------------------------
+# GH #106 — partition_clips_for_sequencing + accept-loop deadlock prevention
+# ---------------------------------------------------------------------------
+
+
+def test_partition_buckets_aligned_pending_and_skipped():
+    from ui.dialogs._word_source_picker import partition_clips_for_sequencing
+
+    aligned, src1 = _make_aligned_clip(clip_id="ok-1", source_id="s-1")
+    pending, src2 = _make_unaligned_clip(clip_id="pending-1", source_id="s-2")
+    failed, src3 = _make_unaligned_clip(clip_id="failed-1", source_id="s-3")
+
+    ready, needs_alignment, skipped = partition_clips_for_sequencing(
+        [(aligned, src1), (pending, src2), (failed, src3)],
+        attempted_clip_ids={"failed-1"},
+    )
+
+    assert [c.id for c, _ in ready] == ["ok-1"]
+    assert [c.id for c in needs_alignment] == ["pending-1"]
+    assert skipped == ["failed-1"]
+
+
+def test_partition_empty_attempted_set_treats_all_unaligned_as_pending():
+    from ui.dialogs._word_source_picker import partition_clips_for_sequencing
+
+    aligned, src1 = _make_aligned_clip(clip_id="ok-1", source_id="s-1")
+    pending, src2 = _make_unaligned_clip(clip_id="pending-1", source_id="s-2")
+
+    ready, needs_alignment, skipped = partition_clips_for_sequencing(
+        [(aligned, src1), (pending, src2)], attempted_clip_ids=set()
+    )
+    assert [c.id for c, _ in ready] == ["ok-1"]
+    assert [c.id for c in needs_alignment] == ["pending-1"]
+    assert skipped == []
+
+
+def test_accept_loop_does_not_redrive_alignment_for_already_attempted_clips(
+    qapp, monkeypatch
+):
+    """GH #106 regression: re-clicking Accept after alignment failed for some
+    clips must not retrigger the worker on the same failed clips. The dialog
+    should skip them with a warning and run the sequencer on the remainder."""
+    from ui.dialogs.word_sequencer_dialog import WordSequencerDialog
+
+    aligned, aligned_src = _make_aligned_clip(clip_id="ok-1", source_id="s-1")
+    bad, bad_src = _make_unaligned_clip(clip_id="bad-1", source_id="s-2")
+    dialog = WordSequencerDialog(
+        clips=[(aligned, aligned_src), (bad, bad_src)],
+        project=None,
+    )
+
+    # Simulate: alignment was already attempted for the bad clip (and it
+    # remained unaligned because Whisper mis-detected its language).
+    dialog._attempted_alignment_clip_ids.add("bad-1")
+
+    sequencer_calls: list = []
+
+    def fake_generate(clips, **kwargs):
+        sequencer_calls.append([c.id for c, _ in clips])
+        from models.sequence import SequenceClip
+        return [SequenceClip(source_clip_id=clips[0][0].id, source_id=clips[0][1].id)]
+
+    monkeypatch.setattr(
+        "ui.dialogs.word_sequencer_dialog.generate_word_sequence",
+        fake_generate,
+    )
+
+    alignment_starts: list = []
+
+    class FakeAlignmentWorker:
+        def __init__(self, *, clips, sources_by_id, skip_existing, parent=None):
+            alignment_starts.append([c.id for c in clips])
+
+            class _Sig:
+                def connect(self, *args, **kwargs):
+                    return None
+
+            self.progress = _Sig()
+            self.clip_aligned = _Sig()
+            self.alignment_completed = _Sig()
+            self.error = _Sig()
+
+        def isRunning(self):
+            return True
+
+        def start(self):
+            pass
+
+        def wait(self, _ms):
+            return True
+
+        def cancel(self):
+            pass
+
+    monkeypatch.setattr(
+        "ui.workers.forced_alignment_worker.ForcedAlignmentWorker",
+        FakeAlignmentWorker,
+    )
+
+    dialog._on_accept()
+
+    # No alignment should have been queued — the bad clip was already attempted.
+    assert alignment_starts == []
+    # Sequencer ran on only the aligned clip.
+    assert sequencer_calls == [["ok-1"]]
+    # User-visible warning lists the skipped clip.
+    assert "bad-1" in dialog._error_label.text()
+
+
+def test_accept_with_all_clips_failed_alignment_shows_error_and_does_not_loop(
+    qapp, monkeypatch
+):
+    """If alignment failed for every selected clip, there is nothing to
+    sequence. Dialog must surface a clear error and must NOT call the
+    sequencer or start another alignment pass."""
+    from ui.dialogs.word_sequencer_dialog import WordSequencerDialog
+
+    bad1, src1 = _make_unaligned_clip(clip_id="bad-1", source_id="s-1")
+    bad2, src2 = _make_unaligned_clip(clip_id="bad-2", source_id="s-2")
+    dialog = WordSequencerDialog(clips=[(bad1, src1), (bad2, src2)], project=None)
+
+    dialog._attempted_alignment_clip_ids.update({"bad-1", "bad-2"})
+
+    sequencer_calls: list = []
+    monkeypatch.setattr(
+        "ui.dialogs.word_sequencer_dialog.generate_word_sequence",
+        lambda *a, **kw: sequencer_calls.append(True) or [],
+    )
+
+    alignment_starts: list = []
+
+    class FakeAlignmentWorker:
+        def __init__(self, **kwargs):
+            alignment_starts.append(True)
+
+            class _Sig:
+                def connect(self, *args, **kwargs):
+                    return None
+
+            self.progress = _Sig()
+            self.clip_aligned = _Sig()
+            self.alignment_completed = _Sig()
+            self.error = _Sig()
+
+        def isRunning(self):
+            return False
+
+        def start(self):
+            pass
+
+        def wait(self, _ms):
+            return True
+
+        def cancel(self):
+            pass
+
+    monkeypatch.setattr(
+        "ui.workers.forced_alignment_worker.ForcedAlignmentWorker",
+        FakeAlignmentWorker,
+    )
+
+    dialog._on_accept()
+
+    assert sequencer_calls == []
+    assert alignment_starts == []
+    assert dialog._stack.currentIndex() == 0
+    assert "could not be word-aligned" in dialog._error_label.text().lower() or \
+           "no clips" in dialog._error_label.text().lower()
