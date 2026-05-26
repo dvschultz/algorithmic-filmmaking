@@ -13,7 +13,14 @@ import threading
 from pathlib import Path
 from unittest.mock import patch
 
-from core.spine.analyze import analyze_clips, analyze_colors, analyze_shots, transcribe
+from core.spine.analyze import (
+    analyze_clips,
+    analyze_colors,
+    analyze_shots,
+    face_embeddings,
+    gaze,
+    transcribe,
+)
 
 
 def _build_project(tmp_path: Path, n_clips: int = 3, populate_colors: int = 0):
@@ -277,6 +284,67 @@ def test_transcribe_empty_segments_treated_as_success(tmp_path):
     assert len(result["result"]["succeeded"]) == 1
     assert result["result"]["succeeded"][0]["segment_count"] == 0
     assert project.clips[0].transcript == []
+
+
+# Regression: GH #109 — headless spine paths must unload heavy models after a
+# job so long-lived MCP servers don't accumulate InsightFace / MediaPipe state.
+def test_face_embeddings_unloads_model_on_success(tmp_path):
+    project = _build_project(tmp_path, n_clips=2)
+    with patch("core.analysis.faces.extract_faces_from_clip", return_value=[]), \
+         patch("core.analysis.faces.unload_model") as mock_unload:
+        face_embeddings(project)
+    assert mock_unload.call_count == 1
+
+
+def test_face_embeddings_unloads_model_on_exception(tmp_path):
+    project = _build_project(tmp_path, n_clips=1)
+    with patch(
+        "core.analysis.faces.extract_faces_from_clip",
+        side_effect=RuntimeError("boom"),
+    ), patch("core.analysis.faces.unload_model") as mock_unload:
+        face_embeddings(project)
+    # Per-clip errors are aggregated, not raised — but unload still runs.
+    assert mock_unload.call_count == 1
+
+
+def test_face_embeddings_unloads_model_on_cancel(tmp_path):
+    project = _build_project(tmp_path, n_clips=3)
+    cancel = threading.Event()
+    cancel.set()
+    with patch("core.analysis.faces.extract_faces_from_clip", return_value=[]), \
+         patch("core.analysis.faces.unload_model") as mock_unload:
+        face_embeddings(project, cancel_event=cancel)
+    assert mock_unload.call_count == 1
+
+
+def test_gaze_unloads_model_on_success(tmp_path):
+    project = _build_project(tmp_path, n_clips=2)
+    fake_result = {"gaze_yaw": 0.0, "gaze_pitch": 0.0, "gaze_category": "center"}
+    with patch("core.analysis.gaze.extract_gaze_from_clip", return_value=fake_result), \
+         patch("core.analysis.gaze.unload_model") as mock_unload:
+        gaze(project)
+    assert mock_unload.call_count == 1
+
+
+def test_gaze_unloads_model_on_exception(tmp_path):
+    project = _build_project(tmp_path, n_clips=1)
+    with patch(
+        "core.analysis.gaze.extract_gaze_from_clip",
+        side_effect=RuntimeError("boom"),
+    ), patch("core.analysis.gaze.unload_model") as mock_unload:
+        gaze(project)
+    assert mock_unload.call_count == 1
+
+
+def test_gaze_unloads_model_on_cancel(tmp_path):
+    project = _build_project(tmp_path, n_clips=3)
+    cancel = threading.Event()
+    cancel.set()
+    fake_result = {"gaze_yaw": 0.0, "gaze_pitch": 0.0, "gaze_category": "center"}
+    with patch("core.analysis.gaze.extract_gaze_from_clip", return_value=fake_result), \
+         patch("core.analysis.gaze.unload_model") as mock_unload:
+        gaze(project, cancel_event=cancel)
+    assert mock_unload.call_count == 1
 
 
 def test_analyze_clips_maps_operation_progress_into_parent_range(tmp_path):
