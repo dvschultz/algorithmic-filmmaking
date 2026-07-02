@@ -842,7 +842,7 @@ def custom_query(
     return {"success": True, "result": {"succeeded": succeeded, "failed": failed, "skipped": skipped, "total_clips": total}}
 
 
-ANALYZE_CLIP_OPERATION_MAP = {
+ANALYZE_CLIP_OPERATION_MAP: dict[str, Callable[..., dict]] = {
     "colors": analyze_colors,
     "shots": analyze_shots,
     "classify": classify_content,
@@ -883,7 +883,7 @@ def analyze_clips(
             break
         if progress_callback is not None:
             progress_callback(index / total_ops, f"Starting {op} ({index + 1}/{total_ops})")
-        kwargs = {"skip_existing": skip_existing}
+        kwargs: dict[str, object] = {"skip_existing": skip_existing}
         if op == "custom_query":
             kwargs["query"] = query
             # Custom query appends user-authored query runs by default.

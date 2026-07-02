@@ -9,11 +9,17 @@ on-demand and cached in memory, invalidated when sequence changes.
 """
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, TypedDict
+
+
+class _GenrePacingNorm(TypedDict):
+    avg_shot_duration: float
+    variance: str
+    description: str
 
 
 # Genre-specific pacing norms for comparison
-GENRE_PACING_NORMS = {
+GENRE_PACING_NORMS: dict[str, _GenrePacingNorm] = {
     "action": {
         "avg_shot_duration": 2.5,
         "variance": "high",
@@ -95,7 +101,7 @@ class PacingAnalysis:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "PacingAnalysis":
+    def from_dict(cls, data: Optional[dict]) -> "PacingAnalysis":
         if data is None:
             return cls()
         return cls(
@@ -140,7 +146,7 @@ class ContinuityWarning:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "ContinuityWarning":
+    def from_dict(cls, data: Optional[dict]) -> "ContinuityWarning":
         if data is None:
             return cls()
         # Validate and coerce clip_pair to exactly 2 elements
@@ -185,7 +191,7 @@ class VisualConsistency:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "VisualConsistency":
+    def from_dict(cls, data: Optional[dict]) -> "VisualConsistency":
         if data is None:
             return cls()
         return cls(
@@ -224,7 +230,7 @@ class GenreComparison:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "GenreComparison":
+    def from_dict(cls, data: Optional[dict]) -> "GenreComparison":
         if data is None:
             return cls()
         return cls(
@@ -263,7 +269,7 @@ class SequenceAnalysis:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "SequenceAnalysis":
+    def from_dict(cls, data: Optional[dict]) -> "SequenceAnalysis":
         if data is None:
             return cls()
         return cls(

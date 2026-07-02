@@ -10,7 +10,10 @@ from __future__ import annotations
 import logging
 import threading
 from pathlib import Path
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
+
+if TYPE_CHECKING:
+    from models.clip import Clip, Source
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +34,7 @@ def _resolve_clip_ids(project, clip_ids: Optional[list[str]]):
 
 
 def generate_clip_thumbnails(
-    clip_source_pairs: list[tuple[object, object]],
+    clip_source_pairs: list[tuple["Clip", "Source"]],
     *,
     force: bool = False,
     width: int = 320,
@@ -54,7 +57,7 @@ def generate_clip_thumbnails(
     failed: list[dict] = []
     skipped: list[dict] = []
 
-    pending: list[tuple[object, object]] = []
+    pending: list[tuple["Clip", "Source"]] = []
     for clip, source in clip_source_pairs:
         thumbnail_path = getattr(clip, "thumbnail_path", None)
         if not force and thumbnail_path and Path(thumbnail_path).exists():

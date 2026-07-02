@@ -532,7 +532,7 @@ class Clip:
             cinematography = CinematographyAnalysis.from_dict(data["cinematography"])
 
         # Parse face embeddings with validation
-        face_embeddings = None
+        face_embeddings: Optional[list[dict]] = None
         if "face_embeddings" in data:
             face_embeddings = []
             for entry in data["face_embeddings"]:

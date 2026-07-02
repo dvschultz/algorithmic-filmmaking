@@ -42,6 +42,7 @@ that). Original (un-normalized) ``text`` is preserved on each
 from __future__ import annotations
 
 import math
+import random
 import secrets
 import string
 from dataclasses import dataclass
@@ -309,7 +310,7 @@ def _pick_instance(
     *,
     policy: RepeatPolicy,
     counter: int,
-    rng,
+    rng: random.Random,
 ) -> WordInstance:
     """Pick a ``WordInstance`` from ``candidates`` under a repeat policy.
 

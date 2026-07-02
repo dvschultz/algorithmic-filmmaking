@@ -183,6 +183,7 @@ def _load_active_auth_state() -> tuple[AuthMode, Optional[AuthIdentity], Optiona
     )
 
     settings = load_settings(read_keyring=False)
+    state: tuple[int, AuthMode, Optional[AuthIdentity], Optional[str]]
     if settings.auth_mode != AuthMode.SUBSCRIPTION.value:
         state = (current_version, AuthMode.API_KEY, None, None)
         _cached_state = state

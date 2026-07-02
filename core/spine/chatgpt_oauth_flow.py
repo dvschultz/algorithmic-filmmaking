@@ -54,7 +54,7 @@ import secrets
 import socket
 import urllib.parse
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, cast
 
 import httpx
 
@@ -199,7 +199,7 @@ def _pick_free_loopback_port() -> int:
     """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.bind((REDIRECT_URI_HOST, 0))
-        return probe.getsockname()[1]
+        return int(probe.getsockname()[1])
 
 
 def build_authorization_url(challenge: str) -> AuthorizationRequest:
@@ -407,7 +407,7 @@ def _post_token_endpoint(
         )
 
     try:
-        return response.json()
+        return cast(dict, response.json())
     except ValueError as exc:
         raise OAuthMalformedResponseError(
             f"Token endpoint returned non-JSON response: {exc}"

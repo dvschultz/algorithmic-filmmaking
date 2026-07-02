@@ -25,3 +25,25 @@ jobs:
         # Informational until green across a release cycle — see docs/releases.md gate-flip rule
         continue-on-error: true
         run: ruff check .
+
+  mypy:
+    name: Mypy (scoped)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install mypy
+        run: pip install mypy==1.19.1
+
+      - name: Run mypy (core/spine + models)
+        # Informational until green across a release cycle — see docs/releases.md gate-flip rule.
+        # Scoped to core/spine/ + models/: the full tree carries ~870 baseline errors, so the
+        # gate is limited to the layers we keep clean. --follow-imports=silent stops mypy from
+        # dragging the whole import graph (ui/, core/analysis/, ...) into the scoped check.
+        continue-on-error: true
+        run: python -m mypy --follow-imports=silent core/spine/ models/

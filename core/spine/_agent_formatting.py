@@ -47,7 +47,7 @@ def summarize_clip_sequence_for_agent(
     limit: int = 20,
 ) -> dict:
     """Summarize ordered clip entries returned by sequence/remix tools."""
-    clips = []
+    clips: list[dict] = []
     total_duration = 0.0
     for index, entry in enumerate(clip_entries):
         if isinstance(entry, dict):

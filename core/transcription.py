@@ -556,7 +556,7 @@ def transcribe_clip(
     start_time: float,
     end_time: float,
     model_name: str = "small.en",
-    language: str = "en",
+    language: Optional[str] = "en",
     backend: str = "auto",
     segmentation_mode: str = "backend",
     segment_max_seconds: float = 12.0,
@@ -753,7 +753,7 @@ _DEFAULT_GROQ_MODEL = "whisper-large-v3-turbo"
 
 def _transcribe_cloud_groq(
     audio_path: Path,
-    language: str = "en",
+    language: Optional[str] = "en",
     segmentation_mode: str = "backend",
     segment_max_seconds: float = 12.0,
     progress_callback: Optional[Callable[[float, str], None]] = None,
