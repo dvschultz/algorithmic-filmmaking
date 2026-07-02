@@ -16,6 +16,10 @@ def test_runtime_smoke_targets_are_stable():
         "scene-detect",
         "transcription",
         "updater",
+        "analyze-clip",
+        "sequence-build",
+        "render-short",
+        "mcp-stdio",
     )
 
 
@@ -32,6 +36,26 @@ def test_scene_detect_runtime_smoke_passes():
 def test_transcription_runtime_smoke_passes():
     """Transcription smoke should exercise FFmpeg audio extraction."""
     assert run_runtime_smoke_target("transcription") == "transcription"
+
+
+def test_analyze_clip_runtime_smoke_passes():
+    """Analyze-clip smoke should run the non-ML color + brightness paths."""
+    assert run_runtime_smoke_target("analyze-clip") == "analyze-clip"
+
+
+def test_sequence_build_runtime_smoke_passes():
+    """Sequence-build smoke should assemble a sequence from detected clips."""
+    assert run_runtime_smoke_target("sequence-build") == "sequence-build"
+
+
+def test_render_short_runtime_smoke_passes():
+    """Render-short smoke should export a short sequence to a playable MP4."""
+    assert run_runtime_smoke_target("render-short") == "render-short"
+
+
+# Note: no live "mcp-stdio" pass-test here. That target spawns the MCP server as
+# a subprocess, which is too heavy/slow for the unit suite; it is exercised via
+# the frozen runtime smoke run in the release pipeline instead.
 
 
 def test_runtime_smoke_rejects_unknown_target():

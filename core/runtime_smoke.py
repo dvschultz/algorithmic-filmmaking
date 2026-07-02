@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
+import os
 import subprocess
 import sys
 import tempfile
@@ -25,7 +27,17 @@ RUNTIME_SMOKE_TARGET_ENV = "SCENE_RIPPER_RUNTIME_SMOKE_TEST_TARGET"
 
 def get_runtime_smoke_targets() -> tuple[str, ...]:
     """Return the supported frozen runtime smoke targets."""
-    return ("imports", "project", "scene-detect", "transcription", "updater")
+    return (
+        "imports",
+        "project",
+        "scene-detect",
+        "transcription",
+        "updater",
+        "analyze-clip",
+        "sequence-build",
+        "render-short",
+        "mcp-stdio",
+    )
 
 
 def run_runtime_smoke_target(target: str) -> str:
@@ -37,6 +49,10 @@ def run_runtime_smoke_target(target: str) -> str:
         "scene-detect": _run_scene_detect_smoke,
         "transcription": _run_transcription_smoke,
         "updater": _run_updater_smoke,
+        "analyze-clip": _run_analyze_clip_smoke,
+        "sequence-build": _run_sequence_build_smoke,
+        "render-short": _run_render_short_smoke,
+        "mcp-stdio": _run_mcp_stdio_smoke,
     }
     handler = handlers.get(normalized)
     if handler is None:
@@ -197,6 +213,424 @@ def _run_updater_smoke() -> None:
         raise RuntimeError("Bundled WinSparkle feed URL missing from updater status.")
     if not status.public_key:
         raise RuntimeError("Bundled WinSparkle public key missing from updater status.")
+
+
+def _run_analyze_clip_smoke() -> None:
+    """Validate the non-ML color + brightness analysis paths on a synthetic clip."""
+    from core.analysis.color import extract_dominant_colors, get_average_brightness
+
+    with tempfile.TemporaryDirectory(prefix="scene-ripper-analyze-smoke-") as tmp:
+        tmp_path = Path(tmp)
+        video_path = tmp_path / "synthetic-analyze.mp4"
+        _create_synthetic_scene_video(video_path)
+
+        # The synthetic clip is three solid-color scenes of 18 frames each at
+        # 24fps; analyze the first (blue) scene so brightness is well below 1.0.
+        start_frame, end_frame = 0, 18
+
+        colors = extract_dominant_colors(
+            video_path,
+            start_frame=start_frame,
+            end_frame=end_frame,
+            n_colors=3,
+        )
+        if not colors:
+            raise RuntimeError("Color analysis returned no dominant colors for synthetic clip.")
+        for color in colors:
+            if len(color) != 3 or not all(0 <= channel <= 255 for channel in color):
+                raise RuntimeError(f"Color analysis produced an out-of-range RGB tuple: {color}")
+
+        brightness = get_average_brightness(
+            video_path,
+            start_frame=start_frame,
+            end_frame=end_frame,
+            fps=24.0,
+        )
+        if not 0.0 <= brightness <= 1.0:
+            raise RuntimeError(f"Brightness analysis produced an out-of-range value: {brightness}")
+
+
+def _run_sequence_build_smoke() -> None:
+    """Validate building a Sequence with SequenceClips from detected clips."""
+    with tempfile.TemporaryDirectory(prefix="scene-ripper-sequence-smoke-") as tmp:
+        tmp_path = Path(tmp)
+        video_path = tmp_path / "synthetic-sequence.mp4"
+        _create_synthetic_scene_video(video_path)
+
+        detector = SceneDetector(
+            DetectionConfig(
+                threshold=1.0,
+                min_scene_length=5,
+                use_adaptive=False,
+                luma_only=False,
+            )
+        )
+        source, clips = detector.detect_scenes(video_path)
+        if len(clips) < 2:
+            raise RuntimeError(
+                f"Expected at least 2 clips to build a sequence, got {len(clips)}."
+            )
+
+        project = Project.new(name="Sequence Build Smoke")
+        project.add_source(source)
+        project.add_clips(clips)
+
+        # Build the sequence through the core API (appends to track 0).
+        sequence_clip_ids = [clip.id for clip in clips[:3]]
+        project.add_to_sequence(sequence_clip_ids)
+
+        sequence = project.sequence
+        if sequence is None:
+            raise RuntimeError("Sequence build smoke produced no sequence.")
+
+        seq_clips = sequence.get_all_clips()
+        if len(seq_clips) != len(sequence_clip_ids):
+            raise RuntimeError(
+                "Sequence build smoke expected "
+                f"{len(sequence_clip_ids)} sequence clips, got {len(seq_clips)}."
+            )
+
+        # SequenceClips must be laid end-to-end with plausible trim points and
+        # source references back to the detected clips.
+        expected_start = 0
+        for seq_clip in seq_clips:
+            if seq_clip.source_clip_id not in {clip.id for clip in clips}:
+                raise RuntimeError("Sequence clip references an unknown source clip.")
+            if seq_clip.out_point <= seq_clip.in_point:
+                raise RuntimeError(
+                    "Sequence clip has a non-positive duration "
+                    f"({seq_clip.in_point}-{seq_clip.out_point})."
+                )
+            if seq_clip.start_frame != expected_start:
+                raise RuntimeError(
+                    "Sequence clips are not laid end-to-end: expected start "
+                    f"{expected_start}, got {seq_clip.start_frame}."
+                )
+            expected_start += seq_clip.duration_frames
+
+        if sequence.duration_frames <= 0:
+            raise RuntimeError("Sequence build smoke produced a zero-length timeline.")
+
+
+def _run_render_short_smoke() -> None:
+    """Validate rendering a short sequence to a playable MP4 through the export path."""
+    from core.sequence_export import export_sequence
+
+    ffprobe = find_binary("ffprobe")
+    if ffprobe is None:
+        raise RuntimeError("ffprobe is required for render-short smoke but was not resolved.")
+
+    from core.paths import is_frozen
+
+    if is_frozen() and not is_bundled_binary_path(ffprobe):
+        raise RuntimeError(f"Frozen app resolved ffprobe outside bundled runtime: {ffprobe}")
+
+    with tempfile.TemporaryDirectory(prefix="scene-ripper-render-smoke-") as tmp:
+        tmp_path = Path(tmp)
+        video_path = tmp_path / "synthetic-render.mp4"
+        _create_synthetic_scene_video(video_path)
+
+        detector = SceneDetector(
+            DetectionConfig(
+                threshold=1.0,
+                min_scene_length=5,
+                use_adaptive=False,
+                luma_only=False,
+            )
+        )
+        source, clips = detector.detect_scenes(video_path)
+        if not clips:
+            raise RuntimeError("Render-short smoke detected no clips to render.")
+
+        project = Project.new(name="Render Short Smoke")
+        project.add_source(source)
+        project.add_clips(clips)
+        project.add_to_sequence([clip.id for clip in clips])
+
+        sequence = project.sequence
+        if sequence is None:
+            raise RuntimeError("Render-short smoke produced no sequence to render.")
+
+        # Keep the render well under 5 seconds: the synthetic clip is ~2.25s of
+        # source at 24fps, and the sequence renders at its own fps (24).
+        sequence.fps = source.fps or 24.0
+        if sequence.duration_seconds > 5.0:
+            raise RuntimeError(
+                f"Render-short smoke sequence too long: {sequence.duration_seconds:.2f}s > 5s."
+            )
+
+        sources = {source.id: source}
+        clip_map = {clip.id: (clip, source) for clip in clips}
+        output_path = tmp_path / "render-short.mp4"
+
+        ok = export_sequence(
+            sequence=sequence,
+            sources=sources,
+            clips=clip_map,
+            output_path=output_path,
+        )
+        if not ok:
+            raise RuntimeError("Render-short smoke export returned failure.")
+        if not output_path.is_file() or output_path.stat().st_size == 0:
+            raise RuntimeError("Render-short smoke produced no output file.")
+
+        # ffprobe must parse the output and report a video stream with duration.
+        result = subprocess.run(
+            [
+                ffprobe,
+                "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "format=duration:stream=codec_type",
+                "-of", "json",
+                str(output_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            **get_subprocess_kwargs(),
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                "Render-short smoke ffprobe failed: "
+                f"{(result.stderr or result.stdout).strip()}"
+            )
+        try:
+            probe = json.loads(result.stdout or "{}")
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Render-short smoke ffprobe returned invalid JSON: {exc}") from exc
+
+        streams = probe.get("streams", [])
+        if not any(stream.get("codec_type") == "video" for stream in streams):
+            raise RuntimeError("Render-short smoke output has no video stream.")
+
+        duration = float(probe.get("format", {}).get("duration", 0.0) or 0.0)
+        if duration <= 0.0:
+            raise RuntimeError("Render-short smoke output reported a non-positive duration.")
+
+
+def _run_mcp_stdio_smoke() -> None:
+    """Validate the MCP server over stdio: initialize handshake + one read tool call.
+
+    Speaks the newline-delimited JSON-RPC framing directly over the subprocess
+    pipes (rather than pulling in the async MCP client) so the smoke run stays
+    synchronous and can bound every read with a timeout. A hung server is
+    surfaced as a timeout error instead of wedging the whole smoke run.
+    """
+    # Prefer the ``scene-ripper-mcp`` console entry point (the canonical launch
+    # used by the release pipeline and documented for external agents). Fall
+    # back to importing the server under its real module name for a bare source
+    # checkout without the script installed. We deliberately avoid
+    # ``python -m scene_ripper_mcp.server`` here: running the module as
+    # ``__main__`` creates a second ``scene_ripper_mcp.server`` module when the
+    # tool packages do ``from scene_ripper_mcp.server import mcp``, so the
+    # decorators register on a different ``mcp`` than ``main()`` runs and the
+    # server exposes zero tools.
+    import shutil
+
+    entry_point = shutil.which("scene-ripper-mcp")
+    if entry_point:
+        command = [entry_point, "--transport", "stdio"]
+    else:
+        command = [
+            sys.executable,
+            "-c",
+            "from scene_ripper_mcp.server import main; main()",
+            "--transport",
+            "stdio",
+        ]
+
+    with tempfile.TemporaryDirectory(prefix="scene-ripper-mcp-smoke-") as tmp:
+        # list_projects requires an existing directory under a safe root; the
+        # temp dir qualifies and contains no projects, so we expect count == 0.
+        search_dir = str(Path(tmp).resolve())
+
+        env = dict(os.environ)
+        # Keep the child's cache/jobs DB inside the temp dir so the smoke run
+        # never touches the user's real cache (the server's lifespan opens a
+        # jobs.db under the cache dir on startup).
+        env["SCENE_RIPPER_CACHE_DIR"] = search_dir
+        env.setdefault("MCP_TOOL_TIMEOUT", "60")
+
+        proc = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,  # line-buffered
+            env=env,
+            **get_subprocess_kwargs(),
+        )
+
+        try:
+            _mcp_send(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-11-25",
+                        "capabilities": {},
+                        "clientInfo": {"name": "runtime-smoke", "version": "1.0"},
+                    },
+                },
+            )
+            init_result = _mcp_read_response(proc, expected_id=1, timeout=60.0)
+            negotiated = (init_result.get("result") or {}).get("protocolVersion")
+            if not negotiated:
+                raise RuntimeError(
+                    f"MCP initialize did not return a protocol version: {init_result}"
+                )
+
+            # Acknowledge initialization (notification, no response expected).
+            _mcp_send(
+                proc,
+                {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
+            )
+
+            _mcp_send(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "list_projects",
+                        "arguments": {"directory": search_dir},
+                    },
+                },
+            )
+            call_result = _mcp_read_response(proc, expected_id=2, timeout=60.0)
+            if "error" in call_result:
+                raise RuntimeError(f"MCP list_projects returned an error: {call_result['error']}")
+
+            payload = _mcp_extract_tool_json(call_result)
+            if payload.get("success") is not True:
+                raise RuntimeError(f"MCP list_projects reported failure: {payload}")
+            if "count" not in payload or "projects" not in payload:
+                raise RuntimeError(f"MCP list_projects response missing expected keys: {payload}")
+        finally:
+            _mcp_terminate(proc)
+
+
+def _mcp_send(proc: subprocess.Popen, message: dict) -> None:
+    """Write one newline-delimited JSON-RPC message to the MCP server stdin."""
+    if proc.stdin is None:
+        raise RuntimeError("MCP server subprocess has no stdin pipe.")
+    proc.stdin.write(json.dumps(message) + "\n")
+    proc.stdin.flush()
+
+
+def _mcp_read_response(proc: subprocess.Popen, expected_id: int, timeout: float) -> dict:
+    """Read JSON-RPC lines until the response with ``expected_id`` arrives.
+
+    Skips notifications/requests initiated by the server (which have no ``id``
+    matching our request). Raises on timeout, EOF, or a crashed subprocess.
+    """
+    import time
+
+    if proc.stdout is None:
+        raise RuntimeError("MCP server subprocess has no stdout pipe.")
+
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError(
+                f"Timed out waiting {timeout:.0f}s for MCP response id={expected_id}."
+            )
+
+        line = _readline_with_timeout(proc, remaining)
+        if line is None:
+            code = proc.poll()
+            stderr = proc.stderr.read() if proc.stderr else ""
+            raise RuntimeError(
+                f"MCP server closed stdout before response id={expected_id} "
+                f"(exit={code}). stderr: {stderr.strip()[:500]}"
+            )
+
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError:
+            # Non-JSON logging that leaked onto stdout; ignore and keep reading.
+            continue
+        if message.get("id") == expected_id:
+            return message
+        # Otherwise it's an unrelated notification/request; keep waiting.
+
+
+def _readline_with_timeout(proc: subprocess.Popen, timeout: float) -> str | None:
+    """Read a single line from proc.stdout, giving up after ``timeout`` seconds.
+
+    Returns the line (with trailing newline) or None on EOF. Uses a watchdog
+    thread so a hung server can't block forever on ``readline()``.
+    """
+    import threading
+
+    result: dict[str, str | None] = {"line": None}
+
+    def _reader() -> None:
+        try:
+            result["line"] = proc.stdout.readline()  # type: ignore[union-attr]
+        except (ValueError, OSError):
+            result["line"] = None
+
+    thread = threading.Thread(target=_reader, daemon=True)
+    thread.start()
+    thread.join(timeout)
+    if thread.is_alive():
+        # Reader is still blocked; killing the process unblocks readline() and
+        # lets the daemon thread exit. Signal a timeout to the caller.
+        proc.kill()
+        raise RuntimeError(f"Timed out waiting {timeout:.0f}s for an MCP stdout line.")
+    line = result["line"]
+    if line == "":
+        return None
+    return line
+
+
+def _mcp_extract_tool_json(response: dict) -> dict:
+    """Extract the JSON payload returned by an MCP tool call.
+
+    FastMCP wraps string tool returns in a ``content`` list of text parts; the
+    tool itself returns a JSON string, so parse the first text block.
+    """
+    result = response.get("result") or {}
+    content = result.get("content") or []
+    for part in content:
+        if part.get("type") == "text":
+            try:
+                return json.loads(part.get("text") or "{}")
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    f"MCP tool returned non-JSON text content: {exc}"
+                ) from exc
+    # Some servers also surface parsed data via structuredContent.
+    structured = result.get("structuredContent")
+    if isinstance(structured, dict):
+        return structured
+    raise RuntimeError(f"MCP tool response had no parseable content: {response}")
+
+
+def _mcp_terminate(proc: subprocess.Popen) -> None:
+    """Terminate the MCP server subprocess cleanly, escalating to kill."""
+    if proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=10)
+    for pipe in (proc.stdin, proc.stdout, proc.stderr):
+        try:
+            if pipe is not None:
+                pipe.close()
+        except OSError:
+            pass
 
 
 def _create_synthetic_scene_video(path: Path) -> Path:
