@@ -19,7 +19,8 @@ jobs:
           python-version: '3.11'
 
       - name: Install ruff
-        run: pip install ruff
+        # Pinned like mypy below so upstream rule changes can't break unrelated PRs
+        run: pip install ruff==0.14.11
 
       - name: Run ruff
         # Informational until green across a release cycle — see docs/releases.md gate-flip rule
