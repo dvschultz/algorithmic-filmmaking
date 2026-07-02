@@ -54,7 +54,6 @@ from ui.dialogs._word_source_picker import (
     BADGE_NEEDS_TRANSCRIPTION,
     BADGE_UNSUPPORTED_LANGUAGE,
     WordAlignmentController,
-    alignable_pending_clips,
     classify_source_alignment,
     format_source_row,
     partition_clips_for_sequencing,

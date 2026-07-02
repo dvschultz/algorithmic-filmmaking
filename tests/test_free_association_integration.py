@@ -8,9 +8,13 @@ import os
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+if TYPE_CHECKING:
+    from models.clip import Clip, Source
 
 # SequenceTab contains video widgets — use offscreen for headless runs
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -209,7 +213,6 @@ class TestCardAvailability:
         from ui.tabs.sequence_tab import SequenceTab
 
         tab = SequenceTab()
-        source = _make_source()
         clip = _make_clip("c1")
         tab._clips = [clip]
 

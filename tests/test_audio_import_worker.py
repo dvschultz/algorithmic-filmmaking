@@ -1,7 +1,5 @@
 """Tests for AudioImportWorker."""
 
-from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest

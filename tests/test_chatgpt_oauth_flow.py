@@ -13,7 +13,6 @@ import json
 import threading
 import time
 import urllib.parse
-from http import HTTPStatus
 
 import httpx
 import pytest

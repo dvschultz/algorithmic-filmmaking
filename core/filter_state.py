@@ -14,7 +14,7 @@ and ``to_dict`` emits ``None`` (no selection), the single string (one value)
 or a sorted list (multiple values) for backward-compat with existing callers.
 """
 
-from typing import Any, Iterable, Optional
+from typing import Any, Optional
 
 from PySide6.QtCore import QObject, Signal
 

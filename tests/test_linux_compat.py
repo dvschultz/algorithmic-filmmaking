@@ -368,12 +368,11 @@ class TestFacesGpuProviderDetection:
              patch.object(faces, "_model", None), \
              patch.object(faces, "_model_lock", __enter__=MagicMock(return_value=None), __exit__=MagicMock(return_value=False)), \
              patch("core.analysis.faces._get_model_cache_dir", return_value=Path("/tmp/test_cache")), \
-             patch("insightface.app.FaceAnalysis", return_value=mock_face_analysis) as mock_fa_cls:
+             patch("insightface.app.FaceAnalysis", return_value=mock_face_analysis):
 
             # We need to actually test the provider detection logic.
             # Since _load_insightface uses a lock, let's test the detection logic directly.
             providers = ["CPUExecutionProvider"]
-            import importlib
             try:
                 available = mock_onnxruntime.get_available_providers()
                 if "CUDAExecutionProvider" in available:

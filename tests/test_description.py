@@ -301,7 +301,7 @@ class TestFilterClipsSearchDescription(unittest.TestCase):
 
     def setUp(self):
         from core.project import Project
-        from models.clip import Source, Clip
+        from models.clip import Source
 
         self.project = Project.new(name="Test Project")
 

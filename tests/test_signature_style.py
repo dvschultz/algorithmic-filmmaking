@@ -20,7 +20,6 @@ from core.remix.signature_style import (
     _merge_samples,
     _colors_similar,
     _PACING_MERGE_THRESHOLD,
-    _COLOR_MERGE_THRESHOLD,
     match_clips_to_segments,
     build_sequence_from_matches,
     sample_drawing_parametric,

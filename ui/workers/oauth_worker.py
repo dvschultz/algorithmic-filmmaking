@@ -39,7 +39,6 @@ import asyncio
 import logging
 import time
 from enum import StrEnum
-from typing import Optional
 
 from PySide6.QtCore import Signal
 
@@ -141,7 +140,6 @@ class OAuthWorker(CancellableWorker):
             build_authorization_url,
             exchange_code_for_token,
             generate_pkce_pair,
-            run_loopback_listener,
         )
 
         # 1. Build the authorization URL on this thread (cheap) and signal

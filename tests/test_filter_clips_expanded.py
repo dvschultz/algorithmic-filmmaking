@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-import pytest
 
 from core.project import Project
 from models.clip import Source, Clip, ExtractedText

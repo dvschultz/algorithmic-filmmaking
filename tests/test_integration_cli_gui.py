@@ -8,13 +8,12 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
 
 from cli.main import cli, register_commands
-from cli.utils.errors import ExitCode
 from core.project import Project
 from core.settings import Settings, load_settings, save_settings
 from models.clip import Source, Clip

@@ -8,7 +8,7 @@ selection_changed.
 
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal, Slot
+from PySide6.QtCore import Signal, Slot
 from PySide6.QtWidgets import (
     QButtonGroup,
     QHBoxLayout,

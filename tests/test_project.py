@@ -3,11 +3,11 @@
 import json
 import tempfile
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import pytest
 
-from core.project import Project, ProjectMetadata
+from core.project import Project
 from models.clip import Source, Clip
 
 

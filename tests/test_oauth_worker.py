@@ -17,10 +17,10 @@ import pytest
 # Skip the whole module on headless CI runs where PySide6 isn't installed.
 PySide6 = pytest.importorskip("PySide6", reason="PySide6 not available")
 
-from PySide6.QtCore import QCoreApplication, QObject
-from PySide6.QtTest import QSignalSpy
+from PySide6.QtCore import QCoreApplication  # noqa: E402
+from PySide6.QtTest import QSignalSpy  # noqa: E402
 
-from ui.workers.oauth_worker import (
+from ui.workers.oauth_worker import (  # noqa: E402
     AUTH_FAILED_CANCELLED,
     AUTH_FAILED_TIMEOUT,
     AUTH_FAILED_NETWORK,

@@ -3,7 +3,6 @@
 from dataclasses import dataclass
 from typing import Optional
 
-import pytest
 
 from core.remix.gaze import eyeline_match, gaze_filter, gaze_rotation
 

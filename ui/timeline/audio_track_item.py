@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from PySide6.QtWidgets import QGraphicsRectItem, QGraphicsItem, QStyleOptionGraphicsItem
+from PySide6.QtWidgets import QGraphicsRectItem, QGraphicsItem
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor, QPen, QPainter, QPainterPath
 

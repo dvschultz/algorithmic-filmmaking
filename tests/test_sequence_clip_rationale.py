@@ -5,7 +5,7 @@ from pathlib import Path
 
 from models.clip import Clip, Source
 from core.project import Project
-from models.sequence import Sequence, SequenceClip, Track
+from models.sequence import Sequence, SequenceClip
 from ui.algorithm_config import get_algorithm_config
 
 

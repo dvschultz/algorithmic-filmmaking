@@ -49,13 +49,10 @@ def _get_plan_controller(main_window) -> PlanController:
 # Agent-formatting helpers live in core.spine._agent_formatting so spine impls
 # don't have to reach back into this module. Re-exported here as private names
 # to keep legacy imports working.
-from core.spine._agent_formatting import (
+from core.spine._agent_formatting import (  # noqa: E402
     add_sequence_summary_for_agent as _add_sequence_summary_for_agent,
     append_gaze_fields as _append_gaze_fields,
     clip_summary_for_agent as _clip_summary_for_agent,
-    summarize_clip_sequence_for_agent as _summarize_clip_sequence_for_agent,
-    summarize_report_for_agent as _summarize_report_for_agent,
-    truncate_for_agent as _truncate_for_agent,
 )
 
 
@@ -531,16 +528,6 @@ ASPECT_RATIO_RANGES = {
     "4:3": (1.27, 1.40),     # 1.333 ± 5%
     "9:16": (0.53, 0.59),    # 0.5625 ± 5%
 }
-
-
-def _append_gaze_fields(clip, clip_data: dict) -> None:
-    """Append gaze fields to clip_data dict if present on the clip."""
-    if clip.gaze_yaw is not None:
-        clip_data["gaze_yaw"] = round(clip.gaze_yaw, 2)
-    if clip.gaze_pitch is not None:
-        clip_data["gaze_pitch"] = round(clip.gaze_pitch, 2)
-    if clip.gaze_category is not None:
-        clip_data["gaze_category"] = clip.gaze_category
 
 
 @tools.register(
@@ -3064,7 +3051,6 @@ def import_folder(project, main_window, folder_path: str) -> dict:
     Returns:
         Dict with success status, imported count, and file list
     """
-    from pathlib import Path
 
     folder = Path(folder_path)
     if not folder.is_dir():
@@ -4133,7 +4119,6 @@ def generate_signature_style(
     Returns:
         Dict with success status and sequence details
     """
-    from pathlib import Path
 
     image_path = Path(reference_image_path)
     if not image_path.is_file():

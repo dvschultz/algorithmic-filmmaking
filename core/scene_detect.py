@@ -15,12 +15,12 @@ import numpy as np
 # actually needs it.
 sys.modules.setdefault("scenedetect.backends.pyav", None)
 
-from scenedetect import detect, AdaptiveDetector, ContentDetector
-from scenedetect.scene_manager import SceneManager
-from scenedetect.backends.opencv import VideoStreamCv2
+from scenedetect import detect, AdaptiveDetector, ContentDetector  # noqa: E402
+from scenedetect.scene_manager import SceneManager  # noqa: E402
+from scenedetect.backends.opencv import VideoStreamCv2  # noqa: E402
 
-from core.analysis.color import detect_video_color_profile
-from models.clip import Clip, Source
+from core.analysis.color import detect_video_color_profile  # noqa: E402
+from models.clip import Clip, Source  # noqa: E402
 
 logger = logging.getLogger(__name__)
 

@@ -1,7 +1,6 @@
 """Tests for SortingCardGrid category filtering and reflow."""
 
 import sys
-import pytest
 from unittest.mock import MagicMock
 
 from PySide6.QtWidgets import QApplication

@@ -1,14 +1,13 @@
 """Tests for ClipBrowser new filter controls (gaze, object, description, brightness)."""
 
 import sys
-import pytest
 from pathlib import Path
 from typing import Optional
 
 from PySide6.QtWidgets import QApplication
 
 from models.clip import Clip, Source
-from ui.clip_browser import ClipBrowser, ClipThumbnail
+from ui.clip_browser import ClipBrowser
 
 # Ensure a QApplication exists for widget tests
 app = QApplication.instance() or QApplication(sys.argv)

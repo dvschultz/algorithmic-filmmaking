@@ -1,6 +1,5 @@
 """Tests for the Windows native updater adapter."""
 
-from pathlib import Path
 from unittest.mock import patch
 
 from core.update_models import UpdateCapability

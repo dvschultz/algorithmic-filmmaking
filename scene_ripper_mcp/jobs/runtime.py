@@ -37,9 +37,9 @@ import logging
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
 
 from scene_ripper_mcp.jobs.lock import ProjectLockRegistry
 from scene_ripper_mcp.jobs.store import (

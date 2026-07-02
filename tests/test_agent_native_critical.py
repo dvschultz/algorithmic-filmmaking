@@ -8,7 +8,6 @@ Critical #3: delete_clips tool
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
 
 from core.gui_state import GUIState
 from models.clip import Clip, Source

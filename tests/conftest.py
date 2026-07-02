@@ -10,9 +10,9 @@ import pytest
 windows_only = pytest.mark.skipif(sys.platform != "win32", reason="Windows only")
 unix_only = pytest.mark.skipif(sys.platform == "win32", reason="Unix only")
 
-from core.project import Project
-from core.transcription import TranscriptSegment
-from models.clip import Source, Clip
+from core.project import Project  # noqa: E402
+from core.transcription import TranscriptSegment  # noqa: E402
+from models.clip import Source, Clip  # noqa: E402
 
 
 @pytest.fixture

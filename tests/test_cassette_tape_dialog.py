@@ -220,10 +220,11 @@ class TestPhraseOrderPreservation:
         dialog.phrase_rows[2].line_edit.setText("search")
 
         # Build a results payload in user order
-        match_for = lambda phrase: MatchResult(
-            phrase=phrase, clip_id="c1", segment_index=0,
-            segment=clips[0].transcript[0], score=80, match_start=0, match_end=5,
-        )
+        def match_for(phrase):
+            return MatchResult(
+                phrase=phrase, clip_id="c1", segment_index=0,
+                segment=clips[0].transcript[0], score=80, match_start=0, match_end=5,
+            )
         ordered_results = [
             ("sorry", [match_for("sorry")]),
             ("rescue", [match_for("rescue")]),

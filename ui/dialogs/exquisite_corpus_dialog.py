@@ -8,7 +8,6 @@ This dialog guides the user through:
 """
 
 import logging
-from typing import Optional
 
 from PySide6.QtWidgets import (
     QDialog,

@@ -1,7 +1,7 @@
 """Custom dual-handle range slider widget."""
 
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QLabel
-from PySide6.QtCore import Qt, Signal, QRect, QPoint
+from PySide6.QtCore import Qt, Signal, QRect
 from PySide6.QtGui import QPainter, QColor, QPen, QBrush, QFont, QFontMetrics
 
 from ui.theme import theme

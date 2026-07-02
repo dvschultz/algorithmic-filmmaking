@@ -1,8 +1,8 @@
 """Track item representing a horizontal lane on the timeline."""
 
 from PySide6.QtWidgets import QGraphicsRectItem, QGraphicsItem
-from PySide6.QtCore import Qt, QRectF
-from PySide6.QtGui import QBrush, QColor, QPen
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QBrush, QPen
 
 from models.sequence import Track
 from ui.theme import theme

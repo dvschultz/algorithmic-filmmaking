@@ -4,7 +4,7 @@ A label that can be clicked to edit inline, with auto-save on blur/Enter
 and Escape to cancel. Uses dual-widget approach (QLabel + QLineEdit).
 """
 
-from PySide6.QtCore import Qt, Signal, Slot
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QLabel, QLineEdit
 
 from ui.theme import theme

@@ -1,7 +1,6 @@
 """Worker that transcribes an AudioSource and emits the segments."""
 
 import logging
-from pathlib import Path
 
 from PySide6.QtCore import Signal
 

@@ -97,7 +97,6 @@ def _load_model():
             except ImportError:
                 pass
 
-            import torch
 
             models, transforms = ensure_image_classification_runtime_available()
 

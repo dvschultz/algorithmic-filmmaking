@@ -1,6 +1,5 @@
 """Tests for SRT export functionality."""
 
-import pytest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -12,7 +11,7 @@ from core.srt_export import (
     _sanitize_srt_text,
 )
 from models.clip import Clip, Source, ExtractedText
-from models.sequence import Sequence, SequenceClip, Track
+from models.sequence import Sequence, SequenceClip
 
 
 class TestHelperFunctions:

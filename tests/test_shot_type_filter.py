@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-import pytest
 
 from core.analysis.shots import SHOT_TYPES
 from models.clip import Clip, Source

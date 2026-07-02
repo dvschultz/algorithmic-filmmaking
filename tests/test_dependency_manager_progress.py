@@ -406,7 +406,10 @@ def test_install_for_feature_repairs_full_runtime_stack_when_only_subset_is_miss
         "core.dependency_manager.clear_package_roots",
         lambda package_names: cleared.append(list(package_names)),
     )
-    fake_installer = lambda specifiers, _progress=None, **kwargs: package_batches.append(list(specifiers)) or True
+    def fake_installer(specifiers, _progress=None, **kwargs):
+        package_batches.append(list(specifiers))
+        return True
+
     monkeypatch.setattr(
         "core.dependency_manager.install_packages", fake_installer,
     )

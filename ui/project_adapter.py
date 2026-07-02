@@ -5,13 +5,11 @@ with Qt's signal/slot mechanism used by the GUI.
 """
 
 import logging
-from pathlib import Path
 from typing import Any, Optional
 
 from PySide6.QtCore import QObject, Signal
 
 from core.project import Project
-from models.clip import Source, Clip
 
 logger = logging.getLogger(__name__)
 

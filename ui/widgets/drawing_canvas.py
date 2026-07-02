@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtWidgets import QWidget
-from PySide6.QtCore import Signal, Qt, QPoint, QSize, QRect
+from PySide6.QtCore import Signal, Qt, QPoint, QSize
 from PySide6.QtGui import (
     QColor,
     QImage,

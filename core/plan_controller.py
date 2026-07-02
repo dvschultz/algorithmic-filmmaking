@@ -7,7 +7,7 @@ so tool functions can be thin wrappers.
 import logging
 from typing import Optional
 
-from core.gui_state import GUIState, NameProjectThenPlanAction
+from core.gui_state import GUIState
 
 logger = logging.getLogger(__name__)
 

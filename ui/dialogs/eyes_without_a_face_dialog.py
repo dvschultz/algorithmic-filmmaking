@@ -29,7 +29,7 @@ from ui.workers.base import CancellableWorker
 
 logger = logging.getLogger(__name__)
 
-from core.analysis.gaze import GAZE_CATEGORY_DISPLAY
+from core.analysis.gaze import GAZE_CATEGORY_DISPLAY  # noqa: E402
 
 # Gaze category display names -> internal keys (derived from centralized constants)
 _CATEGORY_DISPLAY_TO_KEY = {v: k for k, v in GAZE_CATEGORY_DISPLAY.items()}

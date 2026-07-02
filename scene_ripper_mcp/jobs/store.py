@@ -33,7 +33,7 @@ import time
 import traceback as _traceback
 import uuid
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Optional, Sequence
 

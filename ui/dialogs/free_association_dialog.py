@@ -31,7 +31,6 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
-    QSizePolicy,
     QSplitter,
     QStackedWidget,
     QVBoxLayout,

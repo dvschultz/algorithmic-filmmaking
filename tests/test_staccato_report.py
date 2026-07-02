@@ -1,7 +1,6 @@
 """Tests for the Staccato debug HTML report generator."""
 
 import json
-import pytest
 from pathlib import Path
 
 from core.remix.staccato import StaccatoDebugInfo, StaccatoSlotDebug

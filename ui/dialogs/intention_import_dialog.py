@@ -654,7 +654,7 @@ class IntentionImportDialog(QDialog):
         # Remove URL lines from text input to prevent reappearance
         if urls_to_remove:
             lines = self.url_input.toPlainText().split("\n")
-            remaining = [l for l in lines if l.strip() not in urls_to_remove]
+            remaining = [line for line in lines if line.strip() not in urls_to_remove]
             self.url_input.blockSignals(True)
             self.url_input.setPlainText("\n".join(remaining))
             self.url_input.blockSignals(False)

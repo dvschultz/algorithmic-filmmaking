@@ -83,7 +83,10 @@ def test_yolo_labels(browser_with_clips, qapp):
 
 def test_yolo_total_count_gt(browser_with_clips, qapp):
     browser, src = browser_with_clips
-    det = lambda label: {"label": label, "confidence": 0.9, "bbox": [0, 0, 10, 10]}
+
+    def det(label):
+        return {"label": label, "confidence": 0.9, "bbox": [0, 0, 10, 10]}
+
     _add(browser, src, "c1", detected_objects=[det("person")])
     _add(browser, src, "c2", detected_objects=[det("person"), det("person"), det("car")])
     _add(browser, src, "c3", detected_objects=[])
@@ -96,7 +99,10 @@ def test_yolo_total_count_gt(browser_with_clips, qapp):
 
 def test_yolo_per_label_rules(browser_with_clips, qapp):
     browser, src = browser_with_clips
-    det = lambda label: {"label": label, "confidence": 0.9, "bbox": [0, 0, 10, 10]}
+
+    def det(label):
+        return {"label": label, "confidence": 0.9, "bbox": [0, 0, 10, 10]}
+
     _add(browser, src, "c1", detected_objects=[det("person")])
     _add(browser, src, "c2", detected_objects=[det("person"), det("person"), det("car")])
     _add(browser, src, "c3", detected_objects=[det("car"), det("car")])
@@ -167,7 +173,10 @@ def test_filter_state_change_triggers_grid_rebuild(browser_with_clips, qapp):
     but the grid never refiltered.
     """
     browser, src = browser_with_clips
-    det = lambda label: {"label": label, "confidence": 0.9, "bbox": [0, 0, 10, 10]}
+
+    def det(label):
+        return {"label": label, "confidence": 0.9, "bbox": [0, 0, 10, 10]}
+
     _add(browser, src, "c1", detected_objects=[det("person")])
     _add(browser, src, "c2", detected_objects=[det("car")])
     _add(browser, src, "c3", detected_objects=[])

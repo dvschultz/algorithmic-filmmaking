@@ -98,7 +98,6 @@ def test_set_options_after_selection_clears_selection(qapp):
 
 def test_theme_refresh_does_not_crash(qapp):
     from ui.widgets.chip_group import ChipGroup
-    from ui.theme import theme
     group = ChipGroup()
     group.set_options([("a", "A")])
     # Just trigger the refresh; assert stylesheet non-empty

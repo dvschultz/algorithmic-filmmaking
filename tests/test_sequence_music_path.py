@@ -3,7 +3,7 @@
 from pathlib import Path
 import tempfile
 
-from models.sequence import Sequence, Track
+from models.sequence import Sequence
 
 
 def test_music_path_default_none():

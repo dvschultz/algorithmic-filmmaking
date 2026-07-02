@@ -5,7 +5,6 @@ visible items are painted. Critical for handling 10,000+ frames efficiently.
 """
 
 import logging
-from pathlib import Path
 from typing import Optional
 
 from PySide6.QtWidgets import (
@@ -25,7 +24,7 @@ from PySide6.QtCore import (
     QRect,
     QPoint,
 )
-from PySide6.QtGui import QPixmap, QPixmapCache, QPainter, QColor, QFont, QPen
+from PySide6.QtGui import QPixmap, QPixmapCache, QPainter, QColor, QPen
 
 from models.frame import Frame
 from ui.theme import theme, TypeScale, Spacing, Radii

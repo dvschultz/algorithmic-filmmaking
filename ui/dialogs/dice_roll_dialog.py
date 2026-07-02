@@ -6,7 +6,6 @@ before being placed on the timeline.
 """
 
 import logging
-from pathlib import Path
 
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -19,7 +18,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PySide6.QtCore import Qt, Signal, Slot
+from PySide6.QtCore import Signal, Slot
 
 from core.remix import generate_sequence, assign_random_transforms
 from core.remix.prerender import prerender_batch, get_transform_cache_dir

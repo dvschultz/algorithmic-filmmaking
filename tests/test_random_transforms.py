@@ -8,9 +8,7 @@ Covers:
 - Reverse safety limit (>15s clips skip reverse)
 """
 
-import random
 
-import pytest
 
 from models.sequence import SequenceClip, Sequence
 from core.remix import assign_random_transforms

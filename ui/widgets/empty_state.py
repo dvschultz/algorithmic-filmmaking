@@ -4,7 +4,7 @@ from PySide6.QtWidgets import QVBoxLayout, QLabel, QWidget
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QPainter, QColor, QLinearGradient, QBrush
 
-from ui.theme import theme, TypeScale, Spacing
+from ui.theme import theme, TypeScale
 
 
 class EmptyStateWidget(QWidget):

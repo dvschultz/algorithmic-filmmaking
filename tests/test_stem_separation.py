@@ -1,11 +1,7 @@
 """Tests for the stem separation module."""
 
-import hashlib
-import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
-import pytest
 
 from core.analysis.stem_separation import (
     STEM_NAMES,

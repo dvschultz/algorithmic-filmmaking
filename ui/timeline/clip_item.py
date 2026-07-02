@@ -5,10 +5,9 @@ from pathlib import Path
 from PySide6.QtWidgets import (
     QGraphicsRectItem,
     QGraphicsItem,
-    QGraphicsTextItem,
 )
 from PySide6.QtCore import Qt, QRectF
-from PySide6.QtGui import QBrush, QColor, QPen, QPixmap, QPainter
+from PySide6.QtGui import QBrush, QPen, QPixmap, QPainter
 
 from models.sequence import SequenceClip
 from ui.theme import theme

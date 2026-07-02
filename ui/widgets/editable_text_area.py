@@ -4,8 +4,7 @@ A text area that can be clicked to edit inline, with auto-save on blur/Ctrl+Ente
 and Escape to cancel. Uses dual-widget approach (QLabel + QTextEdit).
 """
 
-from PySide6.QtCore import Qt, Signal, Slot
-from PySide6.QtGui import QKeyEvent
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QTextEdit, QSizePolicy
 
 from ui.theme import theme

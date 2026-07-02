@@ -5,7 +5,6 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-import pytest
 
 from core.ffmpeg import estimate_extraction_size, extract_frames_batch
 

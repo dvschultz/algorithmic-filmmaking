@@ -33,7 +33,9 @@ from core.transcription_models import (
     WordTimestamp,
 )
 from core.transcription_segmentation import refine_transcript_segments
-from core.transcription_storage import (
+# Re-exported for callers (and tests) that import these disk-space helpers
+# from core.transcription rather than core.transcription_storage.
+from core.transcription_storage import (  # noqa: F401
     estimate_transcription_required_disk_bytes,
     format_bytes,
     validate_transcription_disk_space,

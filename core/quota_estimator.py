@@ -29,7 +29,6 @@ on ``should_warn`` to decide whether to show the dialog.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 
 # Per-operation heuristic constants. Tunable as a single module-level

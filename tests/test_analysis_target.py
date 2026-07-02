@@ -1,6 +1,5 @@
 """Tests for AnalysisTarget and worker integration with Frame objects."""
 
-import tempfile
 from pathlib import Path
 
 import pytest

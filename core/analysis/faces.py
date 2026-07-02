@@ -76,7 +76,6 @@ def _load_insightface():
         if _model is None:
             logger.info("Loading InsightFace model...")
 
-            import insightface
 
             try:
                 import certifi

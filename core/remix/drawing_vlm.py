@@ -443,7 +443,6 @@ def interpret_drawing_vlm(
     Returns:
         List of DrawingSegments, one per visual slice.
     """
-    import asyncio
 
     canvas_width = image.width()
     if canvas_width == 0 or image.height() == 0:

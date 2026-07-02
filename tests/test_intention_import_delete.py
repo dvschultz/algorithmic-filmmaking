@@ -3,7 +3,6 @@
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import Qt
 
 
 @pytest.fixture

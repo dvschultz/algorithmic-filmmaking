@@ -7,9 +7,9 @@ from PySide6.QtWidgets import (
     QPushButton,
     QLabel,
 )
-from PySide6.QtCore import Qt, Signal, QThread
+from PySide6.QtCore import Signal, QThread
 
-from models.sequence import Sequence, SequenceClip
+from models.sequence import Sequence
 from models.clip import Clip, Source
 from ui.timeline.timeline_scene import TimelineScene
 from ui.timeline.timeline_view import TimelineView

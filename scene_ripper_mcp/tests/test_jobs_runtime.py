@@ -18,7 +18,6 @@ from scene_ripper_mcp.jobs.store import (
     STATUS_COMPLETED,
     STATUS_FAILED,
     STATUS_QUEUED,
-    STATUS_RUNNING,
 )
 
 

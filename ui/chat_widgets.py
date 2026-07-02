@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget
 )
 
-from ui.theme import theme, TypeScale, Spacing, Radii
+from ui.theme import theme, TypeScale
 
 
 class MessageBubble(QFrame):

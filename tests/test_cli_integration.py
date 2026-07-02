@@ -6,10 +6,8 @@ detect → analyze → export
 
 import json
 import os
-import subprocess
 import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock
 
 import pytest
 from click.testing import CliRunner

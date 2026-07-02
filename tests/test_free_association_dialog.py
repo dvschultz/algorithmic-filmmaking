@@ -136,7 +136,6 @@ class TestFirstClipSelection:
 class TestProposalFlow:
     def test_proposal_ready_transitions_to_proposal_page(self, qapp):
         from ui.dialogs.free_association_dialog import (
-            PAGE_FIRST_CLIP_SELECT,
             PAGE_PROPOSAL,
         )
 

@@ -6,7 +6,6 @@ Covers:
 - P1.3: mlx-whisper transcription backend
 """
 
-import platform
 import sys
 from types import ModuleType
 from unittest.mock import patch

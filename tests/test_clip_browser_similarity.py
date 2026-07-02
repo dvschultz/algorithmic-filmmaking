@@ -1,7 +1,6 @@
 """Tests for ClipBrowser similarity mode (Find Similar / Clear Similarity)."""
 
 import sys
-import math
 import pytest
 from pathlib import Path
 from typing import Optional

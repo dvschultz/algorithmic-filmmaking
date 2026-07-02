@@ -157,8 +157,8 @@ def _import_mpv():
 
 mpv = None  # Loaded lazily to avoid libmpv/PyAV FFmpeg dylib collisions at startup.
 
-from core.constants import PLAYBACK_SPEEDS, DEFAULT_SPEED_INDEX
-from ui.theme import theme, TypeScale, Spacing, UISizes
+from core.constants import PLAYBACK_SPEEDS, DEFAULT_SPEED_INDEX  # noqa: E402
+from ui.theme import theme, TypeScale, Spacing, UISizes  # noqa: E402
 
 logger = logging.getLogger(__name__)
 

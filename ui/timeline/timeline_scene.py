@@ -1,10 +1,10 @@
 """Timeline scene holding all timeline items."""
 
 from PySide6.QtWidgets import QGraphicsScene
-from PySide6.QtCore import Signal, QRectF, QTimer
-from PySide6.QtGui import QColor, QPen, QBrush
+from PySide6.QtCore import Signal, QTimer
+from PySide6.QtGui import QBrush
 
-from models.sequence import Sequence, Track, SequenceClip
+from models.sequence import Sequence, SequenceClip
 from ui.theme import theme
 
 
@@ -268,7 +268,7 @@ class TimelineScene(QGraphicsScene):
             samples: Mono audio samples (numpy array)
             duration: Audio duration in seconds
         """
-        from ui.timeline.audio_track_item import AudioTrackItem, AUDIO_TRACK_HEIGHT
+        from ui.timeline.audio_track_item import AudioTrackItem
 
         if self._audio_track_item is None:
             audio_y = self.RULER_HEIGHT + len(self.sequence.tracks) * (

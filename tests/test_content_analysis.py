@@ -3,17 +3,17 @@
 import importlib.util
 import tempfile
 from pathlib import Path
-from unittest.mock import Mock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 _has_torch = importlib.util.find_spec("torch") is not None
 
-from models.clip import Source, Clip
-from core.project import Project
+from models.clip import Source, Clip  # noqa: E402
+from core.project import Project  # noqa: E402
 
 # Import shared test helpers from conftest.py
-from tests.conftest import make_test_clip
+from tests.conftest import make_test_clip  # noqa: E402
 
 
 def _create_filter_test_project() -> Project:

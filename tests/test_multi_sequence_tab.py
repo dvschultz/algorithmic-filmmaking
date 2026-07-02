@@ -1,7 +1,6 @@
 """Tests for multi-sequence UI in the Sequence tab (Units 3-7)."""
 
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
 
 import pytest
 

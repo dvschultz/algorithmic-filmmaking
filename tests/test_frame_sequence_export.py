@@ -3,16 +3,15 @@
 import shutil
 import subprocess
 from pathlib import Path
-from tempfile import TemporaryDirectory
 
 import pytest
 
-from core.edl_export import EDLExportConfig, export_edl, frames_to_timecode
+from core.edl_export import EDLExportConfig, export_edl
 from core.sequence_export import ExportConfig, SequenceExporter
 from core.srt_export import SRTExportConfig, export_srt
 from models.clip import Clip, Source
 from models.frame import Frame
-from models.sequence import Sequence, SequenceClip, Track
+from models.sequence import Sequence, SequenceClip
 
 
 # -- Helpers -----------------------------------------------------------------
@@ -156,13 +155,13 @@ class TestEDLExportFrameEntries:
         assert result is True
 
         content = edl_path.read_text()
-        clip_lines = [l for l in content.split("\n") if l.startswith("* FROM CLIP NAME:")]
+        clip_lines = [line for line in content.split("\n") if line.startswith("* FROM CLIP NAME:")]
         # Two FROM CLIP NAME comments: one for video, one for frame
         assert len(clip_lines) == 2
         assert "video.mp4" in clip_lines[0]
         assert "Frame 42" in clip_lines[1]
         # Source file path comment for clip-based entries
-        source_lines = [l for l in content.split("\n") if l.startswith("* SOURCE FILE:")]
+        source_lines = [line for line in content.split("\n") if line.startswith("* SOURCE FILE:")]
         assert len(source_lines) == 1
         assert "video.mp4" in source_lines[0]
 

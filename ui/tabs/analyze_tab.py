@@ -1,7 +1,6 @@
 """Analyze tab for clip analysis features."""
 
 import logging
-from typing import Optional
 
 from PySide6.QtWidgets import (
     QVBoxLayout,

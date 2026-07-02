@@ -4,10 +4,9 @@ All tests work WITHOUT mediapipe installed. Pure logic functions are tested
 directly; functions requiring mediapipe use unittest.mock to mock imports.
 """
 
-import math
 from collections import namedtuple
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest

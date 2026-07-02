@@ -4,7 +4,7 @@ import logging
 import random
 from typing import List, Tuple, Any, Optional
 from core.remix.shuffle import constrained_shuffle
-from core.analysis.color import get_primary_hue, rgb_to_hsv
+from core.analysis.color import get_primary_hue
 from core.analysis.shots import SHOT_TYPES
 from core.remix.audio_sync import (
     AlignmentSuggestion,

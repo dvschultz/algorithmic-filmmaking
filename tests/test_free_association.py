@@ -7,7 +7,6 @@ import numpy as np
 import pytest
 
 from core.remix.free_association import (
-    DEFAULT_SHORTLIST_SIZE,
     _parse_proposal_response,
     build_id_mapping,
     format_clip_digest,

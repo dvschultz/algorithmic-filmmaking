@@ -2,14 +2,12 @@
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QDialog,
     QDialogButtonBox,
     QGroupBox,
-    QHBoxLayout,
     QLabel,
     QRadioButton,
     QVBoxLayout,

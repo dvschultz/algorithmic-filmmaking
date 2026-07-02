@@ -18,7 +18,7 @@ import tempfile
 import threading
 import uuid
 from pathlib import Path
-from typing import Optional, Literal
+from typing import Optional
 
 from PIL import Image
 
@@ -780,7 +780,7 @@ def describe_frame(
                         logger.debug(f"Cleaned up temp video: {temp_video}")
 
         # Frame-based description (default or when video mode not selected)
-        logger.info(f"Using frame mode for description")
+        logger.info("Using frame mode for description")
         desc = describe_frame_cloud(image_path, prompt)
         return desc, settings.description_model_cloud
 
@@ -814,10 +814,8 @@ def clear_model_cache(model_id: str = "vikhyatk/moondream2") -> bool:
         True if cache was cleared, False if cache dir not found.
     """
     import shutil  # needed for shutil.rmtree
-    from huggingface_hub import HfFolder
 
     try:
-        from huggingface_hub import cached_assets_path
         from huggingface_hub.constants import HF_HUB_CACHE
 
         cache_dir = Path(HF_HUB_CACHE)

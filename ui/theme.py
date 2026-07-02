@@ -16,7 +16,7 @@ Usage:
     theme().changed.connect(self._on_theme_changed)
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 from PySide6.QtWidgets import QApplication

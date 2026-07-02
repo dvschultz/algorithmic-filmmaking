@@ -1,7 +1,10 @@
 """Sequence tab for timeline editing and playback with card-based sorting."""
 
 import logging
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from models.sequence import Sequence
 
 from PySide6.QtWidgets import (
     QVBoxLayout,
@@ -34,13 +37,13 @@ from core.settings import get_llm_api_key, get_replicate_api_key, load_settings,
 
 logger = logging.getLogger(__name__)
 
-from ui.algorithm_config import ALGORITHM_CONFIG, get_algorithm_config, get_algorithm_label
+from ui.algorithm_config import ALGORITHM_CONFIG, get_algorithm_config, get_algorithm_label  # noqa: E402
 
 # Reverse lookup: display label -> algorithm key
 _LABEL_TO_KEY = {cfg["label"]: key for key, cfg in ALGORITHM_CONFIG.items()}
 
 # Gaze category filter options: (display_label, internal_key_or_None)
-from core.analysis.gaze import GAZE_CATEGORY_DISPLAY
+from core.analysis.gaze import GAZE_CATEGORY_DISPLAY  # noqa: E402
 
 GAZE_FILTER_OPTIONS: list[tuple[str, str | None]] = [
     ("All Gaze", None),
@@ -1459,7 +1462,7 @@ class SequenceTab(BaseTab):
             self._create_and_activate_sequence("staccato")
             self.timeline.clear_timeline()
 
-            first_clip, first_source = sequence_clips[0][0], sequence_clips[0][1]
+            first_source = sequence_clips[0][1]
             fps = first_source.fps
             self.timeline.set_fps(fps)
             self.video_player.load_video(first_source.file_path)

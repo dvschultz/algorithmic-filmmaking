@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 
-from ui.theme import theme, UISizes, TypeScale, Spacing, Radii
+from ui.theme import theme, UISizes, TypeScale, Radii
 from core.film_glossary import (
     FILM_GLOSSARY,
     GLOSSARY_CATEGORIES,
@@ -143,7 +143,7 @@ class GlossaryDialog(QDialog):
         self.definition_display = QTextBrowser()
         self.definition_display.setOpenExternalLinks(False)
         self.definition_display.setStyleSheet(
-            f"QTextBrowser {{ background-color: transparent; border: none; }}"
+            "QTextBrowser { background-color: transparent; border: none; }"
         )
         self.definition_display.setPlaceholderText("Select a term to see its definition.")
         definition_layout.addWidget(self.definition_display)

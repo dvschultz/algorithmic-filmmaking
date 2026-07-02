@@ -13,13 +13,11 @@ values are shared across tabs.
 
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal, Slot
+from PySide6.QtCore import Signal, Slot
 from PySide6.QtWidgets import (
     QButtonGroup,
-    QFrame,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QPushButton,
     QRadioButton,
     QScrollArea,

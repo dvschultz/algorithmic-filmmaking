@@ -7,7 +7,6 @@ the same pattern used in tests/test_gaze_worker.py.
 
 from unittest.mock import patch
 
-import pytest
 
 
 def _worker_args():

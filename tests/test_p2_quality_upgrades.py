@@ -8,7 +8,6 @@ Covers:
 """
 
 import json
-import platform
 
 from core.settings import Settings, _settings_to_json, _load_from_json
 

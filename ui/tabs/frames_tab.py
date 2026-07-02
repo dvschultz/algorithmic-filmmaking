@@ -2,14 +2,12 @@
 
 import logging
 from pathlib import Path
-from typing import Optional
 
 from PySide6.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QWidget,
     QStackedWidget,
     QComboBox,
     QSpinBox,
@@ -22,7 +20,6 @@ from .base_tab import BaseTab
 from ui.frame_browser import FrameBrowser
 from ui.widgets import EmptyStateWidget
 from ui.theme import theme, UISizes, TypeScale, Spacing
-from models.frame import Frame
 
 logger = logging.getLogger(__name__)
 

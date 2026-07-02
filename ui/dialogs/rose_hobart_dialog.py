@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from PySide6.QtCore import Qt, Signal, Slot
-from PySide6.QtGui import QFont, QImage, QPainter, QPen, QPixmap
+from PySide6.QtGui import QFont, QPainter, QPen, QPixmap
 
 from core.analysis.faces import SENSITIVITY_PRESETS, order_matched_clips
 from ui.theme import theme, UISizes

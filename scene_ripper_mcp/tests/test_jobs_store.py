@@ -13,7 +13,6 @@ import pytest
 from scene_ripper_mcp.jobs.store import (
     JobNotFoundError,
     JobStore,
-    STATUS_CANCELLED,
     STATUS_COMPLETED,
     STATUS_CRASHED,
     STATUS_FAILED,

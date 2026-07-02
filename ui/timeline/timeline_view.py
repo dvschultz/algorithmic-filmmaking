@@ -2,7 +2,7 @@
 
 from PySide6.QtWidgets import QGraphicsView
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QPainter, QColor, QPen, QFont
+from PySide6.QtGui import QPainter, QPen, QFont
 
 from ui.theme import theme
 

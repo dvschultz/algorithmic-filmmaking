@@ -22,6 +22,20 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["cli*", "core*", "models*", "ui*", "scene_ripper_mcp*"]
 
+[tool.ruff]
+exclude = [
+    "build",
+    "vendor",
+    "prototypes",
+    "replicate",
+    "todos",
+    "test_clips",
+    "recording-issue-capture",
+    "scripts",
+    "packaging",
+    "docs",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]

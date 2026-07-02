@@ -1,11 +1,7 @@
 """Tests for clip disabled feature: model field, project toggle, undo command, and downstream filtering."""
 
-import json
-import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock
 
-import pytest
 
 from models.clip import Clip, Source
 from core.project import Project, save_project, load_project

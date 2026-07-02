@@ -1,7 +1,6 @@
 """Unit tests for tool executor module."""
 
-import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from core.tool_executor import ToolExecutor
 from core.chat_tools import ToolRegistry
@@ -105,7 +104,6 @@ class TestToolExecution:
 
     def test_conflicts_with_workers_blocks_when_busy(self):
         """Test that tools with conflicts_with_workers=True are blocked when busy."""
-        from unittest.mock import MagicMock
 
         registry = ToolRegistry()
 
@@ -134,7 +132,6 @@ class TestToolExecution:
 
     def test_no_conflict_flag_ignores_busy_check(self):
         """Test that tools without conflicts_with_workers ignore busy_check."""
-        from unittest.mock import MagicMock
 
         registry = ToolRegistry()
 

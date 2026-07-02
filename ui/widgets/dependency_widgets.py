@@ -361,7 +361,7 @@ def prompt_feature_download(
         return False
 
     dialog = DependencyDownloadDialog(
-        title=f"Installing dependencies",
+        title="Installing dependencies",
         message=f"Downloading {missing_str} (~{size_mb} MB)...",
         install_func=lambda cb: install_for_feature(feature_name, cb),
         parent=parent_widget,

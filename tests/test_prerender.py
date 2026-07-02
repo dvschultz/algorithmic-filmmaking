@@ -9,12 +9,10 @@ Covers:
 - Project save/load copies and resolves prerendered files
 """
 
-import subprocess
 from pathlib import Path
 from threading import Event
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from core.remix.prerender import (
     _REVERSE_MAX_DURATION,
@@ -262,7 +260,7 @@ class TestPrerenderBatch:
         transforms = {"hflip": False, "vflip": False, "reverse": False}
 
         progress_calls = []
-        results = prerender_batch(
+        prerender_batch(
             clips_with_transforms=[(clip, source, transforms)],
             output_dir=tmp_path,
             progress_cb=lambda c, t: progress_calls.append((c, t)),

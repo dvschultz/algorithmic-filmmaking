@@ -8,7 +8,7 @@ and rebuilds on every change.
 
 from typing import Optional
 
-from PySide6.QtCore import Signal, Slot
+from PySide6.QtCore import Slot
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QPushButton,

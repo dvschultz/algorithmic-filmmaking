@@ -1,6 +1,6 @@
 """Tests for the embeddings feature in the feature registry."""
 
-from core.feature_registry import FEATURE_DEPS, check_feature
+from core.feature_registry import FEATURE_DEPS
 
 
 class TestEmbeddingsFeatureDeps:

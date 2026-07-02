@@ -14,7 +14,6 @@ Shot types:
 import base64
 import json
 import logging
-import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -45,7 +44,6 @@ SHOT_TYPE_SIMPLIFIED = {
 def get_replicate_api_key() -> Optional[str]:
     """Get Replicate API key from settings or environment."""
     import os
-    from core.settings import load_settings
 
     # Check environment first
     env_key = os.environ.get("REPLICATE_API_TOKEN")
@@ -99,7 +97,7 @@ def classify_shot_cloud(
     from core.llm_client import complete_routed
 
     from core.analysis.shots import SHOT_TYPES
-    from core.settings import get_gemini_api_key, load_settings
+    from core.settings import get_gemini_api_key
 
     model = model or _DEFAULT_CLOUD_MODEL
 

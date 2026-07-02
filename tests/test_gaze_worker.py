@@ -5,7 +5,7 @@ All core.analysis.gaze functions are mocked.
 """
 
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 

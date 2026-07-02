@@ -54,7 +54,7 @@ import secrets
 import socket
 import urllib.parse
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Optional
 
 import httpx
 

@@ -23,7 +23,7 @@ from PySide6.QtNetwork import QNetworkAccessManager
 
 from ui.theme import theme, UISizes
 from ui.youtube_result_thumbnail import YouTubeResultThumbnail
-from core.youtube_api import YouTubeVideo, ASPECT_RATIO_RANGES, RESOLUTION_THRESHOLDS, SIZE_LIMITS, DURATION_RANGES
+from core.youtube_api import YouTubeVideo, ASPECT_RATIO_RANGES
 from core.internet_archive_api import InternetArchiveVideo
 
 

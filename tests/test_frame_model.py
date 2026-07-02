@@ -1,7 +1,6 @@
 """Unit tests for Frame model and Project frame management."""
 
 import json
-import tempfile
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -9,7 +8,7 @@ import pytest
 
 from models.frame import Frame
 from models.sequence import SequenceClip
-from core.project import Project, ProjectMetadata, save_project, load_project, SCHEMA_VERSION
+from core.project import Project, save_project, load_project, SCHEMA_VERSION
 
 
 class TestFrameCreation:
@@ -494,8 +493,6 @@ class TestProjectFramePersistence:
 
     def test_save_load_with_frames(self, tmp_path):
         """Test save/load round trip with frames."""
-        from models.clip import Source
-
         project_file = tmp_path / "test_project.json"
 
         # Create frame files
@@ -505,7 +502,6 @@ class TestProjectFramePersistence:
             (frame_dir / f"frame_{i:06d}.png").write_text("fake png")
 
         # Create project with frames
-        source = Source(id="src-1", file_path=Path("/test/video.mp4"))
         frames = [
             Frame(
                 id=f"f{i}",

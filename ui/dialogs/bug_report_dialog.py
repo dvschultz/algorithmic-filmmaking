@@ -164,12 +164,6 @@ class BugReportDialog(QDialog):
         title = self._get_description()[:100]
         body = self._build_body(include_logs=True, max_lines=_MAX_LOG_LINES_GITHUB)
 
-        params = urllib.parse.urlencode({
-            "title": title,
-            "body": body,
-            "labels": "bug",
-        })
-
         def _github_url(t, b):
             p = urllib.parse.urlencode({"title": t, "body": b, "labels": "bug"})
             return f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/issues/new?{p}"

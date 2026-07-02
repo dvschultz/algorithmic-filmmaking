@@ -78,9 +78,8 @@ class FFmpegProcessor:
             accurate,
         )
 
-        # Calculate end time, subtract one frame to exclude first frame of next scene
+        # Subtract one frame so the cut excludes the first frame of the next scene
         frame_duration = 1.0 / fps
-        end_seconds = start_seconds + duration_seconds - frame_duration
 
         if accurate:
             # Re-encode for frame-accurate cutting

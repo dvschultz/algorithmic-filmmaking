@@ -3,7 +3,6 @@
 import pytest
 
 from core.analysis_operations import (
-    AnalysisOperation,
     ANALYSIS_OPERATIONS,
     OPERATIONS_BY_KEY,
     LOCAL_OPS,

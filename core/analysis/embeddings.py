@@ -15,7 +15,6 @@ from pathlib import Path
 
 from core.binary_resolver import find_binary, get_subprocess_kwargs
 
-import numpy as np
 from PIL import Image
 
 logger = logging.getLogger(__name__)

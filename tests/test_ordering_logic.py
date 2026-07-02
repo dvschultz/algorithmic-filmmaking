@@ -10,7 +10,6 @@ Tests cover:
 
 from pathlib import Path
 
-import pytest
 
 from core.analysis.faces import order_matched_clips
 from models.clip import Clip, Source

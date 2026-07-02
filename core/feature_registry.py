@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from core.binary_resolver import find_binary
-from core.dependency_manager import is_binary_available, is_package_available
+from core.dependency_manager import is_package_available
 
 logger = logging.getLogger(__name__)
 

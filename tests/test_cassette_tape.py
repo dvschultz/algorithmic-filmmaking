@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-import pytest
 
 from core.remix.cassette_tape import (
     MatchResult,

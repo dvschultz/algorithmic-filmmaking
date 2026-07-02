@@ -263,8 +263,8 @@ def _generate_pacing_section(analysis) -> str:
 
     section = ["## Pacing & Rhythm", ""]
 
-    section.append(f"| Metric | Value |")
-    section.append(f"|--------|-------|")
+    section.append("| Metric | Value |")
+    section.append("|--------|-------|")
     section.append(f"| Classification | {pacing.classification.replace('_', ' ').title()} |")
     section.append(f"| Average Shot Duration | {pacing.average_duration:.2f}s |")
     section.append(f"| Shortest Shot | {pacing.min_duration:.2f}s |")
@@ -294,8 +294,8 @@ def _generate_visual_consistency_section(analysis) -> str:
 
     section = ["## Visual Consistency", ""]
 
-    section.append(f"| Aspect | Score/Value |")
-    section.append(f"|--------|-------------|")
+    section.append("| Aspect | Score/Value |")
+    section.append("|--------|-------------|")
     section.append(f"| Color Consistency | {vc.color_consistency:.0%} |")
     section.append(f"| Lighting Consistency | {vc.lighting_consistency:.0%} |")
     section.append(f"| Shot Size Variety | {vc.shot_size_variety} types |")

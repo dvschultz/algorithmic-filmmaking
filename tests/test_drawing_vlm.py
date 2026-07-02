@@ -20,7 +20,6 @@ from core.remix.drawing_segment import DrawingSegment
 # Guard Qt imports for CI environments without PySide6
 try:
     from PySide6.QtGui import QImage, QPainter, QColor
-    from PySide6.QtCore import Qt
 
     HAS_QT = True
 except ImportError:

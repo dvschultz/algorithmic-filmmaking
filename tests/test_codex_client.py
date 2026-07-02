@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import urllib.parse
 
 import httpx
 import pytest
 
-from core import codex_client
 from core.codex_client import (
     CodexBackendError,
     CodexError,

@@ -9,7 +9,6 @@ Tests cover:
 
 import math
 import numpy as np
-import pytest
 
 from core.analysis.faces import average_embeddings, compare_faces, SENSITIVITY_PRESETS
 from models.clip import Clip

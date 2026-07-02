@@ -55,7 +55,6 @@ async def get_sequence(
             )
 
         sources_by_id = project.sources_by_id
-        clips_by_id = project.clips_by_id
 
         # Build track data
         tracks_data = []

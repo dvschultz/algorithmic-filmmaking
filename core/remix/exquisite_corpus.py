@@ -156,7 +156,6 @@ def generate_poem(
     settings = load_settings()
     model = model or settings.exquisite_corpus_model or f"ollama/{settings.ollama_model}"
     temperature = settings.exquisite_corpus_temperature
-    original_model = model
 
     logger.info(f"Generating poem with mood: '{mood_prompt}', length: '{length}', form: '{form}' using model: {model}, temperature: {temperature}")
 

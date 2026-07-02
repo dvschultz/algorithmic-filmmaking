@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QWidget,
     QStackedWidget,
 )
-from PySide6.QtCore import Signal, Qt
+from PySide6.QtCore import Signal
 
 from .base_tab import BaseTab
 from ui.widgets import EmptyStateWidget

@@ -1,6 +1,5 @@
 """Tests for custom visual query evaluation."""
 
-import pytest
 
 from core.analysis.custom_query import _parse_yes_no_response, _build_query_prompt
 
