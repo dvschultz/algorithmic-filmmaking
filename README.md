@@ -14,7 +14,7 @@ Scene Ripper analyzes video files to detect scene boundaries, enriches clips wit
 - Film language analysis with scene reports and editing suggestions
 - Integrated chat agent for AI-assisted editing
 - Thumbnail grid browser with collapsible source headers
-- 21 sequencing modes including sort, similarity, audio, text, gaze, reference, and drawing-guided workflows
+- 23 sequencing modes including sort, similarity, audio, text, gaze, reference, and drawing-guided workflows
 - DINOv2 Visual Match for visual similarity workflows ([details](docs/user-guide/visual-match.md))
 - Export individual clips or complete sequences
 - YouTube/Internet Archive import
@@ -139,13 +139,14 @@ python main.py
 
 **Tab-Based Workflow:**
 
-The app uses a 5-tab workflow, though you can skip or revisit tabs as needed:
+The app uses a 6-tab workflow, though you can skip or revisit tabs as needed:
 
 | Tab | Purpose |
 |-----|---------|
 | **Collect** | Import videos (local files, YouTube, Internet Archive) |
 | **Cut** | Detect scenes and browse clips |
 | **Analyze** | Enrich clips with AI metadata (descriptions, transcripts, etc.) |
+| **Frames** | Extract and browse individual frames from clips |
 | **Sequence** | Arrange clips using various sequencing modes |
 | **Render** | Export final video or EDL |
 
@@ -360,13 +361,14 @@ See `requirements.txt` for the full list.
 
 **macOS:**
 ```bash
-brew install ffmpeg
+# libmpv is required for video playback when running from source
+brew install ffmpeg mpv
 ```
 
 **Linux (Ubuntu/Debian):**
 ```bash
-# FFmpeg and Qt multimedia backend (GStreamer)
-sudo apt install ffmpeg \
+# FFmpeg, libmpv (video playback), and Qt multimedia backend (GStreamer)
+sudo apt install ffmpeg libmpv-dev \
     gstreamer1.0-plugins-good \
     gstreamer1.0-plugins-bad \
     gstreamer1.0-plugins-ugly \
@@ -393,6 +395,16 @@ sudo pacman -S ffmpeg \
 
 **Windows:**
 Download FFmpeg from [ffmpeg.org](https://ffmpeg.org/download.html) and add to PATH
+
+### On-Demand Components
+
+Some features install their dependencies the first time you use them, after showing an install prompt in the app. This includes:
+
+- **Python packages** (installed via pip into the app's managed packages directory): PyTorch, ultralytics (object detection), InsightFace (faces), PaddleOCR (text extraction), librosa (audio), Demucs (stem separation), MLX packages on Apple Silicon, and others.
+- **Binaries**: FFmpeg/FFprobe (if not found on your system), yt-dlp (video download), Deno.
+- **Model weights**: YOLO, MediaPipe, and local vision/embedding models.
+
+Everything lands in the platform app-support directory (see paths below) — never in system locations — and can be removed by deleting that directory. Nothing is downloaded until you use a feature that needs it.
 
 ## CLI
 
@@ -435,7 +447,7 @@ python -m cli.main --help
 - [x] Transcription (faster-whisper)
 - [x] Color analysis with direction control
 - [x] Integrated chat agent
-- [x] 21 sequencer algorithms
+- [x] 23 sequencer algorithms
 - [x] CLI for batch processing
 - [x] Project save/load
 - [x] Intention-first workflow
@@ -449,3 +461,11 @@ python -m cli.main --help
 - [ ] FAISS vector similarity search
 - [ ] Model/view timeline virtualization
 - [ ] Motion-based ordering
+
+## Contributing
+
+Developer setup, project structure, conventions, and build/test/release commands live in [AGENTS.md](AGENTS.md) — it doubles as the contributor guide. Releases are documented in [docs/releases.md](docs/releases.md).
+
+## License
+
+Scene Ripper's own code is [MIT licensed](LICENSE). Packaged builds bundle third-party components under their own licenses (FFmpeg, mpv, Sparkle, and on-demand ML packages).

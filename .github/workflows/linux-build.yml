@@ -95,8 +95,14 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "push" ] && [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
+            # Tag builds must match pyproject.toml — the single version source is the git tag.
+            PYPROJECT_VERSION="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
+            if [ "${VERSION}" != "${PYPROJECT_VERSION}" ]; then
+              echo "::error::Tag ${GITHUB_REF_NAME} (${VERSION}) does not match pyproject.toml version (${PYPROJECT_VERSION}). Bump pyproject.toml before tagging."
+              exit 1
+            fi
           elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ github.event.inputs.version || '0.1.0' }}"
+            VERSION="${{ github.event.inputs.version || '0.4.10' }}"
           else
             VERSION="dev-${GITHUB_SHA::7}"
           fi

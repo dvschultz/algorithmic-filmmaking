@@ -1,26 +1,31 @@
 # Releases
 
-This repo ships desktop releases from Git tags.
+This repo ships desktop releases from Git tags. The tag is the single source
+of truth for the version: bump `version` in `pyproject.toml` to match the tag
+before tagging — tag builds fail CI if they disagree.
 
 ## Standard Release
 
 Use this flow when the packaging workflows are already healthy.
 
 1. Make sure `main` contains the exact commit you want to ship.
-2. Push `main`.
-3. Create a version tag in `vX.Y.Z` format.
-4. Push the tag.
-5. Wait for the macOS, Windows, and Linux workflows to finish.
-6. Confirm the GitHub release contains all release assets.
+2. Bump `version` in `pyproject.toml` to the new `X.Y.Z` and update `CHANGELOG.md`.
+3. For each informational CI job (lint, type check, macOS tests) that has been green since the previous release: flip it to required (remove its `continue-on-error: true`).
+4. Push `main`.
+5. Create a version tag in `vX.Y.Z` format.
+6. Push the tag.
+7. Wait for the macOS, Windows, and Linux workflows to finish.
+8. Confirm the GitHub release contains all release assets.
 
 ```bash
 git checkout main
 git pull --ff-only origin main
-git tag v0.1.1
+# after bumping pyproject.toml + CHANGELOG.md and committing:
+git tag v0.4.11
 git push origin main
-git push origin v0.1.1
+git push origin v0.4.11
 gh run list --limit 10
-gh release view v0.1.1
+gh release view v0.4.11
 ```
 
 ## Expected Assets

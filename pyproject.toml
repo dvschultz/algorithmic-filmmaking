@@ -1,6 +1,6 @@
 [project]
 name = "scene-ripper"
-version = "0.1.0"
+version = "0.4.10"
 description = "Video scene detection and analysis tool"
 readme = "README.md"
 requires-python = ">=3.11"

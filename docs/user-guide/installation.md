@@ -52,3 +52,12 @@ The app downloads and caches runtime tools, thumbnails, logs, and optional ML pa
 - Linux: `~/.local/share/scene-ripper/`
 
 Large local models and package installs can push this folder above 5 GB. If a model install fails, check available disk space first.
+
+## On-Demand Installs
+
+Some features install their dependencies the first time you use them, after an in-app prompt:
+
+- **Python packages** are installed via pip into the app's managed packages directory inside the app-support folder above (PyTorch, object detection, OCR, audio analysis, and similar ML libraries).
+- **Binaries** (FFmpeg/FFprobe, yt-dlp, Deno) and **model weights** (YOLO, MediaPipe, local vision models) are downloaded as needed.
+
+Nothing is installed system-wide, nothing downloads until you use a feature that needs it, and removing the app-support directory removes everything the app installed.
