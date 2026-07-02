@@ -285,7 +285,7 @@ class TestConfidenceOrder:
 class TestRandomOrder:
     """Random ordering shuffles and strips confidence."""
 
-    def test_random_returns_all_clips(self):
+    def test_random_returns_all_clips_membership(self):
         src = _make_source("s1")
         c1 = _make_clip("c1")
         c2 = _make_clip("c2")
@@ -294,6 +294,9 @@ class TestRandomOrder:
         matched = [(c1, src, 0.9), (c2, src, 0.8), (c3, src, 0.7)]
         result = order_matched_clips(matched, "random")
 
+        # "random" shuffles (order is intentionally unspecified), so this is a
+        # membership check: every input clip must appear exactly once. The sort
+        # normalizes both sides to make the comparison order-independent.
         result_ids = sorted(clip.id for clip, _ in result)
         assert result_ids == ["c1", "c2", "c3"]
 
@@ -308,7 +311,7 @@ class TestRandomOrder:
         assert len(result) == 1
         assert len(result[0]) == 2  # (Clip, Source), no confidence
 
-    def test_display_name_variant(self):
+    def test_display_name_variant_returns_all_clips_membership(self):
         src = _make_source("s1")
         c1 = _make_clip("c1")
         c2 = _make_clip("c2")
@@ -317,6 +320,8 @@ class TestRandomOrder:
         matched = [(c1, src, 0.9), (c2, src, 0.8), (c3, src, 0.7)]
         result = order_matched_clips(matched, "Random")
 
+        # The capitalized "Random" alias also shuffles, so this is a membership
+        # check: every input clip appears exactly once, order unspecified.
         result_ids = sorted(clip.id for clip, _ in result)
         assert result_ids == ["c1", "c2", "c3"]
 

@@ -1154,8 +1154,13 @@ class TestPendingActionTracking:
         steps = ["Download videos", "Run detection", "Export"]
         result = present_plan(main_window, steps, "Test workflow")
 
-        # Plan should be created directly (no keyword-scan gate)
-        assert "plan_id" in result or "action_required" not in result
+        # Plan is created directly: a plan_id is returned, the display flag is
+        # set, and there is NO naming/action gate blocking the plan.
+        assert "plan_id" in result
+        assert result["plan_id"]
+        assert result["_display_plan"] is True
+        assert result["step_count"] == 3
+        assert "action_required" not in result
 
     def test_set_project_name_returns_needs_save(self):
         """set_project_name returns needs_save flag for unsaved projects."""

@@ -340,9 +340,11 @@ class TestExportTools:
         )
 
         result_data = json.loads(result)
-        # May fail if project load is strict about source files
-        if result_data["success"]:
-            assert output_path.exists()
+        # The fixture writes the source file to disk, so load must succeed and
+        # the export must actually run — do not tolerate a silent failure.
+        assert result_data["success"], result_data
+        assert output_path.exists()
+        assert result_data["clip_count"] == 2
 
     @pytest.mark.asyncio
     async def test_export_dataset(self, export_project):
@@ -359,9 +361,11 @@ class TestExportTools:
         )
 
         result_data = json.loads(result)
-        # May fail if project load is strict
-        if result_data["success"]:
-            assert output_path.exists()
+        # The fixture writes the source file to disk, so load must succeed and
+        # the export must actually run — do not tolerate a silent failure.
+        assert result_data["success"], result_data
+        assert output_path.exists()
+        assert result_data["clip_count"] == 2
 
 
 class TestToolSchemas:
