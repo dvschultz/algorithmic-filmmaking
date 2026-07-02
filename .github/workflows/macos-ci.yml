@@ -1,0 +1,41 @@
+name: macOS CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  test-macos:
+    name: Test on macOS
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install FFmpeg
+        run: brew install ffmpeg
+
+      - name: Install dependencies
+        run: pip install -r requirements-core.txt -e ".[mcp]" pytest pytest-asyncio
+
+      - name: Run tests
+        # Informational until green across a release cycle — see docs/releases.md gate-flip rule
+        continue-on-error: true
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: pytest tests/ -v --tb=short -rs
+
+      - name: Skip-count reminder
+        if: always()
+        run: |
+          echo "Reminder: review the skip summary above (-rs). A hollow green (many skips) does not count as passing -- see docs/releases.md gate-flip rule."
