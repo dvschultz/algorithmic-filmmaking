@@ -38,7 +38,7 @@ class AnalysisTarget:
     cinematography: object = None
 
     @classmethod
-    def from_clip(cls, clip: "Clip", source: "Source") -> "AnalysisTarget":
+    def from_clip(cls, clip: "Clip", source: "Optional[Source]") -> "AnalysisTarget":
         """Create target from a Clip and its Source.
 
         Args:

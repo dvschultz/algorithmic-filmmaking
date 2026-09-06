@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+from unittest.mock import patch
+
 import pytest
 
 from core.analysis_target import AnalysisTarget
@@ -133,9 +135,11 @@ class TestWorkerTaskBuilding:
             clips=[],
             analysis_targets=[target],
         )
-        assert len(worker._tasks) == 1
-        assert worker._tasks[0].clip_id == "frame-1"
-        assert worker._tasks[0].image_path == image_file
+        with patch("core.analysis.color.extract_dominant_colors", return_value=[(1, 2, 3)]):
+            worker.run()
+        assert [(o.target_id, o.status) for o in worker.result.outcomes] == [
+            ("frame-1", "succeeded"),
+        ]
 
     def test_color_worker_skips_existing(self, image_file):
         from ui.workers.color_worker import ColorAnalysisWorker
@@ -151,7 +155,8 @@ class TestWorkerTaskBuilding:
             analysis_targets=[target],
             skip_existing=True,
         )
-        assert len(worker._tasks) == 0
+        worker.run()
+        assert worker.result.outcomes[0].status == "skipped"
 
     def test_color_worker_processes_existing_when_disabled(self, image_file):
         from ui.workers.color_worker import ColorAnalysisWorker
@@ -167,7 +172,11 @@ class TestWorkerTaskBuilding:
             analysis_targets=[target],
             skip_existing=False,
         )
-        assert len(worker._tasks) == 1
+        with patch("core.analysis.color.extract_dominant_colors", return_value=[(1, 2, 3)]):
+            worker.run()
+        assert [(o.target_id, o.status) for o in worker.result.outcomes] == [
+            ("frame-1", "succeeded"),
+        ]
 
     def test_shot_type_worker_accepts_targets(self, image_file):
         from ui.workers.shot_type_worker import ShotTypeWorker
@@ -262,7 +271,7 @@ class TestWorkerTaskBuilding:
         assert worker._analysis_targets is not None
         assert len(worker._analysis_targets) == 1
 
-    def test_target_skips_missing_image(self, tmp_path):
+    def test_target_reports_missing_image(self, tmp_path):
         from ui.workers.color_worker import ColorAnalysisWorker
 
         target = AnalysisTarget(
@@ -274,7 +283,8 @@ class TestWorkerTaskBuilding:
             clips=[],
             analysis_targets=[target],
         )
-        assert len(worker._tasks) == 0
+        worker.run()
+        assert worker.result.outcomes[0].code == "source_file_missing"
 
     def test_clips_still_work_without_targets(self, image_file):
         """Ensure existing clip-based workflow is unaffected."""
@@ -300,5 +310,8 @@ class TestWorkerTaskBuilding:
             clips=[clip],
             sources_by_id={"src-1": source},
         )
-        assert len(worker._tasks) == 1
-        assert worker._tasks[0].clip_id == "clip-1"
+        with patch("core.analysis.color.extract_dominant_colors", return_value=[(1, 2, 3)]):
+            worker.run()
+        assert [(o.target_id, o.status) for o in worker.result.outcomes] == [
+            ("clip-1", "succeeded"),
+        ]

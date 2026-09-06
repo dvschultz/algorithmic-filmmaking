@@ -3756,9 +3756,9 @@ class MainWindow(QMainWindow):
         self._color_analysis_finished_handled = False
         self._reset_analysis_run_error("colors")
         logger.info(f"Creating ColorAnalysisWorker (pipeline) for {len(clips)} clips...")
-        self.color_worker = ColorAnalysisWorker(clips, parallelism=self.settings.color_analysis_parallelism, sources_by_id=self.project.sources_by_id)
+        self.color_worker = ColorAnalysisWorker(clips, parallelism=self.settings.color_analysis_parallelism, sources_by_id=self.project.sources_by_id, project=self.project)
         self.color_worker.progress.connect(self._on_color_progress)
-        self.color_worker.color_ready.connect(self._on_color_ready)
+        self.color_worker.result_ready.connect(self._on_color_result)
         self.color_worker.error.connect(self._on_color_error)
         self.color_worker.analysis_completed.connect(
             self._on_pipeline_colors_finished, Qt.UniqueConnection
@@ -4617,7 +4617,9 @@ class MainWindow(QMainWindow):
         # card widgets are not currently realized. Notify the project once so
         # the standard `clips_updated` observer path refreshes both browsers
         # (and any other listeners) — this also marks the project dirty.
-        if clips and hasattr(self, "project") and hasattr(self.project, "update_clips"):
+        # Color batches already notify through their application adapter.
+        # Other operations still need this completion notification until migrated.
+        if clips and set(completed) - {"colors"} and hasattr(self, "project") and hasattr(self.project, "update_clips"):
             self.project.update_clips(clips)
 
         # Save project
@@ -5854,22 +5856,15 @@ class MainWindow(QMainWindow):
         """Handle color analysis progress."""
         self.progress_bar.setValue(int((current / total) * 100))
 
-    def _on_color_ready(self, clip_id: str, colors: list):
-        """Handle color extraction complete for a clip or frame."""
-        # Try clip first
-        clip = self.clips_by_id.get(clip_id)
-        if clip:
-            clip.dominant_colors = colors
-            # Update both tabs' clip browsers
-            self.cut_tab.update_clip_colors(clip_id, colors)
-            self.analyze_tab.update_clip_colors(clip_id, colors)
-            self._mark_dirty()
+    @Slot(object, object)
+    def _on_color_result(self, application, result):
+        """Apply a completed batch on the GUI thread to its originating project."""
+        if application is None or application.project is not self.project:
             return
-        # Try frame
-        frame = self.project.frames_by_id.get(clip_id)
-        if frame:
-            self.project.update_frame(clip_id, dominant_colors=colors)
-            self._mark_dirty()
+        applied = application.apply(result)
+        stale = [o for o in applied.outcomes if o.code == "stale_input"]
+        if stale:
+            self._on_color_error(f"Color results discarded for {len(stale)} changed targets. Run analysis again.")
 
     def _on_shot_type_progress(self, current: int, total: int):
         """Handle shot type classification progress."""
@@ -6893,9 +6888,10 @@ class MainWindow(QMainWindow):
                 clips=[],
                 analysis_targets=targets,
                 parallelism=self.settings.color_analysis_parallelism,
+                project=self.project,
             )
             worker.progress.connect(self._on_color_progress)
-            worker.color_ready.connect(self._on_color_ready)
+            worker.result_ready.connect(self._on_color_result)
             worker.error.connect(self._on_color_error)
             worker.analysis_completed.connect(
                 lambda: self._on_frame_analysis_op_finished("colors")
@@ -7840,9 +7836,9 @@ class MainWindow(QMainWindow):
 
         # Start worker
         from PySide6.QtCore import Qt
-        self.color_worker = ColorAnalysisWorker(clips, parallelism=self.settings.color_analysis_parallelism, sources_by_id=self.project.sources_by_id)
+        self.color_worker = ColorAnalysisWorker(clips, parallelism=self.settings.color_analysis_parallelism, sources_by_id=self.project.sources_by_id, project=self.project)
         self.color_worker.progress.connect(self._on_color_progress)
-        self.color_worker.color_ready.connect(self._on_color_ready)
+        self.color_worker.result_ready.connect(self._on_color_result)
         self.color_worker.error.connect(self._on_color_error)
         self.color_worker.analysis_completed.connect(self._on_agent_color_analysis_finished, Qt.UniqueConnection)
         # Clean up thread safely after it finishes
@@ -9323,11 +9319,11 @@ class MainWindow(QMainWindow):
                 return
 
             self._reset_analysis_run_error("colors")
-            self.color_worker = ColorAnalysisWorker(clips_needing_colors, parallelism=self.settings.color_analysis_parallelism, sources_by_id=self.project.sources_by_id)
+            self.color_worker = ColorAnalysisWorker(clips_needing_colors, parallelism=self.settings.color_analysis_parallelism, sources_by_id=self.project.sources_by_id, project=self.project)
             self.color_worker.progress.connect(
                 self.intention_workflow.on_analysis_progress
             )
-            self.color_worker.color_ready.connect(self._on_color_ready)
+            self.color_worker.result_ready.connect(self._on_color_result)
             self.color_worker.error.connect(self._on_color_error)
             self.color_worker.analysis_completed.connect(
                 self._on_intention_analysis_finished

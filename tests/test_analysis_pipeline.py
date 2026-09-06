@@ -12,6 +12,23 @@ from tests.conftest import make_test_clip
 from ui.main_window import MainWindow
 
 
+def test_color_result_ignores_a_replaced_project(tmp_path):
+    from unittest.mock import patch
+
+    from core.operations.colors import ColorApplication, color_request, compute_colors
+    from core.project import Project
+    from tests.test_spine_analyze import _build_project
+
+    original = _build_project(tmp_path, 1)
+    request = color_request(original)
+    application = ColorApplication(original, request)
+    with patch("core.analysis.color.extract_dominant_colors", return_value=[(1, 2, 3)]):
+        result = compute_colors(request)
+    harness = SimpleNamespace(project=Project.new())
+    MainWindow._on_color_result(harness, application, result)
+    assert original.clips[0].dominant_colors is None
+
+
 def test_phase_advances_from_local_to_cloud_after_color_completion():
     """Pipeline advances to cloud phase once local color op finishes."""
 
@@ -287,7 +304,7 @@ def _build_fake_worker(completion_signal: str, extra_signals: list[str]):
             "_launch_colors_worker",
             "ColorAnalysisWorker",
             "analysis_completed",
-            ["progress", "color_ready", "error"],
+            ["progress", "result_ready", "error"],
             "colors",
         ),
         (
@@ -354,7 +371,7 @@ def test_launch_worker_emits_pipeline_completion(
         def _on_color_progress(self, *_args):
             return None
 
-        def _on_color_ready(self, *_args):
+        def _on_color_result(self, *_args):
             return None
 
         def _on_color_error(self, *_args):

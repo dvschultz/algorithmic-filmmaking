@@ -246,14 +246,14 @@ def colors(
         scene_ripper analyze colors project.json -c clip1 -c clip2
     """
     try:
-        from core.project import load_project, save_project, ProjectLoadError
-        from core.analysis.color import extract_dominant_colors
+        from core.project import Project, ProjectLoadError
+        from core.operations.colors import ColorApplication, color_request, compute_colors
     except ImportError as e:
         exit_with(ExitCode.DEPENDENCY_MISSING, f"Missing dependency: {e}")
 
     try:
-        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(
-            filepath=project_file,
+        project = Project.load(
+            project_file,
             missing_source_callback=lambda path, sid: None,
         )
     except ProjectLoadError as e:
@@ -261,67 +261,39 @@ def colors(
     except FileNotFoundError:
         exit_with(ExitCode.FILE_NOT_FOUND, f"Project file not found: {project_file}")
 
-    sources_by_id = {s.id: s for s in sources}
-
-    # Filter clips if specific IDs provided
-    clips_to_analyze = clips
+    clips = project.clips
+    selected = clips
     if clip_ids:
         clip_set = set(clip_ids)
-        # Also match by prefix
-        clips_to_analyze = [
-            c for c in clips if c.id in clip_set or c.id[:8] in clip_set
-        ]
-        if not clips_to_analyze:
+        selected = [c for c in clips if c.id in clip_set or c.id[:8] in clip_set]
+        if not selected:
             exit_with(ExitCode.VALIDATION_ERROR, "No matching clips found")
 
-    # Filter out already-analyzed clips unless force
-    if not force:
-        clips_to_analyze = [c for c in clips_to_analyze if c.dominant_colors is None]
-
-    if not clips_to_analyze:
+    try:
+        request = color_request(
+            project, [c.id for c in selected], num_colors,
+            skip_existing=not force, skip_empty=True,
+        )
+    except ValueError as e:
+        exit_with(ExitCode.VALIDATION_ERROR, str(e))
+    application = ColorApplication(project, request)
+    with ProgressContext("Analyzing colors") as progress:
+        result = application.apply(compute_colors(
+            request,
+            progress_callback=lambda done, total, outcome: progress.update(
+                done / total, f"Clip {done}/{total}",
+            ),
+        ))
+        progress.update(1.0, "Complete")
+    if all(o.status == "skipped" for o in result.outcomes):
         output_info("All clips already have color data. Use --force to re-analyze.")
         return
-
-    analyzed_count = 0
-    errors = []
-
-    with ProgressContext("Analyzing colors") as progress:
-        total = len(clips_to_analyze)
-        for i, clip in enumerate(clips_to_analyze):
-            progress.update(i / total, f"Clip {i + 1}/{total}")
-
-            source = sources_by_id.get(clip.source_id)
-            if not source or not source.file_path.exists():
-                errors.append(f"Clip {clip.id[:8]}: source not found")
-                continue
-
-            try:
-                # Extract colors by sampling frames from the video
-                clip.dominant_colors = extract_dominant_colors(
-                    video_path=source.file_path,
-                    start_frame=clip.start_frame,
-                    end_frame=clip.end_frame,
-                    n_colors=num_colors,
-                )
-                analyzed_count += 1
-
-            except Exception as e:
-                errors.append(f"Clip {clip.id[:8]}: {e}")
-
-        progress.update(1.0, "Complete")
-
-    # Save updated project
-    success = save_project(
-        filepath=project_file,
-        sources=sources,
-        clips=clips,
-        sequence=sequence,
-        ui_state=ui_state,
-        metadata=metadata,
-        audio_sources=audio_sources,
-    )
-
-    if not success:
+    analyzed_count = sum(o.status == "succeeded" for o in result.outcomes)
+    errors = [
+        f"Clip {o.target_id[:8]}: {o.message or o.code}"
+        for o in result.outcomes if o.status == "failed"
+    ]
+    if not project.save():
         exit_with(ExitCode.GENERAL_ERROR, "Failed to save project")
 
     result = {

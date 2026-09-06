@@ -32,6 +32,7 @@ from scene_ripper_mcp.tools.jobs import (
     list_jobs,
     purge_old_jobs,
     start_analyze_clips,
+    start_analyze_colors,
     start_describe,
     start_generate_thumbnails,
 )
@@ -64,6 +65,32 @@ def _wait_for_status(store, task_id, expected, timeout=5.0):
             return status
         time.sleep(0.02)
     raise AssertionError(f"timeout waiting for {targets}; last={status!r}")
+
+
+@pytest.mark.asyncio
+async def test_color_job_persists_success_and_reports_each_failed_target(lifespan_ctx, tmp_path):
+    from unittest.mock import patch
+
+    from core.project import Project
+    from tests.test_spine_analyze import _build_project
+
+    ctx, store, _runtime = lifespan_ctx
+    project = _build_project(tmp_path, 2)
+    path = tmp_path / "colors.sceneripper"
+    assert project.save(path)
+    with patch("core.analysis.color.extract_dominant_colors", side_effect=[[], [(1, 2, 3)]]):
+        started = json.loads(await start_analyze_colors(
+            project_path=str(path), clip_ids=["c-0", "c-1", "missing"], ctx=ctx,
+        ))
+        assert started["success"], started
+        _wait_for_status(store, started["task_id"], STATUS_COMPLETED)
+    output = json.loads(await get_job_result(task_id=started["task_id"], ctx=ctx))
+    result = output["result"]["result"]
+    assert result["succeeded"] == [{"clip_id": "c-1", "color_count": 1}]
+    assert [f["code"] for f in result["failed"]] == ["no_colors_extracted", "target_not_found"]
+    restored = Project.load(path)
+    assert restored.clips[0].dominant_colors is None
+    assert restored.clips[1].dominant_colors == [(1, 2, 3)]
 
 
 class _FakeSettings:

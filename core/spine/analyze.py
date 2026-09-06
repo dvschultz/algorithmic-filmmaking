@@ -9,8 +9,9 @@ cancel_event inside the per-frame iteration loops in ``core/analysis/*.py``
 is a follow-up; coarse-grained cancel between clips is sufficient for v1
 and matches the existing pure-function APIs.
 
-Skip-existing semantics: each op checks ``clip.<analysis_field> is not
-None`` and skips already-populated clips. This makes re-issuing the same op
+Skip-existing semantics: operations skip already-populated analysis fields.
+Colors retain their historical truthy-palette check; an empty palette is retried.
+This makes re-issuing the same op
 after a crashed/cancelled run a no-op for clips that succeeded (R18 —
 preserve on-disk progress).
 """
@@ -55,79 +56,44 @@ def analyze_colors(
     Per-clip granularity: cancel checked between clips. Skips clips whose
     ``dominant_colors`` is already set unless ``skip_existing=False``.
     """
-    from core.analysis.color import extract_dominant_colors
+    from core.operations.colors import ColorApplication, color_request, compute_colors
 
-    clips = _resolve_clip_ids(project, clip_ids)
-    if not clips:
-        return {
-            "success": True,
-            "result": {"succeeded": [], "failed": [], "skipped": []},
-        }
+    request = color_request(project, clip_ids, num_colors, skip_existing=skip_existing)
+    application = ColorApplication(project, request)
 
-    sources_by_id = project.sources_by_id
-    succeeded: list[dict] = []
-    failed: list[dict] = []
-    skipped: list[dict] = []
-    updated = []
-
-    total = len(clips)
-    for i, clip in enumerate(clips):
-        if _check_cancel(cancel_event):
-            break
-
+    def progress(completed, total, outcome):
         if progress_callback is not None:
-            progress_callback(
-                i / total,
-                f"Color analysis ({i + 1}/{total}): {clip.id}",
-            )
+            progress_callback(completed / total, f"Color analysis ({completed}/{total}): {outcome.target_id}")
 
-        if skip_existing and clip.dominant_colors:
-            skipped.append({"clip_id": clip.id, "reason": "already_populated"})
-            continue
-
-        source = sources_by_id.get(clip.source_id)
-        if source is None or not source.file_path.exists():
-            failed.append(
-                {"clip_id": clip.id, "code": "source_file_missing"}
-            )
-            continue
-
-        try:
-            colors = extract_dominant_colors(
-                video_path=source.file_path,
-                start_frame=clip.start_frame,
-                end_frame=clip.end_frame,
-                n_colors=num_colors,
-            )
-        except Exception as exc:  # noqa: BLE001 — per-item resilience
-            failed.append(
-                {"clip_id": clip.id, "code": "extraction_failed", "message": str(exc)}
-            )
-            continue
-
-        if colors:
-            clip.dominant_colors = colors
-            updated.append(clip)
-            succeeded.append({"clip_id": clip.id, "color_count": len(colors)})
+    result = application.apply(compute_colors(
+        request, cancel_event=cancel_event, progress_callback=progress,
+    ))
+    succeeded = []
+    failed = []
+    skipped = []
+    unprocessed = []
+    for outcome in result.outcomes:
+        if outcome.status == "succeeded":
+            succeeded.append({"clip_id": outcome.target_id, "color_count": len(outcome.colors)})
+        elif outcome.status == "skipped":
+            skipped.append({"clip_id": outcome.target_id, "reason": outcome.code})
+        elif outcome.status == "unprocessed":
+            unprocessed.append({"clip_id": outcome.target_id, "reason": outcome.code})
         else:
-            failed.append({"clip_id": clip.id, "code": "no_colors_extracted"})
-
-    if updated:
-        project.update_clips(updated)
-
+            error = {"clip_id": outcome.target_id, "code": outcome.code}
+            if outcome.message is not None:
+                error["message"] = outcome.message
+            failed.append(error)
     if progress_callback is not None:
-        progress_callback(
-            1.0,
-            f"Done: {len(succeeded)} ok, {len(failed)} failed, {len(skipped)} skipped",
-        )
-
+        progress_callback(1.0, f"Done: {len(succeeded)} ok, {len(failed)} failed, {len(skipped)} skipped")
     return {
         "success": True,
         "result": {
             "succeeded": succeeded,
             "failed": failed,
             "skipped": skipped,
-            "total_clips": total,
+            "unprocessed": unprocessed,
+            "total_clips": len(request.targets),
         },
     }
 

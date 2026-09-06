@@ -1,0 +1,104 @@
+{
+  "version": "1.4",
+  "sources": [
+    {
+      "id": "source-a",
+      "file_path": "video.mp4",
+      "fps": 23.976,
+      "duration_seconds": 10,
+      "width": 320,
+      "height": 240
+    }
+  ],
+  "clips": [
+    {
+      "id": "clip-a",
+      "source_id": "source-a",
+      "start_frame": 48,
+      "end_frame": 96
+    }
+  ],
+  "sequence": {
+    "id": "sequence-a",
+    "name": "Original",
+    "fps": 30,
+    "tracks": [
+      {
+        "id": "track-a",
+        "name": "Video 1",
+        "clips": [
+          {
+            "id": "entry-a",
+            "source_clip_id": "clip-a",
+            "source_id": "source-a",
+            "start_frame": 0,
+            "in_point": 48,
+            "out_point": 96,
+            "hflip": true,
+            "reverse": true
+          }
+        ]
+      }
+    ]
+  },
+  "frames": [
+    {
+      "id": "frame-a",
+      "file_path": "still.png",
+      "notes": "Keep this still"
+    }
+  ],
+  "audio_sources": [
+    {
+      "id": "audio-a",
+      "file_path": "music.wav",
+      "duration_seconds": 10,
+      "sample_rate": 48000,
+      "channels": 2
+    }
+  ],
+  "sequences": [
+    {
+      "id": "sequence-a",
+      "name": "Original",
+      "fps": 30,
+      "tracks": [
+        {
+          "id": "track-a",
+          "name": "Video 1",
+          "clips": [
+            {
+              "id": "entry-a",
+              "source_clip_id": "clip-a",
+              "source_id": "source-a",
+              "start_frame": 0,
+              "in_point": 48,
+              "out_point": 96,
+              "hflip": true,
+              "reverse": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "sequence-b",
+      "name": "Variation",
+      "fps": 24,
+      "tracks": [
+        {
+          "id": "track-b",
+          "clips": [
+            {
+              "id": "entry-b",
+              "frame_id": "frame-a",
+              "hold_frames": 24,
+              "start_frame": 0
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "active_sequence_index": 0
+}

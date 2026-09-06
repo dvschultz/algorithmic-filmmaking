@@ -1,0 +1,44 @@
+{
+  "version": "1.1",
+  "sources": [
+    {
+      "id": "source-a",
+      "file_path": "video.mp4",
+      "fps": 23.976,
+      "duration_seconds": 10,
+      "width": 320,
+      "height": 240
+    }
+  ],
+  "clips": [
+    {
+      "id": "clip-a",
+      "source_id": "source-a",
+      "start_frame": 48,
+      "end_frame": 96
+    }
+  ],
+  "sequence": {
+    "id": "sequence-a",
+    "name": "Original",
+    "fps": 30,
+    "tracks": [
+      {
+        "id": "track-a",
+        "name": "Video 1",
+        "clips": [
+          {
+            "id": "entry-a",
+            "source_clip_id": "clip-a",
+            "source_id": "source-a",
+            "start_frame": 0,
+            "in_point": 48,
+            "out_point": 96,
+            "hflip": true,
+            "reverse": true
+          }
+        ]
+      }
+    ]
+  }
+}

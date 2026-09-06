@@ -65,8 +65,11 @@ class TestColorWorkerTaskBuilding:
             [clip_with, clip_without], parallelism=1, skip_existing=True,
             sources_by_id=sources_by_id,
         )
-        assert len(worker._tasks) == 1
-        assert worker._tasks[0].clip_id == "c2"
+        with patch("core.analysis.color.extract_dominant_colors", return_value=[(1, 2, 3)]):
+            worker.run()
+        assert [(o.target_id, o.status) for o in worker.result.outcomes] == [
+            ("c1", "skipped"), ("c2", "succeeded"),
+        ]
 
     def test_skip_existing_false_includes_all(self, source, sources_by_id, tmp_path):
         from ui.workers.color_worker import ColorAnalysisWorker
@@ -84,30 +87,35 @@ class TestColorWorkerTaskBuilding:
             [clip_with, clip_without], parallelism=1, skip_existing=False,
             sources_by_id=sources_by_id,
         )
-        assert len(worker._tasks) == 2
+        with patch("core.analysis.color.extract_dominant_colors", return_value=[(1, 2, 3)]):
+            worker.run()
+        assert [o.status for o in worker.result.outcomes] == ["succeeded", "succeeded"]
 
-    def test_skips_clips_without_source(self):
+    def test_reports_clips_without_source(self):
         from ui.workers.color_worker import ColorAnalysisWorker
 
         clip = make_test_clip("c1", source_id="missing-source")
 
         worker = ColorAnalysisWorker([clip], parallelism=1, sources_by_id={})
-        assert len(worker._tasks) == 0
+        worker.run()
+        assert worker.result.outcomes[0].code == "source_file_missing"
 
-    def test_skips_clips_with_nonexistent_source(self, source, sources_by_id):
+    def test_reports_clips_with_nonexistent_source(self, source, sources_by_id):
         from ui.workers.color_worker import ColorAnalysisWorker
 
         # source.file_path points to /test/video.mp4 which doesn't exist
         clip = make_test_clip("c1")
 
         worker = ColorAnalysisWorker([clip], parallelism=1, sources_by_id=sources_by_id)
-        assert len(worker._tasks) == 0
+        worker.run()
+        assert worker.result.outcomes[0].code == "source_file_missing"
 
     def test_empty_clips_produces_empty_tasks(self):
         from ui.workers.color_worker import ColorAnalysisWorker
 
         worker = ColorAnalysisWorker([], parallelism=1)
-        assert len(worker._tasks) == 0
+        worker.run()
+        assert worker.result.outcomes == ()
 
     def test_parallelism_clamped(self):
         from ui.workers.color_worker import ColorAnalysisWorker

@@ -20,10 +20,10 @@ async def analyze_colors(
     num_colors: Annotated[int, "Number of dominant colors to extract (1-10)"] = 5,
     ctx: Context = None,
 ) -> str:
-    """Extract dominant colors from all clip thumbnails in a project.
+    """Extract dominant colors from all clips in a project.
 
     Uses k-means clustering to identify the most dominant colors in each clip.
-    Requires thumbnails to be generated first.
+    Samples frames from each clip's source video; thumbnails are not required.
 
     Args:
         project_path: Path to the project file
@@ -42,7 +42,7 @@ async def analyze_colors(
 def _analyze_colors_sync(path, num_colors):
     """Synchronous body for ``analyze_colors`` (offloaded via ``asyncio.to_thread``)."""
     try:
-        from core.analysis.color import extract_dominant_colors
+        from core.spine.analyze import analyze_colors as run_colors
         from core.project import MissingSourceError
         from core.spine.project_io import (
             ProjectModifiedExternally,
@@ -62,34 +62,10 @@ def _analyze_colors_sync(path, num_colors):
         if not clips:
             return json.dumps({"success": False, "error": "No clips in project"})
 
-        sources_by_id = project.sources_by_id
-
-        analyzed_count = 0
-        skipped_count = 0
-        updated: list = []
-
-        for clip in clips:
-            source = sources_by_id.get(clip.source_id)
-            if not source or not source.file_path.exists():
-                skipped_count += 1
-                continue
-
-            # Extract colors by sampling frames from the video
-            colors = extract_dominant_colors(
-                video_path=source.file_path,
-                start_frame=clip.start_frame,
-                end_frame=clip.end_frame,
-                n_colors=num_colors,
-            )
-            if colors:
-                clip.dominant_colors = colors
-                analyzed_count += 1
-                updated.append(clip)
-            else:
-                skipped_count += 1
-
-        if updated:
-            project.update_clips(updated)
+        outcomes = run_colors(project, num_colors=num_colors, skip_existing=False)["result"]
+        analyzed_count = len(outcomes["succeeded"])
+        # Preserve the legacy skipped counter while also exposing actual errors.
+        skipped_count = len(outcomes["skipped"]) + len(outcomes["failed"])
 
         try:
             save_with_mtime_check(project, path, mtime)
@@ -104,14 +80,15 @@ def _analyze_colors_sync(path, num_colors):
                 },
             })
 
-        return json.dumps(
-            {
-                "success": True,
-                "analyzed_clips": analyzed_count,
-                "skipped_clips": skipped_count,
-                "total_clips": len(clips),
-            }
-        )
+        result = {
+            "success": True,
+            "analyzed_clips": analyzed_count,
+            "skipped_clips": skipped_count,
+            "total_clips": len(clips),
+        }
+        if outcomes["failed"]:
+            result["error_details"] = outcomes["failed"]
+        return json.dumps(result)
     except Exception as e:
         logger.exception("Color analysis failed")
         return json.dumps({"success": False, "error": str(e)})

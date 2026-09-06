@@ -11,8 +11,11 @@ Pattern mirrors ``tests/test_transcription_runtime_imports.py``.
 
 from __future__ import annotations
 
-import importlib
+import subprocess
 import sys
+from pathlib import Path
+
+import pytest
 
 # Modules that must never appear in ``sys.modules`` after a spine import.
 FORBIDDEN_MODULES: tuple[str, ...] = (
@@ -26,6 +29,8 @@ FORBIDDEN_MODULES: tuple[str, ...] = (
 
 # Spine modules under test. Add new spine modules here as they land.
 SPINE_MODULES: tuple[str, ...] = (
+    "core.operations.contracts",
+    "core.operations.colors",
     "core.spine",
     "core.spine.security",
     "core.spine.url_security",
@@ -52,28 +57,35 @@ SPINE_MODULES: tuple[str, ...] = (
 )
 
 
-def _purge_modules(*names: str) -> None:
-    for name in list(sys.modules):
-        for prefix in names:
-            if name == prefix or name.startswith(prefix + "."):
-                sys.modules.pop(name, None)
-
-
-def _assert_no_forbidden_modules() -> None:
-    for forbidden in FORBIDDEN_MODULES:
-        assert forbidden not in sys.modules, (
-            f"Spine import pulled in forbidden module: {forbidden}"
-        )
-
-
 def test_spine_modules_do_not_load_gui_or_runtime_deps():
-    """Importing every spine module must not load any forbidden module."""
-    _purge_modules(*SPINE_MODULES, *FORBIDDEN_MODULES)
+    """Test in a fresh interpreter; never unload native modules in pytest.
 
-    for module_name in SPINE_MODULES:
-        importlib.import_module(module_name)
+    Removing PySide6 from sys.modules does not unload its native libraries and
+    can segfault a later Qt import in the same test process.
+    """
+    code = f"""
+import importlib
+import sys
+for name in {SPINE_MODULES!r}:
+    importlib.import_module(name)
+for forbidden in {FORBIDDEN_MODULES!r}:
+    if any(name == forbidden or name.startswith(forbidden + '.') for name in sys.modules):
+        raise RuntimeError('Spine import pulled in forbidden module: ' + forbidden)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
-    _assert_no_forbidden_modules()
+
+def test_import_boundary_detects_a_forbidden_dependency(monkeypatch):
+    monkeypatch.setitem(globals(), "SPINE_MODULES", SPINE_MODULES + ("PySide6.QtCore",))
+    with pytest.raises(AssertionError, match="forbidden module: PySide6"):
+        test_spine_modules_do_not_load_gui_or_runtime_deps()
 
 
 def test_spine_security_validates_safe_path(tmp_path):
