@@ -1,8 +1,8 @@
 # Project sessions and editorial history
 
 Every `Project` has one Qt-free `ProjectSession`, created on the project's owner
-thread. Clip enable/disable is the first migrated editorial command. Browser
-controls and the chat tool use the same model delegation; the Edit menu and chat
+thread. Clip enable/disable and manual sequence insertion/removal use reversible
+commands. Browser controls, the timeline, and chat use the same model delegation; the Edit menu and chat
 Undo/Redo project the same history through `SessionHistoryAdapter`.
 
 `Project.set_clips_disabled()` captures explicit before/after values for unique
@@ -24,9 +24,18 @@ project closes the old session and rebinds menu actions to the new one. Color
 applications capture the session identity and verify it and the owner thread
 before touching results, in addition to the pilot's existing input checks.
 
-This is the first U4 migration in the shared-engine plan. Sequence insertion,
-removal, reordering, trimming, sequence management, source removal, and metadata
-commands still need migration. Legacy direct model mutations are tracked as
+`insert_sequence_clips()` accepts prepared entries, and `add_to_sequence()` and
+`add_frames_to_sequence()` resolve source IDs into one insertion command.
+`remove_from_sequence()` removes timeline IDs across tracks. Its default ripple
+behavior retains the agent contract; timeline Delete passes `ripple=False` to
+preserve gaps. Undo restores the original entries, ordering, and start positions,
+and rejects conflicting track edits atomically. Commands target their original
+sequence even after the active sequence changes. Timeline model refreshes emit
+`sequence_refreshed`, which updates views without creating an external mutation.
+
+This is an incremental U4 migration. Generated sequence population, clearing,
+reordering, trimming, sequence management, source removal, and metadata commands
+still need migration. Legacy direct model mutations are tracked as
 external changes; they are not yet undoable or comprehensively thread-guarded.
 MCP and CLI do not yet expose history tools; the shared spine history functions
 are available to retained headless sessions. Cross-process locks, durable history,

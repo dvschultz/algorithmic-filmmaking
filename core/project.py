@@ -15,7 +15,7 @@ import uuid
 from models.audio_source import AudioSource
 from models.clip import Source, Clip
 from models.frame import Frame
-from models.sequence import Sequence
+from models.sequence import Sequence, SequenceClip
 
 logger = logging.getLogger(__name__)
 
@@ -1144,7 +1144,7 @@ class Project:
             self.sequence = Sequence(name=self.metadata.name, fps=fps)
 
         current_frame = self.sequence.duration_frames
-        track = self.sequence.tracks[0]
+        entries = []
 
         for frame_id in frame_ids:
             frame = self.frames_by_id.get(frame_id)
@@ -1159,11 +1159,10 @@ class Project:
                 start_frame=current_frame,
                 hold_frames=hold_frames,
             )
-            track.add_clip(seq_clip)
+            entries.append(seq_clip)
             current_frame += seq_clip.duration_frames
 
-        self.mark_dirty()
-        self._notify_observers("sequence_changed", frame_ids)
+        self.insert_sequence_clips(entries)
 
     # --- Sequence operations ---
 
@@ -1182,7 +1181,7 @@ class Project:
 
         # Get current end frame
         current_frame = self.sequence.duration_frames
-        track = self.sequence.tracks[0]
+        entries = []
 
         for clip_id in clip_ids:
             clip = self.clips_by_id.get(clip_id)
@@ -1207,41 +1206,36 @@ class Project:
                 in_point=clip.start_frame,
                 out_point=clip.end_frame,
             )
-            track.add_clip(seq_clip)
+            entries.append(seq_clip)
             current_frame += seq_clip.duration_frames
 
-        self.mark_dirty()
-        self._notify_observers("sequence_changed", clip_ids)
+        self.insert_sequence_clips(entries)
 
-    def remove_from_sequence(self, clip_ids: list[str]) -> list[str]:
-        """Remove clips from the sequence by their sequence clip IDs.
+    def insert_sequence_clips(
+        self, clips: list[SequenceClip], *, sequence: Sequence | None = None,
+    ) -> list[SequenceClip]:
+        """Insert prepared timeline entries as one reversible edit."""
+        from core.commands.sequence_clips import EditSequenceClips
 
-        Args:
-            clip_ids: IDs of sequence clips to remove (not source clip IDs)
-
-        Returns:
-            List of IDs that were successfully removed
-        """
-        if self.sequence is None:
+        self.session.assert_owner()
+        target = sequence if sequence is not None else self.sequence
+        if target is None:
             return []
+        return self.session.execute(EditSequenceClips.insert(target, clips))
 
-        removed = []
-        track = self.sequence.tracks[0]
+    def remove_from_sequence(
+        self, clip_ids: list[str], *, sequence: Sequence | None = None,
+        ripple: bool = True,
+    ) -> list[str]:
+        """Remove timeline IDs in one edit; optionally close gaps on affected tracks."""
+        from core.commands.sequence_clips import EditSequenceClips
 
-        for clip_id in clip_ids:
-            removed_clip = track.remove_clip(clip_id)
-            if removed_clip:
-                removed.append(clip_id)
-            else:
-                logger.warning(f"Sequence clip not found: {clip_id}")
-
-        if removed:
-            # Recalculate start frames after removal
-            self._recalculate_sequence_positions()
-            self.mark_dirty()
-            self._notify_observers("sequence_changed", removed)
-
-        return removed
+        self.session.assert_owner()
+        target = sequence if sequence is not None else self.sequence
+        if target is None:
+            return []
+        removed = self.session.execute(EditSequenceClips.remove(target, clip_ids, ripple=ripple))
+        return [clip.id for clip in removed]
 
     def clear_sequence(self) -> int:
         """Clear all clips from the sequence.

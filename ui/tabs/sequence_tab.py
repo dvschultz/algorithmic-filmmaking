@@ -1931,6 +1931,9 @@ class SequenceTab(BaseTab):
         Called by MainWindow after project load/create.
         """
         self._project = project
+        self.timeline.scene.project = project
+        self.timeline.scene.history_enabled = lambda: not self._algorithm_running
+        self.timeline.scene.set_sequence(project.sequence)
         self._sequence_dirty = False
         self._sync_sequence_dropdown()
 
@@ -2079,20 +2082,19 @@ class SequenceTab(BaseTab):
         if not self._project:
             return
         sequence = self._project.sequence
-        if sequence and sequence.get_all_clips():
-            sources = self._sources
-            self.timeline.load_sequence(
-                sequence,
-                {s_id: src for s_id, src in sources.items()},
-                {c.id: c for c in self._clips},
-            )
+        if sequence is None:
+            return
+        sources = self._sources
+        # Bind even an empty arriving sequence before updating the view. Clearing
+        # the departing scene would mutate its model and invalidate its history.
+        self.timeline.load_sequence(sequence, dict(sources), self._clips)
+        if sequence.get_all_clips():
             self.timeline_preview.set_clips(
                 [(c, sources.get(c.source_id)) for track in sequence.tracks for c in track.clips if sources.get(c.source_id)],
                 sources,
             )
             self._set_state(self.STATE_TIMELINE)
         else:
-            self.timeline.clear_timeline()
             self.timeline_preview.clear()
             self._set_state(self.STATE_CARDS)
 

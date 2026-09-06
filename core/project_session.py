@@ -1,6 +1,6 @@
 """Owner-thread edit history for a live project, independent of Qt.
 
-Clip enable/disable is the first migrated command. Legacy model mutations still
+Clip state and sequence membership edits are migrated. Legacy model mutations still
 advance the external revision, so undo never marks unsaved analysis as saved.
 History is intentionally session-local and is not serialized into project files.
 """
@@ -10,26 +10,34 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from threading import get_ident
-from typing import TYPE_CHECKING, Callable, Protocol
+from typing import TYPE_CHECKING, Any, Callable, Protocol, TypeVar
 from uuid import uuid4
 
 if TYPE_CHECKING:
     from core.project import Project
-    from models.clip import Clip
 
 logger = logging.getLogger(__name__)
 
 
-class EditCommand(Protocol):
+T = TypeVar("T")
+
+
+class EditCommand(Protocol[T]):
+    @property
+    def event_name(self) -> str: ...
+
+    @property
+    def event_data(self) -> list[Any]: ...
+
     @property
     def label(self) -> str: ...
 
-    def apply(self, project: Project, *, undo: bool = False) -> list[Clip]: ...
+    def apply(self, project: Project, *, undo: bool = False) -> list[T]: ...
 
 
 @dataclass(frozen=True)
 class HistoryEntry:
-    command: EditCommand
+    command: EditCommand[Any]
     before: int
     after: int
 
@@ -98,13 +106,13 @@ class ProjectSession:
         self._saved_state = (self._position, self._external_revision)
         self._notify()
 
-    def _publish(self, clips: list[Clip]) -> None:
+    def _publish(self, command: EditCommand[Any]) -> None:
         self.project._mutation_generation += 1
         self.project._dirty = self._saved_state != (self._position, self._external_revision)
-        self.project._notify_observers("clips_updated", clips)
+        self.project._notify_observers(command.event_name, command.event_data)
         self._notify()
 
-    def execute(self, command: EditCommand) -> list[Clip]:
+    def execute(self, command: EditCommand[T]) -> list[T]:
         self.assert_owner()
         self._busy = True
         try:
@@ -115,7 +123,7 @@ class ProjectSession:
             self._undo.append(HistoryEntry(command, self._position, self._next_position))
             self._position = self._next_position
             self._redo.clear()
-            self._publish(clips)
+            self._publish(command)
             return clips
         finally:
             self._busy = False
@@ -134,11 +142,11 @@ class ProjectSession:
         self._busy = True
         try:
             entry = source[-1]
-            clips = entry.command.apply(self.project, undo=undo)
+            entry.command.apply(self.project, undo=undo)
             source.pop()
             destination.append(entry)
             self._position = entry.before if undo else entry.after
-            self._publish(clips)
+            self._publish(entry.command)
             return entry.command.label
         finally:
             self._busy = False

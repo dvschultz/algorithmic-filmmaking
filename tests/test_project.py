@@ -92,6 +92,7 @@ class TestProjectObserverPattern:
     def test_observer_called_on_sequence_changed(self):
         """Test observer is called when sequence changes."""
         project = Project.new()
+        project.add_source(Source(id="src-1", file_path=Path("test.mp4"), fps=30.0))
         observer = Mock()
 
         # Add a clip first
@@ -258,6 +259,7 @@ class TestProjectDirtyState:
     def test_add_to_sequence_marks_dirty(self):
         """Test adding to sequence marks project dirty."""
         project = Project.new()
+        project.add_source(Source(id="src-1", file_path=Path("test.mp4"), fps=30.0))
         clip = Clip(id="clip-1", source_id="src-1", start_frame=0, end_frame=30)
         project.add_clips([clip])
         project.mark_clean()  # Reset dirty

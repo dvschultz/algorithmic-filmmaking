@@ -73,13 +73,13 @@ See [Audio Sources](audio-sources.md) for the full audio import / transcription 
 | `add_note` | Add a note to a clip | "Note: this clip has lens flare" |
 | `update_clip_transcript` | Edit a transcript segment | "Fix the transcript — it should say 'hello' not 'halo'" |
 | `toggle_clip_disabled` | Enable/disable a clip | "Disable clip 3" |
-| `undo` | Undo the last clip enable/disable edit | "Undo that" |
-| `redo` | Restore an undone clip enable/disable edit | "Redo that" |
+| `undo` | Undo the last supported editorial edit | "Undo that" |
+| `redo` | Restore an undone editorial edit | "Redo that" |
 | `delete_clips` | Delete clips permanently | "Delete the selected clips" |
 
-Clip enable/disable edits share undo history with the desktop's Edit menu.
-History lasts until the project is cleared or replaced; other edit types are
-not yet included. Undo preserves analysis results and unrelated metadata edits.
+Clip enable/disable and sequence insertion/removal share undo history with the desktop's Edit menu.
+History lasts until the project is cleared or replaced. Reordering, trimming,
+clearing, and generated sequence creation are not yet included. Undo preserves analysis results and unrelated metadata edits.
 
 ---
 

@@ -58,6 +58,7 @@ class TimelineWidget(QWidget):
     playhead_changed = Signal(float)  # time in seconds
     clip_selected = Signal(str)  # clip_id
     sequence_changed = Signal()  # sequence was modified
+    sequence_refreshed = Signal()  # model projection; never a new edit
     export_requested = Signal()  # request to export sequence
 
     def __init__(self, parent=None):
@@ -208,9 +209,12 @@ class TimelineWidget(QWidget):
 
     # --- Public API ---
 
-    def set_fps(self, fps: float):
+    def set_fps(self, fps: float) -> None:
         """Set the timeline frame rate."""
+        changed = self.sequence.fps != fps
         self.sequence.fps = fps
+        if changed and self.scene.project is not None:
+            self.scene.project.mark_dirty()
         if self._playhead:
             self._playhead.set_fps(fps)
 
@@ -265,7 +269,8 @@ class TimelineWidget(QWidget):
         )
 
         self._update_export_button()
-        self.sequence_changed.emit()
+        if not self.scene.uses_history:
+            self.sequence_changed.emit()
 
     def add_clip_at_position(
         self,
@@ -340,7 +345,7 @@ class TimelineWidget(QWidget):
         self._load_audio_waveform_if_needed(sequence)
 
         self._update_export_button()
-        self.sequence_changed.emit()
+        self.sequence_refreshed.emit()
 
     def _load_audio_waveform_if_needed(self, sequence: Sequence):
         """Load audio waveform for sequences with a music track.

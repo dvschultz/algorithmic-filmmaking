@@ -2241,8 +2241,10 @@ def load_project(path: str, main_window=None) -> dict:
         # Clear existing UI state
         main_window._clear_project_state()
 
-        # Set the new project and update adapter
+        # Rebind history as well as the model projection on the agent path.
+        main_window.project.session.close()
         main_window.project = new_project
+        main_window.undo_stack.set_session(new_project.session)
         main_window._project_adapter.set_project(main_window.project)
 
         # Refresh UI components with new project data
@@ -2272,18 +2274,14 @@ def load_project(path: str, main_window=None) -> dict:
 )
 def new_project(name: str = "Untitled Project", main_window=None) -> dict:
     """Create a new empty project."""
-    from core.project import Project
-
     if main_window is None:
         return {"success": False, "error": "Cannot create project: main window not available"}
 
     # Clear all existing project state
     main_window._clear_project_state()
 
-    # Create and set new project
-    new_proj = Project.new(name=name)
-    main_window.project = new_proj
-    main_window._project_adapter.set_project(main_window.project)
+    # clear() rotates the live session and retains all UI bindings.
+    main_window.project.metadata.name = name
 
     # Update window title
     main_window._update_window_title()

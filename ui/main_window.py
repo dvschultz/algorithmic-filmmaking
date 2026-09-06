@@ -1812,6 +1812,11 @@ class MainWindow(QMainWindow):
         self.sequence_tab.timeline.sequence_changed.connect(self._on_sequence_changed)
         # Update agent context when sequence changes
         self.sequence_tab.timeline.sequence_changed.connect(self._on_sequence_ids_changed)
+        # Model refreshes update projections without recording another mutation.
+        self.sequence_tab.timeline.sequence_refreshed.connect(self._update_render_tab_sequence_info)
+        self.sequence_tab.timeline.sequence_refreshed.connect(self._invalidate_sequence_preview)
+        self.sequence_tab.timeline.sequence_refreshed.connect(self._on_sequence_changed)
+        self.sequence_tab.timeline.sequence_refreshed.connect(self._on_sequence_ids_changed)
         # Mark project dirty when sequence changes
         self.sequence_tab.timeline.sequence_changed.connect(self._mark_dirty)
         # Persist auto-computed clip metadata (brightness, volume, embeddings)

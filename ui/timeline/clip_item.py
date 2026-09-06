@@ -25,7 +25,7 @@ class ClipItem(QGraphicsRectItem):
         track_item,
         pixels_per_second: float,
         fps: float,
-        thumbnail_path: str = None,
+        thumbnail_path: str | None = None,
     ):
         super().__init__()
 

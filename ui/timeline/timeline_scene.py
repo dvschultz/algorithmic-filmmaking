@@ -1,5 +1,12 @@
 """Timeline scene holding all timeline items."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Callable
+
+if TYPE_CHECKING:
+    from core.project import Project
+
 from PySide6.QtWidgets import QGraphicsScene
 from PySide6.QtCore import Signal, QTimer
 from PySide6.QtGui import QBrush
@@ -27,6 +34,8 @@ class TimelineScene(QGraphicsScene):
         super().__init__(parent)
 
         self.sequence: Sequence = Sequence()
+        self.project: Project | None = None
+        self.history_enabled: Callable[[], bool] = lambda: True
         self.pixels_per_second = 100.0  # Zoom level
         self._track_items = []  # TrackItem instances
         self._clip_items = {}  # clip_id -> ClipItem
@@ -93,11 +102,17 @@ class TimelineScene(QGraphicsScene):
 
             # Add clips for this track
             for seq_clip in track.clips:
+                source_clip = (
+                    self.project.clips_by_id.get(seq_clip.source_clip_id)
+                    if self.project is not None else None
+                )
+                thumbnail = source_clip.thumbnail_path if source_clip else None
                 clip_item = ClipItem(
                     seq_clip,
                     track_item,
                     self.pixels_per_second,
                     self.sequence.fps,
+                    thumbnail_path=str(thumbnail) if thumbnail else None,
                 )
                 self.addItem(clip_item)
                 self._clip_items[seq_clip.id] = clip_item
@@ -196,8 +211,8 @@ class TimelineScene(QGraphicsScene):
         start_frame: int,
         in_point: int,
         out_point: int,
-        thumbnail_path: str = None,
-    ) -> SequenceClip:
+        thumbnail_path: str | None = None,
+    ) -> SequenceClip | None:
         """Add a new clip to a track."""
         if track_index < 0 or track_index >= len(self.sequence.tracks):
             return None
@@ -210,6 +225,12 @@ class TimelineScene(QGraphicsScene):
             in_point=in_point,
             out_point=out_point,
         )
+
+        if self.project is not None and self.uses_history:
+            self.project.insert_sequence_clips([seq_clip], sequence=self.sequence)
+            if seq_clip.id not in self._clip_items:
+                self.rebuild()
+            return seq_clip
 
         track = self.sequence.tracks[track_index]
         track.add_clip(seq_clip)
@@ -233,6 +254,11 @@ class TimelineScene(QGraphicsScene):
 
     def remove_clip(self, clip_id: str):
         """Remove a clip from the timeline."""
+        if self.project is not None and self.uses_history:
+            self.project.remove_from_sequence([clip_id], sequence=self.sequence, ripple=False)
+            if clip_id in self._clip_items:
+                self.rebuild()
+            return
         if clip_id in self._clip_items:
             clip_item = self._clip_items.pop(clip_id)
             self.removeItem(clip_item)
@@ -243,6 +269,11 @@ class TimelineScene(QGraphicsScene):
 
             self._update_scene_rect()
             self.clip_removed.emit(clip_id)
+
+    @property
+    def uses_history(self) -> bool:
+        """Generated sequence population remains outside manual edit history."""
+        return self.project is not None and self.history_enabled()
 
     def clear_all_clips(self):
         """Remove all clips from the timeline."""

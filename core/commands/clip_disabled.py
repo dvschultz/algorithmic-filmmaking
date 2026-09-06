@@ -19,8 +19,14 @@ class ClipDisabledChange:
 
 @dataclass(frozen=True)
 class SetClipsDisabled:
+    event_name = "clips_updated"
+
     changes: tuple[ClipDisabledChange, ...]
     label: str
+
+    @property
+    def event_data(self) -> list[Clip]:
+        return [change.clip for change in self.changes]
 
     @classmethod
     def capture(

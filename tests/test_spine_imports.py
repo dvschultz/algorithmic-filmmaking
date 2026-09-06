@@ -31,6 +31,7 @@ FORBIDDEN_MODULES: tuple[str, ...] = (
 SPINE_MODULES: tuple[str, ...] = (
     "core.project_session",
     "core.commands.clip_disabled",
+    "core.commands.sequence_clips",
     "core.spine.history",
     "core.operations.contracts",
     "core.operations.colors",
