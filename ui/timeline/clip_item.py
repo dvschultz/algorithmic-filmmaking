@@ -1,6 +1,7 @@
 """Clip item for timeline - draggable, resizable rectangle."""
 
 from pathlib import Path
+from dataclasses import replace
 
 from PySide6.QtWidgets import (
     QGraphicsRectItem,
@@ -37,6 +38,7 @@ class ClipItem(QGraphicsRectItem):
         self._thumbnail_pixmap = None
 
         # Interaction state
+        self._edit_source = None
         self._dragging = False
         self._resizing = None  # 'left', 'right', or None
         self._drag_start_pos = None
@@ -157,6 +159,16 @@ class ClipItem(QGraphicsRectItem):
             event.ignore()
             return
 
+        scene = self.scene()
+        if scene and getattr(scene, "uses_history", False):
+            from core.commands.sequence_clips import Placement
+
+            self._edit_source = self.seq_clip
+            self._edit_before = Placement.capture(self.seq_clip)
+            self._edit_project = scene.project
+            self._edit_sequence = scene.sequence
+            self.seq_clip = replace(self.seq_clip)
+
         pos = event.pos()
         rect = self.rect()
 
@@ -164,6 +176,7 @@ class ClipItem(QGraphicsRectItem):
         self._original_start_frame = self.seq_clip.start_frame
         self._original_in_point = self.seq_clip.in_point
         self._original_out_point = self.seq_clip.out_point
+        self._original_hold_frames = self.seq_clip.hold_frames
 
         # Determine if resizing or dragging
         if pos.x() < self.EDGE_THRESHOLD:
@@ -181,6 +194,18 @@ class ClipItem(QGraphicsRectItem):
 
         delta_x = event.scenePos().x() - self._drag_start_pos.x()
         delta_frames = self._x_to_frame(delta_x)
+
+        if self.seq_clip.is_frame_entry and self._resizing:
+            if self._resizing == "left":
+                shift = max(-self._original_start_frame,
+                            min(delta_frames, self._original_hold_frames - 1))
+                self.seq_clip.start_frame = self._original_start_frame + shift
+                self.seq_clip.hold_frames = self._original_hold_frames - shift
+            else:
+                self.seq_clip.hold_frames = max(1, self._original_hold_frames + delta_frames)
+            self.prepareGeometryChange()
+            self._update_geometry()
+            return
 
         if self._resizing == "left":
             # Trim in-point: adjust start_frame and in_point
@@ -222,15 +247,31 @@ class ClipItem(QGraphicsRectItem):
         self._update_geometry()
 
     def mouseReleaseEvent(self, event):
-        if self._dragging or self._resizing:
-            # Notify scene of change
-            scene = self.scene()
-            if scene and hasattr(scene, "clip_moved"):
-                scene.clip_moved.emit(self.seq_clip.id, self.seq_clip.start_frame)
-
+        edited = self._dragging or self._resizing
+        scene = self.scene()
         self._dragging = False
         self._resizing = None
         super().mouseReleaseEvent(event)
+        if self._edit_source is not None:
+            self._commit_history_edit()
+        elif edited and scene and hasattr(scene, "clip_moved"):
+            scene.clip_moved.emit(self.seq_clip.id, self.seq_clip.start_frame)
+
+    def _commit_history_edit(self) -> None:
+        """Publish a gesture once; the live model never holds preview values."""
+        preview = self.seq_clip
+        self.seq_clip = self._edit_source
+        self._edit_source = None
+        self._update_geometry()
+        if (not any(s is self._edit_sequence for s in self._edit_project.sequences)
+                or not any(c is self.seq_clip for c in self._edit_sequence.get_all_clips())
+                or not self._edit_before.matches(self.seq_clip)):
+            return  # Another edit won while the gesture was in progress.
+        self._edit_project.update_sequence_clip(
+            self.seq_clip.id, sequence=self._edit_sequence,
+            start_frame=preview.start_frame, in_point=preview.in_point,
+            out_point=preview.out_point, hold_frames=preview.hold_frames,
+        )
 
     def _snap_to_edges(self, frame: int) -> int:
         """Snap to adjacent clip edges if within threshold."""

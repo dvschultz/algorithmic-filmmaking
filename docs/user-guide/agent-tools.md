@@ -77,9 +77,9 @@ See [Audio Sources](audio-sources.md) for the full audio import / transcription 
 | `redo` | Restore an undone editorial edit | "Redo that" |
 | `delete_clips` | Delete clips permanently | "Delete the selected clips" |
 
-Clip enable/disable and sequence insertion/removal share undo history with the desktop's Edit menu.
-History lasts until the project is cleared or replaced. Reordering, trimming,
-clearing, and generated sequence creation are not yet included. Undo preserves analysis results and unrelated metadata edits.
+Clip enable/disable and sequence insertion, removal, reordering, trimming, and
+track/transform changes share undo history with the desktop's Edit menu.
+History lasts until the project is cleared or replaced. Clearing and generated sequence creation are not yet included. Undo preserves analysis results and unrelated metadata edits.
 
 ---
 

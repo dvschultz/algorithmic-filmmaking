@@ -1257,43 +1257,30 @@ class Project:
         return count
 
     def reorder_sequence(self, clip_ids: list[str]) -> bool:
-        """Reorder clips in the sequence to match the provided order.
+        """Reorder the active sequence's first track as one reversible edit."""
+        from core.commands.sequence_clips import EditSequenceClips
 
-        Args:
-            clip_ids: Sequence clip IDs in the desired order
-
-        Returns:
-            True if reorder succeeded, False otherwise
-        """
+        self.session.assert_owner()
         if self.sequence is None:
             return False
-
-        track = self.sequence.tracks[0]
-
-        # Build lookup of current clips
-        clips_by_id = {clip.id: clip for clip in track.clips}
-
-        # Validate all IDs exist
-        for clip_id in clip_ids:
-            if clip_id not in clips_by_id:
-                logger.warning(f"Cannot reorder: clip not found: {clip_id}")
-                return False
-
-        # Reorder clips based on provided order
-        reordered = [clips_by_id[clip_id] for clip_id in clip_ids]
-
-        # Add any clips not in the provided list at the end (preserve them)
-        existing_ids = set(clip_ids)
-        for clip in track.clips:
-            if clip.id not in existing_ids:
-                reordered.append(clip)
-
-        track.clips = reordered
-        self._recalculate_sequence_positions()
-
-        self.mark_dirty()
-        self._notify_observers("sequence_changed", clip_ids)
+        try:
+            command = EditSequenceClips.reorder(self.sequence, clip_ids)
+        except ValueError:
+            return False
+        self.session.execute(command)
         return True
+
+    def update_sequence_clip(
+        self, clip_id: str, *, sequence: Sequence | None = None, **changes,
+    ) -> list[SequenceClip]:
+        """Validate and apply timing, track or transform changes atomically."""
+        from core.commands.sequence_clips import EditSequenceClips
+
+        self.session.assert_owner()
+        target = sequence if sequence is not None else self.sequence
+        if target is None:
+            raise ValueError("No sequence exists")
+        return self.session.execute(EditSequenceClips.update(target, clip_id, changes))
 
     def _recalculate_sequence_positions(self) -> None:
         """Recalculate start_frame for all sequence clips after reorder/removal."""

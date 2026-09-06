@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from models.sequence import Sequence, SequenceClip, Track
@@ -18,6 +18,11 @@ class Placement:
     in_point: int
     out_point: int
     hold_frames: int
+    track_index: int
+    hflip: bool
+    vflip: bool
+    reverse: bool
+    prerendered_path: str | None
 
     @classmethod
     def capture(cls, clip: SequenceClip, start: int | None = None) -> Placement:
@@ -27,6 +32,11 @@ class Placement:
             clip.in_point,
             clip.out_point,
             clip.hold_frames,
+            clip.track_index,
+            clip.hflip,
+            clip.vflip,
+            clip.reverse,
+            clip.prerendered_path,
         )
 
     def matches(self, clip: SequenceClip) -> bool:
@@ -128,6 +138,104 @@ class EditSequenceClips:
             tuple(c.id for c in removed),
         )
 
+    @classmethod
+    def reorder(cls, sequence: Sequence, clip_ids: list[str]) -> EditSequenceClips:
+        track = sequence.tracks[0]
+        lookup = {c.id: c for c in track.clips}
+        if len(set(clip_ids)) != len(clip_ids) or any(
+            cid not in lookup for cid in clip_ids
+        ):
+            raise ValueError("Reorder requires unique existing sequence clip IDs")
+        requested = set(clip_ids)
+        ordered = [lookup[cid] for cid in clip_ids]
+        ordered.extend(c for c in track.clips if c.id not in requested)
+        before = tuple(Placement.capture(c) for c in track.clips)
+        position = 0
+        after = []
+        for clip in ordered:
+            after.append(Placement.capture(clip, position))
+            position += clip.duration_frames
+        edits = (
+            (TrackEdit(track, 0, before, tuple(after)),)
+            if before != tuple(after)
+            else ()
+        )
+        return cls(
+            sequence,
+            edits,
+            tuple(ordered) if edits else (),
+            "Reorder sequence",
+            tuple(clip_ids),
+        )
+
+    @classmethod
+    def update(
+        cls, sequence: Sequence, clip_id: str, changes: dict
+    ) -> EditSequenceClips:
+        allowed = {
+            "in_point",
+            "out_point",
+            "start_frame",
+            "track_index",
+            "hold_frames",
+            "hflip",
+            "vflip",
+            "reverse",
+        }
+        if not changes or set(changes) - allowed:
+            raise ValueError("Provide supported sequence clip fields")
+        target = next((c for c in sequence.get_all_clips() if c.id == clip_id), None)
+        if target is None:
+            raise ValueError(f"Sequence clip '{clip_id}' not found")
+        for key, value in changes.items():
+            if key in {"hflip", "vflip", "reverse"}:
+                if not isinstance(value, bool):
+                    raise ValueError(f"{key} must be a boolean")
+            elif not isinstance(value, int) or isinstance(value, bool):
+                raise ValueError(f"{key} must be an integer")
+        candidate = replace(target, **changes)
+        if (
+            candidate.start_frame < 0
+            or candidate.in_point < 0
+            or candidate.hold_frames < 1
+        ):
+            raise ValueError("Invalid sequence clip position or duration")
+        if not candidate.is_frame_entry and candidate.out_point <= candidate.in_point:
+            raise ValueError("out_point must be greater than in_point")
+        if not 0 <= candidate.track_index < len(sequence.tracks):
+            raise ValueError("track_index out of range")
+        if any(
+            getattr(candidate, key) != getattr(target, key)
+            for key in ("hflip", "vflip", "reverse")
+        ):
+            candidate.prerendered_path = None
+        desired = replace(Placement.capture(candidate), clip=target)
+        original_index = next(
+            i
+            for i, track in enumerate(sequence.tracks)
+            if any(c is target for c in track.clips)
+        )
+        edits = []
+        for index in sorted({original_index, candidate.track_index}):
+            track = sequence.tracks[index]
+            before = tuple(Placement.capture(c) for c in track.clips)
+            if index == original_index == candidate.track_index:
+                after = [desired if p.clip is target else p for p in before]
+            else:
+                after = [p for p in before if p.clip is not target]
+                if index == candidate.track_index:
+                    after.append(desired)
+            after.sort(key=lambda p: p.start)
+            if before != tuple(after):
+                edits.append(TrackEdit(track, index, before, tuple(after)))
+        return cls(
+            sequence,
+            tuple(edits),
+            (target,) if edits else (),
+            "Edit sequence clip",
+            (clip_id,),
+        )
+
     def apply(self, project: Project, *, undo: bool = False) -> list[SequenceClip]:
         if not any(sequence is self.sequence for sequence in project.sequences):
             raise ValueError("Sequence no longer belongs to this project")
@@ -149,4 +257,15 @@ class EditSequenceClips:
             edit.track.clips[:] = [p.clip for p in target]
             for placement in target:
                 placement.clip.start_frame = placement.start
+                for field in (
+                    "in_point",
+                    "out_point",
+                    "hold_frames",
+                    "track_index",
+                    "hflip",
+                    "vflip",
+                    "reverse",
+                    "prerendered_path",
+                ):
+                    setattr(placement.clip, field, getattr(placement, field))
         return list(self.changed)

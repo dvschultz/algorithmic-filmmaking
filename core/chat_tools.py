@@ -919,70 +919,15 @@ def update_sequence_clip(
             "error": f"Sequence clip '{clip_id}' not found. Use list_sequence_clips to see available clips."
         }
 
-    # Validate and apply updates
-    updated_fields = {}
-
-    if in_point is not None:
-        if in_point < 0:
-            return {"success": False, "error": f"in_point must be >= 0, got {in_point}"}
-        target_clip.in_point = in_point
-        updated_fields["in_point"] = in_point
-
-    if out_point is not None:
-        if out_point <= (in_point if in_point is not None else target_clip.in_point):
-            return {"success": False, "error": "out_point must be greater than in_point"}
-        target_clip.out_point = out_point
-        updated_fields["out_point"] = out_point
-
-    if start_frame is not None:
-        if start_frame < 0:
-            return {"success": False, "error": f"start_frame must be >= 0, got {start_frame}"}
-        target_clip.start_frame = start_frame
-        updated_fields["start_frame"] = start_frame
-
-    if track_index is not None:
-        if track_index < 0 or track_index >= len(project.sequence.tracks):
-            return {
-                "success": False,
-                "error": f"track_index {track_index} out of range (0-{len(project.sequence.tracks) - 1})"
-            }
-        target_clip.track_index = track_index
-        updated_fields["track_index"] = track_index
-
-    if hold_frames is not None:
-        if hold_frames < 1:
-            return {"success": False, "error": f"hold_frames must be >= 1, got {hold_frames}"}
-        target_clip.hold_frames = hold_frames
-        updated_fields["hold_frames"] = hold_frames
-
-    if hflip is not None:
-        if not isinstance(hflip, bool):
-            return {"success": False, "error": f"hflip must be a boolean, got {type(hflip).__name__}"}
-        target_clip.hflip = hflip
-        # Invalidate pre-rendered clip since transforms changed
-        target_clip.prerendered_path = None
-        updated_fields["hflip"] = hflip
-
-    if vflip is not None:
-        if not isinstance(vflip, bool):
-            return {"success": False, "error": f"vflip must be a boolean, got {type(vflip).__name__}"}
-        target_clip.vflip = vflip
-        target_clip.prerendered_path = None
-        updated_fields["vflip"] = vflip
-
-    if reverse is not None:
-        if not isinstance(reverse, bool):
-            return {"success": False, "error": f"reverse must be a boolean, got {type(reverse).__name__}"}
-        target_clip.reverse = reverse
-        target_clip.prerendered_path = None
-        updated_fields["reverse"] = reverse
-
-    if not updated_fields:
-        return {"success": False, "error": "No fields provided to update"}
-
-    # Notify observers
-    project.mark_dirty()
-    project._notify_observers("sequence_changed", [clip_id])
+    updated_fields = {key: value for key, value in {
+        "in_point": in_point, "out_point": out_point, "start_frame": start_frame,
+        "track_index": track_index, "hold_frames": hold_frames, "hflip": hflip,
+        "vflip": vflip, "reverse": reverse,
+    }.items() if value is not None}
+    try:
+        project.update_sequence_clip(clip_id, **updated_fields)
+    except (ValueError, RuntimeError) as exc:
+        return {"success": False, "error": str(exc)}
 
     return {
         "success": True,

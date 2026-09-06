@@ -2,7 +2,8 @@
 
 Every `Project` has one Qt-free `ProjectSession`, created on the project's owner
 thread. Clip enable/disable and manual sequence insertion/removal use reversible
-commands. Browser controls, the timeline, and chat use the same model delegation; the Edit menu and chat
+commands. Reorder and timing/track/transform updates use that same history.
+Browser controls, the timeline, and chat use the same model delegation; the Edit menu and chat
 Undo/Redo project the same history through `SessionHistoryAdapter`.
 
 `Project.set_clips_disabled()` captures explicit before/after values for unique
@@ -33,9 +34,15 @@ and rejects conflicting track edits atomically. Commands target their original
 sequence even after the active sequence changes. Timeline model refreshes emit
 `sequence_refreshed`, which updates views without creating an external mutation.
 
+`reorder_sequence()` reorders the first track and rejects duplicate IDs.
+`update_sequence_clip()` validates the complete timing/track/transform request
+before committing it. Track moves update actual membership; undo restores cached
+render references invalidated by transform edits. No-op edits do not enter history.
+Desktop drag/resize gestures use detached previews, leaving save snapshots stable,
+and commit one command on release. Frame entries resize their hold duration.
+
 This is an incremental U4 migration. Generated sequence population, clearing,
-reordering, trimming, sequence management, source removal, and metadata commands
-still need migration. Legacy direct model mutations are tracked as
+sequence management, source removal, and metadata commands still need migration. Legacy direct model mutations are tracked as
 external changes; they are not yet undoable or comprehensively thread-guarded.
 MCP and CLI do not yet expose history tools; the shared spine history functions
 are available to retained headless sessions. Cross-process locks, durable history,
