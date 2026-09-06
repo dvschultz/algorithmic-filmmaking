@@ -50,7 +50,7 @@ def update_frame(
         updated_fields.append("notes")
 
     if tags is not None or notes is not None:
-        project._dirty = True
+        project.mark_dirty()
         project._notify_observers("frames_updated", [frame])
 
     return {

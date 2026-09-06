@@ -19,6 +19,7 @@ from ui.workers.color_worker import ColorAnalysisWorker
 app = QCoreApplication([])
 loop = QEventLoop()
 project = _build_project(Path(sys.argv[1]), 2)
+project.mark_clean()
 owner = threading.get_ident()
 received = []
 
@@ -26,6 +27,17 @@ class Receiver(QObject):
     def __init__(self):
         super().__init__()
         self.project = project
+        self._title_build_suffix = 'test'
+        self.current_project_path = None
+        self.current_source = None
+        self.title = ''
+        self._update_window_title()
+
+    _is_dirty = property(lambda self: self.project.is_dirty)
+    _update_window_title = MainWindow._update_window_title
+
+    def setWindowTitle(self, title):
+        self.title = title
 
     @Slot(object, object)
     def apply(self, application, result):
@@ -49,6 +61,8 @@ with patch('core.analysis.color.extract_dominant_colors', return_value=[(1, 2, 3
     assert worker.wait(5000)
 assert received == [('result', owner), ('completed', owner)], received
 assert all(c.dominant_colors == [(1, 2, 3)] for c in project.clips)
+assert project.is_dirty
+assert receiver.title.endswith('*'), receiver.title
 """
     result = subprocess.run(
         [sys.executable, "-c", code, str(tmp_path)],

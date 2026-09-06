@@ -5498,36 +5498,9 @@ def toggle_clip_disabled(
     if not clip_ids:
         return {"success": False, "error": "No clip IDs provided"}
 
-    updated = []
-    not_found = []
+    from core.spine.clips import set_clips_disabled
 
-    for clip_id in clip_ids:
-        clip = project.clips_by_id.get(clip_id)
-        if clip is None:
-            not_found.append(clip_id)
-            continue
-
-        if disabled is None:
-            clip.disabled = not clip.disabled
-        else:
-            clip.disabled = disabled
-
-        updated.append({"id": clip.id, "disabled": clip.disabled})
-
-    if updated:
-        clips_to_update = [
-            project.clips_by_id[u["id"]] for u in updated
-        ]
-        project.update_clips(clips_to_update)
-
-    result = {
-        "success": True,
-        "updated": updated,
-        "updated_count": len(updated),
-    }
-    if not_found:
-        result["not_found"] = not_found
-    return result
+    return set_clips_disabled(project, clip_ids, disabled)
 
 
 # ============================================================================
@@ -6067,9 +6040,8 @@ def undo(main_window) -> dict:
     if not main_window.undo_stack.canUndo():
         return {"success": False, "error": "Nothing to undo"}
 
-    action_text = main_window.undo_stack.undoText()
-    main_window.undo_stack.undo()
-    return {"success": True, "undone": action_text or "last action"}
+    result: dict = main_window.undo_stack.undo()
+    return result
 
 
 @tools.register(
@@ -6090,6 +6062,5 @@ def redo(main_window) -> dict:
     if not main_window.undo_stack.canRedo():
         return {"success": False, "error": "Nothing to redo"}
 
-    action_text = main_window.undo_stack.redoText()
-    main_window.undo_stack.redo()
-    return {"success": True, "redone": action_text or "last action"}
+    result: dict = main_window.undo_stack.redo()
+    return result

@@ -15,6 +15,36 @@ from core.project import Project
 from tests.test_spine_analyze import _build_project
 
 
+def test_cli_missing_color_backend_does_not_rewrite_project(tmp_path):
+    import builtins
+
+    from cli.main import cli, register_commands
+    from models.clip import Clip, Source
+
+    register_commands()
+    project = _build_project(tmp_path, n_clips=1)
+    project.add_source(Source(id="offline", file_path=tmp_path / "offline.mp4"))
+    project.add_clips([
+        Clip(id="offline-clip", source_id="offline", start_frame=0, end_frame=30)
+    ])
+    path = tmp_path / "project.json"
+    assert project.save(path)
+    original_bytes = path.read_bytes()
+    original_import = builtins.__import__
+
+    def unavailable_backend(name, *args, **kwargs):
+        if name == "core.analysis.color":
+            raise ImportError("color backend unavailable")
+        return original_import(name, *args, **kwargs)
+
+    with patch("builtins.__import__", side_effect=unavailable_backend):
+        result = CliRunner().invoke(cli, ["--json", "analyze", "colors", str(path)])
+
+    assert result.exit_code == 4, result.output
+    assert "color backend unavailable" in result.output
+    assert path.read_bytes() == original_bytes
+
+
 @pytest.mark.parametrize("surface", ["spine", "cli", "mcp", "worker"])
 def test_color_surfaces_use_source_ranges_and_preserve_metadata(tmp_path, surface):
     project = _build_project(tmp_path, n_clips=2)

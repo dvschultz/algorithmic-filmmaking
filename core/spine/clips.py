@@ -1,14 +1,17 @@
 """Clip-level spine impls.
 
-Read-only clip queries shared between the chat-tools agent and the MCP
-server. Heavy imports (``numpy``, color helpers) are lazy.
+Clip queries and editorial operations shared by application adapters.
+Heavy imports (``numpy``, color helpers) are lazy.
 """
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from core.spine._agent_formatting import ASPECT_RATIO_RANGES, append_gaze_fields
+
+if TYPE_CHECKING:
+    from core.project import Project
 
 
 def filter_clips(
@@ -457,4 +460,27 @@ __all__ = [
     "find_similar_clips",
     "get_clip_cinematography",
     "group_clips_by",
+    "set_clips_disabled",
 ]
+
+
+def set_clips_disabled(project: Project, clip_ids: list[str], disabled: bool | None = None) -> dict:
+    """Set or toggle clips through the project's shared editorial history."""
+    if not clip_ids:
+        return {"success": False, "error": "No clip IDs provided"}
+    ids = list(dict.fromkeys(clip_ids))
+    not_found = [clip_id for clip_id in ids if clip_id not in project.clips_by_id]
+    try:
+        project.set_clips_disabled(ids, disabled)
+    except (ValueError, RuntimeError) as exc:
+        return {"success": False, "error": str(exc)}
+    # Keep the public response inclusive of already-matching targets, even
+    # though a no-op creates no command and does not dirty the project.
+    updated = [
+        {"id": clip_id, "disabled": project.clips_by_id[clip_id].disabled}
+        for clip_id in ids if clip_id in project.clips_by_id
+    ]
+    result = {"success": True, "updated": updated, "updated_count": len(updated)}
+    if not_found:
+        result["not_found"] = not_found
+    return result

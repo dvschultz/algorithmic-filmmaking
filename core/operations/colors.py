@@ -21,6 +21,10 @@ if TYPE_CHECKING:
     from core.project import Project
 
 
+class ColorDependencyError(RuntimeError):
+    """The color backend could not load; the batch must not be applied."""
+
+
 def _file_stamp(path: Path | None) -> tuple[int, int] | None:
     try:
         stat = path.stat() if path is not None else None
@@ -157,7 +161,10 @@ def _compute_target(
     try:
         if path is None or not path.is_file():
             return ColorOutcome(target.target_id, "failed", code="source_file_missing")
-        from core.analysis.color import extract_dominant_colors
+        try:
+            from core.analysis.color import extract_dominant_colors
+        except ImportError as exc:
+            raise ColorDependencyError(str(exc)) from exc
 
         colors = extract_dominant_colors(
             video_path=target.video_path or Path(),
@@ -173,6 +180,8 @@ def _compute_target(
             "succeeded",
             tuple((int(r), int(g), int(b)) for r, g, b in colors),
         )
+    except ColorDependencyError:
+        raise
     except Exception as exc:  # noqa: BLE001 — one failed clip must not discard the batch
         return ColorOutcome(
             target.target_id, "failed", code="extraction_failed", message=str(exc)
@@ -236,8 +245,12 @@ class ColorApplication:
         self.project = project
         self.request = request
         self._applied = False
+        self._session_id = project.session.session_id
 
     def apply(self, result: ColorResult) -> ColorResult:
+        self.project.session.assert_owner()
+        if self._session_id != self.project.session.session_id:
+            raise ValueError("Color result belongs to an expired project session")
         if self._applied:
             raise ValueError("Color result already applied")
         if result.request_id != self.request.request_id:

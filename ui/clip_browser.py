@@ -3287,14 +3287,12 @@ class ClipBrowser(QWidget):
             if (clip := clips_by_id.get(clip_id)) is not None and not clip.disabled
         }
 
-        from ui.commands.toggle_clip_disabled import ToggleClipDisabledCommand
         main_win = self.window()
-        if hasattr(main_win, 'undo_stack'):
+        if hasattr(main_win, 'undo_stack') and hasattr(main_win, 'project'):
             # Notify listeners (e.g. MainWindow) that these IDs are toggling so the
             # downstream `clips_updated` handler can preserve layout for them.
             self.disabled_clips_changed.emit(list(clip_ids))
-            cmd = ToggleClipDisabledCommand(main_win.project, clip_ids)
-            main_win.undo_stack.push(cmd)
+            main_win.project.toggle_clips_disabled(clip_ids)
         else:
             # Fallback when no undo stack (e.g. tests)
             for clip_id in clip_ids:

@@ -29,7 +29,7 @@ ui/                  (21 files)  # Main window, chat, player, browser, theme, al
   workers/           (24 files)  # QThread workers (base.py = CancellableWorker + is_transient_provider_error)
   widgets/           (24 files)  # Cards, grids, timeline preview, empty states
   timeline/          (8 files)   # Timeline widget, tracks, clips, playhead
-  commands/          (1 file)    # QUndoCommand subclasses (toggle_clip_disabled, ...)
+  session_history.py            # Qt actions projecting shared project history
 core/                (54 files)  # Business logic, FFmpeg, settings, project, LLM
   analysis/          (18 files)  # Color, shots, brightness, volume, embeddings, OCR, faces, cinematography, gaze
   remix/             (20 files)  # Sequencer algorithm implementations (23 algorithms registered in ui/algorithm_config.py)
@@ -100,7 +100,7 @@ Sequencer algorithm reference: see `.claude/rules/sequencer-algorithms.md` (load
 All workers inherit `CancellableWorker` (`ui/workers/base.py`). Workers emit `progress(n, total)`, `clip_ready(clip)`, `error(message)`, `finished()`. Main thread updates UI. User can cancel. VLM/LLM workers use `is_transient_provider_error()` from `ui/workers/base.py` to retry transient 429/5xx/network failures with exponential backoff; `summarize_clip_errors()` builds the user-facing batch error summary.
 
 ### Undo Commands
-User-undoable actions use QUndoCommand subclasses in `ui/commands/` (e.g., `ToggleClipDisabledCommand`). Push commands onto the main window's QUndoStack rather than mutating the project directly.
+Clip enable/disable uses Qt-free commands in `core/commands/` through `Project.session`. Call `Project.set_clips_disabled()` or `toggle_clips_disabled()`; the Edit menu and chat share this history through `ui/session_history.py`. Other editorial actions are still being migrated. Keep legacy mutations on `mark_dirty()` even when already dirty so undo cannot hide unrelated unsaved edits. See `docs/architecture/project-sessions.md`.
 
 ### Feature Registry
 `core/feature_registry.py` maps features to binary/package dependencies. Call `check_feature(name)` to test availability, `install_for_feature(name)` to auto-install. The UI shows install prompts when deps are missing.

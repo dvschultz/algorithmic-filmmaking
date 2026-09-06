@@ -247,7 +247,9 @@ def colors(
     """
     try:
         from core.project import Project, ProjectLoadError
-        from core.operations.colors import ColorApplication, color_request, compute_colors
+        from core.operations.colors import (
+            ColorApplication, ColorDependencyError, color_request, compute_colors,
+        )
     except ImportError as e:
         exit_with(ExitCode.DEPENDENCY_MISSING, f"Missing dependency: {e}")
 
@@ -277,14 +279,17 @@ def colors(
     except ValueError as e:
         exit_with(ExitCode.VALIDATION_ERROR, str(e))
     application = ColorApplication(project, request)
-    with ProgressContext("Analyzing colors") as progress:
-        result = application.apply(compute_colors(
-            request,
-            progress_callback=lambda done, total, outcome: progress.update(
-                done / total, f"Clip {done}/{total}",
-            ),
-        ))
-        progress.update(1.0, "Complete")
+    try:
+        with ProgressContext("Analyzing colors") as progress:
+            result = application.apply(compute_colors(
+                request,
+                progress_callback=lambda done, total, outcome: progress.update(
+                    done / total, f"Clip {done}/{total}",
+                ),
+            ))
+            progress.update(1.0, "Complete")
+    except ColorDependencyError as e:
+        exit_with(ExitCode.DEPENDENCY_MISSING, f"Missing dependency: {e}")
     if all(o.status == "skipped" for o in result.outcomes):
         output_info("All clips already have color data. Use --force to re-analyze.")
         return

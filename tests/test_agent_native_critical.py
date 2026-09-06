@@ -142,7 +142,7 @@ class TestDeleteClipsTool:
         """Create a mock project with given clips and optional sequence."""
         from core.project import Project
 
-        project = Project.__new__(Project)
+        project = Project.new()
         project._sources = [Source(id="src1", file_path=Path("/video.mp4"), fps=30.0)]
         project._clips = list(clips)
         project._frames = []
@@ -234,7 +234,7 @@ class TestProjectRemoveClips:
         from core.project import Project
         from models.sequence import Sequence
 
-        project = Project.__new__(Project)
+        project = Project.new()
         project._sources = []
         project._clips = [_make_clip("c1"), _make_clip("c2"), _make_clip("c3")]
         project._frames = []
@@ -255,7 +255,7 @@ class TestProjectRemoveClips:
         from core.project import Project
         from models.sequence import Sequence
 
-        project = Project.__new__(Project)
+        project = Project.new()
         project._sources = []
         project._clips = [_make_clip("c1")]
         project._frames = []

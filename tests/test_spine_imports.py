@@ -29,6 +29,9 @@ FORBIDDEN_MODULES: tuple[str, ...] = (
 
 # Spine modules under test. Add new spine modules here as they land.
 SPINE_MODULES: tuple[str, ...] = (
+    "core.project_session",
+    "core.commands.clip_disabled",
+    "core.spine.history",
     "core.operations.contracts",
     "core.operations.colors",
     "core.spine",

@@ -676,6 +676,9 @@ class Project:
         self._dirty: bool = False
         self._mutation_generation: int = 0
         self._observers: list[Callable[[str, Any], None]] = []
+        from core.project_session import ProjectSession
+
+        self.session = ProjectSession(self)
 
     # --- Sequence compatibility property ---
 
@@ -1032,16 +1035,14 @@ class Project:
         Returns:
             List of toggled Clip objects
         """
-        toggled = []
-        for clip_id in clip_ids:
-            clip = self.clips_by_id.get(clip_id)
-            if clip is not None:
-                clip.disabled = not clip.disabled
-                toggled.append(clip)
-        if toggled:
-            self.mark_dirty()
-            self._notify_observers("clips_updated", toggled)
-        return toggled
+        return self.set_clips_disabled(clip_ids, None)
+
+    def set_clips_disabled(self, clip_ids: list[str], disabled: bool | None) -> list[Clip]:
+        """Set or toggle clip states as one reversible session edit."""
+        from core.commands.clip_disabled import SetClipsDisabled
+
+        self.session.assert_owner()
+        return self.session.execute(SetClipsDisabled.capture(self, clip_ids, disabled))
 
     @property
     def enabled_clips(self) -> list[Clip]:
@@ -1327,10 +1328,12 @@ class Project:
         """Mark project as having unsaved changes."""
         self._mutation_generation = self.mutation_generation + 1
         self._dirty = True
+        self.session.record_external_change()
 
     def mark_clean(self) -> None:
         """Mark project as saved (no unsaved changes)."""
         self._dirty = False
+        self.session.record_saved()
 
     # --- Persistence ---
 
@@ -1526,6 +1529,7 @@ class Project:
 
     def clear(self) -> None:
         """Clear all project data (for 'New Project')."""
+        self.session.assert_owner()
         self._sources = []
         self._clips = []
         self._frames = []
@@ -1536,7 +1540,9 @@ class Project:
         self.path = None
         self.metadata = ProjectMetadata()
         self._dirty = False
+        self._mutation_generation += 1
         self._invalidate_caches()
+        self.session.reset()
         self._notify_observers("project_cleared", None)
 
     def __repr__(self) -> str:

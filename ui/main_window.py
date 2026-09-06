@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
     QDialog,
 )
 from PySide6.QtCore import Qt, Signal, QThread, QUrl, QTimer, Slot
-from PySide6.QtGui import QDesktopServices, QKeySequence, QAction, QDragEnterEvent, QDropEvent, QUndoStack
+from PySide6.QtGui import QDesktopServices, QKeySequence, QAction, QDragEnterEvent, QDropEvent
 
 from models.clip import Source, Clip
 from core.scene_detect import SceneDetector, DetectionConfig, KaraokeDetectionConfig
@@ -971,10 +971,14 @@ class MainWindow(QMainWindow):
         # Project path tracking (for backwards compatibility - delegates to project)
         # Note: self.project.path is the actual storage
 
-        self.undo_stack = QUndoStack(self)
+        from ui.session_history import SessionHistoryAdapter
+
+        self.undo_stack = SessionHistoryAdapter(self.project.session, self)
+        self.undo_stack.changed.connect(self._update_window_title)
 
         logger.info("Setting up UI...")
         self._setup_ui()
+        self.undo_stack.action_failed.connect(self.status_bar.showMessage)
         logger.info("Connecting signals...")
         self._connect_signals()
 
@@ -5861,7 +5865,13 @@ class MainWindow(QMainWindow):
         """Apply a completed batch on the GUI thread to its originating project."""
         if application is None or application.project is not self.project:
             return
-        applied = application.apply(result)
+        try:
+            applied = application.apply(result)
+        except (ValueError, RuntimeError) as exc:
+            self._on_color_error(str(exc))
+            return
+        if any(o.status == "succeeded" for o in applied.outcomes):
+            self._update_window_title()
         stale = [o for o in applied.outcomes if o.code == "stale_input"]
         if stale:
             self._on_color_error(f"Color results discarded for {len(stale)} changed targets. Run analysis again.")
@@ -9943,9 +9953,8 @@ class MainWindow(QMainWindow):
 
     def _mark_dirty(self):
         """Mark the project as having unsaved changes."""
-        if not self.project.is_dirty:
-            self.project.mark_dirty()
-            self._update_window_title()
+        self.project.mark_dirty()
+        self._update_window_title()
 
     def _mark_clean(self):
         """Mark the project as having no unsaved changes."""
@@ -10295,7 +10304,9 @@ class MainWindow(QMainWindow):
         self._clear_project_state()
 
         # Set the new project
+        self.project.session.close()
         self.project = loaded_project
+        self.undo_stack.set_session(self.project.session)
         self._project_adapter.set_project(self.project)
 
         # Set project on Frames tab

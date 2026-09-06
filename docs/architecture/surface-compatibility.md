@@ -148,8 +148,10 @@ mtime check and adds per-target error details while retaining legacy counters.
 
 This is a migration checkpoint, not completion of the architecture plan.
 The application guard is process-local and one-use, not durable exactly-once
-execution. Project sessions, locks, undo, durable jobs, media-time correction,
-recipes and the remaining interface migrations are still to be implemented.
+execution. The first [project-session migration](project-sessions.md) now shares
+clip enable/disable history between the browser and chat. Remaining editorial
+commands, locks, durable jobs, media-time correction, recipes, and the remaining
+interface migrations are still to be implemented.
 
 Checkpoint validation:
 

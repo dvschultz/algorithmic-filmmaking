@@ -111,33 +111,26 @@ class TestProjectToggleDisabled:
 # --- Undo command ---
 
 
-class TestToggleClipDisabledCommand:
-    def test_redo_toggles(self):
-        from ui.commands.toggle_clip_disabled import ToggleClipDisabledCommand
+class TestSetClipsDisabledCommand:
+    def test_explicit_command_restores_mixed_states(self):
+        from core.commands.clip_disabled import SetClipsDisabled
 
         project = _make_project_with_clips()
-        cmd = ToggleClipDisabledCommand(project, ["c0"])
-        cmd.redo()
-        assert project.clips_by_id["c0"].disabled is True
+        project.clips[1].disabled = True
+        command = SetClipsDisabled.capture(project, ["c0", "c1"], True)
+        project.session.execute(command)
+        assert all(c.disabled for c in project.clips[:2])
+        project.session.undo()
+        assert not project.clips[0].disabled
+        assert project.clips[1].disabled
 
-    def test_undo_reverts(self):
-        from ui.commands.toggle_clip_disabled import ToggleClipDisabledCommand
-
-        project = _make_project_with_clips()
-        cmd = ToggleClipDisabledCommand(project, ["c0"])
-        cmd.redo()
-        assert project.clips_by_id["c0"].disabled is True
-        cmd.undo()
-        assert project.clips_by_id["c0"].disabled is False
-
-    def test_menu_text(self):
-        from ui.commands.toggle_clip_disabled import ToggleClipDisabledCommand
+    def test_menu_text_describes_the_change(self):
+        from core.commands.clip_disabled import SetClipsDisabled
 
         project = _make_project_with_clips()
-        cmd_single = ToggleClipDisabledCommand(project, ["c0"])
-        assert "1 clip" in cmd_single.text()
-        cmd_multi = ToggleClipDisabledCommand(project, ["c0", "c1"])
-        assert "2 clips" in cmd_multi.text()
+        assert SetClipsDisabled.capture(project, ["c0"], True).label == "Disable 1 clip"
+        project.toggle_clips_disabled(["c0", "c1"])
+        assert SetClipsDisabled.capture(project, ["c0", "c1"], False).label == "Enable 2 clips"
 
 
 # --- Disabled clips excluded from sequence ---
