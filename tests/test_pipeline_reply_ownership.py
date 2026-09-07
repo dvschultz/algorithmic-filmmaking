@@ -108,13 +108,17 @@ with patch('core.settings.load_settings', return_value=SimpleNamespace(
 assert corpus.results == [{}]
 for cls, op, signal in [(TextExtractionWorker, 'extract_text', 'extraction_completed'),
                          (CinematographyWorker, 'cinematography', 'analysis_completed')]:
-    window.settings = SimpleNamespace(description_parallelism=2)
-    window._on_text_extraction_progress = Mock(); window._on_text_extraction_clip_ready = Mock()
+    window.settings = SimpleNamespace(description_parallelism=2,
+        text_extraction_method='vlm', text_extraction_vlm_model='test')
+    window._on_text_extraction_progress = Mock()
     window._on_text_extraction_error = Mock(); window._on_cinematography_progress = Mock()
     window._on_cinematography_clip_ready = Mock(); window._on_cinematography_error = Mock()
     window._on_frame_analysis_op_finished = Mock()
     with patch.object(cls, 'start', lambda worker: getattr(worker, signal).emit({})):
         MainWindow._launch_frame_analysis_worker(window, op, [])
+    if op == 'extract_text':
+        assert window._frame_text_worker.options.vlm_only is True
+        assert window._frame_text_worker.options.vlm_model == 'test'
     window._on_frame_analysis_op_finished.assert_called_once_with(op)
 # Empty or filtered dispatch must report failure instead of waiting forever.
 harness = SimpleNamespace(project=window.project,

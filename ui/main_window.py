@@ -3691,7 +3691,8 @@ class MainWindow(QMainWindow):
             vlm_only=vlm_only,
         )
         self.text_extraction_worker.progress.connect(self._on_text_extraction_progress)
-        self.text_extraction_worker.clip_completed.connect(self._on_text_extraction_clip_ready)
+        from ui.workers.ocr_delivery import OcrDelivery
+        OcrDelivery(self, self.text_extraction_worker, pipeline=True)
         bind_pipeline_completion(
             self, self.text_extraction_worker, "text_extraction_worker",
             self.text_extraction_worker.extraction_completed, self._on_pipeline_extract_text_finished,
@@ -4718,21 +4719,6 @@ class MainWindow(QMainWindow):
         else:
             self.status_bar.showMessage(f"Extracting text: {current}/{total} clips...")
         self.progress_bar.setValue(int((current / total) * 100))
-
-    @Slot(str, list)
-    def _on_text_extraction_clip_ready(self, clip_id: str, texts: list):
-        """Handle text extracted for single clip or frame."""
-        clip = self.clips_by_id.get(clip_id)
-        if clip:
-            clip.extracted_texts = texts
-            self.analyze_tab.update_clip_extracted_text(clip_id, texts)
-            self._mark_dirty()
-            return
-        # Try frame
-        frame = self.project.frames_by_id.get(clip_id)
-        if frame:
-            self.project.update_frame(clip_id, extracted_texts=texts)
-            self._mark_dirty()
 
     @Slot(str)
     def _on_text_extraction_error(self, error_msg: str):
@@ -6789,15 +6775,21 @@ class MainWindow(QMainWindow):
 
         elif op_key == "extract_text":
             from ui.workers.text_extraction_worker import TextExtractionWorker
+            method = self.settings.text_extraction_method
+            use_vlm = method in ("vlm", "hybrid")
             worker = TextExtractionWorker(
                 clips=[],
                 sources_by_id={},
                 analysis_targets=targets,
+                use_vlm_fallback=use_vlm,
+                vlm_only=method == "vlm",
+                vlm_model=self.settings.text_extraction_vlm_model if use_vlm else None,
             )
             worker.progress.connect(self._on_text_extraction_progress)
-            worker.clip_completed.connect(self._on_text_extraction_clip_ready)
-            worker.extraction_completed.connect(
-                lambda _: self._on_frame_analysis_op_finished("extract_text")
+            from ui.workers.ocr_delivery import OcrDelivery
+            OcrDelivery(
+                self, worker, worker_attribute="_frame_text_worker",
+                on_complete=lambda: self._on_frame_analysis_op_finished("extract_text"),
             )
             worker.error.connect(self._on_text_extraction_error)
             worker.finished.connect(worker.deleteLater)

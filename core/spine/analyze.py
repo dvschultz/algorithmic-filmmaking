@@ -424,52 +424,42 @@ def extract_text(
     cancel_event: Optional[threading.Event] = None,
 ) -> dict:
     """Extract visible text from clips using OCR/VLM fallback."""
-    from core.analysis.ocr import extract_text_from_clip
+    from core.operations.ocr import OcrTask, OcrOptions, OcrApplication, run_ocr
 
     clips = _resolve_clip_ids(project, clip_ids)
-    sources_by_id = project.sources_by_id
+    tasks = tuple(
+        OcrTask.from_clip(clip, project.sources_by_id.get(clip.source_id),
+                          skip=skip_existing and clip.extracted_texts is not None)
+        for clip in clips
+    )
+    application = OcrApplication(project, tasks)
     succeeded: list[dict] = []
     failed: list[dict] = []
     skipped: list[dict] = []
-    updated = []
-    total = len(clips)
 
-    for i, clip in enumerate(clips):
-        if _check_cancel(cancel_event):
-            break
-        if progress_callback is not None and total:
-            progress_callback(i / total, f"Text extraction ({i + 1}/{total}): {clip.id}")
-        if skip_existing and clip.extracted_texts is not None:
-            skipped.append({"clip_id": clip.id, "reason": "already_populated"})
-            continue
-        source = sources_by_id.get(clip.source_id)
-        if source is None or not source.file_path.exists():
-            failed.append({"clip_id": clip.id, "code": "source_file_missing"})
-            continue
-        try:
-            texts = extract_text_from_clip(
-                clip=clip,
-                source=source,
-                num_keyframes=min(max(1, num_keyframes), 5),
-                use_vlm_fallback=use_vlm_fallback,
-                vlm_model=vlm_model,
-                vlm_only=vlm_only,
-                cancel_event=cancel_event,
-            )
-        except Exception as exc:  # noqa: BLE001
-            failed.append({"clip_id": clip.id, "code": "text_extraction_failed", "message": str(exc)})
-            continue
-        if _check_cancel(cancel_event):
-            break
-        clip.extracted_texts = texts
-        updated.append(clip)
-        succeeded.append({"clip_id": clip.id, "text_count": len(texts)})
+    def deliver(outcome):
+        if outcome.status == "skipped":
+            skipped.append({"clip_id": outcome.clip_id, "reason": "already_populated"})
+        elif outcome.status == "failed":
+            entry = {"clip_id": outcome.clip_id, "code": outcome.code}
+            if outcome.message:
+                entry["message"] = outcome.message
+            failed.append(entry)
+        elif outcome.status == "succeeded":
+            if application.apply(project, outcome):
+                succeeded.append({"clip_id": outcome.clip_id, "text_count": len(outcome.texts)})
+            else:
+                failed.append({"clip_id": outcome.clip_id, "code": "target_changed"})
 
-    if updated:
-        project.update_clips(updated)
+    run_ocr(
+        tasks, OcrOptions(min(max(1, num_keyframes), 5), use_vlm_fallback, vlm_model, vlm_only),
+        cancel_event=cancel_event, on_outcome=deliver,
+        progress=(lambda n, total, cid: progress_callback((n - 1) / total, f"Text extraction ({n}/{total}): {cid}"))
+        if progress_callback else None,
+    )
     if progress_callback is not None:
         progress_callback(1.0, f"Done: {len(succeeded)} ok, {len(failed)} failed, {len(skipped)} skipped")
-    return {"success": True, "result": {"succeeded": succeeded, "failed": failed, "skipped": skipped, "total_clips": total}}
+    return {"success": True, "result": {"succeeded": succeeded, "failed": failed, "skipped": skipped, "total_clips": len(tasks)}}
 
 
 def describe(

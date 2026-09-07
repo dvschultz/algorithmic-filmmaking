@@ -118,6 +118,7 @@ def extract_text_from_frame(
     skip_detection: bool = False,
     *,
     cancel_event: Optional[threading.Event] = None,
+    raise_errors: bool = False,
 ) -> tuple[str, float, str]:
     """Extract text from a single video frame.
 
@@ -132,6 +133,7 @@ def extract_text_from_frame(
         confidence_threshold: Minimum confidence to accept PaddleOCR result (0.0-1.0)
         skip_detection: Ignored (PaddleOCR handles detection internally)
         cancel_event: Stop between provider calls and discard late results.
+        raise_errors: Let shared operations distinguish failure from valid empty text.
 
     Returns:
         Tuple of (text, confidence, source) where:
@@ -146,6 +148,8 @@ def extract_text_from_frame(
     # VLM-only mode: skip PaddleOCR entirely
     if vlm_only:
         if not use_vlm_fallback:
+            if raise_errors:
+                raise ValueError("VLM-only OCR requires VLM extraction to be enabled")
             logger.warning(
                 "extract_text_from_frame called with vlm_only=True but use_vlm_fallback=False. "
                 "This is a contradictory configuration; returning empty result."
@@ -159,12 +163,15 @@ def extract_text_from_frame(
                 logger.debug(f"VLM extracted (VLM-only): '{text[:50]}...' (confidence: {conf:.2f})")
                 return (text, conf, "vlm")
         except Exception as e:
+            if raise_errors:
+                raise
             logger.warning(f"VLM text extraction failed: {e}")
         return ("", 0.0, "none")
 
     text = ""
     confidence = 0.0
     source = "paddleocr"
+    failure: Optional[Exception] = None
 
     # Try PaddleOCR first
     if _check_paddleocr():
@@ -194,7 +201,10 @@ def extract_text_from_frame(
                     logger.debug(f"PaddleOCR extracted: '{text[:50]}...' (confidence: {confidence:.2f})")
 
         except Exception as e:
+            failure = e
             logger.warning(f"PaddleOCR extraction failed: {e}")
+    else:
+        failure = RuntimeError("Local OCR runtime is unavailable")
 
     if cancel.is_set():
         return ("", 0.0, "none")
@@ -203,16 +213,20 @@ def extract_text_from_frame(
     if use_vlm_fallback and (not text or confidence < confidence_threshold):
         try:
             vlm_text, vlm_conf = _vlm_text_extraction(frame_path, vlm_model)
+            failure = None
             if vlm_text and (not text or vlm_conf > confidence):
                 text = vlm_text
                 confidence = vlm_conf
                 source = "vlm"
                 logger.debug(f"VLM extracted: '{text[:50]}...' (confidence: {confidence:.2f})")
         except Exception as e:
+            failure = e
             logger.warning(f"VLM text extraction failed: {e}")
 
     if cancel.is_set():
         return ("", 0.0, "none")
+    if raise_errors and failure is not None and not text:
+        raise failure
     return text, confidence, source
 
 
@@ -307,6 +321,7 @@ def extract_text_from_clip(
     use_text_detection: bool = True,
     *,
     cancel_event: Optional[threading.Event] = None,
+    raise_errors: bool = False,
 ) -> list:
     """Extract text from multiple keyframes of a clip.
 
@@ -323,6 +338,7 @@ def extract_text_from_clip(
         progress_callback: Optional callback(current, total) for progress updates
         use_text_detection: Ignored (PaddleOCR handles detection internally)
         cancel_event: Stop between keyframes and discard an incomplete clip.
+        raise_errors: Fail the clip if decoding or extracting any keyframe fails.
 
     Returns:
         List of ExtractedText objects from models/clip.py
@@ -379,6 +395,8 @@ def extract_text_from_clip(
                 return []
 
             if not frame_path.exists() or frame_path.stat().st_size == 0:
+                if raise_errors:
+                    raise RuntimeError(f"Could not decode OCR frame {frame_num}")
                 logger.warning(f"Failed to extract frame {frame_num} from {source.file_path}")
                 continue
 
@@ -390,6 +408,7 @@ def extract_text_from_clip(
                 vlm_only=vlm_only,
                 skip_detection=True,  # PaddleOCR handles detection internally
                 cancel_event=cancel,
+                raise_errors=raise_errors,
             )
             if cancel.is_set():
                 return []
@@ -403,6 +422,8 @@ def extract_text_from_clip(
                 ))
 
         except Exception as e:
+            if raise_errors:
+                raise
             logger.error(f"Error extracting text from frame {frame_num}: {e}")
 
         finally:

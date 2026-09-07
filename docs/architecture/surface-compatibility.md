@@ -808,6 +808,18 @@ keyframes. The GUI clip/frame workers and spine reject late provider results;
 already completed clips remain available. Cancellation does not interrupt an
 in-flight native or network call, but prevents its result from being published.
 
-This corrects the provider behavior ahead of the U7 OCR migration. Shared typed
-operations, guarded GUI delivery for edited/replaced targets, and durable OCR
-recovery remain to be implemented.
+OCR computation now runs through `core/operations/ocr.py` for the spine and the
+GUI worker, including the Exquisite Corpus worker. Immutable tasks retain clip
+versus frame identity; clip targets use their video range, while frame targets
+use their image. The operation serializes local model access, validates returned
+text, and distinguishes valid empty observations from provider/decoder failures.
+Fatal model-download failures stop the remaining inference work.
+
+Main-window clip and frame publication is bound to the launching worker, project
+session, target object, media, range, and previous text. Duplicate or stale replies
+are discarded. Frame OCR uses the same configured method/model as clip OCR, and
+empty frame observations survive project save/load. Frame OCR completion advances
+only its original analysis run and is accepted once.
+
+Durable OCR recovery and Exquisite Corpus proposal/publication integration remain
+under U7; this does not complete the full OCR migration.

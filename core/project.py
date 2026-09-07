@@ -1182,6 +1182,7 @@ class Project:
     _UPDATABLE_FRAME_FIELDS = {
         "shot_type", "dominant_colors", "description", "description_model", "transcript",
         "detected_objects", "person_count", "analyzed", "cinematography", "object_labels",
+        "extracted_texts",
     }
 
     def update_frame(self, frame_id: str, **kwargs) -> Optional[Frame]:

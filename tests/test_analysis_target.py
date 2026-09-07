@@ -268,8 +268,9 @@ class TestWorkerTaskBuilding:
             sources_by_id={},
             analysis_targets=[target],
         )
-        assert worker._analysis_targets is not None
-        assert len(worker._analysis_targets) == 1
+        assert len(worker.tasks) == 1
+        assert worker.tasks[0].target_type == "frame"
+        assert worker.tasks[0].path == image_file
 
     def test_target_reports_missing_image(self, tmp_path):
         from ui.workers.color_worker import ColorAnalysisWorker

@@ -118,7 +118,7 @@ class Frame:
             data["person_count"] = self.person_count
         if self.object_labels is not None:
             data["object_labels"] = list(self.object_labels)
-        if self.extracted_texts:
+        if self.extracted_texts is not None:
             data["extracted_texts"] = [
                 et.to_dict() if hasattr(et, "to_dict") else et
                 for et in self.extracted_texts
