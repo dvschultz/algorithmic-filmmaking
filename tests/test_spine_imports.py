@@ -33,6 +33,7 @@ SPINE_MODULES: tuple[str, ...] = (
     "core.jobs",
     "core.jobs.commits",
     "core.jobs.colors",
+    "core.jobs.detection",
     "core.project_migrations",
     "core.project_lock",
     "core.commands.clip_disabled",

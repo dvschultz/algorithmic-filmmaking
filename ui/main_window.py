@@ -31,9 +31,8 @@ from PySide6.QtGui import QDesktopServices, QKeySequence, QAction, QDragEnterEve
 from models.clip import Source, Clip
 from core.project_lock import ProjectWriter
 from core.scene_detect import DetectionConfig, KaraokeDetectionConfig
-from core.operations.detection import (
-    DetectionGuard, DetectionRequest, StaleDetectionResult, run_detection,
-)
+from core.operations.detection import StaleDetectionResult
+from ui.workers.detection_worker import DetectionWorker
 from core.thumbnail import ThumbnailGenerator
 from core.downloader import (
     VideoDownloader,
@@ -167,62 +166,6 @@ def _source_ms_to_timeline_seconds(
     max_frame = max(seq_clip.start_frame, seq_clip.end_frame() - 1)
     timeline_frame = max(min_frame, min(timeline_frame, max_frame))
     return timeline_frame / timeline_fps
-
-
-class DetectionWorker(CancellableWorker):
-    """Background worker for scene detection.
-
-    Supports both visual detection (adaptive/content) and text-based
-    detection (karaoke mode).
-    """
-
-    progress = Signal(float, str)  # progress (0-1), status message
-    result_ready = Signal(object, object, list)  # guard, source, clips
-    detection_completed = Signal(object, list)  # source, clips (renamed from 'finished' to avoid shadowing QThread.finished)
-
-    def __init__(
-        self,
-        video_path: Path,
-        config: DetectionConfig = None,
-        mode: str = "adaptive",
-        karaoke_config: KaraokeDetectionConfig = None,
-        project: Project | None = None,
-        source_id: str | None = None,
-    ):
-        super().__init__()
-        self.video_path = video_path
-        self.config = config or DetectionConfig()
-        self.mode = mode
-        self.karaoke_config = karaoke_config
-        self.guard = DetectionGuard.capture(project, video_path, source_id=source_id) if project is not None else None
-        self.request = DetectionRequest.build(
-            self.video_path, self.config, mode=mode, karaoke_config=karaoke_config
-        )
-
-    def run(self):
-        self._log_start()
-        try:
-            if self.is_cancelled():
-                self._log_cancelled()
-                return
-
-            source, clips = run_detection(
-                self.request,
-                progress_callback=lambda p, m: self.progress.emit(p, m),
-                cancel_event=self._cancel_event,
-            )
-
-            if self.is_cancelled():
-                self._log_cancelled()
-                return
-            if self.guard is not None:
-                self.result_ready.emit(self.guard, source, clips)
-            self.detection_completed.emit(source, clips)
-            self._log_complete()
-        except Exception as e:
-            if not self.is_cancelled():
-                self._log_error(str(e))
-                self.error.emit(str(e))
 
 
 class ThumbnailWorker(QThread):
@@ -5726,6 +5669,9 @@ class MainWindow(QMainWindow):
             source_id=self.current_source.id,
         )
         self._active_detection_guard = self.detection_worker.guard
+        self.detection_worker.job_started.connect(
+            lambda task, persistence, guard=self.detection_worker.guard: self._on_detection_job_started(guard, task, persistence)
+        )
         self.detection_worker.progress.connect(self._on_detection_progress)
         self.detection_worker.result_ready.connect(self._on_guarded_detection_finished, Qt.UniqueConnection)
         self.detection_worker.error.connect(
@@ -5739,6 +5685,14 @@ class MainWindow(QMainWindow):
         self._gui_state.set_processing("scene_detection", f"running on {self.current_source.filename}")
         self.detection_worker.start()
         logger.info("DetectionWorker started")
+
+    def _on_detection_job_started(self, guard, task_id: str, persistence: str) -> None:
+        if (guard is self._active_detection_guard
+                and guard.session_id == self.project.session.session_id
+                and persistence == "session_only"):
+            self.status_bar.showMessage(
+                "Detecting scenes. Results remain unsaved until you save the project."
+            )
 
     def _on_detection_progress(self, progress: float, message: str):
         """Handle detection progress update."""
@@ -9230,6 +9184,9 @@ class MainWindow(QMainWindow):
             self.detection_worker = DetectionWorker(source_path, config, project=self.project)
 
         self._active_detection_guard = self.detection_worker.guard
+        self.detection_worker.job_started.connect(
+            lambda task, persistence, guard=self.detection_worker.guard: self._on_detection_job_started(guard, task, persistence)
+        )
         # Capture generation for lambda closures - used to ignore stale signals
         gen = current_gen
 

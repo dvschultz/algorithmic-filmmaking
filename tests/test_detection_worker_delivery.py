@@ -21,12 +21,15 @@ owner = threading.get_ident()
 source = Source(file_path=Path('video.mp4'))
 project = Project.new(name='delivery')
 project.add_source(source)
-for cancelled in (False, True):
+for outcome in ("completed", "cancelled", "pre_cancelled", "cancel_error", "failed"):
+    cancelled = outcome in ("cancelled", "pre_cancelled", "cancel_error")
     config = DetectionConfig(threshold=4)
     worker = DetectionWorker(Path('video.mp4'), config, project=project)
     config.threshold = 9
     loop = QEventLoop()
     received, errors = [], []
+    started = []
+    worker.job_started.connect(lambda task, persistence: started.append((task, persistence)))
     guarded = []
     worker.result_ready.connect(lambda guard, source, clips: guarded.append((guard, threading.get_ident())))
     worker.detection_completed.connect(lambda source, clips: received.append(source))
@@ -42,18 +45,31 @@ for cancelled in (False, True):
             assert config.threshold == 4
 
         def detect_scenes_with_progress(self, path, progress):
+            if outcome == "failed":
+                raise RuntimeError("decoder failed")
             if cancelled:
                 worker.cancel()
+            if outcome == "cancel_error":
+                raise RuntimeError("decoder stopped during cancellation")
             return source, []
 
+    if outcome == 'pre_cancelled':
+        worker.cancel()
     with patch('core.scene_detect.SceneDetector', Detector):
         timer.start(5000)
         worker.start()
         loop.exec()
         assert worker.wait(5000)
-    assert received == ([] if cancelled else [source]), received
-    assert guarded == ([] if cancelled else [(worker.guard, owner)]), guarded
-    assert errors == [], errors
+    assert started == [(worker.task_id, "session_only")], started
+    assert worker.job_status == ("cancelled" if cancelled else outcome), worker.job_status
+    assert worker._runtime is None
+    assert worker.operation.session_id == project.session.session_id
+    assert received == ([source] if outcome == "completed" else []), received
+    assert guarded == ([(worker.guard, owner)] if outcome == "completed" else []), guarded
+    if outcome == "failed":
+        assert len(errors) == 1 and "decoder failed" in errors[0], errors
+    else:
+        assert errors == [], errors
 '''
     result = subprocess.run(
         [sys.executable, "-c", code],

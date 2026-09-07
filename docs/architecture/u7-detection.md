@@ -7,7 +7,7 @@ source/clip objects and does not read or mutate a project.
 
 | Surface | Adapter | Execution |
 |---|---|---|
-| Desktop and live chat | `DetectionWorker` | Shared operation on the QThread |
+| Desktop and live chat | `ui.workers.detection_worker.DetectionWorker` | Shared operation on the job executor; QThread relays delivery |
 | Headless chat and MCP | `core.spine.detect` | Shared operation, then thumbnails and model publication |
 | CLI detect | `cli.commands.detect` | Shared operation, then project save |
 | CLI download with detection | `cli.commands.youtube` | Shared operation after download, then project save |
@@ -37,14 +37,25 @@ publication. `detection_completed` remains available for compatibility; consumer
 must not publish through both signals. Thumbnail files produced before a stale
 result is rejected can remain in the cache, but are not attached to the project.
 
+Desktop detection now submits an immutable operation specification to
+`JobRuntime.for_session()`. The runtime owns task IDs, progress, cancellation,
+terminal status, and the JSON result. The worker reconstructs source/clip objects
+after terminal success, then emits guarded results for delivery on the GUI thread. Native
+computation never receives the live project. Both manual and intention entry
+points report session-only persistence; this does not save the project or make
+detection restart-safe. The runtime is closed after emitting results, retaining the task
+ID and terminal status on the worker. `ui.main_window.DetectionWorker` remains an
+import alias for compatibility.
+
 Verification includes configuration isolation across retries, cancellation before
 and during computation, progress/error propagation, real queued desktop delivery,
 CLI/MCP compatibility, and the headless import boundary. A generated 24 fps video
 with cuts every 48 frames produced identical ranges from the old and shared paths
 in both adaptive and content modes.
 
-This completes the computation seam and target/session guards. U7 still requires shared job scheduling,
-durable detection receipts,
+This completes the computation seam, target/session guards, and desktop integration
+with the shared job lifecycle. U7 still requires durable detection receipts and
+submission-time snapshots for saved-project jobs,
 source import/download and thumbnail orchestration, and ordered intention plans.
 The remaining analysis families follow those changes. Existing CLI minimum-scene
 duration conversion still assumes 30 fps before detection and needs correction
