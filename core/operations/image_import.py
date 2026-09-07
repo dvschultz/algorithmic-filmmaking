@@ -1,6 +1,6 @@
 """Detached still-image import with isolated artifacts and owner publication."""
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 import shutil
 from threading import Event
@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from core.operations.contracts import OutcomeStatus
 from core.operations.transcription import _media_stamp
+from core.operations.frame_extraction import _decode_stamp
 
 if TYPE_CHECKING:
     from core.project import Project
@@ -33,6 +34,48 @@ class ImageImportTask:
     items: tuple[ImageImportInput, ...]
     artifact_dir: Path
     copy_files: bool
+
+    def to_dict(self) -> dict:
+        return {
+            "request_id": self.request_id,
+            "artifact_dir": str(self.artifact_dir),
+            "copy_files": self.copy_files,
+            "items": [{**asdict(item), "path": str(item.path)} for item in self.items],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ImageImportTask":
+        request_id = _import_id(data.get("request_id"))
+        directory = data.get("artifact_dir")
+        if (
+            not isinstance(directory, str)
+            or not Path(directory).is_absolute()
+            or Path(directory).name != request_id
+            or type(data.get("copy_files")) is not bool
+            or not isinstance(data.get("items"), list)
+        ):
+            raise ValueError("Invalid image import task")
+        items = []
+        for value in data["items"]:
+            path, error = value.get("path"), value.get("error")
+            if (
+                not isinstance(path, str)
+                or not path
+                or (error is not None and not isinstance(error, str))
+                or (error is None and not Path(path).is_absolute())
+            ):
+                raise ValueError("Invalid image import input")
+            items.append(
+                ImageImportInput(
+                    _import_id(value.get("id")),
+                    Path(path),
+                    _decode_stamp(value.get("media_stamp")),
+                    error,
+                )
+            )
+        if len({item.id for item in items}) != len(items):
+            raise ValueError("Duplicate image import input IDs")
+        return cls(request_id, tuple(items), Path(directory), data["copy_files"])
 
     @classmethod
     def from_paths(
@@ -62,7 +105,7 @@ class ImageImportTask:
                 ImageImportInput(
                     uuid4().hex,
                     path,
-                    _media_stamp(path) if error is None else None,
+                    _media_stamp(path) if error is None and path.is_file() else None,
                     error,
                 )
             )
@@ -103,6 +146,87 @@ class ImageImportOutcome:
     status: OutcomeStatus
     frames: tuple[ImportedImage, ...] = ()
     errors: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict:
+        return {
+            "request_id": self.request_id,
+            "status": self.status,
+            "errors": list(self.errors),
+            "frames": [
+                {
+                    **asdict(frame),
+                    "path": str(frame.path),
+                    "thumbnail_path": str(frame.thumbnail_path),
+                }
+                for frame in self.frames
+            ],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ImageImportOutcome":
+        request_id = _import_id(data.get("request_id"))
+        if (
+            data.get("status") not in ("succeeded", "failed", "unprocessed")
+            or not isinstance(data.get("frames"), list)
+            or not isinstance(data.get("errors"), list)
+            or any(not isinstance(error, str) for error in data["errors"])
+        ):
+            raise ValueError("Invalid image import outcome")
+        frames = []
+        for value in data["frames"]:
+            if any(
+                not isinstance(value.get(key), str)
+                or not Path(value[key]).is_absolute()
+                for key in ("path", "thumbnail_path")
+            ):
+                raise ValueError("Invalid imported image artifact path")
+            if any(
+                type(value.get(key)) is not int or value[key] <= 0
+                for key in ("width", "height")
+            ):
+                raise ValueError("Invalid imported image dimensions")
+            frames.append(
+                ImportedImage(
+                    _import_id(value.get("id")),
+                    Path(value["path"]),
+                    Path(value["thumbnail_path"]),
+                    value["width"],
+                    value["height"],
+                    _decode_stamp(value.get("media_stamp")),
+                    _decode_stamp(value.get("thumbnail_stamp")),
+                )
+            )
+        if (data["status"] == "succeeded") != bool(frames):
+            raise ValueError("Image import status does not match its frames")
+        return cls(request_id, data["status"], tuple(frames), tuple(data["errors"]))
+
+
+def _import_id(value) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) != 32
+        or any(c not in "0123456789abcdef" for c in value)
+    ):
+        raise ValueError("Invalid image import ID")
+    return value
+
+
+def image_import_task_inputs(task: ImageImportTask) -> dict:
+    """Stable input identity excludes generated IDs and request workspace name."""
+    return {
+        "copy_files": task.copy_files,
+        "output_root": str(task.artifact_dir.parent),
+        "items": [
+            {
+                "path": str(item.path),
+                "media_stamp": list(item.media_stamp)
+                if item.media_stamp is not None
+                else None,
+                "error": item.error,
+            }
+            for item in task.items
+        ],
+    }
 
 
 def run_image_import(
@@ -245,7 +369,16 @@ class ImageImportApplication:
             and (project.path.resolve() if project.path else None) == self.path
         )
 
-    def apply(self, project: "Project", outcome: ImageImportOutcome) -> bool:
+    def apply(
+        self,
+        project: "Project",
+        outcome: ImageImportOutcome,
+        *,
+        recovered_task: ImageImportTask | None = None,
+    ) -> bool:
+        task = recovered_task or self.task
+        if image_import_task_inputs(task) != image_import_task_inputs(self.task):
+            return False
         if (
             not self.is_current(project)
             or self.consumed
@@ -255,7 +388,7 @@ class ImageImportApplication:
 
         def publish() -> bool:
             self.consumed = True
-            validate_image_artifacts(self.task, outcome)
+            validate_image_artifacts(task, outcome)
             if any(frame.id in project.frames_by_id for frame in outcome.frames):
                 raise ValueError("Imported frame ID already exists")
             project.add_frames([frame.to_model() for frame in outcome.frames])

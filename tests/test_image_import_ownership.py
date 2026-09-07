@@ -44,6 +44,7 @@ app = QCoreApplication([])
 owner = get_ident(); owners = []
 with TemporaryDirectory() as directory:
     folder = Path(directory).resolve()
+    patch('core.settings.load_settings', return_value=SimpleNamespace(cache_dir=folder)).start()
     media = folder / 'image.png'; Image.new('RGB', (400, 300), 'red').save(media)
     bad = folder / 'bad.png'; bad.write_bytes(b'invalid')
     for mode in ('manual', 'agent', 'partial', 'reply', 'expired', 'project', 'save_as', 'cancel', 'failure', 'apply_failure'):

@@ -6650,7 +6650,7 @@ class MainWindow(QMainWindow):
 
         root = self.project.path.parent / "frames" if self.project.path else self.settings.cache_dir / "image-imports"
         worker = ImageImportWorker([Path(path) for path in paths], root, parent=self,
-            copy_files=copy_files, validate_paths=validate_paths)
+            copy_files=copy_files, validate_paths=validate_paths, project=self.project)
         self._image_import_worker = worker
         ImageImportDelivery(self, worker)
         worker.start()

@@ -31,6 +31,8 @@ FORBIDDEN_MODULES: tuple[str, ...] = (
 SPINE_MODULES: tuple[str, ...] = (
     "core.operations.audio_import",
     "core.operations.image_import",
+    "core.jobs.image_import",
+    "core.jobs.gui_image_import",
     "core.jobs.audio_import",
     "core.jobs.gui_audio_import",
     "core.operations.frame_extraction",

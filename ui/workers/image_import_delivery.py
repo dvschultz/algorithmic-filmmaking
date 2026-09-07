@@ -3,7 +3,12 @@
 from typing import Any
 from PySide6.QtCore import QObject, Slot
 
-from core.operations.image_import import ImageImportApplication, ImageImportOutcome
+from core.operations.image_import import (
+    ImageImportApplication,
+    ImageImportOutcome,
+    ImageImportTask,
+)
+from core.jobs.image_import import ImageImportRecord
 
 
 class ImageImportDelivery(QObject):
@@ -40,7 +45,28 @@ class ImageImportDelivery(QObject):
             self.failure = "; ".join(outcome.errors) or "Image import cancelled"
         else:
             try:
-                self.applied = self.application.apply(self.window.project, outcome)
+                cache = self.worker.cache
+                receipt = None
+                recovered_task = None
+                if cache is not None:
+                    if cache.recorded is None:
+                        raise ValueError("Image import receipt is missing")
+                    recovered_task = ImageImportTask.from_dict(cache.recorded.task)
+                    receipt = cache.results[cache.batch_id]
+                    if not receipt.matches(
+                        ImageImportRecord.build(recovered_task, outcome)
+                    ):
+                        raise ValueError(
+                            "Queued image import differs from recorded result"
+                        )
+                applied = self.application.apply(
+                    self.window.project, outcome, recovered_task=recovered_task
+                )
+                if applied and receipt is not None:
+                    self.window.project.record_job_result(
+                        receipt.result_id, receipt.digest
+                    )
+                self.applied = applied
                 if not self.applied:
                     self.failure = "Image import target changed"
             except Exception as exc:

@@ -39,6 +39,7 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
                 "gui_transcribe",
                 "gui_audio_transcribe",
                 "gui_audio_import",
+                "gui_import_images",
                 "gui_extract_frames",
                 "gui_align_words",
                 "gui_describe",
@@ -65,6 +66,28 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
         if identity["project_path"] != canonical or identity["inputs"][
             "project_id"
         ] != snapshot.get("id"):
+            continue
+        if identity["kind"] == "gui_import_images":
+            from core.jobs.image_import import ImageImportRecord
+            from core.operations.image_import import ImageImportOutcome
+            from models.frame import Frame
+
+            recorded = ImageImportRecord.from_dict(json.loads(row["payload_json"]))
+            if recorded.batch_id != identity["target_id"] or recorded.batch_id != identity["inputs"]["source_id"]:
+                raise StaleJobResult("Saved image import does not match its batch")
+            outcome = ImageImportOutcome.from_dict(recorded.outcome)
+            matches = True
+            for imported in outcome.frames:
+                saved = frames.get(imported.id)
+                if saved is None:
+                    matches = False
+                    break
+                actual, expected = Frame.from_dict(saved, path.parent).to_dict(), imported.to_model().to_dict()
+                if any(actual.get(key) != expected.get(key) for key in ("id", "file_path", "width", "height", "source_id", "clip_id", "frame_number")):
+                    matches = False
+                    break
+            if matches:
+                pending.append((result_id, receipt_digest))
             continue
         if identity["kind"] == "gui_audio_import":
             from core.jobs.audio_import import AudioImportRecord

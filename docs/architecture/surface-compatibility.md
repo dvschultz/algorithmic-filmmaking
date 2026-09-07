@@ -1077,5 +1077,15 @@ late owner delivery remain for the planned artifact-management work. Native
 completion retains the worker until it is safe to release; closing cancels and
 waits. No project save is implicit.
 
-Durable image-import jobs, recovery and CLI/MCP exposure remain U7 follow-up,
-alongside frame-analysis orchestration and intention workflows.
+Image import now uses shared job history: unsaved projects retain session-only
+jobs, and saved projects journal complete successful batches before owner delivery.
+Interrupted imports replay the same frame IDs, image paths and thumbnail paths,
+including per-item errors, when inputs, order, storage policy and runtime match.
+Changed source or generated artifacts prevent stale replay. A newly published
+batch advances the generation so a deliberate new import still adds new frames.
+
+Explicit Save acknowledges a batch only when all its successful imported frames
+match the saved IDs, paths, dimensions and provenance. A failed save leaves the
+batch reusable; a failed checkpoint can be acknowledged by a later save without
+repeating image work. CLI/MCP image-import exposure remains U7 follow-up, alongside
+frame-analysis orchestration and intention workflows.
