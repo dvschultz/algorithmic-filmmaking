@@ -115,6 +115,7 @@ from unittest.mock import Mock, patch
 from PySide6.QtCore import QCoreApplication, QObject
 from core.transcription_models import TranscriptSegment
 from core.project import Project
+from core.jobs import JobStore
 from tests.test_spine_analyze import _build_project
 from ui.workers.forced_alignment_worker import ForcedAlignmentWorker
 from ui.workers.alignment_delivery import AlignmentDelivery
@@ -134,6 +135,7 @@ with tempfile.TemporaryDirectory() as directory:
     tab.project.clips[0].transcript = [TranscriptSegment(0, 1, 'hello', language='en')]
     if SAVED:
         assert tab.project.save(Path(directory) / 'project.json')
+        tab.project = Project.load(tab.project.path, retain_writer=True)
     worker = ForcedAlignmentWorker(tab.project.clips, tab.project.sources_by_id, project=tab.project)
     tab._forced_alignment_worker = worker
     delivery = AlignmentDelivery(tab, worker, tab.project)
@@ -151,10 +153,16 @@ with tempfile.TemporaryDirectory() as directory:
     tab._on_alignment_error.assert_not_called()
     tab._on_alignment_completed.assert_called_once()
     if SAVED:
+        history = JobStore(Path(directory) / 'jobs.db')
+        row = history.get(worker.task_id)
+        assert row.status == 'completed' and row.project_path == str(tab.project.path)
+        assert row.result['publication'] == 'explicit_project_save'
+        assert worker.operation.publication == 'owner_thread'
         assert len(tab.project.metadata.job_results) == 1
         assert Project.load(tab.project.path).clips[0].transcript[0].words is None
         assert tab.project.save()
         assert Project.load(tab.project.path).clips[0].transcript[0].words == []
+        tab.project.close_writer()
 """
     result = subprocess.run(
         [sys.executable, "-c", f"SAVED={saved!r}\n" + code],

@@ -19,6 +19,11 @@ from core.operations.alignment import (
     snapshot_alignment_tasks,
 )
 from ui.workers.base import CancellableWorker, summarize_clip_errors
+from ui.workers.job_adapter import (
+    gui_job_operation,
+    gui_job_runtime,
+    close_gui_job_runtime,
+)
 
 if TYPE_CHECKING:
     from core.project import Project
@@ -63,6 +68,9 @@ class ForcedAlignmentWorker(CancellableWorker):
             else None,
         )
         self.task_id: str | None = None
+        self.operation = gui_job_operation(
+            self.operation, project.path if project is not None else None
+        )
         self.job_status: str | None = None
         self._runtime: JobRuntime | None = None
         self.cache = (
@@ -151,14 +159,15 @@ class ForcedAlignmentWorker(CancellableWorker):
                 return {"success": False, "error": str(exc)}
 
         try:
-            runtime = JobRuntime.for_session(max_workers=1)
+            runtime = gui_job_runtime(self.operation)
             self._runtime = runtime
             submission = runtime.submit(
-                kind="align_words",
+                kind=self.operation.kind,
                 args=self.operation.arguments,
                 operation=self.operation,
                 run=compute,
                 cancellation_event=self._cancel_event,
+                project_path=self.operation.arguments.get("project_path"),
             )
             self.task_id = submission["task_id"]
             while runtime.is_handle_live(self.task_id):
@@ -204,7 +213,7 @@ class ForcedAlignmentWorker(CancellableWorker):
         finally:
             try:
                 if runtime is not None:
-                    runtime.close_session()
+                    close_gui_job_runtime(runtime)
             finally:
                 self._runtime = None
                 self.alignment_completed.emit()

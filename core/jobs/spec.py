@@ -37,6 +37,7 @@ class OperationSpec:
     cancellable: bool = True
     session_id: str | None = None
     input_revision: str | None = None
+    publication: Literal["worker", "owner_thread"] = "worker"
 
     def __post_init__(self) -> None:
         if not isinstance(self.kind, str) or not self.kind:
@@ -46,6 +47,7 @@ class OperationSpec:
         if (
             self.persistence not in ("job_history", "session_only")
             or type(self.cancellable) is not bool
+            or self.publication not in ("worker", "owner_thread")
         ):
             raise ValueError("Invalid execution capabilities")
         for value in (self.session_id, self.input_revision):
@@ -69,6 +71,7 @@ class OperationSpec:
         cancellable: bool = True,
         session_id: str | None = None,
         input_revision: str | None = None,
+        publication: Literal["worker", "owner_thread"] = "worker",
     ) -> "OperationSpec":
         return cls(
             kind=kind,
@@ -79,6 +82,7 @@ class OperationSpec:
             cancellable=cancellable,
             session_id=session_id,
             input_revision=input_revision,
+            publication=publication,
         )
 
     @property
@@ -96,6 +100,11 @@ class OperationSpec:
                 "cancellable": self.cancellable,
                 "session_id": self.session_id,
                 "input_revision": self.input_revision,
+                **(
+                    {"publication": self.publication}
+                    if self.publication != "worker"
+                    else {}
+                ),
             }
         )
 
@@ -114,4 +123,9 @@ class OperationSpec:
             "version": self.version,
             "persistence": self.persistence,
             "cancellable": self.cancellable,
+            **(
+                {"publication": self.publication}
+                if self.publication != "worker"
+                else {}
+            ),
         }

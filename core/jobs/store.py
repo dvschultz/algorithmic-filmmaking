@@ -39,6 +39,11 @@ from pathlib import Path
 from typing import Iterator, Optional, Sequence
 from core.jobs.spec import OperationSpec
 
+# Keep short job-store transactions serialized within this process. Concurrent
+# SQLite connection open/close deadlocked in the macOS runtime's native VFS.
+# Inference and project-file writes happen outside these connection scopes.
+_connection_lock = threading.RLock()
+
 # Status sentinel values.
 STATUS_QUEUED = "queued"
 STATUS_RUNNING = "running"
@@ -237,20 +242,21 @@ class JobStore:
                     raise RuntimeError("Session job store is closed")
                 yield self._memory_connection
             return
-        conn = sqlite3.connect(
-            str(self.db_path),
-            timeout=10.0,
-            isolation_level=None,  # autocommit; we manage txns explicitly
-        )
-        conn.row_factory = sqlite3.Row
-        try:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA busy_timeout=5000")
-            conn.execute("PRAGMA foreign_keys=ON")
-            yield conn
-        finally:
-            conn.close()
+        with _connection_lock:
+            conn = sqlite3.connect(
+                str(self.db_path),
+                timeout=10.0,
+                isolation_level=None,  # autocommit; we manage txns explicitly
+            )
+            conn.row_factory = sqlite3.Row
+            try:
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA synchronous=NORMAL")
+                conn.execute("PRAGMA busy_timeout=5000")
+                conn.execute("PRAGMA foreign_keys=ON")
+                yield conn
+            finally:
+                conn.close()
 
     def _init_schema(self) -> None:
         from core.jobs.schema import INITIAL_SCHEMA, RESULT_SCHEMA, DOWNLOAD_SCHEMA

@@ -105,6 +105,7 @@ from unittest.mock import Mock, patch
 from PySide6.QtCore import QCoreApplication, QObject
 from tests.test_spine_analyze import _build_project
 from core.project import Project
+from core.jobs import JobStore
 from ui.workers.transcription_worker import TranscriptionWorker
 from ui.workers.transcription_delivery import TranscriptionDelivery
 app = QCoreApplication([])
@@ -119,6 +120,7 @@ with tempfile.TemporaryDirectory() as directory:
     window.project = _build_project(Path(directory), 1)
     if SAVED:
         assert window.project.save(Path(directory) / 'project.json')
+        window.project = Project.load(window.project.path, retain_writer=True)
     worker = TranscriptionWorker(window.project.clips, window.project.sources[0], backend='faster-whisper', project=window.project)
     window.transcription_worker = worker
     delivery = TranscriptionDelivery(window, worker)
@@ -134,10 +136,16 @@ with tempfile.TemporaryDirectory() as directory:
     window._on_transcription_error.assert_not_called()
     assert any('unsaved' in call.args[0] for call in window.status_bar.showMessage.call_args_list)
     if SAVED:
+        history = JobStore(Path(directory) / 'jobs.db')
+        row = history.get(worker.task_id)
+        assert row.status == 'completed' and row.project_path == str(window.project.path)
+        assert row.result['publication'] == 'explicit_project_save'
+        assert worker.operation.publication == 'owner_thread'
         assert len(window.project.metadata.job_results) == 1
         assert Project.load(window.project.path).clips[0].transcript is None
         assert window.project.save()
         assert Project.load(window.project.path).clips[0].transcript == []
+        window.project.close_writer()
 """
     result = subprocess.run(
         [sys.executable, "-c", f"SAVED={saved!r}\n" + code],

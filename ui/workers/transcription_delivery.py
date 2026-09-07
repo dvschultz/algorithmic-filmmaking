@@ -55,7 +55,7 @@ class TranscriptionDelivery(QObject):
 
     @Slot(str, str)
     def job_started(self, task_id: str, persistence: str) -> None:
-        if self._current() and persistence == "session_only":
+        if self._current():
             self.window.status_bar.showMessage(
                 "Transcription results remain unsaved until you save the project."
             )

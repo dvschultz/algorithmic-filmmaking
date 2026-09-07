@@ -527,8 +527,10 @@ completed computations before applying them. After a crash or failed save, reope
 the project and run alignment again to reuse matching results. Save the project
 normally to persist its words and receipts; alignment does not automatically save
 your other edits. Projects without a save location remain memory-only. GUI and
-headless alignment currently keep separate computation identities, and GUI job
-history itself does not survive restart.
+headless alignment currently keep separate computation identities. For already
+saved projects, GUI transcription and alignment job history survives restart.
+Completed GUI jobs mean computation finished; save the project normally to
+persist the accepted edits.
 
 GUI transcription follows the same save rule. For an already saved project,
 matching completed transcripts, including silence, can be reused after a crash

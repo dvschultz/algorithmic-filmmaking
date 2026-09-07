@@ -242,6 +242,14 @@ class JobRuntime:
                 )
 
         canonical_path = ProjectLockRegistry.canonical(project_path)
+        owner_thread = operation is not None and operation.publication == "owner_thread"
+        if owner_thread:
+            assert operation is not None
+            if (
+                operation.session_id is None or canonical_path is None
+                or operation.arguments.get("project_path") != canonical_path
+            ):
+                raise ValueError("Owner-thread publication requires a bound project session and canonical path")
 
         # Idempotency check (R21).
         if idempotency_key is not None:
@@ -319,6 +327,7 @@ class JobRuntime:
                 run,
                 cancel_event,
                 canonical_path,
+                owner_thread,
             )
         except BaseException as exc:
             with self._handles_lock:
@@ -365,6 +374,7 @@ class JobRuntime:
         run: RunCallable,
         cancel_event: threading.Event,
         canonical_path: Optional[str],
+        owner_thread: bool = False,
     ) -> None:
         """Execute one job inside the worker thread."""
         # Acquire per-project mutex. While blocked the row stays in
@@ -413,11 +423,15 @@ class JobRuntime:
         try:
             result = None
             if not cancel_event.is_set():
+                # GUI jobs compute detached outcomes while the editor retains
+                # its writer; guarded publication happens on the owner thread.
                 with (
-                    project_writer(canonical_path) if canonical_path else nullcontext()
+                    project_writer(canonical_path) if canonical_path and not owner_thread else nullcontext()
                 ):
                     if not cancel_event.is_set():
                         result = run(progress_callback, cancel_event)
+            if owner_thread and isinstance(result, dict):
+                result = {**result, "publication": "explicit_project_save"}
             if cancel_event.is_set():
                 self.store.update_status(
                     task_id,

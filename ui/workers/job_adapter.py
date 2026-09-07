@@ -2,10 +2,46 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+from pathlib import Path
+
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
 
-from core.jobs import JobRuntime, JobNotFoundError
+from core.jobs import JobRuntime, JobNotFoundError, JobStore
+from core.jobs.spec import OperationSpec, encode_object
 from core.jobs.store import STATUS_CANCELLED, STATUS_COMPLETED, TERMINAL_STATUSES
+
+
+def gui_job_operation(operation: OperationSpec, path: Path | None) -> OperationSpec:
+    """Persist saved-project computation history, retaining explicit GUI saves."""
+    if path is None:
+        return operation
+    return replace(
+        operation,
+        kind=f"gui_{operation.kind}",
+        persistence="job_history",
+        publication="owner_thread",
+        arguments_json=encode_object(
+            {**operation.arguments, "project_path": str(path.expanduser().resolve())}
+        ),
+    )
+
+
+def gui_job_runtime(operation: OperationSpec) -> JobRuntime:
+    if operation.persistence == "session_only":
+        return JobRuntime.for_session(max_workers=1)
+    from core.settings import load_settings
+
+    store = JobStore(load_settings().cache_dir / "jobs.db")
+    store.mark_running_jobs_as_crashed()
+    return JobRuntime(store, max_workers=1)
+
+
+def close_gui_job_runtime(runtime: JobRuntime) -> None:
+    if runtime.store.persistence == "session_only":
+        runtime.close_session()
+    else:
+        runtime.shutdown()
 
 
 class JobAdapter(QObject):

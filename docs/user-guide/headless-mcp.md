@@ -487,6 +487,14 @@ receipts after writing the file. A failed acknowledgement leaves the saved file
 intact and can be retried by saving again. Headless result receipts retain their
 existing job-specific checkpoint paths.
 
+Saved GUI transcription/alignment jobs also appear in job history as
+`gui_transcribe` and `gui_align_words`, associated with their project path.
+Their `completed` status means computation finished. The result marker
+`publication: explicit_project_save` describes their save policy; it does not
+claim the current editor state was saved. Existing job status/result tools can
+inspect these records. Abandoned GUI jobs become crashed when a runtime performs
+recovery; inference is never automatically restarted.
+
 `start_detect_scenes_bulk` also records computed scenes, saving one source and
 its receipt at a time. Retrying identical inputs reuses the recorded clip IDs;
 a failed save retries publication, and a failed checkpoint reconciles the saved

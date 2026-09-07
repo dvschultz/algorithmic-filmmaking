@@ -15,6 +15,11 @@ from core.jobs.media import media_stamp
 from core.transcription_models import TranscriptSegment
 
 from ui.workers.base import CancellableWorker, summarize_clip_errors
+from ui.workers.job_adapter import (
+    gui_job_operation,
+    gui_job_runtime,
+    close_gui_job_runtime,
+)
 from core.operations.transcription import (
     TranscriptionOptions,
     TranscriptionOutcome,
@@ -116,6 +121,9 @@ class TranscriptionWorker(CancellableWorker):
             else None,
         )
         self.task_id: str | None = None
+        self.operation = gui_job_operation(
+            self.operation, project.path if project is not None else None
+        )
         self.job_status: str | None = None
         self.result: tuple[TranscriptionOutcome, ...] = ()
         self._runtime: JobRuntime | None = None
@@ -298,17 +306,18 @@ class TranscriptionWorker(CancellableWorker):
                 return {"success": False, "error": str(exc)}
 
         try:
-            runtime = JobRuntime.for_session(max_workers=1)
+            runtime = gui_job_runtime(self.operation)
             self._runtime = runtime
             submission = runtime.submit(
-                kind="transcribe",
+                kind=self.operation.kind,
                 args=self.operation.arguments,
                 operation=self.operation,
                 run=compute,
                 cancellation_event=self._cancel_event,
+                project_path=self.operation.arguments.get("project_path"),
             )
             self.task_id = submission["task_id"]
-            self.job_started.emit(self.task_id, submission["persistence"])
+            self.job_started.emit(self.task_id, runtime.store.persistence)
             while runtime.is_handle_live(self.task_id):
                 try:
                     emit_event(events.get(timeout=0.05))
@@ -357,7 +366,7 @@ class TranscriptionWorker(CancellableWorker):
         finally:
             try:
                 if runtime is not None:
-                    runtime.close_session()
+                    close_gui_job_runtime(runtime)
             finally:
                 self._runtime = None
                 self.transcription_completed.emit()

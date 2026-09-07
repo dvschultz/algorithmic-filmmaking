@@ -252,11 +252,10 @@ status, and typed outcomes. Cancellation shares one event across the worker and
 runtime, and cleanup completes before the worker emits its terminal signal.
 Job-start notices use the same current-worker/request/session guard as transcripts.
 
-These GUI jobs are explicitly session-only, including when the editor has a
-saved project path: results become unsaved model changes until the user saves.
-Their temporary job store closes after delivery. For saved projects, computed
-outcomes are retained separately in the shared journal described below; durable
-GUI job history remains outstanding U7 work.
+Unsaved-project GUI jobs remain session-only. Saved-project transcription jobs
+retain history as `gui_transcribe`; their outcomes remain unsaved model changes
+until the user saves. Computed outcomes are retained in the shared journal
+described below independently of project publication.
 
 ### Word alignment computation and application
 
@@ -293,8 +292,9 @@ before emitting completion. Dependency preparation runs inside the job; cancella
 before or during preparation prevents inference. The Qt adapter drains progress
 and detached word results before completion, while `AlignmentDelivery` still
 publishes only on the project owner thread for the current run. Like GUI
-transcription, job history is `session_only` even for saved projects; saving the
-project remains required to persist its edits.
+transcription, job history is `session_only` for unsaved projects. Saved-project
+alignment jobs retain history as `gui_align_words`; saving the project remains
+required to persist its edits.
 
 For an already saved GUI project, `core/jobs/gui_alignment.py` records successful
 word outcomes in the shared computed-result store before Qt delivery. Input
@@ -307,7 +307,7 @@ project saves include words and receipts together; inference never saves unrelat
 edits automatically. Unsaved projects remain memory-only. GUI alignment uses a
 separate result identity from headless alignment because it records word outcomes
 before segment publication; it does not reuse headless segment-result entries.
-Durable GUI job history remains outstanding.
+Saved-project transcription and alignment job history survives runtime cleanup.
 
 Saved GUI transcription now uses the same `core/jobs/gui_results.py` journal.
 Its adapter includes the resolved transcription options and prior transcript in
@@ -334,4 +334,19 @@ A checkpoint error cannot turn an already-written project into a failed save.
 The error is logged and a later ordinary save retries acknowledgement without
 inference or result application. Missing caches are not recreated by saving;
 unknown receipts and headless result kinds are left to their owning recovery
-paths. Durable GUI job history remains a separate unfinished migration.
+paths.
+
+Saved GUI transcription/alignment jobs use `OperationSpec.publication=owner_thread`.
+Their runtime retains canonical project association and owner leases for crash
+recovery, while the editor keeps its project writer and applies accepted results
+on its owner thread. The default worker-publication path still acquires its own
+writer. Older operation JSON and IDs omit the new default field and stay stable.
+GUI job kinds are distinct from headless jobs: `completed` describes finished
+computation, and `publication: explicit_project_save` describes the publication
+policy, not the current saved state. New GUI runtimes recover abandoned owners
+as crashed without restarting inference or disturbing live jobs. Other GUI
+operation families still need their history migrations.
+
+Short durable job-store connection scopes are serialized within the process to
+avoid the SQLite connection open/close deadlock observed on macOS. Inference and
+project-file writes stay outside these scopes and retain their concurrency.
