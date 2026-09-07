@@ -38,6 +38,7 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
             not in (
                 "gui_transcribe",
                 "gui_audio_transcribe",
+                "gui_extract_frames",
                 "gui_align_words",
                 "gui_describe",
                 "gui_custom_query",
@@ -74,6 +75,33 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
             if outcome.audio_source_id != audio["id"] or outcome.status != "succeeded":
                 raise StaleJobResult("Saved audio transcription does not match its target")
             if audio.get("transcript") == [segment.to_dict() for segment in outcome.segments]:
+                pending.append((result_id, receipt_digest))
+            continue
+        if identity["kind"] == "gui_extract_frames":
+            from core.jobs.gui_frame_extraction import FrameExtractionRecord
+            from core.operations.frame_extraction import FrameExtractionTask, FrameExtractionOutcome
+            from models.frame import Frame
+
+            recorded = FrameExtractionRecord.from_dict(json.loads(row["payload_json"]))
+            if recorded.source_id != identity["target_id"] or recorded.source_id != identity["inputs"]["source_id"]:
+                raise StaleJobResult("Saved extraction does not match its source")
+            task = FrameExtractionTask.from_dict(recorded.task)
+            outcome = FrameExtractionOutcome.from_dict(recorded.outcome)
+            if not any(source["id"] == task.source_id for source in snapshot.get("sources", [])):
+                continue
+            matches = True
+            for extracted in outcome.frames:
+                saved = frames.get(extracted.id)
+                if saved is None:
+                    matches = False
+                    break
+                actual = Frame.from_dict(saved, path.parent).to_dict()
+                expected = extracted.to_model(task).to_dict()
+                fields = ("id", "file_path", "source_id", "clip_id", "frame_number", "width", "height", "thumbnail_path")
+                if any(actual.get(key) != expected.get(key) for key in fields):
+                    matches = False
+                    break
+            if matches:
                 pending.append((result_id, receipt_digest))
             continue
         is_frame = identity["kind"] == "gui_ocr_frame" or (

@@ -67,6 +67,7 @@ TOOL_TIMEOUTS = {
     "describe_content_live": 600,   # 10 minutes for descriptions
     "transcribe_clips": 1200,       # 20 minutes
     "transcribe_audio_source": 1200,
+    "extract_frames": 1200,
     "export_sequence": 600,    # 10 minutes
     "export_bundle": 1800,     # 30 minutes (copies video files)
 }
@@ -4724,7 +4725,7 @@ def generate_analysis_report(
                 "Optionally restrict to a specific clip.",
     requires_project=True,
     modifies_gui_state=True,
-    modifies_project_state=True
+    modifies_project_state=True,
 )
 def extract_frames(
     project, main_window,
@@ -4768,11 +4769,14 @@ def extract_frames(
                 "error": f"Clip {clip_id} does not belong to source {source_id}"
             }
 
-    if interval < 1:
+    if type(interval) is not int or interval < 1:
         return {
             "success": False,
             "error": "Interval must be at least 1"
         }
+
+    if getattr(main_window, "_frame_extraction_worker", None) is not None:
+        return {"success": False, "error": "Frame extraction is already running"}
 
     # Return a marker for the GUI to start the async worker
     return {

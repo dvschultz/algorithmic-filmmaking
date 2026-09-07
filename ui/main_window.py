@@ -6587,15 +6587,20 @@ class MainWindow(QMainWindow):
     # Frames tab handlers
     # ------------------------------------------------------------------
 
-    def _on_extract_frames_requested(self, source_id: str, mode: str, interval: int):
+    def _on_extract_frames_requested(self, source_id: str, mode: str, interval: int,
+                                     *, clip_id: str | None = None) -> bool:
         """Launch frame extraction worker for the given source."""
         if getattr(self, "_frame_extraction_worker", None) is not None:
             self.status_bar.showMessage("Frame extraction is already running")
-            return
+            return False
         source = self.sources_by_id.get(source_id)
         if not source:
             self.status_bar.showMessage("Source not found")
-            return
+            return False
+        clip = self.project.clips_by_id.get(clip_id) if clip_id is not None else None
+        if clip_id is not None and (clip is None or clip.source_id != source_id):
+            self.status_bar.showMessage("Clip does not belong to the source")
+            return False
 
         # Output dir for extracted frames
         output_dir = (self.project.path.parent if self.project.path else self.settings.cache_dir) / "frames"
@@ -6605,17 +6610,19 @@ class MainWindow(QMainWindow):
 
         worker = FrameExtractionWorker(
             source=source,
-            clip=None,
+            clip=clip,
             mode=mode,
             interval=interval,
             output_dir=output_dir,
             parent=self,
+            project=self.project,
         )
 
         self._frame_extraction_worker = worker
         FrameExtractionDelivery(self, worker)
         worker.start()
         self.status_bar.showMessage("Extracting frames...")
+        return True
 
     def _on_frames_extracted(self, frames: list, source_id: str):
         """Handle completed frame extraction."""
@@ -7566,6 +7573,10 @@ class MainWindow(QMainWindow):
 
         elif wait_type == "audio_transcription":
             return self._on_audio_transcribe_requested(tool_result["audio_source_id"])
+
+        elif wait_type == "extract_frames":
+            return self._on_extract_frames_requested(tool_result["_source_id"],
+                tool_result["_mode"], tool_result["_interval"], clip_id=tool_result.get("_clip_id"))
 
         elif wait_type == "export":
             # Export worker is started by the tool itself via start_agent_export

@@ -972,3 +972,24 @@ recovery, CLI/MCP/agent extraction dispatch, image/audio import, remaining frame
 analysis orchestration, and intention workflows remain to be completed. Successful
 but discarded extraction artifacts are retained; managed artifact cleanup belongs
 to U10. No automatic project save is introduced.
+
+### Recoverable extraction and GUI-agent dispatch
+
+Desktop extraction now uses the shared job runtime. Saved projects journal a
+validated record of extraction inputs, generated file identities, and frame IDs
+before queued owner delivery. Reopening and repeating an uncommitted request
+reuses that record without rerunning FFmpeg or copying images. Media, options,
+runtime, output root, and generated artifacts must still match. A receipt already
+applied to the project advances the next extraction generation, so a deliberate
+repeat creates a new batch. Only explicit project save acknowledges a receipt
+whose generated frame identities and paths remain in that saved snapshot.
+
+The existing `extract_frames` GUI-agent tool now dispatches to this worker,
+including its optional clip range. Completion reports frame IDs and count to
+the original request. Cancellation, requester replacement, changed source/clip,
+and mismatched queued payloads prevent late publication. The normal desktop
+launcher uses the same operation and journal without implicitly saving.
+
+CLI/MCP extraction, image/audio import, remaining frame-analysis orchestration,
+and intention workflows remain U7 work. Headless extraction must reuse this
+computation and artifact contract; it must not implement another FFmpeg loop.

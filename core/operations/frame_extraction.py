@@ -1,6 +1,6 @@
 """Detached frame extraction with isolated artifacts and owner publication."""
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 import logging
 from pathlib import Path
 import shutil
@@ -35,6 +35,61 @@ class FrameExtractionTask:
     interval: int
     artifact_dir: Path
     media_stamp: tuple[int, ...] | None
+
+    def to_dict(self) -> dict:
+        data = asdict(self)
+        data["path"] = str(self.path)
+        data["artifact_dir"] = str(self.artifact_dir)
+        return data
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "FrameExtractionTask":
+        from math import isfinite
+
+        values = dict(data)
+        for name in ("path", "artifact_dir"):
+            if not isinstance(values.get(name), str) or not values[name]:
+                raise ValueError("Invalid extraction path")
+            values[name] = Path(values[name])
+        values["media_stamp"] = _decode_stamp(values.get("media_stamp"))
+        task = cls(**values)
+        if (
+            not isinstance(task.request_id, str)
+            or len(task.request_id) != 32
+            or any(c not in "0123456789abcdef" for c in task.request_id)
+            or not isinstance(task.source_id, str)
+            or not task.source_id
+            or (
+                task.clip_id is not None
+                and (not isinstance(task.clip_id, str) or not task.clip_id)
+            )
+            or not task.artifact_dir.is_absolute()
+            or task.artifact_dir.name != task.request_id
+            or task.mode not in ("all", "interval", "smart")
+            or type(task.interval) is not int
+            or task.interval < 1
+            or type(task.start_frame) is not int
+            or task.start_frame < 0
+            or (
+                task.end_frame is not None
+                and (
+                    type(task.end_frame) is not int
+                    or task.end_frame <= task.start_frame
+                )
+            )
+            or type(task.fps) not in (float, int)
+            or not isfinite(task.fps)
+            or task.fps <= 0
+            or type(task.duration) not in (float, int)
+            or not isfinite(task.duration)
+            or task.duration < 0
+            or any(
+                type(value) is not int or value < 0
+                for value in (task.width, task.height)
+            )
+        ):
+            raise ValueError("Invalid extraction task")
+        return task
 
     @classmethod
     def from_source(
@@ -99,6 +154,76 @@ class FrameExtractionOutcome:
     status: OutcomeStatus
     frames: tuple[ExtractedFrame, ...] = ()
     message: str | None = None
+
+    def to_dict(self) -> dict:
+        data = asdict(self)
+        data["frames"] = [
+            {
+                **asdict(frame),
+                "path": str(frame.path),
+                "thumbnail_path": str(frame.thumbnail_path)
+                if frame.thumbnail_path
+                else None,
+            }
+            for frame in self.frames
+        ]
+        return data
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "FrameExtractionOutcome":
+        if (
+            not isinstance(data.get("request_id"), str)
+            or not data["request_id"]
+            or data.get("status") not in ("succeeded", "failed", "unprocessed")
+            or not isinstance(data.get("frames"), list)
+            or (
+                data.get("message") is not None and not isinstance(data["message"], str)
+            )
+        ):
+            raise ValueError("Invalid extraction outcome")
+        frames = []
+        for value in data["frames"]:
+            fields = dict(value)
+            if (
+                not isinstance(fields.get("id"), str)
+                or not fields["id"]
+                or type(fields.get("frame_number")) is not int
+                or fields["frame_number"] < 0
+                or any(
+                    type(fields.get(name)) is not int or fields[name] <= 0
+                    for name in ("width", "height")
+                )
+            ):
+                raise ValueError("Invalid extracted frame metadata")
+            for name in ("path", "thumbnail_path"):
+                if name == "thumbnail_path" and fields.get(name) is None:
+                    continue
+                if (
+                    not isinstance(fields.get(name), str)
+                    or not Path(fields[name]).is_absolute()
+                ):
+                    raise ValueError("Invalid extracted frame path")
+                fields[name] = Path(fields[name])
+            fields["media_stamp"] = _decode_stamp(fields.get("media_stamp"))
+            fields["thumbnail_stamp"] = _decode_stamp(fields.get("thumbnail_stamp"))
+            frames.append(ExtractedFrame(**fields))
+        if data["status"] != "succeeded" and frames:
+            raise ValueError("Incomplete extraction contains published frames")
+        return cls(
+            data["request_id"], data["status"], tuple(frames), data.get("message")
+        )
+
+
+def _decode_stamp(value) -> tuple[int, ...] | None:
+    if value is None:
+        return None
+    if (
+        not isinstance(value, (list, tuple))
+        or len(value) != 5
+        or any(type(v) is not int for v in value)
+    ):
+        raise ValueError("Invalid extraction media stamp")
+    return tuple(value)
 
 
 def run_frame_extraction(
@@ -204,18 +329,33 @@ class FrameExtractionApplication:
             == self.path
         )
 
-    def apply(self, project: "Project", outcome: FrameExtractionOutcome) -> bool:
+    def apply(
+        self,
+        project: "Project",
+        outcome: FrameExtractionOutcome,
+        *,
+        recovered_task: FrameExtractionTask | None = None,
+    ) -> bool:
+        task = recovered_task or self.task
+        if recovered_task is not None and (
+            task.artifact_dir.parent != self.task.artifact_dir.parent
+            or replace(
+                self.task, request_id=task.request_id, artifact_dir=task.artifact_dir
+            )
+            != task
+        ):
+            return False
         if (
             not self.is_current(project)
             or self.consumed
-            or outcome.request_id != self.task.request_id
+            or outcome.request_id != task.request_id
             or outcome.status != "succeeded"
         ):
             return False
 
         def publish() -> bool:
             self.consumed = True
-            task, source = self.task, self.source
+            source = self.source
             if (
                 source is None
                 or source.id != task.source_id
@@ -240,42 +380,48 @@ class FrameExtractionApplication:
                 != (task.source_id, task.start_frame, task.end_frame)
             ):
                 return False
-            numbers = [frame.frame_number for frame in outcome.frames]
-            ids = [frame.id for frame in outcome.frames]
-            if numbers != sorted(set(numbers)) or len(ids) != len(set(ids)):
-                raise ValueError("Duplicate or unordered extracted frames")
-            for frame in outcome.frames:
-                if (
-                    frame.id in project.frames_by_id
-                    or frame.frame_number < task.start_frame
-                    or (
-                        task.end_frame is not None
-                        and frame.frame_number >= task.end_frame
-                    )
-                    or (
-                        task.mode == "interval"
-                        and (frame.frame_number - task.start_frame) % task.interval
-                    )
-                    or frame.path.resolve().parent != task.artifact_dir / "frames"
-                    or frame.path.stem != f"frame_{frame.frame_number:06d}"
-                    or frame.media_stamp is None
-                    or _media_stamp(frame.path) != frame.media_stamp
-                    or (
-                        frame.thumbnail_path is not None
-                        and (
-                            frame.thumbnail_path.resolve().parent
-                            != task.artifact_dir / "thumbnails"
-                            or frame.thumbnail_stamp is None
-                            or _media_stamp(frame.thumbnail_path)
-                            != frame.thumbnail_stamp
-                        )
-                    )
-                ):
-                    raise ValueError(
-                        "Extracted frame artifacts changed or do not match the request"
-                    )
+            validate_frame_artifacts(task, outcome)
+            if any(frame.id in project.frames_by_id for frame in outcome.frames):
+                raise ValueError("Extracted frame ID already exists")
             if outcome.frames:
                 project.add_frames([frame.to_model(task) for frame in outcome.frames])
             return True
 
         return project.session.apply_external(publish)
+
+
+def validate_frame_artifacts(
+    task: FrameExtractionTask, outcome: FrameExtractionOutcome
+) -> None:
+    """Reject incomplete, changed, or out-of-request artifact batches."""
+    if outcome.request_id != task.request_id or outcome.status != "succeeded":
+        raise ValueError("Extraction outcome does not match its task")
+    numbers = [frame.frame_number for frame in outcome.frames]
+    ids = [frame.id for frame in outcome.frames]
+    if numbers != sorted(set(numbers)) or len(ids) != len(set(ids)):
+        raise ValueError("Duplicate or unordered extracted frames")
+    for frame in outcome.frames:
+        if (
+            frame.frame_number < task.start_frame
+            or (task.end_frame is not None and frame.frame_number >= task.end_frame)
+            or (
+                task.mode == "interval"
+                and (frame.frame_number - task.start_frame) % task.interval
+            )
+            or frame.path.resolve().parent != task.artifact_dir / "frames"
+            or frame.path.stem != f"frame_{frame.frame_number:06d}"
+            or frame.media_stamp is None
+            or _media_stamp(frame.path) != frame.media_stamp
+            or (
+                frame.thumbnail_path is not None
+                and (
+                    frame.thumbnail_path.resolve().parent
+                    != task.artifact_dir / "thumbnails"
+                    or frame.thumbnail_stamp is None
+                    or _media_stamp(frame.thumbnail_path) != frame.thumbnail_stamp
+                )
+            )
+        ):
+            raise ValueError(
+                "Extracted frame artifacts changed or do not match the request"
+            )
