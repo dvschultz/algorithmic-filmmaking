@@ -3895,6 +3895,7 @@ class MainWindow(QMainWindow):
         logger.info(f"Creating CinematographyWorker (pipeline) for {len(clips)} clips")
         self.cinematography_worker = CinematographyWorker(
             clips=clips,
+            project=self.project,
             sources_by_id=sources_by_id,
             mode=mode,
             model=model,
@@ -6804,6 +6805,7 @@ class MainWindow(QMainWindow):
             from ui.workers.cinematography_worker import CinematographyWorker
             worker = CinematographyWorker(
                 clips=[],
+                project=self.project,
                 sources_by_id={},
                 analysis_targets=targets,
                 parallelism=min(self.settings.description_parallelism, 2),

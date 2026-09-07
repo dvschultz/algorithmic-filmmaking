@@ -196,7 +196,8 @@ save or cache checkpoint reuses matching results. Submission captures the cloud
 and local models, input mode, media identity, and local backend availability.
 Existing cinematography and manually edited shot types are preserved on retry.
 Missing or corrupt committed receipts produce an error rather than an automatic
-provider call. Desktop cinematography recovery is not yet available.
+provider call. Desktop cinematography also retains computation for saved projects;
+its receipts are separate and are acknowledged only when you save the project.
 
 Every `start_*` returns immediately with `{task_id, status, poll_interval}`.
 The job runs in a background thread; the response payload is **not**

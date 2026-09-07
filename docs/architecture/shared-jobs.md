@@ -193,4 +193,16 @@ save reuses recorded inference, and a failed checkpoint reconciles the exact
 saved output, including its derived shot type. Existing or manually edited
 analysis remains intact. Missing or corrupt committed receipts reject replay.
 
-GUI cinematography recovery and other U7 workflow families remain outstanding.
+GUI cinematography workers now use the shared runtime for saved and unsaved
+projects. Saved projects record clip/frame results through
+`GuiCinematographyCache` before queued delivery. A restart or failed save can
+reuse matching inference without model preparation. Mixed batches publish cached
+hits and compute only misses. Unsaved projects keep session-only history.
+
+GUI receipt identity includes the explicit target type, prior analysis and shot
+type, frame association, task/media identity, resolved options, and runtime.
+Delivery verifies the recorded payload and current project location before
+applying it. Only an explicit project save acknowledges matching analysis and
+derived shot type; Save As or edited output does not acknowledge the old receipt.
+An explicit refresh after saving starts a new generation. Other U7 workflow
+families remain outstanding.
