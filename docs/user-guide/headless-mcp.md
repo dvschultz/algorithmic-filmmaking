@@ -148,7 +148,7 @@ scene-ripper-mcp --transport http --port 8765
 | `start_analyze_shots` | Classify shot type (wide / medium / close-up / xclose) |
 | `start_analyze_classify` | Classify thumbnail content with ImageNet labels |
 | `start_detect_objects` | Detect objects and person counts |
-| `start_extract_text` | Extract visible text with OCR/VLM fallback |
+| `start_extract_text` | Extract visible text with resumable OCR/VLM results; optional `force` refresh |
 | `start_transcribe` | Whisper transcription per clip |
 | `start_align_words` | Add word timestamps to existing transcripts; requires installed alignment runtime |
 | `start_describe` | Generate VLM descriptions |
@@ -159,6 +159,19 @@ scene-ripper-mcp --transport http --port 8765
 | `start_generate_boundary_embeddings` | Extract resumable first/last-frame DINOv2 pairs for Match Cut; optional `force` refresh |
 | `start_custom_query` | Run a yes/no visual query against clips |
 | `start_download_videos` | Bulk video downloads (YouTube / Vimeo / Internet Archive) |
+
+OCR jobs retain successful inference for retries after a failed project save.
+This applies to `start_extract_text` and the `extract_text` operation in
+`start_analyze_clips`. An empty text list means analysis completed without finding
+text and is preserved across save/load. Existing results are skipped; pass
+`force=true` to `start_extract_text` to replace them. Failed inference is not
+stored as an empty observation. The submitted VLM model is captured when queued.
+
+The CLI exposes the same recovery through
+`scene_ripper analyze extract-text project.json --method hybrid`. Use repeated
+`--clip-id` options for exact clip IDs, `--model` to choose a VLM, and `--force`
+to replace existing observations. Recovery requires the same configured cache
+directory and unchanged media, extraction options, and runtime identity.
 
 Download entry points save a verified file receipt after each successful item.
 Retries reuse unchanged local files and download missing files again. Modified

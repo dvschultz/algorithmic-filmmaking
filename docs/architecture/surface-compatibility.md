@@ -38,7 +38,7 @@ across GUI and headless adapters.
 | shots | analyze_shots | shots | analyze_shots |
 | classify | classify_content | classify | — |
 | detect_objects | detect_objects | objects / people | — |
-| extract_text | extract_text | — | — |
+| extract_text | extract_text | analyze extract-text | — |
 | transcribe | transcribe | separate transcribe group | transcribe |
 | describe | describe | describe | — |
 | cinematography | cinematography | — | — |
@@ -828,5 +828,16 @@ and sequence handoff. Both the Sequence tab and intention workflow bind the dial
 to their original project/run and accept the proposal once. Closing the dialog
 retires queued OCR, and an empty extraction can return to the prompt and retry.
 
-Durable OCR recovery remains under U7. Poem generation still uses the dialog's
-existing synchronous path; its shared algorithm adapter remains U12 work.
+Saved-project OCR now uses `core/jobs/ocr.py` from dedicated and combined MCP
+analysis jobs and the CLI `analyze extract-text` command. Successful outcomes
+are journaled before project publication, with source fingerprints, resolved
+options, and package/FFmpeg runtime identity. Retries reuse computation after
+failed saves and reconcile checkpoints after successful saves. Force refreshes
+retain generation identity across retries, including valid empty observations;
+manual text edits remain intact without force. Clip serialization now preserves
+empty observations, matching frame serialization. Provider errors are not cached
+as successful empties, and cancellation retains the completed prefix.
+
+GUI and Exquisite Corpus durable OCR recovery remain under U7. Poem generation
+still uses the dialog's existing synchronous path; its shared algorithm adapter
+remains U12 work. Runtime identity does not independently hash model weights.

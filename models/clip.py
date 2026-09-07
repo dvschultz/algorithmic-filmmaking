@@ -450,7 +450,7 @@ class Clip:
         if self.description_frames:
             data["description_frames"] = self.description_frames
         # OCR extracted text
-        if self.extracted_texts:
+        if self.extracted_texts is not None:
             data["extracted_texts"] = [et.to_dict() for et in self.extracted_texts]
         # Custom visual query results
         if self.custom_queries:

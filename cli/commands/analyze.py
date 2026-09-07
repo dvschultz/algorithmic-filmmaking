@@ -23,10 +23,45 @@ def analyze() -> None:
         align     Add word timestamps to existing transcripts
         faces     Extract face embeddings with resumable results
         gaze      Estimate gaze direction with resumable results
+        extract-text Extract visible text with resumable results
         embeddings Extract thumbnail embeddings with resumable results
         boundary-embeddings Extract first/last-frame embeddings with resumable results
     """
     pass
+
+
+@analyze.command("extract-text")
+@click.argument("project_file", type=click.Path(exists=True, path_type=Path))
+@click.option("--clip-id", "-c", "clip_ids", multiple=True, help="Exact clip ID (default: all clips)")
+@click.option("--num-keyframes", type=click.IntRange(1, 5), default=3, show_default=True)
+@click.option("--method", type=click.Choice(["paddleocr", "hybrid", "vlm"]), default="hybrid", show_default=True)
+@click.option("--model", default=None, help="VLM model override")
+@click.option("--force", "-f", is_flag=True, help="Replace existing OCR results")
+@click.pass_context
+def extract_text(ctx: click.Context, project_file: Path, clip_ids: tuple[str, ...], num_keyframes: int, method: str, model: str | None, force: bool) -> None:
+    """Extract visible text and recover completed inference after interruptions."""
+    from threading import Event
+    from core.jobs.ocr import run_ocr_job
+    from core.jobs.store import JobStore
+    from core.operations.ocr import OcrOptions
+
+    project_file = own_project(ctx, project_file)
+    try:
+        store = JobStore(CLIConfig.load().cache_dir / "jobs.db")
+        try:
+            with ProgressContext("Extracting text") as progress:
+                result = run_ocr_job(
+                    store, project_file, list(clip_ids) if clip_ids else None,
+                    progress.update, Event(), force=force,
+                    options=OcrOptions(num_keyframes, method != "paddleocr", model, method == "vlm"),
+                )
+        finally:
+            store.close()
+    except ValueError as exc:
+        exit_with(ExitCode.VALIDATION_ERROR, str(exc))
+    except Exception as exc:
+        exit_with(ExitCode.GENERAL_ERROR, f"Text extraction failed: {exc}")
+    output_result(result, as_json=ctx.obj.get("json", False))
 
 
 @analyze.command("boundary-embeddings")

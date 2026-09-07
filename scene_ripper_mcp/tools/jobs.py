@@ -542,6 +542,23 @@ async def _start_spine_analyze_job(
 
         def run(progress_callback, cancel_event):
             return run_analysis_job(store, path, operation, progress_callback, cancel_event)
+    elif spine_fn_name == "extract_text":
+        from core.jobs.ocr import ocr_job_spec, run_ocr_job
+        from core.operations.ocr import OcrOptions
+
+        try:
+            operation = ocr_job_spec(_project, clip_ids, OcrOptions(
+                num_keyframes=payload.get("num_keyframes", 3),
+                use_vlm_fallback=payload.get("use_vlm_fallback", True),
+                vlm_model=payload.get("vlm_model"), vlm_only=payload.get("vlm_only", False),
+            ), arguments=payload)
+        except ValueError as exc:
+            return json.dumps(_wrap_error(exc))
+        store = _lifespan(ctx)["job_store"]
+
+        def run(progress_callback, cancel_event):
+            return run_ocr_job(store, path, operation.arguments["clip_ids"],
+                               progress_callback, cancel_event, operation=operation)
     elif spine_fn_name == "boundary_embeddings":
         from core.jobs.boundary_embeddings import boundary_embedding_job_spec, run_boundary_embedding_job
 
@@ -1123,6 +1140,7 @@ async def start_extract_text(
     vlm_only: Annotated[bool, "Skip OCR and use only VLM extraction"] = False,
     idempotency_key: Annotated[Optional[str], "Optional idempotency key (max 255 chars)"] = None,
     ctx: Context = None,
+    force: Annotated[bool, "Replace existing OCR results"] = False,
 ) -> str:
     """Start a job that extracts visible text from clips."""
     op_kwargs = {
@@ -1130,6 +1148,7 @@ async def start_extract_text(
         "use_vlm_fallback": use_vlm_fallback,
         "vlm_model": vlm_model,
         "vlm_only": vlm_only,
+        "force": force,
     }
     return await _start_spine_analyze_job(
         ctx=ctx,

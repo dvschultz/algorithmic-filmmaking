@@ -17,6 +17,12 @@ from core.spine.project_io import load_with_mtime, project_writer, save_with_mti
 
 def analysis_job_spec(project: Project, *, arguments: dict) -> OperationSpec:
     inputs = {}
+    if "extract_text" in (arguments.get("operations") or []):
+        from core.jobs.ocr import ocr_job_spec
+        from core.operations.ocr import OcrOptions
+
+        ocr = ocr_job_spec(project, arguments.get("clip_ids"), OcrOptions(), arguments={})
+        inputs["ocr"] = json.loads(ocr.inputs_json)
     if "embeddings" in (arguments.get("operations") or []):
         from core.jobs.embeddings import embedding_job_spec
         from core.operations.embeddings import EmbeddingOptions
@@ -131,6 +137,7 @@ def run_analysis_job(
         gaze = captured.get("gaze")
         faces = captured.get("faces")
         embeddings = captured.get("embeddings")
+        ocr = captured.get("ocr")
         options = (
             TranscriptionOptions(**transcription["options"]) if transcription else None
         )
@@ -140,6 +147,17 @@ def run_analysis_job(
                 raise StaleJobResult("Analysis inputs changed while the job was queued")
 
         def execute(op: str, report: Progress | None) -> dict:
+            if op == "extract_text":
+                from core.jobs.ocr import ocr_job_spec, run_ocr_job
+                from core.operations.ocr import OcrOptions
+
+                if ocr is None:
+                    raise StaleJobResult("Analysis job has no captured OCR options")
+                current, _ = load_with_mtime(path)
+                step = ocr_job_spec(current, ids, OcrOptions(**ocr["options"]), arguments={})
+                if json.loads(step.inputs_json) != ocr:
+                    raise StaleJobResult("OCR inputs changed before analysis")
+                return run_ocr_job(store, path, ids, report or (lambda *_: None), cancel, operation=step)
             if op == "embeddings":
                 from core.jobs.embeddings import embedding_job_spec, run_embedding_job
                 from core.operations.embeddings import EmbeddingOptions

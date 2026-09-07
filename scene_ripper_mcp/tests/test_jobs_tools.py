@@ -592,6 +592,26 @@ async def test_custom_query_submission_pins_options_and_records_results(lifespan
 
 
 @pytest.mark.asyncio
+async def test_ocr_force_refresh_replaces_existing_text(lifespan_ctx, tmp_path, monkeypatch):
+    from core.project import Project
+    from models.clip import ExtractedText
+    from scene_ripper_mcp.tools import jobs
+
+    ctx, store, _ = lifespan_ctx
+    path = _make_project_file(tmp_path)
+    project = Project.load(path)
+    project.clips[0].extracted_texts = [ExtractedText(0, "OLD", 0.9, "vlm")]
+    project.save()
+    provider = Mock(return_value=[])
+    monkeypatch.setattr("core.analysis.ocr.extract_text_from_clip", provider)
+    response = json.loads(await jobs.start_extract_text(str(path), force=True, ctx=ctx))
+    assert response["success"], response
+    _wait_for_status(store, response["task_id"], STATUS_COMPLETED)
+    provider.assert_called_once()
+    assert Project.load(path).clips[0].extracted_texts == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("generic", [False, True])
 async def test_cinematography_submission_pins_options_and_records_results(lifespan_ctx, tmp_path, monkeypatch, generic):
     from core.project import Project
@@ -661,7 +681,7 @@ async def test_gaze_submission_records_durable_results(lifespan_ctx, tmp_path, m
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("public_kind", ["analyze_gaze", "detect_faces", "detect_objects", "analyze_classify", "analyze_cinematography", "generate_embeddings"])
+@pytest.mark.parametrize("public_kind", ["analyze_gaze", "detect_faces", "detect_objects", "analyze_classify", "analyze_cinematography", "generate_embeddings", "extract_text"])
 async def test_durable_analysis_alias_submits_to_real_runtime(lifespan_ctx, tmp_path, monkeypatch, public_kind):
     from core.project import Project
     from core.jobs.spec import OperationSpec
@@ -682,6 +702,7 @@ async def test_durable_analysis_alias_submits_to_real_runtime(lifespan_ctx, tmp_
     monkeypatch.setattr("core.analysis.gaze.load_face_mesh", Mock())
     monkeypatch.setattr("core.analysis.gaze.unload_model", Mock())
     monkeypatch.setattr("core.analysis.faces.extract_faces_from_clip", Mock(return_value=[]))
+    monkeypatch.setattr("core.analysis.ocr.extract_text_from_clip", Mock(return_value=[]))
     monkeypatch.setattr("core.analysis.embeddings.extract_clip_embeddings_batch", Mock(side_effect=lambda paths: [[0.1] * 768 for _ in paths]))
     monkeypatch.setattr("core.analysis.embeddings.unload_model", Mock())
     monkeypatch.setattr("core.analysis.faces._load_insightface", Mock())
@@ -700,6 +721,28 @@ async def test_durable_analysis_alias_submits_to_real_runtime(lifespan_ctx, tmp_
     receipts = Project.load(path).metadata.job_results
     assert len(receipts) == 1
     assert all(store.get_result(rid)["committed"] for rid in receipts)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("generic", [False, True])
+async def test_ocr_submission_reuses_empty_results(lifespan_ctx, tmp_path, monkeypatch, generic):
+    from core.project import Project
+    from scene_ripper_mcp.tools import jobs
+
+    ctx, store, _ = lifespan_ctx
+    path = _make_project_file(tmp_path)
+    provider = Mock(return_value=[])
+    monkeypatch.setattr("core.analysis.ocr.extract_text_from_clip", provider)
+    for _ in range(2):
+        response = await jobs.start_analyze_clips(str(path), operations=["extract_text"], ctx=ctx) if generic else await jobs.start_extract_text(str(path), ctx=ctx)
+        response = json.loads(response)
+        assert response["success"], response
+        _wait_for_status(store, response["task_id"], STATUS_COMPLETED)
+    provider.assert_called_once()
+    saved = Project.load(path)
+    assert saved.clips[0].extracted_texts == []
+    assert len(saved.metadata.job_results) == 1
+    assert all(store.get_result(rid)["committed"] for rid in saved.metadata.job_results)
 
 
 @pytest.mark.asyncio
