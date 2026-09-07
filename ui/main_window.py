@@ -643,14 +643,12 @@ class MainWindow(QMainWindow):
         self._pending_agent_analyze_all = False
         self._pending_agent_export = False
         self._pending_agent_export_bundle = False
-        self._pending_agent_download = False
         self._agent_color_clips: list = []
         self._agent_shot_clips: list = []
         self._agent_transcription_clips: list = []
         self._agent_classification_clips: list = []
         self._agent_object_detection_clips: list = []
         self._agent_description_clips: list = []
-        self._agent_download_results: list = []  # Results for bulk download
         self._pending_agent_tool_call_id: Optional[str] = None
         self._pending_agent_tool_name: Optional[str] = None
 
@@ -2246,7 +2244,7 @@ class MainWindow(QMainWindow):
                     # Store tool_call_id for when worker completes
                     if wait_type not in {
                         "color_analysis", "shot_analysis", "description", "transcription", "detection",
-                        "classification", "object_detection", "person_detection",
+                        "classification", "object_detection", "person_detection", "download",
                     }:
                         self._pending_agent_tool_call_id = tool_call_id
                         self._pending_agent_tool_name = tool_name
@@ -3120,14 +3118,16 @@ class MainWindow(QMainWindow):
         self._update_window_title()
         self.status_bar.showMessage(f"Selected: {source.filename}")
 
-    def _queue_source_import(self, path: Path, *, select: bool = False) -> None:
+    def _queue_source_import(
+        self, path: Path, *, select: bool = False, reply: GuiToolReply | None = None,
+    ) -> None:
         """Prepare metadata in the background, retaining the requesting session."""
         selection = None
         if select:
             self._source_selection_generation += 1
             selection = self._source_selection_generation
         self._source_import_queue.submit(
-            path, (self.project.session.session_id, selection)
+            path, (self.project.session.session_id, selection), reply=reply,
         )
         self.status_bar.showMessage(f"Importing: {path.name}")
 
@@ -3135,6 +3135,9 @@ class MainWindow(QMainWindow):
     def _on_source_import_ready(self, request, source: Source) -> None:
         session_id, selection = request.context
         if session_id != self.project.session.session_id:
+            return
+        reply = getattr(request, "reply", None)
+        if reply is not None and not reply.is_current(self):
             return
         source, added = add_source_if_missing(self.project, source)
         if added:
@@ -3146,6 +3149,9 @@ class MainWindow(QMainWindow):
 
     @Slot(object, str)
     def _on_source_import_failed(self, request, error: str) -> None:
+        reply = getattr(request, "reply", None)
+        if reply is not None and not reply.is_current(self):
+            return
         if request.context[0] == self.project.session.session_id:
             self.status_bar.showMessage(f"Could not import {request.path.name}: {error}")
 
@@ -3154,9 +3160,9 @@ class MainWindow(QMainWindow):
         deferred = self._deferred_agent_download_results
         self._deferred_agent_download_results = None
         if deferred is not None:
-            session_id, results = deferred
+            session_id, results, reply = deferred
             if session_id == self.project.session.session_id:
-                self._on_agent_bulk_download_finished(results)
+                self._on_agent_bulk_download_finished(results, reply=reply)
 
     def _add_video_to_library(self, path: Path):
         """Add a video file to the library without making it active."""
@@ -7475,9 +7481,10 @@ class MainWindow(QMainWindow):
             # User cancelled - download not started
             return False
 
-        # Mark that agent is waiting
-        self._pending_agent_download = True
-        self._agent_download_results = []
+        reply = getattr(self, "_dispatch_gui_reply", None)
+        if reply is not None and not reply.is_current(self):
+            return False
+        self._deferred_agent_download_results = None
 
         # Start download in background
         self.progress_bar.setVisible(True)
@@ -7487,8 +7494,8 @@ class MainWindow(QMainWindow):
         self.url_bulk_download_worker = URLBulkDownloadWorker(urls, validated_dir)
         self._bind_download_worker("url_bulk_download_worker", {
             "progress": ("bulk_progress", self._on_agent_download_progress),
-            "video_finished": ("url_result", self._on_agent_video_finished),
-            "all_finished": ("bulk_completed", self._on_agent_bulk_download_finished),
+            "video_finished": ("url_result", lambda url, result: self._on_agent_video_finished(url, result, reply=reply)),
+            "all_finished": ("bulk_completed", lambda results: self._on_agent_bulk_download_finished(results, reply=reply)),
         })
         self.url_bulk_download_worker.start()
         return True
@@ -7498,8 +7505,10 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(current)
         self.status_bar.showMessage(message)
 
-    def _on_agent_video_finished(self, url: str, result):
+    def _on_agent_video_finished(self, url: str, result, *, reply: GuiToolReply | None = None) -> None:
         """Handle individual video download completion."""
+        if reply is not None and not reply.is_current(self):
+            return
         # Add to project and source browser
         if result.success and result.file_path and hasattr(self, 'collect_tab'):
             from pathlib import Path
@@ -7510,26 +7519,26 @@ class MainWindow(QMainWindow):
                 logger.info(f"Source already in project: {file_path.name}")
                 return
 
-            self._queue_source_import(file_path)
+            self._queue_source_import(file_path, reply=reply)
 
-    def _on_agent_bulk_download_finished(self, results: list):
+    def _on_agent_bulk_download_finished(self, results: list, *, reply: GuiToolReply | None = None) -> None:
         """Handle bulk download completion."""
+        if reply is not None and not reply.is_current(self):
+            return
         if self._source_import_queue.pending:
+            from copy import deepcopy
             self._deferred_agent_download_results = (
-                self.project.session.session_id, results
+                self.project.session.session_id, deepcopy(results), reply,
             )
             return
-        logger.info(f"Bulk download finished signal received: {len(results)} results, pending_agent_download={self._pending_agent_download}")
+        logger.info(f"Bulk download finished signal received: {len(results)} results")
         self.progress_bar.setVisible(False)
         success_count = sum(1 for r in results if r.get("success"))
         self.status_bar.showMessage(f"Downloaded {success_count}/{len(results)} videos")
 
         # If agent was waiting, send result back
-        if self._pending_agent_download and self._chat_worker:
-            self._pending_agent_download = False
+        if reply is not None:
             result = {
-                "tool_call_id": self._pending_agent_tool_call_id,
-                "name": self._pending_agent_tool_name,
                 "success": success_count > 0,
                 "result": {
                     "success": success_count > 0,
@@ -7539,9 +7548,7 @@ class MainWindow(QMainWindow):
                     "results": results,
                 }
             }
-            self._pending_agent_tool_call_id = None
-            self._pending_agent_tool_name = None
-            self._chat_worker.set_gui_tool_result(result)
+            reply.send(self, result)
             logger.info(f"Sent bulk download result to agent: {success_count}/{len(results)}")
 
     def _start_worker_for_tool(self, wait_type: str, tool_result: dict) -> bool:
@@ -10448,7 +10455,6 @@ class MainWindow(QMainWindow):
         self._pending_agent_description = False
         self._pending_agent_analyze_all = False
         self._pending_agent_export = False
-        self._pending_agent_download = False
         self._pending_agent_tool_call_id = None
         self._pending_agent_tool_name = None
 
@@ -10459,7 +10465,6 @@ class MainWindow(QMainWindow):
         self._agent_classification_clips = []
         self._agent_object_detection_clips = []
         self._agent_description_clips = []
-        self._agent_download_results = []
         if hasattr(self, '_agent_transcription_source_queue'):
             self._agent_transcription_source_queue = []
 

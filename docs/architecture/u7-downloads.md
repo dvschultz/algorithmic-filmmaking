@@ -131,7 +131,16 @@ guarded by the detection identity, project session, and thumbnail worker. Cleanu
 cannot clear a replacement worker. Busy or stale detection dispatch reports a
 failed start instead of leaving the agent waiting for an operation that never ran.
 
-Download batches, exports, and combined
+Agent download batches now capture the reply before dispatch and preserve it in
+per-item import requests and deferred completion. Deferred result data is copied,
+so later mutation cannot change the eventual response. Source admission and import
+error delivery check that the original request is still active; replacing or
+cancelling the chat cannot add a queued downloaded source to the current project.
+Download completion leaves unrelated pending tool fields alone and rejects stale
+deferred replies. Manual source imports retain their existing session/selection
+behavior. Native downloads retain the shared scheduler and receipt recovery.
+
+Exports and combined
 analysis completion still need this sender migration. Their legacy completion
 handlers can construct replies from shared pending fields; mailbox validation
 cannot distinguish a stale result relabeled with the current request token.

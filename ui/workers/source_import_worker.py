@@ -8,6 +8,7 @@ from PySide6.QtCore import QObject, Signal, Slot
 
 from core.spine.sources import prepare_source_import
 from ui.workers.base import CancellableWorker
+from ui.workers.gui_tool_reply import GuiToolReply
 
 
 def _stamp(path: Path) -> tuple[int, int, int, int, int] | None:
@@ -30,6 +31,7 @@ class SourceImportRequest:
     context: tuple[str, int | None]
     generation: int
     media_stamp: tuple[int, int, int, int, int] | None
+    reply: GuiToolReply | None = None
 
 
 class SourceImportWorker(CancellableWorker):
@@ -78,12 +80,18 @@ class SourceImportQueue(QObject):
     def pending(self) -> bool:
         return self._worker is not None or bool(self._queue)
 
-    def submit(self, path: Path, context: tuple[str, int | None]) -> None:
+    def submit(
+        self,
+        path: Path,
+        context: tuple[str, int | None],
+        *,
+        reply: GuiToolReply | None = None,
+    ) -> None:
         if self._closed:
             raise RuntimeError("Source import queue is closed")
         path = Path(path).expanduser().absolute()
         self._queue.append(
-            SourceImportRequest(path, context, self._generation, _stamp(path))
+            SourceImportRequest(path, context, self._generation, _stamp(path), reply)
         )
         self._start_next()
 

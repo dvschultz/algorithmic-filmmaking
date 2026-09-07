@@ -38,12 +38,14 @@ def spin(predicate):
         app.processEvents()
         time.sleep(.001)
     assert predicate()
-queue.submit(path, ('session', 1))
+reply = module.GuiToolReply(object(), 'session', 'download_videos', 'token')
+queue.submit(path, ('session', 1), reply=reply)
 assert started.wait(2)
 assert queue.pending and not results
 release.set()
 spin(lambda: not queue.pending)
 assert results[0][1].fps == 24 and results[0][2] == owner
+assert results[0][0].reply is reply
 assert threads[0] != owner and drained
 # Cancel active and queued work; a fresh submission survives the old completion.
 results.clear(); started.clear(); release.clear()
@@ -129,12 +131,12 @@ window._source_import_queue = SimpleNamespace(pending=True)
 window._deferred_agent_download_results = None
 results = [{'success': True}]
 MainWindow._on_agent_bulk_download_finished(window, results)
-assert window._deferred_agent_download_results == (project.session.session_id, results)
+assert window._deferred_agent_download_results == (project.session.session_id, results, None)
 window._on_agent_bulk_download_finished = Mock()
 MainWindow._on_source_imports_drained(window)
-window._on_agent_bulk_download_finished.assert_called_once_with(results)
+window._on_agent_bulk_download_finished.assert_called_once_with(results, reply=None)
 window._on_agent_bulk_download_finished.reset_mock()
-window._deferred_agent_download_results = ('obsolete-session', results)
+window._deferred_agent_download_results = ('obsolete-session', results, None)
 MainWindow._on_source_imports_drained(window)
 window._on_agent_bulk_download_finished.assert_not_called()
 """
