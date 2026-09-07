@@ -3813,7 +3813,8 @@ class MainWindow(QMainWindow):
             parallelism=self.settings.description_parallelism,
         )
         self.description_worker.progress.connect(self._on_description_progress)
-        self.description_worker.description_ready.connect(self._on_description_ready)
+        from ui.workers.description_delivery import DescriptionDelivery
+        DescriptionDelivery(self, self.description_worker, pipeline=True)
         self.description_worker.error.connect(self._on_description_error)
         bind_pipeline_completion(
             self, self.description_worker, "description_worker",
@@ -6811,7 +6812,8 @@ class MainWindow(QMainWindow):
                 parallelism=self.settings.description_parallelism,
             )
             worker.progress.connect(self._on_description_progress)
-            worker.description_ready.connect(self._on_description_ready)
+            from ui.workers.description_delivery import DescriptionDelivery
+            DescriptionDelivery(self, worker, worker_attribute="_frame_desc_worker")
             worker.error.connect(self._on_description_error)
             worker.description_completed.connect(
                 lambda: self._on_frame_analysis_op_finished("describe")
@@ -7987,7 +7989,8 @@ class MainWindow(QMainWindow):
         sources = self.project.sources_by_id
         self.description_worker = DescriptionWorker(clips, tier=tier, prompt=prompt, sources=sources, parallelism=self.settings.description_parallelism)
         self.description_worker.progress.connect(self._on_description_progress)
-        self.description_worker.description_ready.connect(self._on_description_ready)
+        from ui.workers.description_delivery import DescriptionDelivery
+        DescriptionDelivery(self, self.description_worker)
         self.description_worker.error.connect(self._on_description_error)
         completion = AgentAnalysisCompletion(
             self, self.description_worker, "description_worker", self._on_agent_description_finished
@@ -8011,23 +8014,8 @@ class MainWindow(QMainWindow):
 
     @Slot(str, str, str)
     def _on_description_ready(self, clip_id: str, description: str, model_name: str):
-        """Handle description results for a single clip or frame."""
-        clip = self.project.clips_by_id.get(clip_id)
-        if clip:
-            clip.description = description
-            clip.description_model = model_name
-            clip.description_frames = 1
-            logger.debug(f"Description for {clip_id}: {description[:50]}...")
-            return
-        # Try frame
-        frame = self.project.frames_by_id.get(clip_id)
-        if frame:
-            self.project.update_frame(
-                clip_id,
-                description=description,
-                description_model=model_name,
-            )
-            logger.debug(f"Description for frame {clip_id}: {description[:50]}...")
+        """Refresh after guarded description publication."""
+        logger.debug(f"Description for {clip_id}: {description[:50]}...")
 
     @Slot()
     def _on_agent_description_finished(self, *, reply: GuiToolReply | None = None) -> None:
@@ -9252,7 +9240,8 @@ class MainWindow(QMainWindow):
             self.description_worker.progress.connect(
                 self.intention_workflow.on_analysis_progress
             )
-            self.description_worker.description_ready.connect(self._on_description_ready)
+            from ui.workers.description_delivery import DescriptionDelivery
+            DescriptionDelivery(self, self.description_worker)
             self.description_worker.error.connect(self._on_description_error)
             self.description_worker.description_completed.connect(
                 self._on_intention_description_analysis_finished, Qt.UniqueConnection

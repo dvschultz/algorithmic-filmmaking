@@ -83,6 +83,10 @@ class DescriptionWorker(CancellableWorker):
             return "local"
         return resolved
 
+    @property
+    def tasks(self) -> tuple[DescriptionTask, ...]:
+        return tuple(self._tasks)
+
     def _build_tasks(
         self, clips: list, sources: dict, skip_existing: bool
     ) -> list[DescriptionTask]:
@@ -128,6 +132,7 @@ class DescriptionWorker(CancellableWorker):
                     start_frame=target.start_frame or 0,
                     end_frame=target.end_frame or 0,
                     fps=target.fps,
+                    target_type=target.target_type,
                 )
             )
         return tasks

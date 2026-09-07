@@ -4,10 +4,15 @@ from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
-from typing import Callable
+from typing import Callable, TYPE_CHECKING, Literal
 
 from core.operations.contracts import OutcomeStatus
 from core.provider_errors import is_transient_provider_error
+
+if TYPE_CHECKING:
+    from core.project import Project
+    from models.clip import Clip
+    from models.frame import Frame
 
 DEFAULT_PROMPT = (
     "Describe this video frame in 3 sentences or less. "
@@ -25,6 +30,7 @@ class DescriptionTask:
     end_frame: int
     fps: float | None
     skip: bool = False
+    target_type: Literal["clip", "frame"] = "clip"
 
 
 @dataclass(frozen=True)
@@ -159,3 +165,112 @@ def run_description(
         )
         for i, task in enumerate(tasks)
     )
+
+
+class DescriptionApplication:
+    """Apply results once, on the owner thread, to unchanged clip/frame inputs."""
+
+    def __init__(self, project: "Project", tasks: tuple[DescriptionTask, ...]) -> None:
+        project.session.assert_owner()
+        self.project = project
+        self.session_id = project.session.session_id
+        self._tasks = {task.clip_id: task for task in tasks}
+        self._bindings = {task.clip_id: self._binding(project, task) for task in tasks}
+        self._consumed: set[str] = set()
+
+    @staticmethod
+    def _binding(project: "Project", task: DescriptionTask) -> tuple | None:
+        from core.jobs.media import media_stamp
+
+        source = None
+        target: Clip | Frame | None
+        identity: tuple
+        if task.target_type == "frame":
+            target = project.frames_by_id.get(task.clip_id)
+            if target is None or target.file_path != task.thumbnail_path:
+                return None
+            identity = (target.source_id, target.clip_id, target.frame_number)
+        else:
+            target = project.clips_by_id.get(task.clip_id)
+            if target is None:
+                return None
+            source = project.sources_by_id.get(target.source_id)
+            if (
+                target.thumbnail_path != task.thumbnail_path
+                or (target.start_frame, target.end_frame)
+                != (task.start_frame, task.end_frame)
+                or (source.file_path if source else None) != task.source_path
+                or (source.fps if source else None) != task.fps
+            ):
+                return None
+            identity = (target.source_id, target.start_frame, target.end_frame)
+        image_stamp = media_stamp(task.thumbnail_path) if task.thumbnail_path else None
+        source_stamp = media_stamp(task.source_path) if task.source_path else None
+        if image_stamp is None:
+            return None
+        return (
+            target,
+            source,
+            (
+                identity,
+                target.description,
+                target.description_model,
+                getattr(target, "description_frames", None),
+                image_stamp,
+                source_stamp,
+            ),
+        )
+
+    def apply(self, project: "Project", outcome: DescriptionOutcome) -> bool:
+        return self.apply_batch(project, (outcome,))[0]
+
+    def apply_batch(
+        self, project: "Project", outcomes: tuple[DescriptionOutcome, ...]
+    ) -> tuple[bool, ...]:
+        if (
+            project is not self.project
+            or project.session.session_id != self.session_id
+            or not any(o.status == "succeeded" for o in outcomes)
+        ):
+            return tuple(False for _ in outcomes)
+
+        def publish() -> tuple[bool, ...]:
+            accepted = []
+            clips = []
+            for outcome in outcomes:
+                valid = False
+                task = self._tasks.get(outcome.clip_id)
+                expected = self._bindings.get(outcome.clip_id)
+                if (
+                    outcome.status == "succeeded"
+                    and outcome.clip_id not in self._consumed
+                ):
+                    self._consumed.add(outcome.clip_id)
+                    current = self._binding(project, task) if task else None
+                    if (
+                        task is not None
+                        and current is not None
+                        and expected is not None
+                        and current[0] is expected[0]
+                        and current[1] is expected[1]
+                        and current[2] == expected[2]
+                    ):
+                        target = current[0]
+                        if task.target_type == "frame":
+                            project.update_frame(
+                                outcome.clip_id,
+                                description=outcome.description,
+                                description_model=outcome.model,
+                            )
+                        else:
+                            target.description = outcome.description
+                            target.description_model = outcome.model
+                            target.description_frames = 1
+                            clips.append(target)
+                        valid = True
+                accepted.append(valid)
+            if clips:
+                project.update_clips(clips)
+            return tuple(accepted)
+
+        return project.session.apply_external(publish)

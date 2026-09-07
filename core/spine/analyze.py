@@ -492,6 +492,7 @@ def describe(
         DEFAULT_PROMPT,
         DescriptionTask,
         DescriptionOptions,
+        DescriptionApplication,
         resolve_tier,
         run_description,
     )
@@ -516,19 +517,19 @@ def describe(
     succeeded: list[dict] = []
     failed: list[dict] = []
     skipped: list[dict] = []
-    updated = []
-
     def progress(current: int, count: int) -> None:
         if progress_callback is not None and count:
             progress_callback(current / count, f"Description ({current}/{count})")
 
+    application = DescriptionApplication(project, tuple(tasks))
     outcomes = run_description(
         tuple(tasks),
         DescriptionOptions(resolve_tier(tier), prompt or DEFAULT_PROMPT),
         cancel_event=cancel_event,
         progress=progress,
     )
-    for clip, outcome in zip(clips, outcomes):
+    accepted = application.apply_batch(project, outcomes)
+    for clip, outcome, applied in zip(clips, outcomes, accepted):
         if outcome.status == "skipped":
             skipped.append({"clip_id": clip.id, "reason": outcome.code})
         elif outcome.status == "failed":
@@ -537,14 +538,11 @@ def describe(
                 failure["message"] = outcome.message
             failed.append(failure)
         elif outcome.status == "succeeded":
-            clip.description = outcome.description
-            clip.description_model = outcome.model
-            clip.description_frames = 1
-            updated.append(clip)
-            succeeded.append({"clip_id": clip.id, "model": outcome.model})
+            if applied:
+                succeeded.append({"clip_id": clip.id, "model": outcome.model})
+            else:
+                failed.append({"clip_id": clip.id, "code": "stale_result"})
 
-    if updated:
-        project.update_clips(updated)
     if progress_callback is not None:
         progress_callback(1.0, f"Done: {len(succeeded)} ok, {len(failed)} failed, {len(skipped)} skipped")
     return {"success": True, "result": {"succeeded": succeeded, "failed": failed, "skipped": skipped, "total_clips": total}}

@@ -207,9 +207,18 @@ are failures on both surfaces. Unexpected per-task failures preserve other resul
 
 GUI startup still owns local-model preloading and completion signals. GUI input
 filtering preserves its existing skip behavior; headless responses retain explicit
-skipped/missing-thumbnail entries. Description publication guards and durable
-computed-result recovery remain pending U7 work, as do custom queries and
-cinematography. This cutover shares computation, not the entire family lifecycle.
+skipped/missing-thumbnail entries.
+
+`DescriptionApplication` guards clip/frame publication by project session,
+target and source object identity, prior description metadata, clip range, image
+path, source path/FPS, and media stat identity (including ctime). Accepted results
+use owner-thread project update methods; duplicate delivery does not apply again.
+All four GUI entry points bind results to their launching worker, with pipeline
+and agent-request checks where applicable. Headless calls report rejected results
+as `stale_result`; GUI delivery reports a discarded-result error.
+
+Durable computed-result recovery remains pending U7 work, as do custom queries
+and cinematography. This cutover does not complete the entire family lifecycle.
 
 ## Transcription batch cutover
 

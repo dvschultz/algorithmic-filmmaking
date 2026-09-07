@@ -283,6 +283,7 @@ def _build_fake_worker(completion_signal: str, extra_signals: list[str]):
         def __init__(self, *args, **kwargs):
             del args, kwargs
             self.finished = SignalStub()
+            self.tasks = ()
             setattr(self, completion_signal, SignalStub())
             for signal_name in extra_signals:
                 setattr(self, signal_name, SignalStub())

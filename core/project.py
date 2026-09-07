@@ -1180,7 +1180,7 @@ class Project:
 
     # Fields that can be updated via update_frame()
     _UPDATABLE_FRAME_FIELDS = {
-        "shot_type", "dominant_colors", "description", "transcript",
+        "shot_type", "dominant_colors", "description", "description_model", "transcript",
         "detected_objects", "person_count", "analyzed",
     }
 
