@@ -69,8 +69,23 @@ history into durable receipts. New disk-backed operations use a regular runtime.
 the UI thread after final polling. Closing is idempotent. No job or cache history
 is available to a newly created session, even with the same idempotency key.
 Session runtimes reject saved project paths, and the durable result commit path
-rejects an in-memory store. Production desktop workflows still need migration to
-this adapter; these APIs alone do not change their current UI.
+rejects an in-memory store.
+
+Desktop color analysis now uses this runtime across pipeline, chat, Frames, and
+intention entry points. `ColorAnalysisWorker` keeps its QThread API for existing
+start/cancel/wait/finished callers, but computation and task state run through a
+session runtime. Its thread relays progress from a queue and delivers the final
+immutable batch before analysis completion. Application stays in the GUI's
+owner-thread slot. The status bar explains that results remain unsaved until a
+project save, including when the project already has a file path.
+
+Cancellation uses one event shared by the Qt adapter and runtime. The runtime
+retains a returned partial payload on cancelled jobs, so completed palettes are
+still applied while undispatched targets remain unprocessed. Pre-start
+cancellation skips computation. The adapter closes its session store after
+reading the terminal result. Other desktop workflows still await migration.
+The QThread compatibility shell can be removed once main-window callers adopt
+task-aware start, wait and cleanup instead of the legacy worker API.
 
 This is a partial U6 implementation. Recovery covers recorded results; a crash
 after a provider response but before recording it cannot guarantee avoiding a

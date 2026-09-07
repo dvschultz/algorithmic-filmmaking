@@ -51,6 +51,8 @@ class Receiver(QObject):
 
 receiver = Receiver()
 worker = ColorAnalysisWorker(project.clips, sources_by_id=project.sources_by_id, project=project)
+started = []
+worker.job_started.connect(lambda task, persistence: started.append((task, persistence)))
 worker.result_ready.connect(receiver.apply)
 worker.analysis_completed.connect(receiver.completed)
 worker.finished.connect(loop.quit)
@@ -60,6 +62,8 @@ with patch('core.analysis.color.extract_dominant_colors', return_value=[(1, 2, 3
     loop.exec()
     assert worker.wait(5000)
 assert received == [('result', owner), ('completed', owner)], received
+assert started == [(worker.task_id, 'session_only')], started
+assert worker.job_status == 'completed'
 assert all(c.dominant_colors == [(1, 2, 3)] for c in project.clips)
 assert project.is_dirty
 assert receiver.title.endswith('*'), receiver.title
@@ -72,3 +76,48 @@ assert receiver.title.endswith('*'), receiver.title
         timeout=30,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_cancelled_desktop_color_job_keeps_partial_results(tmp_path):
+    from unittest.mock import patch
+    from tests.test_spine_analyze import _build_project
+    from ui.workers.color_worker import ColorAnalysisWorker
+
+    project = _build_project(tmp_path, 3)
+    worker = ColorAnalysisWorker(
+        project.clips,
+        parallelism=1,
+        sources_by_id=project.sources_by_id,
+        project=project,
+    )
+
+    def extract(**kwargs):
+        worker.cancel()
+        return [(1, 2, 3)]
+
+    with patch("core.analysis.color.extract_dominant_colors", side_effect=extract):
+        worker.run()
+    assert worker.job_status == "cancelled"
+    assert worker.result.outcomes[0].status == "succeeded"
+    assert [o.status for o in worker.result.outcomes[1:]] == [
+        "unprocessed",
+        "unprocessed",
+    ]
+    assert all(c.dominant_colors is None for c in project.clips)
+    worker.application.apply(worker.result)
+    assert project.clips[0].dominant_colors == [(1, 2, 3)]
+
+
+def test_cancel_before_start_skips_desktop_color_computation(tmp_path):
+    from unittest.mock import patch
+    from tests.test_spine_analyze import _build_project
+    from ui.workers.color_worker import ColorAnalysisWorker
+
+    project = _build_project(tmp_path, 1)
+    worker = ColorAnalysisWorker(project.clips, sources_by_id=project.sources_by_id)
+    worker.cancel()
+    with patch("core.analysis.color.extract_dominant_colors") as extract:
+        worker.run()
+    extract.assert_not_called()
+    assert worker.job_status == "cancelled"
+    assert worker.result.outcomes[0].status == "unprocessed"

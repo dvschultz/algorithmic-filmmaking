@@ -1,10 +1,13 @@
 """Qt scheduling and signals for the shared color operation."""
 
 from typing import TYPE_CHECKING, Optional
+from dataclasses import asdict
+from queue import Empty, Queue
 
 from PySide6.QtCore import Signal
 
 from core.analysis_target import AnalysisTarget
+from core.jobs import JobRuntime
 from core.operations.colors import (
     ColorApplication,
     compute_colors,
@@ -28,6 +31,7 @@ class ColorAnalysisWorker(CancellableWorker):
     color_ready = Signal(str, list)
     result_ready = Signal(object, object)  # ColorApplication, ColorResult
     analysis_completed = Signal()
+    job_started = Signal(str, str)  # task ID, persistence
 
     def __init__(
         self,
@@ -57,6 +61,15 @@ class ColorAnalysisWorker(CancellableWorker):
             ColorApplication(project, self.request) if project is not None else None
         )
         self.result: Optional[ColorResult] = None
+        self.task_id: str | None = None
+        self.job_status: str | None = None
+        self._runtime: JobRuntime | None = None
+
+    def cancel(self) -> None:
+        super().cancel()
+        runtime = self._runtime
+        if runtime is not None and self.task_id is not None:
+            runtime.cancel(self.task_id)
 
     def _on_progress(self, completed: int, total: int, outcome: ColorOutcome) -> None:
         if outcome.status == "succeeded":
@@ -65,12 +78,64 @@ class ColorAnalysisWorker(CancellableWorker):
 
     def run(self) -> None:
         self._log_start()
+        runtime: JobRuntime | None = None
+        events: Queue[tuple[int, int, ColorOutcome]] = Queue()
+
+        def compute(progress, cancel):
+            def report(completed, total, outcome):
+                progress(completed / total if total else 1.0, outcome.target_id)
+                events.put((completed, total, outcome))
+
+            return asdict(
+                compute_colors(
+                    self.request,
+                    parallelism=self._parallelism,
+                    cancel_event=cancel,
+                    progress_callback=report,
+                )
+            )
+
         try:
-            self.result = compute_colors(
-                self.request,
-                parallelism=self._parallelism,
-                cancel_event=self._cancel_event,
-                progress_callback=self._on_progress,
+            runtime = JobRuntime.for_session(max_workers=1)
+            self._runtime = runtime
+            submission = runtime.submit(
+                kind="analyze_colors",
+                args={"request_id": self.request.request_id},
+                run=compute,
+                cancellation_event=self._cancel_event,
+            )
+            self.task_id = submission["task_id"]
+            self.job_started.emit(self.task_id, submission["persistence"])
+            while runtime.is_handle_live(self.task_id):
+                try:
+                    self._on_progress(*events.get(timeout=0.05))
+                except Empty:
+                    pass
+            runtime.shutdown()
+            while not events.empty():
+                self._on_progress(*events.get_nowait())
+            row = runtime.store.get(self.task_id)
+            self.job_status = row.status
+            if row.status == "failed":
+                raise RuntimeError(row.error or "Color analysis failed")
+            payload = row.result
+            self.result = ColorResult(
+                self.request.request_id,
+                tuple(
+                    ColorOutcome(
+                        target_id=o["target_id"],
+                        status=o["status"],
+                        colors=tuple(tuple(c) for c in o["colors"]),
+                        code=o["code"],
+                        message=o["message"],
+                    )
+                    for o in payload["outcomes"]
+                )
+                if payload
+                else tuple(
+                    ColorOutcome(target.target_id, "unprocessed", code="cancelled")
+                    for target in self.request.targets
+                ),
             )
             errors = [
                 (o.target_id, o.message or o.code or "Color extraction failed")
@@ -86,5 +151,10 @@ class ColorAnalysisWorker(CancellableWorker):
             self._log_error(str(exc))
             self.error.emit(str(exc))
         finally:
-            self.analysis_completed.emit()
-            self._log_complete()
+            try:
+                if runtime is not None:
+                    runtime.close_session()
+            finally:
+                self._runtime = None
+                self.analysis_completed.emit()
+                self._log_complete()

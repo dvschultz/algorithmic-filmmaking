@@ -147,6 +147,16 @@ difference. CLI color saving now uses `Project.save`; synchronous MCP keeps its
 mtime check and adds per-target error details while retaining legacy counters.
 
 This is a migration checkpoint, not completion of the architecture plan.
+Desktop color execution now uses the shared job runtime through its existing
+QThread delivery adapter on all four entry paths (pipeline, chat, Frames, and
+intentions). Jobs are explicitly session-only until project data is saved; the
+status bar says so. Cancellation retains successful partial results, queued
+cancellation skips computation, and result application still precedes completion
+on the project owner thread. The QThread shell remains for callers using
+`start`, `cancel`, `wait`, and `finished`; its removal condition is migration of
+those main-window lifecycle callers to task-aware adapters. MCP saved-project
+colors separately use durable result receipts, as described in [shared jobs](shared-jobs.md).
+
 The application guard is process-local and one-use, not durable exactly-once
 execution. The first [project-session migration](project-sessions.md) now shares
 clip enable/disable and manual sequence insertion, removal, clearing, reorder, timing, track and transform history between desktop and chat. Sequence creation, deletion, renaming, and settings now share that history as well. Clearing removes clips from every track in one undo action. Remaining editorial

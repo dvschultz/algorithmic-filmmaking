@@ -149,6 +149,7 @@ class JobRuntime:
         project_path: Optional[str | Path] = None,
         project_mtime_at_start: Optional[float] = None,
         idempotency_key: Optional[str] = None,
+        cancellation_event: threading.Event | None = None,
     ) -> dict:
         """Submit a job. Returns a result dict suitable for the MCP
         ``start_*`` tool response.
@@ -237,7 +238,9 @@ class JobRuntime:
             blocking_job_id=blocking_job_id,
         )
 
-        cancel_event = threading.Event()
+        cancel_event = (
+            cancellation_event if cancellation_event is not None else threading.Event()
+        )
         handle = _JobHandle(task_id=row.id, cancel_event=cancel_event, future=None)
         with self._handles_lock:
             self._handles[row.id] = handle
@@ -353,6 +356,7 @@ class JobRuntime:
                     STATUS_CANCELLED,
                     progress=handle.last_progress,
                     status_message=handle.last_status_message or "cancelled",
+                    result=result if isinstance(result, dict) else None,
                     terminal=True,
                 )
             elif isinstance(result, dict) and result.get("success") is False:

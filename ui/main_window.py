@@ -3838,6 +3838,7 @@ class MainWindow(QMainWindow):
         self.color_worker = ColorAnalysisWorker(clips, parallelism=self.settings.color_analysis_parallelism, sources_by_id=self.project.sources_by_id, project=self.project)
         self.color_worker.progress.connect(self._on_color_progress)
         self.color_worker.result_ready.connect(self._on_color_result)
+        self.color_worker.job_started.connect(self._on_color_job_started)
         self.color_worker.error.connect(self._on_color_error)
         self.color_worker.analysis_completed.connect(
             self._on_pipeline_colors_finished, Qt.UniqueConnection
@@ -5938,6 +5939,14 @@ class MainWindow(QMainWindow):
         """Handle color analysis progress."""
         self.progress_bar.setValue(int((current / total) * 100))
 
+    @Slot(str, str)
+    def _on_color_job_started(self, task_id: str, persistence: str) -> None:
+        """Make the live project's unsaved analysis state visible."""
+        if persistence == "session_only":
+            self.status_bar.showMessage(
+                "Extracting colors. Results remain unsaved until you save the project."
+            )
+
     @Slot(object, object)
     def _on_color_result(self, application, result):
         """Apply a completed batch on the GUI thread to its originating project."""
@@ -6979,6 +6988,7 @@ class MainWindow(QMainWindow):
                 project=self.project,
             )
             worker.progress.connect(self._on_color_progress)
+            worker.job_started.connect(self._on_color_job_started)
             worker.result_ready.connect(self._on_color_result)
             worker.error.connect(self._on_color_error)
             worker.analysis_completed.connect(
@@ -7927,6 +7937,7 @@ class MainWindow(QMainWindow):
         self.color_worker = ColorAnalysisWorker(clips, parallelism=self.settings.color_analysis_parallelism, sources_by_id=self.project.sources_by_id, project=self.project)
         self.color_worker.progress.connect(self._on_color_progress)
         self.color_worker.result_ready.connect(self._on_color_result)
+        self.color_worker.job_started.connect(self._on_color_job_started)
         self.color_worker.error.connect(self._on_color_error)
         self.color_worker.analysis_completed.connect(self._on_agent_color_analysis_finished, Qt.UniqueConnection)
         # Clean up thread safely after it finishes
@@ -9412,6 +9423,7 @@ class MainWindow(QMainWindow):
                 self.intention_workflow.on_analysis_progress
             )
             self.color_worker.result_ready.connect(self._on_color_result)
+            self.color_worker.job_started.connect(self._on_color_job_started)
             self.color_worker.error.connect(self._on_color_error)
             self.color_worker.analysis_completed.connect(
                 self._on_intention_analysis_finished

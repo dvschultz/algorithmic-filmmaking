@@ -304,7 +304,7 @@ def _build_fake_worker(completion_signal: str, extra_signals: list[str]):
             "_launch_colors_worker",
             "ColorAnalysisWorker",
             "analysis_completed",
-            ["progress", "result_ready", "error"],
+            ["progress", "result_ready", "error", "job_started"],
             "colors",
         ),
         (
@@ -372,6 +372,9 @@ def test_launch_worker_emits_pipeline_completion(
             return None
 
         def _on_color_result(self, *_args):
+            return None
+
+        def _on_color_job_started(self, *_args):
             return None
 
         def _on_color_error(self, *_args):
