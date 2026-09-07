@@ -192,6 +192,56 @@ def test_cancel_retains_finished_items(setup):
     assert len(Project.load(path).metadata.job_results) == 1
 
 
+@pytest.mark.parametrize("force", [False, True])
+def test_atomic_cancellation_retains_computation_without_saving(setup, force):
+    path, store, compute = setup
+    before = path.read_bytes()
+    cancel = Event()
+    with pytest.raises(RuntimeError, match="cancelled"):
+        run_shot_job(
+            store, path, None, lambda *_: cancel.set(), cancel, atomic=True, force=force
+        )
+    assert path.read_bytes() == before
+    assert compute.call_count == 1
+    assert len(run(setup, atomic=True, force=force)["succeeded"]) == 2
+    assert compute.call_count == 2
+
+
+@pytest.mark.parametrize("atomic", [False, True])
+@pytest.mark.parametrize("force", [False, True])
+def test_failure_after_default_batch_boundary_obeys_publication_policy(
+    tmp_path, monkeypatch, atomic, force
+):
+    project = project_with_thumbnails(tmp_path, 20)
+    path = tmp_path / "project.json"
+    assert project.save(path)
+    before = path.read_bytes()
+    store = JobStore(tmp_path / "jobs.db")
+    compute = Mock(
+        side_effect=[*[("wide", 0.9)] * 19, RuntimeError("last target failed")]
+    )
+    monkeypatch.setattr("core.analysis.shots.classify_shot_type", compute)
+    try:
+        if atomic:
+            with pytest.raises(RuntimeError, match="last target failed"):
+                run((path, store, compute), atomic=True, force=force)
+            assert path.read_bytes() == before
+            compute.side_effect = None
+            compute.return_value = ("wide", 0.9)
+            assert (
+                len(run((path, store, compute), atomic=True, force=force)["succeeded"])
+                == 20
+            )
+            assert compute.call_count == 21
+        else:
+            result = run((path, store, compute), force=force)
+            assert len(result["succeeded"]) == 19
+            assert len(result["failed"]) == 1
+            assert len(Project.load(path).metadata.job_results) == 19
+    finally:
+        store.close()
+
+
 @pytest.mark.parametrize("column", ["spec_json", "payload_json"])
 def test_corrupt_receipt_refuses_recomputation(setup, column):
     path, _, compute = setup

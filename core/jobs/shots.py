@@ -144,8 +144,14 @@ def run_shot_job(
     force: bool = False,
     thumbnail_paths: dict[str, Path] | None = None,
     operation: OperationSpec | None = None,
+    atomic: bool = False,
 ) -> dict:
-    """Reuse completed computation after failed saves, without implicit provider calls."""
+    """Reuse recorded computation after failed saves.
+
+    Atomic callers retain computation but publish nothing on provider failure or
+    cancellation. Missing thumbnails and unknown classifications remain skips
+    for the legacy synchronous adapter's all-or-nothing save contract.
+    """
     options = (
         ShotTypeOptions(**json.loads(operation.inputs_json)["options"])
         if operation
@@ -155,6 +161,7 @@ def run_shot_job(
         raise ValueError("Queued shots inputs cannot replace thumbnails")
     if operation is not None:
         force = bool(operation.arguments.get("force", False))
+        atomic = bool(operation.arguments.get("atomic", atomic))
     thumbnails = dict(thumbnail_paths or {})
     runtime = _runtime()
     fingerprint = MediaFingerprints(cancel).get
@@ -194,6 +201,10 @@ def run_shot_job(
             known.setdefault(identity["target_id"], []).append(
                 (row, identity, json.loads(row["payload_json"]))
             )
+        if atomic:
+            # Even reconciliation may stage several receipts for one target.
+            # Keep every possible receipt below the automatic flush threshold.
+            batch.max_items = len(ids) + sum(len(rows) for rows in known.values()) + 1
 
         def inputs(
             current: Project, cid: str, task: ShotTypeTask | None = None
@@ -359,12 +370,21 @@ def run_shot_job(
                         {"clip_id": cid, "reason": "already_committed"}
                     )
             except FingerprintCancelled:
+                if atomic:
+                    raise
                 result["unprocessed"].extend(
                     {"clip_id": rest, "code": "cancelled"} for rest in ids[index:]
                 )
                 break
             except _OutcomeError as exc:
                 outcome = exc.outcome
+                if atomic and outcome.code not in {
+                    "thumbnail_missing",
+                    "no_classification",
+                }:
+                    raise RuntimeError(
+                        outcome.message or outcome.code or "Shot classification failed"
+                    ) from exc
                 result[outcome.status].append(
                     {"clip_id": cid, "code": outcome.code, "message": outcome.message}
                 )
@@ -372,6 +392,8 @@ def run_shot_job(
                 0.95 * (index + 1) / len(ids),
                 f"Classifying shots ({index + 1}/{len(ids)})",
             )
+        if atomic and cancel.is_set():
+            raise RuntimeError("Shot classification cancelled")
         batch.flush()
         progress(1.0, "Shot classification finished")
         return {"success": True, "result": result}

@@ -253,8 +253,15 @@ or corrupt recorded results produce an error rather than automatic recomputation
 Desktop shot jobs also journal computation for saved projects. Their clip/frame
 receipts are separate from headless receipts; publication applies only to the
 launching editor session, and the journal itself never saves the project.
-Unsaved projects keep session history only. The legacy synchronous
-`analyze_shots` MCP tool does not yet use durable recovery.
+Unsaved projects keep session history only.
+
+The legacy synchronous `analyze_shots` tool also retains computed results before
+saving. It preserves its existing behavior: each completed new request refreshes
+labels, missing thumbnails and unknown classifications count as skipped, and a
+provider failure leaves the entire project unchanged. Retrying a failed provider
+call, save, or checkpoint reuses matching completed inference. Its response keeps
+the same clip counts and shot-type distribution. The asynchronous `start_*`
+routes continue to save partial successes.
 
 `start_analyze_classify` and `classify` steps in `start_analyze_clips` retain
 recorded classification results across failed saves and checkpoint failures.

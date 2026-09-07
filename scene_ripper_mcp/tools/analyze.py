@@ -117,23 +117,27 @@ async def analyze_shots(
     if not valid:
         return json.dumps({"success": False, "error": error})
 
-    return await asyncio.to_thread(_analyze_shots_sync, path)
+    store = ctx.request_context.lifespan_context["job_store"] if ctx else None
+    return await asyncio.to_thread(_analyze_shots_sync, path, store)
 
 
-def _analyze_shots_sync(path):
+def _analyze_shots_sync(path, store=None):
     """Synchronous body for ``analyze_shots`` (offloaded via ``asyncio.to_thread``)."""
     try:
         with project_writer(path):
-            from core.spine.analyze import analyze_shots as run_shots
+            from threading import Event
+            from core.jobs.shots import run_shot_job, shot_job_spec
+            from core.jobs.store import JobStore
+            from core.operations.shots import ShotTypeOptions
+            from core.settings import load_settings
             from core.project import MissingSourceError
             from core.spine.project_io import (
                 ProjectModifiedExternally,
                 load_with_mtime,
-                save_with_mtime_check,
             )
 
             try:
-                project, mtime = load_with_mtime(path)
+                project, _ = load_with_mtime(path)
             except MissingSourceError as e:
                 return json.dumps({
                     "success": False,
@@ -147,23 +151,15 @@ def _analyze_shots_sync(path):
             # The project loader resolves persisted thumbnail paths. Do not
             # regenerate images in this legacy analysis-only entry point.
             selected = [c.id for c in clips if c.source_id in project.sources_by_id]
-            outcomes = run_shots(project, selected, skip_existing=False)["result"]
-            fatal = [
-                item for item in outcomes["failed"]
-                if item["code"] not in {"thumbnail_missing", "no_classification"}
-            ]
-            if fatal:
-                # Preserve the legacy all-or-nothing save on provider failure.
-                return json.dumps({"success": False, "error": fatal[0].get("message") or fatal[0]["code"]})
-            analyzed_count = len(outcomes["succeeded"])
-            skipped_count = len(clips) - analyzed_count
-            shot_type_counts: dict = {}
-            for item in outcomes["succeeded"]:
-                shot_type = item["shot_type"]
-                shot_type_counts[shot_type] = shot_type_counts.get(shot_type, 0) + 1
-
+            options = ShotTypeOptions()
+            operation = shot_job_spec(project, selected, options,
+                arguments={"force": True, "atomic": True})
+            owned_store = store is None
+            if owned_store:
+                store = JobStore(load_settings().cache_dir / "jobs.db")
             try:
-                save_with_mtime_check(project, path, mtime)
+                outcomes = run_shot_job(store, path, selected, lambda *_: None,
+                    Event(), operation=operation)["result"]
             except ProjectModifiedExternally as exc:
                 return json.dumps({
                     "success": False,
@@ -174,6 +170,23 @@ def _analyze_shots_sync(path):
                         "current_mtime": exc.current_mtime,
                     },
                 })
+            finally:
+                if owned_store:
+                    store.close()
+
+            completed = list(outcomes["succeeded"])
+            # A saved result whose checkpoint failed is completed by this retry.
+            # Its label is already in the loaded project and the job verifies it.
+            completed.extend(
+                {"clip_id": item["clip_id"], "shot_type": project.clips_by_id[item["clip_id"]].shot_type}
+                for item in outcomes["skipped"] if item["reason"] == "already_committed"
+            )
+            analyzed_count = len(completed)
+            skipped_count = len(clips) - analyzed_count
+            shot_type_counts: dict = {}
+            for item in completed:
+                shot_type = item["shot_type"]
+                shot_type_counts[shot_type] = shot_type_counts.get(shot_type, 0) + 1
 
             return json.dumps(
                 {

@@ -1153,6 +1153,21 @@ when its target identity, source/range, image path, and shot label match. Manual
 edits, Save As, failed saves, and failed checkpoints do not acknowledge unrelated
 outputs; a later matching save can complete the checkpoint.
 
-The legacy synchronous MCP persistence adapter, combined frame-analysis
-orchestration (including its existing automatic save), and the ordered intention
-workflow remain outstanding; this cutover does not complete U7.
+### Legacy synchronous MCP shot recovery
+
+The synchronous `analyze_shots` adapter now uses the same durable headless shot
+job with atomic publication. Provider failure or cancellation discards staged
+project changes while retaining completed inference for retry. Its atomic batch
+does not flush at the usual partial-result boundary. Missing thumbnails and
+unknown classifications retain the legacy skipped counter; successful new
+requests still refresh existing labels.
+
+The adapter borrows the MCP server's result store when supplied and closes only
+a store it creates itself. Failed-save retries reuse pending results, and
+failed-checkpoint retries report reconciled results in the existing counts and
+distribution. External project edits fail the revision guard. Dedicated and
+generic asynchronous jobs keep their existing partial-success policy.
+
+Combined frame-analysis orchestration (including its existing automatic save)
+and the ordered intention workflow remain outstanding; this cutover does not
+complete U7.
