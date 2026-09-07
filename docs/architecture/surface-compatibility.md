@@ -197,6 +197,13 @@ callers) share `core/operations/description.py`. Immutable tasks retain target
 IDs, image paths, source paths, and clip ranges. Provider computation remains in
 `core/analysis/description.py` and loads lazily.
 
+Description options snapshot the selected model, tier, prompt, input mode, and
+parallelism before GUI dispatch (or at headless execution entry). Provider calls
+receive the selected model explicitly, including video calls and frame fallback.
+The local model cache is keyed by requested model and available backend, so a
+model change cannot silently reuse another model's weights. API credentials are
+resolved at call time and are not part of the operation options.
+
 The shared runner admits at most the configured number of tasks (capped at five)
 and serializes local inference. Headless descriptions retain serial scheduling.
 Both surfaces use the existing GUI transient-error classification and up to three

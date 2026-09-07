@@ -491,9 +491,8 @@ def describe(
     from core.operations.description import (
         DEFAULT_PROMPT,
         DescriptionTask,
-        DescriptionOptions,
         DescriptionApplication,
-        resolve_tier,
+        resolve_options,
         run_description,
     )
 
@@ -524,7 +523,7 @@ def describe(
     application = DescriptionApplication(project, tuple(tasks))
     outcomes = run_description(
         tuple(tasks),
-        DescriptionOptions(resolve_tier(tier), prompt or DEFAULT_PROMPT),
+        resolve_options(tier, prompt or DEFAULT_PROMPT),
         cancel_event=cancel_event,
         progress=progress,
     )

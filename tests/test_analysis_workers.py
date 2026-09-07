@@ -796,9 +796,9 @@ class TestDescriptionWorkerLifecycle:
             [_make_clip_with_thumb(cid, thumbnail_path) for cid in ("clip-1", "clip-2")],
             tier=tier,
         )
-        monkeypatch.setattr("core.analysis.description.is_model_loaded", lambda: False)
+        monkeypatch.setattr("core.analysis.description.is_model_loaded", lambda *_: False)
 
-        def fail():
+        def fail(*_):
             raise RuntimeError("model unavailable")
 
         monkeypatch.setattr("core.analysis.description._load_local_model", fail)
@@ -825,11 +825,11 @@ class TestDescriptionWorkerLifecycle:
         )
         loaded, completed = [], []
 
-        def load():
+        def load(*_):
             loaded.append(True)
             worker.cancel()
 
-        monkeypatch.setattr("core.analysis.description.is_model_loaded", lambda: False)
+        monkeypatch.setattr("core.analysis.description.is_model_loaded", lambda *_: False)
         monkeypatch.setattr("core.analysis.description._load_local_model", load)
         monkeypatch.setattr("core.analysis.description.describe_frame", lambda *a, **kw: pytest.fail("inference"))
         worker.description_completed.connect(lambda: completed.append(True))
@@ -852,10 +852,10 @@ class TestDescriptionWorkerLifecycle:
         worker = DescriptionWorker(
             [_make_clip_with_thumb("clip-1", thumbnail_path)], tier="cloud"
         )
-        monkeypatch.setattr("core.analysis.description.is_model_loaded", lambda: False)
+        monkeypatch.setattr("core.analysis.description.is_model_loaded", lambda *_: False)
         monkeypatch.setattr(
             "core.analysis.description._load_local_model",
-            lambda: pytest.fail("cloud must not load local model"),
+            lambda *_: pytest.fail("cloud must not load local model"),
         )
         monkeypatch.setattr(
             "core.analysis.description.describe_frame", lambda *a, **kw: ("A frame", "cloud")
@@ -881,11 +881,11 @@ class TestDescriptionWorkerLifecycle:
             [_make_clip_with_thumb("clip-1", thumbnail_path)], tier="local"
         )
 
-        def load():
+        def load(*_):
             worker.cancel()
             raise RuntimeError("interrupted")
 
-        monkeypatch.setattr("core.analysis.description.is_model_loaded", lambda: False)
+        monkeypatch.setattr("core.analysis.description.is_model_loaded", lambda *_: False)
         monkeypatch.setattr("core.analysis.description._load_local_model", load)
         errors, completed = [], []
         worker.error.connect(lambda *args: errors.append(args))

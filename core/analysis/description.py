@@ -33,6 +33,7 @@ _model_lock = threading.Lock()
 # Global model cache to avoid reloading heavy weights
 _LOCAL_MODEL = None
 _LOCAL_PROCESSOR = None
+_LOCAL_MODEL_KEY: tuple[str, bool] | None = None
 
 # Local VLM model
 # PINNED: mlx-community quantized model; verify availability before updating
@@ -266,6 +267,7 @@ def encode_video_base64(video_path: Path) -> str:
 def describe_video_cloud(
     video_path: Path,
     prompt: str = "Describe this video clip in 3 sentences or less. Focus on the main subjects, action, and setting.",
+    *, model_name: Optional[str] = None,
 ) -> tuple[str, str]:
     """Send video to Gemini for description via LiteLLM.
 
@@ -282,8 +284,7 @@ def describe_video_cloud(
     """
     from core.settings import get_gemini_api_key
 
-    settings = load_settings()
-    model = settings.description_model_cloud
+    model = model_name or load_settings().description_model_cloud
     original_model = model
 
     logger.info(f"Video description requested with model: {model}")
@@ -346,36 +347,36 @@ def describe_video_cloud(
         raise RuntimeError(_format_cloud_api_error(e, original_model, "video")) from e
 
 
-def _load_local_model():
+def _load_local_model(model_id: Optional[str] = None):
     """Load local VLM model (thread-safe).
 
     Uses Qwen3-VL via mlx-vlm on Apple Silicon, falls back to Moondream otherwise.
     """
-    global _LOCAL_MODEL, _LOCAL_PROCESSOR
-
-    if _LOCAL_MODEL is not None:
-        return _LOCAL_MODEL, _LOCAL_PROCESSOR
+    global _LOCAL_MODEL, _LOCAL_PROCESSOR, _LOCAL_MODEL_KEY
+    model_id = model_id or load_settings().description_model_local
+    use_mlx = is_mlx_vlm_available()
+    key = (model_id, use_mlx)
 
     with _model_lock:
-        if _LOCAL_MODEL is not None:
+        if _LOCAL_MODEL is not None and _LOCAL_MODEL_KEY == key:
             return _LOCAL_MODEL, _LOCAL_PROCESSOR
 
-        if is_mlx_vlm_available():
-            _load_qwen3_vlm()
+        if use_mlx:
+            _load_qwen3_vlm(model_id)
         else:
-            _load_moondream_fallback()
+            _load_moondream_fallback(model_id)
+        _LOCAL_MODEL_KEY = key
 
-    return _LOCAL_MODEL, _LOCAL_PROCESSOR
+        return _LOCAL_MODEL, _LOCAL_PROCESSOR
 
 
-def _load_qwen3_vlm():
+def _load_qwen3_vlm(model_id: Optional[str] = None):
     """Load Qwen3-VL via mlx-vlm."""
     global _LOCAL_MODEL, _LOCAL_PROCESSOR
 
     load, _generate = ensure_local_description_runtime_available()
 
-    settings = load_settings()
-    model_id = settings.description_model_local
+    model_id = model_id or load_settings().description_model_local
 
     logger.info(f"Loading local VLM via mlx-vlm: {model_id}")
     try:
@@ -389,7 +390,7 @@ def _load_qwen3_vlm():
     logger.info(f"Local VLM loaded: {model_id}")
 
 
-def _load_moondream_fallback():
+def _load_moondream_fallback(model_id: Optional[str] = None):
     """Load Moondream as fallback for non-Apple-Silicon."""
     global _LOCAL_MODEL, _LOCAL_PROCESSOR, _CPU_MODEL, _CPU_TOKENIZER
 
@@ -397,8 +398,7 @@ def _load_moondream_fallback():
 
     AutoModelForCausalLM, AutoTokenizer = ensure_local_cpu_description_runtime_available()
 
-    settings = load_settings()
-    model_id = settings.description_model_local
+    model_id = model_id or load_settings().description_model_local
 
     # If the setting points to a Qwen mlx model but we can't use mlx, use fallback
     if "mlx" in model_id.lower() or "qwen" in model_id.lower():
@@ -517,9 +517,11 @@ def _load_moondream_fallback():
     logger.info(f"CPU vision model loaded: {model_id}")
 
 
-def describe_frame_local(image_path: Path, prompt: str = "Describe this image.") -> str:
+def describe_frame_local(
+    image_path: Path, prompt: str = "Describe this image.", *, model_name: Optional[str] = None
+) -> str:
     """Generate description using local VLM (Qwen3-VL or Moondream fallback)."""
-    model, processor = _load_local_model()
+    model, processor = _load_local_model(model_name)
 
     if is_mlx_vlm_available():
         return _describe_with_mlx_vlm(model, processor, str(image_path), prompt)
@@ -623,7 +625,9 @@ def describe_frame_cpu(image_path: Path, prompt: str = "Describe this image.") -
     return describe_frame_local(image_path, prompt)
 
 
-def describe_frame_cloud(image_path: Path, prompt: str = "Describe this image.") -> str:
+def describe_frame_cloud(
+    image_path: Path, prompt: str = "Describe this image.", *, model_name: Optional[str] = None
+) -> str:
     """Generate description using Cloud API (via LiteLLM)."""
     from core.settings import (
         get_openai_api_key,
@@ -631,8 +635,7 @@ def describe_frame_cloud(image_path: Path, prompt: str = "Describe this image.")
         get_gemini_api_key
     )
 
-    settings = load_settings()
-    model = settings.description_model_cloud
+    model = model_name or load_settings().description_model_cloud
     original_model = model  # Keep for logging
 
     logger.info(f"Cloud description requested with model: {model}")
@@ -713,6 +716,9 @@ def describe_frame(
     start_frame: Optional[int] = None,
     end_frame: Optional[int] = None,
     fps: Optional[float] = None,
+    *,
+    model_name: Optional[str] = None,
+    input_mode: Optional[str] = None,
 ) -> tuple[str, str]:
     """Generate description for a video frame or clip.
 
@@ -749,12 +755,13 @@ def describe_frame(
     logger.info(f"Describing frame {image_path.name} using {tier} tier")
 
     if tier == "local":
-        desc = describe_frame_local(image_path, prompt)
-        return desc, settings.description_model_local
+        model = model_name or settings.description_model_local
+        desc = describe_frame_local(image_path, prompt, model_name=model)
+        return desc, model
 
     elif tier == "cloud":
-        model = settings.description_model_cloud
-        input_mode = settings.description_input_mode
+        model = model_name or settings.description_model_cloud
+        input_mode = input_mode or settings.description_input_mode
 
         # Check if we should use video input (only for Gemini when mode is "video")
         if (
@@ -773,7 +780,7 @@ def describe_frame(
                 logger.warning(f"Video extraction failed, falling back to frame: {e}")
             else:
                 try:
-                    return describe_video_cloud(temp_video, prompt)
+                    return describe_video_cloud(temp_video, prompt, model_name=model)
                 finally:
                     if temp_video.exists():
                         temp_video.unlink()
@@ -781,25 +788,29 @@ def describe_frame(
 
         # Frame-based description (default or when video mode not selected)
         logger.info("Using frame mode for description")
-        desc = describe_frame_cloud(image_path, prompt)
-        return desc, settings.description_model_cloud
+        desc = describe_frame_cloud(image_path, prompt, model_name=model)
+        return desc, model
 
     else:
         raise ValueError(f"Unknown tier: {tier}")
 
 
-def is_model_loaded() -> bool:
+def is_model_loaded(model_name: Optional[str] = None) -> bool:
     """Check if a local model is currently loaded."""
-    return _LOCAL_MODEL is not None
+    return _LOCAL_MODEL is not None and (
+        model_name is None
+        or _LOCAL_MODEL_KEY == (model_name, is_mlx_vlm_available())
+    )
 
 
 def unload_model():
     """Unload the local model to free memory."""
-    global _LOCAL_MODEL, _LOCAL_PROCESSOR, _CPU_MODEL, _CPU_TOKENIZER
+    global _LOCAL_MODEL, _LOCAL_PROCESSOR, _LOCAL_MODEL_KEY, _CPU_MODEL, _CPU_TOKENIZER
 
     with _model_lock:
         _LOCAL_MODEL = None
         _LOCAL_PROCESSOR = None
+        _LOCAL_MODEL_KEY = None
         _CPU_MODEL = None
         _CPU_TOKENIZER = None
         logger.info("VLM model unloaded")

@@ -14,10 +14,10 @@ from ui.workers.base import CancellableWorker
 from core.operations.description import (
     DEFAULT_PROMPT,
     DescriptionTask,
-    DescriptionOptions,
     DescriptionOutcome,
     compute_description,
     run_description,
+    resolve_options,
 )
 
 logger = logging.getLogger(__name__)
@@ -64,6 +64,7 @@ class DescriptionWorker(CancellableWorker):
         # Local MLX/Moondream inference shares model state and can crash native
         # backends if multiple descriptions run at once.
         self._parallelism = 1 if self._tier == "local" else requested_parallelism
+        self.options = resolve_options(self._tier, self._prompt, self._parallelism)
         self.result: tuple[DescriptionOutcome, ...] = ()
         self.error_count = 0
         self.success_count = 0
@@ -142,7 +143,7 @@ class DescriptionWorker(CancellableWorker):
     ) -> tuple[str, Optional[str], Optional[str], Optional[str]]:
         """Compatibility wrapper for callers testing one detached task."""
         outcome = compute_description(
-            task, DescriptionOptions(self._tier, self._prompt), self._cancel_event
+            task, self.options, self._cancel_event
         )
         error = "Cancelled" if outcome.status == "unprocessed" else outcome.message
         return outcome.clip_id, outcome.description, outcome.model, error
@@ -176,9 +177,9 @@ class DescriptionWorker(CancellableWorker):
             try:
                 from core.analysis.description import is_model_loaded, _load_local_model
 
-                if not is_model_loaded():
+                if not is_model_loaded(self.options.model):
                     self.progress.emit(0, total)
-                    _load_local_model()
+                    _load_local_model(self.options.model)
             except Exception as e:
                 if self.is_cancelled():
                     self._log_cancelled()
@@ -197,7 +198,7 @@ class DescriptionWorker(CancellableWorker):
 
         self.result = run_description(
             tuple(self._tasks),
-            DescriptionOptions(self._tier, self._prompt, self._parallelism),
+            self.options,
             cancel_event=self._cancel_event,
             on_outcome=self._on_outcome,
             progress=self.progress.emit,

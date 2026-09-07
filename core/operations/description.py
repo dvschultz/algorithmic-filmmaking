@@ -1,7 +1,7 @@
 """Detached description computation shared by GUI and headless callers."""
 
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from threading import Event
 from typing import Callable, TYPE_CHECKING, Literal
@@ -38,6 +38,27 @@ class DescriptionOptions:
     tier: str
     prompt: str = DEFAULT_PROMPT
     parallelism: int = 1
+    model: str | None = None
+    input_mode: str | None = None
+
+
+def resolve_options(
+    tier: str | None = None, prompt: str | None = None, parallelism: int = 1
+) -> DescriptionOptions:
+    """Snapshot non-secret provider settings before work is queued."""
+    from core.settings import load_settings
+
+    settings = load_settings()
+    tier = resolve_tier(tier or settings.description_model_tier)
+    return DescriptionOptions(
+        tier,
+        prompt or DEFAULT_PROMPT,
+        parallelism,
+        settings.description_model_local
+        if tier == "local"
+        else settings.description_model_cloud,
+        settings.description_input_mode,
+    )
 
 
 @dataclass(frozen=True)
@@ -82,6 +103,8 @@ def compute_description(
                 start_frame=task.start_frame,
                 end_frame=task.end_frame,
                 fps=task.fps,
+                model_name=options.model,
+                input_mode=options.input_mode,
             )
             if cancel.is_set():
                 return DescriptionOutcome(task.clip_id, "unprocessed", code="cancelled")
@@ -114,6 +137,13 @@ def run_description(
     progress: Callable[[int, int], None] | None = None,
 ) -> tuple[DescriptionOutcome, ...]:
     """Bound admission, serialize local inference, and suppress cancelled results."""
+    if options.model is None or options.input_mode is None:
+        resolved = resolve_options(options.tier, options.prompt, options.parallelism)
+        options = replace(
+            resolved,
+            model=options.model or resolved.model,
+            input_mode=options.input_mode or resolved.input_mode,
+        )
     cancel = cancel_event or Event()
     parallelism = (
         1
