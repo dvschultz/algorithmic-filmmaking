@@ -45,6 +45,7 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
                 "gui_faces",
                 "gui_gaze",
                 "gui_embeddings",
+                "gui_boundary_embeddings",
                 "gui_ocr_clip",
                 "gui_ocr_frame",
             )
@@ -92,6 +93,15 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
                 clip.get("embedding") == list(outcome.vector)
                 and clip.get("embedding_model") == outcome.model
             ):
+                pending.append((result_id, receipt_digest))
+            continue
+        if identity["kind"] == "gui_boundary_embeddings":
+            from core.operations.boundary_embeddings import BoundaryEmbeddingOutcome
+
+            outcome = BoundaryEmbeddingOutcome.from_dict(payload)
+            if (clip.get("first_frame_embedding") == list(outcome.first)
+                and clip.get("last_frame_embedding") == list(outcome.last)
+                and clip.get("embedding_model") == outcome.model):
                 pending.append((result_id, receipt_digest))
             continue
         if identity["kind"] == "gui_gaze":

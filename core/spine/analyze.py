@@ -787,6 +787,39 @@ def custom_query(
     return {"success": True, "result": {"succeeded": succeeded, "failed": failed, "skipped": skipped, "total_clips": total}}
 
 
+def boundary_embeddings(
+    project: "Project", clip_ids: Optional[list[str]] = None, *,
+    skip_existing: bool = True,
+    progress_callback: Optional[Callable[[float, str], None]] = None,
+    cancel_event: Optional[threading.Event] = None,
+) -> dict:
+    """Analyze first/last source frames and publish each validated pair together."""
+    from core.operations.boundary_embeddings import (
+        BoundaryEmbeddingApplication, BoundaryEmbeddingTask, run_boundary_embeddings,
+    )
+
+    clips = _resolve_clip_ids(project, clip_ids)
+    tasks = tuple(BoundaryEmbeddingTask(
+        clip.id, project.sources_by_id[clip.source_id].file_path if clip.source_id in project.sources_by_id else None,
+        clip.start_frame, clip.end_frame,
+        project.sources_by_id[clip.source_id].fps if clip.source_id in project.sources_by_id else 0.0,
+        skip_existing and clip.first_frame_embedding is not None and clip.last_frame_embedding is not None,
+    ) for clip in clips)
+    application = BoundaryEmbeddingApplication(project, tasks)
+    result = {"succeeded": [], "failed": [], "skipped": [], "unprocessed": [], "total_clips": len(tasks)}
+    for outcome in run_boundary_embeddings(tasks, cancel_event=cancel_event):
+        if outcome.status == "succeeded":
+            if application.apply(project, outcome):
+                result["succeeded"].append({"clip_id": outcome.clip_id})
+            else:
+                result["failed"].append({"clip_id": outcome.clip_id, "code": "stale_result"})
+        else:
+            result[outcome.status].append({"clip_id": outcome.clip_id, "code": outcome.code, "message": outcome.message})
+    if progress_callback is not None:
+        progress_callback(1.0, "Boundary embeddings finished")
+    return {"success": True, "result": result}
+
+
 ANALYZE_CLIP_OPERATION_MAP: dict[str, Callable[..., dict]] = {
     "colors": analyze_colors,
     "shots": analyze_shots,
@@ -799,6 +832,7 @@ ANALYZE_CLIP_OPERATION_MAP: dict[str, Callable[..., dict]] = {
     "face_embeddings": face_embeddings,
     "gaze": gaze,
     "embeddings": embeddings,
+    "boundary_embeddings": boundary_embeddings,
     "custom_query": custom_query,
 }
 

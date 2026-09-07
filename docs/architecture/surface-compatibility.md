@@ -28,7 +28,7 @@ failures while preserving successful results and each surface's default policy.
 ## Analysis inventory
 
 The picker registry is `core/analysis_operations.py`. GUI has worker routes for
-all twelve registered operations. Spine exposes the corresponding operations
+all thirteen registered operations. Spine exposes the corresponding operations
 directly or through `analyze_clips`. These are not yet one shared implementation
 across GUI and headless adapters.
 
@@ -45,6 +45,7 @@ across GUI and headless adapters.
 | face_embeddings | face_embeddings | — | — |
 | gaze | gaze | — | — |
 | embeddings | embeddings | — | — |
+| boundary_embeddings | boundary_embeddings | analyze boundary-embeddings | — |
 | custom_query | custom_query | — | — |
 
 MCP jobs additionally expose generic analysis through the spine. Brightness,
@@ -863,5 +864,26 @@ Unsaved proposals use session-only jobs.
 
 Poem generation still uses the dialog's existing synchronous path; its shared
 algorithm adapter remains U12 work. Runtime identity does not independently hash
-model weights. Remaining U7 work includes boundary-analysis picker integration,
-audio/frame analysis routes and explicit intention-workflow orchestration.
+model weights. Remaining U7 work includes audio/frame analysis routes and
+explicit intention-workflow orchestration.
+
+### Boundary embeddings in the analysis workflow
+
+`boundary_embeddings` is an opt-in sequential analysis operation in the shared
+registry. The picker, live GUI agent, spine `analyze_clips`, and combined MCP
+analysis can select it; the dedicated CLI/MCP commands remain available.
+Completed pairs disable the picker option, and clearing boundary results leaves
+thumbnail vectors intact. OCR availability now also recognizes successful empty
+observations, matching the pipeline and saved-project behavior.
+
+`BoundaryEmbeddingApplication` publishes validated first/last vectors together
+only to the original unchanged clip/source. Desktop computation journals pairs
+before queued delivery, recovers unpublished results, and acknowledges receipts
+on explicit save. Media, range, prior vectors, model and project ownership are
+checked before publication. Unsaved projects use session-only execution. The
+boundary and thumbnail workers share lifecycle plumbing while retaining their
+own task types and computation. Combined MCP analysis reuses the dedicated
+durable boundary job and checks its queued input identity before execution.
+Because the legacy model stores one embedding model label per clip, boundary
+publication rejects a populated thumbnail vector with a different or unknown
+model instead of relabeling it. Clear or reanalyze that thumbnail embedding first.

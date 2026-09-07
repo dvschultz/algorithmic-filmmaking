@@ -185,7 +185,7 @@ policies match and they use the same configured cache directory.
 `start_analyze_clips` accepts the same operation keys used by the GUI
 Analyze tab: `colors`, `shots`, `classify`, `detect_objects`,
 `extract_text`, `transcribe`, `describe`, `cinematography`,
-`face_embeddings`, `gaze`, `embeddings`, and `custom_query`. When using
+`face_embeddings`, `gaze`, `embeddings`, `boundary_embeddings`, and `custom_query`. When using
 `custom_query`, pass the query text in the `query` argument.
 
 Custom-query jobs save computed results before publishing them to the project.

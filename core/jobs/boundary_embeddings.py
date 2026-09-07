@@ -14,6 +14,7 @@ from core.jobs.store import JobStore
 from core.operations.boundary_embeddings import (
     BoundaryEmbeddingTask,
     run_boundary_embeddings,
+    validate_boundary_model,
 )
 from core.operations.embeddings import EmbeddingOutcome, embedding_model_session
 from core.project import Project
@@ -259,6 +260,7 @@ def run_boundary_embedding_job(
                                 "Boundary output changed before application"
                             )
                         clip = current.clips_by_id[cid]
+                        validate_boundary_model(clip, checked["model"])
                         clip.first_frame_embedding = checked["first"]
                         clip.last_frame_embedding = checked["last"]
                         clip.embedding_model = checked["model"]

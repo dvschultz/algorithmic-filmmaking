@@ -3,7 +3,7 @@
 from dataclasses import asdict
 from pathlib import Path
 from queue import Empty, Queue
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable
 
 from PySide6.QtCore import Signal
 
@@ -138,7 +138,6 @@ class EmbeddingAnalysisWorker(CancellableWorker):
         """Relay shared-job results on the QThread; publish models on their owner."""
         self._log_start()
         self.progress.emit(0, len(self.tasks))
-        runtime = None
         events: Queue = Queue()
         errors: list[tuple[str, str]] = []
 
@@ -206,52 +205,65 @@ class EmbeddingAnalysisWorker(CancellableWorker):
                     ],
                 }
 
-        try:
-            runtime = gui_job_runtime(self.operation)
-            self._runtime = runtime
-            submission = runtime.submit(
-                kind=self.operation.kind,
-                args=self.operation.arguments,
-                operation=self.operation,
-                run=compute,
-                cancellation_event=self._cancel_event,
-                project_path=self.operation.arguments.get("project_path"),
-            )
-            self.task_id = submission["task_id"]
-            while runtime.is_handle_live(self.task_id):
-                try:
-                    emit(events.get(timeout=0.05))
-                except Empty:
-                    pass
-            runtime.shutdown()
-            while not events.empty():
-                emit(events.get_nowait())
-            row = runtime.store.get(self.task_id)
-            self.job_status = row.status
-            self.result = tuple(
-                EmbeddingOutcome.from_dict(value)
-                for value in (row.result or {}).get("outcomes", [])
-            )
-            if row.status == "cancelled" and not self.result:
-                self.result = tuple(
-                    EmbeddingOutcome(task.clip_id, "unprocessed", code="cancelled")
-                    for task in self.tasks
-                )
-            if row.status == "failed" and not self.result:
-                raise RuntimeError(row.error or "Embedding extraction failed")
-        except Exception as exc:
-            self.error.emit(str(exc))
-        finally:
+        _run_embedding_job(self, compute, emit, events, EmbeddingOutcome, errors)
+
+
+def _run_embedding_job(
+    worker: Any,
+    compute: Callable,
+    relay: Callable,
+    events: Queue,
+    outcome_type: type,
+    errors: list[tuple[str, str]],
+) -> None:
+    """Run the shared lifecycle while each adapter owns its task/result types."""
+    runtime = None
+    try:
+        runtime = gui_job_runtime(worker.operation)
+        worker._runtime = runtime
+        submission = runtime.submit(
+            kind=worker.operation.kind,
+            args=worker.operation.arguments,
+            operation=worker.operation,
+            run=compute,
+            cancellation_event=worker._cancel_event,
+            project_path=worker.operation.arguments.get("project_path"),
+        )
+        worker.task_id = submission["task_id"]
+        while runtime.is_handle_live(worker.task_id):
             try:
-                if runtime is not None:
-                    close_gui_job_runtime(runtime)
-            finally:
-                self._runtime = None
-                if errors and not self.is_cancelled():
-                    self.error.emit(
-                        summarize_clip_errors(
-                            errors, operation_label="Embedding extraction"
-                        )
+                relay(events.get(timeout=0.05))
+            except Empty:
+                pass
+        runtime.shutdown()
+        while not events.empty():
+            relay(events.get_nowait())
+        row = runtime.store.get(worker.task_id)
+        worker.job_status = row.status
+        worker.result = tuple(
+            outcome_type.from_dict(value)
+            for value in (row.result or {}).get("outcomes", [])
+        )
+        if row.status == "cancelled" and not worker.result:
+            worker.result = tuple(
+                outcome_type(task.clip_id, "unprocessed", code="cancelled")
+                for task in worker.tasks
+            )
+        if row.status == "failed" and not worker.result:
+            raise RuntimeError(row.error or "Embedding extraction failed")
+    except Exception as exc:
+        worker.error.emit(str(exc))
+    finally:
+        try:
+            if runtime is not None:
+                close_gui_job_runtime(runtime)
+        finally:
+            worker._runtime = None
+            if errors and not worker.is_cancelled():
+                worker.error.emit(
+                    summarize_clip_errors(
+                        errors, operation_label="Embedding extraction"
                     )
-                self.analysis_completed.emit()
-                self._log_complete()
+                )
+            worker.analysis_completed.emit()
+            worker._log_complete()

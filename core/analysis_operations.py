@@ -81,6 +81,11 @@ ANALYSIS_OPERATIONS: list[AnalysisOperation] = [
         "Search clips for specific visual content using a VLM (e.g., 'blue flower')",
         "cloud", False, cloud_capable=True,
     ),
+    AnalysisOperation(
+        "boundary_embeddings", "Generate Boundary Embeddings",
+        "Analyze the first and last frames for Match Cut sequencing",
+        "sequential", False,
+    ),
 ]
 
 # Lookup by key

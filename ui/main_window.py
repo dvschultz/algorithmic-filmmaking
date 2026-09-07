@@ -3532,6 +3532,8 @@ class MainWindow(QMainWindow):
             self._launch_gaze_worker(clips)
         elif op_key == "embeddings":
             self._launch_embeddings_worker(clips)
+        elif op_key == "boundary_embeddings":
+            self._launch_boundary_embeddings_worker(clips)
         else:
             logger.warning(f"Unknown analysis operation: {op_key}")
             self._on_analysis_phase_worker_finished(op_key)
@@ -3660,6 +3662,22 @@ class MainWindow(QMainWindow):
         )
         self._embeddings_worker.error.connect(self._on_embeddings_error)
         self._embeddings_worker.start()
+
+    def _launch_boundary_embeddings_worker(self, clips: list):
+        from ui.workers.boundary_embedding_worker import BoundaryEmbeddingWorker
+        from ui.workers.embedding_delivery import BoundaryEmbeddingDelivery
+
+        self._reset_analysis_run_error("boundary_embeddings")
+        worker = BoundaryEmbeddingWorker(clips, project=self.project)
+        self._boundary_embeddings_worker = worker
+        worker.progress.connect(self._on_embeddings_progress)
+        worker._delivery = BoundaryEmbeddingDelivery(self, worker, pipeline=True)
+        bind_pipeline_completion(
+            self, worker, "_boundary_embeddings_worker", worker.analysis_completed,
+            lambda: self._on_analysis_phase_worker_finished("boundary_embeddings"),
+        )
+        worker.error.connect(self._on_boundary_embeddings_error)
+        worker.start()
 
     def _launch_text_extraction_worker(self, clips: list):
         """Launch text extraction worker."""
@@ -4305,6 +4323,18 @@ class MainWindow(QMainWindow):
                 "clips": per_clip[:20],
             }
 
+        if "boundary_embeddings" in completed_ops:
+            per_clip = []
+            for clip in clips:
+                if clip.first_frame_embedding is None or clip.last_frame_embedding is None:
+                    continue
+                row = self._build_agent_clip_context(clip)
+                row["embedding_model"] = clip.embedding_model
+                row["first_frame_dimensions"] = len(clip.first_frame_embedding)
+                row["last_frame_dimensions"] = len(clip.last_frame_embedding)
+                per_clip.append(row)
+            summaries["boundary_embeddings"] = {"analyzed_count": len(per_clip), "clips": per_clip[:20]}
+
         if summaries:
             summaries["response_guidance"] = (
                 "Summarize only facts present in these structured analysis results. "
@@ -4599,6 +4629,7 @@ class MainWindow(QMainWindow):
             "face_embeddings": "_face_detection_run_error",
             "gaze": "_gaze_run_error",
             "embeddings": "_embeddings_run_error",
+            "boundary_embeddings": "_boundary_embeddings_run_error",
             "extract_text": "_text_extraction_run_error",
             "cinematography": "_cinematography_run_error",
         }
@@ -4644,6 +4675,7 @@ class MainWindow(QMainWindow):
             ("face_embeddings", getattr(self, "_face_detection_run_error", None), "face detection"),
             ("gaze", getattr(self, "_gaze_run_error", None), "gaze analysis"),
             ("embeddings", getattr(self, "_embeddings_run_error", None), "embedding analysis"),
+            ("boundary_embeddings", getattr(self, "_boundary_embeddings_run_error", None), "boundary embedding analysis"),
             ("extract_text", self._text_extraction_run_error, "text extraction"),
             ("transcribe", self._transcription_run_error, "transcription"),
             ("describe", self._description_run_error, "description"),
@@ -8237,6 +8269,12 @@ class MainWindow(QMainWindow):
         logger.error("Embedding analysis error: %s", msg)
         self._embeddings_run_error = msg
         self.statusBar().showMessage(f"Embedding analysis failed: {msg}", 5000)
+
+    @Slot(str)
+    def _on_boundary_embeddings_error(self, msg: str):
+        logger.error("Boundary embedding analysis error: %s", msg)
+        self._boundary_embeddings_run_error = msg
+        self.statusBar().showMessage(f"Boundary embedding analysis failed: {msg}", 5000)
 
     @Slot(int, int)
     def _on_object_detection_progress(self, current: int, total: int):

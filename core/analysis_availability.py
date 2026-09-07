@@ -22,6 +22,7 @@ _ANALYSIS_RESULT_FIELDS: dict[str, tuple[str, ...]] = {
         "last_frame_embedding",
         "embedding_model",
     ),
+    "boundary_embeddings": ("first_frame_embedding", "last_frame_embedding"),
 }
 
 
@@ -36,8 +37,7 @@ def operation_is_complete_for_clip(op_key: str, clip) -> bool:
     if op_key == "detect_objects":
         return clip.detected_objects is not None
     if op_key == "extract_text":
-        # Matches current pipeline behavior: empty OCR list is treated as needing rerun.
-        return bool(clip.extracted_texts)
+        return clip.extracted_texts is not None
     if op_key == "transcribe":
         return clip.transcript is not None
     if op_key == "describe":
@@ -50,6 +50,8 @@ def operation_is_complete_for_clip(op_key: str, clip) -> bool:
         return clip.gaze_category is not None
     if op_key == "embeddings":
         return clip.embedding is not None
+    if op_key == "boundary_embeddings":
+        return clip.first_frame_embedding is not None and clip.last_frame_embedding is not None
     if op_key == "custom_query":
         # Each custom query is unique — never auto-skip, always allow rerun
         return False

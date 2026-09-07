@@ -39,12 +39,12 @@ def test_compute_disabled_operations_mixed_clips_keeps_option_enabled():
     assert counts["colors"] == 1
 
 
-def test_extract_text_empty_list_still_counts_as_needing_analysis():
+def test_extract_text_empty_list_is_a_completed_observation():
     clip = make_test_clip("clip-1")
     clip.extracted_texts = []
 
     disabled = compute_disabled_operations([clip], ["extract_text"])
-    assert disabled == set()
+    assert disabled == {"extract_text"}
 
 
 def test_embeddings_completeness_matches_embedding_field():

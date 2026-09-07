@@ -16,9 +16,11 @@ from core.analysis_operations import (
 class TestAnalysisOperationRegistry:
     """Tests for the operation registry."""
 
-    def test_registry_has_12_operations(self):
-        """All 12 operations are registered."""
-        assert len(ANALYSIS_OPERATIONS) == 12
+    def test_boundary_embeddings_are_opt_in_and_sequential(self):
+        operation = OPERATIONS_BY_KEY["boundary_embeddings"]
+        assert operation.phase == "sequential"
+        assert not operation.default_enabled
+        assert not operation.cloud_capable
 
     def test_operations_by_key_matches(self):
         """OPERATIONS_BY_KEY has an entry for every operation."""

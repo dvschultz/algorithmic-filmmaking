@@ -3220,7 +3220,7 @@ def start_clip_analysis(
     description="Run analysis operations on clips with live GUI update. "
                 "Supports smart concurrency: local ops run in parallel, then sequential, then cloud. "
                 "Default operations: colors, shots, transcribe. "
-                "Available operations: colors, shots, classify, detect_objects, face_embeddings, extract_text, transcribe, describe, cinematography.",
+                "Available operations: colors, shots, classify, detect_objects, face_embeddings, extract_text, transcribe, describe, cinematography, gaze, embeddings, boundary_embeddings, custom_query.",
     requires_project=True,
     modifies_gui_state=True,
     modifies_project_state=True
@@ -3239,7 +3239,8 @@ def analyze_all_live(
         clip_ids: List of clip IDs to analyze
         operations: List of operation keys to run (default: colors, shots, transcribe).
             Valid keys: colors, shots, classify, detect_objects, extract_text,
-            transcribe, describe, cinematography.
+            transcribe, describe, cinematography, face_embeddings, gaze,
+            embeddings, boundary_embeddings, custom_query.
 
     Returns:
         Dict with analysis summary (after all workers complete)

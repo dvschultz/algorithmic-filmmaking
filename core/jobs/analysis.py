@@ -17,6 +17,11 @@ from core.spine.project_io import load_with_mtime, project_writer, save_with_mti
 
 def analysis_job_spec(project: Project, *, arguments: dict) -> OperationSpec:
     inputs = {}
+    if "boundary_embeddings" in (arguments.get("operations") or []):
+        from core.jobs.boundary_embeddings import boundary_embedding_job_spec
+
+        boundary = boundary_embedding_job_spec(project, arguments.get("clip_ids"), arguments={})
+        inputs["boundary_embeddings"] = json.loads(boundary.inputs_json)
     if "extract_text" in (arguments.get("operations") or []):
         from core.jobs.ocr import ocr_job_spec
         from core.operations.ocr import OcrOptions
@@ -147,6 +152,17 @@ def run_analysis_job(
                 raise StaleJobResult("Analysis inputs changed while the job was queued")
 
         def execute(op: str, report: Progress | None) -> dict:
+            if op == "boundary_embeddings":
+                from core.jobs.boundary_embeddings import boundary_embedding_job_spec, run_boundary_embedding_job
+
+                boundary = captured.get("boundary_embeddings")
+                if boundary is None:
+                    raise StaleJobResult("Analysis job has no captured boundary embedding inputs")
+                current, _ = load_with_mtime(path)
+                step = boundary_embedding_job_spec(current, ids, arguments={})
+                if json.loads(step.inputs_json) != boundary:
+                    raise StaleJobResult("Boundary embedding inputs changed before analysis")
+                return run_boundary_embedding_job(store, path, ids, report or (lambda *_: None), cancel, operation=step)
             if op == "extract_text":
                 from core.jobs.ocr import ocr_job_spec, run_ocr_job
                 from core.operations.ocr import OcrOptions

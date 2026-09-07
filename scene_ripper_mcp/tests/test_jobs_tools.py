@@ -213,10 +213,12 @@ def _make_project_file(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_boundary_embedding_submission_recovers_with_public_job_kind(lifespan_ctx, tmp_path, monkeypatch):
+@pytest.mark.parametrize("generic", [False, True])
+async def test_boundary_embedding_submission_recovers_with_public_job_kind(lifespan_ctx, tmp_path, monkeypatch, generic):
     from core.project import Project
     from core.jobs.spec import OperationSpec
     from scene_ripper_mcp.tools.jobs import start_generate_boundary_embeddings
+    from scene_ripper_mcp.tools.jobs import start_analyze_clips
 
     ctx, store, _ = lifespan_ctx
     path = _make_project_file(tmp_path)
@@ -224,11 +226,11 @@ async def test_boundary_embedding_submission_recovers_with_public_job_kind(lifes
     monkeypatch.setattr("core.analysis.embeddings.extract_boundary_embeddings", compute)
     monkeypatch.setattr("core.analysis.embeddings.unload_model", Mock())
     for _ in range(2):
-        response = json.loads(await start_generate_boundary_embeddings(str(path), ctx=ctx))
+        response = json.loads(await start_analyze_clips(str(path), operations=["boundary_embeddings"], ctx=ctx) if generic else await start_generate_boundary_embeddings(str(path), ctx=ctx))
         assert response["success"], response
         _wait_for_status(store, response["task_id"], STATUS_COMPLETED)
         row = store.get(response["task_id"])
-        assert row.kind == "generate_boundary_embeddings"
+        assert row.kind == ("analyze_clips" if generic else "generate_boundary_embeddings")
         assert OperationSpec.from_json(row.operation_json).kind == row.kind
     saved = Project.load(path)
     assert saved.clips[0].first_frame_embedding == [.123456789] * 768

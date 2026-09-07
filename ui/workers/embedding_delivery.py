@@ -9,11 +9,15 @@ from ui.workers.analysis_pipeline_delivery import pipeline_can_continue
 
 
 class EmbeddingDelivery(QObject):
+    application_type: type = EmbeddingApplication
+    worker_attribute = "_embeddings_worker"
+    error_method = "_on_embeddings_error"
+
     def __init__(self, window: Any, worker: Any, *, pipeline: bool = False) -> None:
         super().__init__(window)
         self.window = window
         self.worker = worker
-        self.application = EmbeddingApplication(window.project, worker.tasks)
+        self.application = self.application_type(window.project, worker.tasks)
         self.pipeline = pipeline
         self.run = getattr(window, "_analysis_run", None) if pipeline else None
         self.reply = getattr(window, "_dispatch_gui_reply", None)
@@ -25,7 +29,7 @@ class EmbeddingDelivery(QObject):
     def result(self, outcome: EmbeddingOutcome) -> None:
         window = self.window
         if (
-            getattr(window, "_embeddings_worker", None) is not self.worker
+            getattr(window, self.worker_attribute, None) is not self.worker
             or window.project is not self.application.project
             or window.project.session.session_id != self.application.session_id
             or self.worker.is_cancelled()
@@ -61,11 +65,19 @@ class EmbeddingDelivery(QObject):
             if accepted and receipt is not None:
                 window.project.record_job_result(receipt.result_id, receipt.digest)
         except Exception as exc:
-            window._on_embeddings_error(f"Could not apply embedding: {exc}")
+            getattr(window, self.error_method)(f"Could not apply embedding: {exc}")
             return
         if not accepted:
-            window._on_embeddings_error(
+            getattr(window, self.error_method)(
                 "Embedding discarded because the target changed. Run analysis again."
             )
         else:
             window._on_embedding_ready(outcome.clip_id)
+
+
+class BoundaryEmbeddingDelivery(EmbeddingDelivery):
+    from core.operations.boundary_embeddings import BoundaryEmbeddingApplication
+
+    application_type = BoundaryEmbeddingApplication
+    worker_attribute = "_boundary_embeddings_worker"
+    error_method = "_on_boundary_embeddings_error"
