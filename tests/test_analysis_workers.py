@@ -507,10 +507,10 @@ class TestTranscriptionWorkerErrors:
 
         monkeypatch.setattr("core.binary_resolver.find_binary", lambda _name: "/usr/bin/ffmpeg")
         monkeypatch.setattr("core.transcription.get_model", lambda *_args, **_kwargs: object())
+        from core.operations.transcription import TranscriptionOutcome
         monkeypatch.setattr(
-            worker,
-            "_process_task",
-            lambda task: (task.clip_id, None, "audio extraction failed", False),
+            "core.operations.transcription.compute_task",
+            lambda task, options: TranscriptionOutcome(task.clip_id, "failed", message="audio extraction failed"),
         )
 
         errors = []
@@ -578,7 +578,8 @@ class TestTranscriptionWorkerErrors:
         monkeypatch.setattr("core.binary_resolver.find_binary", lambda _name: "/usr/bin/ffmpeg")
         monkeypatch.setattr("core.transcription_storage.validate_transcription_disk_space", lambda *_args, **_kwargs: None)
         monkeypatch.setattr("core.transcription.get_model", lambda *_args, **_kwargs: object())
-        monkeypatch.setattr(worker, "_process_task", lambda task: (task.clip_id, [], None, False))
+        from core.operations.transcription import TranscriptionOutcome
+        monkeypatch.setattr("core.operations.transcription.compute_task", lambda task, options: TranscriptionOutcome(task.clip_id, "succeeded"))
 
         statuses = []
         completed = []

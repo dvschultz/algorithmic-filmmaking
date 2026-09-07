@@ -91,21 +91,7 @@ def transcribe(
 
     project_file = own_project(ctx, project_file)
 
-    # Check for faster-whisper
-    try:
-        from core.transcription import (
-            transcribe_clip,
-            is_faster_whisper_available,
-        )
-        from core.project import Project, ProjectLoadError
-    except ImportError as e:
-        exit_with(ExitCode.DEPENDENCY_MISSING, f"Missing dependency: {e}")
-
-    if not is_faster_whisper_available():
-        exit_with(
-            ExitCode.DEPENDENCY_MISSING,
-            "faster-whisper is not installed. Install with: pip install faster-whisper",
-        )
+    from core.project import Project, ProjectLoadError
 
     config = CLIConfig.load()
 
@@ -120,13 +106,11 @@ def transcribe(
         project = Project.load(
             project_file, missing_source_callback=lambda path, sid: None,
         )
-        sources, clips = project.sources, project.clips
+        clips = project.clips
     except ProjectLoadError as e:
         exit_with(ExitCode.GENERAL_ERROR, f"Failed to load project: {e}")
     except FileNotFoundError:
         exit_with(ExitCode.FILE_NOT_FOUND, f"Project file not found: {project_file}")
-
-    sources_by_id = {s.id: s for s in sources}
 
     # Filter clips if specific IDs provided
     clips_to_transcribe = clips
@@ -149,42 +133,21 @@ def transcribe(
     output_info(f"Using Whisper model: {model}")
     output_info("Loading model (this may take a moment on first run)...")
 
-    transcribed_count = 0
-    errors = []
-    total_segments = 0
+    from core.spine.analyze import transcribe as transcribe_project
 
     with ProgressContext("Transcribing") as progress:
-        total = len(clips_to_transcribe)
-        for i, clip in enumerate(clips_to_transcribe):
-            progress.update(i / total, f"Clip {i + 1}/{total}")
-
-            source = sources_by_id.get(clip.source_id)
-            if not source or not source.file_path.exists():
-                errors.append(f"Clip {clip.id[:8]}: source not found")
-                continue
-
-            try:
-                fps = source.fps
-                start_time = clip.start_time(fps)
-                end_time = clip.end_time(fps)
-
-                # Transcribe the clip
-                segments = transcribe_clip(
-                    source_path=source.file_path,
-                    start_time=start_time,
-                    end_time=end_time,
-                    model_name=model,
-                    language=language,
-                )
-
-                clip.transcript = segments if segments else None
-                transcribed_count += 1
-                total_segments += len(segments)
-
-            except Exception as e:
-                errors.append(f"Clip {clip.id[:8]}: {e}")
-
+        batch = transcribe_project(
+            project, [clip.id for clip in clips_to_transcribe], model=model,
+            language=language, skip_existing=not force,
+            progress_callback=progress.update,
+        )["result"]
         progress.update(1.0, "Complete")
+    transcribed_count = len(batch["succeeded"])
+    total_segments = sum(item["segment_count"] for item in batch["succeeded"])
+    errors = [f"Clip {item['clip_id'][:8]}: {item.get('message') or item['code']}" for item in batch["failed"] + batch["unprocessed"]]
+
+    if not transcribed_count and any(item["code"] == "dependency_missing" for item in batch["failed"]):
+        exit_with(ExitCode.DEPENDENCY_MISSING, errors[0])
 
     # Save updated project
     success = project.save()

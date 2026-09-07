@@ -418,7 +418,7 @@ class Clip:
         if self.shot_type:
             data["shot_type"] = self.shot_type
         # Transcript segments
-        if self.transcript:
+        if self.transcript is not None:
             data["transcript"] = [seg.to_dict() for seg in self.transcript]
         # Tags and notes (only if non-empty)
         if self.tags:

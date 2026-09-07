@@ -212,87 +212,51 @@ def transcribe(
     Heavier dependency than colors / shots; the implementation lazy-imports
     ``core.transcription`` to keep the spine import boundary clean.
     """
-    from core.transcription import transcribe_clip
+    from copy import deepcopy
+    from core.operations.transcription import (
+        TranscriptionOptions, run_transcription, snapshot_tasks,
+    )
 
     clips = _resolve_clip_ids(project, clip_ids)
-    if not clips:
-        return {
-            "success": True,
-            "result": {"succeeded": [], "failed": [], "skipped": []},
-        }
-
-    sources_by_id = project.sources_by_id
-    succeeded: list[dict] = []
-    failed: list[dict] = []
-    skipped: list[dict] = []
-    updated = []
-
-    total = len(clips)
-    for i, clip in enumerate(clips):
-        if _check_cancel(cancel_event):
-            break
-
-        if progress_callback is not None:
-            progress_callback(
-                i / total,
-                f"Transcribing ({i + 1}/{total}): {clip.id}",
-            )
-
-        if skip_existing and clip.transcript:
-            skipped.append({"clip_id": clip.id, "reason": "already_populated"})
-            continue
-
-        source = sources_by_id.get(clip.source_id)
-        if source is None or not source.file_path.exists():
-            failed.append(
-                {"clip_id": clip.id, "code": "source_file_missing"}
-            )
-            continue
-
-        try:
-            segments = transcribe_clip(
-                source_path=source.file_path,
-                start_time=clip.start_time(source.fps),
-                end_time=clip.end_time(source.fps),
-                model_name=model,
-                language=language,
-            )
-        except Exception as exc:  # noqa: BLE001
-            failed.append(
-                {"clip_id": clip.id, "code": "transcription_failed", "message": str(exc)}
-            )
-            continue
-
-        if segments:
-            clip.transcript = segments
+    tasks = snapshot_tasks(clips, project.sources_by_id, skip_existing=skip_existing)
+    expected_transcripts = [deepcopy(clip.transcript) for clip in clips]
+    session_id = project.session.session_id
+    outcomes = run_transcription(
+        tasks, TranscriptionOptions(model=model, language=language),
+        cancel_event=cancel_event,
+        progress=(lambda current, total: progress_callback(current / total, f"Transcribing ({current}/{total})")) if progress_callback else None,
+    )
+    succeeded, failed, skipped, unprocessed, updated = [], [], [], [], []
+    for clip, task, outcome, expected in zip(clips, tasks, outcomes, expected_transcripts):
+        if outcome.status == "succeeded":
+            source = project.sources_by_id.get(clip.source_id)
+            if (
+                project.session.session_id != session_id
+                or project.clips_by_id.get(clip.id) is not clip
+                or clip.transcript != expected
+                or source is None
+                or source.file_path != task.source_path
+                or source.fps != task.fps
+                or clip.start_time(source.fps) != task.start_time
+                or clip.end_time(source.fps) != task.end_time
+            ):
+                failed.append({"clip_id": clip.id, "code": "stale_target", "message": "Transcription target changed during execution"})
+                continue
+            clip.transcript = list(outcome.segments)
             updated.append(clip)
-            succeeded.append(
-                {"clip_id": clip.id, "segment_count": len(segments)}
-            )
-        else:
-            # Empty transcript is a valid outcome (silent clip); track it.
-            clip.transcript = []
-            updated.append(clip)
-            succeeded.append({"clip_id": clip.id, "segment_count": 0})
-
+            succeeded.append({"clip_id": clip.id, "segment_count": len(outcome.segments)})
+        elif outcome.status == "skipped":
+            skipped.append({"clip_id": clip.id, "reason": outcome.code})
+        elif outcome.status == "failed":
+            failed.append({"clip_id": clip.id, "code": outcome.code, "message": outcome.message})
+        elif outcome.status == "unprocessed":
+            unprocessed.append({"clip_id": clip.id, "code": outcome.code})
     if updated:
         project.update_clips(updated)
-
-    if progress_callback is not None:
-        progress_callback(
-            1.0,
-            f"Done: {len(succeeded)} ok, {len(failed)} failed, {len(skipped)} skipped",
-        )
-
-    return {
-        "success": True,
-        "result": {
-            "succeeded": succeeded,
-            "failed": failed,
-            "skipped": skipped,
-            "total_clips": total,
-        },
-    }
+    return {"success": True, "result": {
+        "succeeded": succeeded, "failed": failed, "skipped": skipped,
+        "total_clips": len(clips), "unprocessed": unprocessed,
+    }}
 
 
 def _thumbnail_for_clip(clip):

@@ -236,23 +236,13 @@ def _transcribe_sync(path, model, language):
     """Synchronous body for ``transcribe`` (offloaded via ``asyncio.to_thread``)."""
     try:
         with project_writer(path):
-            from core.transcription import is_faster_whisper_available
-
-            if not is_faster_whisper_available():
-                return json.dumps(
-                    {
-                        "success": False,
-                        "error": "faster-whisper not installed. Run: pip install faster-whisper",
-                    }
-                )
-
             from core.project import MissingSourceError
             from core.spine.project_io import (
                 ProjectModifiedExternally,
                 load_with_mtime,
                 save_with_mtime_check,
             )
-            from core.transcription import transcribe_clip
+            from core.spine.analyze import transcribe as transcribe_project
 
             try:
                 project, mtime = load_with_mtime(path)
@@ -266,41 +256,15 @@ def _transcribe_sync(path, model, language):
             if not clips:
                 return json.dumps({"success": False, "error": "No clips in project"})
 
-            sources_by_id = project.sources_by_id
-
-            transcribed_count = 0
-            skipped_count = 0
-            total_segments = 0
-            updated: list = []
-
-            for clip in clips:
-                source = sources_by_id.get(clip.source_id)
-                if not source or not source.file_path.exists():
-                    skipped_count += 1
-                    continue
-
-                try:
-                    segments = transcribe_clip(
-                        source_path=source.file_path,
-                        start_time=clip.start_time(source.fps),
-                        end_time=clip.end_time(source.fps),
-                        model_name=model,
-                        language=language,
-                    )
-
-                    if segments:
-                        clip.transcript = segments
-                        transcribed_count += 1
-                        total_segments += len(segments)
-                        updated.append(clip)
-                    else:
-                        skipped_count += 1
-                except Exception as e:
-                    logger.warning(f"Failed to transcribe clip {clip.id}: {e}")
-                    skipped_count += 1
-
-            if updated:
-                project.update_clips(updated)
+            batch = transcribe_project(
+                project, model=model, language=language, skip_existing=False,
+            )["result"]
+            transcribed_count = len(batch["succeeded"])
+            total_segments = sum(item["segment_count"] for item in batch["succeeded"])
+            skipped_count = len(clips) - transcribed_count
+            dependency_errors = [item for item in batch["failed"] if item["code"] == "dependency_missing"]
+            if not transcribed_count and dependency_errors:
+                return json.dumps({"success": False, "error": dependency_errors[0]["message"]})
 
             try:
                 save_with_mtime_check(project, path, mtime)

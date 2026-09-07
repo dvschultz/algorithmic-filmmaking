@@ -7,14 +7,14 @@ mlx-whisper backends.
 
 import logging
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from PySide6.QtCore import Signal
 
 from ui.workers.base import CancellableWorker, summarize_clip_errors
+from core.operations.transcription import (
+    TranscriptionOptions, TranscriptionOutcome, run_transcription, snapshot_tasks,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -22,17 +22,6 @@ logger = logging.getLogger(__name__)
 def _summarize_errors(errors: list[tuple[str, str]]) -> str:
     """Return a compact user-facing summary for transcription failures."""
     return summarize_clip_errors(errors, operation_label="Transcription")
-
-
-@dataclass(frozen=True)
-class TranscriptionTask:
-    """Immutable task data for thread pool execution."""
-
-    clip_id: str
-    source_path: Path
-    start_time: float
-    end_time: float
-    fps: float
 
 
 class TranscriptionWorker(CancellableWorker):
@@ -80,7 +69,13 @@ class TranscriptionWorker(CancellableWorker):
         self._segment_max_seconds = segment_max_seconds
         requested_parallelism = min(max(1, parallelism), 4)
         self._parallelism = 1 if self._backend == "mlx-whisper" else requested_parallelism
-        self._tasks = self._build_tasks(clips, source, skip_existing)
+        self._tasks = tuple(task for task in snapshot_tasks(
+            clips, {source.id: source}, skip_existing=skip_existing,
+        ) if not task.skip)
+        self._options = TranscriptionOptions(
+            model_name, language, self._backend, segmentation_mode,
+            segment_max_seconds, self._parallelism,
+        )
 
     @staticmethod
     def _resolve_backend(backend: str) -> str:
@@ -88,61 +83,6 @@ class TranscriptionWorker(CancellableWorker):
         from core.transcription import _resolve_backend
 
         return _resolve_backend(backend)
-
-    def _build_tasks(
-        self, clips: list, source, skip_existing: bool
-    ) -> list[TranscriptionTask]:
-        """Build immutable task list from clips."""
-        tasks = []
-        for clip in clips:
-            if skip_existing and clip.transcript is not None:
-                continue
-
-            tasks.append(
-                TranscriptionTask(
-                    clip_id=clip.id,
-                    source_path=source.file_path,
-                    start_time=clip.start_time(source.fps),
-                    end_time=clip.end_time(source.fps),
-                    fps=source.fps,
-                )
-            )
-        return tasks
-
-    def _process_task(
-        self, task: TranscriptionTask
-    ) -> tuple[str, Optional[list], Optional[str], bool]:
-        """Process a single task (runs in thread pool).
-
-        Returns:
-            Tuple of (clip_id, segments, error_message, is_critical)
-        """
-        if self.is_cancelled():
-            return task.clip_id, None, "Cancelled", False
-
-        try:
-            from core.transcription import (
-                transcribe_clip,
-                FFmpegNotFoundError,
-                FasterWhisperNotInstalledError,
-                ModelDownloadError,
-            )
-
-            segments = transcribe_clip(
-                task.source_path,
-                task.start_time,
-                task.end_time,
-                self._model_name,
-                self._language,
-                backend=self._backend,
-                segmentation_mode=self._segmentation_mode,
-                segment_max_seconds=self._segment_max_seconds,
-            )
-            return task.clip_id, segments, None, False
-        except (FFmpegNotFoundError, FasterWhisperNotInstalledError, ModelDownloadError) as e:
-            return task.clip_id, None, str(e), True  # Critical error
-        except Exception as e:
-            return task.clip_id, None, str(e), False
 
     def run(self):
         """Execute transcription on all clips."""
@@ -221,45 +161,21 @@ class TranscriptionWorker(CancellableWorker):
 
             if self.is_cancelled():
                 self._log_cancelled()
+                self.transcription_completed.emit()
                 return
 
-        completed = 0
         errors: list[tuple[str, str]] = []
 
-        with ThreadPoolExecutor(max_workers=self._parallelism) as executor:
-            future_to_task = {
-                executor.submit(self._process_task, task): task
-                for task in self._tasks
-            }
+        def deliver(outcome: TranscriptionOutcome) -> None:
+            if outcome.status == "succeeded":
+                self.transcript_ready.emit(outcome.clip_id, list(outcome.segments))
+            elif outcome.status == "failed":
+                errors.append((outcome.clip_id, outcome.message or outcome.code or "Transcription failed"))
 
-            for future in as_completed(future_to_task):
-                if self.is_cancelled():
-                    self._log_cancelled()
-                    for f in future_to_task:
-                        f.cancel()
-                    break
-
-                task = future_to_task[future]
-                completed += 1
-
-                try:
-                    clip_id, segments, error_msg, is_critical = future.result()
-
-                    if error_msg and error_msg != "Cancelled":
-                        self._log_error(error_msg, clip_id)
-                        errors.append((clip_id, error_msg))
-                        if is_critical:
-                            # Cancel all remaining work
-                            for f in future_to_task:
-                                f.cancel()
-                            break
-                    elif segments is not None:
-                        self.transcript_ready.emit(clip_id, segments)
-                except Exception as e:
-                    self._log_error(str(e), task.clip_id)
-                    errors.append((task.clip_id, str(e)))
-
-                self.progress.emit(completed, total)
+        run_transcription(
+            self._tasks, self._options, cancel_event=self._cancel_event,
+            on_outcome=deliver, progress=self.progress.emit,
+        )
 
         if errors:
             self.error.emit(_summarize_errors(errors))

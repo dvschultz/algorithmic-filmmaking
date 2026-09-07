@@ -189,3 +189,26 @@ these were sequential inline passes, not independent reviewers. A reproduced
 media-probe permission error was fixed so it fails one target instead of the
 whole batch. No known color-pilot findings remain; this does not certify the
 unimplemented portions of the plan.
+
+## Transcription batch cutover
+
+GUI clip transcription, spine (including MCP jobs), CLI transcription, and
+synchronous MCP transcription now share `core/operations/transcription.py` for
+per-clip execution and bounded scheduling. Task ranges, paths, model, language,
+backend, segmentation, and parallelism are captured before execution. MLX batches
+run serially. Cancellation and critical dependency failures stop further submission;
+accepted successes survive and remaining tasks are reported as unprocessed.
+
+Silent clips are successful empty transcripts on every surface. Empty transcripts
+now survive project save/load and satisfy skip-existing checks. Synchronous MCP
+therefore counts silent clips as transcribed rather than skipped. Existing selection,
+model/language defaults, and force/recompute policies remain adapter inputs.
+CLI and synchronous MCP no longer require faster-whisper before backend selection;
+the shared transcription backend handles its own dependency errors.
+
+GUI model preloading, disk-space status, and result signal delivery remain adapter
+responsibilities. Headless application rejects replaced sessions/clip objects and
+changed source paths, frame ranges, or frame rates. Full GUI per-item application
+ownership, file-content fingerprint validation, durable transcription job recovery,
+alignment, and audio-only transcription remain later U7 work. This cutover does
+not mark U7 complete.
