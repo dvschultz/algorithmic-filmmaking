@@ -8,12 +8,23 @@ cancellation between URLs, and progress callback behaviour.
 from __future__ import annotations
 
 import threading
+import pytest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 
 from core.spine.downloads import download_videos
+
+
+@pytest.fixture(autouse=True)
+def isolated_receipts(tmp_path, monkeypatch):
+    from core.jobs.store import JobStore
+
+    monkeypatch.setattr(
+        "core.jobs.downloads.open_download_store",
+        lambda: JobStore(tmp_path / "jobs.db"),
+    )
 
 
 def _ok_result(file_path: Path, title: str = "Demo") -> SimpleNamespace:
@@ -36,11 +47,12 @@ def test_download_videos_happy_path(tmp_path):
     fake_file = tmp_path / "video.mp4"
     fake_file.write_bytes(b"fake")
 
-    with patch(
-        "core.downloader.VideoDownloader.__init__", return_value=None
-    ), patch(
-        "core.downloader.VideoDownloader.download",
-        return_value=_ok_result(fake_file),
+    with (
+        patch("core.downloader.VideoDownloader.__init__", return_value=None),
+        patch(
+            "core.downloader.VideoDownloader.download",
+            return_value=_ok_result(fake_file),
+        ),
     ):
         result = download_videos(
             ["https://www.youtube.com/watch?v=abc"],
@@ -63,12 +75,13 @@ def test_download_videos_invalid_url_fails_fast(tmp_path):
 
     def fake_download(self, url, **kwargs):
         download_calls.append(url)
-        return _ok_result(tmp_path / "x.mp4")
+        path = tmp_path / "x.mp4"
+        path.write_bytes(b"fake")
+        return _ok_result(path)
 
-    with patch(
-        "core.downloader.VideoDownloader.__init__", return_value=None
-    ), patch(
-        "core.downloader.VideoDownloader.download", new=fake_download
+    with (
+        patch("core.downloader.VideoDownloader.__init__", return_value=None),
+        patch("core.downloader.VideoDownloader.download", new=fake_download),
     ):
         result = download_videos(
             ["javascript://example.com/x", "https://www.youtube.com/watch?v=abc"],
@@ -79,8 +92,7 @@ def test_download_videos_invalid_url_fails_fast(tmp_path):
     # Bad URL surfaces as an invalid_url failure without ever calling
     # downloader.download.
     assert any(
-        f["url"] == "javascript://example.com/x"
-        and f["error_code"] == "invalid_url"
+        f["url"] == "javascript://example.com/x" and f["error_code"] == "invalid_url"
         for f in payload["failed"]
     )
     assert len(download_calls) == 1
@@ -98,10 +110,9 @@ def test_download_videos_per_url_failure_aggregated(tmp_path):
             return _fail_result("geo-blocked")
         return _ok_result(fake_file, title=f"v-{call_count[0]}")
 
-    with patch(
-        "core.downloader.VideoDownloader.__init__", return_value=None
-    ), patch(
-        "core.downloader.VideoDownloader.download", new=fake_download
+    with (
+        patch("core.downloader.VideoDownloader.__init__", return_value=None),
+        patch("core.downloader.VideoDownloader.download", new=fake_download),
     ):
         result = download_videos(
             [
@@ -125,11 +136,12 @@ def test_download_videos_cancellation(tmp_path):
     cancel = threading.Event()
     cancel.set()
 
-    with patch(
-        "core.downloader.VideoDownloader.__init__", return_value=None
-    ), patch(
-        "core.downloader.VideoDownloader.download",
-        return_value=_ok_result(fake_file),
+    with (
+        patch("core.downloader.VideoDownloader.__init__", return_value=None),
+        patch(
+            "core.downloader.VideoDownloader.download",
+            return_value=_ok_result(fake_file),
+        ),
     ):
         result = download_videos(
             ["https://youtube.com/x", "https://youtube.com/y"],
@@ -148,11 +160,16 @@ def test_download_videos_creates_target_dir(tmp_path):
     assert not target.exists()
     fake_file = target / "video.mp4"
 
-    with patch(
-        "core.downloader.VideoDownloader.__init__", return_value=None
-    ), patch(
-        "core.downloader.VideoDownloader.download",
-        return_value=_ok_result(fake_file),
+    def download(*args, **kwargs):
+        fake_file.write_bytes(b"fake")
+        return _ok_result(fake_file)
+
+    with (
+        patch("core.downloader.VideoDownloader.__init__", return_value=None),
+        patch(
+            "core.downloader.VideoDownloader.download",
+            side_effect=download,
+        ),
     ):
         download_videos(
             ["https://www.youtube.com/watch?v=abc"],
@@ -166,12 +183,8 @@ def test_download_videos_downloader_unavailable(tmp_path):
     def raise_runtime(self, **kwargs):
         raise RuntimeError("yt-dlp not found")
 
-    with patch(
-        "core.downloader.VideoDownloader.__init__", new=raise_runtime
-    ):
-        result = download_videos(
-            ["https://www.youtube.com/watch?v=abc"], tmp_path
-        )
+    with patch("core.downloader.VideoDownloader.__init__", new=raise_runtime):
+        result = download_videos(["https://www.youtube.com/watch?v=abc"], tmp_path)
 
     assert result["success"] is False
     assert result["error"]["code"] == "downloader_unavailable"
@@ -185,11 +198,12 @@ def test_download_videos_progress_callback(tmp_path):
     def cb(p, msg):
         calls.append((p, msg))
 
-    with patch(
-        "core.downloader.VideoDownloader.__init__", return_value=None
-    ), patch(
-        "core.downloader.VideoDownloader.download",
-        return_value=_ok_result(fake_file),
+    with (
+        patch("core.downloader.VideoDownloader.__init__", return_value=None),
+        patch(
+            "core.downloader.VideoDownloader.download",
+            return_value=_ok_result(fake_file),
+        ),
     ):
         download_videos(
             ["https://www.youtube.com/watch?v=a"],
@@ -214,10 +228,9 @@ def test_download_videos_per_url_exception_is_aggregated(tmp_path):
             raise RuntimeError("network error")
         return _ok_result(fake_file)
 
-    with patch(
-        "core.downloader.VideoDownloader.__init__", return_value=None
-    ), patch(
-        "core.downloader.VideoDownloader.download", new=fake_download
+    with (
+        patch("core.downloader.VideoDownloader.__init__", return_value=None),
+        patch("core.downloader.VideoDownloader.download", new=fake_download),
     ):
         result = download_videos(
             [

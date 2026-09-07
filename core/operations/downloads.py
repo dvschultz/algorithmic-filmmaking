@@ -134,6 +134,7 @@ def run_download_batch(
     item_callback: Callable[[DownloadOutcome], None] | None = None,
     downloader: VideoDownloader | None = None,
     cached_outcomes: dict[int, DownloadOutcome] | None = None,
+    native_progress: Callable[[int, float, str], None] | None = None,
 ) -> tuple[DownloadOutcome, ...]:
     """Run a bounded batch and return one outcome per input in input order.
 
@@ -172,7 +173,16 @@ def run_download_batch(
         if index in cached:
             return cached[index]
         try:
-            result = run_download(request, downloader=downloader, cancel_event=cancel)
+            result = run_download(
+                request,
+                downloader=downloader,
+                cancel_event=cancel,
+                progress_callback=(
+                    lambda value, message: native_progress(index, value, message)
+                )
+                if native_progress is not None
+                else None,
+            )
             if result.success:
                 return DownloadOutcome(index, request, "succeeded", result=result)
             return DownloadOutcome(
@@ -223,3 +233,44 @@ def run_download_batch(
             cancel.set()
             raise
     return tuple(results[index] for index in range(len(pending_requests)))
+
+
+def format_download_results(
+    outcomes: tuple[DownloadOutcome, ...], target: Path
+) -> dict:
+    """Keep the established headless envelope across volatile and durable runs."""
+    succeeded: list[dict] = []
+    failed: list[dict] = []
+    cancelled: list[str] = []
+    for outcome in outcomes:
+        url = outcome.request.url
+        result = outcome.result
+        if outcome.status == "succeeded" and result is not None:
+            succeeded.append(
+                {
+                    "url": url,
+                    "file_path": str(result.file_path) if result.file_path else None,
+                    "title": result.title,
+                    "duration": result.duration,
+                }
+            )
+        elif outcome.status == "cancelled":
+            cancelled.append(url)
+        else:
+            failed.append(
+                {
+                    "url": url,
+                    "error_code": outcome.error_code,
+                    "error_message": outcome.error_message,
+                }
+            )
+
+    return {
+        "success": True,
+        "result": {
+            "succeeded": succeeded,
+            "failed": failed,
+            "cancelled": cancelled,
+            "target_dir": str(target),
+        },
+    }

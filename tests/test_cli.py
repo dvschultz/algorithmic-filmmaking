@@ -491,8 +491,12 @@ class TestYouTubeCommands:
     def test_download_does_not_report_project_after_refused_save(self, runner, tmp_path):
         from types import SimpleNamespace
 
+        from core.jobs.store import JobStore
+        (tmp_path / "video.mp4").write_bytes(b"video")
         result = SimpleNamespace(success=True, title="Video", file_path=tmp_path / "video.mp4", duration=1)
         with (
+            patch("core.jobs.downloads.open_download_store", side_effect=lambda: JobStore(tmp_path / "jobs.db")),
+            patch("cli.commands.youtube.create_progress_callback", return_value=lambda *_args: None),
             patch("core.downloader.VideoDownloader") as downloader,
             patch("core.scene_detect.SceneDetector") as detector,
             patch("core.project.save_project", return_value=False),

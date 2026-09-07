@@ -7,10 +7,56 @@ from core.operations.downloads import (
     DownloadRequest,
     DownloadCancelled,
     DownloadOutcome,
-    run_download,
-    run_download_batch,
 )
 from ui.workers.base import CancellableWorker
+from core.jobs.downloads import open_download_store, run_recoverable_batch
+
+
+def _run_batch(
+    requests,
+    target,
+    *,
+    max_workers=1,
+    cancel_event=None,
+    item_callback=None,
+    native_progress=None,
+):
+    """Translate storage failures into per-item UI outcomes, retaining successes."""
+    received = {}
+
+    def deliver(outcome):
+        received[outcome.index] = outcome
+        if item_callback is not None:
+            item_callback(outcome)
+
+    store = None
+    try:
+        store = open_download_store()
+        return run_recoverable_batch(
+            store,
+            requests,
+            target,
+            max_workers=max_workers,
+            cancel_event=cancel_event,
+            item_callback=deliver,
+            native_progress=native_progress,
+        )
+    except Exception as exc:
+        for index, request in enumerate(requests):
+            if index not in received:
+                deliver(
+                    DownloadOutcome(
+                        index,
+                        request,
+                        "failed",
+                        error_code="download_batch_failed",
+                        error_message=str(exc),
+                    )
+                )
+        return tuple(received[index] for index in range(len(requests)))
+    finally:
+        if store is not None:
+            store.close()
 
 
 class DownloadWorker(CancellableWorker):
@@ -25,19 +71,28 @@ class DownloadWorker(CancellableWorker):
         super().__init__()
         self.url = url
         self.resolution = resolution
-        self.request = DownloadRequest(url, resolution=resolution)
+        from core.settings import get_default_download_dir
+
+        self.request = DownloadRequest(
+            url, get_default_download_dir(), resolution=resolution
+        )
 
     def run(self):
         try:
-            result = run_download(
-                self.request,
-                progress_callback=lambda p, m: self.progress.emit(p, m),
+            self.progress.emit(0, "Preparing download")
+            outcome = _run_batch(
+                (self.request,),
+                self.request.download_dir,
                 cancel_event=self._cancel_event,
-            )
-            if result.success:
-                self.download_completed.emit(result)
-            else:
-                self.error.emit(result.error or "Download failed")
+                native_progress=lambda index, value, message: self.progress.emit(
+                    min(value, 99), message
+                ),
+            )[0]
+            if outcome.status == "succeeded":
+                self.progress.emit(100, "Download complete")
+                self.download_completed.emit(outcome.result)
+            elif outcome.status == "failed":
+                self.error.emit(outcome.error_message or "Download failed")
         except DownloadCancelled:
             return
         except Exception as e:
@@ -54,6 +109,7 @@ class URLBulkDownloadWorker(CancellableWorker):
 
     def __init__(self, urls: list[str], download_dir: Path):
         super().__init__()
+        self.download_dir = Path(download_dir).expanduser().resolve()
         self.requests = tuple(
             DownloadRequest(url, download_dir, adaptive_timeout=True) for url in urls
         )
@@ -72,8 +128,9 @@ class URLBulkDownloadWorker(CancellableWorker):
                 completed, total, f"Processed {completed}/{total} downloads"
             )
 
-        outcomes = run_download_batch(
+        outcomes = _run_batch(
             self.requests,
+            self.download_dir,
             max_workers=self.MAX_WORKERS,
             cancel_event=self._cancel_event,
             item_callback=on_item,
@@ -129,6 +186,7 @@ class BulkDownloadWorker(CancellableWorker):
             for video in videos
         )
         self.max_parallel = max_parallel
+        self.download_dir = Path(download_dir).expanduser().resolve()
 
     def run(self) -> None:
         total = len(self.items)
@@ -149,8 +207,9 @@ class BulkDownloadWorker(CancellableWorker):
                 completed, total, f"Processed {completed}/{total} downloads"
             )
 
-        run_download_batch(
+        _run_batch(
             tuple(request for _, request in self.items),
+            self.download_dir,
             max_workers=self.max_parallel,
             cancel_event=self._cancel_event,
             item_callback=on_item,

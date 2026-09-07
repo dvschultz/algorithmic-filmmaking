@@ -55,6 +55,27 @@ current = Worker()
 bind(current); current.release.set()
 spin(lambda: not window._active_download_workers)
 assert received == [('done', owner)]
+# Normal reset must not terminate a download while it can own receipt writes.
+from types import SimpleNamespace, MethodType
+from unittest.mock import Mock
+from ui.main_window import MainWindow
+worker = Mock()
+worker.isRunning.return_value = True
+worker.wait.return_value = False
+window = SimpleNamespace(_download_deliveries={'download_worker': object()},
+    _active_download_workers={worker}, _source_import_queue=Mock(),
+    _chat_worker=None, download_worker=worker)
+window._cancel_download_workers = MethodType(MainWindow._cancel_download_workers, window)
+window._stop_worker_safely = MethodType(MainWindow._stop_worker_safely, window)
+MainWindow._stop_all_workers(window)
+worker.cancel.assert_called_once()
+worker.wait.assert_not_called()
+worker.terminate.assert_not_called()
+assert window._active_download_workers == {worker}
+assert not window._download_deliveries
+MainWindow._cancel_download_workers(window, wait=True)
+worker.wait.assert_called_once_with()
+worker.terminate.assert_not_called()
 """
     result = subprocess.run(
         [sys.executable, "-c", code],

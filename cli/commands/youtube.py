@@ -327,28 +327,29 @@ def download(
     if not valid:
         exit_with(ExitCode.VALIDATION_ERROR, error)
 
-    # Get video info first
-    output_info("Getting video info...")
-    try:
-        info = downloader.get_video_info(url)
-        output_info(f"Title: {info['title']}")
-        output_info(f"Duration: {info['duration']}s")
-    except Exception as e:
-        exit_with(ExitCode.NETWORK_ERROR, f"Failed to get video info: {e}")
+    from core.operations.downloads import DownloadRequest
+    from core.jobs.downloads import open_download_store, run_recoverable_batch
 
-    # Download with progress
     progress = create_progress_callback("Downloading")
-
-    from core.operations.downloads import DownloadRequest, run_download
-
-    result = run_download(
-        DownloadRequest(url, output_dir),
-        downloader=downloader,
-        progress_callback=progress,
-    )
-
-    if not result.success:
-        exit_with(ExitCode.NETWORK_ERROR, result.error or "Download failed")
+    store = None
+    try:
+        store = open_download_store()
+        outcome = run_recoverable_batch(
+            store, (DownloadRequest(url, output_dir),), output_dir,
+            downloader=downloader,
+            native_progress=lambda index, value, message: progress(min(value, 99) / 100, message),
+        )[0]
+    except Exception as exc:
+        exit_with(ExitCode.GENERAL_ERROR, f"Download recovery failed: {exc}")
+    finally:
+        if store is not None:
+            store.close()
+    if outcome.status != "succeeded" or outcome.result is None:
+        exit_with(ExitCode.NETWORK_ERROR, outcome.error_message or "Download failed")
+    result = outcome.result
+    progress(1.0, "Download complete")
+    output_info(f"Title: {result.title}")
+    output_info(f"Duration: {result.duration}s")
 
     output_data = {
         "success": True,

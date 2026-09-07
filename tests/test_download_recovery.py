@@ -162,3 +162,79 @@ def test_schema_upgrade_keeps_existing_jobs(tmp_path):
     assert store.get("old").kind == "download_videos"
     store.record_download_receipt("key", "{}", "{}", "digest")
     assert store.get_download_receipt("key")["payload_json"] == "{}"
+
+
+def test_request_policy_and_progress_survive_recovery(tmp_path, monkeypatch):
+    from core.jobs.downloads import run_recoverable_batch, _identity
+    from core.operations.downloads import DownloadRequest
+
+    target = tmp_path / "downloads"
+    store = JobStore(tmp_path / "jobs.db")
+    request = DownloadRequest(
+        "https://youtube.com/a", target, resolution="720p", adaptive_timeout=True
+    )
+    calls, progress = [], []
+
+    def native(request, **kwargs):
+        calls.append(request)
+        kwargs["progress_callback"](100, "native done")
+        path = target / "video.mp4"
+        path.write_bytes(b"video")
+        return DownloadResult(success=True, file_path=path)
+
+    monkeypatch.setattr("core.operations.downloads.run_download", native)
+
+    def on_item(outcome):
+        assert store.get_download_receipt(_identity(outcome.request)[0]) is not None
+
+    first = run_recoverable_batch(
+        store,
+        (request,),
+        target,
+        native_progress=lambda *args: progress.append(args),
+        item_callback=on_item,
+    )
+    second = run_recoverable_batch(store, (request,), target)
+    assert calls == [request]
+    assert progress == [(0, 100, "native done")]
+    assert first[0].status == second[0].status == "succeeded"
+
+
+def test_cli_reuses_mcp_receipt_without_remote_metadata(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+    from cli.main import cli, register_commands
+
+    target = tmp_path / "downloads"
+    store = JobStore(tmp_path / "jobs.db")
+    backend = Mock()
+    backend.is_valid_url.return_value = (True, "")
+
+    def download(*args, **kwargs):
+        if kwargs.get("progress_callback") is not None:
+            kwargs["progress_callback"](50, "halfway")
+            kwargs["progress_callback"](100, "native complete")
+        path = target / "video.mp4"
+        path.write_bytes(b"video")
+        return DownloadResult(success=True, file_path=path, title="Video", duration=3)
+
+    backend.download.side_effect = download
+    monkeypatch.setattr("core.downloader.VideoDownloader", lambda **kwargs: backend)
+    monkeypatch.setattr(
+        "core.jobs.downloads.open_download_store", lambda: JobStore(store.db_path)
+    )
+    progress = []
+    monkeypatch.setattr(
+        "cli.commands.youtube.create_progress_callback",
+        lambda *args: lambda value, message: progress.append(value),
+    )
+    urls = ["https://youtube.com/a"]
+    run_saved_downloads(store, urls, target)
+    register_commands()
+    for attempt in range(3):
+        if attempt == 1:
+            (target / "video.mp4").unlink()
+        response = CliRunner().invoke(cli, ["download", urls[0], "-o", str(target)])
+        assert response.exit_code == 0, response.output
+    assert backend.download.call_count == 2
+    backend.get_video_info.assert_not_called()
+    assert progress == [1.0, 0.5, 0.99, 1.0, 1.0]

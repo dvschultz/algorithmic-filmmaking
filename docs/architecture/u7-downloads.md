@@ -20,7 +20,10 @@ It captures the project session and worker channel at submission. Results,
 progress, errors, and workflow completion from replaced workers or old sessions
 are discarded. Replaced workers are cancelled and retained until finished; their
 cleanup cannot clear a newer worker reference. Reset and shutdown include retained
-download workers. The relay does not change existing shutdown timeout policy.
+download workers. Reset cancels downloads without waiting or terminating their
+threads; retained workers finish independently and cannot publish into the new
+session. Shutdown cancels and waits for download workers, allowing receipt writes
+to finish safely. Waiting can last through native-call timeouts or file hashing.
 
 MCP queued jobs snapshot their URL lists so caller mutation cannot change the
 work after submission. Intention source admission accepts the actual
@@ -43,13 +46,13 @@ include cancelled items with `success: false` and `cancelled: true`. Existing
 success and failure fields and per-item signals remain. The headless spine retains
 its separate succeeded/failed/cancelled lists.
 
-MCP `start_download_videos` now records verified file receipts in the additive
+Desktop, CLI, and headless downloads now record verified file receipts in the additive
 `download_receipts` job-store table. Receipts survive job-row retries and purges.
 The request identity includes the URL, canonical directory, policy, and version;
 the receipt contains result metadata plus the output's size and SHA-256 digest.
-Successful new outputs are flushed and recorded before progress is delivered or
-the next item starts. A receipt-write failure stops the batch, retaining receipts
-already committed for earlier items.
+Successful new outputs are flushed and recorded before their completion is
+delivered. A receipt-write failure stops further dispatch, retaining receipts
+already committed for earlier items; other parallel downloads may still be active.
 
 Retries verify file content before reusing it. Missing outputs are downloaded
 again and their receipts replaced. Changed outputs are reported as
@@ -65,7 +68,21 @@ local I/O, and native calls retain their existing cancellation/timeouts. A crash
 before the receipt is committed can still require another downloader invocation;
 missing files after restart are verified as missing and downloaded again.
 
-Desktop/CLI/synchronous-tool receipt integration, shared ordered intention plans,
+`run_recoverable_batch` accepts the same immutable requests, concurrency limits,
+and per-item callbacks as the download scheduler. Desktop URL/search adapters keep
+their parallelism and timeout policies. All entry points use the configured cache
+directory's `jobs.db`, so matching request policies can share receipts. Single
+desktop downloads retain native progress, capped below 100 percent until receipt
+storage finishes. CLI progress converts native percentages to its 0-to-1 scale;
+cached CLI downloads skip the redundant remote metadata preview. Existing local
+dependency gates remain in place.
+
+Worker storage failures become per-item errors and completion signals while
+already delivered successes remain available. Native progress callbacks originate
+on executor threads; Qt adapters only emit signals there. Receipt and item
+callbacks remain on the calling worker thread.
+
+Shared ordered intention plans,
 and the remaining analysis workflows are outstanding U7 work. A direct chat
 download notification is still associated with the chat worker rather than these
 download-worker relays and needs its own submission/session guard.
@@ -78,3 +95,5 @@ ordered outcomes, cancelled pending work, per-item failure isolation, and callba
 failure. Adapter tests exercise input snapshots and existing result envelopes.
 Recovery tests reopen the store, remove or edit outputs, fail receipt writes and
 progress callbacks, cancel lock waiters, and upgrade a database with existing jobs.
+Adapter tests also verify cross-entry-point receipt reuse, resolution/timeout
+preservation, desktop retries, and CLI progress before and after receipt storage.

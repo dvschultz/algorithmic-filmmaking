@@ -7,7 +7,10 @@ import json
 import os
 from pathlib import Path
 from threading import Event
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
+
+if TYPE_CHECKING:
+    from core.downloader import VideoDownloader
 
 from core.jobs.spec import encode_object
 from core.jobs.store import JobStore
@@ -15,9 +18,9 @@ from core.operations.downloads import (
     DownloadRequest,
     DownloadOutcome,
     run_download_batch,
+    format_download_results,
 )
 from core.project_lock import acquire_lock_record, LockUnavailableError
-from core.spine.downloads import format_download_results
 
 
 class DownloadOutputChanged(RuntimeError):
@@ -61,6 +64,13 @@ def _identity(request: DownloadRequest) -> tuple[str, str]:
     return sha256(spec.encode()).hexdigest(), spec
 
 
+def open_download_store() -> JobStore:
+    """Use the same configured receipt database as the MCP server."""
+    from core.settings import load_settings
+
+    return JobStore(load_settings().cache_dir / "jobs.db")
+
+
 def run_saved_downloads(
     store: JobStore,
     urls: list[str] | tuple[str, ...],
@@ -68,7 +78,38 @@ def run_saved_downloads(
     progress_callback: Callable[[float, str], None] | None = None,
     cancel_event: Event | None = None,
 ) -> dict:
-    """Persist each verified success before progress delivery or later work."""
+    requests = tuple(DownloadRequest(url, target_dir) for url in urls)
+    completed = 0
+
+    def on_item(outcome: DownloadOutcome) -> None:
+        nonlocal completed
+        completed += 1
+        if progress_callback is not None:
+            progress_callback(
+                completed / max(len(requests), 1),
+                f"Processed {completed}/{len(requests)} downloads",
+            )
+
+    if progress_callback is not None:
+        progress_callback(0.0, f"Starting {len(requests)} downloads")
+    outcomes = run_recoverable_batch(
+        store, requests, target_dir, item_callback=on_item, cancel_event=cancel_event
+    )
+    return format_download_results(outcomes, Path(target_dir).expanduser().resolve())
+
+
+def run_recoverable_batch(
+    store: JobStore,
+    requests: tuple[DownloadRequest, ...],
+    target_dir: Path,
+    *,
+    max_workers: int = 1,
+    item_callback: Callable[[DownloadOutcome], None] | None = None,
+    native_progress: Callable[[int, float, str], None] | None = None,
+    cancel_event: Event | None = None,
+    downloader: VideoDownloader | None = None,
+) -> tuple[DownloadOutcome, ...]:
+    """Persist each verified success before delivering its outcome."""
     from core.downloader import DownloadResult
 
     if store.persistence != "job_history":
@@ -76,7 +117,16 @@ def run_saved_downloads(
     target = Path(target_dir).expanduser().resolve()
     target.mkdir(parents=True, exist_ok=True)
     directory_identity = _stamp(target)[:2]
-    requests = tuple(DownloadRequest(url, target) for url in urls)
+    from dataclasses import replace
+
+    for request in requests:
+        if (
+            request.download_dir is not None
+            and request.download_dir.resolve() != target
+        ):
+            raise ValueError("Download request belongs to another output directory")
+    requests = tuple(replace(request, download_dir=target) for request in requests)
+
     cancel = cancel_event if cancel_event is not None else Event()
     lease = None
     while not cancel.is_set():
@@ -86,10 +136,13 @@ def run_saved_downloads(
         except LockUnavailableError:
             cancel.wait(0.05)
     if lease is None:
-        return format_download_results(
-            tuple(DownloadOutcome(i, r, "cancelled") for i, r in enumerate(requests)),
-            target,
+        outcomes = tuple(
+            DownloadOutcome(i, r, "cancelled") for i, r in enumerate(requests)
         )
+        if item_callback is not None:
+            for outcome in outcomes:
+                item_callback(outcome)
+        return outcomes
     try:
 
         def validate_directory() -> None:
@@ -140,10 +193,7 @@ def run_saved_downloads(
                     error_message=str(exc),
                 )
 
-        completed = 0
-
         def on_item(outcome: DownloadOutcome) -> None:
-            nonlocal completed
             validate_directory()
             if outcome.status == "succeeded":
                 result = outcome.result
@@ -173,18 +223,17 @@ def run_saved_downloads(
                     store.record_download_receipt(
                         request_id, spec, payload, sha256(payload.encode()).hexdigest()
                     )
-            completed += 1
-            if progress_callback is not None:
-                progress_callback(
-                    completed / max(len(requests), 1),
-                    f"Processed {completed}/{len(requests)} downloads",
-                )
+            if item_callback is not None:
+                item_callback(outcome)
 
-        if progress_callback is not None:
-            progress_callback(0.0, f"Starting {len(requests)} downloads")
-        outcomes = run_download_batch(
-            requests, cancel_event=cancel, cached_outcomes=cached, item_callback=on_item
+        return run_download_batch(
+            requests,
+            max_workers=max_workers,
+            downloader=downloader,
+            cancel_event=cancel,
+            cached_outcomes=cached,
+            item_callback=on_item,
+            native_progress=native_progress,
         )
-        return format_download_results(outcomes, target)
     finally:
         lease.close()

@@ -23,7 +23,7 @@ from typing import Callable, Optional
 from core.operations.downloads import (
     DownloadRequest,
     DownloadOutcome,
-    run_download_batch,
+    format_download_results,
 )
 
 logger = logging.getLogger(__name__)
@@ -78,12 +78,20 @@ def download_videos(
                 f"Processed {completed}/{len(requests)} downloads",
             )
 
-    outcomes = run_download_batch(
-        requests,
-        downloader=downloader,
-        cancel_event=cancel_event,
-        item_callback=on_item,
-    )
+    from core.jobs.downloads import open_download_store, run_recoverable_batch
+
+    store = open_download_store()
+    try:
+        outcomes = run_recoverable_batch(
+            store,
+            requests,
+            target,
+            downloader=downloader,
+            cancel_event=cancel_event,
+            item_callback=on_item,
+        )
+    finally:
+        store.close()
     output = format_download_results(outcomes, target)
     if progress_callback is not None:
         payload = output["result"]
@@ -93,44 +101,3 @@ def download_videos(
             f"{len(payload['cancelled'])} cancelled",
         )
     return output
-
-
-def format_download_results(
-    outcomes: tuple[DownloadOutcome, ...], target: Path
-) -> dict:
-    """Keep the established headless envelope across volatile and durable runs."""
-    succeeded: list[dict] = []
-    failed: list[dict] = []
-    cancelled: list[str] = []
-    for outcome in outcomes:
-        url = outcome.request.url
-        result = outcome.result
-        if outcome.status == "succeeded" and result is not None:
-            succeeded.append(
-                {
-                    "url": url,
-                    "file_path": str(result.file_path) if result.file_path else None,
-                    "title": result.title,
-                    "duration": result.duration,
-                }
-            )
-        elif outcome.status == "cancelled":
-            cancelled.append(url)
-        else:
-            failed.append(
-                {
-                    "url": url,
-                    "error_code": outcome.error_code,
-                    "error_message": outcome.error_message,
-                }
-            )
-
-    return {
-        "success": True,
-        "result": {
-            "succeeded": succeeded,
-            "failed": failed,
-            "cancelled": cancelled,
-            "target_dir": str(target),
-        },
-    }

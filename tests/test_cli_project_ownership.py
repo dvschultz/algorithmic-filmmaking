@@ -141,6 +141,9 @@ def test_download_busy_project_keeps_download_success(project_file, monkeypatch)
     from types import SimpleNamespace
     from unittest.mock import Mock
 
+    from core.jobs.store import JobStore
+    monkeypatch.setattr("core.jobs.downloads.open_download_store", lambda: JobStore(project_file.parent / "jobs.db"))
+    project_file.with_suffix(".mp4").write_bytes(b"video")
     downloader = Mock()
     downloader.is_valid_url.return_value = (True, "")
     downloader.get_video_info.return_value = {"title": "Video", "duration": 1}

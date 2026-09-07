@@ -9,20 +9,34 @@ def test_workers_snapshot_inputs_and_keep_result_contract():
     code = """
 from pathlib import Path
 from types import SimpleNamespace
+from tempfile import TemporaryDirectory
+from threading import Lock
 from PySide6.QtCore import QCoreApplication
 from core.downloader import DownloadResult
 from ui.workers.download_workers import URLBulkDownloadWorker, BulkDownloadWorker
 import core.operations.downloads as operation
 app = QCoreApplication([])
+from core.jobs.store import JobStore
+import ui.workers.download_workers as workers
+scratch = TemporaryDirectory()
+root = Path(scratch.name)
+target = root / 'downloads'
+target.mkdir()
+workers.open_download_store = lambda: JobStore(root / 'jobs.db')
+lock = Lock()
 seen = []
 def download(request, **kwargs):
     seen.append(request)
     if request.url.endswith('bad'):
         return DownloadResult(success=False, error='provider failure')
-    return DownloadResult(success=True, file_path=Path('video.mp4'), title=request.url, duration=3)
+    path = target / (request.url.rsplit('/', 1)[-1] + '.mp4')
+    with lock:
+        if not path.exists():
+            path.write_bytes(b'video')
+    return DownloadResult(success=True, file_path=path, title=request.url, duration=3)
 operation.run_download = download
 urls = ['https://youtube.com/first', 'https://youtube.com/bad', 'https://youtube.com/first']
-worker = URLBulkDownloadWorker(urls, Path('.'))
+worker = URLBulkDownloadWorker(urls, target)
 urls[0] = 'https://youtube.com/changed'
 results, ready = [], []
 worker.all_finished.connect(results.append)
@@ -31,9 +45,12 @@ worker.run()
 assert [r['url'] for r in results[0]] == ['https://youtube.com/first', 'https://youtube.com/bad', 'https://youtube.com/first']
 assert [r['success'] for r in results[0]] == [True, False, True]
 assert len(ready) == 2
+first_calls = len(seen)
+worker.run()
+assert len(seen) == first_calls + 1  # Only the failed URL needs another attempt.
 assert all(r.adaptive_timeout for r in seen)
 video = SimpleNamespace(video_id='original-id', youtube_url='https://youtube.com/bad')
-worker = BulkDownloadWorker([video], Path('.'))
+worker = BulkDownloadWorker([video], target)
 video.video_id = 'changed-id'; video.youtube_url = 'https://youtube.com/changed'
 errors, finished = [], []
 worker.video_error.connect(lambda key, error: errors.append((key, error)))

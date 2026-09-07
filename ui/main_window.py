@@ -831,6 +831,16 @@ class MainWindow(QMainWindow):
         for signal, (slot, _callback) in connections.items():
             delivery.bind_signal(getattr(worker, signal), slot)
 
+    def _cancel_download_workers(self, *, wait: bool = False) -> None:
+        """Invalidate delivery and retain native workers through graceful completion."""
+        self._download_deliveries.clear()
+        workers = tuple(self._active_download_workers)
+        for worker in workers:
+            worker.cancel()
+        if wait:
+            for worker in workers:
+                worker.wait()
+
 
     def _stop_worker_safely(self, worker: Optional[QThread], name: str, timeout_ms: int = 3000) -> None:
         """Safely stop a running QThread worker.
@@ -876,7 +886,7 @@ class MainWindow(QMainWindow):
         """
         self._source_import_queue.cancel_pending()
         self._deferred_agent_download_results = None
-        self._download_deliveries.clear()
+        self._cancel_download_workers()
 
         # Stop chat worker if running
         if self._chat_worker and self._chat_worker.isRunning():
@@ -894,9 +904,6 @@ class MainWindow(QMainWindow):
             (getattr(self, 'description_worker', None), "Description"),
             (getattr(self, 'text_extraction_worker', None), "TextExtraction"),
             (getattr(self, 'cinematography_worker', None), "Cinematography"),
-            (getattr(self, 'download_worker', None), "Download"),
-            (getattr(self, 'bulk_download_worker', None), "BulkDownload"),
-            (getattr(self, 'url_bulk_download_worker', None), "URLBulkDownload"),
             (getattr(self, 'youtube_search_worker', None), "YouTubeSearch"),
             (getattr(self, 'ia_search_worker', None), "InternetArchiveSearch"),
             (getattr(self, 'export_worker', None), "Export"),
@@ -905,7 +912,6 @@ class MainWindow(QMainWindow):
             (getattr(self, '_gaze_worker', None), "Gaze"),
         ]
 
-        workers_to_stop.extend((worker, "Download") for worker in self._active_download_workers)
         for worker, name in workers_to_stop:
             self._stop_worker_safely(worker, name, timeout_ms=2000)
 
@@ -10644,7 +10650,6 @@ class MainWindow(QMainWindow):
         workers = [
             ("detection", self.detection_worker),
             ("thumbnail", self.thumbnail_worker),
-            ("download", self.download_worker),
             ("export", self.export_worker),
             ("color", self.color_worker),
             ("shot_type", self.shot_type_worker),
@@ -10655,8 +10660,7 @@ class MainWindow(QMainWindow):
             ("gaze", getattr(self, '_gaze_worker', None)),
         ]
 
-        self._download_deliveries.clear()
-        workers.extend(("download", worker) for worker in self._active_download_workers)
+        self._cancel_download_workers(wait=True)
 
         for name, worker in workers:
             if worker:
