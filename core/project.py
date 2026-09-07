@@ -767,6 +767,9 @@ class Project:
                 continue
             if any(sc.source_id == source_id for sc in seq.get_all_clips()):
                 names.append(seq.name)
+        for name in self.session.retained_sources.get(source_id, []):
+            if name not in names:
+                names.append(name)
         return names
 
     # --- Data access (read-only lists) ---
@@ -903,7 +906,9 @@ class Project:
 
         retained = [s for s in self.session.retained_sequences
                     if not any(current is s for current in self.sequences)]
-        if any(c.source_id == source_id for s in retained for c in s.get_all_clips()):
+        if source_id in self.session.retained_sources or any(
+            c.source_id == source_id for s in retained for c in s.get_all_clips()
+        ):
             raise ValueError("Source is retained by sequence undo history")
 
         self._sources.remove(source)
@@ -1232,24 +1237,15 @@ class Project:
         removed = self.session.execute(EditSequenceClips.remove(target, clip_ids, ripple=ripple))
         return [clip.id for clip in removed]
 
-    def clear_sequence(self) -> int:
-        """Clear all clips from the sequence.
+    def clear_sequence(self, *, sequence: Sequence | None = None) -> int:
+        """Clear every track in one reversible edit; return the removed count."""
+        from core.commands.sequence_clips import EditSequenceClips
 
-        Returns:
-            Number of clips that were cleared
-        """
-        if self.sequence is None:
+        self.session.assert_owner()
+        target = sequence if sequence is not None else self.sequence
+        if target is None:
             return 0
-
-        track = self.sequence.tracks[0]
-        count = len(track.clips)
-        track.clips.clear()
-
-        if count > 0:
-            self.mark_dirty()
-            self._notify_observers("sequence_changed", [])
-
-        return count
+        return len(self.session.execute(EditSequenceClips.clear(target)))
 
     def reorder_sequence(self, clip_ids: list[str]) -> bool:
         """Reorder the active sequence's first track as one reversible edit."""

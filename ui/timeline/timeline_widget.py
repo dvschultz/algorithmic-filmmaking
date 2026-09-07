@@ -285,6 +285,12 @@ class TimelineWidget(QWidget):
 
     def clear_timeline(self):
         """Remove all clips from the timeline."""
+        if self.scene.uses_history:
+            self.scene.project.clear_sequence(sequence=self.scene.sequence)
+            self.scene.rebuild()
+            self._update_export_button()
+            self.sequence_refreshed.emit()
+            return
         self.scene.clear_all_clips()
         self.scene.clear_audio_waveform()
         self._update_export_button()
@@ -311,13 +317,14 @@ class TimelineWidget(QWidget):
         return dict(self._clip_lookup)
 
     def clear(self):
-        """Clear all clips and reset lookups."""
-        self.scene.clear_all_clips()
+        """Reset the departing view without editing its project or history."""
+        self.scene.set_sequence(Sequence())
+        self.scene.clear_audio_waveform()
         self._source_lookup.clear()
         self._clip_lookup.clear()
         self._available_clips.clear()
         self._update_export_button()
-        self.sequence_changed.emit()
+        self.sequence_refreshed.emit()
 
     def load_sequence(self, sequence: Sequence, sources: dict, clips: list = None):
         """Load a saved sequence.

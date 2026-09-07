@@ -149,7 +149,7 @@ mtime check and adds per-target error details while retaining legacy counters.
 This is a migration checkpoint, not completion of the architecture plan.
 The application guard is process-local and one-use, not durable exactly-once
 execution. The first [project-session migration](project-sessions.md) now shares
-clip enable/disable and manual sequence insertion, removal, reorder, timing, track and transform history between desktop and chat. Sequence creation, deletion, renaming, and settings now share that history as well. Remaining editorial
+clip enable/disable and manual sequence insertion, removal, clearing, reorder, timing, track and transform history between desktop and chat. Sequence creation, deletion, renaming, and settings now share that history as well. Clearing removes clips from every track in one undo action. Remaining editorial
 commands, locks, durable jobs, media-time correction, recipes, and the remaining
 interface migrations are still to be implemented.
 

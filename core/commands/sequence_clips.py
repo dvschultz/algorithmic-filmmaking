@@ -65,6 +65,16 @@ class EditSequenceClips:
     def event_data(self) -> list[str]:
         return list(self.notification_ids)
 
+    @property
+    def retained_sources(self) -> dict[str, str]:
+        """Source references in both sides of the edit, including removed clips."""
+        return {
+            placement.clip.source_id: self.sequence.name
+            for edit in self.tracks
+            for placement in (*edit.before, *edit.after)
+            if placement.clip.source_id
+        }
+
     @classmethod
     def insert(cls, sequence: Sequence, clips: list[SequenceClip]) -> EditSequenceClips:
         edits = []
@@ -137,6 +147,13 @@ class EditSequenceClips:
             f"Remove {len(removed)} sequence clip{'s' if len(removed) != 1 else ''}",
             tuple(c.id for c in removed),
         )
+
+    @classmethod
+    def clear(cls, sequence: Sequence) -> EditSequenceClips:
+        command = cls.remove(
+            sequence, [clip.id for clip in sequence.get_all_clips()], ripple=False
+        )
+        return replace(command, label="Clear sequence", notification_ids=())
 
     @classmethod
     def reorder(cls, sequence: Sequence, clip_ids: list[str]) -> EditSequenceClips:
@@ -254,6 +271,20 @@ class EditSequenceClips:
                 raise ValueError(
                     "Sequence changed since this edit; cannot apply history"
                 )
+        for edit in self.tracks:
+            target = edit.before if undo else edit.after
+            expected = edit.after if undo else edit.before
+            existing = {id(p.clip) for p in expected}
+            for placement in target:
+                clip = placement.clip
+                if id(clip) in existing:
+                    continue
+                if (
+                    (clip.source_id and clip.source_id not in project.sources_by_id)
+                    or (clip.source_clip_id and clip.source_clip_id not in project.clips_by_id)
+                    or (clip.frame_id and clip.frame_id not in project.frames_by_id)
+                ):
+                    raise ValueError("Cannot restore sequence clip: referenced media was removed")
         for edit in self.tracks:
             target = edit.before if undo else edit.after
             edit.track.clips[:] = [p.clip for p in target]

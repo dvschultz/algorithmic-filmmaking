@@ -61,6 +61,64 @@ def test_noops_leave_history_and_dirty_unchanged():
     assert not project.is_dirty and not project.session.can_undo
 
 
+def test_clear_all_tracks_is_one_edit_and_restores_original_entries():
+    from core.chat_tools import clear_sequence
+
+    project = _make_project_with_clips()
+    project.sequence.tracks.append(Track())
+    entries = [
+        SequenceClip(source_id="s1", source_clip_id=f"c{i}", track_index=i,
+                     start_frame=100, in_point=5, out_point=25, hflip=True)
+        for i in range(2)
+    ]
+    project.insert_sequence_clips(entries)
+    project.mark_clean()
+    events = []
+    project.add_observer(lambda event, data: events.append((event, data)))
+
+    assert clear_sequence(project)["clips_removed"] == 2
+    assert not project.sequence.get_all_clips()
+    assert events == [("sequence_changed", [])]
+    project.session.undo()
+    assert not project.is_dirty
+    for index, entry in enumerate(entries):
+        assert project.sequence.tracks[index].clips[0] is entry
+        assert (entry.start_frame, entry.in_point, entry.out_point, entry.hflip) == (100, 5, 25, True)
+    project.session.redo()
+    assert not project.sequence.get_all_clips()
+
+
+def test_clear_empty_sequence_is_noop():
+    project = _make_project_with_clips()
+    events = []
+    project.add_observer(lambda event, data: events.append(event))
+    assert project.clear_sequence() == 0
+    assert not project.is_dirty and not project.session.can_undo
+    assert events == []
+
+
+def test_clear_retains_source_media_for_undo():
+    project = _make_project_with_clips()
+    project.add_to_sequence(["c0"])
+    project.clear_sequence()
+    assert project.source_in_sequences("s1") == [project.sequence.name]
+    with pytest.raises(ValueError, match="undo history"):
+        project.remove_source("s1")
+    project.session.undo()
+    assert project.sequence.get_all_clips()[0].source_id in project.sources_by_id
+
+
+def test_clear_undo_rejects_permanently_removed_library_clip_atomically():
+    project = _make_project_with_clips()
+    project.add_to_sequence(["c0", "c1"])
+    project.clear_sequence()
+    project.remove_clips(["c1"])
+    with pytest.raises(ValueError, match="referenced media was removed"):
+        project.session.undo()
+    assert not project.sequence.get_all_clips()
+    assert project.session.undo_text == "Clear sequence"
+
+
 def test_history_targets_original_sequence_after_active_sequence_switch():
     project = _make_project_with_clips()
     first = project.sequence
@@ -138,7 +196,48 @@ def test_timeline_and_agent_share_commands_without_refresh_marking_dirty(qapp):
     assert not project.is_dirty
     assert project.sequence.get_all_clips()[0].start_frame == 50
     assert entry.id in timeline.scene._clip_items
+    project.mark_clean()
+    timeline.clear_timeline()
+    assert not timeline.scene._clip_items
+    assert not project.sequence.get_all_clips()
+    action.trigger()
+    assert not project.is_dirty
+    assert project.sequence.get_all_clips()[0] is entry
+    assert entry.id in timeline.scene._clip_items
     timeline.close()
+
+
+def test_generation_clear_does_not_record_manual_history(qapp):
+    from ui.timeline.timeline_widget import TimelineWidget
+
+    project = _make_project_with_clips()
+    project.sequence.tracks[0].clips.append(SequenceClip(out_point=20))
+    timeline = TimelineWidget()
+    timeline.scene.project = project
+    timeline.scene.set_sequence(project.sequence)
+    timeline.scene.history_enabled = lambda: False
+    timeline.clear_timeline()
+    assert not project.sequence.get_all_clips()
+    assert not project.session.can_undo
+    timeline.close()
+
+
+def test_new_project_can_clear_departing_sequence_view(qapp):
+    from ui.tabs.sequence_tab import SequenceTab
+
+    project = _make_project_with_clips()
+    project.add_to_sequence(["c0"])
+    tab = SequenceTab()
+    tab.set_project(project)
+    tab.timeline.sequence_changed.connect(project.mark_dirty)
+    # MainWindow resets the model before clearing and rebinding the tab.
+    project.clear()
+    tab.clear()
+    tab.set_project(project)
+    assert tab.timeline.get_sequence() is project.sequence
+    assert not project.session.can_undo
+    assert not project.is_dirty
+    tab.close()
 
 
 def test_agent_new_project_rebinds_history(qapp):

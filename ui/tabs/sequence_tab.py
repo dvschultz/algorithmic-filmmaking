@@ -1917,7 +1917,7 @@ class SequenceTab(BaseTab):
         self.set_chromatic_color_bar_enabled(False, emit_signal=False)
         self._update_chromatic_bar_controls(None)
         self._emit_chromatic_bar_setting_changed()
-        self.timeline.clear_timeline()
+        self.timeline.clear()
         self.timeline_preview.clear()
         self._set_state(self.STATE_CARDS)
         # Reset all cards to enabled for intention flow (fresh project)
@@ -1984,6 +1984,12 @@ class SequenceTab(BaseTab):
         if not self._project:
             return SeqModel()
 
+        # Activation refreshes controls from the model, so initialize the pending
+        # generation preference before publishing the new active sequence.
+        show_chromatic_color_bar = (
+            self._show_chromatic_color_bar and self._is_chromatic_flow_algorithm(algorithm_key)
+        )
+
         # Persist the departing sequence (no dirty prompt — callers handle that)
         self._persist_current_sequence()
 
@@ -1999,12 +2005,16 @@ class SequenceTab(BaseTab):
         if current_seq and len(current_seq.get_all_clips()) == 0:
             current_seq.name = name
             current_seq.algorithm = algorithm_key
+            current_seq.show_chromatic_color_bar = show_chromatic_color_bar
             new_seq = current_seq
         else:
             # Create and add a new sequence
-            new_seq = SeqModel(name=name, algorithm=algorithm_key)
-            self._project.add_sequence(new_seq)
-            self._project.set_active_sequence(len(self._project.sequences) - 1)
+            new_seq = SeqModel(
+                name=name,
+                algorithm=algorithm_key,
+                show_chromatic_color_bar=show_chromatic_color_bar,
+            )
+            self._project.add_sequence(new_seq, activate=True)
 
         # Sync the timeline's scene to point at the new active sequence.
         # Without this, timeline.get_sequence() keeps returning the previous

@@ -52,8 +52,15 @@ commands and Undo/Redo. Source removal is blocked while an absent sequence in
 history retains it; restoring a sequence with permanently removed clips fails
 atomically. `core.spine.sequences` supplies listing and management wrappers.
 
+`clear_sequence()` clears all tracks in one reversible command, shared by chat
+and the timeline Clear button. Undo retains original clip objects, gaps, trims,
+and transforms. Empty clears create no history or dirty change. Generation and
+project-reset paths retain their explicit history bypass.
+Source deletion also respects references retained in both sides of clip-edit
+snapshots, including Clear and Remove, until their history is released.
+
 This is an incremental U4 migration. Generated sequence population/grouping,
-clearing, source removal, and other metadata commands still need migration. Legacy direct model mutations are tracked as
+source removal, and other metadata commands still need migration. Legacy direct model mutations are tracked as
 external changes; they are not yet undoable or comprehensively thread-guarded.
 MCP and CLI do not yet expose history tools; the shared spine history functions
 are available to retained headless sessions. Cross-process locks, durable history,

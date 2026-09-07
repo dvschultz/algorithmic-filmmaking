@@ -112,6 +112,17 @@ class ProjectSession:
         self._external_revision += 1
         self._notify()
 
+    @property
+    def retained_sources(self) -> dict[str, list[str]]:
+        """Source IDs and sequence names retained by timeline edit snapshots."""
+        retained: dict[str, list[str]] = {}
+        for entry in (*self._undo, *self._redo):
+            for source_id, name in getattr(entry.command, "retained_sources", {}).items():
+                names = retained.setdefault(source_id, [])
+                if name not in names:
+                    names.append(name)
+        return retained
+
     def record_saved(self) -> None:
         self._saved_state = (self._position, self._external_revision)
         self._notify()

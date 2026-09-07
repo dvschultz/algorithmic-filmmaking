@@ -50,6 +50,40 @@ def test_should_show_chromatic_bar_only_for_color_algorithm(qapp):
     assert tab.chromatic_bar_checkbox.isHidden() is True
 
 
+@pytest.mark.parametrize("enabled", [True, False])
+@pytest.mark.parametrize("populated", [True, False])
+def test_generation_preserves_color_bar_across_activation(qapp, enabled, populated):
+    from pathlib import Path
+
+    from core.project import Project
+    from models.clip import Clip, Source
+    from ui.project_adapter import ProjectSignalAdapter
+    from ui.tabs.sequence_tab import SequenceTab
+
+    project = Project.new()
+    project.add_source(Source(id="src", file_path=Path("/tmp/test.mp4"), fps=30))
+    project.add_clips([Clip(id="clip", source_id="src", start_frame=0, end_frame=30)])
+    if populated:
+        project.add_to_sequence(["clip"])
+    tab = SequenceTab()
+    tab.set_project(project)
+    adapter = ProjectSignalAdapter(project)
+    # MainWindow's activation refresh synchronizes these same controls.
+    adapter.active_sequence_changed.connect(
+        lambda _: tab.sync_sequence_metadata(project.sequence)
+    )
+    tab.set_chromatic_color_bar_enabled(enabled, emit_signal=False)
+
+    sequence = tab._create_and_activate_sequence("color")
+    tab._apply_chromatic_bar_to_sequence("color")
+
+    assert project.sequence is sequence
+    assert sequence.show_chromatic_color_bar is enabled
+    assert tab._confirm_chromatic_bar_checkbox.isChecked() is enabled
+    assert len(project.sequences) == (2 if populated else 1)
+    tab.close()
+
+
 def test_card_click_chromatic_flow_still_shows_confirm_when_estimates_empty(qapp, monkeypatch):
     from pathlib import Path
     from types import SimpleNamespace
