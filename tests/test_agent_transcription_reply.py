@@ -63,7 +63,9 @@ class Worker(QThread):
     transcript_ready = Signal(str, list)
     transcription_completed = Signal()
     error = Signal(str)
-    def __init__(self, *args, **kwargs): super().__init__()
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+        self.tasks = ()
     def run(self):
         self.transcription_completed.emit()
         self.transcription_completed.emit()

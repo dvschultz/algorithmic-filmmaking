@@ -212,38 +212,25 @@ def transcribe(
     Heavier dependency than colors / shots; the implementation lazy-imports
     ``core.transcription`` to keep the spine import boundary clean.
     """
-    from copy import deepcopy
     from core.operations.transcription import (
-        TranscriptionOptions, run_transcription, snapshot_tasks,
+        TranscriptionApplication, TranscriptionOptions, run_transcription, snapshot_tasks,
     )
 
     clips = _resolve_clip_ids(project, clip_ids)
     tasks = snapshot_tasks(clips, project.sources_by_id, skip_existing=skip_existing)
-    expected_transcripts = [deepcopy(clip.transcript) for clip in clips]
-    session_id = project.session.session_id
+    application = TranscriptionApplication(project, tasks)
     outcomes = run_transcription(
         tasks, TranscriptionOptions(model=model, language=language),
         cancel_event=cancel_event,
         progress=(lambda current, total: progress_callback(current / total, f"Transcribing ({current}/{total})")) if progress_callback else None,
     )
-    succeeded, failed, skipped, unprocessed, updated = [], [], [], [], []
-    for clip, task, outcome, expected in zip(clips, tasks, outcomes, expected_transcripts):
+    accepted = application.apply_batch(project, outcomes)
+    succeeded, failed, skipped, unprocessed = [], [], [], []
+    for clip, outcome, applied in zip(clips, outcomes, accepted):
         if outcome.status == "succeeded":
-            source = project.sources_by_id.get(clip.source_id)
-            if (
-                project.session.session_id != session_id
-                or project.clips_by_id.get(clip.id) is not clip
-                or clip.transcript != expected
-                or source is None
-                or source.file_path != task.source_path
-                or source.fps != task.fps
-                or clip.start_time(source.fps) != task.start_time
-                or clip.end_time(source.fps) != task.end_time
-            ):
+            if not applied:
                 failed.append({"clip_id": clip.id, "code": "stale_target", "message": "Transcription target changed during execution"})
                 continue
-            clip.transcript = list(outcome.segments)
-            updated.append(clip)
             succeeded.append({"clip_id": clip.id, "segment_count": len(outcome.segments)})
         elif outcome.status == "skipped":
             skipped.append({"clip_id": clip.id, "reason": outcome.code})
@@ -251,8 +238,6 @@ def transcribe(
             failed.append({"clip_id": clip.id, "code": outcome.code, "message": outcome.message})
         elif outcome.status == "unprocessed":
             unprocessed.append({"clip_id": clip.id, "code": outcome.code})
-    if updated:
-        project.update_clips(updated)
     return {"success": True, "result": {
         "succeeded": succeeded, "failed": failed, "skipped": skipped,
         "total_clips": len(clips), "unprocessed": unprocessed,

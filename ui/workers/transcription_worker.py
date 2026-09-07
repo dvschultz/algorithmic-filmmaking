@@ -13,7 +13,7 @@ from PySide6.QtCore import Signal
 
 from ui.workers.base import CancellableWorker, summarize_clip_errors
 from core.operations.transcription import (
-    TranscriptionOptions, TranscriptionOutcome, run_transcription, snapshot_tasks,
+    TranscriptionOptions, TranscriptionOutcome, TranscriptionTask, run_transcription, snapshot_tasks,
 )
 
 logger = logging.getLogger(__name__)
@@ -76,6 +76,11 @@ class TranscriptionWorker(CancellableWorker):
             model_name, language, self._backend, segmentation_mode,
             segment_max_seconds, self._parallelism,
         )
+
+    @property
+    def tasks(self) -> tuple[TranscriptionTask, ...]:
+        """The exact immutable inputs submitted by this worker."""
+        return self._tasks
 
     @staticmethod
     def _resolve_backend(backend: str) -> str:

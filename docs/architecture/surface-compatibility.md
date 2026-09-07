@@ -206,9 +206,14 @@ model/language defaults, and force/recompute policies remain adapter inputs.
 CLI and synchronous MCP no longer require faster-whisper before backend selection;
 the shared transcription backend handles its own dependency errors.
 
-GUI model preloading, disk-space status, and result signal delivery remain adapter
-responsibilities. Headless application rejects replaced sessions/clip objects and
-changed source paths, frame ranges, or frame rates. Full GUI per-item application
-ownership, file-content fingerprint validation, durable transcription job recovery,
-alignment, and audio-only transcription remain later U7 work. This cutover does
-not mark U7 complete.
+GUI model preloading and disk-space status remain adapter responsibilities.
+`TranscriptionApplication` now guards both GUI and headless result publication by
+project session, clip/source object identity, frame range/rate, existing transcript,
+and media device/inode/size/mtime. Each target can be applied once. Application
+uses the project session boundary for owner-thread, writable-project, revision,
+and reentrancy checks. Headless batches notify once; GUI results apply incrementally.
+The GUI relay also scopes progress, status, errors, and results to their worker,
+request, and pipeline run, rejecting expired or replaced work before UI delivery.
+
+Full media-content hashing, durable transcription job recovery, alignment, and
+audio-only transcription remain later U7 work. This cutover does not mark U7 complete.

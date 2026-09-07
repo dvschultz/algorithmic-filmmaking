@@ -1,14 +1,19 @@
 """Shared, GUI-free transcription scheduling over detached clip tasks."""
 
+from __future__ import annotations
+
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from math import isfinite
 from pathlib import Path
 from threading import Event
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from core.operations.contracts import OutcomeStatus
+
+if TYPE_CHECKING:
+    from core.project import Project
 
 
 @dataclass(frozen=True)
@@ -204,3 +209,100 @@ def run_transcription(
         )
         for i, task in enumerate(tasks)
     )
+
+
+def _media_stamp(path: Path | None) -> tuple[int, int, int, int] | None:
+    try:
+        stat = path.stat() if path is not None else None
+        return (
+            (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns) if stat else None
+        )
+    except OSError:
+        return None
+
+
+class TranscriptionApplication:
+    """Owner-thread, one-use application of results to unchanged clip targets."""
+
+    def __init__(self, project: Project, tasks: tuple[TranscriptionTask, ...]) -> None:
+        project.session.assert_owner()
+        self.project = project
+        self.session_id = project.session.session_id
+        self._consumed: set[str] = set()
+        self._targets: dict[str, tuple] = {}
+        stamps = {
+            path: _media_stamp(path) for path in {task.source_path for task in tasks}
+        }
+        for task in tasks:
+            clip = project.clips_by_id.get(task.clip_id)
+            source = project.sources_by_id.get(clip.source_id) if clip else None
+            self._targets[task.clip_id] = (
+                task,
+                clip,
+                source,
+                deepcopy(clip.transcript) if clip else None,
+                stamps[task.source_path],
+                (clip.start_frame, clip.end_frame) if clip else None,
+            )
+
+    def apply(self, project: Project, outcome: TranscriptionOutcome) -> bool:
+        """Publish one successful result without accepting duplicate delivery."""
+        return self.apply_batch(project, (outcome,))[0]
+
+    def apply_batch(
+        self,
+        project: Project,
+        outcomes: tuple[TranscriptionOutcome, ...],
+    ) -> tuple[bool, ...]:
+        """Validate one project revision and notify once for a headless batch."""
+        if (
+            project is not self.project
+            or project.session.session_id != self.session_id
+            or not any(
+                o.status == "succeeded" and o.clip_id not in self._consumed
+                for o in outcomes
+            )
+        ):
+            return tuple(False for _ in outcomes)
+
+        def publish() -> tuple[bool, ...]:
+            accepted = tuple(self._apply(project, outcome) for outcome in outcomes)
+            updated = [
+                project.clips_by_id[o.clip_id]
+                for o, valid in zip(outcomes, accepted)
+                if valid
+            ]
+            if updated:
+                project.update_clips(updated)
+            return accepted
+
+        return project.session.apply_external(publish)
+
+    def _apply(self, project: Project, outcome: TranscriptionOutcome) -> bool:
+        if outcome.status != "succeeded" or outcome.clip_id in self._consumed:
+            return False
+        self._consumed.add(outcome.clip_id)
+        binding = self._targets.get(outcome.clip_id)
+        if binding is None:
+            return False
+        task, clip, source, expected, stamp, frames = binding
+        if (
+            project is not self.project
+            or project.session.session_id != self.session_id
+            or clip is None
+            or project.clips_by_id.get(outcome.clip_id) is not clip
+            or (clip.start_frame, clip.end_frame) != frames
+            or clip.transcript != expected
+            or source is None
+            or project.sources_by_id.get(clip.source_id) is not source
+            or source.file_path != task.source_path
+            or source.fps != task.fps
+            or task.error is not None
+            or clip.start_time(source.fps) != task.start_time
+            or clip.end_time(source.fps) != task.end_time
+            or stamp is None
+            or _media_stamp(task.source_path) != stamp
+        ):
+            return False
+        clip.transcript = list(deepcopy(outcome.segments))
+        return True

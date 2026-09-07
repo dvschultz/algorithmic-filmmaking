@@ -3775,9 +3775,8 @@ class MainWindow(QMainWindow):
             segmentation_mode=self.settings.transcription_segmentation_mode,
             segment_max_seconds=self.settings.transcription_segment_max_seconds,
         )
-        self.transcription_worker.progress.connect(self._on_transcription_progress)
-        self.transcription_worker.status.connect(self.status_bar.showMessage)
-        self.transcription_worker.transcript_ready.connect(self._on_transcript_ready)
+        from ui.workers.transcription_delivery import TranscriptionDelivery
+        TranscriptionDelivery(self, self.transcription_worker, reply=agent_reply, pipeline=pipeline)
         if pipeline:
             bind_pipeline_completion(
                 self, self.transcription_worker, "transcription_worker",
@@ -3790,7 +3789,6 @@ class MainWindow(QMainWindow):
                 reply=agent_reply,
             )
             self.transcription_worker.transcription_completed.connect(completion.completed, Qt.UniqueConnection)
-        self.transcription_worker.error.connect(self._on_transcription_error)
         self.transcription_worker.start()
 
     @Slot()
@@ -5751,17 +5749,11 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage(f"Transcribing: {current}/{total} clips...")
         self.progress_bar.setValue(int((current / total) * 100))
 
-    def _on_transcript_ready(self, clip_id: str, segments: list):
-        """Handle transcript ready for a clip."""
-        # Update the clip model
-        clip = self.clips_by_id.get(clip_id)
-        if clip:
-            clip.transcript = segments
-            # Update both tabs' clip browsers
-            self.cut_tab.update_clip_transcript(clip_id, segments)
-            self.analyze_tab.update_clip_transcript(clip_id, segments)
-            self._mark_dirty()
-            logger.debug(f"Clip {clip_id}: transcribed {len(segments)} segments")
+    def _on_transcript_ready(self, clip_id: str, segments: list) -> None:
+        """Refresh transcript widgets after guarded model application."""
+        self.cut_tab.update_clip_transcript(clip_id, segments)
+        self.analyze_tab.update_clip_transcript(clip_id, segments)
+        logger.debug(f"Clip {clip_id}: transcribed {len(segments)} segments")
 
     def _on_clip_dragged_to_timeline(self, clip: Clip):
         """Handle clip dragged from browser to timeline."""
