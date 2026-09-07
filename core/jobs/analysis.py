@@ -17,6 +17,12 @@ from core.spine.project_io import load_with_mtime, project_writer, save_with_mti
 
 def analysis_job_spec(project: Project, *, arguments: dict) -> OperationSpec:
     inputs = {}
+    if "embeddings" in (arguments.get("operations") or []):
+        from core.jobs.embeddings import embedding_job_spec
+        from core.operations.embeddings import EmbeddingOptions
+
+        embedding = embedding_job_spec(project, arguments.get("clip_ids"), EmbeddingOptions(), arguments={})
+        inputs["embeddings"] = json.loads(embedding.inputs_json)
     if "gaze" in (arguments.get("operations") or []):
         from core.jobs.gaze import gaze_job_spec
         from core.operations.gaze import GazeOptions
@@ -124,6 +130,7 @@ def run_analysis_job(
         object_detection = captured.get("object_detection")
         gaze = captured.get("gaze")
         faces = captured.get("faces")
+        embeddings = captured.get("embeddings")
         options = (
             TranscriptionOptions(**transcription["options"]) if transcription else None
         )
@@ -133,6 +140,17 @@ def run_analysis_job(
                 raise StaleJobResult("Analysis inputs changed while the job was queued")
 
         def execute(op: str, report: Progress | None) -> dict:
+            if op == "embeddings":
+                from core.jobs.embeddings import embedding_job_spec, run_embedding_job
+                from core.operations.embeddings import EmbeddingOptions
+
+                if embeddings is None:
+                    raise StaleJobResult("Analysis job has no captured embedding options")
+                current, _ = load_with_mtime(path)
+                step = embedding_job_spec(current, ids, EmbeddingOptions(**embeddings["options"]), arguments={})
+                if json.loads(step.inputs_json) != embeddings:
+                    raise StaleJobResult("Embedding inputs changed before analysis")
+                return run_embedding_job(store, path, ids, report or (lambda *_: None), cancel, operation=step)
             if op == "gaze":
                 from core.jobs.gaze import gaze_job_spec, run_gaze_job
                 from core.operations.gaze import GazeOptions

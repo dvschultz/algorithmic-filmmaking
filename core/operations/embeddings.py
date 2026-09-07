@@ -1,10 +1,11 @@
 """Detached DINOv2 batches and owner-thread embedding publication."""
 
 from dataclasses import dataclass
+from contextlib import contextmanager
 from math import isfinite
 from pathlib import Path
 from threading import Event, Lock
-from typing import Callable, Sequence, TYPE_CHECKING
+from typing import Callable, Iterator, Sequence, TYPE_CHECKING
 
 from core.operations.contracts import OutcomeStatus
 
@@ -51,6 +52,41 @@ class EmbeddingOutcome:
         )
 
 
+class _EmbeddingModelSession:
+    def __init__(self) -> None:
+        self.acquired = False
+        self.attempted = False
+        self.failed = False
+
+    def acquire(self, cancel: Event) -> bool:
+        if self.failed:
+            return False
+        while not self.acquired and not cancel.is_set():
+            self.acquired = _inference_lock.acquire(timeout=0.05)
+        return self.acquired and not cancel.is_set()
+
+    def close(self) -> None:
+        if self.acquired:
+            try:
+                if self.attempted:
+                    from core.analysis.embeddings import unload_model
+
+                    unload_model()
+            finally:
+                self.acquired = False
+                _inference_lock.release()
+
+
+@contextmanager
+def embedding_model_session() -> Iterator[_EmbeddingModelSession]:
+    """Keep model ownership across durable batches without loading for cache hits."""
+    session = _EmbeddingModelSession()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
 def run_embeddings(
     tasks: tuple[EmbeddingTask, ...],
     options: EmbeddingOptions,
@@ -58,6 +94,7 @@ def run_embeddings(
     cancel_event: Event | None = None,
     on_outcome: Callable[[EmbeddingOutcome], None] | None = None,
     progress: Callable[[int, int], None] | None = None,
+    model_session: _EmbeddingModelSession | None = None,
 ) -> tuple[EmbeddingOutcome, ...]:
     """Compute bounded batches, validate every item, and serialize model ownership."""
     if (
@@ -69,7 +106,7 @@ def run_embeddings(
     cancel = cancel_event or Event()
     outcomes: dict[str, EmbeddingOutcome] = {}
     pending = []
-    acquired = attempted = False
+    session = model_session or _EmbeddingModelSession()
 
     def publish(outcome: EmbeddingOutcome) -> None:
         outcomes[outcome.clip_id] = outcome
@@ -94,11 +131,7 @@ def run_embeddings(
             else:
                 pending.append(task)
         if pending and not cancel.is_set():
-            while not cancel.is_set():
-                if _inference_lock.acquire(timeout=0.05):
-                    acquired = True
-                    break
-            if acquired and not cancel.is_set():
+            if session.acquire(cancel):
                 from core.analysis.embeddings import extract_clip_embeddings_batch
 
                 for start in range(0, len(pending), options.chunk_size):
@@ -106,7 +139,7 @@ def run_embeddings(
                         break
                     chunk = pending[start : start + options.chunk_size]
                     try:
-                        attempted = True
+                        session.attempted = True
                         paths: list[Path] = []
                         for task in chunk:
                             assert task.thumbnail_path is not None
@@ -121,6 +154,7 @@ def run_embeddings(
                     except Exception as exc:
                         if cancel.is_set():
                             break
+                        session.failed = True
                         for task in chunk:
                             publish(
                                 EmbeddingOutcome(
@@ -151,18 +185,18 @@ def run_embeddings(
                             )
                         publish(outcome)
     finally:
-        if acquired:
-            try:
-                if attempted:
-                    from core.analysis.embeddings import unload_model
-
-                    unload_model()
-            finally:
-                _inference_lock.release()
+        if model_session is None:
+            session.close()
     return tuple(
         outcomes.get(
             task.clip_id,
-            EmbeddingOutcome(task.clip_id, "unprocessed", code="cancelled"),
+            EmbeddingOutcome(
+                task.clip_id,
+                "unprocessed",
+                code="embedding_failed"
+                if session.failed and not cancel.is_set()
+                else "cancelled",
+            ),
         )
         for task in tasks
     )

@@ -695,6 +695,26 @@ Embedding job history/recovery, boundary and sequencer-specific embedding routes
 OCR, remaining audio/frame analysis, and workflow orchestration remain U7 work.
 Native-process isolation remains a later milestone.
 
+### Durable headless thumbnail embeddings
+
+Dedicated MCP `start_generate_embeddings`, embedding steps in combined analysis
+plans, and CLI `analyze embeddings <project> [--chunk-size <n>] [--force]` use
+`core/jobs/embeddings.py`. Submitted jobs capture target ranges, thumbnail/source
+identity, options, and runtime metadata. Receipt validation rejects corrupt or
+changed inputs before reuse; existing manually edited vectors are preserved
+unless explicitly refreshed.
+
+Inference remains batched. Each computed batch is recorded before project
+publication, including vectors beyond a project-save batch boundary. Failed
+saves reuse those vectors, and failed checkpoints reconcile saved receipts.
+Thumbnail vectors retain their full saved precision. Only missing work loads
+the model; ownership spans computation batches and a fatal model/batch error
+stops later dispatch. Cancellation preserves accepted results and leaves
+recorded but unapplied neighbors available for an explicit retry.
+
+Public MCP job names remain unchanged. GUI embedding job history and recovery,
+remaining embedding routes, OCR, and the rest of U7 remain outstanding.
+
 The MCP analysis adapter translates shared operation kinds to their existing
 public job names at submission. Gaze, faces, objects, classification, and
 cinematography are covered by tests that submit to the real job runtime and

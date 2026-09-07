@@ -636,7 +636,7 @@ async def test_gaze_submission_records_durable_results(lifespan_ctx, tmp_path, m
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("public_kind", ["analyze_gaze", "detect_faces", "detect_objects", "analyze_classify", "analyze_cinematography"])
+@pytest.mark.parametrize("public_kind", ["analyze_gaze", "detect_faces", "detect_objects", "analyze_classify", "analyze_cinematography", "generate_embeddings"])
 async def test_durable_analysis_alias_submits_to_real_runtime(lifespan_ctx, tmp_path, monkeypatch, public_kind):
     from core.project import Project
     from core.jobs.spec import OperationSpec
@@ -657,6 +657,8 @@ async def test_durable_analysis_alias_submits_to_real_runtime(lifespan_ctx, tmp_
     monkeypatch.setattr("core.analysis.gaze.load_face_mesh", Mock())
     monkeypatch.setattr("core.analysis.gaze.unload_model", Mock())
     monkeypatch.setattr("core.analysis.faces.extract_faces_from_clip", Mock(return_value=[]))
+    monkeypatch.setattr("core.analysis.embeddings.extract_clip_embeddings_batch", Mock(side_effect=lambda paths: [[0.1] * 768 for _ in paths]))
+    monkeypatch.setattr("core.analysis.embeddings.unload_model", Mock())
     monkeypatch.setattr("core.analysis.faces._load_insightface", Mock())
     monkeypatch.setattr("core.analysis.faces.unload_model", Mock())
     monkeypatch.setattr("core.analysis.detection.detect_objects", Mock(return_value=[]))
@@ -673,6 +675,37 @@ async def test_durable_analysis_alias_submits_to_real_runtime(lifespan_ctx, tmp_
     receipts = Project.load(path).metadata.job_results
     assert len(receipts) == 1
     assert all(store.get_result(rid)["committed"] for rid in receipts)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("generic", [False, True])
+async def test_embedding_submission_records_durable_results(lifespan_ctx, tmp_path, monkeypatch, generic):
+    from core.project import Project
+    from scene_ripper_mcp.tools import jobs
+
+    ctx, store, _ = lifespan_ctx
+    path = _make_project_file(tmp_path)
+    project = Project.load(path)
+    thumbnail = tmp_path / "embedding-thumb.jpg"
+    thumbnail.write_bytes(b"image")
+    project.clips[0].thumbnail_path = thumbnail
+    assert project.save()
+    compute = Mock(side_effect=lambda paths: [[.123456789] * 768 for _ in paths])
+    monkeypatch.setattr("core.analysis.embeddings.extract_clip_embeddings_batch", compute)
+    monkeypatch.setattr("core.analysis.embeddings.unload_model", Mock())
+    for _ in range(2):
+        if generic:
+            response = await jobs.start_analyze_clips(str(path), operations=["embeddings"], ctx=ctx)
+        else:
+            response = await jobs.start_generate_embeddings(str(path), ctx=ctx)
+        response = json.loads(response)
+        assert response["success"], response
+        _wait_for_status(store, response["task_id"], STATUS_COMPLETED)
+    saved = Project.load(path)
+    assert saved.clips[0].embedding == [.123456789] * 768
+    assert len(saved.metadata.job_results) == 1
+    assert all(store.get_result(rid)["committed"] for rid in saved.metadata.job_results)
+    compute.assert_called_once()
 
 
 @pytest.mark.asyncio

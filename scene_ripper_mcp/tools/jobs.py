@@ -580,6 +580,18 @@ async def _start_spine_analyze_job(
                 store, path, operation.arguments["clip_ids"],
                 progress_callback, cancel_event, operation=operation,
             )
+    elif spine_fn_name == "embeddings":
+        from core.jobs.embeddings import embedding_job_spec, run_embedding_job
+        from core.operations.embeddings import EmbeddingOptions
+
+        try:
+            operation = embedding_job_spec(_project, clip_ids, EmbeddingOptions(), arguments=payload)
+        except ValueError as exc:
+            return json.dumps(_wrap_error(exc))
+        store = _lifespan(ctx)["job_store"]
+
+        def run(progress_callback, cancel_event):
+            return run_embedding_job(store, path, operation.arguments["clip_ids"], progress_callback, cancel_event, operation=operation)
     elif spine_fn_name == "face_embeddings":
         from core.jobs.faces import face_job_spec, run_face_job
         from core.operations.faces import FaceOptions

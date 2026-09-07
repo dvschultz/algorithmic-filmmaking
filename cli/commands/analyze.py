@@ -23,8 +23,40 @@ def analyze() -> None:
         align     Add word timestamps to existing transcripts
         faces     Extract face embeddings with resumable results
         gaze      Estimate gaze direction with resumable results
+        embeddings Extract thumbnail embeddings with resumable results
     """
     pass
+
+
+@analyze.command("embeddings")
+@click.argument("project_file", type=click.Path(exists=True, path_type=Path))
+@click.option("--clip-id", "-c", "clip_ids", multiple=True, help="Clip ID or eight-character prefix")
+@click.option("--chunk-size", type=click.IntRange(min=1), default=16, show_default=True)
+@click.option("--force", "-f", is_flag=True, help="Recompute existing embeddings")
+@click.pass_context
+def embeddings(ctx: click.Context, project_file: Path, clip_ids: tuple[str, ...], chunk_size: int, force: bool) -> None:
+    """Extract DINOv2 thumbnail vectors with resumable batch computation."""
+    from threading import Event
+    from core.jobs.embeddings import run_embedding_job
+    from core.jobs.store import JobStore
+    from core.operations.embeddings import EmbeddingOptions
+    from core.project import Project
+
+    project_file = own_project(ctx, project_file)
+    try:
+        project = Project.load(project_file, missing_source_callback=lambda path, sid: None)
+        selected = [c.id for c in project.clips if not clip_ids or c.id in clip_ids or c.id[:8] in clip_ids]
+        if clip_ids and not selected:
+            exit_with(ExitCode.VALIDATION_ERROR, "No matching clips found")
+        store = JobStore(CLIConfig.load().cache_dir / "jobs.db")
+        try:
+            with ProgressContext("Extracting embeddings") as progress:
+                result = run_embedding_job(store, project_file, selected, progress.update, Event(), options=EmbeddingOptions(chunk_size), force=force)
+        finally:
+            store.close()
+    except Exception as exc:
+        exit_with(ExitCode.GENERAL_ERROR, f"Embedding analysis failed: {exc}")
+    output_result(result, as_json=ctx.obj.get("json", False))
 
 
 @analyze.command("gaze")
