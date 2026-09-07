@@ -454,10 +454,13 @@ def extract_text(
                 use_vlm_fallback=use_vlm_fallback,
                 vlm_model=vlm_model,
                 vlm_only=vlm_only,
+                cancel_event=cancel_event,
             )
         except Exception as exc:  # noqa: BLE001
             failed.append({"clip_id": clip.id, "code": "text_extraction_failed", "message": str(exc)})
             continue
+        if _check_cancel(cancel_event):
+            break
         clip.extracted_texts = texts
         updated.append(clip)
         succeeded.append({"clip_id": clip.id, "text_count": len(texts)})

@@ -798,3 +798,16 @@ still use cooperative cancellation; process isolation remains later work.
 
 Generic GUI boundary-analysis picker integration, OCR, remaining audio/frame
 analysis, and intention-workflow orchestration still remain in U7.
+
+### OCR sampling and cancellation
+
+OCR keyframes now use the clip's half-open source range: the last eligible frame
+is `end_frame - 1`, including clips shorter than the requested sample count.
+Cancellation is checked between frame decoding, local OCR, VLM fallback, and
+keyframes. The GUI clip/frame workers and spine reject late provider results;
+already completed clips remain available. Cancellation does not interrupt an
+in-flight native or network call, but prevents its result from being published.
+
+This corrects the provider behavior ahead of the U7 OCR migration. Shared typed
+operations, guarded GUI delivery for edited/replaced targets, and durable OCR
+recovery remain to be implemented.

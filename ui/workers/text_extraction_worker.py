@@ -117,7 +117,10 @@ class TextExtractionWorker(CancellableWorker):
                     vlm_model=self.vlm_model,
                     vlm_only=self.vlm_only,
                     use_text_detection=self.use_text_detection,
+                    cancel_event=self._cancel_event,
                 )
+                if self.is_cancelled():
+                    break
                 results[clip.id] = extracted
                 self.clip_completed.emit(clip.id, extracted)
 
@@ -165,7 +168,10 @@ class TextExtractionWorker(CancellableWorker):
                     vlm_model=self.vlm_model,
                     vlm_only=self.vlm_only,
                     skip_detection=not self.use_text_detection,
+                    cancel_event=self._cancel_event,
                 )
+                if self.is_cancelled():
+                    break
                 extracted = []
                 if text and text.strip():
                     extracted.append(
