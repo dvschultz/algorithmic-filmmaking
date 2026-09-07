@@ -780,3 +780,21 @@ The CLI accepts exact `--clip-id` values; MCP accepts an optional exact `clip_id
 list. Existing complete pairs are preserved unless forced. These entry points do
 not install the embedding runtime. Automatic durable sequencing prerequisites
 and generic GUI analysis-picker integration remain outstanding.
+
+### Recoverable GUI sequencing prerequisites
+
+Similarity-chain, Match Cut, and Staccato now run embedding prerequisites through
+shared job history for saved projects and disposable session history for unsaved
+projects. Completed thumbnail batches and boundary pairs are journaled before
+later computation starts, so rerunning the same proposal reuses them after an
+interruption. Cache identity includes target ranges, previous vectors, source and
+thumbnail fingerprints, and runtime identity.
+
+Results enrich only detached proposal clips. They do not save the project or
+attach analysis receipts to live clips. The owner rechecks the project session,
+save path, relevant clip fields, and media before using the proposal. Staccato
+also rejects a result when the sequence tab has switched projects. Native calls
+still use cooperative cancellation; process isolation remains later work.
+
+Generic GUI boundary-analysis picker integration, OCR, remaining audio/frame
+analysis, and intention-workflow orchestration still remain in U7.

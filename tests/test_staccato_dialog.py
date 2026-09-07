@@ -66,11 +66,12 @@ def test_generate_uses_preview_filtered_markers(qapp, monkeypatch):
     captured = {}
 
     class FakeWorker:
-        def __init__(self, clips, audio_analysis, strategy, cut_times=None, parent=None):
+        def __init__(self, clips, audio_analysis, strategy, cut_times=None, parent=None, *, project=None):
             captured["clips"] = clips
             captured["audio_analysis"] = audio_analysis
             captured["strategy"] = strategy
             captured["cut_times"] = cut_times
+            captured["project"] = project
             self.progress_update = _DummySignal()
             self.progress_message = _DummySignal()
             self.finished_sequence = _DummySignal()
@@ -86,6 +87,7 @@ def test_generate_uses_preview_filtered_markers(qapp, monkeypatch):
     assert captured["strategy"] == "onsets"
     assert captured["cut_times"] == [0.5, 1.5]
     assert captured["started"] is True
+    assert captured["project"] is dialog._project
 
 
 def test_audio_analysis_worker_receives_onset_profile_config(qapp, monkeypatch):

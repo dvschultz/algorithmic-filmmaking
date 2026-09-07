@@ -889,6 +889,7 @@ class SequenceTab(BaseTab):
             direction=direction,
             no_color_handling=no_color_handling,
             parent=self,
+            project=self._project,
         )
         # Store algorithm for the completion slot
         worker._pending_algorithm = algorithm
@@ -933,6 +934,9 @@ class SequenceTab(BaseTab):
         generated_sequence = None
         try:
             # Create a new sequence for this algorithm run
+            prerequisite_job = getattr(worker, "prerequisite_job", None)
+            if prerequisite_job is not None:
+                prerequisite_job.validate_project(self._project)
             inputs = getattr(worker, "_pending_inputs", [])
             for clip, source, start, end, path, fps, _ in inputs:
                 if self._project and (
@@ -1448,10 +1452,14 @@ class SequenceTab(BaseTab):
         """
         from ui.dialogs.staccato_dialog import StaccatoDialog
 
-        dialog = StaccatoDialog(clips=clips, project=self._project, parent=self)
-        dialog.sequence_ready.connect(
-            lambda seq_clips: self._apply_staccato_sequence(seq_clips, dialog.music_path)
-        )
+        owner_project = self._project
+        dialog = StaccatoDialog(clips=clips, project=owner_project, parent=self)
+
+        def apply_result(seq_clips):
+            if self._project is owner_project:
+                self._apply_staccato_sequence(seq_clips, dialog.music_path)
+
+        dialog.sequence_ready.connect(apply_result)
         dialog.exec()
 
     def _apply_staccato_sequence(self, sequence_clips: list, music_path=None) -> bool:

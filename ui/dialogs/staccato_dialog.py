@@ -8,6 +8,10 @@ between consecutive clips via DINOv2 embedding distance.
 import logging
 from copy import deepcopy
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.project import Project
 
 import numpy as np
 
@@ -181,9 +185,13 @@ class StaccatoGenerateWorker(CancellableWorker):
         strategy: str,
         cut_times: list[float] | None = None,
         parent=None,
+        *,
+        project: "Project | None" = None,
     ):
         super().__init__(parent)
         self._clips = deepcopy(clips)
+        from core.jobs.sequence_embeddings import SequenceEmbeddingJob
+        self.prerequisite_job = SequenceEmbeddingJob(self._clips, mode="thumbnail", project=project)
         self._audio_analysis = audio_analysis
         self._strategy = strategy
         self._cut_times = cut_times
@@ -222,11 +230,7 @@ class StaccatoGenerateWorker(CancellableWorker):
 
     def _auto_compute_embeddings(self) -> None:
         """Resolve prerequisites on the worker's private clip snapshot."""
-        from core.remix.embedding_inputs import populate_embeddings
-
-        populate_embeddings(
-            self._clips, cancel_event=self._cancel_event, require_all=True
-        )
+        self.prerequisite_job.populate(self._clips, self._cancel_event, require_all=True)
 
     def _on_progress(self, current: int, total: int):
         self.progress_update.emit(current, total)
@@ -1044,6 +1048,7 @@ class StaccatoDialog(QDialog):
             strategy=strategy_text,
             cut_times=cut_times,
             parent=self,
+            project=self._project,
         )
         self._generate_worker.progress_update.connect(self._on_progress_update)
         self._generate_worker.progress_message.connect(self._on_progress_message)
@@ -1166,7 +1171,14 @@ class StaccatoDialog(QDialog):
 
     @Slot()
     def _on_use_sequence(self):
-        """Emit the sequence and close the dialog."""
+        """Emit the sequence and close the dialog after revalidating inputs."""
+        prerequisite_job = getattr(self._generate_worker, "prerequisite_job", None)
+        if prerequisite_job is not None:
+            try:
+                prerequisite_job.validate_project(self._project)
+            except Exception as exc:
+                QMessageBox.warning(self, "Sequence inputs changed", str(exc))
+                return
         if self._sequence_data is not None:
             self.sequence_ready.emit(self._sequence_data)
         self.accept()
