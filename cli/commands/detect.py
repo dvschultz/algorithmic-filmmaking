@@ -4,6 +4,8 @@ from pathlib import Path
 
 import click
 
+from core.operations.detection import DetectionRequest, run_detection
+
 from cli.utils.config import CLIConfig
 from cli.utils.errors import ExitCode, exit_with
 from cli.utils.output import output_result, output_success
@@ -100,7 +102,7 @@ def detect(
 
     # Import heavy dependencies only when needed (keeps CLI startup fast)
     try:
-        from core.scene_detect import SceneDetector, DetectionConfig
+        from core.scene_detect import DetectionConfig
         from core.project import Project
     except ImportError as e:
         exit_with(ExitCode.DEPENDENCY_MISSING, f"Missing dependency: {e}")
@@ -114,7 +116,6 @@ def detect(
         luma_only=luma_only,
     )
 
-    detector = SceneDetector(config=detection_config)
     progress = create_progress_callback("Detecting scenes")
 
     # Set up signal handling for graceful shutdown
@@ -124,8 +125,8 @@ def detect(
 
     try:
         # Run detection
-        source, clips = detector.detect_scenes_with_progress(
-            video_path=video,
+        source, clips = run_detection(
+            DetectionRequest.build(video, detection_config),
             progress_callback=progress,
         )
 

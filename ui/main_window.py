@@ -30,7 +30,8 @@ from PySide6.QtGui import QDesktopServices, QKeySequence, QAction, QDragEnterEve
 
 from models.clip import Source, Clip
 from core.project_lock import ProjectWriter
-from core.scene_detect import SceneDetector, DetectionConfig, KaraokeDetectionConfig
+from core.scene_detect import DetectionConfig, KaraokeDetectionConfig
+from core.operations.detection import DetectionRequest, run_detection
 from core.thumbnail import ThumbnailGenerator
 from core.downloader import (
     VideoDownloader,
@@ -188,6 +189,9 @@ class DetectionWorker(CancellableWorker):
         self.config = config or DetectionConfig()
         self.mode = mode
         self.karaoke_config = karaoke_config
+        self.request = DetectionRequest.build(
+            self.video_path, self.config, mode=mode, karaoke_config=karaoke_config
+        )
 
     def run(self):
         self._log_start()
@@ -196,21 +200,11 @@ class DetectionWorker(CancellableWorker):
                 self._log_cancelled()
                 return
 
-            detector = SceneDetector(self.config)
-
-            if self.mode == "karaoke":
-                # Use karaoke (text-based) detection
-                source, clips = detector.detect_karaoke_scenes_with_progress(
-                    self.video_path,
-                    lambda p, m: self.progress.emit(p, m),
-                    self.karaoke_config,
-                )
-            else:
-                # Use visual detection (adaptive or content)
-                source, clips = detector.detect_scenes_with_progress(
-                    self.video_path,
-                    lambda p, m: self.progress.emit(p, m),
-                )
+            source, clips = run_detection(
+                self.request,
+                progress_callback=lambda p, m: self.progress.emit(p, m),
+                cancel_event=self._cancel_event,
+            )
 
             if self.is_cancelled():
                 self._log_cancelled()

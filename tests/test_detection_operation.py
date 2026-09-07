@@ -1,0 +1,75 @@
+"""Contracts for the shared, project-independent detection computation."""
+
+from threading import Event
+from unittest.mock import Mock
+
+import pytest
+
+from core.operations.detection import DetectionCancelled, DetectionRequest, run_detection
+from core.scene_detect import DetectionConfig, KaraokeDetectionConfig
+
+
+@pytest.mark.parametrize("mode", ["adaptive", "content", "karaoke"])
+def test_settings_are_detached_and_rebuilt_for_each_execution(tmp_path, monkeypatch, mode):
+    config = DetectionConfig(threshold=4, use_adaptive=mode != "content")
+    karaoke = KaraokeDetectionConfig(language="fr")
+    request = DetectionRequest.build(tmp_path / "v.mp4", config, mode=mode, karaoke_config=karaoke)
+    config.threshold = 9
+    karaoke.language = "en"
+    seen = []
+    result = (object(), [])
+
+    def create_detector(config):
+        seen.append(config.threshold)
+        assert config.use_adaptive == (mode != "content")
+        config.threshold = 8  # Backend mutation must not alter a retry's request.
+        detector = Mock()
+        detector.detect_scenes_with_progress.return_value = result
+
+        def detect_karaoke(path, progress, settings):
+            assert settings.language == "fr"
+            return result
+
+        detector.detect_karaoke_scenes_with_progress.side_effect = detect_karaoke
+        return detector
+
+    monkeypatch.setattr("core.scene_detect.SceneDetector", create_detector)
+    assert run_detection(request) == result
+    assert run_detection(request) == result
+    assert seen == [4, 4]
+
+
+@pytest.mark.parametrize("cancel_before", [True, False])
+def test_cancelled_operation_never_delivers_result(tmp_path, monkeypatch, cancel_before):
+    cancel = Event()
+    detector = Mock()
+
+    def detect(path, progress):
+        cancel.set()
+        return object(), []
+
+    detector.detect_scenes_with_progress.side_effect = detect
+    constructor = Mock(return_value=detector)
+    monkeypatch.setattr("core.scene_detect.SceneDetector", constructor)
+    if cancel_before:
+        cancel.set()
+    with pytest.raises(DetectionCancelled):
+        run_detection(DetectionRequest.build(tmp_path / "v.mp4"), cancel_event=cancel)
+    assert constructor.call_count == (0 if cancel_before else 1)
+
+
+def test_progress_and_errors_are_preserved(tmp_path, monkeypatch):
+    detector = Mock()
+    failure = RuntimeError("decoder failed")
+
+    def detect(path, progress):
+        progress(0.5, "Analyzing")
+        raise failure
+
+    detector.detect_scenes_with_progress.side_effect = detect
+    monkeypatch.setattr("core.scene_detect.SceneDetector", Mock(return_value=detector))
+    progress = Mock()
+    with pytest.raises(RuntimeError) as raised:
+        run_detection(DetectionRequest.build(tmp_path / "v.mp4"), progress_callback=progress)
+    assert raised.value is failure
+    progress.assert_called_once_with(0.5, "Analyzing")

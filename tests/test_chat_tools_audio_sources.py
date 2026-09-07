@@ -317,7 +317,7 @@ class TestMCPAudioSourceTools:
             ),
             patch("core.scene_detect.SceneDetector") as detector_cls,
         ):
-            detector_cls.return_value.detect_scenes.return_value = (source, clips)
+            detector_cls.return_value.detect_scenes_with_progress.return_value = (source, clips)
             result_json = pytest.importorskip("asyncio").run(
                 detect_scenes(str(video_path), str(project_path))
             )

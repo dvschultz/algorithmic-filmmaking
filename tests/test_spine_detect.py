@@ -5,7 +5,7 @@ Covers ``detect_scenes_for_source``, ``detect_scenes_for_video``,
 ``start_detect_scenes_*`` job wrappers are exercised through these spine
 fns plus the runtime tests in ``test_jobs_runtime.py``.
 
-Most tests stub ``core.scene_detect.SceneDetector.detect_scenes`` to avoid
+Most tests stub ``core.scene_detect.SceneDetector.detect_scenes_with_progress`` to avoid
 running the real OpenCV/PySceneDetect pipeline — the spine fns' job is to
 orchestrate the model calls (replace_source_clips, add_source, save), not
 to test the detector itself.
@@ -48,7 +48,7 @@ def test_cancelled_detection_does_not_publish(tmp_path, entry, phase):
         cancel.set()
         return {"generated": [], "failed": [], "skipped": []}
 
-    with patch("core.scene_detect.SceneDetector.detect_scenes", side_effect=detect), patch(
+    with patch("core.scene_detect.SceneDetector.detect_scenes_with_progress", side_effect=detect), patch(
         "core.spine.detect._generate_detected_clip_thumbnails", side_effect=thumbnails
     ) as thumbs:
         if entry == "source":
@@ -69,7 +69,7 @@ def test_bulk_cancel_during_detection_reports_current_and_remaining(tmp_path):
         cancel.set()
         return source, []
 
-    with patch("core.scene_detect.SceneDetector.detect_scenes", side_effect=detect):
+    with patch("core.scene_detect.SceneDetector.detect_scenes_with_progress", side_effect=detect):
         result = detect_scenes_bulk(project, [source.id, "next"], cancel_event=cancel)
 
     assert result["result"] == {
@@ -100,13 +100,13 @@ def _build_project_with_source(tmp_path: Path, source_id: str = "src-1"):
 
 
 def _stub_detect_returns(source, clips):
-    """Patch SceneDetector.detect_scenes to return a fixed (source, clips)."""
+    """Patch SceneDetector.detect_scenes_with_progress to return a fixed (source, clips)."""
 
-    def fake_detect(self, video_path):
+    def fake_detect(self, video_path, progress_callback):
         return source, clips
 
     return patch(
-        "core.scene_detect.SceneDetector.detect_scenes", new=fake_detect
+        "core.scene_detect.SceneDetector.detect_scenes_with_progress", new=fake_detect
     )
 
 

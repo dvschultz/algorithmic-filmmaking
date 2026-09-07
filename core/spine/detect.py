@@ -26,6 +26,8 @@ import threading
 from pathlib import Path
 from typing import Callable, Optional
 
+from core.operations.detection import DetectionCancelled, DetectionRequest, run_detection
+
 logger = logging.getLogger(__name__)
 
 
@@ -73,7 +75,7 @@ def detect_scenes_for_source(
     Returns ``{"success": bool, "result": {"clips": [...], "skipped": ...}}``
     for happy path, or a structured error dict on failure.
     """
-    from core.scene_detect import DetectionConfig, SceneDetector
+    from core.scene_detect import DetectionConfig
 
     source = project.sources_by_id.get(source_id)
     if source is None:
@@ -103,13 +105,19 @@ def detect_scenes_for_source(
         progress_callback(0.0, f"Detecting scenes in {source.filename}")
 
     config = DetectionConfig(threshold=sensitivity, luma_only=luma_only)
-    detector = SceneDetector(config)
+    request = DetectionRequest.build(source.file_path, config)
 
     if _check_cancel(cancel_event):
         return {"success": False, "error": {"code": "cancelled"}}
 
     try:
-        detected_source, clips = detector.detect_scenes(source.file_path)
+        detected_source, clips = run_detection(
+            request, cancel_event=cancel_event,
+            progress_callback=(lambda p, m: progress_callback(p * 0.8, m))
+            if progress_callback is not None else None,
+        )
+    except DetectionCancelled:
+        return {"success": False, "error": {"code": "cancelled"}}
     except FileNotFoundError as exc:
         return {
             "success": False,
@@ -171,7 +179,7 @@ def detect_scenes_for_video(
     shape: if a source for the resolved file path already exists, its clips
     are replaced; otherwise a new source is added.
     """
-    from core.scene_detect import DetectionConfig, SceneDetector
+    from core.scene_detect import DetectionConfig
 
     video = Path(video_path).expanduser()
     if not video.exists():
@@ -199,11 +207,18 @@ def detect_scenes_for_video(
         return {"success": False, "error": {"code": "cancelled"}}
 
     config = DetectionConfig(threshold=sensitivity, luma_only=luma_only)
-    detector = SceneDetector(config)
+    request = DetectionRequest.build(video, config)
     if progress_callback is not None:
         progress_callback(0.0, f"Detecting scenes in {video.name}")
 
-    detected_source, clips = detector.detect_scenes(video)
+    try:
+        detected_source, clips = run_detection(
+            request, cancel_event=cancel_event,
+            progress_callback=(lambda p, m: progress_callback(p * 0.8, m))
+            if progress_callback is not None else None,
+        )
+    except DetectionCancelled:
+        return {"success": False, "error": {"code": "cancelled"}}
 
     if _check_cancel(cancel_event):
         return {"success": False, "error": {"code": "cancelled"}}

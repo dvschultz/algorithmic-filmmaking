@@ -5,6 +5,8 @@ from typing import Optional
 
 import click
 
+from core.operations.detection import DetectionRequest, run_detection
+
 from core.project_lock import ProjectBusyError
 
 from cli.utils.config import CLIConfig
@@ -357,7 +359,7 @@ def download(
         output_info("Running scene detection...")
 
         try:
-            from core.scene_detect import SceneDetector, DetectionConfig
+            from core.scene_detect import DetectionConfig
             from core.project import save_project
 
             from core.project_lock import project_writer
@@ -374,11 +376,10 @@ def download(
                     use_adaptive=True,
                 )
 
-                detector = SceneDetector(config=detection_config)
                 detect_progress = create_progress_callback("Detecting scenes")
 
-                source, clips = detector.detect_scenes_with_progress(
-                    video_path=result.file_path,
+                source, clips = run_detection(
+                    DetectionRequest.build(result.file_path, detection_config),
                     progress_callback=detect_progress,
                 )
 
