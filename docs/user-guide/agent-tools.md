@@ -37,7 +37,7 @@ The Scene Ripper chat agent has access to 117 tools organized by category. You d
 | `list_sources` | List all imported source videos | "Show me all my sources" |
 | `select_source` | Set the active source | "Switch to the interview source" |
 | `update_source` | Update source metadata | "Mark this source as analyzed" |
-| `remove_source` | Remove a source and its clips | "Remove the first source" |
+| `remove_source` | Remove a source, its clips/frames, and sequence entries; Undo restores them | "Remove the first source" |
 | `list_audio_sources` | List imported audio files (music/podcasts) | "What audio do I have?" |
 | `get_audio_source` | Full audio-source detail incl. transcript | "Show me the transcript for the podcast" |
 | `import_audio_source` | Import an audio file by path | "Import /Music/score.mp3" |

@@ -102,8 +102,8 @@ def test_clear_retains_source_media_for_undo():
     project.add_to_sequence(["c0"])
     project.clear_sequence()
     assert project.source_in_sequences("s1") == [project.sequence.name]
-    with pytest.raises(ValueError, match="undo history"):
-        project.remove_source("s1")
+    project.remove_source("s1")
+    project.session.undo()  # Source removal restores media before Clear is undone.
     project.session.undo()
     assert project.sequence.get_all_clips()[0].source_id in project.sources_by_id
 

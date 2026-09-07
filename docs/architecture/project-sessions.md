@@ -48,19 +48,27 @@ deleting the last sequence creates a stable empty fallback that is also undone.
 frame rates, music paths, and repeat settings. Collection/settings changes publish
 `sequences_changed` followed by `active_sequence_changed` after dirty state settles.
 The Qt adapter forwards these events so dropdowns and the timeline follow agent
-commands and Undo/Redo. Source removal is blocked while an absent sequence in
-history retains it; restoring a sequence with permanently removed clips fails
+commands and Undo/Redo. Restoring a sequence with permanently removed clips fails
 atomically. `core.spine.sequences` supplies listing and management wrappers.
 
 `clear_sequence()` clears all tracks in one reversible command, shared by chat
 and the timeline Clear button. Undo retains original clip objects, gaps, trims,
 and transforms. Empty clears create no history or dirty change. Generation and
 project-reset paths retain their explicit history bypass.
-Source deletion also respects references retained in both sides of clip-edit
-snapshots, including Clear and Remove, until their history is released.
+Source references retained in both sides of clip-edit snapshots remain discoverable.
+
+`remove_source()` and batch `remove_sources()` now retain sources, library clips,
+frames, and affected entries across every sequence in one command. They never
+delete media files. Undo restores original objects and ordering without repeating
+import or analysis; conflicting library or track membership fails atomically.
+The desktop keeps its guard against deleting sources used in live sequences,
+but sources used only in Undo history can be removed: Undo restores the source
+before restoring earlier edits. The `sources_changed` event refreshes library
+views after commit, alongside legacy per-source notifications. Chat and MCP
+delegate through `core.spine.sources`; MCP retains its response and save contract.
 
 This is an incremental U4 migration. Generated sequence population/grouping,
-source removal, and other metadata commands still need migration. Legacy direct model mutations are tracked as
+and other metadata commands still need migration. Legacy direct model mutations are tracked as
 external changes; they are not yet undoable or comprehensively thread-guarded.
 MCP and CLI do not yet expose history tools; the shared spine history functions
 are available to retained headless sessions. Cross-process locks, durable history,

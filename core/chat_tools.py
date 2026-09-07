@@ -1798,42 +1798,9 @@ def remove_source(
     if project is None:
         return {"success": False, "error": "No project loaded"}
 
-    # Find the source
-    source = project.sources_by_id.get(source_id)
-    if source is None:
-        # Try matching by filename
-        for s in project.sources:
-            if s.file_path and (s.file_path.name == source_id or s.file_path.stem == source_id):
-                source = s
-                source_id = s.id
-                break
+    from core.spine.sources import remove_source as remove_source_impl
 
-    if source is None:
-        return {
-            "success": False,
-            "error": f"Source '{source_id}' not found. Use list_sources to see available sources."
-        }
-
-    # Count clips that will be removed
-    clips_to_remove = len([c for c in project.clips if c.source_id == source_id])
-    source_name = source.filename if source.file_path else f"Source {source_id[:8]}"
-
-    # Remove from project
-    try:
-        project.remove_source(source_id)
-    except ValueError as exc:
-        return {"success": False, "error": str(exc)}
-
-    # Update UI if available
-    if main_window:
-        main_window.remove_source_from_library(source_id)
-
-    return {
-        "success": True,
-        "message": f"Removed source '{source_name}' and {clips_to_remove} associated clips",
-        "removed_source": source_name,
-        "removed_clips_count": clips_to_remove,
-    }
+    return remove_source_impl(project, source_id)
 
 
 @tools.register(

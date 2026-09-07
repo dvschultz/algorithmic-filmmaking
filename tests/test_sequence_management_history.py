@@ -91,14 +91,14 @@ def test_delete_before_active_restores_index_and_original_selection():
     assert project.sequences[0] is first and not project.is_dirty
 
 
-def test_deleted_sequence_media_remains_protected_until_history_is_cleared():
+def test_deleted_sequence_media_is_restored_before_sequence_undo():
     project = _make_project_with_clips()
     project.add_to_sequence(["c0"])
     source_id = project.clips[0].source_id
     project.remove_sequence(0)
     assert project.source_in_sequences(source_id)
-    with pytest.raises(ValueError, match="undo history"):
-        project.remove_source(source_id)
+    project.remove_source(source_id)
+    project.session.undo()
     assert source_id in project.sources_by_id
     project.session.undo()
     assert project.sequence.get_all_clips()[0].source_id == source_id

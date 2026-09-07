@@ -890,35 +890,16 @@ class Project:
         self._notify_observers("source_added", source)
 
     def remove_source(self, source_id: str) -> Optional[Source]:
-        """Remove a source by ID.
+        """Remove a source and its references as one reversible edit."""
+        removed = self.remove_sources([source_id])
+        return removed[0] if removed else None
 
-        Also removes all clips associated with this source.
+    def remove_sources(self, source_ids: list[str]) -> list[Source]:
+        """Remove sources, clips, frames and sequence entries without deleting files."""
+        from core.commands.sources import RemoveSources
 
-        Args:
-            source_id: ID of the source to remove
-
-        Returns:
-            The removed source, or None if not found
-        """
-        source = self.sources_by_id.get(source_id)
-        if source is None:
-            return None
-
-        retained = [s for s in self.session.retained_sequences
-                    if not any(current is s for current in self.sequences)]
-        if source_id in self.session.retained_sources or any(
-            c.source_id == source_id for s in retained for c in s.get_all_clips()
-        ):
-            raise ValueError("Source is retained by sequence undo history")
-
-        self._sources.remove(source)
-        # Remove associated clips and frames
-        self._clips = [c for c in self._clips if c.source_id != source_id]
-        self._frames = [f for f in self._frames if f.source_id != source_id]
-        self._invalidate_caches()
-        self.mark_dirty()
-        self._notify_observers("source_removed", source)
-        return source
+        self.session.assert_owner()
+        return self.session.execute(RemoveSources.capture(self, source_ids))
 
     # Fields that can be updated via update_source()
     _UPDATABLE_SOURCE_FIELDS = {"color_profile", "fps", "analyzed", "name"}

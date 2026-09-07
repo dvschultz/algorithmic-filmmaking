@@ -844,6 +844,7 @@ class MainWindow(QMainWindow):
         self._project_adapter.clips_removed.connect(self._on_clips_removed)
         self._project_adapter.source_added.connect(self._on_source_added)
         self._project_adapter.source_updated.connect(self._on_source_updated)
+        self._project_adapter.sources_changed.connect(self._on_sources_changed)
         self._project_adapter.frames_removed.connect(self._on_frames_removed)
         self._project_adapter.sequence_changed.connect(lambda _: self._refresh_timeline_from_project())
         self._project_adapter.sequences_changed.connect(lambda _: self.sequence_tab._sync_sequence_dropdown())
@@ -2128,7 +2129,10 @@ class MainWindow(QMainWindow):
         blocked = {}  # source_id -> list of sequence names
 
         for source_id in source_ids:
-            seq_names = self.project.source_in_sequences(source_id)
+            seq_names = [
+                sequence.name for sequence in self.project.sequences
+                if any(clip.source_id == source_id for clip in sequence.get_all_clips())
+            ]
             if seq_names:
                 source = self.project.sources_by_id.get(source_id)
                 name = source.filename if source else source_id
@@ -2144,9 +2148,9 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 "Cannot Delete",
-                "The following sources are used by sequences or Undo history:\n"
+                "The following sources are used by sequences:\n"
                 + "\n".join(lines)
-                + "\n\nDelete the sequences, then save and reopen the project to release their Undo history.",
+                + "\n\nRemove their sequence entries before deleting these sources.",
             )
 
         if not deletable:
@@ -2163,9 +2167,9 @@ class MainWindow(QMainWindow):
             source_names.append(source.filename if source else sid)
 
         if len(deletable) == 1:
-            msg = f"Delete \"{source_names[0]}\" and its {total_clips} clips?\nThis cannot be undone."
+            msg = f"Delete \"{source_names[0]}\" and its {total_clips} clips?\nYou can Undo this change."
         else:
-            msg = f"Delete {len(deletable)} sources and {total_clips} clips?\nThis cannot be undone."
+            msg = f"Delete {len(deletable)} sources and {total_clips} clips?\nYou can Undo this change."
 
         result = QMessageBox.question(
             self, "Delete Sources", msg,
@@ -2175,9 +2179,7 @@ class MainWindow(QMainWindow):
             return
 
         # Perform deletion
-        for source_id in deletable:
-            self.project.remove_source(source_id)
-            self.collect_tab.remove_source(source_id)
+        self.project.remove_sources(deletable)
 
         # Refresh lookups
         if hasattr(self, "analyze_tab"):
@@ -2187,6 +2189,43 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(
             f"Deleted {len(deletable)} source(s) and {total_clips} clips"
         )
+
+    @Slot(list)
+    def _on_sources_changed(self, source_ids: list):
+        """Project a committed source edit without running import or analysis."""
+        for source_id in source_ids:
+            source = self.project.sources_by_id.get(source_id)
+            if source is None:
+                self.collect_tab.remove_source(source_id)
+            else:
+                self.collect_tab.add_source(source)
+        if self.current_source and self.current_source.id not in self.project.sources_by_id:
+            self._stop_playback()
+            self.current_source = None
+        if self.current_source is None:
+            self.current_source = next(iter(self.project.sources), None)
+        self.cut_tab.set_source(self.current_source)
+        self.cut_tab.set_clip_source_pairs([
+            (clip, self.project.sources_by_id[clip.source_id])
+            for clip in self.project.clips if clip.source_id in self.project.sources_by_id
+        ])
+        self.analyze_tab.set_lookups(self.project.clips_by_id, self.project.sources_by_id)
+        # Analyze membership is workspace state, so retain it in this view while
+        # source history temporarily removes the underlying library objects.
+        retained = getattr(self, "_removed_source_analyze_ids", set())
+        valid = set(self.project.clips_by_id)
+        retained.update(set(self.analyze_tab.get_clip_ids()) - valid)
+        self._removed_source_analyze_ids = retained
+        self.analyze_tab.remove_orphaned_clips(set(self.project.clips_by_id))
+        restored = retained & valid
+        if restored:
+            self.analyze_tab.add_clips(sorted(restored))
+            retained.difference_update(restored)
+        self._auto_include_analyzed_clips(self.project.clips)
+        self.frames_tab.set_sources(self.project.sources)
+        self.frames_tab.update_frame_browser()
+        self._refresh_timeline_from_project()
+        self._update_window_title()
 
     @Slot(list)
     def _on_clips_removed(self, clips: list):
@@ -10482,6 +10521,7 @@ class MainWindow(QMainWindow):
         # Clear UI state
         self.current_source = None
         self._analyze_queue = deque()
+        self._removed_source_analyze_ids = set()
         self._analyze_queue_total = 0
         self._detection_start_time = None
         self._rendered_sequence_preview_path = None

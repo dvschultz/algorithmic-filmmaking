@@ -28,6 +28,7 @@ class ProjectSignalAdapter(QObject):
     source_added = Signal(object)       # Source
     source_removed = Signal(object)     # Source
     source_updated = Signal(object)     # Source
+    sources_changed = Signal(list)     # atomic source removal/restoration
     clips_added = Signal(list)          # list[Clip]
     clips_updated = Signal(list)        # list[Clip]
     clips_removed = Signal(list)        # list[Clip]
@@ -83,6 +84,8 @@ class ProjectSignalAdapter(QObject):
             self.source_removed.emit(data)
         elif event == "source_updated":
             self.source_updated.emit(data)
+        elif event == "sources_changed":
+            self.sources_changed.emit(data)
         elif event == "clips_added":
             self.clips_added.emit(data)
         elif event == "clips_updated":

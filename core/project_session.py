@@ -127,10 +127,13 @@ class ProjectSession:
         self._saved_state = (self._position, self._external_revision)
         self._notify()
 
-    def _publish(self, command: EditCommand[Any]) -> None:
+    def _publish(self, command: EditCommand[Any], *, undo: bool = False) -> None:
         self.project._mutation_generation += 1
         self.project._dirty = self._saved_state != (self._position, self._external_revision)
-        self.project._notify_observers(command.event_name, command.event_data)
+        notifications = getattr(command, "notification_events", None)
+        events = notifications(undo=undo) if notifications else [(command.event_name, command.event_data)]
+        for event, data in events:
+            self.project._notify_observers(event, data)
         if command.event_name == "sequences_changed":
             self.project._notify_observers("active_sequence_changed", self.project.active_sequence_index)
         self._notify()
@@ -169,7 +172,7 @@ class ProjectSession:
             source.pop()
             destination.append(entry)
             self._position = entry.before if undo else entry.after
-            self._publish(entry.command)
+            self._publish(entry.command, undo=undo)
             return entry.command.label
         finally:
             self._busy = False

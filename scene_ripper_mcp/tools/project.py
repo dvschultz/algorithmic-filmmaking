@@ -455,14 +455,13 @@ async def remove_source(
         original_clip_count = len(project.clips)
 
         # Remove the source (also drops associated clips and frames).
-        project.remove_source(source_id)
+        from core.spine.sources import remove_source as remove_source_impl
+
+        result = remove_source_impl(project, source_id)
+        if not result["success"]:
+            return json.dumps(result)
 
         removed_clips = original_clip_count - len(project.clips)
-
-        # Remove from sequence if present
-        if project.sequence is not None:
-            for track in project.sequence.tracks:
-                track.clips = [c for c in track.clips if c.source_id != source_id]
 
         try:
             save_with_mtime_check(project, path, mtime)

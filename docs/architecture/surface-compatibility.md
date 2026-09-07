@@ -153,6 +153,11 @@ clip enable/disable and manual sequence insertion, removal, clearing, reorder, t
 commands, locks, durable jobs, media-time correction, recipes, and the remaining
 interface migrations are still to be implemented.
 
+Source removal now shares reversible library/sequence-reference changes across
+desktop, chat, and MCP. Desktop batch deletion is one edit; Undo restores objects
+and refreshes library views without importing media again. The desktop retains its
+live-sequence deletion guard. MCP response keys and load/save behavior are preserved.
+
 Checkpoint validation:
 
 - `python -m pytest tests/ scene_ripper_mcp/tests/ -q`: 2,832 passed, 2 skipped.
