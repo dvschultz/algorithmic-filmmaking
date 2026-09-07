@@ -190,6 +190,27 @@ media-probe permission error was fixed so it fails one target instead of the
 whole batch. No known color-pilot findings remain; this does not certify the
 unimplemented portions of the plan.
 
+## Description computation cutover
+
+GUI clip/frame descriptions and spine descriptions (including CLI and MCP
+callers) share `core/operations/description.py`. Immutable tasks retain target
+IDs, image paths, source paths, and clip ranges. Provider computation remains in
+`core/analysis/description.py` and loads lazily.
+
+The shared runner admits at most the configured number of tasks (capped at five)
+and serializes local inference. Headless descriptions retain serial scheduling.
+Both surfaces use the existing GUI transient-error classification and up to three
+retries at 2, 5, and 10 seconds; authentication errors are not retried. Cancellation
+interrupts retry waits, stops admission, and suppresses in-flight results while
+waiting for active provider calls to return. Empty or `Error...` provider replies
+are failures on both surfaces. Unexpected per-task failures preserve other results.
+
+GUI startup still owns local-model preloading and completion signals. GUI input
+filtering preserves its existing skip behavior; headless responses retain explicit
+skipped/missing-thumbnail entries. Description publication guards and durable
+computed-result recovery remain pending U7 work, as do custom queries and
+cinematography. This cutover shares computation, not the entire family lifecycle.
+
 ## Transcription batch cutover
 
 GUI clip transcription, spine (including MCP jobs), CLI transcription, and

@@ -58,6 +58,8 @@ SPINE_MODULES: tuple[str, ...] = (
     "core.operations.detection",
     "core.operations.transcription",
     "core.operations.alignment",
+    "core.operations.description",
+    "core.provider_errors",
     "core.spine",
     "core.spine.security",
     "core.spine.url_security",

@@ -5,34 +5,22 @@ using ThreadPoolExecutor for parallelism with retry logic for cloud APIs.
 """
 
 import logging
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import Signal
 
 from core.settings import load_settings
-from ui.workers.base import CancellableWorker, is_transient_provider_error
+from ui.workers.base import CancellableWorker
+from core.operations.description import (
+    DEFAULT_PROMPT,
+    DescriptionTask,
+    DescriptionOptions,
+    DescriptionOutcome,
+    compute_description,
+    run_description,
+)
 
 logger = logging.getLogger(__name__)
-
-# Retry configuration for cloud API rate limits
-_MAX_RETRIES = 3
-_RETRY_DELAYS = [2, 5, 10]  # seconds
-
-
-@dataclass(frozen=True)
-class DescriptionTask:
-    """Immutable task data for thread pool execution."""
-
-    clip_id: str
-    thumbnail_path: Path
-    source_path: Optional[Path]
-    start_frame: int
-    end_frame: int
-    fps: Optional[float]
 
 
 class DescriptionWorker(CancellableWorker):
@@ -71,14 +59,12 @@ class DescriptionWorker(CancellableWorker):
     ):
         super().__init__(parent)
         self._tier = self._resolve_tier(tier)
-        self._prompt = prompt or (
-            "Describe this video frame in 3 sentences or less. "
-            "Focus on the main subjects, action, and setting."
-        )
+        self._prompt = prompt or DEFAULT_PROMPT
         requested_parallelism = min(max(1, parallelism), 5)
         # Local MLX/Moondream inference shares model state and can crash native
         # backends if multiple descriptions run at once.
         self._parallelism = 1 if self._tier == "local" else requested_parallelism
+        self.result: tuple[DescriptionOutcome, ...] = ()
         self.error_count = 0
         self.success_count = 0
         self.last_error: Optional[str] = None
@@ -132,9 +118,7 @@ class DescriptionWorker(CancellableWorker):
                 continue
             image_path = target.image_path
             if not image_path or not image_path.exists():
-                logger.warning(
-                    f"Skipping target {target.id}: image not found"
-                )
+                logger.warning(f"Skipping target {target.id}: image not found")
                 continue
             tasks.append(
                 DescriptionTask(
@@ -151,49 +135,12 @@ class DescriptionWorker(CancellableWorker):
     def _process_task(
         self, task: DescriptionTask
     ) -> tuple[str, Optional[str], Optional[str], Optional[str]]:
-        """Process a single task with retry logic (runs in thread pool).
-
-        Returns:
-            Tuple of (clip_id, description, model_name, error_message)
-        """
-        if self.is_cancelled():
-            return task.clip_id, None, None, "Cancelled"
-
-        from core.analysis.description import describe_frame
-
-        last_error = None
-        for attempt in range(_MAX_RETRIES + 1):
-            if self.is_cancelled():
-                return task.clip_id, None, None, "Cancelled"
-
-            try:
-                description, model = describe_frame(
-                    task.thumbnail_path,
-                    tier=self._tier,
-                    prompt=self._prompt,
-                    source_path=task.source_path,
-                    start_frame=task.start_frame,
-                    end_frame=task.end_frame,
-                    fps=task.fps,
-                )
-
-                if description and not description.startswith("Error"):
-                    return task.clip_id, description, model, None
-                else:
-                    return task.clip_id, None, None, description
-            except Exception as e:
-                last_error = str(e)
-                if is_transient_provider_error(last_error) and attempt < _MAX_RETRIES:
-                    delay = _RETRY_DELAYS[attempt]
-                    logger.warning(
-                        f"Transient description failure for {task.clip_id}, "
-                        f"retry {attempt + 1}/{_MAX_RETRIES} in {delay}s"
-                    )
-                    time.sleep(delay)
-                    continue
-                break
-
-        return task.clip_id, None, None, last_error
+        """Compatibility wrapper for callers testing one detached task."""
+        outcome = compute_description(
+            task, DescriptionOptions(self._tier, self._prompt), self._cancel_event
+        )
+        error = "Cancelled" if outcome.status == "unprocessed" else outcome.message
+        return outcome.clip_id, outcome.description, outcome.model, error
 
     def run(self) -> None:
         """Execute description generation on all clips."""
@@ -243,45 +190,23 @@ class DescriptionWorker(CancellableWorker):
             self._log_cancelled()
             return
 
-        completed = 0
-
-        with ThreadPoolExecutor(max_workers=self._parallelism) as executor:
-            future_to_task = {
-                executor.submit(self._process_task, task): task
-                for task in self._tasks
-            }
-
-            for future in as_completed(future_to_task):
-                if self.is_cancelled():
-                    self._log_cancelled()
-                    for f in future_to_task:
-                        f.cancel()
-                    break
-
-                task = future_to_task[future]
-                completed += 1
-
-                try:
-                    clip_id, description, model, error_msg = future.result()
-
-                    if error_msg and error_msg != "Cancelled":
-                        self._log_error(error_msg, clip_id)
-                        self.error_count += 1
-                        self.last_error = error_msg
-                        self.error.emit(clip_id, error_msg)
-                    elif description:
-                        self.description_ready.emit(clip_id, description, model)
-                        self.success_count += 1
-                except Exception as e:
-                    error_msg = str(e)
-                    self._log_error(error_msg, task.clip_id)
-                    self.error_count += 1
-                    self.last_error = error_msg
-                    self.error.emit(task.clip_id, error_msg)
-
-                self.progress.emit(completed, total)
-
-        logger.info(
-            f"DescriptionWorker.run() completed: "
-            f"{self.success_count} success, {self.error_count} errors"
+        self.result = run_description(
+            tuple(self._tasks),
+            DescriptionOptions(self._tier, self._prompt, self._parallelism),
+            cancel_event=self._cancel_event,
+            on_outcome=self._on_outcome,
+            progress=self.progress.emit,
         )
+
+    def _on_outcome(self, outcome: DescriptionOutcome) -> None:
+        if outcome.status == "failed":
+            message = outcome.message or outcome.code or "Description failed"
+            self._log_error(message, outcome.clip_id)
+            self.error_count += 1
+            self.last_error = message
+            self.error.emit(outcome.clip_id, message)
+        elif outcome.status == "succeeded":
+            self.description_ready.emit(
+                outcome.clip_id, outcome.description, outcome.model
+            )
+            self.success_count += 1

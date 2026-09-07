@@ -9,34 +9,9 @@ from typing import Iterable
 
 from PySide6.QtCore import QThread, Signal
 
+from core.provider_errors import is_transient_provider_error as is_transient_provider_error
+
 logger = logging.getLogger(__name__)
-
-
-def is_transient_provider_error(message: str) -> bool:
-    """Return True for transient cloud/provider failures worth retrying.
-
-    Covers rate limits (429), gateway/server errors (500/502/503/504), and
-    network/timeout failures. Used by VLM/LLM workers (description, custom
-    query) that retry transient failures with exponential backoff.
-    """
-    normalized = message.lower()
-    return (
-        "429" in normalized
-        or "rate limit" in normalized
-        or "too many requests" in normalized
-        or "500" in normalized
-        or "502" in normalized
-        or "503" in normalized
-        or "504" in normalized
-        or "internalservererror" in normalized
-        or "internal error" in normalized
-        or "temporarily unavailable" in normalized
-        or "service unavailable" in normalized
-        or "timeout" in normalized
-        or "timed out" in normalized
-        or "connection" in normalized
-        or "network" in normalized
-    )
 
 
 def summarize_clip_errors(

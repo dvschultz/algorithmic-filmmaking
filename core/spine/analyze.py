@@ -488,51 +488,60 @@ def describe(
     cancel_event: Optional[threading.Event] = None,
 ) -> dict:
     """Generate VLM descriptions for clip thumbnails/video snippets."""
-    from core.analysis.description import describe_frame
-
-    default_prompt = (
-        "Describe this video frame in 3 sentences or less. "
-        "Focus on the main subjects, action, and setting."
+    from core.operations.description import (
+        DEFAULT_PROMPT,
+        DescriptionTask,
+        DescriptionOptions,
+        resolve_tier,
+        run_description,
     )
+
     clips = _resolve_clip_ids(project, clip_ids)
     sources_by_id = project.sources_by_id
+    tasks = []
+    for clip in clips:
+        source = sources_by_id.get(clip.source_id)
+        tasks.append(
+            DescriptionTask(
+                clip.id,
+                _thumbnail_for_clip(clip),
+                source.file_path if source else None,
+                clip.start_frame,
+                clip.end_frame,
+                source.fps if source else None,
+                skip_existing and clip.description is not None,
+            )
+        )
+    total = len(clips)
     succeeded: list[dict] = []
     failed: list[dict] = []
     skipped: list[dict] = []
     updated = []
-    total = len(clips)
 
-    for i, clip in enumerate(clips):
-        if _check_cancel(cancel_event):
-            break
-        if progress_callback is not None and total:
-            progress_callback(i / total, f"Description ({i + 1}/{total}): {clip.id}")
-        if skip_existing and clip.description is not None:
-            skipped.append({"clip_id": clip.id, "reason": "already_populated"})
-            continue
-        thumbnail_path = _thumbnail_for_clip(clip)
-        if thumbnail_path is None:
-            failed.append({"clip_id": clip.id, "code": "thumbnail_missing"})
-            continue
-        source = sources_by_id.get(clip.source_id)
-        try:
-            description, model = describe_frame(
-                thumbnail_path,
-                tier=tier,
-                prompt=prompt or default_prompt,
-                source_path=source.file_path if source else None,
-                start_frame=clip.start_frame,
-                end_frame=clip.end_frame,
-                fps=source.fps if source else None,
-            )
-        except Exception as exc:  # noqa: BLE001
-            failed.append({"clip_id": clip.id, "code": "description_failed", "message": str(exc)})
-            continue
-        clip.description = description
-        clip.description_model = model
-        clip.description_frames = 1
-        updated.append(clip)
-        succeeded.append({"clip_id": clip.id, "model": model})
+    def progress(current: int, count: int) -> None:
+        if progress_callback is not None and count:
+            progress_callback(current / count, f"Description ({current}/{count})")
+
+    outcomes = run_description(
+        tuple(tasks),
+        DescriptionOptions(resolve_tier(tier), prompt or DEFAULT_PROMPT),
+        cancel_event=cancel_event,
+        progress=progress,
+    )
+    for clip, outcome in zip(clips, outcomes):
+        if outcome.status == "skipped":
+            skipped.append({"clip_id": clip.id, "reason": outcome.code})
+        elif outcome.status == "failed":
+            failure = {"clip_id": clip.id, "code": outcome.code}
+            if outcome.message is not None:
+                failure["message"] = outcome.message
+            failed.append(failure)
+        elif outcome.status == "succeeded":
+            clip.description = outcome.description
+            clip.description_model = outcome.model
+            clip.description_frames = 1
+            updated.append(clip)
+            succeeded.append({"clip_id": clip.id, "model": outcome.model})
 
     if updated:
         project.update_clips(updated)

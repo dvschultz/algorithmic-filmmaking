@@ -831,7 +831,7 @@ class TestDescriptionWorkerLifecycle:
 
         monkeypatch.setattr("core.analysis.description.is_model_loaded", lambda: False)
         monkeypatch.setattr("core.analysis.description._load_local_model", load)
-        monkeypatch.setattr(worker, "_process_task", lambda _: pytest.fail("inference"))
+        monkeypatch.setattr("core.analysis.description.describe_frame", lambda *a, **kw: pytest.fail("inference"))
         worker.description_completed.connect(lambda: completed.append(True))
         if not cancel_during_load:
             worker.cancel()
@@ -858,7 +858,7 @@ class TestDescriptionWorkerLifecycle:
             lambda: pytest.fail("cloud must not load local model"),
         )
         monkeypatch.setattr(
-            worker, "_process_task", lambda task: (task.clip_id, "A frame", "cloud", None)
+            "core.analysis.description.describe_frame", lambda *a, **kw: ("A frame", "cloud")
         )
         worker.run()
         assert worker.success_count == 1
@@ -927,7 +927,7 @@ class TestDescriptionWorkerRetries:
 
         monkeypatch.setattr("core.analysis.description.describe_frame", _describe_frame)
         monkeypatch.setattr(
-            "ui.workers.description_worker.time.sleep",
+            worker._cancel_event, "wait",
             lambda delay: sleeps.append(delay),
         )
 
@@ -964,7 +964,7 @@ class TestDescriptionWorkerRetries:
 
         monkeypatch.setattr("core.analysis.description.describe_frame", _describe_frame)
         monkeypatch.setattr(
-            "ui.workers.description_worker.time.sleep",
+            worker._cancel_event, "wait",
             lambda _delay: (_ for _ in ()).throw(
                 AssertionError("auth errors should not sleep for retry")
             ),
