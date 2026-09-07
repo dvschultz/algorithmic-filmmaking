@@ -80,8 +80,8 @@ class AudioLibraryList(QWidget):
         duration_item = QTableWidgetItem(audio.duration_str)
         self._table.setItem(row, self._COL_DURATION, duration_item)
 
-        transcribe_btn = QPushButton("Transcribed" if audio.transcript else "Transcribe")
-        if audio.transcript:
+        transcribe_btn = QPushButton("Transcribed" if audio.transcript is not None else "Transcribe")
+        if audio.transcript is not None:
             transcribe_btn.setEnabled(False)
             transcribe_btn.setToolTip(f"{len(audio.transcript)} segments")
         else:

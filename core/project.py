@@ -1045,6 +1045,18 @@ class Project:
         """Look up an audio source by ID."""
         return self.audio_sources_by_id.get(audio_source_id)
 
+    def set_audio_transcript(self, audio_source_id: str, segments: list) -> None:
+        """Publish an audio transcript, including a successful silent result."""
+        from copy import deepcopy
+
+        self._assert_writable()
+        audio = self.get_audio_source(audio_source_id)
+        if audio is None:
+            raise ValueError(f"Audio source not found: {audio_source_id}")
+        audio.transcript = deepcopy(segments)
+        self.mark_dirty()
+        self._notify_observers("audio_sources_changed", self._audio_sources)
+
     def add_clips(self, clips: list[Clip]) -> None:
         """Add detected clips to the project.
 

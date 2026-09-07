@@ -1,31 +1,26 @@
-"""Worker that transcribes an AudioSource and emits the segments."""
+"""Qt adapter for shared standalone-audio transcription."""
 
-import logging
+from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Signal
 
+from core.operations.audio_transcription import (
+    AudioTranscriptionTask,
+    run_audio_transcription,
+)
+from core.operations.transcription import TranscriptionOptions
 from models.audio_source import AudioSource
 from ui.workers.base import CancellableWorker
 
-logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from core.project import Project
 
 
 class AudioTranscribeWorker(CancellableWorker):
-    """Run Whisper transcription on a single AudioSource.
-
-    Reuses core.transcription.transcribe_video — it accepts any file with
-    an audio stream, including standalone .mp3/.wav files. The worker does
-    not mutate the AudioSource directly; the caller wires `transcript_ready`
-    to assign segments on the main thread.
-
-    Signals:
-        progress: (current, total) during processing
-        transcript_ready: (audio_source_id, segments) on success
-        finished_signal: emitted exactly once on completion or error
-    """
+    """Compute from detached inputs; callers publish on the project owner thread."""
 
     progress = Signal(int, int)
-    transcript_ready = Signal(str, list)  # audio_source_id, list[TranscriptSegment]
+    transcript_ready = Signal(str, list)
     finished_signal = Signal()
 
     def __init__(
@@ -37,55 +32,39 @@ class AudioTranscribeWorker(CancellableWorker):
         segmentation_mode: str = "backend",
         segment_max_seconds: float = 12.0,
         parent=None,
-    ):
+        *,
+        project: "Project | None" = None,
+    ) -> None:
         super().__init__(parent)
-        self._audio_source = audio_source
-        self._model_name = model_name
-        self._language = language
-        self._backend = backend
-        self._segmentation_mode = segmentation_mode
-        self._segment_max_seconds = segment_max_seconds
+        if project is not None:
+            project.session.assert_owner()
+        self.session_id = project.session.session_id if project is not None else None
+        self.task = AudioTranscriptionTask.from_audio(audio_source)
+        self.options = TranscriptionOptions(
+            model=model_name,
+            language=language,
+            backend=backend,
+            segmentation_mode=segmentation_mode,
+            segment_max_seconds=segment_max_seconds,
+        )
 
     def run(self) -> None:
         self._log_start()
         try:
-            if not self._audio_source.file_path.exists():
-                self.error.emit(
-                    f"Audio file is missing on disk: {self._audio_source.file_path.name}"
-                )
-                return
-
-            from core.transcription import transcribe_video
-
-            def progress_cb(fraction: float, _message: str) -> None:
-                if self.is_cancelled():
-                    return
-                # Coarse progress: convert 0..1 fraction to (n, 100)
-                self.progress.emit(int(fraction * 100), 100)
-
-            self.progress.emit(0, 100)
-
-            try:
-                segments = transcribe_video(
-                    self._audio_source.file_path,
-                    model_name=self._model_name,
-                    language=self._language,
-                    backend=self._backend,
-                    segmentation_mode=self._segmentation_mode,
-                    segment_max_seconds=self._segment_max_seconds,
-                    progress_callback=progress_cb,
-                )
-            except Exception as exc:
-                logger.exception("Audio transcription failed")
-                self.error.emit(f"Transcription failed: {exc}")
-                return
-
+            outcome = run_audio_transcription(
+                self.task,
+                self.options,
+                cancel_event=self._cancel_event,
+                progress=self.progress.emit,
+            )
             if self.is_cancelled():
                 self._log_cancelled()
-                return
-
-            self.progress.emit(100, 100)
-            self.transcript_ready.emit(self._audio_source.id, segments)
-            self._log_complete()
+            elif outcome.status == "succeeded":
+                self.transcript_ready.emit(
+                    outcome.audio_source_id, list(outcome.segments)
+                )
+                self._log_complete()
+            elif outcome.status == "failed":
+                self.error.emit(outcome.message or "Audio transcription failed")
         finally:
             self.finished_signal.emit()

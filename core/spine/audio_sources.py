@@ -20,7 +20,7 @@ def list_audio_sources(project) -> dict:
                 "duration_str": a.duration_str,
                 "sample_rate": a.sample_rate,
                 "channels": a.channels,
-                "transcribed": bool(a.transcript),
+                "transcribed": a.transcript is not None,
                 "transcript_segment_count": len(a.transcript) if a.transcript else 0,
             }
         )
@@ -45,7 +45,7 @@ def get_audio_source(project, audio_source_id: str) -> dict:
         }
 
     transcript_payload = None
-    if audio.transcript:
+    if audio.transcript is not None:
         transcript_payload = [
             {
                 "start_time": seg.start_time,

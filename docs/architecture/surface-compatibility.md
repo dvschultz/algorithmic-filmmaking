@@ -887,3 +887,25 @@ durable boundary job and checks its queued input identity before execution.
 Because the legacy model stores one embedding model label per clip, boundary
 publication rejects a populated thumbnail vector with a different or unknown
 model instead of relabeling it. Clear or reanalyze that thumbnail embedding first.
+
+### Standalone audio transcription ownership
+
+The Collect launcher now accepts its project context and delegates computation
+to `core/operations/audio_transcription.py`. Tasks detach the audio ID and path
+and check media identity before and after inference. Cancellation prevents new
+inference and discards late results. The current native provider cannot stop
+mid-call; closing requests cancellation and keeps the window alive until the
+worker returns, after which the user can close again.
+
+Queued delivery applies once through the project session and
+`Project.set_audio_transcript()`. Project/session changes, Save As, replaced or
+edited audio, changed media, and cancelled workers cannot publish transcripts.
+Repeated requests for the same audio/session reuse the active request. Native
+thread completion owns cleanup. Successful empty transcripts remain complete
+in the launcher, audio list, and agent audio-source summaries.
+
+This is the ownership/computation portion of the audio migration. Shared job
+runtime integration, durable audio-result recovery, and audio transcription
+CLI/MCP/GUI-agent dispatch remain U7 work, alongside remaining frame analysis
+and explicit intention-workflow orchestration. Native process isolation remains
+U13 work.

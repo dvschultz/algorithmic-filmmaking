@@ -3182,13 +3182,22 @@ class MainWindow(QMainWindow):
     def _on_audio_transcribe_requested(self, audio_source_id: str):
         """Run Whisper transcription on the selected audio source."""
         from ui.workers.audio_transcribe_worker import AudioTranscribeWorker
+        from ui.workers.audio_transcription_delivery import AudioTranscriptionDelivery
 
         audio = self.project.get_audio_source(audio_source_id)
         if audio is None:
             self.status_bar.showMessage(f"Audio source not found: {audio_source_id}")
             return
-        if audio.transcript:
+        if audio.transcript is not None:
             self.status_bar.showMessage(f"Already transcribed: {audio.filename}")
+            return
+
+        if any(
+            worker.session_id == self.project.session.session_id
+            and worker.task.audio_source_id == audio_source_id
+            for worker in self._active_audio_transcribes
+        ):
+            self.status_bar.showMessage(f"Already transcribing: {audio.filename}")
             return
 
         worker = AudioTranscribeWorker(
@@ -3203,24 +3212,15 @@ class MainWindow(QMainWindow):
         )
         self._active_audio_transcribes.add(worker)
 
-        worker.transcript_ready.connect(self._on_audio_transcript_ready)
-        worker.error.connect(self._on_audio_transcribe_error)
-        worker.finished_signal.connect(
-            lambda w=worker: self._active_audio_transcribes.discard(w)
-        )
+        AudioTranscriptionDelivery(self, worker)
         self.status_bar.showMessage(f"Transcribing {audio.filename}…")
         worker.start()
 
     def _on_audio_transcript_ready(self, audio_source_id: str, segments: list):
-        """Persist the transcript on the AudioSource and notify observers."""
+        """Report a transcript already applied by the owner-bound delivery."""
         audio = self.project.get_audio_source(audio_source_id)
         if audio is None:
             return
-        audio.transcript = segments
-        self.project.mark_dirty()
-        self.project._notify_observers(
-            "audio_sources_changed", self.project.audio_sources
-        )
         self.status_bar.showMessage(
             f"Transcribed {audio.filename}: {len(segments)} segment(s)"
         )
@@ -10629,6 +10629,16 @@ class MainWindow(QMainWindow):
             logger.info("Skipping native shutdown during startup smoke test")
             self.project.close_writer()
             event.accept()
+            return
+
+        audio_workers = tuple(getattr(self, "_active_audio_transcribes", ()))
+        for worker in audio_workers:
+            worker.cancel()
+        if any(worker.isRunning() for worker in audio_workers):
+            self.status_bar.showMessage(
+                "Cancelling audio transcription. Close the window again when it finishes."
+            )
+            event.ignore()
             return
 
         self._source_import_queue.close()
