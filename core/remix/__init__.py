@@ -112,7 +112,7 @@ def generate_sequence(
                    "exclude": drop clips without color data
                    "sort_inline": treat as hue 0 and sort normally
         cancel_event: Stops pending thumbnail embedding batches and discards a
-                   cancelled similarity-chain result. Other algorithms currently
+                   cancelled similarity-chain or Match Cut result. Other algorithms currently
                    check only before dispatch.
 
     Returns:
@@ -327,7 +327,9 @@ def generate_sequence(
     elif algorithm == "match_cut":
         from core.remix.match_cut import match_cut_chain
         # Auto-compute boundary embeddings
-        _auto_compute_boundary_embeddings(clips_to_use)
+        clips_to_use = _auto_compute_boundary_embeddings(clips_to_use, cancel_event=cancel_event)
+        if cancel_event is not None and cancel_event.is_set():
+            return []
         return match_cut_chain(clips_to_use, start_clip_id=None)
 
     elif algorithm == "gaze_sort":
@@ -511,15 +513,26 @@ def _auto_compute_embeddings(
     return snapshots
 
 
-def _auto_compute_boundary_embeddings(clips: List[Tuple[Any, Any]]) -> None:
-    """Compute first/last frame DINOv2 embeddings for clips that don't have them."""
-    needs_compute = any(
-        clip.first_frame_embedding is None or clip.last_frame_embedding is None
-        for clip, source in clips
+def _auto_compute_boundary_embeddings(
+    clips: List[Tuple[Any, Any]], *, cancel_event: Event | None = None
+) -> List[Tuple[Any, Any]]:
+    """Resolve first/last-frame prerequisites on private sequencing snapshots."""
+    from core.operations.boundary_embeddings import (
+        BoundaryEmbeddingTask,
+        run_boundary_embeddings,
     )
-    if not needs_compute:
-        return
 
+    snapshots = deepcopy(clips)
+    cancel = cancel_event or Event()
+    tasks = tuple(
+        BoundaryEmbeddingTask(
+            str(i), source.file_path, clip.start_frame, clip.end_frame, source.fps,
+            skip=clip.first_frame_embedding is not None and clip.last_frame_embedding is not None,
+        )
+        for i, (clip, source) in enumerate(snapshots)
+    )
+    if cancel.is_set() or all(task.skip for task in tasks):
+        return snapshots
     from core.feature_registry import check_feature
 
     available, missing = check_feature("embeddings")
@@ -529,22 +542,14 @@ def _auto_compute_boundary_embeddings(clips: List[Tuple[Any, Any]]) -> None:
             f"Missing: {', '.join(missing)}. "
             "Run embedding analysis first or install dependencies via Settings."
         )
-
-    from core.analysis.embeddings import extract_boundary_embeddings, _EMBEDDING_MODEL_TAG
-
-    for clip, source in clips:
-        if clip.first_frame_embedding is None or clip.last_frame_embedding is None:
-            try:
-                first_emb, last_emb = extract_boundary_embeddings(
-                    source_path=source.file_path,
-                    start_frame=clip.start_frame,
-                    end_frame=clip.end_frame,
-                    fps=source.fps,
-                )
-                clip.first_frame_embedding = first_emb
-                clip.last_frame_embedding = last_emb
-                clip.embedding_model = _EMBEDDING_MODEL_TAG
-            except Exception as e:
-                logger.warning(
-                    f"Failed to compute boundary embeddings for clip {clip.id}: {e}"
-                )
+    outcomes = run_boundary_embeddings(tasks, cancel_event=cancel)
+    for (clip, _), outcome in zip(snapshots, outcomes):
+        if cancel.is_set():
+            break
+        if outcome.status == "succeeded":
+            clip.first_frame_embedding = list(outcome.first)
+            clip.last_frame_embedding = list(outcome.last)
+            clip.embedding_model = outcome.model
+        elif outcome.status == "failed":
+            logger.warning("Boundary embeddings failed for %s: %s", clip.id, outcome.message)
+    return snapshots

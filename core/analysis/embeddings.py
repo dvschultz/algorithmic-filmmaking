@@ -8,6 +8,7 @@ SigLIP 2 for classification). Provides functions for:
 """
 
 import logging
+from contextlib import closing
 import subprocess
 import tempfile
 import threading
@@ -187,6 +188,8 @@ def extract_boundary_embeddings(
     start_frame: int,
     end_frame: int,
     fps: float,
+    *,
+    cancel_event: threading.Event | None = None,
 ) -> tuple[list[float], list[float]]:
     """Extract DINOv2 embeddings of the first and last frames of a clip.
 
@@ -198,6 +201,7 @@ def extract_boundary_embeddings(
         start_frame: Clip start frame number
         end_frame: Clip end frame number
         fps: Video frame rate
+        cancel_event: Cooperative cancellation between frame extraction/inference calls
 
     Returns:
         Tuple of (first_frame_embedding, last_frame_embedding),
@@ -206,6 +210,7 @@ def extract_boundary_embeddings(
     Raises:
         ValueError: If fps is not positive
         RuntimeError: If frame extraction or embedding fails
+        InterruptedError: If cancellation was requested
     """
     if fps <= 0:
         raise ValueError(f"fps must be positive, got {fps}")
@@ -213,12 +218,19 @@ def extract_boundary_embeddings(
     # Last frame: one frame before end
     last_frame_time = max(start_time, (end_frame - 1) / fps)
 
-    first_image = _extract_frame_image(source_path, start_time)
-    last_image = _extract_frame_image(source_path, last_frame_time)
+    def check_cancelled() -> None:
+        if cancel_event is not None and cancel_event.is_set():
+            raise InterruptedError("Boundary embedding extraction cancelled")
 
-    first_emb = _image_to_embedding(first_image)
-    last_emb = _image_to_embedding(last_image)
-
+    check_cancelled()
+    with closing(_extract_frame_image(source_path, start_time)) as first_image:
+        check_cancelled()
+        first_emb = _image_to_embedding(first_image)
+    check_cancelled()
+    with closing(_extract_frame_image(source_path, last_frame_time)) as last_image:
+        check_cancelled()
+        last_emb = _image_to_embedding(last_image)
+    check_cancelled()
     return first_emb, last_emb
 
 

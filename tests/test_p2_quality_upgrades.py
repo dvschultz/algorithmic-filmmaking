@@ -120,12 +120,29 @@ class TestDINOv2Embeddings:
         zero = [0.0] * _EMBEDDING_DIM
         assert len(zero) == 768
 
-    def test_embedding_model_tag_set_in_remix(self):
-        """remix/__init__.py should tag clips with embedding model."""
-        import inspect
-        import core.remix as remix
-        source = inspect.getsource(remix)
-        assert "_EMBEDDING_MODEL_TAG" in source
+    def test_embedding_model_tag_set_in_remix(self, tmp_path, monkeypatch):
+        """Both sequencing prerequisites preserve the computed model identity."""
+        from core.remix import generate_sequence
+        from tests.test_description_operations import project_with_thumbnails
+
+        project = project_with_thumbnails(tmp_path, 1)
+        source = project.sources[0]
+        source.file_path.write_bytes(b"video")
+        clips = [(project.clips[0], source)]
+        monkeypatch.setattr("core.feature_registry.check_feature", lambda _: (True, []))
+        monkeypatch.setattr(
+            "core.analysis.embeddings.extract_clip_embeddings_batch",
+            lambda paths: [[0.1] * 768 for _ in paths],
+        )
+        monkeypatch.setattr(
+            "core.analysis.embeddings.extract_boundary_embeddings",
+            lambda **kwargs: ([0.1] * 768, [0.2] * 768),
+        )
+        monkeypatch.setattr("core.analysis.embeddings.unload_model", lambda: None)
+        for algorithm in ("similarity_chain", "match_cut"):
+            result = generate_sequence(algorithm, clips, 1)
+            assert result[0][0].embedding_model == "dinov2-vit-b-14"
+        assert project.clips[0].embedding_model is None
 
 
 # --- P2.2: Qwen3-VL 4B for local VLM descriptions ---

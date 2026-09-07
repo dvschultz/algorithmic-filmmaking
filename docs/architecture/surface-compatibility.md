@@ -751,3 +751,17 @@ computed; similarity-chain retains its existing fallback for missing embeddings.
 This U7 migration does not yet provide durable sequencer prerequisite jobs.
 Boundary embeddings, the full sequencing operation/recipe migration, and remaining
 analysis workflow migrations are still outstanding.
+
+### Match Cut boundary embedding prerequisites
+
+Match Cut now uses detached clip snapshots and a shared boundary operation.
+First/last vectors are validated as one pair, and source stamps are checked before
+inference and before delivery. Boundary and thumbnail operations share DINOv2
+model ownership. Cancellation stops later clips and is checked between frame
+extraction and inference calls; an active native call must still return first.
+Extracted images are explicitly closed, including on cancellation and errors.
+
+Existing complete boundary pairs retain the skip policy. Failed prerequisites
+retain Match Cut's missing-data fallback. Computed pairs remain local to the
+sequence proposal; durable boundary analysis jobs and sequencer prerequisites
+remain part of the unfinished migration.
