@@ -688,3 +688,26 @@ async def test_sync_transcription_uses_server_result_store(lifespan_ctx, tmp_pat
     receipts = Project.load(path).metadata.job_results
     assert len(receipts) == 1
     assert all(store.get_result(result_id)['committed'] for result_id in receipts)
+
+
+@pytest.mark.asyncio
+async def test_analysis_plan_freezes_submission_and_saves_transcription(lifespan_ctx, tmp_path, monkeypatch):
+    from scene_ripper_mcp.tools import jobs
+    from core.project import Project
+
+    ctx, store, _ = lifespan_ctx
+    path = _make_project_file(tmp_path)
+    captured = {}
+    monkeypatch.setattr(jobs, '_start_job', lambda ctx, **kwargs: captured.update(kwargs) or 'queued')
+    monkeypatch.setattr('core.transcription.transcribe_clip', lambda **_: [])
+    operations = ['transcribe']
+    ids = ['clip-1']
+    assert await jobs.start_analyze_clips(str(path), operations, ids, ctx=ctx) == 'queued'
+    operations.clear()
+    ids.clear()
+    result = captured['run'](lambda *_: None, threading.Event())
+    assert 'transcribe' in result['result']['operations']
+    assert captured['operation'].arguments['clip_ids'] == ['clip-1']
+    receipts = Project.load(path).metadata.job_results
+    assert len(receipts) == 1
+    assert all(store.get_result(result_id)['committed'] for result_id in receipts)

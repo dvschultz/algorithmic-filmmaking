@@ -526,12 +526,25 @@ async def _start_spine_analyze_job(
         )
 
     op_kwargs = op_kwargs or {}
-    runner_factory = _make_analyze_runner(spine_fn_name, **op_kwargs)
-    run = runner_factory(path, mtime, clip_ids)
-
     payload = {"project_path": canonical, "clip_ids": clip_ids}
     if args:
         payload.update(args)
+
+    operation = None
+    if spine_fn_name == "analyze_clips":
+        from core.jobs.analysis import analysis_job_spec, run_analysis_job
+
+        try:
+            operation = analysis_job_spec(_project, arguments=payload)
+        except ValueError as exc:
+            return json.dumps(_wrap_error(exc))
+        store = _lifespan(ctx)["job_store"]
+
+        def run(progress_callback, cancel_event):
+            return run_analysis_job(store, path, operation, progress_callback, cancel_event)
+    else:
+        runner_factory = _make_analyze_runner(spine_fn_name, **op_kwargs)
+        run = runner_factory(path, mtime, clip_ids)
 
     return _start_job(
         ctx,
@@ -541,6 +554,7 @@ async def _start_spine_analyze_job(
         project_mtime_at_start=mtime,
         idempotency_key=idempotency_key,
         run=run,
+        operation=operation,
     )
 
 

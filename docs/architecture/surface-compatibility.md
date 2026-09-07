@@ -236,5 +236,14 @@ reuse pending computations; successful saves advance the count so another
 explicit refresh recomputes even silent output. The initial adapter model is
 never saved over the runner's updated model.
 
-GUI and generic multi-analysis transcription still need durable receipt
-integration; they retain the shared computation and application guards above.
+Generic MCP multi-analysis now shares ordered execution, progress mapping, and
+cancellation with spine analysis through `core/operations/analysis_plan.py`.
+Its saved-project adapter freezes submitted arguments, checks the queued project
+revision, and revalidates transcription media/targets before that step starts.
+Transcription uses the durable runner; other steps save their spine results
+individually. Every following step reloads the saved model, preserving receipts
+and completed work when a later step fails. This is not an atomic whole-plan
+transaction, and other analysis families still need their durable migrations.
+
+GUI transcription still needs durable receipt integration; it retains the
+shared computation and application guards above.

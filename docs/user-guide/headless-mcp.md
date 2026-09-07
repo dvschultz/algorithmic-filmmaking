@@ -460,8 +460,13 @@ these receipts in the shared job cache. CLI `--force` and synchronous MCP retain
 their explicit refresh behavior: a failed save can reuse its pending computation,
 while a successfully saved refresh allows the next request to compute again,
 including for silent clips. CLI runs without `--force` still skip existing
-transcripts. GUI and generic multi-analysis transcription do not yet use these
-durable receipts.
+transcripts. `start_analyze_clips` also uses durable transcription when its
+operation list includes `transcribe`, preserving its skip-existing behavior even
+for transcripts created with another model. It saves between operations and reloads
+the project for following steps, so a later failure does not lose a completed
+transcript or its receipts. Other operations in that list retain their existing
+computation behavior; the full list is not an atomic transaction. GUI
+transcription does not yet use durable receipts.
 
 `start_detect_scenes_bulk` also records computed scenes, saving one source and
 its receipt at a time. Retrying identical inputs reuses the recorded clip IDs;

@@ -99,7 +99,13 @@ def run_transcription_job(
     *,
     operation: OperationSpec | None = None,
     force: bool = False,
+    skip_existing: bool = False,
 ) -> dict:
+    """Recover managed results, or explicitly skip/refresh populated targets.
+
+    ``skip_existing`` preserves every populated transcript, including managed
+    outputs from other models. ``force`` takes precedence for explicit refresh.
+    """
     from core.transcription import _resolve_backend
 
     options = replace(options, backend=_resolve_backend(options.backend))
@@ -192,6 +198,11 @@ def run_transcription_job(
                 )
                 break
             clip = project.clips_by_id[clip_id]
+            if skip_existing and not force and clip.transcript is not None:
+                output["skipped"].append(
+                    {"clip_id": clip_id, "reason": "already_populated"}
+                )
+                continue
             if clip_id in managed and not force:
                 current_segments = (
                     None
