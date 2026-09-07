@@ -666,7 +666,7 @@ def objects(
     try:
         from core.project import Project, ProjectLoadError
         from core.thumbnail import ThumbnailGenerator
-        from core.operations.object_detection import ObjectDetectionOptions, ObjectDetectionTask, run_object_detection
+        from core.operations.object_detection import ObjectDetectionApplication, ObjectDetectionOptions, ObjectDetectionTask, run_object_detection
     except ImportError as e:
         exit_with(ExitCode.DEPENDENCY_MISSING, f"Missing dependency: {e}")
 
@@ -740,15 +740,17 @@ def objects(
                 )
 
                 # Detect objects
+                tasks = (ObjectDetectionTask(clip.id, thumb_path),)
+                options = ObjectDetectionOptions(confidence=confidence)
+                application = ObjectDetectionApplication(project, tasks, options)
                 outcome = run_object_detection(
-                    (ObjectDetectionTask(clip.id, thumb_path),),
-                    ObjectDetectionOptions(confidence=confidence),
+                    tasks, options,
                 )[0]
                 if outcome.status != "succeeded" or outcome.person_count is None:
                     raise RuntimeError(outcome.message or outcome.code or "Object detection failed")
                 detections = outcome.detection_dicts()
-                clip.detected_objects = detections
-                clip.person_count = outcome.person_count
+                if not application.apply(project, outcome):
+                    raise RuntimeError("Object detection target changed during analysis")
                 total_people += clip.person_count
                 analyzed_count += 1
 
@@ -841,7 +843,7 @@ def people(
     try:
         from core.project import Project, ProjectLoadError
         from core.thumbnail import ThumbnailGenerator
-        from core.operations.object_detection import ObjectDetectionOptions, ObjectDetectionTask, run_object_detection
+        from core.operations.object_detection import ObjectDetectionApplication, ObjectDetectionOptions, ObjectDetectionTask, run_object_detection
     except ImportError as e:
         exit_with(ExitCode.DEPENDENCY_MISSING, f"Missing dependency: {e}")
 
@@ -915,14 +917,17 @@ def people(
                 )
 
                 # Count people
+                tasks = (ObjectDetectionTask(clip.id, thumb_path),)
+                options = ObjectDetectionOptions(confidence=confidence, detect_all=False)
+                application = ObjectDetectionApplication(project, tasks, options)
                 outcome = run_object_detection(
-                    (ObjectDetectionTask(clip.id, thumb_path),),
-                    ObjectDetectionOptions(confidence=confidence, detect_all=False),
+                    tasks, options,
                 )[0]
                 if outcome.status != "succeeded" or outcome.person_count is None:
                     raise RuntimeError(outcome.message or outcome.code or "People counting failed")
                 person_count = outcome.person_count
-                clip.person_count = person_count
+                if not application.apply(project, outcome):
+                    raise RuntimeError("People counting target changed during analysis")
                 total_people += person_count
                 analyzed_count += 1
 

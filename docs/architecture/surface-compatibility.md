@@ -518,3 +518,18 @@ failure stops the batch without repeated downloads; untouched targets are
 reported as unprocessed. Existing data-selection and publication policies remain
 at the adapters. Guarded publication and durable object-detection recovery are
 the next U7 migration steps.
+
+### Guarded object-detection publication
+
+Object-detection results now publish through `ObjectDetectionApplication` on the
+project owner's thread. GUI pipeline, agent, and Frames launchers use a queued
+delivery adapter bound to the worker, project session, target type, and active
+pipeline/reply context. CLI and spine use the same application guard. Changed
+media, target replacement, changed source/range, edits to output fields, and
+duplicate replies cannot overwrite newer state. Unrelated notes remain intact.
+
+People-only analysis checks `person_count` when skipping existing results and
+updates only that field. Full object analysis updates both detections and count.
+Frames persist person counts, including zero; both clips and frames preserve a
+valid empty detections list across save/load. Missing analysis remains `None`.
+Durable object-detection result recovery remains the next U7 step.

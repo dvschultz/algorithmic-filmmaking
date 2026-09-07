@@ -3589,7 +3589,8 @@ class MainWindow(QMainWindow):
         logger.info(f"Creating ObjectDetectionWorker (pipeline) for {len(clips)} clips...")
         self.detection_worker_yolo = ObjectDetectionWorker(clips, parallelism=self.settings.local_model_parallelism)
         self.detection_worker_yolo.progress.connect(self._on_object_detection_progress)
-        self.detection_worker_yolo.objects_ready.connect(self._on_objects_ready)
+        from ui.workers.object_detection_delivery import ObjectDetectionDelivery
+        ObjectDetectionDelivery(self, self.detection_worker_yolo, pipeline=True)
         self.detection_worker_yolo.error.connect(self._on_object_detection_error)
         bind_pipeline_completion(
             self, self.detection_worker_yolo, "detection_worker_yolo",
@@ -6760,7 +6761,8 @@ class MainWindow(QMainWindow):
                 parallelism=self.settings.local_model_parallelism,
             )
             worker.progress.connect(self._on_object_detection_progress)
-            worker.objects_ready.connect(self._on_objects_ready)
+            from ui.workers.object_detection_delivery import ObjectDetectionDelivery
+            ObjectDetectionDelivery(self, worker, worker_attribute="_frame_detect_worker")
             worker.error.connect(self._on_object_detection_error)
             worker.detection_completed.connect(
                 lambda: self._on_frame_analysis_op_finished("detect_objects")
@@ -7909,7 +7911,8 @@ class MainWindow(QMainWindow):
         from PySide6.QtCore import Qt
         self.detection_worker_yolo = ObjectDetectionWorker(clips, confidence=confidence, detect_all=detect_all, parallelism=self.settings.local_model_parallelism)
         self.detection_worker_yolo.progress.connect(self._on_object_detection_progress)
-        self.detection_worker_yolo.objects_ready.connect(self._on_objects_ready)
+        from ui.workers.object_detection_delivery import ObjectDetectionDelivery
+        ObjectDetectionDelivery(self, self.detection_worker_yolo)
         self.detection_worker_yolo.error.connect(self._on_object_detection_error)
         completion = AgentAnalysisCompletion(
             self, self.detection_worker_yolo, "detection_worker_yolo", self._on_agent_object_detection_finished
@@ -8234,21 +8237,6 @@ class MainWindow(QMainWindow):
                 task = "objects" if detect_all else "people"
                 self.status_bar.showMessage(f"Detecting {task}: {current}/{total} clips...")
             self.progress_bar.setValue(int(current / total * 100))
-
-    @Slot(str, list, int)
-    def _on_objects_ready(self, clip_id: str, detections: list, person_count: int):
-        """Handle object detection results for a single clip or frame."""
-        clip = self.project.clips_by_id.get(clip_id)
-        if clip:
-            clip.detected_objects = detections
-            clip.person_count = person_count
-            logger.debug(f"Detection for {clip_id}: {len(detections)} objects, {person_count} people")
-            return
-        # Try frame
-        frame = self.project.frames_by_id.get(clip_id)
-        if frame:
-            self.project.update_frame(clip_id, detected_objects=detections)
-            logger.debug(f"Detection for frame {clip_id}: {len(detections)} objects, {person_count} people")
 
     @Slot()
     def _on_agent_object_detection_finished(self, *, reply: GuiToolReply | None = None) -> None:

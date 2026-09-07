@@ -428,7 +428,7 @@ class Clip:
         # Content analysis fields
         if self.object_labels is not None:
             data["object_labels"] = list(self.object_labels)
-        if self.detected_objects:
+        if self.detected_objects is not None:
             data["detected_objects"] = self.detected_objects
         if self.face_embeddings:
             data["face_embeddings"] = [

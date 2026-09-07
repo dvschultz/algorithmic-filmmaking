@@ -74,7 +74,10 @@ class ObjectDetectionWorker(CancellableWorker):
         """Build immutable task list from clips."""
         tasks = []
         for clip in clips:
-            if skip_existing and clip.detected_objects is not None:
+            existing = (
+                clip.detected_objects if self.options.detect_all else clip.person_count
+            )
+            if skip_existing and existing is not None:
                 continue
             if not clip.thumbnail_path or not clip.thumbnail_path.exists():
                 logger.warning(f"Skipping clip {clip.id}: thumbnail not found")
@@ -93,7 +96,12 @@ class ObjectDetectionWorker(CancellableWorker):
         """Build immutable task list from AnalysisTarget objects."""
         tasks = []
         for target in targets:
-            if skip_existing and target.detected_objects is not None:
+            existing = (
+                target.detected_objects
+                if self.options.detect_all
+                else target.person_count
+            )
+            if skip_existing and existing is not None:
                 continue
             image_path = target.image_path
             if not image_path or not image_path.exists():
@@ -160,11 +168,17 @@ class ObjectDetectionWorker(CancellableWorker):
             )
             if errors and not self.is_cancelled():
                 model_failure = next(
-                    (outcome for outcome in self.result if outcome.code == "model_load_failed"),
+                    (
+                        outcome
+                        for outcome in self.result
+                        if outcome.code == "model_load_failed"
+                    ),
                     None,
                 )
                 if model_failure is not None:
-                    self.error.emit(model_failure.message or "Object detection model unavailable")
+                    self.error.emit(
+                        model_failure.message or "Object detection model unavailable"
+                    )
                 else:
                     self.error.emit(_summarize_errors(errors))
         except Exception as exc:

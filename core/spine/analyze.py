@@ -373,22 +373,23 @@ def detect_objects(
     cancel_event: Optional[threading.Event] = None,
 ) -> dict:
     """Detect objects and person count on clip thumbnails."""
-    from core.operations.object_detection import ObjectDetectionOptions, ObjectDetectionTask, run_object_detection
+    from core.operations.object_detection import ObjectDetectionApplication, ObjectDetectionOptions, ObjectDetectionTask, run_object_detection
 
     clips = _resolve_clip_ids(project, clip_ids)
     clips_by_id = {clip.id: clip for clip in clips}
     result = {"succeeded": [], "failed": [], "skipped": [], "unprocessed": [], "total_clips": len(clips)}
-    updated = []
     tasks = tuple(ObjectDetectionTask(clip.id, _thumbnail_for_clip(clip),
-        skip=skip_existing and clip.detected_objects is not None) for clip in clips)
+        skip=skip_existing and (clip.detected_objects if detect_all else clip.person_count) is not None) for clip in clips)
+    options = ObjectDetectionOptions(confidence, detect_all)
+    application = ObjectDetectionApplication(project, tasks, options)
 
     def deliver(outcome):
         clip = clips_by_id[outcome.clip_id]
         if outcome.status == "succeeded":
-            clip.detected_objects = outcome.detection_dicts()
-            clip.person_count = outcome.person_count
-            updated.append(clip)
-            result["succeeded"].append({"clip_id": clip.id, "object_count": len(outcome.detections), "person_count": outcome.person_count})
+            if application.apply(project, outcome):
+                result["succeeded"].append({"clip_id": clip.id, "object_count": len(outcome.detections), "person_count": outcome.person_count})
+            else:
+                result["failed"].append({"clip_id": clip.id, "code": "stale_result"})
         elif outcome.status == "skipped":
             result["skipped"].append({"clip_id": clip.id, "reason": outcome.code})
         elif outcome.status == "failed":
@@ -401,12 +402,10 @@ def detect_objects(
         if progress_callback:
             progress_callback(current / total if total else 1.0, f"Object detection ({current}/{total})")
 
-    outcomes = run_object_detection(tasks, ObjectDetectionOptions(confidence, detect_all),
+    outcomes = run_object_detection(tasks, options,
         cancel_event=cancel_event, on_outcome=deliver, progress=report)
     result["unprocessed"] = [{"clip_id": outcome.clip_id, "code": outcome.code}
         for outcome in outcomes if outcome.status == "unprocessed"]
-    if updated:
-        project.update_clips(updated)
     if progress_callback:
         progress_callback(1.0, f"Done: {len(result['succeeded'])} ok, {len(result['failed'])} failed, {len(result['skipped'])} skipped")
     return {"success": True, "result": result}

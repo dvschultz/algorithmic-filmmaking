@@ -53,6 +53,7 @@ class Frame:
     tags: list[str] = field(default_factory=list)
     notes: str = ""
     object_labels: Optional[list[str]] = None
+    person_count: Optional[int] = None
 
     def display_name(self) -> str:
         """Get a human-readable display name for this frame.
@@ -111,8 +112,10 @@ class Frame:
             data["description"] = self.description
         if self.description_model:
             data["description_model"] = self.description_model
-        if self.detected_objects:
+        if self.detected_objects is not None:
             data["detected_objects"] = self.detected_objects
+        if self.person_count is not None:
+            data["person_count"] = self.person_count
         if self.object_labels is not None:
             data["object_labels"] = list(self.object_labels)
         if self.extracted_texts:
@@ -201,6 +204,7 @@ class Frame:
             description_model=data.get("description_model"),
             detected_objects=data.get("detected_objects"),
             object_labels=data.get("object_labels"),
+            person_count=data.get("person_count"),
             extracted_texts=extracted_texts,
             cinematography=cinematography,
             tags=data.get("tags", []),

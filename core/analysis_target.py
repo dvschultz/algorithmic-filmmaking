@@ -36,6 +36,7 @@ class AnalysisTarget:
     object_labels: Optional[list] = None
     extracted_texts: Optional[list] = None
     cinematography: object = None
+    person_count: Optional[int] = None
 
     @classmethod
     def from_clip(cls, clip: "Clip", source: "Optional[Source]") -> "AnalysisTarget":
@@ -60,6 +61,7 @@ class AnalysisTarget:
             object_labels=clip.object_labels,
             extracted_texts=clip.extracted_texts,
             cinematography=clip.cinematography,
+            person_count=clip.person_count,
         )
 
     @classmethod
@@ -84,4 +86,5 @@ class AnalysisTarget:
             object_labels=frame.object_labels,
             extracted_texts=frame.extracted_texts,
             cinematography=frame.cinematography,
+            person_count=frame.person_count,
         )

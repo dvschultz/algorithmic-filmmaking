@@ -107,7 +107,7 @@ def test_gui_and_spine_share_parameters_and_results(tmp_path, monkeypatch, detec
     provider = objects if detect_all else people
     assert provider.call_count == 2
     assert provider.call_args.kwargs == {"confidence_threshold": 0.4}
-    assert project.clips[0].detected_objects == emitted[0][1]
+    assert project.clips[0].detected_objects == (emitted[0][1] if detect_all else None)
     assert (
         result["succeeded"][0]["person_count"]
         == emitted[0][2]
