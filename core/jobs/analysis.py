@@ -17,6 +17,15 @@ from core.spine.project_io import load_with_mtime, project_writer, save_with_mti
 
 def analysis_job_spec(project: Project, *, arguments: dict) -> OperationSpec:
     inputs = {}
+    if "custom_query" in (arguments.get("operations") or []):
+        from core.jobs.custom_query import custom_query_job_spec
+        from core.operations.custom_query import resolve_options
+
+        custom_query = custom_query_job_spec(
+            project, arguments.get("clip_ids"), resolve_options(),
+            arguments={"query": arguments.get("query")},
+        )
+        inputs["custom_query"] = json.loads(custom_query.inputs_json)
     if "describe" in (arguments.get("operations") or []):
         from core.jobs.description import description_job_spec
         from core.operations.description import resolve_options
@@ -69,6 +78,7 @@ def run_analysis_job(
         captured = json.loads(operation.inputs_json)
         transcription = captured.get("transcription")
         description = captured.get("description")
+        custom_query = captured.get("custom_query")
         options = (
             TranscriptionOptions(**transcription["options"]) if transcription else None
         )
@@ -78,6 +88,22 @@ def run_analysis_job(
                 raise StaleJobResult("Analysis inputs changed while the job was queued")
 
         def execute(op: str, report: Progress | None) -> dict:
+            if op == "custom_query":
+                from core.jobs.custom_query import custom_query_job_spec, run_custom_query_job
+                from core.operations.custom_query import CustomQueryOptions
+
+                if custom_query is None:
+                    raise StaleJobResult("Analysis job has no captured custom-query options")
+                current, _ = load_with_mtime(path)
+                step = custom_query_job_spec(
+                    current, ids, CustomQueryOptions(**custom_query["options"]),
+                    arguments={"query": arguments.get("query")},
+                )
+                if json.loads(step.inputs_json) != custom_query:
+                    raise StaleJobResult("Custom-query inputs changed before analysis")
+                return run_custom_query_job(
+                    store, path, ids, report or (lambda *_: None), cancel, operation=step,
+                )
             if op == "describe":
                 from core.jobs.description import description_job_spec, run_description_job
                 from core.operations.description import DescriptionOptions
@@ -113,8 +139,6 @@ def run_analysis_job(
             # its result receipts. Unmigrated steps retain their spine provider.
             current, mtime = load_with_mtime(path)
             kwargs: dict[str, object] = {"skip_existing": True}
-            if op == "custom_query":
-                kwargs = {"skip_existing": False, "query": arguments.get("query")}
             result = ANALYZE_CLIP_OPERATION_MAP[op](
                 current,
                 ids,

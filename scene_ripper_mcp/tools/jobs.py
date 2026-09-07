@@ -562,6 +562,23 @@ async def _start_spine_analyze_job(
                 progress_callback, cancel_event, operation=operation,
                 force=operation.arguments.get("force", False),
             )
+    elif spine_fn_name == "custom_query":
+        from core.jobs.custom_query import custom_query_job_spec, run_custom_query_job
+        from core.operations.custom_query import resolve_options
+
+        try:
+            operation = custom_query_job_spec(
+                _project, clip_ids, resolve_options(payload.get("tier")), arguments=payload,
+            )
+        except ValueError as exc:
+            return json.dumps(_wrap_error(exc))
+        store = _lifespan(ctx)["job_store"]
+
+        def run(progress_callback, cancel_event):
+            return run_custom_query_job(
+                store, path, operation.arguments["clip_ids"],
+                progress_callback, cancel_event, operation=operation,
+            )
     elif spine_fn_name == "align_words":
         from core.jobs.alignment import alignment_job_spec, run_alignment_job
 

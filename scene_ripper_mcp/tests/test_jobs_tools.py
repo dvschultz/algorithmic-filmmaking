@@ -13,7 +13,7 @@ import json
 import threading
 import time
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -537,40 +537,50 @@ async def test_describe_queue_pins_options_and_media(lifespan_ctx, tmp_path, mon
 
 
 @pytest.mark.asyncio
-async def test_start_analyze_clips_uses_canonical_operation_map(
+async def test_custom_query_submission_pins_options_and_records_results(lifespan_ctx, tmp_path, monkeypatch):
+    from core.project import Project
+    from core.settings import Settings
+    from scene_ripper_mcp.tools import jobs
+    ctx, store, _runtime = lifespan_ctx
+    path = _make_project_file(tmp_path)
+    project = Project.load(path)
+    thumbnail = tmp_path / "thumb.jpg"
+    thumbnail.write_bytes(b"image")
+    project.clips[0].thumbnail_path = thumbnail
+    assert project.save()
+    settings = Settings(description_model_tier="cloud", description_model_cloud="original")
+    monkeypatch.setattr("core.settings.load_settings", lambda: settings)
+    captured = {}
+    monkeypatch.setattr(jobs, "_start_job", lambda ctx, **kwargs: captured.update(kwargs) or "queued")
+    compute = Mock(return_value=(True, 0.9, "original"))
+    monkeypatch.setattr("core.analysis.custom_query.evaluate_custom_query", compute)
+    ids = ["clip-1"]
+    assert await jobs.start_custom_query(str(path), "person", ids, ctx=ctx) == "queued"
+    ids.clear()
+    settings.description_model_cloud = "replacement"
+    result = captured["run"](lambda *_: None, threading.Event())
+    assert result["result"]["succeeded"][0]["query"] == "person"
+    assert compute.call_args.kwargs["model_name"] == "original"
+    saved = Project.load(path)
+    assert len(saved.metadata.job_results) == 1
+    assert all(store.get_result(rid)["committed"] for rid in saved.metadata.job_results)
+
+
+@pytest.mark.asyncio
+async def test_start_analyze_clips_uses_durable_custom_query(
     lifespan_ctx, tmp_path, monkeypatch
 ):
-    from core.project import load_project
-    from core.spine import analyze as analyze_module
+    from core.project import Project, load_project
 
     ctx, store, _runtime = lifespan_ctx
     project_path = _make_project_file(tmp_path)
 
-    def fake_custom_query(project, clip_ids=None, query=None, **_kwargs):
-        clip = project.clips_by_id["clip-1"]
-        clip.custom_queries = [
-            {
-                "query": query,
-                "match": True,
-                "confidence": 0.91,
-                "model": "fake-vlm",
-            }
-        ]
-        return {
-            "success": True,
-            "result": {
-                "succeeded": [{"clip_id": clip.id, "query": query, "match": True}],
-                "failed": [],
-                "skipped": [],
-                "total_clips": 1,
-            },
-        }
-
-    monkeypatch.setitem(
-        analyze_module.ANALYZE_CLIP_OPERATION_MAP,
-        "custom_query",
-        fake_custom_query,
-    )
+    project = Project.load(project_path)
+    thumbnail = tmp_path / "thumb.jpg"
+    thumbnail.write_bytes(b"image")
+    project.clips[0].thumbnail_path = thumbnail
+    assert project.save()
+    monkeypatch.setattr("core.analysis.custom_query.evaluate_custom_query", lambda **_: (True, 0.91, "fake-vlm"))
 
     out = json.loads(
         await start_analyze_clips(
@@ -584,6 +594,7 @@ async def test_start_analyze_clips_uses_canonical_operation_map(
     assert out["success"] is True
     _wait_for_status(store, out["task_id"], STATUS_COMPLETED)
 
+    assert len(Project.load(project_path).metadata.job_results) == 1
     _sources, clips, *_ = load_project(project_path)
     assert clips[0].custom_queries == [
         {

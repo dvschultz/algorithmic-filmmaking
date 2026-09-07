@@ -174,6 +174,13 @@ Analyze tab: `colors`, `shots`, `classify`, `detect_objects`,
 `face_embeddings`, `gaze`, `embeddings`, and `custom_query`. When using
 `custom_query`, pass the query text in the `query` argument.
 
+Custom-query jobs save computed results before publishing them to the project.
+Retrying after a failed project save reuses matching results; retrying a failed
+cache checkpoint does not append them twice. A new request after successful
+completion still appends a fresh query result. Query text, provider model, and
+media identity are captured when the job is submitted. This also applies to
+custom-query steps in `start_analyze_clips`.
+
 `start_describe` and `describe` steps in `start_analyze_clips` retain computed
 results before saving them to the project. Retrying after a failed save reuses
 matching results rather than calling the provider again. Model, prompt, input mode,

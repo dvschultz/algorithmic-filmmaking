@@ -276,7 +276,17 @@ Spine calls report rejected results as `stale_result`. GUI delivery also checks 
 launching worker, pipeline run, cancellation, and agent request before publication;
 the main-window callback only refreshes views. Frame tasks cannot resolve through
 a colliding clip ID: the Frame model has no custom-query storage yet. Durable
-custom-query result recovery remains pending U7 work.
+GUI custom-query result recovery remains pending U7 work.
+
+Dedicated MCP custom-query jobs and custom-query steps in analysis plans now use
+`core/jobs/custom_query.py`. Submission captures the query, model, media identity,
+and backend provenance. Computation is recorded before one project save publishes
+the request's successful appends and receipts together. A failed save reuses those
+results; a failed checkpoint reconciles the exact saved append without inference
+or duplication. After successful completion, a later request appends a fresh
+result as before. Manual edits become inputs to the next append. Missing committed
+payloads fail without repeating paid computation. Later analysis steps reload the
+saved model so they cannot overwrite custom-query receipts with older state.
 
 ## Transcription batch cutover
 
