@@ -351,15 +351,19 @@ def test_launch_worker_emits_pipeline_completion(
         _build_fake_worker(completion_signal, extra_signals),
     )
 
-    class Harness:
+    from PySide6.QtCore import QObject
+    from core.project import Project
+
+    class Harness(QObject):
         def __init__(self):
+            super().__init__()
             self.settings = SimpleNamespace(
                 color_analysis_parallelism=2,
                 local_model_parallelism=1,
                 description_model_tier="cloud",
                 description_parallelism=2,
             )
-            self.project = SimpleNamespace(sources_by_id={})
+            self.project = Project.new()
             self.sources_by_id = {}
             self.finished_ops = []
             self.color_worker = None

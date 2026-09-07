@@ -30,13 +30,13 @@ class TextExtractionWorker(CancellableWorker):
     Signals:
         progress: Emitted with (current, total, clip_id) during processing
         clip_completed: Emitted with (clip_id, extracted_texts) when a clip finishes
-        finished: Emitted with {clip_id: [ExtractedText, ...]} when all complete
+        extraction_completed: Emitted with {clip_id: [ExtractedText, ...]} when all complete
         error: Emitted with error message string on failure (inherited)
     """
 
     progress = Signal(int, int, str)  # current, total, clip_id
     clip_completed = Signal(str, list)  # clip_id, extracted_texts
-    finished = Signal(dict)  # {clip_id: [ExtractedText, ...]}
+    extraction_completed = Signal(dict)  # {clip_id: [ExtractedText, ...]}
 
     def __init__(
         self,
@@ -132,7 +132,7 @@ class TextExtractionWorker(CancellableWorker):
             logger.info(f"Text extraction complete: {len(results)} clips processed")
             if errors:
                 self.error.emit(_summarize_errors(errors))
-            self.finished.emit(results)
+            self.extraction_completed.emit(results)
             self._log_complete()
 
     def _run_targets(self):
@@ -192,5 +192,5 @@ class TextExtractionWorker(CancellableWorker):
             logger.info(f"Text extraction complete: {len(results)} targets processed")
             if errors:
                 self.error.emit(_summarize_errors(errors))
-            self.finished.emit(results)
+            self.extraction_completed.emit(results)
             self._log_complete()

@@ -477,7 +477,7 @@ class ExquisiteCorpusDialog(QDialog):
             parent=self,
         )
         self.worker.progress.connect(self._on_extraction_progress, Qt.UniqueConnection)
-        self.worker.finished.connect(self._on_extraction_finished, Qt.UniqueConnection)
+        self.worker.extraction_completed.connect(self._on_extraction_finished, Qt.UniqueConnection)
         self.worker.error.connect(self._on_extraction_error, Qt.UniqueConnection)
         self.worker.start()
 

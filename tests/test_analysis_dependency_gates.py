@@ -12,6 +12,7 @@ def test_pipeline_skips_blocked_operations_and_runs_remaining():
         def __init__(self):
             self._gui_state = SimpleNamespace(set_processing=lambda *_args: None)
             self.analyze_tab = SimpleNamespace(set_analyzing=lambda *_args: None)
+            self.project = SimpleNamespace(session=SimpleNamespace(session_id="session"))
             self.started = False
 
         def _filter_available_analysis_operations(self, operations, **_kwargs):

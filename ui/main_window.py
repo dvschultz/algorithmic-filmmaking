@@ -86,6 +86,9 @@ from ui.chat_panel import ChatPanel
 from ui.workers.chat_delivery import ChatDelivery, stop_chat_workers
 from ui.workers.detection_thumbnail_delivery import DetectionThumbnailDelivery
 from ui.workers.export_delivery import ExportDelivery
+from ui.workers.analysis_pipeline_delivery import (
+    AnalysisPipelineRun, bind_pipeline_completion, pipeline_can_continue,
+)
 from ui.workers.gui_tool_reply import (
     AgentAnalysisCompletion, GuiToolReply, gui_reply_scope,
 )
@@ -641,7 +644,6 @@ class MainWindow(QMainWindow):
         self._pending_agent_classification = False
         self._pending_agent_object_detection = False
         self._pending_agent_description = False
-        self._pending_agent_analyze_all = False
         self._agent_color_clips: list = []
         self._agent_shot_clips: list = []
         self._agent_transcription_clips: list = []
@@ -3385,7 +3387,7 @@ class MainWindow(QMainWindow):
         operations: list[str],
         *,
         force_rerun: bool = False,
-    ):
+    ) -> bool:
         """Central entry point for running analysis operations.
 
         Organizes operations into phases (local → sequential → cloud) and
@@ -3401,8 +3403,11 @@ class MainWindow(QMainWindow):
             force_rerun: Clear selected operation results before dispatch so
                 workers process clips even when prior results exist.
         """
+        reply = getattr(self, "_dispatch_gui_reply", None)
+        session_id = self.project.session.session_id
+        previous_run = getattr(self, "_analysis_run", None)
         if not clips or not operations:
-            return
+            return False
 
         # Disabled clips are excluded from analysis the same way they're
         # excluded from sequence/export. They keep any prior analysis fields
@@ -3412,7 +3417,7 @@ class MainWindow(QMainWindow):
         if skipped:
             logger.info("Skipping %d disabled clip(s) from analysis pipeline", skipped)
         if not enabled_clips:
-            return
+            return False
         clips = enabled_clips
 
         # Custom Query needs query text — prompt if not already set (e.g., from agent tool)
@@ -3427,13 +3432,23 @@ class MainWindow(QMainWindow):
                 # User cancelled — remove custom_query from operations
                 operations = [op for op in operations if op != "custom_query"]
                 if not operations:
-                    return
+                    return False
 
         # Validate operation keys
         valid_ops = [op for op in operations if op in OPERATIONS_BY_KEY]
         valid_ops = self._filter_available_analysis_operations(valid_ops)
         if not valid_ops:
-            return
+            return False
+
+        # Dependency prompts can run a nested event loop and replace the request.
+        if self.project.session.session_id != session_id or (
+            reply is not None and not reply.is_current(self)
+        ):
+            return False
+        if getattr(self, "_analysis_run", None) is not previous_run:
+            return False
+        valid_ops = list(dict.fromkeys(valid_ops))
+        self._analysis_run = AnalysisPipelineRun(session_id, reply)
 
         if force_rerun:
             cleared = clear_operation_results(clips, valid_ops)
@@ -3470,8 +3485,12 @@ class MainWindow(QMainWindow):
         # Start first phase
         self._start_next_analysis_phase()
 
+        return True
+
     def _start_next_analysis_phase(self):
         """Start the next phase in the analysis pipeline."""
+        if not pipeline_can_continue(self):
+            return
         if not self._analysis_pending_phases:
             # All phases done
             self._on_analysis_pipeline_complete()
@@ -3518,6 +3537,8 @@ class MainWindow(QMainWindow):
             op_key: Operation key (e.g., "colors", "shots")
             clips: List of clips to process
         """
+        if not pipeline_can_continue(self):
+            return
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 100)
 
@@ -3562,11 +3583,10 @@ class MainWindow(QMainWindow):
         self.color_worker.result_ready.connect(self._on_color_result)
         self.color_worker.job_started.connect(self._on_color_job_started)
         self.color_worker.error.connect(self._on_color_error)
-        self.color_worker.analysis_completed.connect(
-            self._on_pipeline_colors_finished, Qt.UniqueConnection
+        bind_pipeline_completion(
+            self, self.color_worker, "color_worker",
+            self.color_worker.analysis_completed, self._on_pipeline_colors_finished,
         )
-        self.color_worker.finished.connect(self.color_worker.deleteLater)
-        self.color_worker.finished.connect(lambda: setattr(self, 'color_worker', None))
         self.color_worker.start()
 
     def _launch_shots_worker(self, clips: list):
@@ -3578,11 +3598,10 @@ class MainWindow(QMainWindow):
         self.shot_type_worker.progress.connect(self._on_shot_type_progress)
         self.shot_type_worker.shot_type_ready.connect(self._on_shot_type_ready)
         self.shot_type_worker.error.connect(self._on_shot_type_error)
-        self.shot_type_worker.analysis_completed.connect(
-            self._on_pipeline_shots_finished, Qt.UniqueConnection
+        bind_pipeline_completion(
+            self, self.shot_type_worker, "shot_type_worker",
+            self.shot_type_worker.analysis_completed, self._on_pipeline_shots_finished,
         )
-        self.shot_type_worker.finished.connect(self.shot_type_worker.deleteLater)
-        self.shot_type_worker.finished.connect(lambda: setattr(self, 'shot_type_worker', None))
         self.shot_type_worker.start()
 
     def _launch_classification_worker(self, clips: list):
@@ -3594,11 +3613,10 @@ class MainWindow(QMainWindow):
         self.classification_worker.progress.connect(self._on_classification_progress)
         self.classification_worker.labels_ready.connect(self._on_classification_ready)
         self.classification_worker.error.connect(self._on_classification_error)
-        self.classification_worker.classification_completed.connect(
-            self._on_pipeline_classify_finished, Qt.UniqueConnection
+        bind_pipeline_completion(
+            self, self.classification_worker, "classification_worker",
+            self.classification_worker.classification_completed, self._on_pipeline_classify_finished,
         )
-        self.classification_worker.finished.connect(self.classification_worker.deleteLater)
-        self.classification_worker.finished.connect(lambda: setattr(self, 'classification_worker', None))
         self.classification_worker.start()
 
     def _launch_object_detection_worker(self, clips: list):
@@ -3610,11 +3628,10 @@ class MainWindow(QMainWindow):
         self.detection_worker_yolo.progress.connect(self._on_object_detection_progress)
         self.detection_worker_yolo.objects_ready.connect(self._on_objects_ready)
         self.detection_worker_yolo.error.connect(self._on_object_detection_error)
-        self.detection_worker_yolo.detection_completed.connect(
-            self._on_pipeline_detect_objects_finished, Qt.UniqueConnection
+        bind_pipeline_completion(
+            self, self.detection_worker_yolo, "detection_worker_yolo",
+            self.detection_worker_yolo.detection_completed, self._on_pipeline_detect_objects_finished,
         )
-        self.detection_worker_yolo.finished.connect(self.detection_worker_yolo.deleteLater)
-        self.detection_worker_yolo.finished.connect(lambda: setattr(self, 'detection_worker_yolo', None))
         self.detection_worker_yolo.start()
 
     def _launch_face_detection_worker(self, clips: list):
@@ -3626,11 +3643,10 @@ class MainWindow(QMainWindow):
             clips, sources_by_id=sources_by_id,
         )
         self.face_detection_worker.progress.connect(self._on_face_detection_progress)
-        self.face_detection_worker.detection_completed.connect(
-            self._on_pipeline_face_detection_finished, Qt.UniqueConnection
+        bind_pipeline_completion(
+            self, self.face_detection_worker, "face_detection_worker",
+            self.face_detection_worker.detection_completed, self._on_pipeline_face_detection_finished,
         )
-        self.face_detection_worker.finished.connect(self.face_detection_worker.deleteLater)
-        self.face_detection_worker.finished.connect(lambda: setattr(self, 'face_detection_worker', None))
         self.face_detection_worker.start()
 
     def _launch_gaze_worker(self, clips: list):
@@ -3643,12 +3659,11 @@ class MainWindow(QMainWindow):
         )
         self._gaze_worker.progress.connect(self._on_gaze_progress)
         self._gaze_worker.gaze_ready.connect(self._on_gaze_ready)
-        self._gaze_worker.detection_completed.connect(
-            self._on_pipeline_gaze_finished, Qt.UniqueConnection
+        bind_pipeline_completion(
+            self, self._gaze_worker, "_gaze_worker",
+            self._gaze_worker.detection_completed, self._on_pipeline_gaze_finished,
         )
         self._gaze_worker.error.connect(self._on_gaze_error)
-        self._gaze_worker.finished.connect(self._gaze_worker.deleteLater)
-        self._gaze_worker.finished.connect(lambda: setattr(self, '_gaze_worker', None))
         self._gaze_worker.start()
 
     def _launch_embeddings_worker(self, clips: list):
@@ -3664,12 +3679,11 @@ class MainWindow(QMainWindow):
         self._embeddings_worker = EmbeddingAnalysisWorker(clips)
         self._embeddings_worker.progress.connect(self._on_embeddings_progress)
         self._embeddings_worker.embedding_ready.connect(self._on_embedding_ready)
-        self._embeddings_worker.analysis_completed.connect(
-            self._on_pipeline_embeddings_finished, Qt.UniqueConnection
+        bind_pipeline_completion(
+            self, self._embeddings_worker, "_embeddings_worker",
+            self._embeddings_worker.analysis_completed, self._on_pipeline_embeddings_finished,
         )
         self._embeddings_worker.error.connect(self._on_embeddings_error)
-        self._embeddings_worker.finished.connect(self._embeddings_worker.deleteLater)
-        self._embeddings_worker.finished.connect(lambda: setattr(self, '_embeddings_worker', None))
         self._embeddings_worker.start()
 
     def _launch_text_extraction_worker(self, clips: list):
@@ -3703,14 +3717,11 @@ class MainWindow(QMainWindow):
         )
         self.text_extraction_worker.progress.connect(self._on_text_extraction_progress)
         self.text_extraction_worker.clip_completed.connect(self._on_text_extraction_clip_ready)
-        self.text_extraction_worker.finished.connect(
-            self._on_pipeline_extract_text_finished
+        bind_pipeline_completion(
+            self, self.text_extraction_worker, "text_extraction_worker",
+            self.text_extraction_worker.extraction_completed, self._on_pipeline_extract_text_finished,
         )
         self.text_extraction_worker.error.connect(self._on_text_extraction_error)
-        self.text_extraction_worker.finished.connect(self.text_extraction_worker.deleteLater)
-        self.text_extraction_worker.finished.connect(
-            lambda results: setattr(self, 'text_extraction_worker', None)
-        )
         self.text_extraction_worker.start()
 
     def _launch_transcription_worker(self, clips: list):
@@ -3752,6 +3763,8 @@ class MainWindow(QMainWindow):
 
     def _start_next_source_transcription_pipeline(self):
         """Start transcription for the next source in the pipeline queue."""
+        if not pipeline_can_continue(self):
+            return
         if not self._transcription_source_queue:
             logger.info("All source transcriptions complete")
             self._on_analysis_phase_worker_finished("transcribe")
@@ -3779,11 +3792,12 @@ class MainWindow(QMainWindow):
             clips,
             source,
             self._on_pipeline_source_transcription_finished,
+            pipeline=True,
         )
 
     def _start_transcription_worker(
         self, clips: list, source: Source, completed_slot,
-        *, agent_reply: GuiToolReply | None = None,
+        *, agent_reply: GuiToolReply | None = None, pipeline: bool = False,
     ) -> None:
         """Create, wire, and start the shared transcription worker."""
         self._stop_worker_safely(self.transcription_worker, "Transcription")
@@ -3802,12 +3816,18 @@ class MainWindow(QMainWindow):
         self.transcription_worker.progress.connect(self._on_transcription_progress)
         self.transcription_worker.status.connect(self.status_bar.showMessage)
         self.transcription_worker.transcript_ready.connect(self._on_transcript_ready)
-        completion = AgentAnalysisCompletion(
-            self, self.transcription_worker, "transcription_worker",
-            completed_slot if agent_reply is not None else lambda **_: completed_slot(),
-            reply=agent_reply,
-        )
-        self.transcription_worker.transcription_completed.connect(completion.completed, Qt.UniqueConnection)
+        if pipeline:
+            bind_pipeline_completion(
+                self, self.transcription_worker, "transcription_worker",
+                self.transcription_worker.transcription_completed, completed_slot,
+            )
+        else:
+            completion = AgentAnalysisCompletion(
+                self, self.transcription_worker, "transcription_worker",
+                completed_slot if agent_reply is not None else lambda **_: completed_slot(),
+                reply=agent_reply,
+            )
+            self.transcription_worker.transcription_completed.connect(completion.completed, Qt.UniqueConnection)
         self.transcription_worker.error.connect(self._on_transcription_error)
         self.transcription_worker.start()
 
@@ -3835,11 +3855,10 @@ class MainWindow(QMainWindow):
         self.description_worker.progress.connect(self._on_description_progress)
         self.description_worker.description_ready.connect(self._on_description_ready)
         self.description_worker.error.connect(self._on_description_error)
-        self.description_worker.description_completed.connect(
-            self._on_pipeline_describe_finished, Qt.UniqueConnection
+        bind_pipeline_completion(
+            self, self.description_worker, "description_worker",
+            self.description_worker.description_completed, self._on_pipeline_describe_finished,
         )
-        self.description_worker.finished.connect(self.description_worker.deleteLater)
-        self.description_worker.finished.connect(lambda: setattr(self, 'description_worker', None))
         self.description_worker.start()
 
     def _launch_custom_query_worker(self, clips: list):
@@ -3867,11 +3886,10 @@ class MainWindow(QMainWindow):
         self.custom_query_worker.progress.connect(self._on_custom_query_progress)
         self.custom_query_worker.query_result_ready.connect(self._on_custom_query_ready)
         self.custom_query_worker.error.connect(self._on_custom_query_error)
-        self.custom_query_worker.analysis_completed.connect(
-            self._on_pipeline_custom_query_finished, Qt.UniqueConnection
+        bind_pipeline_completion(
+            self, self.custom_query_worker, "custom_query_worker",
+            self.custom_query_worker.analysis_completed, self._on_pipeline_custom_query_finished,
         )
-        self.custom_query_worker.finished.connect(self.custom_query_worker.deleteLater)
-        self.custom_query_worker.finished.connect(lambda: setattr(self, 'custom_query_worker', None))
         self.custom_query_worker.start()
 
     @Slot(int, int)
@@ -3932,14 +3950,11 @@ class MainWindow(QMainWindow):
         )
         self.cinematography_worker.progress.connect(self._on_cinematography_progress)
         self.cinematography_worker.clip_completed.connect(self._on_cinematography_clip_ready)
-        self.cinematography_worker.finished.connect(
-            self._on_pipeline_cinematography_finished
+        bind_pipeline_completion(
+            self, self.cinematography_worker, "cinematography_worker",
+            self.cinematography_worker.analysis_completed, self._on_pipeline_cinematography_finished,
         )
         self.cinematography_worker.error.connect(self._on_cinematography_error)
-        self.cinematography_worker.finished.connect(self.cinematography_worker.deleteLater)
-        self.cinematography_worker.finished.connect(
-            lambda results: setattr(self, 'cinematography_worker', None)
-        )
         self.cinematography_worker.start()
 
     # Named slots for pipeline phase completion (Qt.UniqueConnection requires
@@ -4363,6 +4378,8 @@ class MainWindow(QMainWindow):
         in the current phase are done. For sequential phases, launches the
         next queued operation before checking phase completion.
         """
+        if not pipeline_can_continue(self) or op_key in self._analysis_completed_ops:
+            return
         self._analysis_completed_ops.append(op_key)
         self._analysis_phase_remaining -= 1
         logger.info(
@@ -4385,6 +4402,8 @@ class MainWindow(QMainWindow):
 
     def _on_analysis_pipeline_complete(self):
         """Handle completion of the entire analysis pipeline."""
+        if not pipeline_can_continue(self):
+            return
         clips = self._analysis_clips
         completed = self._analysis_completed_ops
         clip_count = len(clips)
@@ -4399,7 +4418,6 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage(
                 f"Analysis finished with errors ({', '.join(error_labels)}) - {clip_count} clips ({', '.join(completed)})"
             )
-            self._show_completed_analysis_error_dialog(completed)
         else:
             self.status_bar.showMessage(
                 f"Analysis complete - {clip_count} clips ({', '.join(completed)})"
@@ -4433,8 +4451,8 @@ class MainWindow(QMainWindow):
         self._update_chat_project_state()
 
         # If agent was waiting for analyze_all, send result back
-        if self._pending_agent_analyze_all and self._chat_worker:
-            self._pending_agent_analyze_all = False
+        run = getattr(self, "_analysis_run", None)
+        if run is not None and run.reply is not None:
 
             shot_types = {}
             transcribed_count = 0
@@ -4454,22 +4472,18 @@ class MainWindow(QMainWindow):
                 },
             )
 
-            result = {
-                "tool_call_id": self._pending_agent_tool_call_id,
-                "name": self._pending_agent_tool_name,
-                "success": True,
-                "result": agent_result,
-            }
-            self._pending_agent_tool_call_id = None
-            self._pending_agent_tool_name = None
-            self._chat_worker.set_gui_tool_result(result)
+            run.reply.send(self, {"success": True, "result": agent_result})
             logger.info(f"Sent analysis result to agent: {clip_count} clips")
 
         if "custom_query" in completed:
             self._active_custom_query_text = None
 
+        if run is not None:
+            run.finished = True
         self._analysis_clips = []
         self._analysis_selected_ops = []
+        if error_labels:
+            self._show_completed_analysis_error_dialog(completed)
 
     # ------------------------------------------------------------------
     # Individual analysis handlers (kept for manual standalone + backward compat)
@@ -6826,7 +6840,7 @@ class MainWindow(QMainWindow):
             )
             worker.progress.connect(self._on_text_extraction_progress)
             worker.clip_completed.connect(self._on_text_extraction_clip_ready)
-            worker.finished.connect(
+            worker.extraction_completed.connect(
                 lambda _: self._on_frame_analysis_op_finished("extract_text")
             )
             worker.error.connect(self._on_text_extraction_error)
@@ -6862,7 +6876,7 @@ class MainWindow(QMainWindow):
             worker.progress.connect(self._on_cinematography_progress)
             worker.clip_completed.connect(self._on_cinematography_clip_ready)
             worker.error.connect(self._on_cinematography_error)
-            worker.finished.connect(
+            worker.analysis_completed.connect(
                 lambda _: self._on_frame_analysis_op_finished("cinematography")
             )
             worker.finished.connect(worker.deleteLater)
@@ -7636,16 +7650,12 @@ class MainWindow(QMainWindow):
             if not clips:
                 return False
 
-            # Mark agent waiting
-            self._pending_agent_analyze_all = True
-
             # Add clips to Analyze tab and switch
             self.analyze_tab.add_clips(clip_ids)
             self._switch_to_tab("analyze")
 
             # Start the pipeline
-            self._run_analysis_pipeline(clips, operations)
-            return True
+            return self._run_analysis_pipeline(clips, operations)
 
         else:
             logger.warning(f"Unknown worker type: {wait_type}")
@@ -10437,7 +10447,6 @@ class MainWindow(QMainWindow):
         self._pending_agent_classification = False
         self._pending_agent_object_detection = False
         self._pending_agent_description = False
-        self._pending_agent_analyze_all = False
         self._pending_agent_tool_call_id = None
         self._pending_agent_tool_name = None
 

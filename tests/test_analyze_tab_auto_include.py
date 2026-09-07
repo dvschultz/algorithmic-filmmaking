@@ -168,6 +168,7 @@ class TestPipelineSkipsDisabledClips:
         """Build a SimpleNamespace stand-in that mimics the MainWindow
         attributes _run_analysis_pipeline reads/writes."""
         return SimpleNamespace(
+            project=SimpleNamespace(session=SimpleNamespace(session_id="session")),
             _custom_query_text="dummy",
             _analysis_clips=None,
             _analysis_selected_ops=None,

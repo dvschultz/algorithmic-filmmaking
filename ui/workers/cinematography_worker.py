@@ -52,13 +52,13 @@ class CinematographyWorker(CancellableWorker):
     Signals:
         progress: Emitted with (current, total, clip_id) during processing
         clip_completed: Emitted with (clip_id, CinematographyAnalysis) when done
-        finished: Emitted with {clip_id: CinematographyAnalysis} on completion
+        analysis_completed: Emitted with {clip_id: CinematographyAnalysis} on completion
         error: Emitted with error message string on failure (inherited)
     """
 
     progress = Signal(int, int, str)  # current, total, clip_id
     clip_completed = Signal(str, object)  # clip_id, CinematographyAnalysis
-    finished = Signal(dict)  # {clip_id: CinematographyAnalysis}
+    analysis_completed = Signal(dict)  # {clip_id: CinematographyAnalysis}
 
     def __init__(
         self,
@@ -211,7 +211,7 @@ class CinematographyWorker(CancellableWorker):
         total = len(self._tasks)
         if total == 0:
             logger.info("No clips to process for cinematography analysis")
-            self.finished.emit({})
+            self.analysis_completed.emit({})
             self._log_complete()
             return
 
@@ -271,5 +271,5 @@ class CinematographyWorker(CancellableWorker):
             )
             if errors:
                 self.error.emit(_summarize_errors(errors))
-            self.finished.emit(results)
+            self.analysis_completed.emit(results)
             self._log_complete()

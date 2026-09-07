@@ -154,12 +154,20 @@ reset cannot change those export inputs. Sequence completion reports the capture
 clip count. Native export execution, cancellation, and shutdown behavior remain on
 their existing implementations pending the export-operation migration.
 
-Combined
-analysis completion still need this sender migration. Their legacy completion
-handlers can construct replies from shared pending fields; mailbox validation
-cannot distinguish a stale result relabeled with the current request token.
+Combined analysis captures a run identity and the originating reply before
+configuration prompts. A replaced project, conversation, or expired request stops
+further phase and transcription-source handoffs. Owner-thread completion relays
+reject duplicate or replaced-worker results and old-run completions. Dispatch
+returns failure when no operation starts. A replacement run owns subsequent
+completions; late callbacks from its predecessor cannot advance it.
+OCR and cinematography use separate result signals; cleanup uses native thread
+completion. Frame-analysis and Exquisite Corpus consumers use the renamed signals.
+
 Per-item analysis mutation delivery and full computation migration remain separate
-U7 work; this completion relay does not replace those operation implementations.
+U7 work; these completion relays do not replace those operation implementations.
+Already running native operations retain their existing cancellation behavior.
+Legacy pending reply fields remain only as cancellation bookkeeping, pending
+replacement with mailbox state; combined completion no longer reads them.
 
 Tests cover timeout/resolution forwarding, cancellation at each stage, invalid
 URLs, failure aggregation, frozen MCP submission arguments, actual intention

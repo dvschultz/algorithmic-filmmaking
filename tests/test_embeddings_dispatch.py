@@ -47,7 +47,12 @@ class TestLauncherSignalWiring:
         """_launch_embeddings_worker instantiates EmbeddingAnalysisWorker and wires up signals."""
         from ui.main_window import MainWindow
 
+        from PySide6.QtWidgets import QMainWindow
+        from core.project import Project
+
         mw = MainWindow.__new__(MainWindow)
+        QMainWindow.__init__(mw)
+        mw.project = Project.new()
         mw._embeddings_finished_handled = False
 
         # Patch the class in main_window's namespace so instantiation
@@ -64,7 +69,11 @@ class TestLauncherSignalWiring:
         fake_worker.analysis_completed.connect.assert_called()
         fake_worker.error.connect.assert_called()
         # Lifecycle cleanup connected
-        assert fake_worker.finished.connect.call_count >= 2
+        fake_worker.finished.connect.assert_called_once()
+        cleanup = fake_worker.finished.connect.call_args.args[0]
+        cleanup()
+        assert mw._embeddings_worker is None
+        fake_worker.deleteLater.assert_called_once()
         # Worker started
         fake_worker.start.assert_called_once()
         # Guard flag reset
