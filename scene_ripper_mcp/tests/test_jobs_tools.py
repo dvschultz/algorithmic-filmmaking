@@ -471,22 +471,16 @@ async def test_start_describe_job_saves_description(lifespan_ctx, tmp_path, monk
     ctx, store, _runtime = lifespan_ctx
     project_path = _make_project_file(tmp_path)
 
-    def fake_describe(project, clip_ids=None, **_kwargs):
-        clip = project.clips_by_id["clip-1"]
-        clip.description = "A person standing in a doorway."
-        clip.description_model = "fake-vlm"
-        clip.description_frames = 1
-        return {
-            "success": True,
-            "result": {
-                "succeeded": [{"clip_id": clip.id, "model": "fake-vlm"}],
-                "failed": [],
-                "skipped": [],
-                "total_clips": 1,
-            },
-        }
-
-    monkeypatch.setattr("core.spine.analyze.describe", fake_describe)
+    from core.project import Project
+    project = Project.load(project_path)
+    thumbnail = tmp_path / "thumb.jpg"
+    thumbnail.write_bytes(b"fake")
+    project.clips[0].thumbnail_path = thumbnail
+    assert project.save()
+    monkeypatch.setattr(
+        "core.analysis.description.describe_frame",
+        lambda *args, **kwargs: ("A person standing in a doorway.", "fake-vlm"),
+    )
 
     out = json.loads(await start_describe(project_path=str(project_path), ctx=ctx))
 
@@ -496,6 +490,50 @@ async def test_start_describe_job_saves_description(lifespan_ctx, tmp_path, monk
     _sources, clips, *_ = load_project(project_path)
     assert clips[0].description == "A person standing in a doorway."
     assert clips[0].description_model == "fake-vlm"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["model", "media"])
+async def test_describe_queue_pins_options_and_media(lifespan_ctx, tmp_path, monkeypatch, change):
+    from unittest.mock import Mock
+    from core.project import Project
+    from core.settings import Settings
+
+    ctx, store, runtime = lifespan_ctx
+    path = _make_project_file(tmp_path)
+    project = Project.load(path)
+    thumbnail = tmp_path / "thumb.jpg"
+    thumbnail.write_bytes(b"fake")
+    project.clips[0].thumbnail_path = thumbnail
+    assert project.save()
+    settings = Settings(description_model_tier="cloud", description_model_cloud="gpt-original", description_input_mode="frame")
+    monkeypatch.setattr("core.settings.load_settings", lambda: settings)
+    compute = Mock(return_value=("Generated", "gpt-original"))
+    monkeypatch.setattr("core.analysis.description.describe_frame", compute)
+    release = threading.Event()
+    entered = [threading.Event() for _ in range(4)]
+    try:
+        for event in entered:
+            def block(progress, cancel, event=event):
+                event.set()
+                assert release.wait(10)
+                return {}
+            runtime.submit(kind="blocker", args={}, run=block)
+        assert all(event.wait(5) for event in entered)
+        response = json.loads(await start_describe(str(path), ctx=ctx))
+        assert response["success"], response
+        if change == "model":
+            settings.description_model_cloud = "gpt-replacement"
+        else:
+            thumbnail.write_bytes(b"changed")
+        release.set()
+        _wait_for_status(store, response["task_id"], STATUS_COMPLETED if change == "model" else STATUS_FAILED)
+        if change == "model":
+            assert compute.call_args.kwargs["model_name"] == "gpt-original"
+        else:
+            compute.assert_not_called()
+    finally:
+        release.set()
 
 
 @pytest.mark.asyncio

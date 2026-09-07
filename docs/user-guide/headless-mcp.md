@@ -174,6 +174,15 @@ Analyze tab: `colors`, `shots`, `classify`, `detect_objects`,
 `face_embeddings`, `gaze`, `embeddings`, and `custom_query`. When using
 `custom_query`, pass the query text in the `query` argument.
 
+`start_describe` and `describe` steps in `start_analyze_clips` retain computed
+results before saving them to the project. Retrying after a failed save reuses
+matching results rather than calling the provider again. Model, prompt, input mode,
+image/source media, and local backend changes prevent reuse. Existing descriptions
+are preserved by default; pass `force=true` to `start_describe` to refresh them.
+CLI `analyze describe` shares these receipts when options, media, and the configured
+cache directory match. Missing committed cache payloads produce an error rather
+than an automatic paid recomputation.
+
 Every `start_*` returns immediately with `{task_id, status, poll_interval}`.
 The job runs in a background thread; the response payload is **not**
 included — you must poll `get_job_status` until terminal, then call

@@ -192,13 +192,13 @@ unimplemented portions of the plan.
 
 ## Description computation cutover
 
-GUI clip/frame descriptions and spine descriptions (including CLI and MCP
-callers) share `core/operations/description.py`. Immutable tasks retain target
+GUI clip/frame descriptions, spine descriptions, CLI descriptions, and MCP
+jobs share `core/operations/description.py`. Immutable tasks retain target
 IDs, image paths, source paths, and clip ranges. Provider computation remains in
 `core/analysis/description.py` and loads lazily.
 
 Description options snapshot the selected model, tier, prompt, input mode, and
-parallelism before GUI dispatch (or at headless execution entry). Provider calls
+parallelism before GUI dispatch or MCP submission (at entry for direct spine calls). Provider calls
 receive the selected model explicitly, including video calls and frame fallback.
 The local model cache is keyed by requested model and available backend, so a
 model change cannot silently reuse another model's weights. API credentials are
@@ -224,8 +224,21 @@ All four GUI entry points bind results to their launching worker, with pipeline
 and agent-request checks where applicable. Headless calls report rejected results
 as `stale_result`; GUI delivery reports a discarded-result error.
 
-Durable computed-result recovery remains pending U7 work, as do custom queries
-and cinematography. This cutover does not complete the entire family lifecycle.
+CLI descriptions, dedicated MCP `start_describe`, and description steps in MCP
+analysis plans now use `core/jobs/description.py`. Result identity includes the
+project/target, source and image fingerprints, resolved options, and local
+backend/fallback provenance. Computation is recorded before publication; project
+data and receipts save together before cache checkpoints. Retries after save or
+checkpoint failure reuse matching results. Existing user-edited descriptions stay
+intact by default; CLI `--force` and MCP `force=true` request a new refresh generation.
+Missing committed cache payloads fail without recomputing.
+
+CLI retains eight-character clip prefixes, 640x360 thumbnail preparation,
+frame-only inference, and its result counters. Generated thumbnails are included
+in the saved project when results are committed. CLI/MCP reuse requires matching
+options and media plus the same cache directory. The old CLI inference loop is
+removed. Direct spine calls remain non-durable; GUI durable description recovery,
+custom queries, and cinematography remain pending U7 work.
 
 ## Transcription batch cutover
 

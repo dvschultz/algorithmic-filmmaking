@@ -542,6 +542,26 @@ async def _start_spine_analyze_job(
 
         def run(progress_callback, cancel_event):
             return run_analysis_job(store, path, operation, progress_callback, cancel_event)
+    elif spine_fn_name == "describe":
+        from core.jobs.description import description_job_spec, run_description_job
+        from core.operations.description import resolve_options
+
+        try:
+            operation = description_job_spec(
+                _project, clip_ids,
+                resolve_options(payload.get("tier"), payload.get("prompt")),
+                arguments=payload,
+            )
+        except ValueError as exc:
+            return json.dumps(_wrap_error(exc))
+        store = _lifespan(ctx)["job_store"]
+
+        def run(progress_callback, cancel_event):
+            return run_description_job(
+                store, path, operation.arguments["clip_ids"],
+                progress_callback, cancel_event, operation=operation,
+                force=operation.arguments.get("force", False),
+            )
     elif spine_fn_name == "align_words":
         from core.jobs.alignment import alignment_job_spec, run_alignment_job
 
@@ -993,6 +1013,7 @@ async def start_describe(
     prompt: Annotated[Optional[str], "Optional description prompt override"] = None,
     idempotency_key: Annotated[Optional[str], "Optional idempotency key (max 255 chars)"] = None,
     ctx: Context = None,
+    force: Annotated[bool, "Replace existing descriptions"] = False,
 ) -> str:
     """Start a job that generates VLM clip descriptions."""
     return await _start_spine_analyze_job(
@@ -1002,8 +1023,8 @@ async def start_describe(
         spine_fn_name="describe",
         clip_ids=clip_ids,
         idempotency_key=idempotency_key,
-        args={"tier": tier, "prompt": prompt},
-        op_kwargs={"tier": tier, "prompt": prompt},
+        args={"tier": tier, "prompt": prompt, "force": force},
+        op_kwargs={"tier": tier, "prompt": prompt, "skip_existing": not force},
     )
 
 

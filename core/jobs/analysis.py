@@ -17,6 +17,14 @@ from core.spine.project_io import load_with_mtime, project_writer, save_with_mti
 
 def analysis_job_spec(project: Project, *, arguments: dict) -> OperationSpec:
     inputs = {}
+    if "describe" in (arguments.get("operations") or []):
+        from core.jobs.description import description_job_spec
+        from core.operations.description import resolve_options
+
+        description = description_job_spec(
+            project, arguments.get("clip_ids"), resolve_options(), arguments={},
+        )
+        inputs["description"] = json.loads(description.inputs_json)
     if "transcribe" in (arguments.get("operations") or []):
         transcription = transcription_job_spec(
             project,
@@ -60,6 +68,7 @@ def run_analysis_job(
         # must not silently retarget an already queued transcription request.
         captured = json.loads(operation.inputs_json)
         transcription = captured.get("transcription")
+        description = captured.get("description")
         options = (
             TranscriptionOptions(**transcription["options"]) if transcription else None
         )
@@ -69,6 +78,21 @@ def run_analysis_job(
                 raise StaleJobResult("Analysis inputs changed while the job was queued")
 
         def execute(op: str, report: Progress | None) -> dict:
+            if op == "describe":
+                from core.jobs.description import description_job_spec, run_description_job
+                from core.operations.description import DescriptionOptions
+
+                if description is None:
+                    raise StaleJobResult("Analysis job has no captured description options")
+                current, _ = load_with_mtime(path)
+                step = description_job_spec(
+                    current, ids, DescriptionOptions(**description["options"]), arguments={},
+                )
+                if json.loads(step.inputs_json) != description:
+                    raise StaleJobResult("Description inputs changed before analysis")
+                return run_description_job(
+                    store, path, ids, report or (lambda *_: None), cancel, operation=step,
+                )
             if op == "transcribe":
                 assert options is not None
                 current, _ = load_with_mtime(path)
