@@ -49,10 +49,16 @@ def test_scope_restores_after_nested_dispatch_and_failure():
 
 def test_old_operation_cannot_complete_new_request_on_same_chat():
     mailbox = GuiToolMailbox()
-    worker = SimpleNamespace(_stop_requested=False, set_gui_tool_result=mailbox.submit)
+    worker = SimpleNamespace(
+        _stop_requested=False,
+        set_gui_tool_result=mailbox.submit,
+        is_gui_tool_pending=mailbox.is_pending,
+    )
     window = SimpleNamespace(project=Project.new(), _chat_worker=worker)
     old = GuiToolReply.capture(window, "describe", mailbox.begin("describe"))
+    assert old.is_current(window)
     assert mailbox.wait(0) is None
+    assert not old.is_current(window)
     current = GuiToolReply.capture(window, "describe", mailbox.begin("describe"))
     window._pending_agent_tool_call_id = current.token
     assert not old.send(window, {"success": True, "result": {"old": True}})

@@ -21,12 +21,16 @@ class GuiToolReply:
 
     def is_current(self, window: Any) -> bool:
         """Check whether GUI work still belongs to the live conversation."""
-        return (
+        current = (
             self.worker is not None
             and window._chat_worker is self.worker
             and window.project.session.session_id == self.session_id
             and getattr(self.worker, "_stop_requested", False) is not True
         )
+        if not current:
+            return False
+        pending = getattr(self.worker, "is_gui_tool_pending", None)
+        return pending is None or bool(pending(self.token, self.name))
 
     def send(self, window: Any, result: dict) -> bool:
         """Send only to the original live requester, with captured identity."""
@@ -59,13 +63,17 @@ class AgentAnalysisCompletion(QObject):
         worker: QThread,
         attribute: str,
         handler: Callable[..., None],
+        *,
+        reply: GuiToolReply | None = None,
     ) -> None:
         super().__init__(window)
         self.window = window
         self.worker = worker
         self.attribute = attribute
         self.handler = handler
-        self.reply = getattr(window, "_dispatch_gui_reply", None)
+        self.reply = (
+            reply if reply is not None else getattr(window, "_dispatch_gui_reply", None)
+        )
         self.session_id = window.project.session.session_id
         self._delivered = False
         worker.finished.connect(self._finished)

@@ -113,7 +113,16 @@ responses, plan display acknowledgments, and failed starts use captured replies.
 Dispatch stops follow-up work after a nested GUI event replaces the conversation;
 the five analysis starters recheck ownership after dependency availability gates.
 
-Transcription, detection/thumbnails, download batches, exports, and combined
+Agent transcription now retains its captured reply across every source handoff,
+stops the remaining queue when the conversation is cancelled/replaced or the
+request times out, and reports progress against the original total source count.
+The shared transcription launcher uses guarded completion delivery for agent and
+manual-pipeline callbacks, including identity-safe cleanup when one source starts
+the next. `GuiToolReply` checks the chat worker's live mailbox before follow-up work
+or delivery, so an expired request cannot continue merely because its chat still
+exists. Per-source computation remains in the existing transcription worker.
+
+Detection/thumbnails, download batches, exports, and combined
 analysis completion still need this sender migration. Their legacy completion
 handlers can construct replies from shared pending fields; mailbox validation
 cannot distinguish a stale result relabeled with the current request token.

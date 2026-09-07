@@ -40,6 +40,15 @@ class GuiToolMailbox:
             self._condition.notify_all()
             return True
 
+    def is_pending(self, token: str, name: str) -> bool:
+        """Whether a GUI operation may still continue for this request."""
+        with self._condition:
+            return (
+                not self._cancelled
+                and self._active == (token, name)
+                and self._result is None
+            )
+
     def wait(self, timeout: float) -> dict | None:
         """Consume the reply, closing admission on timeout or cancellation."""
         with self._condition:

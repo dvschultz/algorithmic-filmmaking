@@ -925,3 +925,7 @@ CURRENT GUI STATE:
             result: Tool execution result dict
         """
         return self._gui_tool_mailbox.submit(result)
+
+    def is_gui_tool_pending(self, token: str, name: str) -> bool:
+        """Allow GUI handoffs only while their original request is waiting."""
+        return self._gui_tool_mailbox.is_pending(token, name)

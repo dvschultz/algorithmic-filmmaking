@@ -2244,7 +2244,7 @@ class MainWindow(QMainWindow):
                     logger.info(f"GUI tool {tool_name} waiting for worker: {wait_type}")
                     # Store tool_call_id for when worker completes
                     if wait_type not in {
-                        "color_analysis", "shot_analysis", "description",
+                        "color_analysis", "shot_analysis", "description", "transcription",
                         "classification", "object_detection", "person_detection",
                     }:
                         self._pending_agent_tool_call_id = tool_call_id
@@ -3774,7 +3774,10 @@ class MainWindow(QMainWindow):
             self._on_pipeline_source_transcription_finished,
         )
 
-    def _start_transcription_worker(self, clips: list, source: Source, completed_slot) -> None:
+    def _start_transcription_worker(
+        self, clips: list, source: Source, completed_slot,
+        *, agent_reply: GuiToolReply | None = None,
+    ) -> None:
         """Create, wire, and start the shared transcription worker."""
         self._stop_worker_safely(self.transcription_worker, "Transcription")
         self.transcription_worker = TranscriptionWorker(
@@ -3792,15 +3795,13 @@ class MainWindow(QMainWindow):
         self.transcription_worker.progress.connect(self._on_transcription_progress)
         self.transcription_worker.status.connect(self.status_bar.showMessage)
         self.transcription_worker.transcript_ready.connect(self._on_transcript_ready)
-        self.transcription_worker.transcription_completed.connect(
-            completed_slot,
-            Qt.UniqueConnection,
+        completion = AgentAnalysisCompletion(
+            self, self.transcription_worker, "transcription_worker",
+            completed_slot if agent_reply is not None else lambda **_: completed_slot(),
+            reply=agent_reply,
         )
+        self.transcription_worker.transcription_completed.connect(completion.completed, Qt.UniqueConnection)
         self.transcription_worker.error.connect(self._on_transcription_error)
-        self.transcription_worker.finished.connect(self.transcription_worker.deleteLater)
-        self.transcription_worker.finished.connect(
-            lambda: setattr(self, "transcription_worker", None)
-        )
         self.transcription_worker.start()
 
     @Slot()
@@ -4903,7 +4904,7 @@ class MainWindow(QMainWindow):
         self._update_chat_project_state()
 
     @Slot()
-    def _on_agent_transcription_finished(self):
+    def _on_agent_transcription_finished(self, *, reply: GuiToolReply | None = None) -> None:
         """Handle transcription completion when triggered by agent."""
         logger.info("=== AGENT TRANSCRIPTION FINISHED ===")
 
@@ -4913,11 +4914,19 @@ class MainWindow(QMainWindow):
             return
         self._transcription_finished_handled = True
 
+        if reply is not None and not reply.is_current(self):
+            self._agent_transcription_source_queue = []
+            self._agent_transcription_clips = []
+            self._pending_agent_transcription = False
+            self.progress_bar.setVisible(False)
+            self.analyze_tab.set_analyzing(False)
+            return
+
         # Check if there are more sources to process
         if self._agent_transcription_source_queue:
             next_source, next_clips = self._agent_transcription_source_queue.pop(0)
             remaining = len(self._agent_transcription_source_queue)
-            total_sources = remaining + 2  # +1 for current, +1 for just-completed
+            total_sources = self._agent_transcription_total_sources
             current_source_num = total_sources - remaining
 
             logger.info(f"Continuing transcription with next source: {next_source.filename} ({current_source_num}/{total_sources})")
@@ -4934,6 +4943,7 @@ class MainWindow(QMainWindow):
                 next_clips,
                 next_source,
                 self._on_agent_transcription_finished,
+                agent_reply=reply,
             )
             return
 
@@ -4949,7 +4959,7 @@ class MainWindow(QMainWindow):
         transcribed_count = sum(1 for c in clips if c.transcript)
 
         # Send result back to agent
-        if self._pending_agent_transcription and self._chat_worker:
+        if self._pending_agent_transcription:
             self._pending_agent_transcription = False
             agent_result = self._build_agent_analysis_result(
                 clips,
@@ -4958,16 +4968,13 @@ class MainWindow(QMainWindow):
                 {"transcribed_count": transcribed_count},
             )
             result = {
-                "tool_call_id": self._pending_agent_tool_call_id,
-                "name": self._pending_agent_tool_name,
                 "success": True,
                 "result": agent_result,
             }
-            self._pending_agent_tool_call_id = None
-            self._pending_agent_tool_name = None
             self._agent_transcription_clips = []
             self._agent_transcription_source_queue = []
-            self._chat_worker.set_gui_tool_result(result)
+            if reply is not None:
+                reply.send(self, result)
             logger.info(f"Sent transcription result to agent: {transcribed_count}/{clip_count} clips")
 
         # Update chat panel with project state
@@ -7754,6 +7761,10 @@ class MainWindow(QMainWindow):
         if not self._ensure_analysis_operation_available("transcribe"):
             return False
 
+        request = getattr(self, "_dispatch_gui_reply", None)
+        if request is not None and not request.is_current(self):
+            return False
+
         # Resolve clips
         clips = [self.project.clips_by_id.get(cid) for cid in clip_ids]
         clips = [c for c in clips if c is not None]
@@ -7784,6 +7795,7 @@ class MainWindow(QMainWindow):
 
         # Store queue and all clips for sequential processing
         self._agent_transcription_source_queue = source_queue[1:]  # Remaining after first
+        self._agent_transcription_total_sources = len(source_queue)
         self._agent_transcription_clips = clips  # All clips for final result
         self._pending_agent_transcription = True
 
@@ -7808,6 +7820,7 @@ class MainWindow(QMainWindow):
             first_clips,
             first_source,
             self._on_agent_transcription_finished,
+            agent_reply=request,
         )
 
         return True
