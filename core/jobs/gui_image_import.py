@@ -6,11 +6,12 @@ from typing import Callable
 
 from core.jobs.commits import StaleJobResult, canonical_json
 from core.jobs.gui_results import GuiResultJournal, GuiResultRequest
-from core.jobs.media import FingerprintCancelled, media_stamp
+from core.jobs.media import FingerprintCancelled
 from core.jobs.image_import import (
     ImageImportRecord,
     image_import_target,
     image_import_runtime,
+    image_import_media,
 )
 from core.operations.image_import import (
     ImageImportTask,
@@ -44,21 +45,7 @@ class GuiImageImportCache(GuiResultJournal):
         self.recorded: ImageImportRecord | None = None
 
     def _media(self) -> dict:
-        values: list[dict | None] = []
-        for item in self.task.items:
-            if item.error is not None or item.path.is_dir():
-                values.append(None)
-                continue
-            if media_stamp(item.path) != item.media_stamp:
-                raise StaleJobResult("Image import source changed while queued")
-            try:
-                values.append(
-                    self.fingerprints.get(item.path) if item.path.is_file() else None
-                )
-            except OSError:
-                # Keep unreadable-input errors per item, as the shared import does.
-                values.append(None)
-        return {"items": values}
+        return image_import_media(self.task, self.fingerprints)
 
     def validate_media(self, request: GuiResultRequest) -> None:
         super().validate_media(request)

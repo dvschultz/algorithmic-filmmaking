@@ -1245,3 +1245,37 @@ async def test_audio_import_rejects_invalid_media_paths_before_submission(lifesp
     result = json.loads(await jobs.start_import_audio(str(path), media_path, ctx=ctx))
     assert result["success"] is False
     submit.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_image_import_job_preserves_partial_errors_and_submission_identity(lifespan_ctx, tmp_path, monkeypatch):
+    from scene_ripper_mcp.tools.jobs import start_import_images
+    from core.project import Project
+    from tests.test_image_import_operations import make_image
+    from core.thumbnail import generate_image_thumbnail
+
+    ctx, store, _ = lifespan_ctx
+    media = make_image(tmp_path / "image.png")
+    project = Project.new()
+    path = tmp_path / "images.sceneripper"
+    project.save(path); project.close_writer()
+    provider = Mock(wraps=generate_image_thumbnail)
+    monkeypatch.setattr("core.thumbnail.generate_image_thumbnail", provider)
+    inputs = ["image.png", "../outside.png", "/etc/outside.png"]
+    out = json.loads(await start_import_images(str(path), inputs, idempotency_key="one-batch", ctx=ctx))
+    assert out["success"], out
+    _wait_for_status(store, out["task_id"], STATUS_COMPLETED)
+    result = json.loads(await get_job_result(out["task_id"], ctx=ctx))["result"]["result"]
+    assert result["imported_count"] == 1 and len(result["errors"]) == 2
+    assert any("traversal" in error for error in result["errors"])
+    repeated = json.loads(await start_import_images(str(path), inputs, idempotency_key="one-batch", ctx=ctx))
+    assert repeated["task_id"] == out["task_id"]
+    provider.assert_called_once()
+    saved = Project.load(path)
+    assert saved.frames[0].id == result["frame_ids"][0]
+    assert saved.frames[0].file_path != media
+    assert (saved.frames[0].width, saved.frames[0].height) == (400, 300)
+    assert all(store.get_result(rid)["committed"] for rid in saved.metadata.job_results)
+    saved.close_writer()
+    invalid = json.loads(await start_import_images(str(path), [], ctx=ctx))
+    assert invalid["success"] is False

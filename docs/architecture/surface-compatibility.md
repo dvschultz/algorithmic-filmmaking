@@ -1087,5 +1087,16 @@ batch advances the generation so a deliberate new import still adds new frames.
 Explicit Save acknowledges a batch only when all its successful imported frames
 match the saved IDs, paths, dimensions and provenance. A failed save leaves the
 batch reusable; a failed checkpoint can be acknowledged by a later save without
-repeating image work. CLI/MCP image-import exposure remains U7 follow-up, alongside
-frame-analysis orchestration and intention workflows.
+repeating image work.
+
+CLI `import-images PROJECT IMAGE...` and MCP `start_import_images` execute the
+same shared import through durable saved-project jobs. Both copy by default;
+CLI `--reference` or MCP `copy_files=false` retains source references. Inputs,
+order, storage policy, project revision and runtime are frozen at submission.
+Valid items are saved with per-item errors; an all-invalid batch fails without
+changing the project. Interrupted publication reuses recorded IDs and artifacts,
+and a failed checkpoint is reconciled before a fresh import generation. MCP
+supports submission idempotency and validates each input through the shared path
+policy. Media fingerprinting is shared with the desktop recovery journal.
+
+U7 still includes frame-analysis orchestration and intention workflows.

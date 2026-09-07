@@ -152,6 +152,7 @@ scene-ripper-mcp --transport http --port 8765
 | `start_transcribe` | Whisper transcription per clip |
 | `start_transcribe_audio` | Standalone imported audio transcription by exact audio-source ID; preserves existing results unless `force=true` |
 | `start_import_audio` | Import an audio file and save; repeated canonical paths return the existing audio ID |
+| `start_import_images` | Import a batch of still images and save; copy by default or reference originals with `copy_files=false` |
 | `start_extract_frames` | Extract a video source into saved frame items; supports `interval`, `all`, and `smart` modes and an optional `clip_id` |
 | `start_align_words` | Add word timestamps to existing transcripts; requires installed alignment runtime |
 | `start_describe` | Generate VLM descriptions |
@@ -171,6 +172,21 @@ safe-root and traversal checks. Results include `audio_source_id`, `filename`,
 again; failed saves reuse recorded metadata and IDs, and interrupted checkpoints
 acknowledge the saved import on retry. An MCP `idempotency_key` also deduplicates
 job submission. GUI and headless result journals remain separate.
+
+Import still images with
+`scene_ripper import-images project.sceneripper first.png second.jpg`.
+Use `--reference` to retain references to originals instead of copying them into
+the project. MCP offers the same policy through `start_import_images` and
+`copy_files`. Relative input paths use the project directory; MCP applies the
+shared safe-root and traversal checks to every item. A batch saves valid images
+and reports rejected items in `errors`; no valid images means the job fails.
+Results include `frame_ids`, `imported_count`, `errors`, and `status`.
+
+Interrupted saves reuse the original frame IDs, copied images and thumbnails.
+An interrupted checkpoint acknowledges the saved batch on retry. A fresh
+invocation intentionally appends new frames; use an MCP `idempotency_key` when
+retrying the same submission. Changed inputs, order, copy policy, runtime or
+generated artifacts prevent stale recovery. GUI and headless journals are separate.
 
 Frame extraction is also available as
 `scene_ripper extract-frames project.sceneripper SOURCE_ID --interval 10`.
