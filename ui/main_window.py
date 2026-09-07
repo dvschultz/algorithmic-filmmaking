@@ -30,7 +30,7 @@ from PySide6.QtGui import QDesktopServices, QKeySequence, QAction, QDragEnterEve
 
 from models.clip import Source, Clip
 from core.project_lock import ProjectWriter
-from core.spine.sources import find_source_by_path, add_source_if_missing, probe_source
+from core.spine.sources import find_source_by_path, add_source_if_missing
 from core.scene_detect import DetectionConfig, KaraokeDetectionConfig
 from core.operations.detection import StaleDetectionResult
 from ui.workers.detection_worker import DetectionWorker
@@ -807,6 +807,13 @@ class MainWindow(QMainWindow):
 
         # Active audio import workers (kept alive while running)
         self._active_audio_imports: set = set()
+        from ui.workers.source_import_worker import SourceImportQueue
+        self._source_import_queue = SourceImportQueue(self)
+        self._source_import_queue.result_ready.connect(self._on_source_import_ready)
+        self._source_import_queue.failed.connect(self._on_source_import_failed)
+        self._source_import_queue.drained.connect(self._on_source_imports_drained)
+        self._source_selection_generation = 0
+        self._deferred_agent_download_results = None
         self._active_audio_transcribes: set = set()
 
         # UI state (not part of Project - these are GUI-specific selections)
@@ -1126,6 +1133,9 @@ class MainWindow(QMainWindow):
         worker may continue running after New Project, causing state leakage
         or "QThread: Destroyed while thread is still running" crashes.
         """
+        self._source_import_queue.cancel_pending()
+        self._deferred_agent_download_results = None
+
         # Stop chat worker if running
         if self._chat_worker and self._chat_worker.isRunning():
             self._chat_worker.stop()
@@ -3332,6 +3342,7 @@ class MainWindow(QMainWindow):
 
     def _select_source(self, source: Source):
         """Select a source as the current active source."""
+        self._source_selection_generation = getattr(self, "_source_selection_generation", 0) + 1
         if source.id == getattr(self.current_source, 'id', None):
             return  # Already selected
 
@@ -3346,33 +3357,50 @@ class MainWindow(QMainWindow):
         self._update_window_title()
         self.status_bar.showMessage(f"Selected: {source.filename}")
 
-    def _create_source_with_metadata(self, path: Path) -> Source:
-        """Prepare metadata through the shared source-import probe."""
-        return probe_source(path)
+    def _queue_source_import(self, path: Path, *, select: bool = False) -> None:
+        """Prepare metadata in the background, retaining the requesting session."""
+        selection = None
+        if select:
+            self._source_selection_generation += 1
+            selection = self._source_selection_generation
+        self._source_import_queue.submit(
+            path, (self.project.session.session_id, selection)
+        )
+        self.status_bar.showMessage(f"Importing: {path.name}")
+
+    @Slot(object, object)
+    def _on_source_import_ready(self, request, source: Source) -> None:
+        session_id, selection = request.context
+        if session_id != self.project.session.session_id:
+            return
+        source, added = add_source_if_missing(self.project, source)
+        if added:
+            self.collect_tab.add_source(source)
+            self._update_chat_project_state()
+        if selection is not None and selection == self._source_selection_generation:
+            self._select_source(source)
+        self.status_bar.showMessage(f"Added to library: {source.filename}")
+
+    @Slot(object, str)
+    def _on_source_import_failed(self, request, error: str) -> None:
+        if request.context[0] == self.project.session.session_id:
+            self.status_bar.showMessage(f"Could not import {request.path.name}: {error}")
+
+    @Slot()
+    def _on_source_imports_drained(self) -> None:
+        deferred = self._deferred_agent_download_results
+        self._deferred_agent_download_results = None
+        if deferred is not None:
+            session_id, results = deferred
+            if session_id == self.project.session.session_id:
+                self._on_agent_bulk_download_finished(results)
 
     def _add_video_to_library(self, path: Path):
         """Add a video file to the library without making it active."""
-        # Check if already in library
         if find_source_by_path(self.project, path) is not None:
             self.status_bar.showMessage(f"Video already in library: {path.name}")
             return
-
-        # Create new source with metadata and add to project
-        source = self._create_source_with_metadata(path)
-        source, added = add_source_if_missing(self.project, source)
-        if not added:
-            return
-
-        # Add to CollectTab grid
-        self.collect_tab.add_source(source)
-
-        # Generate thumbnail for the source
-        self._generate_source_thumbnail(source)
-
-        # Update chat panel with project state (new source added)
-        self._update_chat_project_state()
-
-        self.status_bar.showMessage(f"Added to library: {path.name}")
+        self._queue_source_import(path)
 
     def _on_audio_files_added(self, paths: list[Path]):
         """Spawn an AudioImportWorker for each picked audio file."""
@@ -5249,19 +5277,7 @@ class MainWindow(QMainWindow):
             # Already in library, just select it
             self._select_source(existing)
         else:
-            # Add to library with metadata
-            source = self._create_source_with_metadata(path)
-            source, added = add_source_if_missing(self.project, source)
-            if not added:
-                self._select_source(source)
-                return
-            self.collect_tab.add_source(source)
-
-            # Generate thumbnail
-            self._generate_source_thumbnail(source)
-
-            # Select it
-            self._select_source(source)
+            self._queue_source_import(path, select=True)
 
     def _on_import_url_click(self):
         """Handle import URL button click."""
@@ -7719,22 +7735,15 @@ class MainWindow(QMainWindow):
                 logger.info(f"Source already in project: {file_path.name}")
                 return
 
-            # Create source with metadata and add to project
-            source = self._create_source_with_metadata(file_path)
-            source, added = add_source_if_missing(self.project, source)
-            if not added:
-                return
-
-            # Add to CollectTab grid
-            self.collect_tab.add_source(source)
-
-            # Generate thumbnail for the source
-            self._generate_source_thumbnail(source)
-
-            logger.info(f"Added downloaded source to project: {file_path.name} ({source.duration_seconds:.1f}s)")
+            self._queue_source_import(file_path)
 
     def _on_agent_bulk_download_finished(self, results: list):
         """Handle bulk download completion."""
+        if self._source_import_queue.pending:
+            self._deferred_agent_download_results = (
+                self.project.session.session_id, results
+            )
+            return
         logger.info(f"Bulk download finished signal received: {len(results)} results, pending_agent_download={self._pending_agent_download}")
         self.progress_bar.setVisible(False)
         success_count = sum(1 for r in results if r.get("success"))
@@ -10891,6 +10900,8 @@ class MainWindow(QMainWindow):
             self.project.close_writer()
             event.accept()
             return
+
+        self._source_import_queue.close()
 
         # Stop playback timer
         if self._playback_timer.isActive():

@@ -97,7 +97,7 @@ for name in ('_load_video', '_add_video_to_library', '_on_agent_video_finished',
     project.add_source(source)
     window = SimpleNamespace(project=project, sources=project.sources, collect_tab=Mock(),
         status_bar=Mock(), intention_workflow=None, _select_source=Mock(),
-        _create_source_with_metadata=Mock(return_value=Source(file_path=alias)),
+        _queue_source_import=Mock(),
         _generate_source_thumbnail=Mock(), _update_chat_project_state=Mock())
     result = SimpleNamespace(success=True, file_path=alias, duration=1, fps=30, width=100, height=100)
     if name.startswith('_on_'):
@@ -105,7 +105,7 @@ for name in ('_load_video', '_add_video_to_library', '_on_agent_video_finished',
     else:
         getattr(MainWindow, name)(window, alias)
     assert project.sources == [source], name
-    window._create_source_with_metadata.assert_not_called()
+    window._queue_source_import.assert_not_called()
     window.collect_tab.add_source.assert_not_called()
     window._generate_source_thumbnail.assert_not_called()
 """

@@ -21,11 +21,28 @@ data without mutating a project. Probe failures retain the desktop's default
 metadata behavior. Folder import now uses this helper in place of its broken
 reference to the removed `load_source` function.
 
-This is an incremental U7 migration. Metadata probing remains blocking at current
-entry points. Moving preparation to workers, guarding import delivery by session,
-durable download orchestration, and ordered intention plans remain outstanding.
+Desktop manual imports and download callbacks now prepare metadata and thumbnails
+through `SourceImportQueue`. One worker runs at a time; workers never receive the
+project. The owner thread admits the prepared source after checking the captured
+session and media stamp. A selection generation prevents an older import from
+overriding a later source selection. Existing sources still select immediately.
+
+Reset discards queued work and invalidates active results without waiting for
+native media calls. The active thread remains owned until it finishes; shutdown
+cancels and waits for it rather than terminating it. Cancellation is cooperative
+between metadata and thumbnail stages. Native subprocess timeouts bound the wait.
+Stale results can leave unreferenced thumbnail cache files. Bulk agent download
+responses wait until pending source imports drain, so the agent can then find its
+downloaded sources. Session changes discard deferred responses.
+
+This is an incremental U7 migration. Folder imports still probe synchronously in
+their existing tool adapter. Intention downloads use their supplied metadata.
+Download submission/session guards, shared durable download orchestration, ordered
+intention plans, and the remaining analysis families are outstanding.
 
 Regression coverage checks alias retries, preserved edits, unavailable old paths,
 all four desktop admission routes, folder retries, metadata fallback, and stale
 detection results through hard-link aliases. Headless import-boundary tests ensure
 the shared helpers do not import GUI or heavy analysis dependencies at load time.
+Real Qt-loop tests cover background preparation, owner-thread delivery, reset and
+retry during an active probe, changed media, per-item failures, and shutdown.

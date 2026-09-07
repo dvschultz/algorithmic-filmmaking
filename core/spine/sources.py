@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from pathlib import Path
 import logging
+from threading import Event
 
 if TYPE_CHECKING:
     from core.project import Project
@@ -38,6 +39,24 @@ def probe_source(path: Path | str) -> Source:
     except Exception as exc:
         logger.warning("Failed to extract metadata for %s: %s", path.name, exc)
     return source
+
+
+def prepare_source_import(path: Path, cancel_event: Event) -> Source | None:
+    """Prepare metadata and a source thumbnail without touching a project."""
+    if cancel_event.is_set():
+        return None
+    source = probe_source(path)
+    if cancel_event.is_set():
+        return None
+    try:
+        from core.thumbnail import ThumbnailGenerator
+
+        source.thumbnail_path = ThumbnailGenerator().generate_first_frame(
+            path, source.id
+        )
+    except Exception as exc:
+        logger.warning("Failed to generate source thumbnail for %s: %s", path.name, exc)
+    return None if cancel_event.is_set() else source
 
 
 def same_source_path(first: Path | str, second: Path | str) -> bool:
@@ -153,4 +172,5 @@ __all__ = [
     "find_source_by_path",
     "add_source_if_missing",
     "probe_source",
+    "prepare_source_import",
 ]
