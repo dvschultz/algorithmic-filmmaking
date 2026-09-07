@@ -224,3 +224,43 @@ async def clear_session_timeline(
             session_id, lambda project: timeline.clear_timeline(project, sequence_id)
         ),
     )
+
+
+@mcp.tool()
+async def set_session_clips_disabled(
+    session_id: str,
+    clip_ids: list[str],
+    disabled: bool,
+    ctx: Context,
+) -> str:
+    """Enable or disable library clips as one saved undoable edit."""
+    from core.spine.clips import set_clips_disabled
+
+    return await _call(
+        ctx,
+        lambda sessions: sessions.edit(
+            session_id, lambda project: set_clips_disabled(project, clip_ids, disabled)
+        ),
+    )
+
+
+@mcp.tool()
+async def update_session_clip(
+    session_id: str,
+    clip_id: str,
+    fields: dict,
+    ctx: Context,
+) -> str:
+    """Save editable clip metadata as one undoable edit.
+
+    Fields include name, notes, tags, shot_type, description, object_labels,
+    and transcript. Unsupported fields are rejected by the shared model.
+    """
+    from core.spine.metadata import update_clip_from_json
+
+    return await _call(
+        ctx,
+        lambda sessions: sessions.edit(
+            session_id, lambda project: update_clip_from_json(project, clip_id, fields)
+        ),
+    )

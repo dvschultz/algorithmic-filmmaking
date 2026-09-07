@@ -10,16 +10,16 @@ session lease from load or first save through project replacement or close.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Tuple
+from typing import Any, Tuple
 
 from core.project import Project, ProjectSaveError
 from core.project_lock import ProjectBusyError, project_writer
 from core.project_revision import ProjectFileRevision, ProjectRevisionConflict
 
 
-def project_error(error: Exception) -> str | dict[str, str]:
+def project_error(error: Exception) -> str | dict[str, Any]:
     """Keep existing error strings while exposing writer conflicts structurally."""
-    return error.to_dict() if isinstance(error, (ProjectBusyError, ProjectRevisionConflict)) else str(error)
+    return error.to_dict() if isinstance(error, (ProjectBusyError, ProjectRevisionConflict, ProjectModifiedExternally)) else str(error)
 
 # Mtime-comparison tolerance in seconds. Filesystem caches and network mounts
 # can report sub-second drift on otherwise-untouched files. This legacy 1s
@@ -48,6 +48,14 @@ class ProjectModifiedExternally(Exception):
             f"Project file mtime drifted: expected {expected_mtime}, "
             f"got {current_mtime} (path={path})"
         )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "code": "project_modified_externally",
+            "path": str(self.path),
+            "expected_mtime": self.expected_mtime,
+            "current_mtime": self.current_mtime,
+        }
 
 
 def load_with_mtime(path: Path | str) -> Tuple[Project, float]:

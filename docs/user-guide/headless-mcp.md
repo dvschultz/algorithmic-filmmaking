@@ -380,6 +380,25 @@ clip IDs. The following tools target that sequence even when it is inactive:
 Each call is one saved undoable edit. The existing path-based `reorder_sequence`,
 `remove_from_sequence`, `clear_sequence`, and `shuffle_sequence` tools now join
 the same retained session when called through the running server. Shuffle redo
-uses its saved order, without running randomness or analysis again. Legacy
-`add_to_sequence` and other unmigrated path tools still save independently and
-invalidate retained history; use `insert_session_clips` for retained insertion.
+uses its saved order, without running randomness or analysis again. `add_to_sequence`, tag/note edits, and source removal also join retained history.
+Remaining unmigrated operations, such as media analysis and imports, still save
+independently and invalidate previous retained history.
+
+### Library edits and legacy insertion
+
+`add_to_sequence` now joins retained history and uses absolute source-frame
+ranges. Missing tracks are created in the same undo action as insertion; undo
+removes those new tracks. Track creation accepts indices 0–255. Unknown or
+disabled library clips are skipped, and a batch with no insertable clips does
+not create tracks.
+
+`add_clip_tags`, `remove_clip_tags`, `add_clip_note`, and `remove_source` preserve
+their existing response fields and now share the retained session. Undoing source
+removal restores its model references, including clips used in sequences.
+
+`set_session_clips_disabled(session_id, clip_ids, disabled)` edits enabled state.
+`update_session_clip(session_id, clip_id, fields)` edits metadata. Transcript
+values use a list of objects with `start_time`, `end_time`, and `text`; optional
+word objects use `start`, `end`, and `text`. Times must be finite, nonnegative,
+and ordered. Use an empty list to clear a transcript. JSON conversion happens
+before the edit, so malformed transcript input cannot partially change a clip.

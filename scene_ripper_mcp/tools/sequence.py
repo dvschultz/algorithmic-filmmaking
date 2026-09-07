@@ -1,50 +1,19 @@
 """Sequence/timeline manipulation MCP tools."""
 
-import asyncio
 import json
 import logging
-from typing import Annotated, Optional, Callable
+from typing import Annotated, Optional
 
 from mcp.server.fastmcp import Context
 
 from scene_ripper_mcp.server import mcp
 from scene_ripper_mcp.security import validate_project_path
 
-from core.spine.project_io import project_error, project_writer
+from scene_ripper_mcp.editorial import editorial_call as _editorial_call
 
 logger = logging.getLogger(__name__)
 
 
-async def _editorial_call(project_path: str, ctx: Context, operation: Callable) -> str:
-    valid, error, path = validate_project_path(project_path)
-    if not valid:
-        return json.dumps({"success": False, "error": error})
-    try:
-        if ctx is not None:
-            runtime = ctx.request_context.lifespan_context["project_sessions"]
-            result = await runtime.call(
-                lambda sessions: sessions.edit_path(path, operation)
-            )
-        else:
-
-            def standalone():
-                from core.spine.project_io import load_with_mtime, save_with_mtime_check
-
-                with project_writer(path):
-                    project, mtime = load_with_mtime(path)
-                    generation = project.mutation_generation
-                    result = operation(project)
-                    if (
-                        result.get("success")
-                        and project.mutation_generation != generation
-                    ):
-                        save_with_mtime_check(project, path, mtime)
-                    return result
-
-            result = await asyncio.to_thread(standalone)
-        return json.dumps(result)
-    except Exception as exc:
-        return json.dumps({"success": False, "error": project_error(exc)})
 
 
 @mcp.tool()
@@ -162,118 +131,10 @@ async def add_to_sequence(
     Returns:
         JSON with updated sequence state
     """
-    valid, error, path = validate_project_path(project_path)
-    if not valid:
-        return json.dumps({"success": False, "error": error})
-
-    try:
-        with project_writer(path):
-            from core.project import MissingSourceError
-            from core.spine.project_io import (
-                ProjectModifiedExternally,
-                load_with_mtime,
-                save_with_mtime_check,
-            )
-            from models.sequence import Sequence, SequenceClip
-
-            try:
-                project, mtime = load_with_mtime(path)
-            except MissingSourceError as e:
-                return json.dumps({
-                    "success": False,
-                    "error": {"code": "source_files_missing", "message": str(e)},
-                })
-
-            sources_by_id = project.sources_by_id
-            clips_by_id = project.clips_by_id
-
-            sequence = project.sequence
-            if sequence is None:
-                # Determine FPS from sources
-                fps = 30.0
-                if project.sources:
-                    fps = project.sources[0].fps
-                project.sequence = Sequence(name=project.metadata.name, fps=fps)
-                sequence = project.sequence
-
-            # Ensure track exists
-            while len(sequence.tracks) <= track_index:
-                sequence.add_track()
-
-            track = sequence.tracks[track_index]
-
-            # Determine starting position
-            if position == "end":
-                start_frame = track.clips[-1].end_frame() if track.clips else 0
-            elif position == "start":
-                start_frame = 0
-            else:
-                try:
-                    start_frame = int(position)
-                except (ValueError, TypeError):
-                    return json.dumps({"success": False, "error": f"Invalid position: {position}"})
-
-            # Add clips
-            added_clips = []
-            current_frame = start_frame
-
-            for clip_id in clip_ids:
-                orig_clip = clips_by_id.get(clip_id)
-                if not orig_clip:
-                    logger.warning(f"Clip not found: {clip_id}")
-                    continue
-
-                source = sources_by_id.get(orig_clip.source_id)
-                if not source:
-                    logger.warning(f"Source not found for clip: {clip_id}")
-                    continue
-
-                seq_clip = SequenceClip(
-                    source_clip_id=orig_clip.id,
-                    source_id=orig_clip.source_id,
-                    track_index=track_index,
-                    start_frame=current_frame,
-                    in_point=0,
-                    out_point=orig_clip.duration_frames,
-                )
-
-                track.add_clip(seq_clip)
-                added_clips.append(
-                    {
-                        "clip_id": clip_id,
-                        "sequence_clip_id": seq_clip.id,
-                        "start_frame": current_frame,
-                    }
-                )
-
-                current_frame += orig_clip.duration_frames
-
-            project.mark_dirty()
-
-            try:
-                save_with_mtime_check(project, path, mtime)
-            except ProjectModifiedExternally as exc:
-                return json.dumps({
-                    "success": False,
-                    "error": {
-                        "code": "project_modified_externally",
-                        "path": str(exc.path),
-                        "expected_mtime": exc.expected_mtime,
-                        "current_mtime": exc.current_mtime,
-                    },
-                })
-
-            return json.dumps(
-                {
-                    "success": True,
-                    "clips_added": len(added_clips),
-                    "added": added_clips,
-                    "sequence_duration": sequence.duration_seconds,
-                }
-            )
-    except Exception as e:
-        logger.exception("Failed to add to sequence")
-        return json.dumps({"success": False, "error": project_error(e)})
+    def operation(project):
+        from core.spine.timeline import insert_legacy_clips
+        return insert_legacy_clips(project, clip_ids, track_index=track_index, position=position)
+    return await _editorial_call(project_path, ctx, operation)
 
 
 @mcp.tool()

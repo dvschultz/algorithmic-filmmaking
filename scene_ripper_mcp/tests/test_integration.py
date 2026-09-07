@@ -184,7 +184,7 @@ class TestClipTools:
         """Add tags to a clip."""
         from scene_ripper_mcp.tools.clips import add_clip_tags
 
-        ctx = AsyncMock()
+        ctx = None  # Standalone path; retained ownership is covered separately.
         result = await add_clip_tags(
             project_path=str(project_with_clips),
             clip_id="clip-2",
@@ -243,7 +243,7 @@ class TestSequenceTools:
         """Add clips to sequence."""
         from scene_ripper_mcp.tools.sequence import add_to_sequence
 
-        ctx = AsyncMock()
+        ctx = None  # Standalone path; retained ownership is covered separately.
         result = await add_to_sequence(
             project_path=str(project_with_sequence),
             clip_ids=["clip-2", "clip-3"],

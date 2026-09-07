@@ -432,67 +432,21 @@ async def remove_source(
     Returns:
         JSON with removal result
     """
-    valid, error, path = validate_project_path(project_path)
-    if not valid:
-        return json.dumps({"success": False, "error": error})
+    from scene_ripper_mcp.editorial import editorial_call
 
-    try:
-        with project_writer(path):
-            from core.project import MissingSourceError
-            from core.spine.project_io import (
-                ProjectModifiedExternally,
-                load_with_mtime,
-                save_with_mtime_check,
-            )
-
-            try:
-                project, mtime = load_with_mtime(path)
-            except MissingSourceError as e:
-                return json.dumps({
-                    "success": False,
-                    "error": {"code": "source_files_missing", "message": str(e)},
-                })
-
-            source_to_remove = project.sources_by_id.get(source_id)
-            if source_to_remove is None:
-                return json.dumps({"success": False, "error": f"Source not found: {source_id}"})
-
-            original_clip_count = len(project.clips)
-
-            # Remove the source (also drops associated clips and frames).
-            from core.spine.sources import remove_source as remove_source_impl
-
-            result = remove_source_impl(project, source_id)
-            if not result["success"]:
-                return json.dumps(result)
-
-            removed_clips = original_clip_count - len(project.clips)
-
-            try:
-                save_with_mtime_check(project, path, mtime)
-            except ProjectModifiedExternally as exc:
-                return json.dumps({
-                    "success": False,
-                    "error": {
-                        "code": "project_modified_externally",
-                        "path": str(exc.path),
-                        "expected_mtime": exc.expected_mtime,
-                        "current_mtime": exc.current_mtime,
-                    },
-                })
-
-            return json.dumps(
-                {
-                    "success": True,
-                    "removed_source": source_to_remove.filename,
-                    "removed_clips": removed_clips,
-                    "remaining_sources": len(project.sources),
-                    "remaining_clips": len(project.clips),
-                }
-            )
-    except Exception as e:
-        logger.exception("Failed to remove source")
-        return json.dumps({"success": False, "error": project_error(e)})
+    def operation(project):
+        from core.spine.sources import remove_source as remove_source_impl
+        source = project.sources_by_id.get(source_id)
+        if source is None:
+            return {"success": False, "error": f"Source not found: {source_id}"}
+        original_count = len(project.clips)
+        result = remove_source_impl(project, source_id)
+        if not result["success"]:
+            return result
+        return {"success": True, "removed_source": source.filename,
+                "removed_clips": original_count - len(project.clips),
+                "remaining_sources": len(project.sources), "remaining_clips": len(project.clips)}
+    return await editorial_call(project_path, ctx, operation)
 
 
 @mcp.tool()

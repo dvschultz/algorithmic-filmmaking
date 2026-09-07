@@ -60,6 +60,8 @@ class EditSequenceClips:
     changed: tuple[SequenceClip, ...]
     label: str
     notification_ids: tuple[str, ...]
+    original_tracks: tuple[Track, ...] = ()
+    created_tracks: tuple[Track, ...] = ()
 
     @property
     def event_data(self) -> list[str]:
@@ -76,22 +78,41 @@ class EditSequenceClips:
         }
 
     @classmethod
-    def insert(cls, sequence: Sequence, clips: list[SequenceClip]) -> EditSequenceClips:
+    def insert(
+        cls,
+        sequence: Sequence,
+        clips: list[SequenceClip],
+        *,
+        create_tracks: bool = False,
+    ) -> EditSequenceClips:
         edits = []
+        planned_tracks = list(sequence.tracks)
+        for clip in clips:
+            index = clip.track_index
+            if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+                raise ValueError("Invalid sequence track")
+            if create_tracks and index >= len(planned_tracks):
+                if index >= 256:
+                    raise ValueError("Track creation supports indices 0 through 255")
+                while len(planned_tracks) <= index:
+                    planned_tracks.append(
+                        Track(name=f"Video {len(planned_tracks) + 1}")
+                    )
+        created = tuple(planned_tracks[len(sequence.tracks) :])
         existing = {clip.id for clip in sequence.get_all_clips()}
         for clip in clips:
             if clip.id in existing:
                 raise ValueError("Sequence clip ID already exists")
             existing.add(clip.id)
-            if not 0 <= clip.track_index < len(sequence.tracks):
+            if not 0 <= clip.track_index < len(planned_tracks):
                 raise ValueError("Invalid sequence track")
             if clip.start_frame < 0 or clip.duration_frames <= 0:
                 raise ValueError(
                     "Sequence clips require a nonnegative start and positive duration"
                 )
-        for index, track in enumerate(sequence.tracks):
+        for index, track in enumerate(planned_tracks):
             added = [clip for clip in clips if clip.track_index == index]
-            if added:
+            if added or index >= len(sequence.tracks):
                 before = tuple(Placement.capture(c) for c in track.clips)
                 after = tuple(
                     sorted(
@@ -106,6 +127,8 @@ class EditSequenceClips:
             tuple(clips),
             f"Insert {len(clips)} sequence clip{'s' if len(clips) != 1 else ''}",
             tuple(c.frame_id or c.source_clip_id or c.id for c in clips),
+            tuple(sequence.tracks) if created else (),
+            created,
         )
 
     @classmethod
@@ -157,9 +180,17 @@ class EditSequenceClips:
 
     @classmethod
     def reorder(
-        cls, sequence: Sequence, clip_ids: list[str], *, track_index: int = 0,
+        cls,
+        sequence: Sequence,
+        clip_ids: list[str],
+        *,
+        track_index: int = 0,
     ) -> EditSequenceClips:
-        if isinstance(track_index, bool) or not isinstance(track_index, int) or not 0 <= track_index < len(sequence.tracks):
+        if (
+            isinstance(track_index, bool)
+            or not isinstance(track_index, int)
+            or not 0 <= track_index < len(sequence.tracks)
+        ):
             raise ValueError("Invalid sequence track")
         track = sequence.tracks[track_index]
         lookup = {c.id: c for c in track.clips}
@@ -262,13 +293,27 @@ class EditSequenceClips:
     def apply(self, project: Project, *, undo: bool = False) -> list[SequenceClip]:
         if not any(sequence is self.sequence for sequence in project.sequences):
             raise ValueError("Sequence no longer belongs to this project")
+        validation_tracks = list(self.sequence.tracks)
+        if self.created_tracks:
+            expected_tracks = (
+                self.original_tracks + self.created_tracks
+                if undo
+                else self.original_tracks
+            )
+            if len(expected_tracks) != len(validation_tracks) or any(
+                actual is not expected
+                for actual, expected in zip(validation_tracks, expected_tracks)
+            ):
+                raise ValueError("Sequence tracks changed since this edit")
+            if not undo:
+                validation_tracks.extend(self.created_tracks)
         # Validate every affected track before changing any of them. Keep the
         # original objects: transforms and media references must survive undo.
         for edit in self.tracks:
             expected = edit.after if undo else edit.before
             if (
-                edit.index >= len(self.sequence.tracks)
-                or self.sequence.tracks[edit.index] is not edit.track
+                edit.index >= len(validation_tracks)
+                or validation_tracks[edit.index] is not edit.track
                 or len(edit.track.clips) != len(expected)
                 or any(not p.matches(c) for p, c in zip(expected, edit.track.clips))
             ):
@@ -285,10 +330,17 @@ class EditSequenceClips:
                     continue
                 if (
                     (clip.source_id and clip.source_id not in project.sources_by_id)
-                    or (clip.source_clip_id and clip.source_clip_id not in project.clips_by_id)
+                    or (
+                        clip.source_clip_id
+                        and clip.source_clip_id not in project.clips_by_id
+                    )
                     or (clip.frame_id and clip.frame_id not in project.frames_by_id)
                 ):
-                    raise ValueError("Cannot restore sequence clip: referenced media was removed")
+                    raise ValueError(
+                        "Cannot restore sequence clip: referenced media was removed"
+                    )
+        if self.created_tracks and not undo:
+            self.sequence.tracks.extend(self.created_tracks)
         for edit in self.tracks:
             target = edit.before if undo else edit.after
             edit.track.clips[:] = [p.clip for p in target]
@@ -305,4 +357,6 @@ class EditSequenceClips:
                     "prerendered_path",
                 ):
                     setattr(placement.clip, field, getattr(placement, field))
+        if self.created_tracks and undo:
+            self.sequence.tracks[len(self.original_tracks) :] = []
         return list(self.changed)

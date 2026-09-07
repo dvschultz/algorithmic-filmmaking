@@ -1274,6 +1274,7 @@ class Project:
 
     def insert_sequence_clips(
         self, clips: list[SequenceClip], *, sequence: Sequence | None = None,
+        create_tracks: bool = False,
     ) -> list[SequenceClip]:
         """Insert prepared timeline entries as one reversible edit."""
         from core.commands.sequence_clips import EditSequenceClips
@@ -1282,7 +1283,7 @@ class Project:
         target = sequence if sequence is not None else self.sequence
         if target is None:
             return []
-        return self.session.execute(EditSequenceClips.insert(target, clips))
+        return self.session.execute(EditSequenceClips.insert(target, clips, create_tracks=create_tracks))
 
     def remove_from_sequence(
         self, clip_ids: list[str], *, sequence: Sequence | None = None,

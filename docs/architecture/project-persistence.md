@@ -149,12 +149,18 @@ its model and history between calls, but releases the writer lease. External
 revision changes reload the model and invalidate previous history before the
 next operation; failed saves discard unpublished state. Shutdown drains queued
 session work and closes models. Unmigrated path-based tools still load independently;
-their writes trigger the same revision-driven reload. Migrating their remaining
-editorial operations into retained sessions is still outstanding.
+their writes trigger the same revision-driven reload. Analysis and import
+operation lifecycle remains separate from editorial undo.
 
 Retained timeline tools delegate to `core/spine/timeline.py` and shared reversible
 commands, using explicit sequence IDs and validated track indices. The migrated
 path-based remove/reorder/clear/shuffle tools enter the same retained session
 through `edit_path`; standalone calls still acquire ownership and save on an
-owner thread without retained history. Legacy insertion and remaining library
-mutators still require migration.
+owner thread without retained history. Remaining analysis and import operations still require lifecycle migration.
+
+Legacy MCP insertion, tag/note edits, and source removal now use the retained
+editorial adapter too. New track creation is captured inside the insertion
+command, including empty intermediate tracks, so undo/redo restores structure
+atomically. Session metadata accepts validated transcript JSON and converts it
+to shared model types before publication. Import/analysis jobs remain outside
+editorial undo and are the next lifecycle migration surface.

@@ -168,3 +168,64 @@ def shuffle_clips(
         project, sequence_id, [c.id for c in entries], track_index=track_index
     )
     return {**result, "method": method, "clips_shuffled": len(entries)}
+
+
+def insert_legacy_clips(
+    project: Project,
+    clip_ids: list[str],
+    *,
+    track_index: int = 0,
+    position: str | None = "end",
+) -> dict:
+    """Legacy insertion with implicit tracks, published as one reversible edit."""
+    sequence = project.sequence
+    if sequence is None:
+        raise ValueError("No sequence in project")
+    if (
+        isinstance(track_index, bool)
+        or not isinstance(track_index, int)
+        or track_index < 0
+    ):
+        raise ValueError("Invalid sequence track")
+    if track_index >= len(sequence.tracks) and track_index >= 256:
+        raise ValueError("Track creation supports indices 0 through 255")
+    existing = (
+        sequence.tracks[track_index].clips if track_index < len(sequence.tracks) else []
+    )
+    if position == "end":
+        start = max((clip.end_frame() for clip in existing), default=0)
+    elif position == "start":
+        start = 0
+    else:
+        try:
+            start = int(position) if position is not None else -1
+        except (ValueError, TypeError):
+            raise ValueError(f"Invalid position: {position}") from None
+    if start < 0:
+        raise ValueError("Position must be a nonnegative frame")
+    entries = []
+    added = []
+    for clip_id in clip_ids:
+        clip = project.clips_by_id.get(clip_id)
+        if clip is None or clip.source_id not in project.sources_by_id or clip.disabled:
+            continue
+        entry = SequenceClip(
+            source_clip_id=clip.id,
+            source_id=clip.source_id,
+            track_index=track_index,
+            start_frame=start,
+            in_point=clip.start_frame,
+            out_point=clip.end_frame,
+        )
+        entries.append(entry)
+        added.append(
+            {"clip_id": clip_id, "sequence_clip_id": entry.id, "start_frame": start}
+        )
+        start += entry.duration_frames
+    project.insert_sequence_clips(entries, sequence=sequence, create_tracks=True)
+    return {
+        "success": True,
+        "clips_added": len(added),
+        "added": added,
+        "sequence_duration": sequence.duration_seconds,
+    }
