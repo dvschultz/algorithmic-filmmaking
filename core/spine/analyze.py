@@ -699,45 +699,37 @@ def embeddings(
     cancel_event: Optional[threading.Event] = None,
 ) -> dict:
     """Extract DINOv2 embeddings from clip thumbnails."""
-    from core.analysis.embeddings import _EMBEDDING_MODEL_TAG, extract_clip_embeddings_batch
+    from core.operations.embeddings import (
+        EmbeddingApplication, EmbeddingOptions, EmbeddingTask, run_embeddings,
+    )
 
-    clips = _resolve_clip_ids(project, clip_ids)
-    to_process = []
-    succeeded: list[dict] = []
-    failed: list[dict] = []
-    skipped: list[dict] = []
+    tasks = tuple(
+        EmbeddingTask(c.id, _thumbnail_for_clip(c), skip_existing and c.embedding is not None)
+        for c in _resolve_clip_ids(project, clip_ids)
+    )
+    application = EmbeddingApplication(project, tasks)
+    result = {"succeeded": [], "failed": [], "skipped": [], "unprocessed": [], "total_clips": len(tasks)}
 
-    for clip in clips:
-        if skip_existing and clip.embedding is not None:
-            skipped.append({"clip_id": clip.id, "reason": "already_populated"})
-            continue
-        thumbnail_path = _thumbnail_for_clip(clip)
-        if thumbnail_path is None:
-            failed.append({"clip_id": clip.id, "code": "thumbnail_missing"})
-            continue
-        to_process.append((clip, thumbnail_path))
+    def deliver(outcome):
+        if outcome.status == "succeeded":
+            if application.apply(project, outcome):
+                result["succeeded"].append({"clip_id": outcome.clip_id, "embedding_dim": len(outcome.vector)})
+            else:
+                result["failed"].append({"clip_id": outcome.clip_id, "code": "stale_result"})
+        elif outcome.status == "skipped":
+            result["skipped"].append({"clip_id": outcome.clip_id, "reason": outcome.code})
+        elif outcome.status == "failed":
+            item = {"clip_id": outcome.clip_id, "code": outcome.code}
+            if outcome.message:
+                item["message"] = outcome.message
+            result["failed"].append(item)
 
-    total = len(clips)
-    if to_process and not _check_cancel(cancel_event):
-        try:
-            vectors = extract_clip_embeddings_batch([path for _clip, path in to_process])
-        except Exception as exc:  # noqa: BLE001
-            failed.extend({"clip_id": clip.id, "code": "embedding_failed", "message": str(exc)} for clip, _path in to_process)
-        else:
-            for i, ((clip, _path), vector) in enumerate(zip(to_process, vectors)):
-                if _check_cancel(cancel_event):
-                    break
-                clip.embedding = vector
-                clip.embedding_model = _EMBEDDING_MODEL_TAG
-                succeeded.append({"clip_id": clip.id, "embedding_dim": len(vector)})
-                if progress_callback is not None and to_process:
-                    progress_callback((i + 1) / len(to_process), f"Embeddings ({i + 1}/{len(to_process)}): {clip.id}")
-            if succeeded:
-                project.update_clips([clip for clip, _path in to_process if clip.embedding is not None])
-
-    if progress_callback is not None:
-        progress_callback(1.0, f"Done: {len(succeeded)} ok, {len(failed)} failed, {len(skipped)} skipped")
-    return {"success": True, "result": {"succeeded": succeeded, "failed": failed, "skipped": skipped, "total_clips": total}}
+    outcomes = run_embeddings(
+        tasks, EmbeddingOptions(), cancel_event=cancel_event, on_outcome=deliver,
+        progress=lambda n, total: progress_callback(n / total if total else 1.0, f"Embeddings ({n}/{total})") if progress_callback else None,
+    )
+    result["unprocessed"] = [{"clip_id": o.clip_id, "code": o.code} for o in outcomes if o.status == "unprocessed"]
+    return {"success": True, "result": result}
 
 
 def custom_query(

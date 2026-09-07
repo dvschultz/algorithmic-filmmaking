@@ -3646,10 +3646,14 @@ class MainWindow(QMainWindow):
         here — if the user declined install, this launcher is never reached.
         """
         self._embeddings_finished_handled = False
+        self._reset_analysis_run_error("embeddings")
         logger.info(f"Creating EmbeddingAnalysisWorker (pipeline) for {len(clips)} clips...")
         self._embeddings_worker = EmbeddingAnalysisWorker(clips)
         self._embeddings_worker.progress.connect(self._on_embeddings_progress)
-        self._embeddings_worker.embedding_ready.connect(self._on_embedding_ready)
+        from ui.workers.embedding_delivery import EmbeddingDelivery
+        self._embeddings_worker._delivery = EmbeddingDelivery(
+            self, self._embeddings_worker, pipeline=True,
+        )
         bind_pipeline_completion(
             self, self._embeddings_worker, "_embeddings_worker",
             self._embeddings_worker.analysis_completed, self._on_pipeline_embeddings_finished,
@@ -4592,6 +4596,7 @@ class MainWindow(QMainWindow):
             "detect_objects": "_object_detection_run_error",
             "face_embeddings": "_face_detection_run_error",
             "gaze": "_gaze_run_error",
+            "embeddings": "_embeddings_run_error",
             "extract_text": "_text_extraction_run_error",
             "cinematography": "_cinematography_run_error",
         }
@@ -4636,6 +4641,7 @@ class MainWindow(QMainWindow):
             ("detect_objects", self._object_detection_run_error, "object detection"),
             ("face_embeddings", getattr(self, "_face_detection_run_error", None), "face detection"),
             ("gaze", getattr(self, "_gaze_run_error", None), "gaze analysis"),
+            ("embeddings", getattr(self, "_embeddings_run_error", None), "embedding analysis"),
             ("extract_text", self._text_extraction_run_error, "text extraction"),
             ("transcribe", self._transcription_run_error, "transcription"),
             ("describe", self._description_run_error, "description"),
@@ -8221,7 +8227,6 @@ class MainWindow(QMainWindow):
         """Handle embedding attached to a clip. No per-clip UI indicator yet."""
         clip = self.clips_by_id.get(clip_id)
         if clip:
-            self._mark_dirty()
             logger.debug(f"Clip {clip_id}: embedding populated")
 
     @Slot()
@@ -8236,6 +8241,7 @@ class MainWindow(QMainWindow):
     def _on_embeddings_error(self, msg: str):
         """Handle embedding analysis errors — log and ensure pipeline advances."""
         logger.error("Embedding analysis error: %s", msg)
+        self._embeddings_run_error = msg
         self.statusBar().showMessage(f"Embedding analysis failed: {msg}", 5000)
 
     @Slot(int, int)

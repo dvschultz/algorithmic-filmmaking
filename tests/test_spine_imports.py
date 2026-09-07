@@ -71,6 +71,7 @@ SPINE_MODULES: tuple[str, ...] = (
     "core.operations.classification",
     "core.operations.faces",
     "core.operations.gaze",
+    "core.operations.embeddings",
     "core.operations.object_detection",
     "core.operations.colors",
     "core.operations.detection",

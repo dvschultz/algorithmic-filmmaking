@@ -670,6 +670,31 @@ The headless public `no_gaze_detected` response remains compatible.
 Embeddings, OCR, remaining audio/frame analysis, and workflow orchestration remain
 U7 work. This gaze cutover does not complete U7 or isolate native inference.
 
+### Shared embedding computation and guarded publication
+
+GUI and spine/MCP clip-thumbnail embeddings now use
+`core/operations/embeddings.py`. Bounded batches return immutable vectors;
+only the project owner applies results after validating clip, source, thumbnail,
+and prior embedding state. Queued results from cancelled jobs, replaced workers,
+or changed project sessions are rejected, and duplicate delivery applies once.
+
+The shared operation rejects zero, non-finite, and wrong-sized vectors. A batch
+with the wrong number of vectors fails explicitly instead of silently truncating
+its results. Missing thumbnails fail per item, successful earlier batches remain
+available after a later batch failure, and cancellation rejects late results.
+Migrated embedding jobs serialize model use and cleanup; cancelled waiters do
+not unload another job's model. Progress includes skipped and failed targets.
+
+The legacy `embedding_ready(clip_id)` signal remains a computation notification;
+the main window uses the typed outcome signal for guarded publication. Pipeline
+summaries now retain embedding errors, and result refresh does not dirty the
+project a second time. Existing headless result fields remain, with an additive
+`unprocessed` list for cancellation and aborted later batches.
+
+Embedding job history/recovery, boundary and sequencer-specific embedding routes,
+OCR, remaining audio/frame analysis, and workflow orchestration remain U7 work.
+Native-process isolation remains a later milestone.
+
 The MCP analysis adapter translates shared operation kinds to their existing
 public job names at submission. Gaze, faces, objects, classification, and
 cinematography are covered by tests that submit to the real job runtime and

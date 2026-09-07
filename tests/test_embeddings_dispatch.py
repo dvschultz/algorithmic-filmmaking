@@ -65,11 +65,14 @@ class TestLauncherSignalWiring:
         assert mw._embeddings_worker is fake_worker
         # Required signal connections
         fake_worker.progress.connect.assert_called()
-        fake_worker.embedding_ready.connect.assert_called()
+        fake_worker.outcome_ready.connect.assert_called_once_with(
+            fake_worker._delivery.result
+        )
+        fake_worker.embedding_ready.connect.assert_not_called()
         fake_worker.analysis_completed.connect.assert_called()
         fake_worker.error.connect.assert_called()
         # Lifecycle cleanup connected
-        fake_worker.finished.connect.assert_called_once()
+        fake_worker.finished.connect.assert_any_call(fake_worker._delivery.deleteLater)
         cleanup = fake_worker.finished.connect.call_args.args[0]
         cleanup()
         assert mw._embeddings_worker is None
