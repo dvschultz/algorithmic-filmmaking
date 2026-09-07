@@ -30,6 +30,8 @@ from core.operations.detection import (
     DetectionCancelled, DetectionGuard, DetectionRequest, StaleDetectionResult, run_detection,
 )
 
+from core.spine.sources import find_source_by_path
+
 logger = logging.getLogger(__name__)
 
 
@@ -201,17 +203,7 @@ def detect_scenes_for_video(
             },
         }
 
-    resolved = video.resolve()
-    existing_source = None
-    for s in project.sources:
-        try:
-            if s.file_path.resolve() == resolved:
-                existing_source = s
-                break
-        except (OSError, ValueError):
-            if s.file_path == video:
-                existing_source = s
-                break
+    existing_source = find_source_by_path(project, video)
 
     if _check_cancel(cancel_event):
         return {"success": False, "error": {"code": "cancelled"}}

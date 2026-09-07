@@ -30,6 +30,7 @@ from PySide6.QtGui import QDesktopServices, QKeySequence, QAction, QDragEnterEve
 
 from models.clip import Source, Clip
 from core.project_lock import ProjectWriter
+from core.spine.sources import find_source_by_path, add_source_if_missing, probe_source
 from core.scene_detect import DetectionConfig, KaraokeDetectionConfig
 from core.operations.detection import StaleDetectionResult
 from ui.workers.detection_worker import DetectionWorker
@@ -3346,42 +3347,21 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(f"Selected: {source.filename}")
 
     def _create_source_with_metadata(self, path: Path) -> Source:
-        """Create a Source with metadata extracted via FFprobe.
-
-        Args:
-            path: Path to the video file
-
-        Returns:
-            Source with duration, fps, width, height populated
-        """
-        source = Source(file_path=path)
-
-        # Try to extract metadata using FFprobe
-        try:
-            processor = FFmpegProcessor()
-            info = processor.get_video_info(path)
-            source.duration_seconds = info.get("duration", 0.0)
-            source.fps = info.get("fps", 30.0)
-            source.width = info.get("width", 0)
-            source.height = info.get("height", 0)
-            logger.debug(f"Extracted metadata for {path.name}: {source.duration_seconds:.1f}s, {source.fps:.1f}fps, {source.width}x{source.height}")
-        except Exception as e:
-            logger.warning(f"Failed to extract metadata for {path.name}: {e}")
-            # Source will have default values (duration=0, fps=30, etc.)
-
-        return source
+        """Prepare metadata through the shared source-import probe."""
+        return probe_source(path)
 
     def _add_video_to_library(self, path: Path):
         """Add a video file to the library without making it active."""
         # Check if already in library
-        for source in self.sources:
-            if source.file_path == path:
-                self.status_bar.showMessage(f"Video already in library: {path.name}")
-                return
+        if find_source_by_path(self.project, path) is not None:
+            self.status_bar.showMessage(f"Video already in library: {path.name}")
+            return
 
         # Create new source with metadata and add to project
         source = self._create_source_with_metadata(path)
-        self.project.add_source(source)
+        source, added = add_source_if_missing(self.project, source)
+        if not added:
+            return
 
         # Add to CollectTab grid
         self.collect_tab.add_source(source)
@@ -5263,11 +5243,7 @@ class MainWindow(QMainWindow):
     def _load_video(self, path: Path):
         """Load a video file - adds to library and selects it."""
         # Check if already in library
-        existing = None
-        for source in self.sources:
-            if source.file_path == path:
-                existing = source
-                break
+        existing = find_source_by_path(self.project, path)
 
         if existing:
             # Already in library, just select it
@@ -5275,7 +5251,10 @@ class MainWindow(QMainWindow):
         else:
             # Add to library with metadata
             source = self._create_source_with_metadata(path)
-            self.project.add_source(source)
+            source, added = add_source_if_missing(self.project, source)
+            if not added:
+                self._select_source(source)
+                return
             self.collect_tab.add_source(source)
 
             # Generate thumbnail
@@ -7736,14 +7715,15 @@ class MainWindow(QMainWindow):
             file_path = Path(result.file_path)
 
             # Check if already in project
-            for existing in self.project.sources:
-                if existing.file_path == file_path:
-                    logger.info(f"Source already in project: {file_path.name}")
-                    return
+            if find_source_by_path(self.project, file_path) is not None:
+                logger.info(f"Source already in project: {file_path.name}")
+                return
 
             # Create source with metadata and add to project
             source = self._create_source_with_metadata(file_path)
-            self.project.add_source(source)
+            source, added = add_source_if_missing(self.project, source)
+            if not added:
+                return
 
             # Add to CollectTab grid
             self.collect_tab.add_source(source)
@@ -9031,9 +9011,8 @@ class MainWindow(QMainWindow):
             file_path = Path(result.file_path)
 
             # Check if already in project
-            for existing in self.project.sources:
-                if existing.file_path == file_path:
-                    return
+            if find_source_by_path(self.project, file_path) is not None:
+                return
 
             # Create source and add to project
             source = Source(
@@ -9043,7 +9022,9 @@ class MainWindow(QMainWindow):
                 width=result.width or 1920,
                 height=result.height or 1080,
             )
-            self.project.add_source(source)
+            source, added = add_source_if_missing(self.project, source)
+            if not added:
+                return
             self.collect_tab.add_source(source)
 
     def _cleanup_worker(

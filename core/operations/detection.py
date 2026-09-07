@@ -9,6 +9,8 @@ from pathlib import Path
 from threading import Event
 from typing import TYPE_CHECKING, Callable
 
+from core.spine.sources import find_source_by_path, same_source_path
+
 if TYPE_CHECKING:
     from core.project import Project
     from core.scene_detect import DetectionConfig, KaraokeDetectionConfig
@@ -38,7 +40,7 @@ def _media_stamp(path: Path) -> tuple[int, int, int, int, int] | None:
 
 
 def _target_digest(project: Project, path: Path) -> str:
-    sources = [s for s in project.sources if s.file_path.resolve() == path]
+    sources = [s for s in project.sources if same_source_path(s.file_path, path)]
     ids = {s.id for s in sources}
     payload = {
         "sources": [s.to_dict() for s in sources],
@@ -66,11 +68,11 @@ class DetectionGuard:
         source = (
             project.sources_by_id.get(source_id)
             if source_id
-            else next(
-                (s for s in project.sources if s.file_path.resolve() == path), None
-            )
+            else find_source_by_path(project, path)
         )
-        if source_id and (source is None or source.file_path.resolve() != path):
+        if source_id and (
+            source is None or not same_source_path(source.file_path, path)
+        ):
             raise StaleDetectionResult("Detection source no longer matches its media")
         return cls(
             project.session.session_id,

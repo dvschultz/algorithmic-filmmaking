@@ -2870,23 +2870,21 @@ def import_folder(project, main_window, folder_path: str) -> dict:
     if not video_files:
         return {"success": False, "error": f"No video files found in {folder_path}"}
 
+    from core.spine.sources import find_source_by_path, add_source_if_missing, probe_source
+
     imported = []
     skipped = []
     for vf in video_files:
         # Check if already imported
-        existing = next(
-            (s for s in project.sources if Path(s.file_path).resolve() == vf.resolve()),
-            None
-        )
+        existing = find_source_by_path(project, vf)
         if existing:
             skipped.append(vf.name)
             continue
 
-        from core.scene_detect import load_source
-        source = load_source(str(vf))
+        source = probe_source(vf)
         if source:
-            project.add_source(source)
-            imported.append(vf.name)
+            _source, added = add_source_if_missing(project, source)
+            (imported if added else skipped).append(vf.name)
 
     return {
         "success": True,
