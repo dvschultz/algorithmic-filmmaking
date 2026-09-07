@@ -58,6 +58,7 @@ from unittest.mock import patch
 from PySide6.QtCore import QCoreApplication, QObject, QThread, Signal
 app = QCoreApplication([])
 class Worker(QThread):
+    job_started = Signal(str, str)
     progress = Signal(int, int)
     status = Signal(str)
     transcript_ready = Signal(str, list)

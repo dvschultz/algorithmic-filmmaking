@@ -31,6 +31,7 @@ class TranscriptionDelivery(QObject):
         worker.status.connect(self.status)
         worker.transcript_ready.connect(self.transcript)
         worker.error.connect(self.error)
+        worker.job_started.connect(self.job_started)
 
     def _current(self) -> bool:
         return (
@@ -51,6 +52,13 @@ class TranscriptionDelivery(QObject):
     def progress(self, current: int, total: int) -> None:
         if self._current():
             self.window._on_transcription_progress(current, total)
+
+    @Slot(str, str)
+    def job_started(self, task_id: str, persistence: str) -> None:
+        if self._current() and persistence == "session_only":
+            self.window.status_bar.showMessage(
+                "Transcription results remain unsaved until you save the project."
+            )
 
     @Slot(str)
     def status(self, message: str) -> None:

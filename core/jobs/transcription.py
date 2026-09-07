@@ -5,7 +5,7 @@ from hashlib import sha256
 import json
 from pathlib import Path
 from threading import Event
-from typing import Callable
+from typing import Callable, Literal
 
 from core.jobs.commits import ResultSpec, StaleJobResult, result_batch
 from core.jobs.spec import OperationSpec
@@ -14,6 +14,7 @@ from core.operations.transcription import (
     TranscriptionApplication,
     TranscriptionOptions,
     TranscriptionOutcome,
+    TranscriptionTask,
     run_transcription,
     snapshot_tasks,
 )
@@ -56,27 +57,45 @@ def transcription_job_spec(
         project.sources_by_id,
         skip_existing=False,
     )
+    revision = project.session.file_revision
+    return transcription_operation_spec(
+        tasks,
+        replace(options, backend=_resolve_backend(options.backend)),
+        arguments=arguments,
+        persistence="job_history",
+        session_id=project.session.session_id,
+        input_revision=revision.digest if revision else None,
+    )
+
+
+def transcription_operation_spec(
+    tasks: tuple[TranscriptionTask, ...],
+    options: TranscriptionOptions,
+    *,
+    arguments: dict,
+    persistence: Literal["job_history", "session_only"],
+    session_id: str | None,
+    input_revision: str | None,
+) -> OperationSpec:
+    """Describe detached transcription inputs for either runtime surface."""
     targets = []
     for task in tasks:
         target = asdict(task)
         target["source_path"] = str(task.source_path) if task.source_path else None
         target["media_stamp"] = _stamp(task.source_path) if task.source_path else None
         targets.append(target)
-    revision = project.session.file_revision
     return OperationSpec.build(
         kind="transcribe",
         version=1,
         arguments=arguments,
         inputs={
             "targets": targets,
-            "options": asdict(
-                replace(options, backend=_resolve_backend(options.backend))
-            ),
+            "options": asdict(options),
         },
-        persistence="job_history",
+        persistence=persistence,
         cancellable=True,
-        session_id=project.session.session_id,
-        input_revision=revision.digest if revision else None,
+        session_id=session_id,
+        input_revision=input_revision,
     )
 
 

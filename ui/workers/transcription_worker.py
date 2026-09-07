@@ -1,22 +1,30 @@
-"""Background worker for clip transcription.
-
-Runs Whisper transcription on multiple clips in a background thread,
-using ThreadPoolExecutor for parallelism. Supports faster-whisper and
-mlx-whisper backends.
-"""
+"""Qt lifecycle adapter for shared session transcription jobs."""
 
 import logging
 import time
+from dataclasses import asdict
 from pathlib import Path
+from queue import Empty, Queue
+from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Signal
+from core.jobs import JobRuntime
+from core.jobs.transcription import transcription_operation_spec
+from core.transcription_models import TranscriptSegment
 
 from ui.workers.base import CancellableWorker, summarize_clip_errors
 from core.operations.transcription import (
-    TranscriptionOptions, TranscriptionOutcome, TranscriptionTask, run_transcription, snapshot_tasks,
+    TranscriptionOptions,
+    TranscriptionOutcome,
+    TranscriptionTask,
+    run_transcription,
+    snapshot_tasks,
 )
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from core.project import Project
 
 
 def _summarize_errors(errors: list[tuple[str, str]]) -> str:
@@ -42,6 +50,7 @@ class TranscriptionWorker(CancellableWorker):
     status = Signal(str)
     transcript_ready = Signal(str, list)  # clip_id, segments
     transcription_completed = Signal()
+    job_started = Signal(str, str)
 
     def __init__(
         self,
@@ -57,7 +66,9 @@ class TranscriptionWorker(CancellableWorker):
         segmentation_mode: str = "backend",
         segment_max_seconds: float = 12.0,
         parent=None,
-    ):
+        *,
+        project: "Project | None" = None,
+    ) -> None:
         super().__init__(parent)
         self._model_name = model_name
         self._language = language
@@ -68,14 +79,50 @@ class TranscriptionWorker(CancellableWorker):
         self._segmentation_mode = segmentation_mode
         self._segment_max_seconds = segment_max_seconds
         requested_parallelism = min(max(1, parallelism), 4)
-        self._parallelism = 1 if self._backend == "mlx-whisper" else requested_parallelism
-        self._tasks = tuple(task for task in snapshot_tasks(
-            clips, {source.id: source}, skip_existing=skip_existing,
-        ) if not task.skip)
-        self._options = TranscriptionOptions(
-            model_name, language, self._backend, segmentation_mode,
-            segment_max_seconds, self._parallelism,
+        self._parallelism = (
+            1 if self._backend == "mlx-whisper" else requested_parallelism
         )
+        self._tasks = tuple(
+            task
+            for task in snapshot_tasks(
+                clips,
+                {source.id: source},
+                skip_existing=skip_existing,
+            )
+            if not task.skip
+        )
+        self._options = TranscriptionOptions(
+            model_name,
+            language,
+            self._backend,
+            segmentation_mode,
+            segment_max_seconds,
+            self._parallelism,
+        )
+        self.operation = transcription_operation_spec(
+            self._tasks,
+            self._options,
+            arguments={
+                **asdict(self._options),
+                "model_cache_dir": str(model_cache_dir) if model_cache_dir else None,
+                "min_free_disk_gb": min_free_disk_gb,
+            },
+            persistence="session_only",
+            session_id=project.session.session_id if project is not None else None,
+            input_revision=str(project.mutation_generation)
+            if project is not None
+            else None,
+        )
+        self.task_id: str | None = None
+        self.job_status: str | None = None
+        self.result: tuple[TranscriptionOutcome, ...] = ()
+        self._runtime: JobRuntime | None = None
+
+    def cancel(self) -> None:
+        super().cancel()
+        runtime = self._runtime
+        if runtime is not None and self.task_id is not None:
+            runtime.cancel(self.task_id)
 
     @property
     def tasks(self) -> tuple[TranscriptionTask, ...]:
@@ -89,28 +136,17 @@ class TranscriptionWorker(CancellableWorker):
 
         return _resolve_backend(backend)
 
-    def run(self):
-        """Execute transcription on all clips."""
-        started_at = time.monotonic()
-        self._log_start()
-
+    def _prepare(self, events: Queue[tuple[str, tuple]]) -> bool:
+        """Run preflight inside the job, reporting through the lifecycle adapter."""
         total = len(self._tasks)
-        if total == 0:
-            logger.info("No clips to process for transcription")
-            self.transcription_completed.emit()
-            self._log_complete()
-            return
+        if self.is_cancelled() or total == 0:
+            return False
 
         from core.binary_resolver import find_binary
         from core.transcription import FFmpegNotFoundError
 
         if find_binary("ffmpeg") is None:
-            message = str(FFmpegNotFoundError())
-            self._log_error(message)
-            self.error.emit(message)
-            self.transcription_completed.emit()
-            self._log_complete()
-            return
+            raise FFmpegNotFoundError()
 
         logger.info(
             f"Starting transcription: {total} clips, "
@@ -118,23 +154,26 @@ class TranscriptionWorker(CancellableWorker):
         )
 
         if self._backend != "groq":
-            try:
-                from core.settings import load_settings
-                from core.transcription_storage import validate_transcription_disk_space
+            from core.settings import load_settings
+            from core.transcription_storage import validate_transcription_disk_space
 
-                cache_dir = self._model_cache_dir or load_settings().model_cache_dir
-                self.status.emit("Transcribe: checking disk space for Whisper model and temp audio...")
-                validate_transcription_disk_space(
-                    self._model_name,
-                    self._backend,
-                    cache_dir,
-                    self._min_free_disk_gb,
+            cache_dir = self._model_cache_dir or load_settings().model_cache_dir
+            events.put(
+                (
+                    "status",
+                    (
+                        "Transcribe: checking disk space for Whisper model and temp audio...",
+                    ),
                 )
-            except Exception as e:
-                self.error.emit(str(e))
-                self.transcription_completed.emit()
-                self._log_complete()
-                return
+            )
+            validate_transcription_disk_space(
+                self._model_name,
+                self._backend,
+                cache_dir,
+                self._min_free_disk_gb,
+            )
+            if self.is_cancelled():
+                return False
 
         # Pre-load Whisper model so user sees download status
         if self._backend != "groq":
@@ -146,46 +185,151 @@ class TranscriptionWorker(CancellableWorker):
                     is_mlx_whisper_available,
                 )
 
-                self.progress.emit(0, total)
+                events.put(("progress", (0, total)))
                 model_info = WHISPER_MODELS.get(self._model_name, {})
                 model_size = model_info.get("size", "unknown size")
-                self.status.emit(
-                    f"Transcribe: loading {self._backend} model "
-                    f"{self._model_name} ({model_size}); first run may download it..."
+                events.put(
+                    (
+                        "status",
+                        (
+                            f"Transcribe: loading {self._backend} model "
+                            f"{self._model_name} ({model_size}); first run may download it...",
+                        ),
+                    )
                 )
-                if self._backend in ("auto", "mlx-whisper") and is_mlx_whisper_available():
+                if (
+                    self._backend in ("auto", "mlx-whisper")
+                    and is_mlx_whisper_available()
+                ):
                     get_mlx_model(self._model_name)
                 else:
                     get_model(self._model_name)
-                self.status.emit(f"Transcribe: model ready; processing {total} clips...")
+                events.put(
+                    (
+                        "status",
+                        (f"Transcribe: model ready; processing {total} clips...",),
+                    )
+                )
             except Exception as e:
-                self.error.emit(f"Failed to load Whisper model: {e}")
+                raise RuntimeError(f"Failed to load Whisper model: {e}") from e
+        return not self.is_cancelled()
+
+    def run(self) -> None:
+        """Observe one session job and emit Qt signals from this adapter."""
+        started_at = time.monotonic()
+        self._log_start()
+        runtime = None
+        events: Queue[tuple[str, tuple]] = Queue()
+
+        def emit_event(event: tuple[str, tuple]) -> None:
+            kind, args = event
+            if kind == "status":
+                self.status.emit(*args)
+            elif kind == "progress":
+                self.progress.emit(*args)
+            elif kind == "transcript":
+                self.transcript_ready.emit(*args)
+
+        def compute(progress, cancel):
+            try:
+                if not self._prepare(events):
+                    outcomes = tuple(
+                        TranscriptionOutcome(
+                            task.clip_id, "unprocessed", code="cancelled"
+                        )
+                        for task in self._tasks
+                    )
+                else:
+
+                    def deliver(outcome):
+                        if outcome.status == "succeeded":
+                            events.put(
+                                (
+                                    "transcript",
+                                    (outcome.clip_id, list(outcome.segments)),
+                                )
+                            )
+
+                    def report(current, total):
+                        progress(
+                            current / total if total else 1.0,
+                            f"Transcribing ({current}/{total})",
+                        )
+                        events.put(("progress", (current, total)))
+
+                    outcomes = run_transcription(
+                        self._tasks,
+                        self._options,
+                        cancel_event=cancel,
+                        on_outcome=deliver,
+                        progress=report,
+                    )
+                return {"outcomes": [asdict(outcome) for outcome in outcomes]}
+            except Exception as exc:
+                return {"success": False, "error": str(exc)}
+
+        try:
+            runtime = JobRuntime.for_session(max_workers=1)
+            self._runtime = runtime
+            submission = runtime.submit(
+                kind="transcribe",
+                args=self.operation.arguments,
+                operation=self.operation,
+                run=compute,
+                cancellation_event=self._cancel_event,
+            )
+            self.task_id = submission["task_id"]
+            self.job_started.emit(self.task_id, submission["persistence"])
+            while runtime.is_handle_live(self.task_id):
+                try:
+                    emit_event(events.get(timeout=0.05))
+                except Empty:
+                    pass
+            runtime.shutdown()
+            while not events.empty():
+                emit_event(events.get_nowait())
+            row = runtime.store.get(self.task_id)
+            self.job_status = row.status
+            payload = row.result or {}
+            self.result = tuple(
+                TranscriptionOutcome(
+                    **{
+                        **item,
+                        "segments": tuple(
+                            TranscriptSegment.from_dict(s) for s in item["segments"]
+                        ),
+                    }
+                )
+                for item in payload.get("outcomes", [])
+            )
+            if row.status == "cancelled" and not self.result:
+                self.result = tuple(
+                    TranscriptionOutcome(task.clip_id, "unprocessed", code="cancelled")
+                    for task in self._tasks
+                )
+            if row.status == "failed":
+                raise RuntimeError(row.error or "Transcription failed")
+            errors = [
+                (o.clip_id, o.message or o.code or "Transcription failed")
+                for o in self.result
+                if o.status == "failed"
+            ]
+            if errors:
+                self.error.emit(_summarize_errors(errors))
+            if row.status == "cancelled":
+                self._log_cancelled()
+            else:
+                self.status.emit(
+                    f"Transcription completed in {time.monotonic() - started_at:.1f}s"
+                )
+        except Exception as exc:
+            self._log_error(str(exc))
+            self.error.emit(str(exc))
+        finally:
+            try:
+                if runtime is not None:
+                    runtime.close_session()
+            finally:
+                self._runtime = None
                 self.transcription_completed.emit()
                 self._log_complete()
-                return
-
-            if self.is_cancelled():
-                self._log_cancelled()
-                self.transcription_completed.emit()
-                return
-
-        errors: list[tuple[str, str]] = []
-
-        def deliver(outcome: TranscriptionOutcome) -> None:
-            if outcome.status == "succeeded":
-                self.transcript_ready.emit(outcome.clip_id, list(outcome.segments))
-            elif outcome.status == "failed":
-                errors.append((outcome.clip_id, outcome.message or outcome.code or "Transcription failed"))
-
-        run_transcription(
-            self._tasks, self._options, cancel_event=self._cancel_event,
-            on_outcome=deliver, progress=self.progress.emit,
-        )
-
-        if errors:
-            self.error.emit(_summarize_errors(errors))
-
-        elapsed = time.monotonic() - started_at
-        self.status.emit(f"Transcription completed in {elapsed:.1f}s")
-        self.transcription_completed.emit()
-        self._log_complete()

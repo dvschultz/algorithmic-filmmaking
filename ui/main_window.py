@@ -3198,6 +3198,7 @@ class MainWindow(QMainWindow):
             backend=self.settings.transcription_backend,
             segmentation_mode=self.settings.transcription_segmentation_mode,
             segment_max_seconds=self.settings.transcription_segment_max_seconds,
+            project=self.project,
             parent=self,
         )
         self._active_audio_transcribes.add(worker)

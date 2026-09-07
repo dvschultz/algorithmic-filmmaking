@@ -245,5 +245,14 @@ individually. Every following step reloads the saved model, preserving receipts
 and completed work when a later step fails. This is not an atomic whole-plan
 transaction, and other analysis families still need their durable migrations.
 
-GUI transcription still needs durable receipt integration; it retains the
-shared computation and application guards above.
+GUI transcription now submits an immutable operation specification to the shared
+job runtime through its existing Qt worker. Preflight and computation run inside
+the job; the worker observes progress/results and retains a task ID, terminal
+status, and typed outcomes. Cancellation shares one event across the worker and
+runtime, and cleanup completes before the worker emits its terminal signal.
+Job-start notices use the same current-worker/request/session guard as transcripts.
+
+These GUI jobs are explicitly session-only, including when the editor has a
+saved project path: results become unsaved model changes until the user saves.
+Their temporary job store closes after delivery; they do not yet provide durable
+receipt recovery. Durable GUI publication remains outstanding U7 work.

@@ -19,6 +19,7 @@ from ui.workers.gui_tool_reply import GuiToolReply
 app = QCoreApplication([])
 owner_thread = threading.get_ident()
 class Worker(QThread):
+    job_started = Signal(str, str)
     progress = Signal(int, int)
     status = Signal(str)
     error = Signal(str)
@@ -26,6 +27,7 @@ class Worker(QThread):
     def __init__(self, tasks):
         super().__init__(); self.tasks = tasks
     def run(self):
+        self.job_started.emit('task-id', 'session_only')
         self.progress.emit(1, 1); self.status.emit('status'); self.error.emit('error')
         self.transcript_ready.emit('c-0', [])
         self.transcript_ready.emit('c-0', [])
