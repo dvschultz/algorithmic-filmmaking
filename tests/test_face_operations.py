@@ -229,3 +229,38 @@ def test_waiting_face_job_cancels_without_loading_or_unloading_active_model(
         if second.ident is not None:
             second.join(5)
     unload.assert_called_once()
+
+
+def test_pipeline_completion_does_not_unload_another_active_job(setup, monkeypatch):
+    from threading import Thread
+    from types import SimpleNamespace
+    from ui.main_window import MainWindow
+
+    project, provider = setup
+    entered, release = Event(), Event()
+    unload = Mock()
+    monkeypatch.setattr("core.analysis.faces.unload_model", unload)
+    results = []
+
+    def compute(**kwargs):
+        entered.set()
+        assert release.wait(5)
+        return []
+
+    provider.side_effect = compute
+    snapshot = tasks(project)[:1]
+    active = Thread(target=lambda: results.extend(run_faces(snapshot, FaceOptions())))
+    window = SimpleNamespace(_on_analysis_phase_worker_finished=Mock())
+    active.start()
+    try:
+        assert entered.wait(5)
+        # A prior worker's queued completion can arrive after this job starts.
+        MainWindow._on_pipeline_face_detection_finished(window)
+        window._on_analysis_phase_worker_finished.assert_called_once_with("face_embeddings")
+        unload.assert_not_called()
+    finally:
+        release.set()
+        active.join(5)
+    assert not active.is_alive()
+    assert results[0].status == "succeeded"
+    unload.assert_called_once()

@@ -3941,8 +3941,6 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_pipeline_face_detection_finished(self):
-        from core.analysis.faces import unload_model
-        unload_model()
         self._on_analysis_phase_worker_finished("face_embeddings")
 
     @Slot()
