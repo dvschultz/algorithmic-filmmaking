@@ -84,6 +84,7 @@ from ui.tabs import CollectTab, CutTab, AnalyzeTab, FramesTab, SequenceTab, Rend
 from ui.theme import theme, Spacing
 from ui.chat_panel import ChatPanel
 from ui.workers.chat_delivery import ChatDelivery, stop_chat_workers
+from ui.workers.detection_thumbnail_delivery import DetectionThumbnailDelivery
 from ui.workers.gui_tool_reply import (
     AgentAnalysisCompletion, GuiToolReply, gui_reply_scope,
 )
@@ -633,7 +634,6 @@ class MainWindow(QMainWindow):
         self._transcription_source_queue: list = []  # Queue for multi-source transcription
 
         # Agent tool waiting state - tracks when agent is waiting for worker completion
-        self._pending_agent_detection = False
         self._pending_agent_color_analysis = False
         self._pending_agent_shot_analysis = False
         self._pending_agent_transcription = False
@@ -891,6 +891,7 @@ class MainWindow(QMainWindow):
         self._source_import_queue.cancel_pending()
         self._deferred_agent_download_results = None
         self._cancel_download_workers()
+        self._active_detection_reply = None
 
         # Stop chat worker if running
         stop_chat_workers(self)
@@ -2244,7 +2245,7 @@ class MainWindow(QMainWindow):
                     logger.info(f"GUI tool {tool_name} waiting for worker: {wait_type}")
                     # Store tool_call_id for when worker completes
                     if wait_type not in {
-                        "color_analysis", "shot_analysis", "description", "transcription",
+                        "color_analysis", "shot_analysis", "description", "transcription", "detection",
                         "classification", "object_detection", "person_detection",
                     }:
                         self._pending_agent_tool_call_id = tool_call_id
@@ -5356,7 +5357,7 @@ class MainWindow(QMainWindow):
         else:
             self.status_bar.showMessage(f"Downloaded {success} videos successfully")
 
-    def _start_detection(self, mode: str = "adaptive", config_dict: dict = None):
+    def _start_detection(self, mode: str = "adaptive", config_dict: dict = None) -> bool:
         """Start scene detection with given mode and config.
 
         Args:
@@ -5365,14 +5366,18 @@ class MainWindow(QMainWindow):
         """
         logger.info(f"=== START DETECTION (mode={mode}) ===")
         if not self.current_source:
-            return
+            return False
+
+        reply = getattr(self, "_dispatch_gui_reply", None)
+        if reply is not None and not reply.is_current(self):
+            return False
 
         config_dict = config_dict or {}
 
         # Guard against concurrent detection
         if self.detection_worker and self.detection_worker.isRunning():
             logger.warning("Detection already in progress, ignoring request")
-            return
+            return False
 
         self._detection_generation += 1
 
@@ -5425,6 +5430,7 @@ class MainWindow(QMainWindow):
             source_id=self.current_source.id,
         )
         self._active_detection_guard = self.detection_worker.guard
+        self._active_detection_reply = reply
         self.detection_worker.job_started.connect(
             lambda task, persistence, guard=self.detection_worker.guard: self._on_detection_job_started(guard, task, persistence)
         )
@@ -5441,6 +5447,7 @@ class MainWindow(QMainWindow):
         self._gui_state.set_processing("scene_detection", f"running on {self.current_source.filename}")
         self.detection_worker.start()
         logger.info("DetectionWorker started")
+        return True
 
     def _on_detection_job_started(self, guard, task_id: str, persistence: str) -> None:
         if (guard is self._active_detection_guard
@@ -5460,7 +5467,7 @@ class MainWindow(QMainWindow):
         if (guard is self._active_detection_guard
                 and not self._detection_finished_handled
                 and guard.session_id == self.project.session.session_id):
-            self._on_detection_error(error)
+            self._on_detection_error(error, reply=getattr(self, "_active_detection_reply", None))
 
     @Slot(object, object, list)
     def _on_guarded_detection_finished(self, guard, source, clips):
@@ -5469,16 +5476,31 @@ class MainWindow(QMainWindow):
         # A result queued by an old project must not change the new project's UI.
         if guard.session_id != self.project.session.session_id:
             return
+        reply = getattr(self, "_active_detection_reply", None)
+        if reply is not None and not reply.is_current(self):
+            self._detection_finished_handled = True
+            self._active_detection_reply = None
+            self._gui_state.clear_processing("scene_detection")
+            self.progress_bar.setVisible(False)
+            return
         try:
             guard.validate(self.project)
         except StaleDetectionResult as exc:
             self._detection_finished_handled = True
-            self._on_detection_error(str(exc))
+            self._on_detection_error(str(exc), reply=getattr(self, "_active_detection_reply", None))
             return
-        self._on_detection_finished(source, clips, target_id=guard.source_id)
+        self._on_detection_finished(
+            source, clips, target_id=guard.source_id,
+            reply=reply,
+        )
+        if guard is self._active_detection_guard and getattr(self, "_active_detection_reply", None) is reply:
+            self._active_detection_reply = None  # Thumbnail delivery now owns the reply.
 
     @Slot(object, list)
-    def _on_detection_finished(self, source: Source, clips: list[Clip], target_id: str | None = None):
+    def _on_detection_finished(
+        self, source: Source, clips: list[Clip], target_id: str | None = None,
+        *, reply: GuiToolReply | None = None,
+    ) -> None:
         """Handle detection completion."""
         logger.info("=== DETECTION FINISHED ===")
         self._gui_state.clear_processing("scene_detection")
@@ -5508,8 +5530,6 @@ class MainWindow(QMainWindow):
             # Source not in library yet (shouldn't happen normally)
             target_source = source
             source.analyzed = True
-
-        self._detected_source_id = target_source.id
 
         # Update clips to reference the existing source ID (detection creates a new Source object)
         # This ensures clips_by_source lookups work correctly
@@ -5551,32 +5571,30 @@ class MainWindow(QMainWindow):
             cache_dir=self.settings.thumbnail_cache_dir,
             sources_by_id=self.sources_by_id,
         )
-        self.thumbnail_worker.progress.connect(self._on_thumbnail_progress)
-        self.thumbnail_worker.thumbnail_ready.connect(self._on_thumbnail_ready)
-        self.thumbnail_worker.finished.connect(self._on_thumbnails_finished, Qt.UniqueConnection)
+        DetectionThumbnailDelivery(
+            self, self.thumbnail_worker, self._active_detection_guard,
+            lambda source_id=target_source.id: self._on_thumbnails_finished(reply=reply, source_id=source_id),
+        )
         logger.info("Starting ThumbnailWorker...")
         self.thumbnail_worker.start()
         logger.info("ThumbnailWorker started")
 
-    def _on_detection_error(self, error: str):
+    def _on_detection_error(self, error: str, *, reply: GuiToolReply | None = None) -> None:
         """Handle detection error."""
+        if getattr(self, "_active_detection_reply", None) is reply:
+            self._active_detection_reply = None
         logger.error(f"=== DETECTION ERROR: {error} ===")
         self._gui_state.clear_processing("scene_detection")
         self._gui_state.set_last_error(f"Detection error: {error}")
         self.progress_bar.setVisible(False)
 
         # If agent was waiting for detection, send error result
-        if self._pending_agent_detection and self._chat_worker:
-            self._pending_agent_detection = False
+        if reply is not None:
             result = {
-                "tool_call_id": self._pending_agent_tool_call_id,
-                "name": self._pending_agent_tool_name,
                 "success": False,
                 "error": error
             }
-            self._pending_agent_tool_call_id = None
-            self._pending_agent_tool_name = None
-            self._chat_worker.set_gui_tool_result(result)
+            reply.send(self, result)
             logger.info(f"Sent detection error to agent: {error}")
         else:
             # Only show dialog for manual detection
@@ -5608,7 +5626,9 @@ class MainWindow(QMainWindow):
             logger.warning(f"Total clips in project: {len(self.project.clips)}")
 
     @Slot()
-    def _on_thumbnails_finished(self):
+    def _on_thumbnails_finished(
+        self, *, reply: GuiToolReply | None = None, source_id: str | None = None,
+    ) -> None:
         """Handle all thumbnails completed."""
         logger.info("=== THUMBNAILS FINISHED ===")
 
@@ -5642,9 +5662,8 @@ class MainWindow(QMainWindow):
         self._update_chat_project_state()
 
         # If agent was waiting for detection, send result back
-        if self._pending_agent_detection and self._chat_worker:
-            self._pending_agent_detection = False
-            detected_source = self.sources_by_id.get(self._detected_source_id)
+        if reply is not None:
+            detected_source = self.sources_by_id.get(source_id)
             if detected_source:
                 detected_source_clips = self.project.clips_by_source.get(
                     detected_source.id, []
@@ -5653,8 +5672,6 @@ class MainWindow(QMainWindow):
                 detected_source_clips = []
             clip_ids = [c.id for c in detected_source_clips]
             result = {
-                "tool_call_id": self._pending_agent_tool_call_id,
-                "name": self._pending_agent_tool_name,
                 "success": True,
                 "result": {
                     "success": True,
@@ -5673,9 +5690,7 @@ class MainWindow(QMainWindow):
                     "message": f"Detected {len(clip_ids)} scenes"
                 }
             }
-            self._pending_agent_tool_call_id = None
-            self._pending_agent_tool_name = None
-            self._chat_worker.set_gui_tool_result(result)
+            reply.send(self, result)
             logger.info(f"Sent detection result to agent: {len(clip_ids)} clips")
 
         # Continue with next source in batch queue (deferred to let worker cleanup)
@@ -7577,11 +7592,9 @@ class MainWindow(QMainWindow):
                 return False
             self._select_source(source)
 
-            # Mark agent waiting
-            self._pending_agent_detection = True
-
             # Start detection
-            self._start_detection(mode, config)
+            if not self._start_detection(mode, config):
+                return False
 
             # Switch to Cut tab
             self._switch_to_tab("cut")
@@ -10427,7 +10440,6 @@ class MainWindow(QMainWindow):
         self._last_user_message = ""
 
         # Clear all agent pending flags
-        self._pending_agent_detection = False
         self._pending_agent_color_analysis = False
         self._pending_agent_shot_analysis = False
         self._pending_agent_transcription = False

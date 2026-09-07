@@ -122,7 +122,16 @@ the next. `GuiToolReply` checks the chat worker's live mailbox before follow-up 
 or delivery, so an expired request cannot continue merely because its chat still
 exists. Per-source computation remains in the existing transcription worker.
 
-Detection/thumbnails, download batches, exports, and combined
+Desktop detection now captures its request when detection starts and carries that
+reply through the thumbnail stage. Errors and completion leave unrelated pending
+fields alone, and the response uses the captured source ID. An expired request
+cannot publish a late detection result or start thumbnail generation. Detection
+thumbnail progress, individual results, and completion use an owner-thread relay
+guarded by the detection identity, project session, and thumbnail worker. Cleanup
+cannot clear a replacement worker. Busy or stale detection dispatch reports a
+failed start instead of leaving the agent waiting for an operation that never ran.
+
+Download batches, exports, and combined
 analysis completion still need this sender migration. Their legacy completion
 handlers can construct replies from shared pending fields; mailbox validation
 cannot distinguish a stale result relabeled with the current request token.

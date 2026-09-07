@@ -90,8 +90,10 @@ from core.project import Project
 from core.operations.detection import DetectionGuard
 from models.clip import Source, Clip
 from ui.main_window import MainWindow
+from ui.workers.gui_tool_reply import GuiToolReply
+from PySide6.QtCore import QObject
 
-class Controller:
+class Controller(QObject):
     _on_guarded_detection_error = MainWindow._on_guarded_detection_error
     _on_guarded_intention_detection_error = MainWindow._on_guarded_intention_detection_error
     _on_guarded_detection_finished = MainWindow._on_guarded_detection_finished
@@ -177,11 +179,30 @@ for intention in (False, True):
                      '_sync_cut_tab_clip_browser', '_refresh_sequence_tab_clips', '_start_next_analysis'):
             setattr(controller, name, Mock())
         controller._build_agent_detected_clip_summary = lambda clips: []
+        reply = GuiToolReply.capture(controller, 'detect_scenes_live', 'original')
         with patch('ui.main_window.QTimer'):
-            MainWindow._on_thumbnails_finished(controller)
+            MainWindow._on_thumbnails_finished(controller, reply=reply, source_id=target.id)
         response = controller._chat_worker.set_gui_tool_result.call_args.args[0]['result']
         assert response['source_id'] == target.id, response
         assert response['clip_ids'] == [c.id for c in clips], response
+        assert controller._pending_agent_tool_call_id == 'call'
+        assert controller._chat_worker.set_gui_tool_result.call_args.args[0]['tool_call_id'] == 'original'
+        controller._detection_finished_handled = False
+        controller._active_detection_reply = Mock()
+        controller._active_detection_reply.is_current.return_value = False
+        controller._on_detection_finished = Mock()
+        controller._on_guarded_detection_finished(guard, result, clips)
+        controller._on_detection_finished.assert_not_called()
+        assert controller._detection_finished_handled
+        MainWindow._on_detection_error(controller, 'decoder failed', reply=reply)
+        response = controller._chat_worker.set_gui_tool_result.call_args.args[0]
+        assert response['tool_call_id'] == 'original' and response['error'] == 'decoder failed'
+        assert controller._pending_agent_tool_call_id == 'call'
+        controller._start_detection = Mock(return_value=False)
+        controller._select_source = Mock()
+        controller._switch_to_tab = Mock()
+        assert MainWindow._start_worker_for_tool(controller, 'detection', {'source_id': target.id}) is False
+        controller._switch_to_tab.assert_not_called()
 '''
     result = subprocess.run(
         [sys.executable, "-c", code],
