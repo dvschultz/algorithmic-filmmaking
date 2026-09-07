@@ -82,10 +82,19 @@ already delivered successes remain available. Native progress callbacks originat
 on executor threads; Qt adapters only emit signals there. Receipt and item
 callbacks remain on the calling worker thread.
 
-Shared ordered intention plans,
-and the remaining analysis workflows are outstanding U7 work. A direct chat
-download notification is still associated with the chat worker rather than these
-download-worker relays and needs its own submission/session guard.
+Direct chat download notifications now pass through `ChatDelivery`, which checks
+the requesting project session and current chat worker before delivery. The same
+guard covers text, GUI tool requests, cancellation, search results, and completion.
+Replacing or clearing a conversation invalidates delivery and cooperatively stops
+its workers; retained workers are released only after `finished`. Project reset
+does not wait for chat threads. Shutdown waits for them, which can take until a
+provider or native call returns. Ordinary chat cancellation retains the existing
+completion/history behavior. Pending GUI-tool cancellation is consumed before
+invalidation so its later queued signal cannot cancel a new conversation's work.
+
+Shared ordered intention plans and the remaining analysis workflows are outstanding
+U7 work. This relay protects incoming chat signals; per-operation ownership of
+asynchronous GUI tool replies and worker-side project access still need migration.
 
 Tests cover timeout/resolution forwarding, cancellation at each stage, invalid
 URLs, failure aggregation, frozen MCP submission arguments, actual intention

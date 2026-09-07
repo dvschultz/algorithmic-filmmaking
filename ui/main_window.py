@@ -83,6 +83,7 @@ from ui.settings_dialog import SettingsDialog
 from ui.tabs import CollectTab, CutTab, AnalyzeTab, FramesTab, SequenceTab, RenderTab
 from ui.theme import theme, Spacing
 from ui.chat_panel import ChatPanel
+from ui.workers.chat_delivery import ChatDelivery, stop_chat_workers
 from ui.chat_worker import ChatAgentWorker
 from ui.clip_browser import VIRTUALIZATION_THRESHOLD, clear_thumbnail_pixmap_cache
 from ui.clip_details_sidebar import ClipDetailsSidebar
@@ -889,9 +890,7 @@ class MainWindow(QMainWindow):
         self._cancel_download_workers()
 
         # Stop chat worker if running
-        if self._chat_worker and self._chat_worker.isRunning():
-            self._chat_worker.stop()
-            self._chat_worker.wait(1000)
+        stop_chat_workers(self)
 
         # Stop all analysis workers
         workers_to_stop = [
@@ -1572,6 +1571,7 @@ class MainWindow(QMainWindow):
         self._current_chat_bubble = None
         self._current_tool_indicator = None
         self._chat_worker: Optional[ChatAgentWorker] = None
+        self._active_chat_workers: set[ChatAgentWorker] = set()
 
         # Create chat panel
         self.chat_panel = ChatPanel()
@@ -2013,9 +2013,7 @@ class MainWindow(QMainWindow):
                     return
 
         # Cancel any existing worker
-        if self._chat_worker and self._chat_worker.isRunning():
-            self._chat_worker.stop()
-            self._chat_worker.wait(1000)
+        stop_chat_workers(self)
 
         # Get current provider config
         provider_key = self.chat_panel.get_provider()
@@ -2069,22 +2067,23 @@ class MainWindow(QMainWindow):
         bubble = self.chat_panel.start_streaming_response()
         self._current_chat_bubble = bubble
 
-        self._chat_worker.text_chunk.connect(self.chat_panel.on_stream_chunk)
-        self._chat_worker.clear_current_bubble.connect(self.chat_panel.on_clear_bubble)
-        self._chat_worker.tool_called.connect(self._on_chat_tool_called)
-        self._chat_worker.tool_result.connect(self._on_chat_tool_result)
-        self._chat_worker.gui_tool_requested.connect(self._on_gui_tool_requested)
-        self._chat_worker.gui_tool_cancelled.connect(self._on_gui_tool_cancelled)
-        self._chat_worker.complete.connect(self._on_chat_complete)
-        self._chat_worker.error.connect(self._on_chat_error)
-        self._chat_worker.auth_failed.connect(self._on_chat_auth_failed)
-
-        # Workflow progress for compound operations
-        self._chat_worker.workflow_progress.connect(self._on_workflow_progress)
-
-        # GUI sync signals - update GUI components when agent performs actions
-        self._chat_worker.youtube_search_completed.connect(self._on_agent_youtube_search)
-        self._chat_worker.video_download_completed.connect(self._on_agent_video_downloaded)
+        handlers = {
+            "text_chunk": self.chat_panel.on_stream_chunk,
+            "clear_current_bubble": self.chat_panel.on_clear_bubble,
+            "tool_called": self._on_chat_tool_called,
+            "tool_result": self._on_chat_tool_result,
+            "gui_tool_requested": self._on_gui_tool_requested,
+            "gui_tool_cancelled": self._on_gui_tool_cancelled,
+            "complete": self._on_chat_complete,
+            "error": self._on_chat_error,
+            "auth_failed": self._on_chat_auth_failed,
+            "workflow_progress": self._on_workflow_progress,
+            "youtube_search_completed": self._on_agent_youtube_search,
+            "video_download_completed": self._on_agent_video_downloaded,
+        }
+        delivery = ChatDelivery(self, self._chat_worker, handlers)
+        for name in handlers:
+            getattr(self._chat_worker, name).connect(getattr(delivery, name))
 
         self._chat_worker.start()
 
@@ -2896,6 +2895,7 @@ class MainWindow(QMainWindow):
     def _on_chat_clear(self):
         """Handle chat clear request - reset conversation history."""
         logger.info("Clearing chat history")
+        stop_chat_workers(self)
         self._chat_history.clear()
         self._last_user_message = ""
 
@@ -10660,6 +10660,7 @@ class MainWindow(QMainWindow):
             ("gaze", getattr(self, '_gaze_worker', None)),
         ]
 
+        stop_chat_workers(self, wait=True)
         self._cancel_download_workers(wait=True)
 
         for name, worker in workers:
