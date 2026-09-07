@@ -185,9 +185,9 @@ before cancellation or failure. An absent `result` means no output was recorded.
 Status and list endpoints continue to omit payloads, and nonterminal jobs do not
 expose their unfinished output through `get_job_result`.
 
-Migrated color jobs also expose an `operation` summary in status/list responses:
+Migrated color and bulk-detection jobs expose an `operation` summary in status/list responses:
 its ID, kind, version, `cancellable`, and persistence mode. Input details remain
-private. A queued color job fails if its project revision or media snapshot
+private. These queued jobs fail if their project revision or media snapshot
 changes before execution. Submit it again against the current inputs to retry.
 An explicit idempotency key still refers to the original job; use a new key when
 requesting different work.
@@ -441,8 +441,16 @@ checkpoint verifies the saved palette without applying it twice. Edited palettes
 are preserved and reported as a conflict. Other analysis jobs do not yet use this
 recovery path.
 
+`start_detect_scenes_bulk` also records computed scenes, saving one source and
+its receipt at a time. Retrying identical inputs reuses the recorded clip IDs;
+a failed save retries publication, and a failed checkpoint reconciles the saved
+result. Edited sources or clips are reported as conflicts instead of overwritten.
+Queued jobs reject changed project or media inputs. Successful sources remain
+saved if another source fails or the job is cancelled. This recovery path applies
+to bulk detection on existing projects, not new-project detection.
+
 Projects save in schema 1.5 to retain these receipts; schema-aware 1.4 clients can
 inspect them read-only. Job-history cleanup retains the computed-result cache.
 Keep that cache when moving projects between installations if you need to retry
-managed color analysis; missing cached results are reported instead of silently
+managed color analysis or bulk detection; missing cached results are reported instead of silently
 recomputing them.

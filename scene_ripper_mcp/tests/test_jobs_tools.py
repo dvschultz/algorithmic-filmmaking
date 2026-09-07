@@ -34,6 +34,7 @@ from scene_ripper_mcp.tools.jobs import (
     start_analyze_clips,
     start_analyze_colors,
     start_describe,
+    start_detect_scenes_bulk,
     start_generate_thumbnails,
 )
 from scene_ripper_mcp.tools.clips import filter_clips, get_clip_metadata, list_clips
@@ -209,6 +210,57 @@ def _make_project_file(tmp_path):
     project.add_clips([clip])
     assert project.save(project_path)
     return project_path
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["media", "project", "caller_arguments"])
+async def test_detection_job_binds_snapshot_and_reuses_results(lifespan_ctx, tmp_path, monkeypatch, change):
+    from unittest.mock import Mock
+    from core.project import Project
+    from models.clip import Clip, Source
+
+    ctx, store, runtime = lifespan_ctx
+    path = _make_project_file(tmp_path)
+    source = Source(file_path=tmp_path / "video.mp4")
+    compute = Mock(return_value=(source, [Clip(source_id=source.id, start_frame=0, end_frame=30)]))
+    monkeypatch.setattr("core.jobs.detection.run_detection", compute)
+    monkeypatch.setattr("core.spine.detect._generate_detected_clip_thumbnails", lambda *a, **k: {"generated": [], "failed": [], "skipped": []})
+    release = threading.Event()
+    entered = [threading.Event() for _ in range(4)]
+    try:
+        for event in entered:
+            def block(progress, cancel, event=event):
+                event.set()
+                assert release.wait(10)
+                return {}
+            runtime.submit(kind="blocker", args={}, run=block)
+        assert all(event.wait(5) for event in entered)
+        ids = ["src-1"]
+        started = json.loads(await start_detect_scenes_bulk(str(path), ids, ctx=ctx))
+        assert started["success"], started
+        task = started["task_id"]
+        assert store.get(task).operation_json
+        if change == "media":
+            source.file_path.write_bytes(b"changed media")
+        elif change == "project":
+            project = Project.load(path)
+            project.clips[0].notes = "edited while queued"
+            assert project.save(path)
+        else:
+            ids.append("not-submitted")
+        release.set()
+        expected = STATUS_COMPLETED if change == "caller_arguments" else STATUS_FAILED
+        _wait_for_status(store, task, expected)
+        assert compute.call_count == (1 if change == "caller_arguments" else 0)
+        if change == "caller_arguments":
+            first = store.get(task).result["result"]
+            assert len(first["succeeded"]) == 1 and not first["failed"]
+            retried = json.loads(await start_detect_scenes_bulk(str(path), ["src-1"], ctx=ctx))
+            _wait_for_status(store, retried["task_id"], STATUS_COMPLETED)
+            assert store.get(retried["task_id"]).result["result"] == first
+            assert compute.call_count == 1
+    finally:
+        release.set()
 
 
 @pytest.mark.asyncio

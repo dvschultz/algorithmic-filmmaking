@@ -375,9 +375,9 @@ async def start_detect_scenes_bulk(
     Poll with ``get_job_status``; fetch the result with ``get_job_result``
     after status reaches a terminal value.
 
-    Per-source granularity: cancellation is observed between sources;
-    per-source failures are aggregated into the result, never raised
-    mid-batch.
+    Each source is saved with a result receipt before checkpointing. Retries
+    reuse recorded clips. Cancellation stops later sources; ordinary per-source
+    failures are aggregated while persistence failures stop the job.
     """
     from core.project import MissingSourceError
     from scene_ripper_mcp.security import validate_project_path
@@ -400,48 +400,35 @@ async def start_detect_scenes_bulk(
             }
         )
 
-    def run(progress_callback, cancel_event):
-        from core.spine.detect import detect_scenes_bulk
-        from core.spine.project_io import (
-            ProjectModifiedExternally,
-            save_with_mtime_check,
-        )
+    from core.jobs.detection import saved_detection_spec, run_saved_detection
+    from core.jobs.commits import StaleJobResult
+    from core.project_revision import ProjectFileRevision
 
-        project, captured_mtime = load_with_mtime(path)
-        result = detect_scenes_bulk(
-            project,
-            source_ids,
-            sensitivity=sensitivity,
-            progress_callback=progress_callback,
-            cancel_event=cancel_event,
-        )
-        try:
-            save_with_mtime_check(project, path, captured_mtime)
-        except ProjectModifiedExternally as exc:
-            return {
-                "success": False,
-                "error": {
-                    "code": "project_modified_externally",
-                    "path": str(exc.path),
-                    "expected_mtime": exc.expected_mtime,
-                    "current_mtime": exc.current_mtime,
-                },
-                "result": result.get("result"),
-            }
-        return result
+    store = _lifespan(ctx)["job_store"]
+    try:
+        operation = saved_detection_spec(project, path, source_ids, sensitivity)
+    except ValueError as exc:
+        return json.dumps(_wrap_error(exc))
+
+    def run(progress_callback, cancel_event):
+        frozen = operation.arguments
+        if operation.input_revision is not None:
+            ProjectFileRevision(path, operation.input_revision).verify()
+        current, _ = load_with_mtime(path)
+        live = saved_detection_spec(current, path, frozen["source_ids"], frozen["sensitivity"])
+        if live.inputs_json != operation.inputs_json:
+            raise StaleJobResult("Detection inputs changed while the job was queued")
+        return run_saved_detection(store, path, frozen["source_ids"], frozen["sensitivity"], progress_callback, cancel_event)
 
     return _start_job(
         ctx,
         kind="detect_scenes_bulk",
-        args={
-            "project_path": canonical,
-            "source_ids": source_ids,
-            "sensitivity": sensitivity,
-        },
+        args=operation.arguments,
         project_path=canonical,
         project_mtime_at_start=mtime,
         idempotency_key=idempotency_key,
         run=run,
+        operation=operation,
     )
 
 

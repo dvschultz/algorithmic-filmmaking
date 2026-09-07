@@ -53,10 +53,20 @@ CLI/MCP compatibility, and the headless import boundary. A generated 24 fps vide
 with cuts every 48 frames produced identical ranges from the old and shared paths
 in both adaptive and content modes.
 
-This completes the computation seam, target/session guards, and desktop integration
-with the shared job lifecycle. U7 still requires durable detection receipts and
-submission-time snapshots for saved-project jobs,
-source import/download and thumbnail orchestration, and ordered intention plans.
+MCP bulk detection over existing projects now captures project revision, media
+stamps, target state, and detached arguments at submission. Changed queued inputs
+fail before decoding. Each successfully computed source is recorded in the result
+ledger, then its clips and receipt are saved together before checkpointing. A
+retry reuses clip IDs and computations; a failed checkpoint reconciles the saved
+receipt without applying twice. Target edits made after computation or publication
+are preserved and reported as conflicts. Source failures are collected; persistence
+failures stop the job. Completed sources remain saved after failure or cancellation.
+Each source is one publication group because it may contain many clips.
+
+This completes the computation seam, target/session guards, desktop job lifecycle,
+and durable MCP bulk detection for existing projects. U7 still requires the
+new-project detection path, source import/download and thumbnail orchestration,
+and ordered intention plans to use the same durable workflows.
 The remaining analysis families follow those changes. Existing CLI minimum-scene
 duration conversion still assumes 30 fps before detection and needs correction
 as part of parameter parity; this extraction preserves that behavior.
