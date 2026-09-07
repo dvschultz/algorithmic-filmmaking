@@ -33,12 +33,21 @@ class AudioTranscriptionDelivery(QObject):
         if not self.current() or self.application.consumed:
             return
         try:
+            outcome = AudioTranscriptionOutcome(
+                audio_source_id, "succeeded", tuple(segments)
+            )
+            cache = getattr(self.worker, "cache", None)
+            receipt = cache.results[audio_source_id] if cache is not None else None
+            if receipt is not None and not receipt.matches(outcome):
+                raise ValueError(
+                    "Queued audio transcript differs from its recorded result"
+                )
             applied = self.application.apply(
                 self.window.project,
-                AudioTranscriptionOutcome(
-                    audio_source_id, "succeeded", tuple(segments)
-                ),
+                outcome,
             )
+            if applied and receipt is not None:
+                self.window.project.record_job_result(receipt.result_id, receipt.digest)
         except Exception as exc:
             self.error(f"Could not apply audio transcription: {exc}")
             return

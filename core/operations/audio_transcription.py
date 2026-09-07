@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
+from math import isfinite
 from threading import Event
 from typing import TYPE_CHECKING, Callable
 
@@ -35,6 +36,41 @@ class AudioTranscriptionOutcome:
     status: OutcomeStatus
     segments: tuple[TranscriptSegment, ...] = ()
     message: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict) -> AudioTranscriptionOutcome:
+        """Decode durable results without silently defaulting malformed segments."""
+        from core.transcription_models import TranscriptSegment
+
+        if (
+            not isinstance(data.get("audio_source_id"), str)
+            or not data["audio_source_id"]
+            or data.get("status")
+            not in ("succeeded", "failed", "skipped", "unprocessed")
+            or not isinstance(data.get("segments"), list)
+        ):
+            raise ValueError("Invalid audio transcription outcome")
+        for segment in data["segments"]:
+            if not isinstance(segment, dict) or not isinstance(
+                segment.get("text"), str
+            ):
+                raise ValueError("Invalid audio transcript segment")
+            for key in ("start_time", "end_time", "confidence"):
+                value = segment.get(key)
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not isfinite(value)
+                ):
+                    raise ValueError("Invalid audio transcript timing or confidence")
+            if segment["start_time"] < 0 or segment["end_time"] < segment["start_time"]:
+                raise ValueError("Invalid audio transcript range")
+        return cls(
+            data["audio_source_id"],
+            data["status"],
+            tuple(TranscriptSegment.from_dict(segment) for segment in data["segments"]),
+            data.get("message"),
+        )
 
 
 def run_audio_transcription(

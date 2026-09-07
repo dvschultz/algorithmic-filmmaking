@@ -909,3 +909,24 @@ runtime integration, durable audio-result recovery, and audio transcription
 CLI/MCP/GUI-agent dispatch remain U7 work, alongside remaining frame analysis
 and explicit intention-workflow orchestration. Native process isolation remains
 U13 work.
+
+### Recoverable desktop audio transcription
+
+Standalone audio now uses the shared job runtime: unsaved projects have
+session-only jobs, and saved projects have durable computation history.
+`GuiAudioTranscriptionCache` records a successful transcript before queued
+delivery. Reopening the original project can reuse that result, including an
+empty transcript, without invoking the provider again. Result identity includes
+the audio metadata and prior transcript, source fingerprint, resolved backend,
+model and segmentation options, installed runtime versions, and FFmpeg identity.
+Runtime identity does not independently hash model weights.
+
+The shared GUI journal accepts an explicit audio ID field while preserving
+existing clip/frame result contracts. Audio delivery checks the exact receipt
+payload before applying through the original project session. Only explicit
+project save checkpoints a matching saved audio transcript; Save As, changed
+transcripts, and a clip with the same ID cannot acknowledge it. Corrupt results
+fail closed. Failed or cancelled computation does not become a silent result.
+
+Audio transcription dispatch for CLI/MCP/GUI-agent callers is still pending in
+U7, as are the remaining frame-analysis routes and intention-workflow migration.

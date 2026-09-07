@@ -27,6 +27,7 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
     canonical = str(path.expanduser().resolve())
     clips = {clip["id"]: clip for clip in snapshot.get("clips", [])}
     frames = {frame["id"]: frame for frame in snapshot.get("frames", [])}
+    audio_sources = {audio["id"]: audio for audio in snapshot.get("audio_sources", [])}
     pending = []
     for row in store.get_pending_results(list(receipts)):
         result_id = row["result_id"]
@@ -36,6 +37,7 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
             identity["kind"]
             not in (
                 "gui_transcribe",
+                "gui_audio_transcribe",
                 "gui_align_words",
                 "gui_describe",
                 "gui_custom_query",
@@ -61,6 +63,18 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
         if identity["project_path"] != canonical or identity["inputs"][
             "project_id"
         ] != snapshot.get("id"):
+            continue
+        if identity["kind"] == "gui_audio_transcribe":
+            from core.operations.audio_transcription import AudioTranscriptionOutcome
+
+            audio = audio_sources.get(identity["target_id"])
+            if audio is None or audio["id"] != identity["inputs"]["source_id"]:
+                continue
+            outcome = AudioTranscriptionOutcome.from_dict(json.loads(row["payload_json"]))
+            if outcome.audio_source_id != audio["id"] or outcome.status != "succeeded":
+                raise StaleJobResult("Saved audio transcription does not match its target")
+            if audio.get("transcript") == [segment.to_dict() for segment in outcome.segments]:
+                pending.append((result_id, receipt_digest))
             continue
         is_frame = identity["kind"] == "gui_ocr_frame" or (
             identity["kind"]

@@ -43,6 +43,7 @@ class GuiResultJournal:
         kind: str,
         arguments: dict,
         media_stamps: dict[Path, tuple[int, ...] | None],
+        target_id_field: str = "clip_id",
     ) -> None:
         self.path = path.expanduser().resolve()
         self.project_id = project_id
@@ -52,6 +53,7 @@ class GuiResultJournal:
         self.arguments_json = canonical_json(arguments)
         self.media_stamps = dict(media_stamps)
         self.results: dict[str, GuiResultReceipt] = {}
+        self.target_id_field = target_id_field
 
     def start(self, cancel: Event) -> None:
         from core.settings import load_settings
@@ -116,7 +118,10 @@ class GuiResultJournal:
     def record(self, request: GuiResultRequest, outcome: Any) -> dict:
         self.validate_media(request)
         payload = asdict(outcome)
-        if payload["clip_id"] != request.clip_id or payload["status"] != "succeeded":
+        if (
+            payload[self.target_id_field] != request.clip_id
+            or payload["status"] != "succeeded"
+        ):
             raise StaleJobResult("Analysis result does not match a successful target")
         payload_json = canonical_json(payload)
         row = self.store.record_result(
@@ -136,7 +141,10 @@ class GuiResultJournal:
             raise StaleJobResult("Cached analysis result is corrupt")
         self.validate_media(request)
         payload: dict = json.loads(row["payload_json"])
-        if payload["clip_id"] != request.clip_id or payload["status"] != "succeeded":
+        if (
+            payload[self.target_id_field] != request.clip_id
+            or payload["status"] != "succeeded"
+        ):
             raise StaleJobResult("Cached analysis result does not match its target")
         self.results[request.clip_id] = GuiResultReceipt(
             request.spec.result_id, digest, row["payload_json"]
