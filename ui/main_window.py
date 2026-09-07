@@ -835,6 +835,9 @@ class MainWindow(QMainWindow):
         self._active_detection_reply = None
         self._pending_thumbnail_clips = []
 
+        for controller in tuple(getattr(self, "_active_intention_detections", ())):
+            controller.cancel()
+
         for worker in tuple(getattr(self, "_active_thumbnail_workers", ())):
             worker.cancel()
 
@@ -5390,7 +5393,7 @@ class MainWindow(QMainWindow):
         )
         # Clean up thread safely after it finishes to prevent "QThread: Destroyed while running" crash
         self.detection_worker.finished.connect(
-            lambda g=self._detection_generation: self._on_detection_worker_finished(g)
+            lambda worker=self.detection_worker: self._on_detection_worker_finished(worker)
         )
         logger.info("Starting DetectionWorker...")
         self._gui_state.set_processing("scene_detection", f"running on {self.current_source.filename}")
@@ -8237,15 +8240,7 @@ class MainWindow(QMainWindow):
         if self.intention_workflow and self.intention_workflow.is_running:
             self.intention_workflow.cancel()
 
-        # Also cancel any running workers owned by MainWindow
-        # The coordinator doesn't have references to these workers
-        if hasattr(self, 'detection_worker') and self.detection_worker is not None:
-            if self.detection_worker.isRunning():
-                logger.info("Cancelling detection worker due to workflow cancellation")
-                self.detection_worker.cancel()
-                # Don't wait here - let the worker finish in background
-                # Cleanup will happen in _start_intention_detection if needed
-
+        # Detection's run-bound adapter observes workflow cancellation directly.
         if hasattr(self, 'thumbnail_worker') and self.thumbnail_worker is not None:
             if self.thumbnail_worker.isRunning():
                 logger.info("Cancelling thumbnail worker due to workflow cancellation")
@@ -8567,277 +8562,28 @@ class MainWindow(QMainWindow):
                 return
             self.collect_tab.add_source(source)
 
-    def _cleanup_worker(
-        self,
-        worker,
-        worker_name: str,
-        signal_names: list[str],
-        wait_timeout: int = 2000,
-        allow_terminate: bool = False,
-    ) -> bool:
-        """Clean up a QThread worker safely without blocking the GUI.
-
-        This helper prevents "QThread: Destroyed while thread is still running" crashes
-        by properly cancelling and cleaning up workers before they're replaced.
-
-        Args:
-            worker: The QThread worker to clean up (can be None)
-            worker_name: Name for logging (e.g., "detection", "thumbnail")
-            signal_names: List of signal attribute names to disconnect (e.g., ["progress", "finished"])
-            wait_timeout: Max ms to wait for graceful shutdown (default 2000ms)
-            allow_terminate: If True, terminate() as last resort (DANGEROUS - avoid if possible)
-
-        Returns:
-            True if worker was cleaned up or was None, False if cleanup is still in progress
-        """
-        if worker is None:
-            return True
-
-        if not worker.isRunning():
-            # Worker finished - just clean up references
-            for sig_name in signal_names:
-                try:
-                    sig = getattr(worker, sig_name, None)
-                    if sig:
-                        sig.disconnect()
-                except (RuntimeError, TypeError):
-                    pass  # Already disconnected
-            worker.deleteLater()
-            return True
-
-        # Worker still running - request cancellation
-        logger.warning(f"Previous {worker_name} worker still running, requesting cancellation")
-        if hasattr(worker, 'cancel'):
-            worker.cancel()
-
-        # Brief non-blocking wait - if it doesn't stop quickly, let it finish in background
-        if worker.wait(wait_timeout):
-            logger.info(f"{worker_name} worker stopped gracefully")
-            for sig_name in signal_names:
-                try:
-                    sig = getattr(worker, sig_name, None)
-                    if sig:
-                        sig.disconnect()
-                except (RuntimeError, TypeError):
-                    pass
-            worker.deleteLater()
-            return True
-
-        # Worker didn't stop in time
-        if allow_terminate:
-            # SEVERE WARNING: terminate() is dangerous and can corrupt state
-            logger.critical(
-                f"SEVERE: {worker_name} worker did not stop in {wait_timeout}ms, "
-                f"forcefully terminating. This may cause corruption or resource leaks!"
-            )
-            worker.terminate()
-            worker.wait(500)  # Brief wait after terminate
-            for sig_name in signal_names:
-                try:
-                    sig = getattr(worker, sig_name, None)
-                    if sig:
-                        sig.disconnect()
-                except (RuntimeError, TypeError):
-                    pass
-            worker.deleteLater()
-            return True
-        else:
-            # Don't terminate - let worker finish in background
-            # Use generation ID pattern to ignore its signals
-            logger.warning(
-                f"{worker_name} worker still running after {wait_timeout}ms, "
-                f"letting it finish in background (signals will be ignored via generation ID)"
-            )
-            # Don't disconnect signals - generation ID will handle stale signals
-            # Don't deleteLater - let the finished signal handle cleanup
-            return True  # Proceed anyway - generation ID protects against stale signals
-
     def _start_intention_detection(self):
-        """Start scene detection for the intention workflow."""
+        """Dispatch this plan's serial detection through its owning adapter."""
         if not self.intention_workflow:
             return
+        from ui.workers.intention_detection import IntentionDetectionController
 
-        source_path = self.intention_workflow.get_current_source_path()
-        if not source_path:
+        existing = getattr(self, "_intention_detection", None)
+        if (existing is not None and not existing.cancelled
+                and existing.workflow is self.intention_workflow
+                and existing.plan is self.intention_workflow.plan):
+            existing.start()
             return
+        controller = IntentionDetectionController(self)
+        controller.start()
 
-        logger.info(f"Starting intention detection for: {source_path}")
-
-        # Increment generation ID - signals from old workers will be ignored
-        self._detection_generation += 1
-        current_gen = self._detection_generation
-
-        # Clean up any existing detection worker (non-blocking, no terminate)
-        if hasattr(self, 'detection_worker') and self.detection_worker is not None:
-            self._cleanup_worker(
-                self.detection_worker,
-                "detection",
-                ["progress", "result_ready", "detection_completed", "error", "finished"],
-                wait_timeout=2000,
-                allow_terminate=False,  # Don't terminate - let it finish, ignore its signals
-            )
+    def _on_detection_worker_finished(self, worker: DetectionWorker) -> None:
+        """Clean up the standalone detection channel after native completion."""
+        if worker.isRunning():
+            return
+        if self.detection_worker is worker:
             self.detection_worker = None
-
-        # Determine detection mode based on algorithm
-        algorithm, _ = self.intention_workflow.get_algorithm_with_direction()
-        if algorithm == "exquisite_corpus":
-            # Use karaoke (text-based) detection for Exquisite Corpus
-            # Cuts scenes based on on-screen text changes, ideal for text-heavy content
-            karaoke_config = KaraokeDetectionConfig(
-                roi_top_percent=0.0,  # Full frame - let OCR find text anywhere
-                text_similarity_threshold=60.0,
-                confirm_frames=3,
-                cut_offset=5,
-            )
-            logger.info("Using karaoke (text-based) detection for Exquisite Corpus")
-            self.detection_worker = DetectionWorker(
-                source_path,
-                mode="karaoke",
-                karaoke_config=karaoke_config,
-                project=self.project,
-            )
-        else:
-            config = DetectionConfig(
-                threshold=self.settings.default_sensitivity,
-                min_scene_length=15,
-                use_adaptive=True,
-            )
-            self.detection_worker = DetectionWorker(source_path, config, project=self.project)
-
-        self._active_detection_guard = self.detection_worker.guard
-        self.detection_worker.job_started.connect(
-            lambda task, persistence, guard=self.detection_worker.guard: self._on_detection_job_started(guard, task, persistence)
-        )
-        # Capture generation for lambda closures - used to ignore stale signals
-        gen = current_gen
-
-        self.detection_worker.progress.connect(
-            self.intention_workflow.on_detection_progress
-        )
-        # Use lambda with generation check to ignore signals from old workers
-        self.detection_worker.result_ready.connect(
-            lambda guard, src, clps, g=gen: self._on_guarded_intention_detection_finished(guard, src, clps, g)
-        )
-        self.detection_worker.error.connect(
-            lambda err, g=gen, guard=self.detection_worker.guard: self._on_guarded_intention_detection_error(guard, err, g)
-        )
-        # Clean up - use generation check to avoid cleaning up wrong worker
-        self.detection_worker.finished.connect(
-            lambda g=gen: self._on_detection_worker_finished(g)
-        )
-
-        self._detection_finished_handled = False
-        self.detection_worker.start()
-
-    def _on_detection_worker_finished(self, generation: int):
-        """Handle detection worker finished signal with generation check."""
-        if generation != self._detection_generation:
-            logger.debug(f"Ignoring finished signal from old detection worker (gen {generation} != {self._detection_generation})")
-            return
-        # Safe to clean up - this is the current worker
-        if self.detection_worker:
-            self.detection_worker.deleteLater()
-            self.detection_worker = None
-
-    def _on_guarded_intention_detection_error(self, guard, error, generation):
-        if (guard is self._active_detection_guard
-                and not self._detection_finished_handled
-                and guard.session_id == self.project.session.session_id):
-            self._on_intention_detection_error(error, generation)
-
-    def _on_guarded_intention_detection_finished(self, guard, source, clips, generation):
-        if guard is not self._active_detection_guard or self._detection_finished_handled:
-            return
-        if generation != self._detection_generation or guard.session_id != self.project.session.session_id:
-            return
-        try:
-            guard.validate(self.project)
-        except StaleDetectionResult as exc:
-            self._on_intention_detection_error(str(exc), generation)
-            return
-        if guard.source_id is not None:
-            # Preserve the imported source identity instead of inserting a duplicate.
-            source.id = guard.source_id
-        self._on_intention_detection_completed(source, clips, generation)
-
-    def _on_intention_detection_completed(self, source, clips, generation: int = 0):
-        """Handle detection completion during intention workflow.
-
-        Args:
-            source: The detected Source object
-            clips: List of detected Clip objects
-            generation: Worker generation ID - used to ignore stale signals from old workers
-        """
-        # Check generation ID - ignore signals from old/cancelled workers
-        if generation != 0 and generation != self._detection_generation:
-            logger.info(f"Ignoring detection_completed from old worker (gen {generation} != {self._detection_generation})")
-            return
-
-        if self._detection_finished_handled:
-            return
-        self._detection_finished_handled = True
-
-        logger.info(f"Intention detection completed: {len(clips)} clips")
-
-        # Add source and clips to project, retaining the identity of imported media.
-        existing = self.sources_by_id.get(source.id)
-        if existing is not None:
-            existing.duration_seconds = source.duration_seconds
-            existing.fps = source.fps
-            existing.width = source.width
-            existing.height = source.height
-            source = existing
-        source.analyzed = True
-        if source.id not in self.sources_by_id:
-            self.project.add_source(source)
-            self.collect_tab.add_source(source)
-
-        # Set Cut tab source (needed for proper state display)
-        self.cut_tab.set_source(source)
-
-        for clip in clips:
-            # Sync clip source_id to match the source we just added
-            clip.source_id = source.id
-
-        self.project.replace_source_clips(source.id, clips)
-
-        # Notify coordinator
-        if self.intention_workflow:
-            self.intention_workflow.on_detection_completed(source, clips)
-
-            # Check if there are more sources to process
-            next_source = self.intention_workflow.get_current_source_path()
-            if next_source:
-                # Start detection for next source
-                self._start_intention_detection()
-
-    def _on_intention_detection_error(self, error: str, generation: int = 0):
-        """Handle detection error during intention workflow.
-
-        Args:
-            error: Error message
-            generation: Worker generation ID - used to ignore stale signals from old workers
-        """
-        # Check generation ID - ignore signals from old/cancelled workers
-        if generation != 0 and generation != self._detection_generation:
-            logger.info(f"Ignoring detection_error from old worker (gen {generation} != {self._detection_generation})")
-            return
-
-        if self._detection_finished_handled:
-            return
-        self._detection_finished_handled = True
-
-        logger.error(f"Intention detection error: {error}")
-
-        # Notify coordinator
-        if self.intention_workflow:
-            self.intention_workflow.on_detection_error(error)
-
-            # Check if there are more sources to process
-            next_source = self.intention_workflow.get_current_source_path()
-            if next_source:
-                # Start detection for next source
-                self._start_intention_detection()
+        worker.deleteLater()
 
     def _start_intention_thumbnails(self):
         """Start thumbnail generation for the intention workflow."""
@@ -10433,12 +10179,16 @@ class MainWindow(QMainWindow):
 
         audio_workers = tuple(getattr(self, "_active_audio_transcribes", ())) + tuple(getattr(self, "_active_audio_imports", ()))
         frame_analyses = tuple(getattr(self, "_active_frame_analyses", ()))
+        intention_detections = tuple(getattr(self, "_active_intention_detections", ()))
+        for controller in intention_detections:
+            controller.cancel()
+        intention_workers = tuple(controller.worker for controller in intention_detections if controller.worker is not None)
         for controller in frame_analyses:
             controller.cancel()
         analysis_workers = tuple(controller.worker for controller in frame_analyses if controller.worker is not None)
         frame_worker = getattr(self, "_frame_extraction_worker", None)
         image_worker = getattr(self, "_image_import_worker", None)
-        active_workers = audio_workers + analysis_workers + tuple(getattr(self, "_active_thumbnail_workers", ())) + tuple(getattr(self, "_active_shot_workers", ())) + tuple(worker for worker in (frame_worker, image_worker) if worker is not None)
+        active_workers = intention_workers + audio_workers + analysis_workers + tuple(getattr(self, "_active_thumbnail_workers", ())) + tuple(getattr(self, "_active_shot_workers", ())) + tuple(worker for worker in (frame_worker, image_worker) if worker is not None)
         for worker in active_workers:
             worker.cancel()
         if any(worker.isRunning() for worker in active_workers):

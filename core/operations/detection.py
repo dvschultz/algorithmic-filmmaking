@@ -92,6 +92,87 @@ class DetectionGuard:
             raise StaleDetectionResult("Detection target changed; run detection again")
 
 
+class DetectionApplication:
+    """Publish one detached result to the original owner and target objects."""
+
+    def __init__(self, project: Project, guard: DetectionGuard) -> None:
+        project.session.assert_owner()
+        self.project = project
+        self.guard = guard
+        self.path = project.path
+        self.source = (
+            project.sources_by_id.get(guard.source_id) if guard.source_id else None
+        )
+        self.clips = (
+            tuple(project.clips_by_source.get(guard.source_id, ()))
+            if guard.source_id
+            else ()
+        )
+        self.consumed = False
+
+    def apply(
+        self,
+        source: Source,
+        clips: list[Clip],
+        *,
+        still_current: Callable[[], bool],
+    ) -> Source | None:
+        """Retain imported source identity and reject replaced targets or runs."""
+        project = self.project
+        self.guard.validate(project)
+
+        def publish() -> Source | None:
+            if self.consumed or not still_current():
+                return None
+            source_id = self.guard.source_id
+            current = project.sources_by_id.get(source_id) if source_id else None
+            current_clips = (
+                project.clips_by_source.get(source_id, ()) if source_id else ()
+            )
+            if (
+                project.path != self.path
+                or current is not self.source
+                or len(current_clips) != len(self.clips)
+                or any(a is not b for a, b in zip(current_clips, self.clips))
+                or not same_source_path(source.file_path, self.guard.video_path)
+            ):
+                raise StaleDetectionResult(
+                    "Detection target changed; run detection again"
+                )
+            self.consumed = True
+            if current is None:
+                if source.id in project.sources_by_id:
+                    raise StaleDetectionResult(
+                        "Detection returned an existing source ID"
+                    )
+                source.analyzed = True
+                project.add_source(source)
+                current = source
+            else:
+                current.duration_seconds = source.duration_seconds
+                current.fps = source.fps
+                current.width = source.width
+                current.height = source.height
+                current.analyzed = True
+            # A source-added observer can cancel or replace the workflow.
+            if not still_current():
+                return None
+            for clip in clips:
+                clip.source_id = current.id
+            project.replace_source_clips(current.id, clips)
+            if not still_current():
+                return None
+            if project.sources_by_id.get(current.id) is not current or any(
+                project.clips_by_id.get(clip.id) is not clip for clip in clips
+            ):
+                raise StaleDetectionResult(
+                    "Detection result was replaced during publication"
+                )
+            return current
+
+        return project.session.apply_external(publish)
+
+
 @dataclass(frozen=True)
 class DetectionRequest:
     """Detached configuration snapshot, safe to pass to a worker."""

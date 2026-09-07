@@ -107,7 +107,6 @@ class IntentionWorkflowCoordinator(QObject):
 
         # Worker references (set by MainWindow when connecting)
         self._download_worker = None
-        self._detection_worker = None
         self._thumbnail_worker = None
         self._color_worker = None
 
@@ -194,8 +193,6 @@ class IntentionWorkflowCoordinator(QObject):
         # Cancel any running workers
         if self._download_worker and hasattr(self._download_worker, "cancel"):
             self._download_worker.cancel()
-        if self._detection_worker and hasattr(self._detection_worker, "cancel"):
-            self._detection_worker.cancel()
         if self._color_worker and hasattr(self._color_worker, "cancel"):
             self._color_worker.cancel()
 
@@ -483,6 +480,10 @@ class IntentionWorkflowCoordinator(QObject):
                 failed_sources=list(self._sources_failed),
             )
         )
+
+    def fail(self, message: str) -> None:
+        """Abort the current run when its execution adapter cannot continue."""
+        self._complete_with_error(message)
 
     def _complete_with_error(self, message: str):
         """Complete workflow with an error."""

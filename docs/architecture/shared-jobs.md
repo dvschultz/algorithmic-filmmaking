@@ -329,5 +329,27 @@ all retained thumbnail workers; closing waits for them through the existing
 close preflight. Model changes use `Project.update_clips()` on the owner thread;
 saving remains explicit. Intention thumbnails also check their originating plan.
 
-Remaining intention detection/download/analysis worker ownership and the broader
+Remaining intention download/analysis worker ownership and the broader
 U7 route audit are still required.
+
+## Intention detection ownership
+
+`ui/workers/intention_detection.py` owns serial detection for one intention plan.
+It snapshots detection settings, buffers results, and advances to the next source
+or phase only after the current worker's native `finished` signal. The main
+window no longer implements the detection loop or waits for old intention
+workers during replacement.
+
+`DetectionApplication` in `core/operations/detection.py` publishes on the project
+owner thread after validating session, save location, media, source identity,
+and existing clip objects. Imported source IDs are preserved. Failed or stale
+sources produce per-source errors while later sources can still succeed.
+Publication does not save the project.
+
+Cancellation, restart, reset, and close retain active workers until they exit.
+Callbacks also check the originating coordinator and plan; an old standalone
+detection completion cannot clear a replacement intention worker. The controller
+checks ownership again after model and UI callbacks before advancing the plan.
+
+U7 remains partial: intention download and analysis ownership plus the remaining
+route audit still need migration.
