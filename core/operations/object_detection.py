@@ -81,6 +81,19 @@ class ObjectDetectionOutcome:
         """Return fresh containers for legacy model and signal consumers."""
         return [detection.to_dict() for detection in self.detections]
 
+    @classmethod
+    def from_dict(cls, data: dict) -> "ObjectDetectionOutcome":
+        """Detach recorded JSON detections, including nested bounding boxes."""
+        return cls(
+            **{
+                **data,
+                "detections": tuple(
+                    DetectedObject.from_dict(value)
+                    for value in data.get("detections", ())
+                ),
+            }
+        )
+
 
 def compute_object_detection(
     task: ObjectDetectionTask,

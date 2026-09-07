@@ -3587,7 +3587,7 @@ class MainWindow(QMainWindow):
         self._object_detection_finished_handled = False
         self._reset_analysis_run_error("detect_objects")
         logger.info(f"Creating ObjectDetectionWorker (pipeline) for {len(clips)} clips...")
-        self.detection_worker_yolo = ObjectDetectionWorker(clips, parallelism=self.settings.local_model_parallelism)
+        self.detection_worker_yolo = ObjectDetectionWorker(clips, parallelism=self.settings.local_model_parallelism, project=self.project)
         self.detection_worker_yolo.progress.connect(self._on_object_detection_progress)
         from ui.workers.object_detection_delivery import ObjectDetectionDelivery
         ObjectDetectionDelivery(self, self.detection_worker_yolo, pipeline=True)
@@ -6759,6 +6759,7 @@ class MainWindow(QMainWindow):
                 clips=[],
                 analysis_targets=targets,
                 parallelism=self.settings.local_model_parallelism,
+                project=self.project,
             )
             worker.progress.connect(self._on_object_detection_progress)
             from ui.workers.object_detection_delivery import ObjectDetectionDelivery
@@ -7909,7 +7910,7 @@ class MainWindow(QMainWindow):
 
         # Start worker
         from PySide6.QtCore import Qt
-        self.detection_worker_yolo = ObjectDetectionWorker(clips, confidence=confidence, detect_all=detect_all, parallelism=self.settings.local_model_parallelism)
+        self.detection_worker_yolo = ObjectDetectionWorker(clips, confidence=confidence, detect_all=detect_all, parallelism=self.settings.local_model_parallelism, project=self.project)
         self.detection_worker_yolo.progress.connect(self._on_object_detection_progress)
         from ui.workers.object_detection_delivery import ObjectDetectionDelivery
         ObjectDetectionDelivery(self, self.detection_worker_yolo)

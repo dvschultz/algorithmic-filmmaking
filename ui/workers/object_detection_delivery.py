@@ -62,7 +62,24 @@ class ObjectDetectionDelivery(QObject):
                 tuple(DetectedObject.from_dict(value) for value in detections),
                 person_count,
             )
+            receipt = None
+            cache = getattr(self.worker, "cache", None)
+            if cache is not None:
+                if (
+                    window.project.path is None
+                    or window.project.path.resolve() != cache.path
+                ):
+                    raise ValueError(
+                        "Project save location changed during object detection"
+                    )
+                receipt = cache.results[target_id]
+                if not receipt.matches(outcome):
+                    raise ValueError(
+                        "Queued object detection differs from its recorded result"
+                    )
             accepted = self.application.apply(window.project, outcome)
+            if accepted and receipt is not None:
+                window.project.record_job_result(receipt.result_id, receipt.digest)
         except Exception as exc:
             window._on_object_detection_error(
                 f"Could not apply object detection: {exc}"

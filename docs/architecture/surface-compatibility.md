@@ -549,3 +549,18 @@ retain their 320x180 analysis-image identity without replacing display images.
 People-only output validation checks count without overwriting object detections.
 Legacy populated results retain the existing explicit-force reuse policy.
 GUI object-detection job history and recovery remain the next migration step.
+
+### GUI object-detection recovery
+
+Pipeline, agent, and Frames object-detection workers now use the shared job
+runtime. Saved projects keep job history and record computed detections before
+queued owner-thread publication. Retries reuse matching records; unsaved projects
+remain session-only. Completion settles after runtime cleanup.
+
+The GUI journal captures target type, prior affected outputs, source/frame
+identity, image/source fingerprints, options, and runtime identity. People-only
+records exclude object metadata from affected outputs. Delivery verifies the
+recorded payload and save location before applying it. A project save checkpoints
+only receipts whose exact affected outputs are present in the saved snapshot,
+including zero people and empty detections. Changed outputs or Save As cannot
+acknowledge an unrelated result. Other U7 analysis families still await migration.
