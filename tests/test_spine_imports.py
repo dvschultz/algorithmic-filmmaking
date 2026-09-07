@@ -60,6 +60,7 @@ SPINE_MODULES: tuple[str, ...] = (
     "core.spine.sequences",
     "core.spine.history",
     "core.operations.contracts",
+    "core.operations.classification",
     "core.operations.colors",
     "core.operations.detection",
     "core.operations.transcription",

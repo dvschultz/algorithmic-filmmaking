@@ -328,7 +328,7 @@ def classify_content(
     cancel_event: Optional[threading.Event] = None,
 ) -> dict:
     """Classify thumbnail content with ImageNet labels."""
-    from core.analysis.classification import classify_frame
+    from core.operations.classification import ClassificationTask, ClassificationOptions, run_classification
 
     clips = _resolve_clip_ids(project, clip_ids)
     succeeded: list[dict] = []
@@ -337,26 +337,25 @@ def classify_content(
     updated = []
     total = len(clips)
 
-    for i, clip in enumerate(clips):
-        if _check_cancel(cancel_event):
-            break
-        if progress_callback is not None and total:
-            progress_callback(i / total, f"Content classification ({i + 1}/{total}): {clip.id}")
-        if skip_existing and clip.object_labels is not None:
-            skipped.append({"clip_id": clip.id, "reason": "already_populated"})
-            continue
-        thumbnail_path = _thumbnail_for_clip(clip)
-        if thumbnail_path is None:
-            failed.append({"clip_id": clip.id, "code": "thumbnail_missing"})
-            continue
-        try:
-            labels = classify_frame(thumbnail_path, top_k=top_k, threshold=threshold)
-        except Exception as exc:  # noqa: BLE001
-            failed.append({"clip_id": clip.id, "code": "classification_failed", "message": str(exc)})
-            continue
-        clip.object_labels = [label for label, _confidence in labels]
-        updated.append(clip)
-        succeeded.append({"clip_id": clip.id, "label_count": len(labels)})
+    tasks = tuple(ClassificationTask(clip.id, _thumbnail_for_clip(clip), skip=skip_existing and clip.object_labels is not None) for clip in clips)
+
+    def report(current: int, count: int) -> None:
+        if progress_callback is not None:
+            progress_callback(current / count if count else 1.0, f"Content classification ({current}/{count})")
+
+    outcomes = run_classification(tasks, ClassificationOptions(top_k, threshold), cancel_event=cancel_event, progress=report)
+    for clip, outcome in zip(clips, outcomes):
+        if outcome.status == "skipped":
+            skipped.append({"clip_id": clip.id, "reason": outcome.code})
+        elif outcome.status == "failed":
+            failure = {"clip_id": clip.id, "code": outcome.code}
+            if outcome.message:
+                failure["message"] = outcome.message
+            failed.append(failure)
+        elif outcome.status == "succeeded":
+            clip.object_labels = [label for label, _ in outcome.labels]
+            updated.append(clip)
+            succeeded.append({"clip_id": clip.id, "label_count": len(outcome.labels)})
 
     if updated:
         project.update_clips(updated)

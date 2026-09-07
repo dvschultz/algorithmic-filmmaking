@@ -206,3 +206,18 @@ applying it. Only an explicit project save acknowledges matching analysis and
 derived shot type; Save As or edited output does not acknowledge the old receipt.
 An explicit refresh after saving starts a new generation. Other U7 workflow
 families remain outstanding.
+
+## Content classification computation
+
+GUI content classification, CLI `analyze classify`, and headless `classify_content` share immutable tasks,
+options, and outcomes in `core/operations/classification.py`. The runner admits
+one inference at a time across shared classification jobs because they use one
+MobileNet singleton. Waiting for that model is cancellable. Cancelled inference
+does not publish its result or start later targets.
+
+The GUI worker retains its signals and parallelism argument for caller
+compatibility, but inference runs serially. Completion is emitted even after
+pre-start cancellation or errors. Empty label lists remain valid successes;
+malformed labels or confidence values become per-item failures. Frame task
+identity survives computation. Guarded publication, frame label storage, and
+durable classification receipts remain follow-up work in U7.
