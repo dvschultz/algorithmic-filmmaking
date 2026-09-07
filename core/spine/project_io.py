@@ -16,7 +16,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Tuple
 
-from core.project import Project
+from core.project import Project, ProjectSaveError
 
 # Mtime-comparison tolerance in seconds. Filesystem caches and network mounts
 # can report sub-second drift on otherwise-untouched files; 1s is conservative
@@ -54,8 +54,8 @@ def load_with_mtime(path: Path | str) -> Tuple[Project, float]:
     to ``save_with_mtime_check`` to detect external modifications between
     load and save.
 
-    Raises whatever ``Project.load()`` raises (``ProjectLoadError``,
-    ``MissingSourceError``).
+    Raises ``ProjectLoadError`` for invalid documents. Offline media references
+    are preserved by the model loader.
     """
     p = Path(path)
     mtime = p.stat().st_mtime
@@ -84,7 +84,8 @@ def save_with_mtime_check(
         if abs(current - expected_mtime) > MTIME_TOLERANCE_SECONDS:
             raise ProjectModifiedExternally(p, expected_mtime, current)
 
-    project.save(p)
+    if not project.save(p):
+        raise ProjectSaveError(f"Failed to save project: {p}")
 
 
 def save_path_resolved(path: Path | str) -> Path:

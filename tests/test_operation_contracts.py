@@ -168,19 +168,20 @@ def test_supported_project_versions_round_trip(tmp_path, version):
         assert restored.sequences[1].tracks[0].clips[0].hold_frames == 24
 
 
-def test_current_offline_media_loading_requires_explicit_resolution(tmp_path):
-    from core.project import MissingSourceError
-
+def test_offline_media_loading_preserves_references(tmp_path):
     fixture = Path(__file__).parent / "fixtures" / "projects" / "v1.0.json"
     path = tmp_path / "project.json"
     path.write_text(fixture.read_text())
-    with pytest.raises(MissingSourceError):
-        Project.load(path)
-    # Characterizes a known destructive policy, not the intended U5 behavior.
+    offline = Project.load(path)
+    assert len(offline.sources) == len(offline.clips) == 1
     project = Project.load(path, missing_source_callback=lambda *_: None)
-    assert project.sources == []
-    assert project.clips == []
-    assert project.sequence.tracks[0].clips == []
+    assert [source.id for source in project.sources] == ["source-a"]
+    assert [clip.id for clip in project.clips] == ["clip-a"]
+    assert [clip.id for clip in project.sequence.tracks[0].clips] == ["entry-a"]
+    assert project.save()
+    restored = Project.load(path)
+    assert restored.sources[0].file_path == project.sources[0].file_path
+    assert restored.sequence.tracks[0].clips[0].in_point == 48
 
 
 @pytest.mark.parametrize("surface", ["cli", "mcp"])

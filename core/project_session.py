@@ -140,6 +140,7 @@ class ProjectSession:
 
     def execute(self, command: EditCommand[T]) -> list[T]:
         self.assert_owner()
+        self.project._assert_writable()
         self._busy = True
         try:
             clips = command.apply(self.project)
@@ -162,6 +163,7 @@ class ProjectSession:
         This is a reentrancy guard, not a rollback transaction.
         """
         self.assert_owner()
+        self.project._assert_writable()
         self._busy = True
         try:
             return apply()

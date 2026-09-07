@@ -16,11 +16,11 @@ from models.audio_source import AudioSource
 from models.clip import Source, Clip
 from models.frame import Frame
 from models.sequence import Sequence, SequenceClip
+from core.project_migrations import (
+    SCHEMA_VERSION, is_future_schema, migrate_project_data, prepare_project_write,
+)
 
 logger = logging.getLogger(__name__)
-
-# Current project file schema version
-SCHEMA_VERSION = "1.4"
 
 
 class ProjectError(Exception):
@@ -194,6 +194,12 @@ def save_project(
     Returns:
         True if save succeeded, False otherwise
     """
+    try:
+        prepare_project_write(filepath, metadata.version if metadata else SCHEMA_VERSION)
+    except (OSError, ValueError) as exc:
+        logger.error("Cannot save project: %s", exc)
+        return False
+
     if progress_callback:
         progress_callback(0.1, "Preparing project data...")
 
@@ -205,6 +211,7 @@ def save_project(
         metadata = ProjectMetadata(name=filepath.stem)
     else:
         metadata.modified_at = datetime.now().isoformat()
+        metadata.version = SCHEMA_VERSION
 
     # Build project data
     project_data = metadata.to_dict()
@@ -334,6 +341,8 @@ def save_project(
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(project_data, f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
 
             # Atomic rename (POSIX guarantees this is atomic)
             os.replace(temp_path, filepath)
@@ -402,8 +411,12 @@ def _validate_project_structure(data: dict) -> list[str]:
                 if not isinstance(seq, (dict, type(None))):
                     errors.append(f"sequences[{i}] must be an object or null")
 
+    def entries(field_name: str) -> list:
+        value = data.get(field_name, [])
+        return value if isinstance(value, list) else []
+
     # Validate source entries have required fields
-    for i, source in enumerate(data.get("sources", [])):
+    for i, source in enumerate(entries("sources")):
         if not isinstance(source, dict):
             errors.append(f"sources[{i}] must be an object")
             continue
@@ -413,7 +426,7 @@ def _validate_project_structure(data: dict) -> list[str]:
             errors.append(f"sources[{i}] missing required field: file_path")
 
     # Validate clip entries have required fields
-    for i, clip in enumerate(data.get("clips", [])):
+    for i, clip in enumerate(entries("clips")):
         if not isinstance(clip, dict):
             errors.append(f"clips[{i}] must be an object")
             continue
@@ -431,7 +444,7 @@ def _validate_project_structure(data: dict) -> list[str]:
         errors.append("Field 'audio_sources' must be a list")
 
     # Validate frame entries have required fields
-    for i, frame in enumerate(data.get("frames", [])):
+    for i, frame in enumerate(entries("frames")):
         if not isinstance(frame, dict):
             errors.append(f"frames[{i}] must be an object")
             continue
@@ -454,14 +467,13 @@ def load_project(
         filepath: Path to the project file
         progress_callback: Optional callback(progress, message)
         missing_source_callback: Optional callback(missing_path, source_id) -> new_path or None
-            Called when a source video is not found. Return new path to remap, or None to skip.
+            Return a valid replacement path to relink, or None to keep it offline.
 
     Returns:
         Tuple of (sources, clips, sequence, metadata, ui_state, frames, audio_sources)
 
     Raises:
         ProjectLoadError: If the project file cannot be loaded
-        MissingSourceError: If a source video is missing and no callback handles it
     """
     if progress_callback:
         progress_callback(0.1, "Reading project file...")
@@ -482,15 +494,10 @@ def load_project(
             "Invalid project file structure:\n  - " + "\n  - ".join(validation_errors)
         )
 
-    # Validate version using semantic comparison
-    version = data.get("version", "1.0")
     try:
-        version_parts = tuple(int(x) for x in version.split("."))
-        schema_parts = tuple(int(x) for x in SCHEMA_VERSION.split("."))
-        if version_parts > schema_parts:
-            logger.warning(f"Project file version {version} is newer than supported {SCHEMA_VERSION}")
-    except (ValueError, AttributeError):
-        logger.warning(f"Invalid version format: {version}")
+        data = migrate_project_data(data)
+    except ValueError as exc:
+        raise ProjectLoadError(str(exc)) from exc
 
     # Use project file's parent as base for relative paths
     base_path = filepath.parent
@@ -507,7 +514,7 @@ def load_project(
     for source_data in data.get("sources", []):
         source = Source.from_dict(source_data, base_path=base_path)
 
-        # Check if source file exists
+        # Offline media remains model data; declining a relink must not delete edits.
         if not source.file_path.exists():
             if missing_source_callback:
                 new_path = missing_source_callback(source.file_path, source.id)
@@ -516,15 +523,14 @@ def load_project(
                     new_path = Path(new_path)
                     if not new_path.exists():
                         logger.warning(
-                            f"Replacement path does not exist: {new_path}, skipping source"
+                            f"Replacement path does not exist: {new_path}; keeping original reference"
                         )
-                        continue
-                    source.file_path = new_path
+                    else:
+                        source.file_path = new_path
                 else:
-                    logger.warning(f"Skipping missing source: {source.file_path}")
-                    continue
+                    logger.warning(f"Keeping offline source: {source.file_path}")
             else:
-                raise MissingSourceError(source.file_path, source.id)
+                logger.warning(f"Keeping offline source: {source.file_path}")
 
         sources.append(source)
         sources_by_id[source.id] = source
@@ -532,7 +538,7 @@ def load_project(
     if progress_callback:
         progress_callback(0.5, "Loading clips...")
 
-    # Load clips (only those whose source exists)
+    # Load clips whose source is declared, including offline media.
     clips = []
     for clip_data in data.get("clips", []):
         source_id = clip_data.get("source_id", "")
@@ -884,6 +890,7 @@ class Project:
         Args:
             source: Source to add
         """
+        self._assert_writable()
         self._sources.append(source)
         self._invalidate_caches()
         self.mark_dirty()
@@ -919,6 +926,7 @@ class Project:
         Raises:
             ValueError: If attempting to set a disallowed field
         """
+        self._assert_writable()
         invalid = set(kwargs) - self._UPDATABLE_SOURCE_FIELDS
         if invalid:
             raise ValueError(f"Cannot update protected fields: {invalid}")
@@ -939,6 +947,7 @@ class Project:
         Args:
             audio_source: AudioSource to add
         """
+        self._assert_writable()
         self._audio_sources.append(audio_source)
         self._invalidate_caches()
         self.mark_dirty()
@@ -953,6 +962,7 @@ class Project:
         Returns:
             The removed AudioSource, or None if not found
         """
+        self._assert_writable()
         audio = self.audio_sources_by_id.get(audio_source_id)
         if audio is None:
             return None
@@ -972,6 +982,7 @@ class Project:
         Args:
             clips: Clips to add
         """
+        self._assert_writable()
         self._clips.extend(clips)
         self._invalidate_caches()
         self.mark_dirty()
@@ -985,6 +996,7 @@ class Project:
         Args:
             clips: Updated clips
         """
+        self._assert_writable()
         # Clips are updated in-place, just notify and mark dirty
         self.mark_dirty()
         self._notify_observers("clips_updated", clips)
@@ -1017,6 +1029,7 @@ class Project:
         Returns:
             List of removed Clip objects
         """
+        self._assert_writable()
         ids_to_remove = set(clip_ids)
         removed = [c for c in self._clips if c.id in ids_to_remove]
         self._clips = [c for c in self._clips if c.id not in ids_to_remove]
@@ -1056,6 +1069,7 @@ class Project:
             source_id: The source whose clips are being replaced
             new_clips: New clips for this source
         """
+        self._assert_writable()
         self._clips = [c for c in self._clips if c.source_id != source_id]
         self._clips.extend(new_clips)
         self._invalidate_caches()
@@ -1070,6 +1084,7 @@ class Project:
         Args:
             frames: Frame objects to add
         """
+        self._assert_writable()
         self._frames.extend(frames)
         self._invalidate_caches()
         self.mark_dirty()
@@ -1084,6 +1099,7 @@ class Project:
         Returns:
             List of removed Frame objects
         """
+        self._assert_writable()
         ids_to_remove = set(frame_ids)
         removed = [f for f in self._frames if f.id in ids_to_remove]
         self._frames = [f for f in self._frames if f.id not in ids_to_remove]
@@ -1114,6 +1130,7 @@ class Project:
         Raises:
             ValueError: If attempting to set a disallowed field
         """
+        self._assert_writable()
         invalid = set(kwargs) - self._UPDATABLE_FRAME_FIELDS
         if invalid:
             raise ValueError(f"Cannot update protected fields: {invalid}")
@@ -1292,6 +1309,15 @@ class Project:
         return self._dirty
 
     @property
+    def is_read_only(self) -> bool:
+        """Future schemas may be inspected but cannot be edited or saved."""
+        return is_future_schema(self.metadata.version)
+
+    def _assert_writable(self) -> None:
+        if self.is_read_only:
+            raise RuntimeError("Project uses a newer schema and is read-only")
+
+    @property
     def mutation_generation(self) -> int:
         """Monotonic counter incremented for every project mutation."""
         return getattr(self, "_mutation_generation", 0)
@@ -1411,7 +1437,6 @@ class Project:
 
         Raises:
             ProjectLoadError: If the project file cannot be loaded
-            MissingSourceError: If a source video is missing
         """
         # First, read the raw JSON to extract multi-sequence data (if present)
         # before load_project() processes it into the standard 6-tuple.
@@ -1420,6 +1445,10 @@ class Project:
         try:
             with open(path, "r", encoding="utf-8") as f:
                 raw_data = json.load(f)
+            validation_errors = _validate_project_structure(raw_data)
+            if validation_errors:
+                raise ProjectLoadError("Invalid project file structure: " + "; ".join(validation_errors))
+            raw_data = migrate_project_data(raw_data)
             if isinstance(raw_data.get("sequences"), list) and raw_data["sequences"]:
                 base_path = path.parent
                 active_idx = raw_data.get("active_sequence_index", 0)
@@ -1434,6 +1463,8 @@ class Project:
                         sequences_list.append(Sequence())
         except (json.JSONDecodeError, OSError, IOError):
             pass  # Will be handled by load_project() below
+        except ValueError as exc:
+            raise ProjectLoadError(str(exc)) from exc
 
         sources, clips, sequence, metadata, ui_state, frames, audio_sources = load_project(
             filepath=path,
