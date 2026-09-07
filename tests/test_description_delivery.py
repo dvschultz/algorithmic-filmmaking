@@ -26,11 +26,23 @@ class Worker(QThread):
         self.description_ready.emit('c-0', 'Duplicate', 'model')
 window = QObject()
 with tempfile.TemporaryDirectory() as directory:
-    for mode in ('current', 'worker', 'session', 'edit', 'cancel'):
+    for mode in ('current', 'worker', 'session', 'edit', 'cancel', 'receipt', 'payload', 'save_as'):
         window.project = project_with_thumbnails(Path(directory), 1)
         target = window.project.clips[0]
         tasks = DescriptionWorker(window.project.clips, sources=window.project.sources_by_id, tier='cloud').tasks
         worker = Worker(tasks)
+        if mode in ('receipt', 'payload', 'save_as'):
+            from dataclasses import asdict
+            from hashlib import sha256
+            import json
+            from types import SimpleNamespace
+            from core.jobs.gui_results import GuiResultReceipt
+            from core.operations.description import DescriptionOutcome
+            window.project.save(Path(directory) / 'project.json')
+            payload = json.dumps(asdict(DescriptionOutcome('c-0', 'succeeded', 'Generated', 'model')))
+            worker.cache = SimpleNamespace(path=window.project.path.resolve(), results={'c-0': GuiResultReceipt('a' * 64, sha256(payload.encode()).hexdigest(), payload)})
+            if mode == 'payload': worker.cache.results['c-0'] = GuiResultReceipt('a' * 64, 'b' * 64, payload.replace('Generated', 'Other'))
+            if mode == 'save_as': window.project.save(Path(directory) / 'copy.json')
         window.description_worker = worker
         callbacks = []
         window._on_description_ready = lambda *args: callbacks.append(threading.get_ident())
@@ -42,15 +54,16 @@ with tempfile.TemporaryDirectory() as directory:
         if mode == 'cancel': worker.cancelled = True
         worker.start(); assert worker.wait(5000)
         app.processEvents()
-        if mode == 'current':
+        if mode in ('current', 'receipt'):
             assert target.description == 'Generated'
             assert callbacks == [owner]
+            assert bool(window.project.metadata.job_results) == (mode == 'receipt')
         else:
             assert not callbacks
             assert target.description == ('User edit' if mode == 'edit' else None)
-        if mode == 'edit':
+        if mode in ('edit', 'payload', 'save_as'):
             window._on_description_error.assert_called_once()
-            assert 'discarded' in window._on_description_error.call_args.args[1]
+            assert not window.project.metadata.job_results
         else:
             window._on_description_error.assert_not_called()
 """

@@ -51,10 +51,24 @@ class DescriptionDelivery(QObject):
             return
         self._delivered.add(target_id)
         try:
+            project = self.window.project
+            cache = getattr(self.worker, "cache", None)
+            outcome = DescriptionOutcome(target_id, "succeeded", description, model)
+            receipt = None
+            if cache is not None:
+                if project.path is None or project.path.resolve() != cache.path:
+                    raise ValueError("Project save location changed during description")
+                receipt = cache.results[target_id]
+                if not receipt.matches(outcome):
+                    raise ValueError(
+                        "Queued description differs from its recorded result"
+                    )
             accepted = self.application.apply(
-                self.window.project,
-                DescriptionOutcome(target_id, "succeeded", description, model),
+                project,
+                outcome,
             )
+            if accepted and receipt is not None:
+                project.record_job_result(receipt.result_id, receipt.digest)
         except Exception as exc:
             self.window._on_description_error(
                 target_id, f"Could not apply description: {exc}"

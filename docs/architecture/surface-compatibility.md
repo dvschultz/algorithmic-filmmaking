@@ -237,8 +237,23 @@ CLI retains eight-character clip prefixes, 640x360 thumbnail preparation,
 frame-only inference, and its result counters. Generated thumbnails are included
 in the saved project when results are committed. CLI/MCP reuse requires matching
 options and media plus the same cache directory. The old CLI inference loop is
-removed. Direct spine calls remain non-durable; GUI durable description recovery,
-custom queries, and cinematography remain pending U7 work.
+removed. Direct spine calls remain non-durable; custom queries and cinematography
+remain pending U7 work.
+
+Saved GUI projects use `gui_describe` history and a computation journal for both
+clip and frame targets. Results are recorded before queued delivery, and matching
+results from an interrupted run are reused without model preparation or inference.
+Mixed batches compute only missing targets. Identity includes prior description
+metadata, image/source fingerprints, resolved options, and runtime provenance.
+Delivery verifies the recorded payload, original save location, and owner-thread
+application guards before recording a project receipt. Unsaved projects use
+session-only history. All four GUI entry points use this path.
+
+GUI computation never saves the project automatically. An explicit successful save
+acknowledges only receipts whose output matches the exact saved clip/frame snapshot.
+Save As and edited descriptions do not acknowledge the original result; failed
+checkpoints can be retried by saving again without inference. GUI and headless
+receipts retain separate identities because their publication policies differ.
 
 ## Transcription batch cutover
 

@@ -5,11 +5,23 @@ using ThreadPoolExecutor for parallelism with retry logic for cloud APIs.
 """
 
 import logging
-from typing import Optional
+from dataclasses import asdict
+from queue import Empty, Queue
+from typing import TYPE_CHECKING, Optional
 
 from PySide6.QtCore import Signal
 
 from core.settings import load_settings
+from core.jobs import JobRuntime
+from core.jobs.spec import OperationSpec
+from core.jobs.description import _runtime, _task_data
+from core.jobs.gui_description import GuiDescriptionCache
+from core.jobs.media import media_stamp
+from ui.workers.job_adapter import (
+    gui_job_operation,
+    gui_job_runtime,
+    close_gui_job_runtime,
+)
 from ui.workers.base import CancellableWorker
 from core.operations.description import (
     DEFAULT_PROMPT,
@@ -21,6 +33,9 @@ from core.operations.description import (
 )
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from core.project import Project
 
 
 class DescriptionWorker(CancellableWorker):
@@ -56,7 +71,9 @@ class DescriptionWorker(CancellableWorker):
         skip_existing: bool = True,
         analysis_targets: Optional[list] = None,
         parent=None,
-    ):
+        *,
+        project: Optional["Project"] = None,
+    ) -> None:
         super().__init__(parent)
         self._tier = self._resolve_tier(tier)
         self._prompt = prompt or DEFAULT_PROMPT
@@ -75,6 +92,64 @@ class DescriptionWorker(CancellableWorker):
             )
         else:
             self._tasks = self._build_tasks(clips, sources or {}, skip_existing)
+        self._media_stamps = {
+            path: media_stamp(path)
+            for task in self.tasks
+            for path in (task.thumbnail_path, task.source_path)
+            if path is not None
+        }
+        self.operation = gui_job_operation(
+            OperationSpec.build(
+                kind="describe",
+                version=1,
+                arguments={
+                    "clip_ids": [task.clip_id for task in self.tasks],
+                    "force": not skip_existing,
+                },
+                inputs={
+                    "targets": [_task_data(task) for task in self.tasks],
+                    "options": asdict(self.options),
+                    "runtime": _runtime(self.options),
+                },
+                persistence="session_only",
+                session_id=project.session.session_id if project is not None else None,
+                input_revision=str(project.mutation_generation)
+                if project is not None
+                else None,
+            ),
+            project.path if project is not None else None,
+        )
+        self.task_id: str | None = None
+        self.job_status: str | None = None
+        self._runtime: JobRuntime | None = None
+        self.cache: GuiDescriptionCache | None = None
+        if project is not None and project.path is not None:
+            targets = {
+                task.clip_id: (
+                    project.frames_by_id
+                    if task.target_type == "frame"
+                    else project.clips_by_id
+                )[task.clip_id]
+                for task in self.tasks
+            }
+            self.cache = GuiDescriptionCache(
+                project.path,
+                project.metadata.id,
+                {cid: target.source_id or "" for cid, target in targets.items()},
+                project.metadata.job_results,
+                options=self.options,
+                previous_descriptions={
+                    cid: {
+                        "description": target.description,
+                        "model": target.description_model,
+                        "frames": getattr(target, "description_frames", None),
+                        "clip_id": getattr(target, "clip_id", None),
+                        "frame_number": getattr(target, "frame_number", None),
+                    }
+                    for cid, target in targets.items()
+                },
+                media_stamps=self._media_stamps,
+            )
 
     @staticmethod
     def _resolve_tier(tier: Optional[str]) -> str:
@@ -142,67 +217,156 @@ class DescriptionWorker(CancellableWorker):
         self, task: DescriptionTask
     ) -> tuple[str, Optional[str], Optional[str], Optional[str]]:
         """Compatibility wrapper for callers testing one detached task."""
-        outcome = compute_description(
-            task, self.options, self._cancel_event
-        )
+        outcome = compute_description(task, self.options, self._cancel_event)
         error = "Cancelled" if outcome.status == "unprocessed" else outcome.message
         return outcome.clip_id, outcome.description, outcome.model, error
 
-    def run(self) -> None:
-        """Execute description generation on all clips."""
-        self._log_start()
-        try:
-            self._run_descriptions()
-        finally:
-            self.description_completed.emit()
-            self._log_complete()
+    def cancel(self) -> None:
+        super().cancel()
+        if self._runtime is not None and self.task_id is not None:
+            self._runtime.cancel(self.task_id)
 
-    def _run_descriptions(self) -> None:
-        if self.is_cancelled():
-            self._log_cancelled()
-            return
-
-        total = len(self._tasks)
-        if total == 0:
-            logger.info("No clips to process for descriptions")
-            return
-
-        logger.info(
-            f"Starting description generation: {total} clips, "
-            f"parallelism={self._parallelism}"
-        )
-
-        # Pre-load local VLM model so user sees download status
+    def _prepare(self) -> bool:
+        if self.is_cancelled() or not self.tasks:
+            return False
+        if any(
+            media_stamp(path) != stamp for path, stamp in self._media_stamps.items()
+        ):
+            raise RuntimeError("Description media changed while queued")
         if self._tier == "local":
             try:
                 from core.analysis.description import is_model_loaded, _load_local_model
 
                 if not is_model_loaded(self.options.model):
-                    self.progress.emit(0, total)
                     _load_local_model(self.options.model)
-            except Exception as e:
+            except Exception as exc:
                 if self.is_cancelled():
-                    self._log_cancelled()
-                    return
-                message = f"Failed to load local VLM: {e}"
-                self.last_error = message
-                for task in self._tasks:
-                    self.error_count += 1
-                    self._log_error(message, task.clip_id)
-                    self.error.emit(task.clip_id, message)
-                return
+                    return False
+                raise RuntimeError(f"Failed to load local VLM: {exc}") from exc
+        if any(
+            media_stamp(path) != stamp for path, stamp in self._media_stamps.items()
+        ):
+            raise RuntimeError("Description media changed during preparation")
+        return not self.is_cancelled()
 
-        if self.is_cancelled():
-            self._log_cancelled()
-            return
+    def run(self) -> None:
+        self._log_start()
+        runtime = None
+        events: Queue[tuple[str, object]] = Queue()
 
-        self.result = run_description(
-            tuple(self._tasks),
-            self.options,
-            cancel_event=self._cancel_event,
-            on_outcome=self._on_outcome,
-            progress=self.progress.emit,
-        )
+        def emit(event):
+            kind, value = event
+            if kind == "outcome":
+                self._on_outcome(value)
+            else:
+                self.progress.emit(*value)
+
+        def compute(progress, cancel):
+            collected = {}
+
+            def deliver(outcome):
+                collected[outcome.clip_id] = outcome
+                events.put(("outcome", outcome))
+
+            def report(current, total):
+                progress(
+                    current / total if total else 1.0, f"Describing ({current}/{total})"
+                )
+                events.put(("progress", (current, total)))
+
+            try:
+                if self.cache is not None:
+                    outcomes = self.cache.run(
+                        self.tasks, cancel, self._prepare, deliver, report
+                    )
+                else:
+                    report(0, len(self.tasks))
+                    if self._prepare():
+                        outcomes = run_description(
+                            self.tasks,
+                            self.options,
+                            cancel_event=cancel,
+                            on_outcome=deliver,
+                            progress=report,
+                        )
+                    else:
+                        outcomes = tuple(
+                            DescriptionOutcome(
+                                task.clip_id, "unprocessed", code="cancelled"
+                            )
+                            for task in self.tasks
+                        )
+                return {"outcomes": [asdict(outcome) for outcome in outcomes]}
+            except Exception as exc:
+                for task in self.tasks:
+                    if task.clip_id not in collected:
+                        deliver(
+                            DescriptionOutcome(
+                                task.clip_id,
+                                "failed",
+                                code="description_failed",
+                                message=str(exc),
+                            )
+                        )
+                return {
+                    "success": False,
+                    "error": str(exc),
+                    "outcomes": [
+                        asdict(collected[task.clip_id]) for task in self.tasks
+                    ],
+                }
+
+        try:
+            runtime = gui_job_runtime(self.operation)
+            self._runtime = runtime
+            submission = runtime.submit(
+                kind=self.operation.kind,
+                args=self.operation.arguments,
+                operation=self.operation,
+                run=compute,
+                cancellation_event=self._cancel_event,
+                project_path=self.operation.arguments.get("project_path"),
+            )
+            self.task_id = submission["task_id"]
+            while runtime.is_handle_live(self.task_id):
+                try:
+                    emit(events.get(timeout=0.05))
+                except Empty:
+                    pass
+            runtime.shutdown()
+            while not events.empty():
+                emit(events.get_nowait())
+            row = runtime.store.get(self.task_id)
+            self.job_status = row.status
+            self.result = tuple(
+                DescriptionOutcome(**value)
+                for value in (row.result or {}).get("outcomes", [])
+            )
+            if row.status == "cancelled" and not self.result:
+                self.result = tuple(
+                    DescriptionOutcome(task.clip_id, "unprocessed", code="cancelled")
+                    for task in self.tasks
+                )
+            if row.status == "failed" and not self.result:
+                raise RuntimeError(row.error or "Description failed")
+        except Exception as exc:
+            for task in self.tasks:
+                self._on_outcome(
+                    DescriptionOutcome(
+                        task.clip_id,
+                        "failed",
+                        code="description_failed",
+                        message=str(exc),
+                    )
+                )
+        finally:
+            try:
+                if runtime is not None:
+                    close_gui_job_runtime(runtime)
+            finally:
+                self._runtime = None
+                self.description_completed.emit()
+                self._log_complete()
 
     def _on_outcome(self, outcome: DescriptionOutcome) -> None:
         if outcome.status == "failed":

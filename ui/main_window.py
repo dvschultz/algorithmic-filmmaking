@@ -3810,7 +3810,7 @@ class MainWindow(QMainWindow):
         logger.info(f"Creating DescriptionWorker (pipeline) with tier={tier}...")
         self.description_worker = DescriptionWorker(
             clips, tier=tier, sources=sources,
-            parallelism=self.settings.description_parallelism,
+            parallelism=self.settings.description_parallelism, project=self.project,
         )
         self.description_worker.progress.connect(self._on_description_progress)
         from ui.workers.description_delivery import DescriptionDelivery
@@ -6809,7 +6809,7 @@ class MainWindow(QMainWindow):
             worker = DescriptionWorker(
                 clips=[],
                 analysis_targets=targets,
-                parallelism=self.settings.description_parallelism,
+                parallelism=self.settings.description_parallelism, project=self.project,
             )
             worker.progress.connect(self._on_description_progress)
             from ui.workers.description_delivery import DescriptionDelivery
@@ -7987,7 +7987,7 @@ class MainWindow(QMainWindow):
         # Start worker
         from PySide6.QtCore import Qt
         sources = self.project.sources_by_id
-        self.description_worker = DescriptionWorker(clips, tier=tier, prompt=prompt, sources=sources, parallelism=self.settings.description_parallelism)
+        self.description_worker = DescriptionWorker(clips, tier=tier, prompt=prompt, sources=sources, parallelism=self.settings.description_parallelism, project=self.project)
         self.description_worker.progress.connect(self._on_description_progress)
         from ui.workers.description_delivery import DescriptionDelivery
         DescriptionDelivery(self, self.description_worker)
@@ -9236,7 +9236,7 @@ class MainWindow(QMainWindow):
             self._description_finished_handled = False
             self._reset_description_run_errors()
             logger.info(f"Creating DescriptionWorker (intention) for {len(clips_needing_descriptions)} clips with tier={tier}")
-            self.description_worker = DescriptionWorker(clips_needing_descriptions, tier=tier, sources=sources, parallelism=self.settings.description_parallelism)
+            self.description_worker = DescriptionWorker(clips_needing_descriptions, tier=tier, sources=sources, parallelism=self.settings.description_parallelism, project=self.project)
             self.description_worker.progress.connect(
                 self.intention_workflow.on_analysis_progress
             )

@@ -26,13 +26,15 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
     store = JobStore(database)
     canonical = str(path.expanduser().resolve())
     clips = {clip["id"]: clip for clip in snapshot.get("clips", [])}
+    frames = {frame["id"]: frame for frame in snapshot.get("frames", [])}
     pending = []
     for row in store.get_pending_results(list(receipts)):
         result_id = row["result_id"]
         receipt_digest = receipts[result_id]
         identity = json.loads(row["spec_json"])
         if (
-            identity["kind"] not in ("gui_transcribe", "gui_align_words")
+            identity["kind"]
+            not in ("gui_transcribe", "gui_align_words", "gui_describe")
             or identity["version"] != 1
         ):
             continue
@@ -46,12 +48,27 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
             "project_id"
         ] != snapshot.get("id"):
             continue
-        clip = clips.get(identity["target_id"])
-        if clip is None or clip["source_id"] != identity["inputs"]["source_id"]:
+        is_frame = (
+            identity["kind"] == "gui_describe"
+            and identity["inputs"]["task"]["target_type"] == "frame"
+        )
+        clip = (frames if is_frame else clips).get(identity["target_id"])
+        if (
+            clip is None
+            or (clip.get("source_id") or "") != identity["inputs"]["source_id"]
+        ):
             continue
         payload = json.loads(row["payload_json"])
         if payload["clip_id"] != clip["id"] or payload["status"] != "succeeded":
             raise StaleJobResult("Saved GUI result does not match its target")
+        if identity["kind"] == "gui_describe":
+            if (
+                clip.get("description") == payload["description"]
+                and clip.get("description_model") == payload["model"]
+                and (is_frame or clip.get("description_frames") == 1)
+            ):
+                pending.append((result_id, receipt_digest))
+            continue
         if identity["kind"] == "gui_transcribe":
             expected = [
                 TranscriptSegment.from_dict(s).to_dict() for s in payload["segments"]
