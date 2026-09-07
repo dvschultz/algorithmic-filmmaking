@@ -85,6 +85,7 @@ from ui.theme import theme, Spacing
 from ui.chat_panel import ChatPanel
 from ui.workers.chat_delivery import ChatDelivery, stop_chat_workers
 from ui.workers.detection_thumbnail_delivery import DetectionThumbnailDelivery
+from ui.workers.export_delivery import ExportDelivery
 from ui.workers.gui_tool_reply import (
     AgentAnalysisCompletion, GuiToolReply, gui_reply_scope,
 )
@@ -285,10 +286,10 @@ class SequenceExportWorker(QThread):
 
     def __init__(self, sequence, sources, clips, config):
         super().__init__()
-        self.sequence = sequence
-        self.sources = sources
-        self.clips = clips
-        self.config = config
+        from copy import deepcopy
+        self.sequence, self.sources, self.clips, self.config = deepcopy(
+            (sequence, sources, clips, config)
+        )
 
     def run(self):
         try:
@@ -641,8 +642,6 @@ class MainWindow(QMainWindow):
         self._pending_agent_object_detection = False
         self._pending_agent_description = False
         self._pending_agent_analyze_all = False
-        self._pending_agent_export = False
-        self._pending_agent_export_bundle = False
         self._agent_color_clips: list = []
         self._agent_shot_clips: list = []
         self._agent_transcription_clips: list = []
@@ -2245,6 +2244,7 @@ class MainWindow(QMainWindow):
                     if wait_type not in {
                         "color_analysis", "shot_analysis", "description", "transcription", "detection",
                         "classification", "object_detection", "person_detection", "download",
+                        "export", "export_bundle",
                     }:
                         self._pending_agent_tool_call_id = tool_call_id
                         self._pending_agent_tool_name = tool_name
@@ -7150,13 +7150,27 @@ class MainWindow(QMainWindow):
         self.sequence_tab.timeline.export_btn.setEnabled(False)
 
         self.export_worker = SequenceExportWorker(sequence, sources, clips, config)
-        self.export_worker.progress.connect(self._on_sequence_export_progress)
-        self.export_worker.export_completed.connect(self._on_sequence_export_finished)
-        self.export_worker.error.connect(self._on_sequence_export_error)
-        # Clean up thread safely after it finishes
-        self.export_worker.finished.connect(self.export_worker.deleteLater)
-        self.export_worker.finished.connect(lambda: setattr(self, 'export_worker', None))
+        self._bind_export_worker("export_worker")
         self.export_worker.start()
+
+    def _bind_export_worker(
+        self, attribute: str, *, reply: GuiToolReply | None = None,
+    ) -> None:
+        worker = getattr(self, attribute)
+        if attribute == "export_worker":
+            clip_count = len(worker.sequence.get_all_clips())
+            handlers = {
+                "progress": self._on_sequence_export_progress,
+                "result": lambda path: self._on_sequence_export_finished(path, reply=reply, clip_count=clip_count),
+                "error": lambda error: self._on_sequence_export_error(error, reply=reply),
+            }
+        else:
+            handlers = {
+                "progress": self._on_export_bundle_progress,
+                "result": lambda result: self._on_export_bundle_finished(result, reply=reply),
+                "error": lambda error: self._on_export_bundle_error(error, reply=reply),
+            }
+        ExportDelivery(self, attribute, worker, handlers)
 
     def start_agent_export(self, sequence, sources: dict, clips: dict, config) -> bool:
         """Start a sequence export triggered by agent.
@@ -7174,8 +7188,9 @@ class MainWindow(QMainWindow):
         if self.export_worker and self.export_worker.isRunning():
             return False
 
-        # Mark that agent is waiting
-        self._pending_agent_export = True
+        reply = getattr(self, "_dispatch_gui_reply", None)
+        if reply is not None and not reply.is_current(self):
+            return False
 
         # Start export in background
         self.progress_bar.setVisible(True)
@@ -7183,12 +7198,7 @@ class MainWindow(QMainWindow):
         self.sequence_tab.timeline.export_btn.setEnabled(False)
 
         self.export_worker = SequenceExportWorker(sequence, sources, clips, config)
-        self.export_worker.progress.connect(self._on_sequence_export_progress)
-        self.export_worker.export_completed.connect(self._on_sequence_export_finished)
-        self.export_worker.error.connect(self._on_sequence_export_error)
-        # Clean up thread safely after it finishes
-        self.export_worker.finished.connect(self.export_worker.deleteLater)
-        self.export_worker.finished.connect(lambda: setattr(self, 'export_worker', None))
+        self._bind_export_worker("export_worker", reply=reply)
         self.export_worker.start()
         return True
 
@@ -7212,8 +7222,9 @@ class MainWindow(QMainWindow):
         if self.export_bundle_worker and self.export_bundle_worker.isRunning():
             return False
 
-        # Mark that agent is waiting
-        self._pending_agent_export_bundle = True
+        reply = getattr(self, "_dispatch_gui_reply", None)
+        if reply is not None and not reply.is_current(self):
+            return False
 
         # Start background export
         self.status_bar.showMessage("Exporting project bundle...")
@@ -7225,9 +7236,7 @@ class MainWindow(QMainWindow):
             include_clips=include_clips,
             parent=self,
         )
-        self.export_bundle_worker.progress.connect(self._on_export_bundle_progress)
-        self.export_bundle_worker.export_completed.connect(self._on_export_bundle_finished)
-        self.export_bundle_worker.error.connect(self._on_export_bundle_error)
+        self._bind_export_worker("export_bundle_worker", reply=reply)
         self.export_bundle_worker.start()
         return True
 
@@ -7236,53 +7245,42 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(int(progress * 100))
         self.status_bar.showMessage(message)
 
-    def _on_sequence_export_finished(self, output_path: Path):
+    def _on_sequence_export_finished(self, output_path: Path, *, reply: GuiToolReply | None = None, clip_count: int = 0) -> None:
         """Handle sequence export completion."""
         self.progress_bar.setVisible(False)
         self.sequence_tab.timeline.export_btn.setEnabled(True)
         self.status_bar.showMessage(f"Sequence exported to {output_path.name}")
 
         # If agent was waiting for export, send result back
-        if self._pending_agent_export and self._chat_worker:
-            self._pending_agent_export = False
-            sequence = self.sequence_tab.get_sequence()
+        if reply is not None:
             result = {
-                "tool_call_id": self._pending_agent_tool_call_id,
-                "name": self._pending_agent_tool_name,
                 "success": True,
                 "result": {
                     "success": True,
                     "output_path": str(output_path),
-                    "clip_count": len(sequence.get_all_clips()) if sequence else 0,
+                    "clip_count": clip_count,
                     "message": f"Exported to {output_path.name}"
                 }
             }
-            self._pending_agent_tool_call_id = None
-            self._pending_agent_tool_name = None
-            self._chat_worker.set_gui_tool_result(result)
+            reply.send(self, result)
             logger.info(f"Sent export result to agent: {output_path}")
         else:
             # Only open folder for manual exports
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(output_path.parent)))
 
-    def _on_sequence_export_error(self, error: str):
+    def _on_sequence_export_error(self, error: str, *, reply: GuiToolReply | None = None) -> None:
         """Handle sequence export error."""
         self._gui_state.set_last_error(f"Export error: {error}")
         self.progress_bar.setVisible(False)
         self.sequence_tab.timeline.export_btn.setEnabled(True)
 
         # If agent was waiting for export, send error result
-        if self._pending_agent_export and self._chat_worker:
-            self._pending_agent_export = False
+        if reply is not None:
             result = {
-                "tool_call_id": self._pending_agent_tool_call_id,
-                "name": self._pending_agent_tool_name,
                 "success": False,
                 "error": error
             }
-            self._pending_agent_tool_call_id = None
-            self._pending_agent_tool_name = None
-            self._chat_worker.set_gui_tool_result(result)
+            reply.send(self, result)
             logger.info(f"Sent export error to agent: {error}")
         else:
             # Only show dialog for manual exports
@@ -9740,11 +9738,9 @@ class MainWindow(QMainWindow):
             include_clips=include_clips,
             parent=self,
         )
-        self.export_bundle_worker.progress.connect(self._on_export_bundle_progress)
-        self.export_bundle_worker.export_completed.connect(self._on_export_bundle_finished)
-        self.export_bundle_worker.error.connect(self._on_export_bundle_error)
 
         self.status_bar.showMessage("Exporting project bundle...")
+        self._bind_export_worker("export_bundle_worker")
         self.export_bundle_worker.start()
 
     def _on_export_bundle_progress(self, current: int, total: int, filename: str):
@@ -9754,9 +9750,8 @@ class MainWindow(QMainWindow):
                 f"Exporting bundle: {current}/{total} files — {filename}"
             )
 
-    def _on_export_bundle_finished(self, result):
+    def _on_export_bundle_finished(self, result, *, reply: GuiToolReply | None = None) -> None:
         """Handle successful bundle export."""
-        self.export_bundle_worker = None
 
         parts = []
         if result.sources_copied:
@@ -9784,11 +9779,8 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(f"Bundle exported to {result.dest_dir.name}", 5000)
 
         # If agent was waiting for bundle export, send result back
-        if self._pending_agent_export_bundle and self._chat_worker:
-            self._pending_agent_export_bundle = False
+        if reply is not None:
             agent_result = {
-                "tool_call_id": self._pending_agent_tool_call_id,
-                "name": self._pending_agent_tool_name,
                 "success": True,
                 "result": {
                     "success": True,
@@ -9800,9 +9792,7 @@ class MainWindow(QMainWindow):
                     "message": msg,
                 }
             }
-            self._pending_agent_tool_call_id = None
-            self._pending_agent_tool_name = None
-            self._chat_worker.set_gui_tool_result(agent_result)
+            reply.send(self, agent_result)
             logger.info(f"Sent bundle export result to agent: {result.dest_dir}")
         else:
             QMessageBox.information(self, "Export Project Bundle", msg)
@@ -9810,23 +9800,17 @@ class MainWindow(QMainWindow):
             # Open containing folder
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(result.dest_dir.parent)))
 
-    def _on_export_bundle_error(self, error_msg: str):
+    def _on_export_bundle_error(self, error_msg: str, *, reply: GuiToolReply | None = None) -> None:
         """Handle bundle export error."""
-        self.export_bundle_worker = None
         self.status_bar.showMessage("Bundle export failed", 5000)
 
         # If agent was waiting for bundle export, send error result
-        if self._pending_agent_export_bundle and self._chat_worker:
-            self._pending_agent_export_bundle = False
+        if reply is not None:
             agent_result = {
-                "tool_call_id": self._pending_agent_tool_call_id,
-                "name": self._pending_agent_tool_name,
                 "success": False,
                 "error": error_msg
             }
-            self._pending_agent_tool_call_id = None
-            self._pending_agent_tool_name = None
-            self._chat_worker.set_gui_tool_result(agent_result)
+            reply.send(self, agent_result)
             logger.info(f"Sent bundle export error to agent: {error_msg}")
         else:
             QMessageBox.warning(
@@ -10454,7 +10438,6 @@ class MainWindow(QMainWindow):
         self._pending_agent_object_detection = False
         self._pending_agent_description = False
         self._pending_agent_analyze_all = False
-        self._pending_agent_export = False
         self._pending_agent_tool_call_id = None
         self._pending_agent_tool_name = None
 

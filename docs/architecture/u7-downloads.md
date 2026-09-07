@@ -140,7 +140,21 @@ Download completion leaves unrelated pending tool fields alone and rejects stale
 deferred replies. Manual source imports retain their existing session/selection
 behavior. Native downloads retain the shared scheduler and receipt recovery.
 
-Exports and combined
+Sequence and project-bundle exports now capture the originating reply before
+their eager worker start. Completion and error callbacks use that request and do
+not consume unrelated pending fields or fall back to manual dialogs after chat
+replacement. A shared owner-thread relay guards both manual and agent export
+delivery by project session and worker channel, rejects duplicate terminal
+signals, and clears only its own worker reference on thread completion.
+
+Sequence export workers deep-copy the submitted sequence, source/clip lookups, and
+configuration. Bundle workers capture `Project.snapshot_for_save()` on dispatch
+and construct a detached project on their worker thread. Later edits or project
+reset cannot change those export inputs. Sequence completion reports the captured
+clip count. Native export execution, cancellation, and shutdown behavior remain on
+their existing implementations pending the export-operation migration.
+
+Combined
 analysis completion still need this sender migration. Their legacy completion
 handlers can construct replies from shared pending fields; mailbox validation
 cannot distinguish a stale result relabeled with the current request token.

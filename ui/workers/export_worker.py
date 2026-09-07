@@ -36,7 +36,8 @@ class ExportBundleWorker(CancellableWorker):
         parent=None,
     ):
         super().__init__(parent)
-        self._project = project
+        self._snapshot = project.snapshot_for_save()
+        self._project_path = project.path
         self._dest_dir = dest_dir
         self._include_videos = include_videos
         self._include_clips = include_clips
@@ -46,8 +47,16 @@ class ExportBundleWorker(CancellableWorker):
         try:
             from core.project_export import export_project_bundle
 
+            snapshot = dict(self._snapshot)
+            extra = snapshot.pop("extra_data")
+            project = Project(
+                path=self._project_path,
+                **snapshot,
+                sequences=extra["_all_sequences"],
+                active_sequence_index=extra["active_sequence_index"],
+            )
             result = export_project_bundle(
-                project=self._project,
+                project=project,
                 dest_dir=self._dest_dir,
                 include_videos=self._include_videos,
                 include_clips=self._include_clips,
