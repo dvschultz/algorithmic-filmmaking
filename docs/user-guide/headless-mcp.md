@@ -447,8 +447,17 @@ and receipts to the project in groups of up to 16. Cancellation saves the final
 partial group. Start another color job after a failure to reuse its
 recorded results: a failed project save retries application, while a failed job
 checkpoint verifies the saved palette without applying it twice. Edited palettes
-are preserved and reported as a conflict. Other analysis jobs do not yet use this
-recovery path.
+are preserved and reported as a conflict.
+
+`start_transcribe` also records each successful transcript, including silent
+clips, and saves project receipts in groups of up to 16. Resubmitting after a
+failed save or checkpoint reuses verified computed results. Edited managed
+transcripts are reported as conflicts. Pending jobs reject changed project or
+media metadata; execution fingerprints source contents and revalidates them
+before publication. Cancellation preserves completed targets for retry.
+This recovery path currently applies to the dedicated MCP transcription job;
+GUI, CLI, synchronous MCP, and generic multi-analysis transcription still use
+the shared computation/application path without these durable receipts.
 
 `start_detect_scenes_bulk` also records computed scenes, saving one source and
 its receipt at a time. Retrying identical inputs reuses the recorded clip IDs;
@@ -461,5 +470,5 @@ to bulk detection on existing projects, not new-project detection.
 Projects save in schema 1.5 to retain these receipts; schema-aware 1.4 clients can
 inspect them read-only. Job-history cleanup retains the computed-result cache.
 Keep that cache when moving projects between installations if you need to retry
-managed color analysis or bulk detection; missing cached results are reported instead of silently
+managed color analysis, transcription jobs, or bulk detection; missing cached results are reported instead of silently
 recomputing them.

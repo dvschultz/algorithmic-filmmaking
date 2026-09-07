@@ -640,3 +640,36 @@ async def test_download_submission_rejects_replaced_directory(tmp_path, monkeypa
     target.mkdir()
     with pytest.raises(RuntimeError, match='directory changed'):
         captured['run'](None, threading.Event())
+
+
+@pytest.mark.asyncio
+async def test_transcription_submission_freezes_ids_and_rejects_queued_media_changes(lifespan_ctx, tmp_path, monkeypatch):
+    from scene_ripper_mcp.tools import jobs
+    from core.jobs.commits import StaleJobResult
+    from core.project import Project
+    ctx, store, _ = lifespan_ctx
+    path = _make_project_file(tmp_path)
+    captured = {}
+    monkeypatch.setattr(jobs, '_start_job', lambda ctx, **kwargs: captured.update(kwargs) or 'queued')
+    ids = ['clip-1']
+    assert await jobs.start_transcribe(str(path), clip_ids=ids, ctx=ctx) == 'queued'
+    ids.clear()
+    assert captured['operation'].arguments['clip_ids'] == ['clip-1']
+    Project.load(path).sources[0].file_path.write_bytes(b'changed')
+    with pytest.raises(StaleJobResult, match='queued'):
+        captured['run'](lambda *_: None, threading.Event())
+
+
+@pytest.mark.asyncio
+async def test_transcription_job_saves_receipts(lifespan_ctx, tmp_path, monkeypatch):
+    from scene_ripper_mcp.tools.jobs import start_transcribe
+    from core.project import Project
+    ctx, store, _ = lifespan_ctx
+    path = _make_project_file(tmp_path)
+    monkeypatch.setattr('core.transcription.transcribe_clip', lambda **_: [])
+    out = json.loads(await start_transcribe(str(path), ctx=ctx))
+    assert out['success'] is True
+    _wait_for_status(store, out['task_id'], STATUS_COMPLETED)
+    project = Project.load(path)
+    assert project.clips[0].transcript == []
+    assert len(project.metadata.job_results) == 1

@@ -816,24 +816,48 @@ async def start_transcribe(
             }
         )
 
-    runner_factory = _make_analyze_runner(
-        "transcribe", model=model, language=language
-    )
-    run = runner_factory(path, mtime, clip_ids)
+    from core.jobs.transcription import run_transcription_job, transcription_job_spec
+    from core.operations.transcription import TranscriptionOptions
+
+    store = _lifespan(ctx)["job_store"]
+    arguments = {
+        "project_path": canonical,
+        "clip_ids": clip_ids,
+        "model": model,
+        "language": language,
+    }
+    try:
+        operation = transcription_job_spec(
+            _project,
+            clip_ids,
+            TranscriptionOptions(model=model, language=language),
+            arguments=arguments,
+        )
+    except ValueError as exc:
+        return json.dumps(_wrap_error(exc))
+
+    def run(progress_callback, cancel_event):
+        frozen = operation.arguments
+        options = TranscriptionOptions(**json.loads(operation.inputs_json)["options"])
+        return run_transcription_job(
+            store,
+            path,
+            frozen["clip_ids"],
+            options,
+            progress_callback,
+            cancel_event,
+            operation=operation,
+        )
 
     return _start_job(
         ctx,
         kind="transcribe",
-        args={
-            "project_path": canonical,
-            "clip_ids": clip_ids,
-            "model": model,
-            "language": language,
-        },
+        args=operation.arguments,
         project_path=canonical,
         project_mtime_at_start=mtime,
         idempotency_key=idempotency_key,
         run=run,
+        operation=operation,
     )
 
 

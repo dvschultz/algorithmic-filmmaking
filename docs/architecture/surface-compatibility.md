@@ -215,5 +215,19 @@ and reentrancy checks. Headless batches notify once; GUI results apply increment
 The GUI relay also scopes progress, status, errors, and results to their worker,
 request, and pipeline run, rejecting expired or replaced work before UI delivery.
 
-Full media-content hashing, durable transcription job recovery, alignment, and
-audio-only transcription remain later U7 work. This cutover does not mark U7 complete.
+Alignment, audio-only transcription, and durable recovery on the remaining
+surfaces remain later U7 work. This cutover does not mark U7 complete.
+
+### Dedicated MCP transcription job recovery
+
+`start_transcribe` now captures an immutable operation specification and checks
+project revision, target snapshots, and media metadata before queued work starts.
+Its saved-project runner uses existing result rows and project-first receipts:
+computed transcripts survive save failures, and saved transcripts reconcile after
+checkpoint failures without duplicate application. Source fingerprints include a
+SHA-256 digest, cached only while device/inode/size/mtime/ctime remain unchanged.
+Edited managed outputs are conflicts. Silent results are retained and reused.
+
+This is the dedicated MCP job cutover. GUI, CLI, synchronous MCP, and generic
+multi-analysis transcription still need durable receipt integration; they retain
+the shared computation and application guards documented above.
