@@ -5,12 +5,13 @@ from __future__ import annotations
 import asyncio
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 import errno
 from hashlib import sha256
 import os
 from pathlib import Path
 import sys
-from threading import get_ident
+from threading import Lock, get_ident
 from typing import BinaryIO, Iterator
 import unicodedata
 
@@ -74,6 +75,41 @@ class ProjectWriter:
         self.closed = True
         self._path_lock: BinaryIO | None = None
         self._identity_lock: BinaryIO | None = None
+        self._use_lock = Lock()
+
+    def _is_active_here(self) -> bool:
+        return any(
+            borrow.active and borrow.writer is self and borrow.owner == _owner()
+            for borrow in _borrowed_writers.get()
+        )
+
+    @contextmanager
+    def activate(self) -> Iterator[ProjectWriter]:
+        """Explicitly lend this lease to one save operation in this process.
+
+        Possession of the writer is the capability; inherited thread/task
+        context alone never grants access. The acquiring context retains
+        responsibility for closing the lease after the operation returns.
+        """
+        if self.closed or self.owner[0] != os.getpid():
+            raise RuntimeError("Project writer is closed or belongs to another process")
+        if self._is_active_here():
+            yield self
+            return
+        if not self._use_lock.acquire(blocking=False):
+            raise RuntimeError("Project writer is in use")
+        try:
+            if self.closed:
+                raise RuntimeError("Project writer is closed")
+            borrow = _WriterBorrow(self, _owner())
+            token = _borrowed_writers.set((*_borrowed_writers.get(), borrow))
+            try:
+                yield self
+            finally:
+                borrow.active = False
+                _borrowed_writers.reset(token)
+        finally:
+            self._use_lock.release()
 
     def _acquire_record(self, key: str) -> BinaryIO:
         directory = _lock_directory()
@@ -109,8 +145,12 @@ class ProjectWriter:
 
     def replace(self, temporary: Path) -> None:
         """Atomically replace the project while retaining writer ownership."""
-        if self.closed or self.owner != _owner():
+        if self.closed or (self.owner != _owner() and not self._is_active_here()):
             raise RuntimeError("Project writer is not active in this execution context")
+        with self.activate():
+            self._replace(temporary)
+
+    def _replace(self, temporary: Path) -> None:
         replacement_lock = self._acquire_identity(temporary)
         try:
             os.replace(temporary, self.path)
@@ -124,11 +164,16 @@ class ProjectWriter:
     def close(self) -> None:
         if not self.closed and self.owner != _owner():
             raise RuntimeError("Only the acquiring context can close a project writer")
-        for stream in (self._identity_lock, self._path_lock):
-            if stream is not None:
-                stream.close()
-        self._identity_lock = self._path_lock = None
-        self.closed = True
+        if not self._use_lock.acquire(blocking=False):
+            raise RuntimeError("Project writer is in use")
+        try:
+            for stream in (self._identity_lock, self._path_lock):
+                if stream is not None:
+                    stream.close()
+            self._identity_lock = self._path_lock = None
+            self.closed = True
+        finally:
+            self._use_lock.release()
 
     def __enter__(self) -> ProjectWriter:
         return self.acquire()
@@ -142,18 +187,42 @@ _writers: ContextVar[tuple[ProjectWriter, ...]] = ContextVar(
 )
 
 
+@dataclass
+class _WriterBorrow:
+    writer: ProjectWriter
+    owner: tuple[int, int, int | None]
+    active: bool = True
+
+
+_borrowed_writers: ContextVar[tuple[_WriterBorrow, ...]] = ContextVar(
+    "borrowed_project_writers", default=()
+)
+
+
+def _current_writer(canonical: Path) -> ProjectWriter | None:
+    for borrow in _borrowed_writers.get():
+        writer = borrow.writer
+        if (
+            borrow.active
+            and not writer.closed
+            and writer.path == canonical
+            and borrow.owner == _owner()
+        ):
+            return writer
+    for writer in _writers.get():
+        if not writer.closed and writer.path == canonical and writer.owner == _owner():
+            return writer
+    return None
+
+
 @contextmanager
 def project_writer(path: Path | str) -> Iterator[ProjectWriter]:
     """Reuse only a scope belonging to the current thread and async task."""
     canonical = Path(path).expanduser().resolve()
-    for writer in _writers.get():
-        if (
-            not writer.closed
-            and writer.path == canonical
-            and writer.owner == _owner()
-        ):
-            yield writer
-            return
+    existing = _current_writer(canonical)
+    if existing is not None:
+        yield existing
+        return
     with ProjectWriter(canonical) as writer:
         token = _writers.set((*_writers.get(), writer))
         try:
@@ -165,12 +234,8 @@ def project_writer(path: Path | str) -> Iterator[ProjectWriter]:
 def replace_project_file(temporary: Path | str, destination: Path | str) -> None:
     """Publish through the surrounding writer scope."""
     canonical = Path(destination).expanduser().resolve()
-    for writer in _writers.get():
-        if (
-            not writer.closed
-            and writer.path == canonical
-            and writer.owner == _owner()
-        ):
-            writer.replace(Path(temporary))
-            return
+    writer = _current_writer(canonical)
+    if writer is not None:
+        writer.replace(Path(temporary))
+        return
     raise RuntimeError("Project replacement requires writer ownership")

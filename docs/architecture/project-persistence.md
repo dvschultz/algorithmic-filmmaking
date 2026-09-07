@@ -55,6 +55,17 @@ On macOS, case and Unicode normalization conservatively serialize path aliases;
 distinct case variants on case-sensitive volumes can therefore conflict too.
 Nested scopes reuse ownership only in the same process, thread, and async task.
 
+`ProjectWriter.activate()` explicitly lends an existing lease to one save
+operation, including a worker thread in the same process. Possession of the
+writer object is required; inherited contexts alone do not grant access.
+Borrow permission expires when the operation exits, including in copied
+contexts. Concurrent borrowing and closing an active lease fail immediately.
+`SaveProjectWorker` accepts an optional writer and verifies that it owns the
+destination. Success and failure release the borrow before emitting completion,
+while the original session lease remains held. Desktop lifecycle wiring must
+pass this lease and close it only after worker completion; that wiring remains
+outstanding below.
+
 Every shared project save holds ownership while serializing and replacing the
 file. MCP mutations additionally acquire it before loading and retain it through
 saving; project-scoped jobs hold it throughout execution. Contention returns

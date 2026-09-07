@@ -185,7 +185,9 @@ def test_shared_save_refuses_competing_owner(tmp_path, lock_root):
         assert project.is_dirty
 
 
-def test_mcp_mutation_owns_file_before_loading_and_releases_after_return(tmp_path, lock_root, monkeypatch):
+def test_mcp_mutation_owns_file_before_loading_and_releases_after_return(
+    tmp_path, lock_root, monkeypatch
+):
     import core.spine.project_io as project_io
     from core.project import Project
     from scene_ripper_mcp.tools.clips import add_clip_note
@@ -207,7 +209,9 @@ def test_mcp_mutation_owns_file_before_loading_and_releases_after_return(tmp_pat
     assert attempt(path, lock_root) == "acquired"
 
 
-def test_mcp_writer_conflict_is_structured_and_does_not_load(tmp_path, lock_root, monkeypatch):
+def test_mcp_writer_conflict_is_structured_and_does_not_load(
+    tmp_path, lock_root, monkeypatch
+):
     import core.spine.project_io as project_io
     from core.project import Project
     from scene_ripper_mcp.tools.clips import add_clip_note
@@ -216,8 +220,109 @@ def test_mcp_writer_conflict_is_structured_and_does_not_load(tmp_path, lock_root
     path = tmp_path / "project.sceneripper"
     assert Project.new().save(path)
     original = path.read_bytes()
-    monkeypatch.setattr(project_io, "load_with_mtime", lambda path: pytest.fail("loaded without ownership"))
+    monkeypatch.setattr(
+        project_io,
+        "load_with_mtime",
+        lambda path: pytest.fail("loaded without ownership"),
+    )
     with ProjectWriter(path):
         result = json.loads(asyncio.run(add_clip_note(str(path), "missing", "note")))
     assert result["error"]["code"] == "project_busy"
     assert path.read_bytes() == original
+
+
+def test_explicit_worker_scope_can_save_without_releasing_session_owner(
+    tmp_path, lock_root
+):
+    from concurrent.futures import ThreadPoolExecutor
+    from core.project import Project
+
+    path = tmp_path / "worker.sceneripper"
+    writer = ProjectWriter(path).acquire()
+    try:
+
+        def save():
+            with writer.activate():
+                assert Project.new("Worker").save(path)
+                assert attempt(path, lock_root) == "busy"
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pool.submit(save).result(timeout=10)
+        assert attempt(path, lock_root) == "busy"
+    finally:
+        writer.close()
+    assert attempt(path, lock_root) == "acquired"
+
+
+def test_active_worker_scope_prevents_close_and_competing_borrow(tmp_path, lock_root):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    writer = ProjectWriter(tmp_path / "worker.sceneripper").acquire()
+    entered, release = Event(), Event()
+
+    def use():
+        with writer.activate():
+            entered.set()
+            assert release.wait(10)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(use)
+        try:
+            assert entered.wait(10)
+            with pytest.raises(RuntimeError, match="in use"):
+                writer.close()
+            with pytest.raises(RuntimeError, match="in use"):
+                with writer.activate():
+                    pass
+        finally:
+            release.set()
+            future.result(timeout=10)
+            writer.close()
+
+
+def test_worker_scope_exception_restores_context_and_keeps_owner(tmp_path, lock_root):
+    path = tmp_path / "worker.sceneripper"
+    with ProjectWriter(path) as writer:
+        with pytest.raises(ValueError):
+            with writer.activate():
+                with writer.activate():
+                    raise ValueError("save failed")
+        with pytest.raises(ProjectBusyError):
+            with project_writer(path):
+                pass
+        assert attempt(path, lock_root) == "busy"
+
+
+def test_borrowed_context_cannot_be_inherited_by_another_task(tmp_path, lock_root):
+    writer = ProjectWriter(tmp_path / "worker.sceneripper").acquire()
+
+    async def contender():
+        with pytest.raises(RuntimeError, match="in use"):
+            with writer.activate():
+                pass
+
+    async def use():
+        with writer.activate():
+            await asyncio.create_task(contender())
+
+    try:
+        asyncio.run(use())
+    finally:
+        writer.close()
+
+
+def test_copied_borrow_context_expires_when_operation_finishes(tmp_path, lock_root):
+    from contextvars import copy_context
+
+    path = tmp_path / "worker.sceneripper"
+    with ProjectWriter(path) as writer:
+        with writer.activate():
+            copied = copy_context()
+
+        def stale_save():
+            with pytest.raises(ProjectBusyError):
+                with project_writer(path):
+                    pass
+
+        copied.run(stale_save)

@@ -100,8 +100,8 @@ def test_desktop_save_preserves_manual_project_name_and_undo(
     window.save_worker = None
     window.sequence_tab = SimpleNamespace(_persist_current_sequence=lambda: None)
     window.analyze_tab = SimpleNamespace(get_clip_ids=lambda: [])
-    window._on_project_save_finished = lambda *args: MainWindow._on_project_save_finished(
-        window, *args
+    window._on_project_save_finished = (
+        lambda *args: MainWindow._on_project_save_finished(window, *args)
     )
     monkeypatch.setattr(SaveProjectWorker, "start", lambda worker: worker.run())
     target = tmp_path / "different-filename.sceneripper"
@@ -273,3 +273,60 @@ def test_save_worker_uses_snapshot_not_live_project(qapp, tmp_path, monkeypatch)
     assert saved_ids == {"clip-1"}, (
         "Worker must serialize the snapshot, not the post-mutation live project"
     )
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_save_worker_uses_explicit_session_writer_on_real_thread(
+    qapp, tmp_path, monkeypatch, fail
+):
+    from core.project_lock import ProjectWriter, ProjectBusyError
+    from ui import main_window
+
+    target = tmp_path / "threaded.sceneripper"
+    project = _make_project_with_clip(tmp_path)
+    writer = ProjectWriter(target).acquire()
+    if fail:
+
+        def failed_save(**kwargs):
+            raise OSError("disk unavailable")
+
+        monkeypatch.setattr(main_window, "save_project", failed_save)
+    worker = None
+    try:
+        worker = main_window.SaveProjectWorker(
+            project.snapshot_for_save(), target, writer=writer
+        )
+        received = []
+        worker.save_finished.connect(lambda *args: received.append(args))
+        worker.start()
+        assert worker.wait(10000)
+        qapp.processEvents()
+        assert received and received[0][0] is (not fail)
+        assert target.exists() is (not fail)
+        with pytest.raises(ProjectBusyError):
+            with ProjectWriter(target):
+                pass
+        # Worker scope is gone on success and failure; session ownership remains.
+        with writer.activate():
+            pass
+    finally:
+        if worker is not None and worker.isRunning():
+            worker.wait()
+        writer.close()
+
+
+def test_save_worker_rejects_writer_for_another_destination(qapp, tmp_path):
+    from core.project_lock import ProjectWriter
+    from ui.main_window import SaveProjectWorker
+
+    protected = tmp_path / "protected.sceneripper"
+    target = tmp_path / "other.sceneripper"
+    with ProjectWriter(protected) as writer:
+        received = []
+        worker = SaveProjectWorker(
+            _make_project_with_clip(tmp_path).snapshot_for_save(), target, writer=writer
+        )
+        worker.save_finished.connect(lambda *args: received.append(args))
+        worker.run()
+        assert received and not received[0][0]
+        assert not target.exists()

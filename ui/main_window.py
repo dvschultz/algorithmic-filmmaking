@@ -6,6 +6,7 @@ import re
 import sys
 import time
 from collections import deque
+from contextlib import nullcontext
 from datetime import timedelta
 from pathlib import Path
 from typing import Optional
@@ -28,6 +29,7 @@ from PySide6.QtCore import Qt, Signal, QThread, QUrl, QTimer, Slot
 from PySide6.QtGui import QDesktopServices, QKeySequence, QAction, QDragEnterEvent, QDropEvent
 
 from models.clip import Source, Clip
+from core.project_lock import ProjectWriter
 from core.scene_detect import SceneDetector, DetectionConfig, KaraokeDetectionConfig
 from core.thumbnail import ThumbnailGenerator
 from core.downloader import (
@@ -289,25 +291,29 @@ class SaveProjectWorker(QThread):
 
     save_finished = Signal(bool, str, str)  # success, path, error
 
-    def __init__(self, snapshot: dict, filepath: Path):
+    def __init__(self, snapshot: dict, filepath: Path, *, writer: Optional[ProjectWriter] = None):
         super().__init__()
         self._snapshot = snapshot
         self.filepath = filepath
+        self._writer = writer
 
     def run(self):
         try:
             started = time.perf_counter()
-            success = save_project(
-                filepath=self.filepath,
-                sources=self._snapshot["sources"],
-                clips=self._snapshot["clips"],
-                sequence=self._snapshot["sequence"],
-                ui_state=self._snapshot["ui_state"],
-                metadata=self._snapshot["metadata"],
-                frames=self._snapshot["frames"],
-                extra_data=self._snapshot["extra_data"],
-                audio_sources=self._snapshot["audio_sources"],
-            )
+            if self._writer and self._writer.path != self.filepath.expanduser().resolve():
+                raise ValueError("Project writer does not own the save destination")
+            with self._writer.activate() if self._writer else nullcontext():
+                success = save_project(
+                    filepath=self.filepath,
+                    sources=self._snapshot["sources"],
+                    clips=self._snapshot["clips"],
+                    sequence=self._snapshot["sequence"],
+                    ui_state=self._snapshot["ui_state"],
+                    metadata=self._snapshot["metadata"],
+                    frames=self._snapshot["frames"],
+                    extra_data=self._snapshot["extra_data"],
+                    audio_sources=self._snapshot["audio_sources"],
+                )
             elapsed = time.perf_counter() - started
             logger.info("Saved project to %s in %.2fs", self.filepath, elapsed)
             self.save_finished.emit(success, str(self.filepath), "")
