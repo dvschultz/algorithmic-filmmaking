@@ -6589,15 +6589,19 @@ class MainWindow(QMainWindow):
 
     def _on_extract_frames_requested(self, source_id: str, mode: str, interval: int):
         """Launch frame extraction worker for the given source."""
+        if getattr(self, "_frame_extraction_worker", None) is not None:
+            self.status_bar.showMessage("Frame extraction is already running")
+            return
         source = self.sources_by_id.get(source_id)
         if not source:
             self.status_bar.showMessage("Source not found")
             return
 
         # Output dir for extracted frames
-        output_dir = self.project.path.parent / "frames" / source_id if self.project.path else Path.home() / ".cache" / "scene-ripper" / "frames" / source_id
+        output_dir = (self.project.path.parent if self.project.path else self.settings.cache_dir) / "frames"
 
         from ui.workers.frame_extraction_worker import FrameExtractionWorker
+        from ui.workers.frame_extraction_delivery import FrameExtractionDelivery
 
         worker = FrameExtractionWorker(
             source=source,
@@ -6605,20 +6609,11 @@ class MainWindow(QMainWindow):
             mode=mode,
             interval=interval,
             output_dir=output_dir,
-        )
-        worker.progress.connect(
-            lambda cur, tot: self.status_bar.showMessage(
-                f"Extracting frames: {cur}/{tot}"
-            )
-        )
-        worker.extraction_completed.connect(
-            lambda frames: self._on_frames_extracted(frames, source_id)
-        )
-        worker.error.connect(
-            lambda msg: self.status_bar.showMessage(f"Extraction error: {msg}")
+            parent=self,
         )
 
         self._frame_extraction_worker = worker
+        FrameExtractionDelivery(self, worker)
         worker.start()
         self.status_bar.showMessage("Extracting frames...")
 
@@ -6628,10 +6623,8 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("No frames extracted")
             return
 
-        self.project.add_frames(frames)
         self.frames_tab.update_frame_browser()
         self.status_bar.showMessage(f"Extracted {len(frames)} frames")
-        self._mark_dirty()
 
     def _on_import_images_requested(self, paths: list):
         """Import image files as Frame objects."""
@@ -10636,11 +10629,13 @@ class MainWindow(QMainWindow):
             return
 
         audio_workers = tuple(getattr(self, "_active_audio_transcribes", ()))
-        for worker in audio_workers:
+        frame_worker = getattr(self, "_frame_extraction_worker", None)
+        active_workers = audio_workers + ((frame_worker,) if frame_worker is not None else ())
+        for worker in active_workers:
             worker.cancel()
-        if any(worker.isRunning() for worker in audio_workers):
+        if any(worker.isRunning() for worker in active_workers):
             self.status_bar.showMessage(
-                "Cancelling audio transcription. Close the window again when it finishes."
+                "Cancelling background work. Close the window again when it finishes."
             )
             event.ignore()
             return

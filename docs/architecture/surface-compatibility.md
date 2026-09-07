@@ -948,3 +948,27 @@ project session. A replaced requester cannot receive results or publish a late
 transcript. Desktop saves remain explicit. Audio metadata tools now return
 available word timestamps and language. GUI/headless journals remain separate;
 remaining U7 work includes other audio/frame routes and intention orchestration.
+
+### Detached frame extraction and guarded desktop delivery
+
+`core/operations/frame_extraction.py` snapshots source metadata, media identity,
+clip range, and extraction options. Each request owns a fresh artifact directory;
+repeated extraction preserves previously published images. Failed or cancelled
+requests remove only their own incomplete directory. Successful results retain
+actual image dimensions and zero-based source-frame indices, including gaps from
+interval and scene-change selection. FFmpeg decodes from the beginning to retain
+exact source ordinals; extracting a late clip can therefore take longer than
+timestamp seeking. Its stderr is drained during processing and cancellation.
+
+The desktop adapter queues immutable results to the original project owner.
+Publication checks project/session/save path, source and clip identity, metadata,
+media, and generated files before adding the batch once through the project
+model. Duplicate launches are blocked until native worker completion; closing
+cancels and postpones teardown while extraction is running. Unsaved projects use
+the configured cache directory.
+
+This is an incremental U7 migration. Shared job history, durable frame-result
+recovery, CLI/MCP/agent extraction dispatch, image/audio import, remaining frame
+analysis orchestration, and intention workflows remain to be completed. Successful
+but discarded extraction artifacts are retained; managed artifact cleanup belongs
+to U10. No automatic project save is introduced.

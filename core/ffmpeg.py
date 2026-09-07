@@ -361,8 +361,23 @@ def extract_frames_batch(
         cancel_event: When set, the extraction is aborted early.
 
     Returns:
-        Sorted list of ``Path`` objects for extracted frames.
+        Sorted paths named ``frame_<source_index>.png`` (zero-based).
+        Existing extracted images in the output directory are never overwritten.
     """
+    from math import isfinite
+
+    if mode not in ("all", "interval", "smart"):
+        raise ValueError("Unknown frame extraction mode")
+    if not isfinite(fps) or fps <= 0:
+        raise ValueError("Frame rate must be positive and finite")
+    if type(interval) is not int or interval < 1:
+        raise ValueError("Frame interval must be a positive integer")
+    if type(start_frame) is not int or start_frame < 0 or (
+        end_frame is not None and (type(end_frame) is not int or end_frame <= start_frame)
+    ):
+        raise ValueError("Frame range must be nonnegative and nonempty")
+    if any(output_dir.glob("frame_*.png")):
+        raise ValueError("Frame output directory already contains extracted frames")
     ffmpeg_path = find_binary("ffmpeg")
     if ffmpeg_path is None:
         raise RuntimeError("FFmpeg not found")
@@ -378,60 +393,55 @@ def extract_frames_batch(
         video_path, fps, mode, interval, start_frame, end_frame,
     )
 
-    # Build the FFmpeg command ------------------------------------------------
-    cmd: list[str] = [ffmpeg_path, "-y"]
-
-    # Time-range flags (applied before -i for fast seeking)
-    if start_frame > 0:
-        cmd.extend(["-ss", str(start_frame / fps)])
-    cmd.extend(["-i", str(video_path)])
+    # Preserve decoded source ordinals as integer PTS. The image encoder uses
+    # the same 1-second time base, so frame_pts filenames carry exact indices
+    # even after interval/scene selection. PNGs have no playback timing.
+    filters = ["settb=1/1", "setpts=N"]
+    trim = f"trim=start_frame={start_frame}"
     if end_frame is not None:
-        # Duration relative to the seek point
-        duration = (end_frame - start_frame) / fps
-        cmd.extend(["-t", str(duration)])
-
-    # Mode-specific filters
+        trim += f":end_frame={end_frame}"
+    filters.append(trim)
     if mode == "interval":
-        cmd.extend([
-            "-vf", f"select=not(mod(n\\,{interval}))",
-            "-vsync", "vfr",
-        ])
+        filters.append(f"select=not(mod(n\\,{interval}))")
     elif mode == "smart":
-        cmd.extend([
-            "-vf", "select='gt(scene\\,0.3)'",
-            "-vsync", "vfr",
-        ])
-    # "all" mode – no filter needed
+        filters.append("select=gt(scene\\,0.3)")
+    cmd = [
+        ffmpeg_path, "-v", "error", "-nostdin", "-n", "-i", str(video_path),
+        "-map", "0:v:0", "-an", "-vf", ",".join(filters),
+        "-enc_time_base", "1:1", "-vsync", "0", "-frame_pts", "1",
+        str(output_dir / "frame_%06d.png"),
+    ]
 
-    output_pattern = str(output_dir / "frame_%06d.png")
-    cmd.append(output_pattern)
-
-    # Run FFmpeg --------------------------------------------------------------
-    process = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+    # communicate() drains stderr while waiting; wait() with a pipe can deadlock.
+    with subprocess.Popen(
+        cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
         **get_subprocess_kwargs(),
-    )
-
-    # Poll for cancellation while FFmpeg is running
-    while True:
-        if cancel_event is not None and cancel_event.is_set():
-            process.terminate()
-            process.wait(timeout=10)
-            return []
+    ) as process:
         try:
-            process.wait(timeout=0.5)
-            break  # Process finished
-        except subprocess.TimeoutExpired:
-            continue
-
-    if process.returncode != 0:
-        stderr = process.stderr.read().decode("utf-8", errors="replace") if process.stderr else ""
-        raise RuntimeError(f"FFmpeg frame extraction failed (rc={process.returncode}): {stderr}")
+            while True:
+                if cancel_event is not None and cancel_event.is_set():
+                    process.terminate()
+                    try:
+                        process.communicate(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.communicate()
+                    return []
+                try:
+                    _, stderr = process.communicate(timeout=0.5)
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+        if process.returncode != 0:
+            message = stderr.decode("utf-8", errors="replace") if stderr else ""
+            raise RuntimeError(f"FFmpeg frame extraction failed (rc={process.returncode}): {message}")
 
     # Collect results ---------------------------------------------------------
-    extracted = sorted(output_dir.glob("frame_*.png"))
+    extracted = sorted(output_dir.glob("frame_*.png"), key=lambda path: int(path.stem.removeprefix("frame_")))
 
     if progress_callback is not None:
         progress_callback(len(extracted), estimated_total)

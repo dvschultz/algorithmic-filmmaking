@@ -5,8 +5,25 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 
 from core.ffmpeg import estimate_extraction_size, extract_frames_batch
+
+
+@pytest.mark.parametrize("mode,start,end,interval,expected", [
+    ("all", 10, 20, 1, list(range(10, 20))),
+    ("interval", 3, 23, 5, [3, 8, 13, 18]),
+    ("smart", 0, 30, 1, [10, 20]),
+])
+def test_filenames_identify_exact_source_frames(tmp_path, mode, start, end, interval, expected):
+    video = _make_synthetic_video(tmp_path / "video.mp4")
+    frames = extract_frames_batch(video, tmp_path / "frames", 30,
+        mode=mode, start_frame=start, end_frame=end, interval=interval)
+    assert [int(path.stem.split("_")[1]) for path in frames] == expected
+    colours = [(0, 0, 255), (0, 255, 0), (255, 0, 0)]
+    for path, frame_number in zip(frames, expected):
+        actual = cv2.imread(str(path))[0, 0]
+        assert np.max(np.abs(actual.astype(int) - colours[frame_number // 10])) < 10
 
 
 # ---------------------------------------------------------------------------
