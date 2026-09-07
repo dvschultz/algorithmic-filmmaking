@@ -270,5 +270,14 @@ clip models in its execution loop. Owner-thread delivery distributes words onto
 a detached transcript and uses the shared project application guard; edited
 text, timing/media changes, cleared tabs, replaced projects, and duplicate
 signals cannot overwrite current transcripts. The tab refreshes accepted model
-updates only. Dedicated CLI/MCP alignment entry points, durable job recovery,
+updates only.
+
+`core.spine.analyze.align_words` now backs `scene_ripper analyze align` and the
+MCP `start_align_words` job. Both accept exact clip IDs, skip completed word data
+by default, and support explicit forced alignment. The shared application guard
+publishes results; the adapters save under the project writer lease. Missing
+dependencies produce per-target `dependency_missing` results and CLI exit code
+4 when no clip succeeds; headless calls never install them implicitly. The MCP
+job uses standard progress/result/cancellation tools. These entry points do not
+yet cache computed alignment results for restart recovery; durable publication
 and the later explicit capability-install workflow remain outstanding.

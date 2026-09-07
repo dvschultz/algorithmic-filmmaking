@@ -23,7 +23,7 @@ def project_file(tmp_path, monkeypatch):
     "command",
     [
         ["analyze", name]
-        for name in ["colors", "describe", "shots", "classify", "objects", "people"]
+        for name in ["colors", "describe", "shots", "classify", "objects", "people", "align"]
     ]
     + [["transcribe"], ["project", "add-to-sequence"]],
 )

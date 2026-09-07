@@ -559,6 +559,27 @@ async def _start_spine_analyze_job(
 
 
 @mcp.tool()
+async def start_align_words(
+    project_path: Annotated[str, "Absolute path to saved project file"],
+    clip_ids: Annotated[Optional[list[str]], "Exact clip IDs (default: all)"] = None,
+    force: Annotated[bool, "Replace existing word timestamps"] = False,
+    idempotency_key: Annotated[Optional[str], "Optional idempotency key (max 255 chars)"] = None,
+    ctx: Context = None,
+) -> str:
+    """Align existing transcripts using the installed word-alignment runtime.
+
+    Does not install dependencies. Poll/cancel through the standard job tools.
+    """
+    return await _start_spine_analyze_job(
+        ctx=ctx, project_path=project_path, kind="align_words",
+        spine_fn_name="align_words",
+        clip_ids=list(clip_ids) if clip_ids is not None else None,
+        idempotency_key=idempotency_key,
+        args={"force": force}, op_kwargs={"skip_existing": not force},
+    )
+
+
+@mcp.tool()
 async def start_analyze_colors(
     project_path: Annotated[str, "Absolute path to .sceneripper project file"],
     clip_ids: Annotated[

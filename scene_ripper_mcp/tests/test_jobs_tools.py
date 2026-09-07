@@ -711,3 +711,28 @@ async def test_analysis_plan_freezes_submission_and_saves_transcription(lifespan
     receipts = Project.load(path).metadata.job_results
     assert len(receipts) == 1
     assert all(store.get_result(result_id)['committed'] for result_id in receipts)
+
+
+@pytest.mark.asyncio
+async def test_alignment_job_saves_word_timestamps(lifespan_ctx, tmp_path, monkeypatch):
+    from scene_ripper_mcp.tools.jobs import start_align_words
+    from core.project import Project
+    from core.transcription_models import TranscriptSegment, WordTimestamp
+
+    ctx, store, _ = lifespan_ctx
+    path = _make_project_file(tmp_path)
+    project = Project.load(path)
+    project.clips[0].transcript = [TranscriptSegment(0, 1, 'hello', language='en')]
+    assert project.save()
+    wav = tmp_path / 'audio.wav'
+    wav.write_bytes(b'fake')
+    monkeypatch.setattr('core.feature_registry.check_feature_ready', lambda *_: (True, []))
+    monkeypatch.setattr('core.analysis.alignment.extract_audio_to_wav', lambda *a, **k: wav)
+    monkeypatch.setattr('core.analysis.alignment.align_words', lambda *a, **k: [WordTimestamp(0, 1, 'hello')])
+    out = json.loads(await start_align_words(str(path), ctx=ctx))
+    assert out['success'] is True
+    _wait_for_status(store, out['task_id'], STATUS_COMPLETED)
+    result = json.loads(await get_job_result(out['task_id'], ctx=ctx))
+    assert result['result']['result']['succeeded'] == [{'clip_id': 'clip-1', 'word_count': 1}]
+    assert Project.load(path).clips[0].transcript[0].words[0].text == 'hello'
+    assert not wav.exists()

@@ -494,3 +494,27 @@ If you're running all analyses, the app handles ordering automatically when usin
 6. **Object Detection, Face Detection, Gaze Direction, Text Extraction** — as needed for your project
 
 You don't need to run every analysis. Start with what your project needs. Colors and Shot Classification cover most sequencer requirements. Add Describe if you want to search clips by content. Add Rich Analysis if you need detailed cinematography metadata.
+
+### Word alignment from the command line or MCP
+
+Word alignment adds word timestamps to existing transcripts. Install the optional
+word-alignment runtime from **Settings > Dependencies** first. Transcripts must
+include a supported language; legacy transcripts without language metadata need
+to be transcribed again before alignment.
+
+```bash
+scene_ripper analyze align project.json
+scene_ripper --json analyze align project.json --clip CLIP_ID
+scene_ripper analyze align project.json --force
+```
+
+`--clip` takes an exact clip ID and can be repeated. Existing word timestamps are
+preserved unless `--force` is supplied. JSON results contain `succeeded`, `failed`,
+`skipped`, and `unprocessed` lists; progress goes to stderr. Missing dependencies
+return exit code 4 when no clip succeeds.
+
+MCP clients can call `start_align_words(project_path, clip_ids=None, force=False)`
+and use the standard `get_job_status`, `get_job_result`, and `cancel_job` tools.
+These headless paths do not install packages automatically. Completed results
+are saved to the project, but failed saves do not yet have computed-result
+recovery for alignment.

@@ -20,8 +20,49 @@ def analyze() -> None:
     Commands:
         colors    Extract dominant colors from clips
         shots     Classify shot types (wide, medium, close-up)
+        align     Add word timestamps to existing transcripts
     """
     pass
+
+
+@analyze.command("align")
+@click.argument("project_file", type=click.Path(exists=True, path_type=Path))
+@click.option("--clip", "-c", "clip_ids", multiple=True, help="Exact clip IDs to align (repeatable; default: all)")
+@click.option("--force", "-f", is_flag=True, help="Replace existing word timestamps")
+@click.pass_context
+def align(ctx: click.Context, project_file: Path, clip_ids: tuple[str, ...], force: bool) -> None:
+    """Add word timestamps to existing transcripts.
+
+    Requires the optional word-alignment runtime to be installed beforehand.
+    """
+    from core.spine.analyze import align_words
+    from core.spine.project_io import load_with_mtime, save_with_mtime_check
+
+    path = own_project(ctx, project_file)
+    try:
+        project, mtime = load_with_mtime(path)
+        with ProgressContext("Aligning words") as progress:
+            result = align_words(
+                project, list(clip_ids) if clip_ids else None,
+                skip_existing=not force, progress_callback=progress.update,
+            )
+        batch = result["result"]
+        if batch["succeeded"]:
+            save_with_mtime_check(project, path, mtime)
+    except ValueError as exc:
+        exit_with(ExitCode.VALIDATION_ERROR, str(exc))
+    except Exception as exc:
+        exit_with(ExitCode.GENERAL_ERROR, f"Word alignment failed: {exc}")
+
+    if (ctx.obj or {}).get("json", False):
+        output_result(result, as_json=True)
+    else:
+        output_success(f"Aligned {len(batch['succeeded'])} clips; skipped {len(batch['skipped'])}; failed {len(batch['failed'])}")
+        for failure in batch["failed"][:5]:
+            output_info(f"  {failure['clip_id']}: {failure['message']}")
+    if batch["failed"] and not batch["succeeded"]:
+        code = ExitCode.DEPENDENCY_MISSING if all(item["code"] == "dependency_missing" for item in batch["failed"]) else ExitCode.GENERAL_ERROR
+        exit_with(code)
 
 
 @analyze.command("describe")

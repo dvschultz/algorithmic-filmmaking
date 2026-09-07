@@ -20,7 +20,10 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Callable, Optional
+from typing import Callable, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.project import Project
 
 logger = logging.getLogger(__name__)
 
@@ -242,6 +245,65 @@ def transcribe(
         "succeeded": succeeded, "failed": failed, "skipped": skipped,
         "total_clips": len(clips), "unprocessed": unprocessed,
     }}
+
+
+def align_words(
+    project: Project,
+    clip_ids: Optional[list[str]] = None,
+    *,
+    skip_existing: bool = True,
+    progress_callback: Optional[Callable[[float, str], None]] = None,
+    cancel_event: Optional[threading.Event] = None,
+) -> dict:
+    """Align existing transcripts without installing optional dependencies."""
+    from core.operations.alignment import (
+        AlignmentApplication, AlignmentOutcome, run_alignment, snapshot_alignment_tasks,
+    )
+
+    if clip_ids is not None:
+        clip_ids = list(dict.fromkeys(clip_ids))
+        unknown = [cid for cid in clip_ids if cid not in project.clips_by_id]
+        if unknown:
+            raise ValueError(f"Unknown alignment clip IDs: {', '.join(unknown)}")
+    clips = _resolve_clip_ids(project, clip_ids)
+    tasks = snapshot_alignment_tasks(clips, project.sources_by_id, skip_existing=skip_existing)
+    application = AlignmentApplication(project, tasks)
+    missing: list[str] = []
+    if any(task.skip_reason is None for task in tasks) and not _check_cancel(cancel_event):
+        from core.feature_registry import check_feature_ready
+        ready, missing = check_feature_ready("word_alignment")
+        if ready:
+            missing = []
+        elif not missing:
+            missing = ["word_alignment"]
+    if _check_cancel(cancel_event):
+        missing = []
+    if missing:
+        outcomes = tuple(
+            AlignmentOutcome(task.clip_id, "skipped", code=task.skip_reason)
+            if task.skip_reason is not None else AlignmentOutcome(
+                task.clip_id, "failed", code="dependency_missing",
+                message=f"Word alignment dependencies unavailable: {', '.join(missing)}. Install them from Settings > Dependencies.",
+            )
+            for task in tasks
+        )
+    else:
+        outcomes = run_alignment(
+            tasks, cancel_event=cancel_event,
+            progress=(lambda current, total: progress_callback(current / total if total else 1.0, f"Aligning words ({current}/{total})")) if progress_callback else None,
+        )
+    output: dict = {"succeeded": [], "failed": [], "skipped": [], "unprocessed": [], "total_clips": len(tasks)}
+    for outcome in outcomes:
+        if outcome.status == "succeeded":
+            if application.apply(project, outcome):
+                output["succeeded"].append({"clip_id": outcome.clip_id, "word_count": len(outcome.words)})
+            else:
+                output["failed"].append({"clip_id": outcome.clip_id, "code": "stale_target", "message": "Alignment target changed during execution"})
+        elif outcome.status == "skipped":
+            output["skipped"].append({"clip_id": outcome.clip_id, "reason": outcome.code})
+        else:
+            output[outcome.status].append({"clip_id": outcome.clip_id, "code": outcome.code, "message": outcome.message})
+    return {"success": True, "result": output}
 
 
 def _thumbnail_for_clip(clip):
