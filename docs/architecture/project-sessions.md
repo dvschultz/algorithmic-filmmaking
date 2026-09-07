@@ -37,7 +37,7 @@ sequence even after the active sequence changes. Timeline model refreshes emit
 `reorder_sequence()` reorders the first track and rejects duplicate IDs.
 `update_sequence_clip()` validates the complete timing/track/transform request
 before committing it. Track moves update actual membership; undo restores cached
-render references invalidated by transform edits. No-op edits do not enter history.
+render references invalidated by trim or transform edits. No-op edits do not enter history.
 Desktop drag/resize gestures use detached previews, leaving save snapshots stable,
 and commit one command on release. Frame entries resize their hold duration.
 

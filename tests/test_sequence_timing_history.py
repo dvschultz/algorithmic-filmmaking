@@ -197,3 +197,75 @@ def test_noop_on_overlapping_entries_preserves_stable_order():
     project.update_sequence_clip(entries[0].id, start_frame=entries[0].start_frame)
     assert project.sequence.get_all_clips() == entries
     assert project.mutation_generation == generation
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"in_point": 20},
+        {"out_point": 40},
+        {"in_point": 20, "out_point": 40},
+    ],
+)
+def test_trim_only_export_invalidates_cache_and_undo_redo_restore_it(tmp_path, changes):
+    from unittest.mock import Mock
+    from core.sequence_export import ExportConfig, SequenceExporter
+
+    project = _make_project_with_clips()
+    project.add_to_sequence(["c0"])
+    clip = project.sequence.get_all_clips()[0]
+    original_points = (clip.in_point, clip.out_point)
+    cached = tmp_path / "cached.mp4"
+    cached.write_bytes(b"cached media placeholder")
+    clip.prerendered_path = str(cached)
+    project.mark_clean()
+    exporter = SequenceExporter(ffmpeg_path="ffmpeg")
+    exporter._export_segment = Mock(return_value=True)
+    exporter._export_prerendered_segment = Mock(return_value=True)
+    exporter._concat_segments = Mock(return_value=True)
+    config = ExportConfig(output_path=tmp_path / "out.mp4", width=640, height=480)
+    clips = {c.id: (c, project.sources_by_id[c.source_id]) for c in project.clips}
+
+    def export():
+        exporter._export_segment.reset_mock()
+        exporter._export_prerendered_segment.reset_mock()
+        assert exporter.export(project.sequence, project.sources_by_id, clips, config)
+
+    assert update_sequence_clip(project, clip.id, **changes)["success"]
+    export()
+    exporter._export_prerendered_segment.assert_not_called()
+    exporter._export_segment.assert_called_once()
+    assert exporter._export_segment.call_args.kwargs["start_frame"] == changes.get(
+        "in_point", original_points[0]
+    )
+    assert exporter._export_segment.call_args.kwargs["end_frame"] == changes.get(
+        "out_point", original_points[1]
+    )
+    assert clip.prerendered_path is None
+
+    project.session.undo()
+    assert (clip.in_point, clip.out_point) == original_points
+    assert clip.prerendered_path == str(cached) and not project.is_dirty
+    export()
+    exporter._export_prerendered_segment.assert_called_once()
+    exporter._export_segment.assert_not_called()
+
+    project.session.redo()
+    assert clip.prerendered_path is None
+    export()
+    exporter._export_prerendered_segment.assert_not_called()
+    exporter._export_segment.assert_called_once()
+    assert cached.exists()  # Undo retains the original media reference.
+
+
+def test_unchanged_trim_and_position_edit_preserve_render_cache():
+    project = project_with_sequence()
+    clip = project.sequence.get_all_clips()[0]
+    clip.prerendered_path = "/tmp/rendered.mp4"
+    generation = project.mutation_generation
+    project.update_sequence_clip(
+        clip.id, in_point=clip.in_point, out_point=clip.out_point
+    )
+    assert project.mutation_generation == generation and not project.is_dirty
+    project.update_sequence_clip(clip.id, start_frame=12)
+    assert clip.prerendered_path == "/tmp/rendered.mp4"

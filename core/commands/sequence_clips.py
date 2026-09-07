@@ -206,8 +206,10 @@ class EditSequenceClips:
             raise ValueError("track_index out of range")
         if any(
             getattr(candidate, key) != getattr(target, key)
-            for key in ("hflip", "vflip", "reverse")
+            for key in ("in_point", "out_point", "hflip", "vflip", "reverse")
         ):
+            # Cached media already bakes in the source range and transforms.
+            # Placement retains the previous reference for undo.
             candidate.prerendered_path = None
         desired = replace(Placement.capture(candidate), clip=target)
         original_index = next(
