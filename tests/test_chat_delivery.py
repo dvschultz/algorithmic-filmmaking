@@ -24,6 +24,7 @@ class Worker(QThread):
         self.stopped = False
     def stop(self):
         self.stopped = True
+        self._stop_requested = True
     def run(self):
         assert self.release.wait(3)
         self.text_chunk.emit('text')
@@ -90,6 +91,11 @@ stop_chat_workers(window, wait=True)
 assert not closing.isRunning()
 drain(closing)
 assert not received
+cancelled_worker = Worker()
+bind(cancelled_worker)
+cancelled_worker.stop()
+drain(cancelled_worker)
+assert not any(len(item) == 3 for item in received), received
 """
     result = subprocess.run(
         [sys.executable, "-c", code],

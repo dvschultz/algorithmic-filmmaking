@@ -92,9 +92,20 @@ provider or native call returns. Ordinary chat cancellation retains the existing
 completion/history behavior. Pending GUI-tool cancellation is consumed before
 invalidation so its later queued signal cannot cancel a new conversation's work.
 
+Chat workers accept GUI replies through `GuiToolMailbox`. Each request gets a
+fresh transport token, independent of provider call IDs, and only the first reply
+with the matching token and tool name is accepted. Timeout closes the request;
+cancellation permanently closes the worker's mailbox and wakes any waiter. Replies
+are copied at admission, and the original provider call ID is restored before
+tool results enter LLM history. This rejects late or duplicate replies without
+changing the provider conversation format.
+
 Shared ordered intention plans and the remaining analysis workflows are outstanding
 U7 work. This relay protects incoming chat signals; per-operation ownership of
 asynchronous GUI tool replies and worker-side project access still need migration.
+In particular, legacy completion handlers can still construct replies from shared
+pending fields; mailbox validation cannot distinguish a stale result relabeled
+with the current request token. Those senders need captured operation ownership.
 
 Tests cover timeout/resolution forwarding, cancellation at each stage, invalid
 URLs, failure aggregation, frozen MCP submission arguments, actual intention

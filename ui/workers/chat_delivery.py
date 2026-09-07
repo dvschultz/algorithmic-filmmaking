@@ -70,7 +70,9 @@ class ChatDelivery(QObject):
 
     @Slot(str, dict, str)
     def gui_tool_requested(self, name: str, args: dict, call_id: str) -> None:
-        self._deliver("gui_tool_requested", name, args, call_id)
+        # Cancel may arrive after emission but before queued owner-thread delivery.
+        if not getattr(self.worker, "_stop_requested", False):
+            self._deliver("gui_tool_requested", name, args, call_id)
 
     @Slot(str)
     def gui_tool_cancelled(self, name: str) -> None:

@@ -26,6 +26,7 @@ from core.llm_client import (
     normalize_provider_error,
 )
 from core.tool_executor import ToolExecutor
+from ui.workers.gui_tool_mailbox import GuiToolMailbox
 
 # Maximum iterations for the agent tool loop. Prevents infinite loops when the
 # LLM repeatedly calls tools without converging on a final response.  Set high
@@ -215,9 +216,7 @@ class ChatAgentWorker(QThread):
         self._stop_requested = False
 
         # For GUI tool synchronization
-        import threading
-        self._gui_tool_event = threading.Event()
-        self._gui_tool_result: Optional[dict] = None
+        self._gui_tool_mailbox = GuiToolMailbox()
 
     def run(self):
         """Run the agent loop."""
@@ -302,15 +301,17 @@ class ChatAgentWorker(QThread):
                     tool_def = tool_registry.get(name)
                     if tool_def and tool_def.modifies_gui_state:
                         # Execute on main thread via signal/slot
-                        self._gui_tool_event.clear()
-                        self._gui_tool_result = None
-                        self.gui_tool_requested.emit(name, args, tool_call_id)
+                        # Provider call IDs may be reused. GUI transport gets a
+                        # unique token; history keeps the original provider ID.
+                        token = self._gui_tool_mailbox.begin(name)
+                        if token is not None:
+                            self.gui_tool_requested.emit(name, args, token)
 
                         # Wait for main thread to complete (with per-tool timeout)
                         tool_timeout = get_tool_timeout(name)
                         logger.info(f"Waiting for GUI tool '{name}' with timeout {tool_timeout}s ({tool_timeout/60:.1f} min)")
-                        completed = self._gui_tool_event.wait(timeout=tool_timeout)
-                        if not completed or self._stop_requested:
+                        gui_result = self._gui_tool_mailbox.wait(tool_timeout)
+                        if gui_result is None or self._stop_requested:
                             logger.warning(f"GUI tool '{name}' timed out after {tool_timeout}s or was cancelled (stop_requested={self._stop_requested})")
                             # Emit cancellation signal so MainWindow can stop orphaned workers
                             self.gui_tool_cancelled.emit(name)
@@ -320,15 +321,8 @@ class ChatAgentWorker(QThread):
                                 "success": False,
                                 "error": "Tool execution timed out or was cancelled"
                             }
-                        elif self._gui_tool_result:
-                            result = self._gui_tool_result
                         else:
-                            result = {
-                                "tool_call_id": tool_call_id,
-                                "name": name,
-                                "success": False,
-                                "error": "No result from GUI tool"
-                            }
+                            result = {**gui_result, "tool_call_id": tool_call_id}
                     else:
                         # Execute non-GUI tool directly in worker thread
                         result = executor.execute(tc)
@@ -918,17 +912,16 @@ CURRENT GUI STATE:
             logger.info(f"Emitting video_download_completed for {url}")
             self.video_download_completed.emit(url, data)
 
-    def stop(self):
+    def stop(self) -> None:
         """Request the worker to stop."""
         self._stop_requested = True
         # Unblock any waiting GUI tool
-        self._gui_tool_event.set()
+        self._gui_tool_mailbox.cancel()
 
-    def set_gui_tool_result(self, result: dict):
+    def set_gui_tool_result(self, result: dict) -> bool:
         """Called by main thread to provide GUI tool result.
 
         Args:
             result: Tool execution result dict
         """
-        self._gui_tool_result = result
-        self._gui_tool_event.set()
+        return self._gui_tool_mailbox.submit(result)
