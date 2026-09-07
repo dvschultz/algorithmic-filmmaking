@@ -150,9 +150,7 @@ class TestForcedAlignmentWorkerCancelContract:
             # Pretend we did the work and return one word per call.
             call_count["n"] += 1
             words = [_make_word(0.0, 0.5, "fakeword")]
-            # Cancel after the FIRST clip has been processed and emitted.
-            # The worker's loop checks cancellation at the top of each clip
-            # iteration, so this guarantees clip2 and clip3 never emit.
+            # Cancel inside inference, before its result can be published.
             if call_count["n"] == 1:
                 worker.cancel()
             return words
@@ -171,9 +169,8 @@ class TestForcedAlignmentWorkerCancelContract:
             worker.alignment_completed.connect(lambda: completions.append(True))
             worker.run()
 
-        # Only the first clip's signal was emitted; the cancel was honoured
-        # at the top of the second iteration.
-        assert [cid for cid, _ in ready_calls] == ["c1"]
+        # No result from an in-flight inference may publish after cancellation.
+        assert ready_calls == []
         # Lifecycle terminator emits exactly once.
         assert completions == [True]
         # align_words was only called once — the worker did not re-enter for c2 or c3.

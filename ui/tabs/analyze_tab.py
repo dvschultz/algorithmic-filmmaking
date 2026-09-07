@@ -60,7 +60,7 @@ class AnalyzeTab(BaseTab):
     STATE_NO_CLIPS = 0
     STATE_CLIPS = 1
 
-    def __init__(self, parent=None, filter_state=None):
+    def __init__(self, parent=None, filter_state=None, *, project_provider=None) -> None:
         # Clip ID references (not copies) - resolved via MainWindow.clips_by_id
         self._clip_ids: set[str] = set()
         # Source lookup for video preview (set by MainWindow)
@@ -76,6 +76,8 @@ class AnalyzeTab(BaseTab):
         # resets at click-start so subsequent runs work.
         self._forced_alignment_worker = None
         self._alignment_finished_handled = False
+        self._alignment_generation = 0
+        self._project_provider = project_provider
         if filter_state is None:
             from core.filter_state import FilterState
             filter_state = FilterState()
@@ -345,9 +347,15 @@ class AnalyzeTab(BaseTab):
             )
             return
 
+        project = self._project_provider() if self._project_provider else None
+        if project is None:
+            logger.warning("Word alignment requires a project session")
+            return
+
         # Reset the guard flag at click-start so re-runs work (per the
         # qthread-destroyed-duplicate-signal-delivery learning).
         self._alignment_finished_handled = False
+        self._alignment_generation += 1
 
         from ui.workers.forced_alignment_worker import ForcedAlignmentWorker
 
@@ -355,25 +363,9 @@ class AnalyzeTab(BaseTab):
             clips=clips,
             sources_by_id=self._sources_by_id,
         )
-        # Qt.UniqueConnection prevents duplicate slot registration on
-        # repeated runs (the worker object is fresh, but defensive in depth
-        # against future refactors that share workers).
-        worker.progress.connect(
-            self._on_alignment_progress, Qt.UniqueConnection
-        )
-        worker.clip_aligned.connect(
-            self._on_clip_aligned, Qt.UniqueConnection
-        )
-        worker.error.connect(
-            self._on_alignment_error, Qt.UniqueConnection
-        )
-        worker.alignment_completed.connect(
-            self._on_alignment_completed, Qt.UniqueConnection
-        )
-        worker.finished.connect(worker.deleteLater)
-        worker.finished.connect(self._on_alignment_thread_finished)
-
         self._forced_alignment_worker = worker
+        from ui.workers.alignment_delivery import AlignmentDelivery
+        AlignmentDelivery(self, worker, project)
 
         # Surface "alignment running" in the same row the Transcribe quick
         # run uses by repurposing the analyze button's text — there is no
@@ -396,17 +388,10 @@ class AnalyzeTab(BaseTab):
 
     @Slot(str, list)
     def _on_clip_aligned(self, clip_id: str, words: list) -> None:
-        """Write per-word timestamps back onto the clip's transcript.
+        """Refresh widgets after guarded word alignment was applied to the model.
 
-        The worker emits a flat ``list[WordTimestamp]`` across all segments
-        of the clip (alignment runs over the concatenated text). We
-        distribute words back to segments using each word's midpoint: a word
-        whose midpoint falls within ``[seg.start_time, seg.end_time]`` is
-        assigned to that segment. Any words that fall outside every segment
-        (rare — typically a tiny boundary slop) attach to the nearest
-        segment by midpoint distance. Segments that end up with no words
-        are set to ``[]`` so the skip predicate treats the clip as aligned
-        on the next run (per U3's idempotency contract).
+        AlignmentApplication has distributed words to detached segments and
+        published them through the project session before this refresh.
         """
         clip = self._clips_by_id.get(clip_id)
         if clip is None or not getattr(clip, "transcript", None):
@@ -417,11 +402,6 @@ class AnalyzeTab(BaseTab):
             return
 
         segments = list(clip.transcript)
-        # Distribute the flat word list back onto segments. See
-        # ``core.analysis.alignment.distribute_words_to_segments`` for the
-        # midpoint-containment + nearest-boundary fallback.
-        from core.analysis.alignment import distribute_words_to_segments
-        distribute_words_to_segments(segments, words)
 
         if self.clip_browser.is_clip_realized(clip_id):
             self.clip_browser.update_clip_transcript(clip_id, segments)
@@ -464,6 +444,7 @@ class AnalyzeTab(BaseTab):
     def _on_alignment_thread_finished(self) -> None:
         """Drop the worker reference once Qt has finished the thread."""
         self._forced_alignment_worker = None
+        self.alignment_btn.setText("Run Word-Level Alignment")
         self._refresh_alignment_button_enablement()
 
     def _on_clip_selected(self, clip):
@@ -669,6 +650,9 @@ class AnalyzeTab(BaseTab):
 
     def clear_clips(self):
         """Remove all clips from the analysis tab."""
+        self._alignment_generation += 1
+        if self._forced_alignment_worker is not None:
+            self._forced_alignment_worker.cancel()
         self._clip_ids.clear()
         self._pending_browser_clip_ids.clear()
         self.clip_browser.clear()

@@ -943,7 +943,7 @@ class MainWindow(QMainWindow):
         # Create tabs
         self.collect_tab = CollectTab()
         self.cut_tab = CutTab(filter_state=self._filter_state)
-        self.analyze_tab = AnalyzeTab(filter_state=self._filter_state)
+        self.analyze_tab = AnalyzeTab(filter_state=self._filter_state, project_provider=lambda: self.project)
         self.frames_tab = FramesTab()
         self.sequence_tab = SequenceTab()
         self.render_tab = RenderTab()
@@ -1508,9 +1508,8 @@ class MainWindow(QMainWindow):
         self.analyze_tab.clip_browser.view_details_requested.connect(self.show_clip_details)
         self.analyze_tab.clip_browser.export_requested.connect(self._on_clip_export_requested)
         self.analyze_tab.clip_browser.disabled_clips_changed.connect(self._on_disabled_clips_changed)
-        # distribute_words_to_segments mutates Clip.transcript[*].words in place;
-        # this signal makes the mutation observable to the dirty flag so the
-        # alignment data persists on save.
+        # AlignmentApplication publishes through the project model; refresh
+        # the window's dirty indicator after accepted alignment delivery.
         self.analyze_tab.clip_alignment_applied.connect(lambda _clip_id: self._mark_dirty())
 
         # Sequence tab signals

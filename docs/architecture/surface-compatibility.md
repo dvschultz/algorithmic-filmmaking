@@ -256,3 +256,19 @@ These GUI jobs are explicitly session-only, including when the editor has a
 saved project path: results become unsaved model changes until the user saves.
 Their temporary job store closes after delivery; they do not yet provide durable
 receipt recovery. Durable GUI publication remains outstanding U7 work.
+
+### Word alignment computation and application
+
+Word alignment now runs through `core/operations/alignment.py`: input snapshots
+contain detached transcript text/language and source timing, results are typed,
+and serial execution cleans temporary audio on both failure and cancellation.
+Cancellation during inference suppresses its late result and marks remaining
+targets unprocessed. Empty word lists continue to mean alignment completed.
+
+The GUI worker retains its existing feature preflight but no longer reads live
+clip models in its execution loop. Owner-thread delivery distributes words onto
+a detached transcript and uses the shared project application guard; edited
+text, timing/media changes, cleared tabs, replaced projects, and duplicate
+signals cannot overwrite current transcripts. The tab refreshes accepted model
+updates only. Dedicated CLI/MCP alignment entry points, durable job recovery,
+and the later explicit capability-install workflow remain outstanding.
