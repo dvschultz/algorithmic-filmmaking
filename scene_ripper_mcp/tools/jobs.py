@@ -1003,6 +1003,56 @@ async def start_generate_thumbnails(
 
 
 @mcp.tool()
+async def start_import_audio(
+    project_path: Annotated[str, "Absolute path to a saved .sceneripper project"],
+    file_path: Annotated[str, "Absolute or project-relative audio file path"],
+    idempotency_key: Optional[str] = None,
+    ctx: Context = None,
+) -> str:
+    """Import audio and save; poll job status/result for completion.
+
+    Repeated canonical paths return the existing audio ID. Interrupted saves reuse
+    recorded probing; an idempotency key retries the same job submission.
+    """
+    from scene_ripper_mcp.security import validate_project_path
+    from core.spine.project_io import load_with_mtime
+    from core.jobs.audio_import import audio_import_job_spec, run_audio_import_job
+    from scene_ripper_mcp.security import validate_path
+    from core.audio_formats import is_audio_file
+
+    valid, error, path = validate_project_path(project_path)
+    if not valid:
+        return json.dumps({"success": False, "error": error})
+    try:
+        project, mtime = load_with_mtime(path)
+        if not file_path:
+            raise ValueError("Audio path cannot be empty")
+        media = Path(file_path).expanduser()
+        if not media.is_absolute():
+            media = path.parent / media
+        valid, error, media = validate_path(str(media), must_be_file=True)
+        if not valid:
+            raise ValueError(error)
+        if not is_audio_file(media):
+            raise ValueError(f"Unsupported audio format: {media.suffix or '<no extension>'}")
+        existing = any(audio.file_path.expanduser().resolve() == media for audio in project.audio_sources)
+        if not existing and not media.is_file():
+            raise ValueError(f"File not found: {media}")
+        operation = audio_import_job_spec(project, str(media))
+        store = _lifespan(ctx)["job_store"]
+
+        def run(progress, cancel):
+            return run_audio_import_job(store, path, operation.arguments["file_path"],
+                progress, cancel, operation=operation)
+
+        return _start_job(ctx, kind=operation.kind, args=operation.arguments,
+            project_path=str(path), project_mtime_at_start=mtime,
+            idempotency_key=idempotency_key, run=run, operation=operation)
+    except Exception as exc:
+        return json.dumps(_wrap_error(exc))
+
+
+@mcp.tool()
 async def start_extract_frames(
     project_path: Annotated[str, "Absolute path to a saved .sceneripper project"],
     source_id: Annotated[str, "Exact video source ID"],

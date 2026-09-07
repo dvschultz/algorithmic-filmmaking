@@ -1193,3 +1193,55 @@ async def test_frame_extraction_job_saves_and_deduplicates_submission(lifespan_c
         assert invalid["success"] is False
     saved = json.loads(path.read_text())
     assert all(store.get_result(rid)["committed"] for rid in saved["job_results"])
+
+
+@pytest.mark.asyncio
+async def test_audio_import_job_saves_and_deduplicates(lifespan_ctx, tmp_path, monkeypatch):
+    from scene_ripper_mcp.tools.jobs import start_import_audio
+    from core.project import Project
+
+    ctx, store, _ = lifespan_ctx
+    media = tmp_path / "voice.wav"
+    media.write_bytes(b"audio")
+    project = Project.new()
+    path = tmp_path / "audio.sceneripper"
+    project.save(path)
+    project.close_writer()
+    processor = Mock(ffprobe_available=True)
+    processor.get_audio_info.return_value = dict(duration=10, sample_rate=48000, channels=2)
+    monkeypatch.setattr("core.ffmpeg.FFmpegProcessor", lambda: processor)
+    out = json.loads(await start_import_audio(str(path), "voice.wav", idempotency_key="import-one", ctx=ctx))
+    assert out["success"], out
+    _wait_for_status(store, out["task_id"], STATUS_COMPLETED)
+    result = json.loads(await get_job_result(out["task_id"], ctx=ctx))
+    aid = result["result"]["result"]["audio_source_id"]
+    repeated = json.loads(await start_import_audio(str(path), "voice.wav", idempotency_key="import-one", ctx=ctx))
+    assert repeated["task_id"] == out["task_id"]
+    fresh = json.loads(await start_import_audio(str(path), "voice.wav", ctx=ctx))
+    _wait_for_status(store, fresh["task_id"], STATUS_COMPLETED)
+    existing = json.loads(await get_job_result(fresh["task_id"], ctx=ctx))
+    assert existing["result"]["result"]["status"] == "skipped"
+    assert existing["result"]["result"]["audio_source_id"] == aid
+    processor.get_audio_info.assert_called_once()
+    saved = json.loads(path.read_text())
+    assert len(saved["audio_sources"]) == 1
+    assert saved["audio_sources"][0]["id"] == aid
+    assert all(store.get_result(rid)["committed"] for rid in saved["job_results"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("media_path", ["../voice.wav", "/etc/voice.wav", "", "voice.txt"])
+async def test_audio_import_rejects_invalid_media_paths_before_submission(lifespan_ctx, tmp_path, monkeypatch, media_path):
+    from scene_ripper_mcp.tools import jobs
+    from core.project import Project
+
+    ctx, _, _ = lifespan_ctx
+    project = Project.new()
+    path = tmp_path / "audio.sceneripper"
+    project.save(path)
+    project.close_writer()
+    submit = Mock(return_value=json.dumps({"success": True}))
+    monkeypatch.setattr(jobs, "_start_job", submit)
+    result = json.loads(await jobs.start_import_audio(str(path), media_path, ctx=ctx))
+    assert result["success"] is False
+    submit.assert_not_called()

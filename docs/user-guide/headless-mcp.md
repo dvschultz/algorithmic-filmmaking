@@ -151,6 +151,7 @@ scene-ripper-mcp --transport http --port 8765
 | `start_extract_text` | Extract visible text with resumable OCR/VLM results; optional `force` refresh |
 | `start_transcribe` | Whisper transcription per clip |
 | `start_transcribe_audio` | Standalone imported audio transcription by exact audio-source ID; preserves existing results unless `force=true` |
+| `start_import_audio` | Import an audio file and save; repeated canonical paths return the existing audio ID |
 | `start_extract_frames` | Extract a video source into saved frame items; supports `interval`, `all`, and `smart` modes and an optional `clip_id` |
 | `start_align_words` | Add word timestamps to existing transcripts; requires installed alignment runtime |
 | `start_describe` | Generate VLM descriptions |
@@ -161,6 +162,15 @@ scene-ripper-mcp --transport http --port 8765
 | `start_generate_boundary_embeddings` | Extract resumable first/last-frame DINOv2 pairs for Match Cut; optional `force` refresh |
 | `start_custom_query` | Run a yes/no visual query against clips |
 | `start_download_videos` | Bulk video downloads (YouTube / Vimeo / Internet Archive) |
+
+Import audio with `scene_ripper import-audio project.sceneripper voice.wav`, or
+submit `start_import_audio` and poll `get_job_status` / `get_job_result`.
+Relative media paths use the project directory. MCP paths must satisfy the shared
+safe-root and traversal checks. Results include `audio_source_id`, `filename`,
+`duration`, and `status`. Repeated imports preserve the existing ID without probing
+again; failed saves reuse recorded metadata and IDs, and interrupted checkpoints
+acknowledge the saved import on retry. An MCP `idempotency_key` also deduplicates
+job submission. GUI and headless result journals remain separate.
 
 Frame extraction is also available as
 `scene_ripper extract-frames project.sceneripper SOURCE_ID --interval 10`.

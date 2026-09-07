@@ -1042,6 +1042,14 @@ when the saved audio identity, path and probe metadata match. Failed saves leave
 results reusable, and failed checkpoints can be acknowledged on a later save.
 Removing and reimporting a previously published item starts a new generation.
 
-This step does not complete U7. Headless audio-import job exposure, image import,
-frame-analysis orchestration, and intention workflows remain. FFprobe cancellation
+Headless imports use `scene_ripper import-audio PROJECT AUDIO` and MCP
+`start_import_audio`. Both delegate to the shared audio-import job, freeze queued
+inputs, and atomically save imported audio before acknowledging its receipt.
+Repeated canonical paths return the existing ID, including offline library items.
+Failed saves reuse the original probe and ID; failed checkpoints are reconciled
+without duplication. MCP validates media paths before submission and supports
+submission idempotency. GUI and headless journals remain separate.
+
+This step does not complete U7. Image import, frame-analysis orchestration, and
+intention workflows remain. FFprobe cancellation
 is checked around the bounded probe call; it does not interrupt that call mid-probe.
