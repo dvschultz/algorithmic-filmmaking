@@ -275,8 +275,18 @@ image/source media identity, prior query results, and the submitted query text.
 Spine calls report rejected results as `stale_result`. GUI delivery also checks the
 launching worker, pipeline run, cancellation, and agent request before publication;
 the main-window callback only refreshes views. Frame tasks cannot resolve through
-a colliding clip ID: the Frame model has no custom-query storage yet. Durable
-GUI custom-query result recovery remains pending U7 work.
+a colliding clip ID: the Frame model has no custom-query storage yet.
+
+GUI clip queries use the shared job runtime, with model preparation and local
+inference on the same runtime thread. Saved projects retain `gui_custom_query`
+history and computation receipts; unsaved projects use session-only history.
+The GUI journal reuses matching results across restarts and computes only missing
+targets. Queued delivery verifies the saved payload and original project location
+before owner-thread publication. An explicit project save acknowledges matching
+appends, including several queries accumulated before saving. Edited prefixes and
+Save As do not acknowledge the original results. Failed checkpoints retry on the
+next save without inference. All GUI journals reject corrupted committed result
+identities before consulting cached history.
 
 Dedicated MCP custom-query jobs and custom-query steps in analysis plans now use
 `core/jobs/custom_query.py`. Submission captures the query, model, media identity,

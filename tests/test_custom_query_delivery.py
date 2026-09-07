@@ -26,11 +26,21 @@ class Worker(QThread):
         self.query_result_ready.emit('c-0', 'person', True, .9, 'model')
 window = QObject()
 with TemporaryDirectory() as directory:
-    for mode in ('current', 'worker', 'session', 'project', 'edit', 'cancel', 'pipeline', 'reply'):
+    for mode in ('current', 'worker', 'session', 'project', 'edit', 'cancel', 'pipeline', 'reply', 'receipt', 'payload', 'save_as'):
         window._analysis_run = None
         window.project = project_with_thumbnails(Path(directory), 1)
         clip = window.project.clips[0]
         worker = Worker(CustomQueryTask(clip.id, clip.thumbnail_path, 'person'))
+        if mode in ('receipt', 'payload', 'save_as'):
+            from dataclasses import asdict
+            import json
+            from core.jobs.gui_results import GuiResultReceipt
+            from core.operations.custom_query import CustomQueryOutcome
+            window.project.save(Path(directory) / 'project.json')
+            payload = json.dumps(asdict(CustomQueryOutcome('c-0', 'person', 'succeeded', True, .9, 'model')))
+            worker.cache = SimpleNamespace(path=window.project.path.resolve(), results={'c-0':GuiResultReceipt('a'*64, 'b'*64, payload)})
+            if mode == 'payload': worker.cache.results['c-0'] = GuiResultReceipt('a'*64, 'b'*64, payload.replace('person','other'))
+            if mode == 'save_as': window.project.save(Path(directory) / 'copy.json')
         window.custom_query_worker = worker
         window._on_custom_query_ready = Mock()
         window._on_custom_query_error = Mock()
@@ -46,13 +56,14 @@ with TemporaryDirectory() as directory:
         if mode == 'reply': reply.is_current = lambda _: False
         worker.start(); assert worker.wait(5000)
         app.processEvents()
-        if mode == 'current':
+        if mode in ('current', 'receipt'):
             assert len(clip.custom_queries) == 1
             window._on_custom_query_ready.assert_called_once()
+            assert bool(window.project.metadata.job_results) == (mode == 'receipt')
         else:
             window._on_custom_query_ready.assert_not_called()
             assert clip.custom_queries == ([{'query':'manual'}] if mode == 'edit' else None)
-        if mode == 'edit': window._on_custom_query_error.assert_called_once()
+        if mode in ('edit', 'payload', 'save_as'): window._on_custom_query_error.assert_called_once()
         else: window._on_custom_query_error.assert_not_called()
 """
     result = subprocess.run(

@@ -1007,7 +1007,7 @@ class TestCustomQueryWorkerTaskBuilding:
         worker = CustomQueryWorker([], "person", {}, parallelism=5)
         assert worker._parallelism == 1
 
-    def test_local_run_processes_tasks_on_worker_thread(
+    def test_local_preload_and_inference_share_runtime_thread(
         self, monkeypatch, thumbnail_path
     ):
         import threading
@@ -1025,11 +1025,16 @@ class TestCustomQueryWorkerTaskBuilding:
         )
         caller_thread_id = threading.get_ident()
         evaluation_thread_ids = []
+        preload_thread_ids = []
         results = []
 
         monkeypatch.setattr(
             "core.analysis.description.is_model_loaded",
-            lambda *_: True,
+            lambda *_: False,
+        )
+        monkeypatch.setattr(
+            "core.analysis.description._load_local_model",
+            lambda *_: preload_thread_ids.append(threading.get_ident()),
         )
 
         def _evaluate_custom_query(*_args, **_kwargs):
@@ -1048,7 +1053,9 @@ class TestCustomQueryWorkerTaskBuilding:
 
         worker.run()
 
-        assert evaluation_thread_ids == [caller_thread_id]
+        assert len(evaluation_thread_ids) == 1
+        assert evaluation_thread_ids == preload_thread_ids
+        assert evaluation_thread_ids[0] != caller_thread_id
         assert results == [
             ("clip-1", "person", True, 0.9, "local-test-model")
         ]

@@ -38,17 +38,32 @@ class CustomQueryDelivery(QObject):
             return
         self.delivered.add(clip_id)
         try:
-            accepted = self.application.apply(
-                window.project,
-                CustomQueryOutcome(
-                    clip_id,
-                    query,
-                    "succeeded",
-                    match,
-                    confidence,
-                    model,
-                ),
+            outcome = CustomQueryOutcome(
+                clip_id,
+                query,
+                "succeeded",
+                match,
+                confidence,
+                model,
             )
+            receipt = None
+            cache = getattr(self.worker, "cache", None)
+            if cache is not None:
+                if (
+                    window.project.path is None
+                    or window.project.path.resolve() != cache.path
+                ):
+                    raise ValueError(
+                        "Project save location changed during custom query"
+                    )
+                receipt = cache.results[clip_id]
+                if not receipt.matches(outcome):
+                    raise ValueError(
+                        "Queued custom query differs from its recorded result"
+                    )
+            accepted = self.application.apply(window.project, outcome)
+            if accepted and receipt is not None:
+                window.project.record_job_result(receipt.result_id, receipt.digest)
         except Exception as exc:
             window._on_custom_query_error(f"Could not apply custom query: {exc}")
             return

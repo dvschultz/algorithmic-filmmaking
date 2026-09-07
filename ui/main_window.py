@@ -3842,7 +3842,7 @@ class MainWindow(QMainWindow):
         logger.info(f"Creating CustomQueryWorker for '{query}' on {len(clips)} clips, tier={tier}")
         self.custom_query_worker = CustomQueryWorker(
             clips, query=query, sources_by_id=sources,
-            tier=tier, parallelism=parallelism,
+            tier=tier, parallelism=parallelism, project=self.project,
         )
         self.custom_query_worker.progress.connect(self._on_custom_query_progress)
         from ui.workers.custom_query_delivery import CustomQueryDelivery

@@ -34,7 +34,12 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
         identity = json.loads(row["spec_json"])
         if (
             identity["kind"]
-            not in ("gui_transcribe", "gui_align_words", "gui_describe")
+            not in (
+                "gui_transcribe",
+                "gui_align_words",
+                "gui_describe",
+                "gui_custom_query",
+            )
             or identity["version"] != 1
         ):
             continue
@@ -61,6 +66,20 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
         payload = json.loads(row["payload_json"])
         if payload["clip_id"] != clip["id"] or payload["status"] != "succeeded":
             raise StaleJobResult("Saved GUI result does not match its target")
+        if identity["kind"] == "gui_custom_query":
+            expected = [
+                *identity["inputs"]["task"]["previous_queries"],
+                {
+                    "query": payload["query"],
+                    "match": payload["match"],
+                    "confidence": round(payload["confidence"] or 0.0, 4),
+                    "model": payload["model"],
+                },
+            ]
+            # Later appends may follow this result before the explicit save.
+            if (clip.get("custom_queries") or [])[: len(expected)] == expected:
+                pending.append((result_id, receipt_digest))
+            continue
         if identity["kind"] == "gui_describe":
             if (
                 clip.get("description") == payload["description"]

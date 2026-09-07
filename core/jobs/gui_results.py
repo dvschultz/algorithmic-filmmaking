@@ -63,6 +63,8 @@ class GuiResultJournal:
             row = self.store.get_result(result_id)
             if row is None:
                 raise StaleJobResult("Committed result payload is missing")
+            if sha256(row["spec_json"].encode()).hexdigest() != result_id:
+                raise StaleJobResult("Committed result identity is corrupt")
             identity = json.loads(row["spec_json"])
             if identity["kind"] != self.kind:
                 continue
