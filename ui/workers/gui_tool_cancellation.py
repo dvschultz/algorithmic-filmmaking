@@ -13,6 +13,9 @@ def cancel_gui_tool_work(
         return
     workers = list(getattr(window, "_active_download_workers", ()))
     workers.extend(getattr(window, "_active_audio_imports", ()))
+    image_import = getattr(window, "_image_import_worker", None)
+    if image_import is not None:
+        workers.append(image_import)
     detection = getattr(window, "detection_worker", None)
     if detection is not None:
         workers.append(detection)

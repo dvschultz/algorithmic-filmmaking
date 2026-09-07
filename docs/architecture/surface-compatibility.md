@@ -1053,3 +1053,29 @@ submission idempotency. GUI and headless journals remain separate.
 This step does not complete U7. Image import, frame-analysis orchestration, and
 intention workflows remain. FFprobe cancellation
 is checked around the bounded probe call; it does not interrupt that call mid-probe.
+
+### Shared still-image import and owner delivery
+
+Desktop Import Images and the agent's `import_frames` now use the same detached
+image-import operation and Qt worker. The desktop preserves references to the
+original images, including in unsaved projects; agent imports still require a saved
+project and copy images into its frames directory. Agent path validation retains
+the shared safe-root and traversal policy. Unsaved thumbnail artifacts use the
+configured cache directory.
+
+Both routes decode images, record dimensions, generate thumbnails, and reject
+invalid images. Individual failures are reported while valid inputs retain their
+order. Repeated imports intentionally add new frame items. Copies and thumbnails
+use separate paths under unique request/item directories, preserving original
+filenames without overwriting another import or the source image.
+
+Publication is guarded by the original project/session/save path, media and
+artifact stamps, and the initiating agent request. Cancellation discards the
+whole pending batch and removes only newly created artifacts; failures likewise
+clean up unsuccessful items. Successfully computed artifacts discarded during
+late owner delivery remain for the planned artifact-management work. Native
+completion retains the worker until it is safe to release; closing cancels and
+waits. No project save is implicit.
+
+Durable image-import jobs, recovery and CLI/MCP exposure remain U7 follow-up,
+alongside frame-analysis orchestration and intention workflows.

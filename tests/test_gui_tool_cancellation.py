@@ -65,3 +65,16 @@ def test_audio_import_timeout_cancels_only_its_captured_worker():
     worker.cancel.assert_called_once()
     manual.cancel.assert_not_called()
     other.cancel.assert_not_called()
+
+
+def test_image_import_timeout_cancels_its_native_worker():
+    from ui.workers.gui_tool_cancellation import cancel_gui_tool_work
+
+    window = SimpleNamespace(project=Project.new(), _chat_worker=object())
+    reply = GuiToolReply.capture(window, "import_frames", "expired")
+    worker = Mock(gui_tool_reply=reply)
+    window._image_import_worker = worker
+    cancel_gui_tool_work(window, name=reply.name, token="other")
+    worker.cancel.assert_not_called()
+    cancel_gui_tool_work(window, name=reply.name, token=reply.token)
+    worker.cancel.assert_called_once()

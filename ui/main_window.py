@@ -6635,33 +6635,26 @@ class MainWindow(QMainWindow):
         self.frames_tab.update_frame_browser()
         self.status_bar.showMessage(f"Extracted {len(frames)} frames")
 
-    def _on_import_images_requested(self, paths: list):
-        """Import image files as Frame objects."""
-        from models.frame import Frame
-        from core.thumbnail import generate_image_thumbnail
+    def _on_import_images_requested(
+        self, paths: list, *, copy_files: bool = False, validate_paths: bool = False,
+    ) -> bool:
+        """Import images off-thread, preserving the requested storage policy."""
+        if not paths or getattr(self, "_image_import_worker", None) is not None:
+            self.status_bar.showMessage("Image import is already running" if paths else "No images selected")
+            return False
+        if copy_files and self.project.path is None:
+            self.status_bar.showMessage("Save the project before copying imported images")
+            return False
+        from ui.workers.image_import_worker import ImageImportWorker
+        from ui.workers.image_import_delivery import ImageImportDelivery
 
-        frames = []
-        thumb_dir = self.project.path.parent / "thumbnails" if self.project.path else Path.home() / ".cache" / "scene-ripper" / "thumbnails"
-        thumb_dir.mkdir(parents=True, exist_ok=True)
-
-        for image_path in paths:
-            frame = Frame(file_path=image_path)
-
-            # Generate thumbnail
-            thumb_path = thumb_dir / f"{frame.id}_thumb.jpg"
-            try:
-                generate_image_thumbnail(image_path, thumb_path)
-                frame.thumbnail_path = thumb_path
-            except Exception:
-                pass
-
-            frames.append(frame)
-
-        if frames:
-            self.project.add_frames(frames)
-            self.frames_tab.update_frame_browser()
-            self.status_bar.showMessage(f"Imported {len(frames)} images")
-            self._mark_dirty()
+        root = self.project.path.parent / "frames" if self.project.path else self.settings.cache_dir / "image-imports"
+        worker = ImageImportWorker([Path(path) for path in paths], root, parent=self,
+            copy_files=copy_files, validate_paths=validate_paths)
+        self._image_import_worker = worker
+        ImageImportDelivery(self, worker)
+        worker.start()
+        return True
 
     def _on_analyze_frames_requested(self, frame_ids: list):
         """Analyze selected frames using AnalysisTarget-based pipeline.
@@ -7578,6 +7571,9 @@ class MainWindow(QMainWindow):
 
         elif wait_type == "audio_import":
             return self._on_audio_files_added([Path(tool_result["file_path"])])
+
+        elif wait_type == "image_import":
+            return self._on_import_images_requested(tool_result["file_paths"], copy_files=True, validate_paths=True)
 
         elif wait_type == "extract_frames":
             return self._on_extract_frames_requested(tool_result["_source_id"],
@@ -10646,7 +10642,8 @@ class MainWindow(QMainWindow):
 
         audio_workers = tuple(getattr(self, "_active_audio_transcribes", ())) + tuple(getattr(self, "_active_audio_imports", ()))
         frame_worker = getattr(self, "_frame_extraction_worker", None)
-        active_workers = audio_workers + ((frame_worker,) if frame_worker is not None else ())
+        image_worker = getattr(self, "_image_import_worker", None)
+        active_workers = audio_workers + tuple(worker for worker in (frame_worker, image_worker) if worker is not None)
         for worker in active_workers:
             worker.cancel()
         if any(worker.isRunning() for worker in active_workers):

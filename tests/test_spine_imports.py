@@ -30,6 +30,7 @@ FORBIDDEN_MODULES: tuple[str, ...] = (
 # Spine modules under test. Add new spine modules here as they land.
 SPINE_MODULES: tuple[str, ...] = (
     "core.operations.audio_import",
+    "core.operations.image_import",
     "core.jobs.audio_import",
     "core.jobs.gui_audio_import",
     "core.operations.frame_extraction",

@@ -68,6 +68,7 @@ TOOL_TIMEOUTS = {
     "transcribe_clips": 1200,       # 20 minutes
     "transcribe_audio_source": 1200,
     "import_audio_source": 120,
+    "import_frames": 1200,
     "extract_frames": 1200,
     "export_sequence": 600,    # 10 minutes
     "export_bundle": 1800,     # 30 minutes (copies video files)
@@ -4812,70 +4813,19 @@ def extract_frames(
     modifies_gui_state=True,
     modifies_project_state=True
 )
-def import_frames(project, file_paths: list[str]) -> dict:
+def import_frames(main_window, file_paths: list[str]) -> dict:
     """Import image files as frames.
 
     Args:
         file_paths: List of absolute paths to image files
     """
-    from models.frame import Frame
-    import shutil
-
     if not file_paths:
-        return {"success": False, "error": "No file paths provided"}
-
-    valid_extensions = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".webp"}
-    frames_created = []
-    errors = []
-
-    # Determine project frames directory
-    project_dir = project.project_dir
-    if project_dir is None:
-        return {"success": False, "error": "Project must be saved before importing frames"}
-
-    frames_dir = project_dir / "frames"
-    frames_dir.mkdir(parents=True, exist_ok=True)
-
-    for path_str in file_paths:
-        valid, err_msg, resolved = validate_path(path_str, must_exist=True)
-        if not valid:
-            errors.append(f"{path_str}: {err_msg}")
-            continue
-
-        if resolved.suffix.lower() not in valid_extensions:
-            errors.append(f"{path_str}: Unsupported image format '{resolved.suffix}'")
-            continue
-
-        # Copy to project directory
-        dest = frames_dir / resolved.name
-        if dest.exists():
-            stem = resolved.stem
-            suffix = resolved.suffix
-            counter = 1
-            while dest.exists():
-                dest = frames_dir / f"{stem}_{counter}{suffix}"
-                counter += 1
-
-        try:
-            shutil.copy2(str(resolved), str(dest))
-        except OSError as e:
-            errors.append(f"{path_str}: Copy failed: {e}")
-            continue
-
-        frame = Frame(file_path=dest)
-        frames_created.append(frame)
-
-    if frames_created:
-        project.add_frames(frames_created)
-
-    result = {
-        "success": len(frames_created) > 0,
-        "imported_count": len(frames_created),
-        "frame_ids": [f.id for f in frames_created],
-    }
-    if errors:
-        result["errors"] = errors
-    return result
+        raise ValueError("No file paths provided")
+    if main_window.project.path is None:
+        raise ValueError("Project must be saved before importing frames")
+    if getattr(main_window, "_image_import_worker", None) is not None:
+        raise ValueError("Image import is already running")
+    return {"_wait_for_worker": "image_import", "file_paths": list(file_paths)}
 
 
 @tools.register(
