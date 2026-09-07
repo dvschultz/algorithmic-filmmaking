@@ -184,7 +184,13 @@ when a frame and clip share an ID. Model notifications update frame views; the
 clip callback only refreshes views after the shared application publishes.
 Headless callers receive `stale_result` for a rejected successful computation.
 
-This completes the guarded-publication portion of the cinematography migration.
-Cinematography does not yet record durable result receipts or recover completed
-inference after a restart. Those changes and other U7 workflow families remain
-outstanding.
+Saved-project cinematography jobs now use `core/jobs/cinematography.py` from both
+the dedicated MCP tool and multi-step analysis jobs. Receipt identity includes
+project/source identity, media fingerprints, range/FPS, resolved cloud/local
+models, input mode, and runtime availability. Computation is recorded before
+model publication; project saves precede cache checkpoints. Retrying a failed
+save reuses recorded inference, and a failed checkpoint reconciles the exact
+saved output, including its derived shot type. Existing or manually edited
+analysis remains intact. Missing or corrupt committed receipts reject replay.
+
+GUI cinematography recovery and other U7 workflow families remain outstanding.

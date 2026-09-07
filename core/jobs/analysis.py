@@ -17,21 +17,29 @@ from core.spine.project_io import load_with_mtime, project_writer, save_with_mti
 
 def analysis_job_spec(project: Project, *, arguments: dict) -> OperationSpec:
     inputs = {}
+    if "cinematography" in (arguments.get("operations") or []):
+        from core.jobs.cinematography import cinematography_job_spec
+        from core.operations.cinematography import resolve_options as resolve_cinematography
+
+        cinematography = cinematography_job_spec(
+            project, arguments.get("clip_ids"), resolve_cinematography(), arguments={},
+        )
+        inputs["cinematography"] = json.loads(cinematography.inputs_json)
     if "custom_query" in (arguments.get("operations") or []):
         from core.jobs.custom_query import custom_query_job_spec
-        from core.operations.custom_query import resolve_options
+        from core.operations.custom_query import resolve_options as resolve_custom_query
 
         custom_query = custom_query_job_spec(
-            project, arguments.get("clip_ids"), resolve_options(),
+            project, arguments.get("clip_ids"), resolve_custom_query(),
             arguments={"query": arguments.get("query")},
         )
         inputs["custom_query"] = json.loads(custom_query.inputs_json)
     if "describe" in (arguments.get("operations") or []):
         from core.jobs.description import description_job_spec
-        from core.operations.description import resolve_options
+        from core.operations.description import resolve_options as resolve_description
 
         description = description_job_spec(
-            project, arguments.get("clip_ids"), resolve_options(), arguments={},
+            project, arguments.get("clip_ids"), resolve_description(), arguments={},
         )
         inputs["description"] = json.loads(description.inputs_json)
     if "transcribe" in (arguments.get("operations") or []):
@@ -79,6 +87,7 @@ def run_analysis_job(
         transcription = captured.get("transcription")
         description = captured.get("description")
         custom_query = captured.get("custom_query")
+        cinematography = captured.get("cinematography")
         options = (
             TranscriptionOptions(**transcription["options"]) if transcription else None
         )
@@ -88,6 +97,21 @@ def run_analysis_job(
                 raise StaleJobResult("Analysis inputs changed while the job was queued")
 
         def execute(op: str, report: Progress | None) -> dict:
+            if op == "cinematography":
+                from core.jobs.cinematography import cinematography_job_spec, run_cinematography_job
+                from core.operations.cinematography import CinematographyOptions
+
+                if cinematography is None:
+                    raise StaleJobResult("Analysis job has no captured cinematography options")
+                current, _ = load_with_mtime(path)
+                step = cinematography_job_spec(
+                    current, ids, CinematographyOptions(**cinematography["options"]), arguments={},
+                )
+                if json.loads(step.inputs_json) != cinematography:
+                    raise StaleJobResult("Cinematography inputs changed before analysis")
+                return run_cinematography_job(
+                    store, path, ids, report or (lambda *_: None), cancel, operation=step,
+                )
             if op == "custom_query":
                 from core.jobs.custom_query import custom_query_job_spec, run_custom_query_job
                 from core.operations.custom_query import CustomQueryOptions

@@ -567,6 +567,44 @@ async def test_custom_query_submission_pins_options_and_records_results(lifespan
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("generic", [False, True])
+async def test_cinematography_submission_pins_options_and_records_results(lifespan_ctx, tmp_path, monkeypatch, generic):
+    from core.project import Project
+    from core.settings import Settings
+    from models.cinematography import CinematographyAnalysis
+    from scene_ripper_mcp.tools import jobs
+
+    ctx, store, _runtime = lifespan_ctx
+    path = _make_project_file(tmp_path)
+    project = Project.load(path)
+    thumbnail = tmp_path / "thumb.jpg"
+    thumbnail.write_bytes(b"image")
+    project.clips[0].thumbnail_path = thumbnail
+    assert project.save()
+    settings = Settings(cinematography_tier="cloud", cinematography_model="original")
+    monkeypatch.setattr("core.settings.load_settings", lambda: settings)
+    captured = {}
+    monkeypatch.setattr(jobs, "_start_job", lambda ctx, **kwargs: captured.update(kwargs) or "queued")
+    compute = Mock(return_value=CinematographyAnalysis(shot_size="CU"))
+    monkeypatch.setattr("core.analysis.cinematography.analyze_cinematography", compute)
+    ids = ["clip-1"]
+    if generic:
+        response = await jobs.start_analyze_clips(str(path), clip_ids=ids, operations=["cinematography"], ctx=ctx)
+    else:
+        response = await jobs.start_analyze_cinematography(str(path), clip_ids=ids, ctx=ctx)
+    assert response == "queued"
+    ids.clear()
+    settings.cinematography_model = "replacement"
+    result = captured["run"](lambda *_: None, threading.Event())
+    assert result["success"]
+    assert compute.call_args.kwargs["model"] == "original"
+    saved = Project.load(path)
+    assert saved.clips[0].cinematography.shot_size == "CU"
+    assert len(saved.metadata.job_results) == 1
+    assert all(store.get_result(rid)["committed"] for rid in saved.metadata.job_results)
+
+
+@pytest.mark.asyncio
 async def test_start_analyze_clips_uses_durable_custom_query(
     lifespan_ctx, tmp_path, monkeypatch
 ):

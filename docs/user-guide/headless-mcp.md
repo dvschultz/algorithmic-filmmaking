@@ -190,6 +190,14 @@ CLI `analyze describe` shares these receipts when options, media, and the config
 cache directory match. Missing committed cache payloads produce an error rather
 than an automatic paid recomputation.
 
+`start_analyze_cinematography` and cinematography steps in `start_analyze_clips`
+also retain completed inference before saving the project. Retry after a failed
+save or cache checkpoint reuses matching results. Submission captures the cloud
+and local models, input mode, media identity, and local backend availability.
+Existing cinematography and manually edited shot types are preserved on retry.
+Missing or corrupt committed receipts produce an error rather than an automatic
+provider call. Desktop cinematography recovery is not yet available.
+
 Every `start_*` returns immediately with `{task_id, status, poll_interval}`.
 The job runs in a background thread; the response payload is **not**
 included — you must poll `get_job_status` until terminal, then call
