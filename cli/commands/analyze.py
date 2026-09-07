@@ -515,7 +515,7 @@ def classify(
     try:
         from core.project import Project, ProjectLoadError
         from core.thumbnail import ThumbnailGenerator
-        from core.operations.classification import ClassificationTask, ClassificationOptions, run_classification
+        from core.operations.classification import ClassificationApplication, ClassificationTask, ClassificationOptions, run_classification
     except ImportError as e:
         exit_with(ExitCode.DEPENDENCY_MISSING, f"Missing dependency: {e}")
 
@@ -588,15 +588,17 @@ def classify(
                 )
 
                 # Classify content
+                tasks = (ClassificationTask(clip.id, thumb_path),)
+                application = ClassificationApplication(project, tasks)
                 outcome = run_classification(
-                    (ClassificationTask(clip.id, thumb_path),),
+                    tasks,
                     ClassificationOptions(top_k, threshold),
                 )[0]
                 if outcome.status != "succeeded":
                     raise RuntimeError(outcome.message or outcome.code or "Classification failed")
+                if not application.apply(project, outcome):
+                    raise RuntimeError("Classification target changed during analysis")
                 results = outcome.labels
-                clip.object_labels = [label for label, _ in results]
-                project.update_clips([clip])
                 analyzed_count += 1
 
                 # Track top label counts

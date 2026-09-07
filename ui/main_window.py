@@ -3573,7 +3573,8 @@ class MainWindow(QMainWindow):
         logger.info(f"Creating ClassificationWorker (pipeline) for {len(clips)} clips...")
         self.classification_worker = ClassificationWorker(clips, parallelism=self.settings.local_model_parallelism)
         self.classification_worker.progress.connect(self._on_classification_progress)
-        self.classification_worker.labels_ready.connect(self._on_classification_ready)
+        from ui.workers.classification_delivery import ClassificationDelivery
+        ClassificationDelivery(self, self.classification_worker, pipeline=True)
         self.classification_worker.error.connect(self._on_classification_error)
         bind_pipeline_completion(
             self, self.classification_worker, "classification_worker",
@@ -6740,7 +6741,8 @@ class MainWindow(QMainWindow):
                 parallelism=self.settings.local_model_parallelism,
             )
             worker.progress.connect(self._on_classification_progress)
-            worker.labels_ready.connect(self._on_classification_ready)
+            from ui.workers.classification_delivery import ClassificationDelivery
+            ClassificationDelivery(self, worker, worker_attribute="_frame_classify_worker")
             worker.error.connect(self._on_classification_error)
             worker.classification_completed.connect(
                 lambda: self._on_frame_analysis_op_finished("classify")
@@ -7841,7 +7843,8 @@ class MainWindow(QMainWindow):
         from PySide6.QtCore import Qt
         self.classification_worker = ClassificationWorker(clips, top_k=top_k, parallelism=self.settings.local_model_parallelism)
         self.classification_worker.progress.connect(self._on_classification_progress)
-        self.classification_worker.labels_ready.connect(self._on_classification_ready)
+        from ui.workers.classification_delivery import ClassificationDelivery
+        ClassificationDelivery(self, self.classification_worker)
         self.classification_worker.error.connect(self._on_classification_error)
         completion = AgentAnalysisCompletion(
             self, self.classification_worker, "classification_worker", self._on_agent_classification_finished
@@ -8087,32 +8090,6 @@ class MainWindow(QMainWindow):
             else:
                 self.status_bar.showMessage(f"Classifying content: {current}/{total} clips...")
             self.progress_bar.setValue(int(current / total * 100))
-
-    @Slot(str, list)
-    def _on_classification_ready(self, clip_id: str, results: list):
-        """Handle classification results for a single clip or frame.
-
-        Note: Frame model doesn't have object_labels, so frame results
-        are stored as detected_objects for consistency.
-        """
-        clip = self.project.clips_by_id.get(clip_id)
-        if clip:
-            # Store labels (just the label strings, not confidences)
-            clip.object_labels = [label for label, _ in results]
-            logger.debug(f"Classification for {clip_id}: {clip.object_labels[:3]}")
-            return
-        # Try frame - store as detected_objects since Frame has no object_labels
-        frame = self.project.frames_by_id.get(clip_id)
-        if frame:
-            objects = [
-                {"label": label, "confidence": conf}
-                for label, conf in results
-            ]
-            self.project.update_frame(clip_id, detected_objects=objects)
-            logger.debug(
-                f"Classification for frame {clip_id}: "
-                f"{[label for label, _ in results[:3]]}"
-            )
 
     @Slot()
     def _on_agent_classification_finished(self, *, reply: GuiToolReply | None = None) -> None:

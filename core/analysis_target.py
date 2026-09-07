@@ -81,7 +81,7 @@ class AnalysisTarget:
             shot_type=frame.shot_type,
             description=frame.description,
             detected_objects=frame.detected_objects,
-            object_labels=None,  # Frame model doesn't have object_labels
+            object_labels=frame.object_labels,
             extracted_texts=frame.extracted_texts,
             cinematography=frame.cinematography,
         )

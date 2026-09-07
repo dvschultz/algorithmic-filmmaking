@@ -328,23 +328,23 @@ def classify_content(
     cancel_event: Optional[threading.Event] = None,
 ) -> dict:
     """Classify thumbnail content with ImageNet labels."""
-    from core.operations.classification import ClassificationTask, ClassificationOptions, run_classification
+    from core.operations.classification import ClassificationApplication, ClassificationTask, ClassificationOptions, run_classification
 
     clips = _resolve_clip_ids(project, clip_ids)
     succeeded: list[dict] = []
     failed: list[dict] = []
     skipped: list[dict] = []
-    updated = []
     total = len(clips)
 
     tasks = tuple(ClassificationTask(clip.id, _thumbnail_for_clip(clip), skip=skip_existing and clip.object_labels is not None) for clip in clips)
+    application = ClassificationApplication(project, tasks)
 
     def report(current: int, count: int) -> None:
         if progress_callback is not None:
             progress_callback(current / count if count else 1.0, f"Content classification ({current}/{count})")
 
     outcomes = run_classification(tasks, ClassificationOptions(top_k, threshold), cancel_event=cancel_event, progress=report)
-    for clip, outcome in zip(clips, outcomes):
+    for clip, outcome, accepted in zip(clips, outcomes, application.apply_batch(project, outcomes)):
         if outcome.status == "skipped":
             skipped.append({"clip_id": clip.id, "reason": outcome.code})
         elif outcome.status == "failed":
@@ -353,12 +353,10 @@ def classify_content(
                 failure["message"] = outcome.message
             failed.append(failure)
         elif outcome.status == "succeeded":
-            clip.object_labels = [label for label, _ in outcome.labels]
-            updated.append(clip)
-            succeeded.append({"clip_id": clip.id, "label_count": len(outcome.labels)})
-
-    if updated:
-        project.update_clips(updated)
+            if accepted:
+                succeeded.append({"clip_id": clip.id, "label_count": len(outcome.labels)})
+            else:
+                failed.append({"clip_id": clip.id, "code": "stale_result"})
     if progress_callback is not None:
         progress_callback(1.0, f"Done: {len(succeeded)} ok, {len(failed)} failed, {len(skipped)} skipped")
     return {"success": True, "result": {"succeeded": succeeded, "failed": failed, "skipped": skipped, "total_clips": total}}

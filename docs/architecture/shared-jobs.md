@@ -218,6 +218,17 @@ does not publish its result or start later targets.
 The GUI worker retains its signals and parallelism argument for caller
 compatibility, but inference runs serially. Completion is emitted even after
 pre-start cancellation or errors. Empty label lists remain valid successes;
-malformed labels or confidence values become per-item failures. Frame task
-identity survives computation. Guarded publication, frame label storage, and
-durable classification receipts remain follow-up work in U7.
+malformed labels or confidence values become per-item failures.
+
+`ClassificationApplication` applies results once on the project owner thread,
+checking the originating session, target/source objects, media, clip range/FPS,
+frame association, and prior labels. CLI-generated analysis thumbnails may differ
+from the stored display thumbnail; applying labels preserves the display path.
+GUI delivery also checks cancellation and the current worker, request, and
+pipeline. Model notifications refresh views after publication.
+
+Frames persist ImageNet labels in `object_labels`, separate from object detection.
+An empty list means classification completed without matching labels; `None`
+means no classification. Older frame files retain their existing detection data
+and load with no classification. Durable classification receipts remain follow-up
+work in U7.

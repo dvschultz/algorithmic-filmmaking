@@ -52,6 +52,7 @@ class Frame:
     cinematography: Optional["CinematographyAnalysis"] = None
     tags: list[str] = field(default_factory=list)
     notes: str = ""
+    object_labels: Optional[list[str]] = None
 
     def display_name(self) -> str:
         """Get a human-readable display name for this frame.
@@ -112,6 +113,8 @@ class Frame:
             data["description_model"] = self.description_model
         if self.detected_objects:
             data["detected_objects"] = self.detected_objects
+        if self.object_labels is not None:
+            data["object_labels"] = list(self.object_labels)
         if self.extracted_texts:
             data["extracted_texts"] = [
                 et.to_dict() if hasattr(et, "to_dict") else et
@@ -197,6 +200,7 @@ class Frame:
             description=data.get("description"),
             description_model=data.get("description_model"),
             detected_objects=data.get("detected_objects"),
+            object_labels=data.get("object_labels"),
             extracted_texts=extracted_texts,
             cinematography=cinematography,
             tags=data.get("tags", []),
