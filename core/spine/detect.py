@@ -120,11 +120,13 @@ def detect_scenes_for_source(
             },
         }
 
+    if _check_cancel(cancel_event):
+        return {"success": False, "error": {"code": "cancelled"}}
+
     # Reuse the existing source id so downstream references (sequence clips,
     # frames) stay valid.
     for clip in clips:
         clip.source_id = source.id
-    source.analyzed = True
 
     thumbnails = _generate_detected_clip_thumbnails(
         source,
@@ -133,6 +135,10 @@ def detect_scenes_for_source(
         cancel_event=cancel_event,
     )
 
+    if _check_cancel(cancel_event):
+        return {"success": False, "error": {"code": "cancelled"}}
+
+    source.analyzed = True
     project.replace_source_clips(source.id, clips)
 
     if progress_callback is not None:
@@ -199,27 +205,29 @@ def detect_scenes_for_video(
 
     detected_source, clips = detector.detect_scenes(video)
 
+    if _check_cancel(cancel_event):
+        return {"success": False, "error": {"code": "cancelled"}}
+
     if existing_source:
         source = existing_source
         for clip in clips:
             clip.source_id = source.id
-        source.analyzed = True
-        thumbnails = _generate_detected_clip_thumbnails(
-            source,
-            clips,
-            progress_callback=progress_callback,
-            cancel_event=cancel_event,
-        )
-        project.replace_source_clips(source.id, clips)
     else:
         source = detected_source
-        source.analyzed = True
-        thumbnails = _generate_detected_clip_thumbnails(
-            source,
-            clips,
-            progress_callback=progress_callback,
-            cancel_event=cancel_event,
-        )
+
+    thumbnails = _generate_detected_clip_thumbnails(
+        source,
+        clips,
+        progress_callback=progress_callback,
+        cancel_event=cancel_event,
+    )
+    if _check_cancel(cancel_event):
+        return {"success": False, "error": {"code": "cancelled"}}
+
+    source.analyzed = True
+    if existing_source:
+        project.replace_source_clips(source.id, clips)
+    else:
         project.add_source(source)
         if clips:
             project.add_clips(clips)
@@ -306,9 +314,9 @@ def detect_scenes_bulk(
 ) -> dict:
     """Run scene detection on each source in ``source_ids``.
 
-    Per-source granularity for cancellation: between sources we check
-    ``cancel_event``; an interrupted run reports the sources that finished
-    in ``succeeded`` and the rest in ``cancelled``. Per-source failures are
+    Cancellation is checked between detection, thumbnails, and publication;
+    an interrupted run reports the sources already published in ``succeeded``
+    and the current/unstarted sources in ``cancelled``. Per-source failures are
     aggregated to ``failed`` and never raise mid-batch (R20).
     """
     succeeded: list[dict] = []
@@ -339,6 +347,9 @@ def detect_scenes_bulk(
             succeeded.append(result["result"])
         else:
             err = result.get("error", {})
+            if err.get("code") == "cancelled":
+                cancelled.extend(source_ids[i:])
+                break
             failed.append(
                 {
                     "source_id": source_id,

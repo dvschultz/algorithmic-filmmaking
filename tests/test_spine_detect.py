@@ -14,6 +14,7 @@ to test the detector itself.
 from __future__ import annotations
 
 import threading
+import pytest
 from pathlib import Path
 from unittest.mock import patch
 
@@ -23,6 +24,57 @@ from core.spine.detect import (
     detect_scenes_for_video,
     detect_scenes_new_project,
 )
+
+
+@pytest.mark.parametrize("entry", ["source", "video", "new_video"])
+@pytest.mark.parametrize("phase", ["detection", "thumbnails"])
+def test_cancelled_detection_does_not_publish(tmp_path, entry, phase):
+    from models.clip import Clip
+
+    project, source, video = _build_project_with_source(tmp_path)
+    old = Clip(id="old", source_id=source.id, start_frame=0, end_frame=60)
+    project.add_clips([old])
+    if entry == "new_video":
+        project.remove_source(source.id)
+    before = project.snapshot_for_save()
+    cancel = threading.Event()
+
+    def detect(*args):
+        if phase == "detection":
+            cancel.set()
+        return source, [Clip(id="new", source_id=source.id, start_frame=0, end_frame=30)]
+
+    def thumbnails(*args, **kwargs):
+        cancel.set()
+        return {"generated": [], "failed": [], "skipped": []}
+
+    with patch("core.scene_detect.SceneDetector.detect_scenes", side_effect=detect), patch(
+        "core.spine.detect._generate_detected_clip_thumbnails", side_effect=thumbnails
+    ) as thumbs:
+        if entry == "source":
+            result = detect_scenes_for_source(project, source.id, cancel_event=cancel)
+        else:
+            result = detect_scenes_for_video(project, video, cancel_event=cancel)
+
+    assert result == {"success": False, "error": {"code": "cancelled"}}
+    assert project.snapshot_for_save() == before
+    assert thumbs.call_count == (0 if phase == "detection" else 1)
+
+
+def test_bulk_cancel_during_detection_reports_current_and_remaining(tmp_path):
+    project, source, _ = _build_project_with_source(tmp_path)
+    cancel = threading.Event()
+
+    def detect(*args):
+        cancel.set()
+        return source, []
+
+    with patch("core.scene_detect.SceneDetector.detect_scenes", side_effect=detect):
+        result = detect_scenes_bulk(project, [source.id, "next"], cancel_event=cancel)
+
+    assert result["result"] == {
+        "succeeded": [], "failed": [], "cancelled": [source.id, "next"]
+    }
 
 
 def _build_project_with_source(tmp_path: Path, source_id: str = "src-1"):
