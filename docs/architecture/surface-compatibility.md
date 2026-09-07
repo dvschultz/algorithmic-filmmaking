@@ -267,8 +267,16 @@ emit completion even if local model preparation fails.
 
 The existing custom-query legacy tier mapping is preserved: `cpu` means local and
 `gpu` means cloud. Existing append/skip result behavior remains, with whitespace
-normalized before skip checks. Guarded owner-thread publication and durable
-custom-query result recovery remain pending U7 work.
+normalized before skip checks.
+
+`CustomQueryApplication` appends a result once, on the owner thread, after checking
+project/session identity, clip/source object identity, clip range, source path/FPS,
+image/source media identity, prior query results, and the submitted query text.
+Spine calls report rejected results as `stale_result`. GUI delivery also checks the
+launching worker, pipeline run, cancellation, and agent request before publication;
+the main-window callback only refreshes views. Frame tasks cannot resolve through
+a colliding clip ID: the Frame model has no custom-query storage yet. Durable
+custom-query result recovery remains pending U7 work.
 
 ## Transcription batch cutover
 

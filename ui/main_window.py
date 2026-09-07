@@ -3845,7 +3845,8 @@ class MainWindow(QMainWindow):
             tier=tier, parallelism=parallelism,
         )
         self.custom_query_worker.progress.connect(self._on_custom_query_progress)
-        self.custom_query_worker.query_result_ready.connect(self._on_custom_query_ready)
+        from ui.workers.custom_query_delivery import CustomQueryDelivery
+        CustomQueryDelivery(self, self.custom_query_worker)
         self.custom_query_worker.error.connect(self._on_custom_query_error)
         bind_pipeline_completion(
             self, self.custom_query_worker, "custom_query_worker",
@@ -3863,17 +3864,9 @@ class MainWindow(QMainWindow):
 
     @Slot(str, str, bool, float, str)
     def _on_custom_query_ready(self, clip_id: str, query: str, match: bool, confidence: float, model: str):
-        """Handle custom query result for a single clip."""
+        """Refresh views after guarded custom-query publication."""
         clip = self.project.clips_by_id.get(clip_id)
         if clip:
-            if clip.custom_queries is None:
-                clip.custom_queries = []
-            clip.custom_queries.append({
-                "query": query,
-                "match": match,
-                "confidence": round(confidence, 4),
-                "model": model,
-            })
             if hasattr(self, "analyze_tab"):
                 self.analyze_tab.update_clip_custom_queries(clip_id, clip.custom_queries)
             if hasattr(self, "cut_tab") and hasattr(self.cut_tab, "clip_browser"):
@@ -3883,7 +3876,6 @@ class MainWindow(QMainWindow):
                     clip_id,
                     clip.custom_queries,
                 )
-            self._mark_dirty()
             logger.debug(f"Custom query '{query}' for {clip_id}: match={match} ({confidence:.0%})")
 
     @Slot(str)

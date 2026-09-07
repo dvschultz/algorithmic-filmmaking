@@ -2,12 +2,16 @@
 
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, replace
+from copy import deepcopy
 from pathlib import Path
 from threading import Event
-from typing import Callable, Literal
+from typing import Callable, Literal, TYPE_CHECKING
 
 from core.operations.contracts import OutcomeStatus
 from core.provider_errors import is_transient_provider_error
+
+if TYPE_CHECKING:
+    from core.project import Project
 
 
 @dataclass(frozen=True)
@@ -171,3 +175,100 @@ def run_custom_query(
         )
         for i, task in enumerate(tasks)
     )
+
+
+class CustomQueryApplication:
+    """Append once on the owner thread, only to unchanged clip inputs."""
+
+    def __init__(self, project: "Project", tasks: tuple[CustomQueryTask, ...]) -> None:
+        project.session.assert_owner()
+        self.project = project
+        self.session_id = project.session.session_id
+        self.tasks = {task.clip_id: task for task in tasks}
+        self.bindings = {task.clip_id: self._binding(project, task) for task in tasks}
+        self.consumed: set[str] = set()
+
+    @staticmethod
+    def _binding(project: "Project", task: CustomQueryTask) -> tuple | None:
+        from core.jobs.media import media_stamp
+
+        # Frame query storage is not part of the Frame model. Never resolve a
+        # frame task through a colliding clip ID.
+        if task.target_type != "clip":
+            return None
+        clip = project.clips_by_id.get(task.clip_id)
+        if clip is None or clip.thumbnail_path != task.thumbnail_path:
+            return None
+        stamp = media_stamp(task.thumbnail_path) if task.thumbnail_path else None
+        if stamp is None:
+            return None
+        source = project.sources_by_id.get(clip.source_id)
+        source_path = source.file_path if source else None
+        return (
+            clip,
+            source,
+            (
+                clip.source_id,
+                clip.start_frame,
+                clip.end_frame,
+                stamp,
+                source_path,
+                source.fps if source else None,
+                media_stamp(source_path) if source_path else None,
+                deepcopy(clip.custom_queries),
+            ),
+        )
+
+    def apply(self, project: "Project", outcome: CustomQueryOutcome) -> bool:
+        return self.apply_batch(project, (outcome,))[0]
+
+    def apply_batch(
+        self, project: "Project", outcomes: tuple[CustomQueryOutcome, ...]
+    ) -> tuple[bool, ...]:
+        if (
+            project is not self.project
+            or project.session.session_id != self.session_id
+            or not any(outcome.status == "succeeded" for outcome in outcomes)
+        ):
+            return tuple(False for _ in outcomes)
+
+        def publish() -> tuple[bool, ...]:
+            accepted = []
+            updated = []
+            for outcome in outcomes:
+                task = self.tasks.get(outcome.clip_id)
+                expected = self.bindings.get(outcome.clip_id)
+                valid = False
+                if (
+                    outcome.status == "succeeded"
+                    and outcome.clip_id not in self.consumed
+                ):
+                    self.consumed.add(outcome.clip_id)
+                    current = self._binding(project, task) if task else None
+                    if (
+                        task is not None
+                        and outcome.query == task.query
+                        and expected is not None
+                        and current is not None
+                        and current[0] is expected[0]
+                        and current[1] is expected[1]
+                        and current[2] == expected[2]
+                    ):
+                        clip = current[0]
+                        clip.custom_queries = [
+                            *(clip.custom_queries or []),
+                            {
+                                "query": outcome.query,
+                                "match": outcome.match,
+                                "confidence": round(outcome.confidence or 0.0, 4),
+                                "model": outcome.model,
+                            },
+                        ]
+                        updated.append(clip)
+                        valid = True
+                accepted.append(valid)
+            if updated:
+                project.update_clips(updated)
+            return tuple(accepted)
+
+        return project.session.apply_external(publish)

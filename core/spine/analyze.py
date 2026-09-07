@@ -777,7 +777,7 @@ def custom_query(
     cancel_event: Optional[threading.Event] = None,
 ) -> dict:
     """Evaluate a yes/no VLM visual query against clip thumbnails."""
-    from core.operations.custom_query import CustomQueryTask, resolve_options, run_custom_query
+    from core.operations.custom_query import CustomQueryApplication, CustomQueryTask, resolve_options, run_custom_query
 
     if not query or not query.strip():
         return {"success": False, "error": {"code": "missing_query", "message": "query is required"}}
@@ -786,7 +786,6 @@ def custom_query(
     succeeded: list[dict] = []
     failed: list[dict] = []
     skipped: list[dict] = []
-    updated = []
     total = len(clips)
 
     query = query.strip()
@@ -799,8 +798,10 @@ def custom_query(
         if progress_callback is not None:
             progress_callback(current / count if count else 1.0, f"Custom query ({current}/{count})")
 
+    application = CustomQueryApplication(project, tasks)
     outcomes = run_custom_query(tasks, resolve_options(tier), cancel_event=cancel_event, progress=report)
-    for clip, outcome in zip(clips, outcomes):
+    accepted = application.apply_batch(project, outcomes)
+    for clip, outcome, applied in zip(clips, outcomes, accepted):
         if outcome.status == "skipped":
             skipped.append({"clip_id": clip.id, "reason": outcome.code})
             continue
@@ -811,20 +812,17 @@ def custom_query(
                     failure["message"] = outcome.message
                 failed.append(failure)
             continue
-        if clip.custom_queries is None:
-            clip.custom_queries = []
+        if not applied:
+            failed.append({"clip_id": clip.id, "code": "stale_result"})
+            continue
         result = {
             "query": query,
             "match": outcome.match,
             "confidence": round(outcome.confidence or 0.0, 4),
             "model": outcome.model,
         }
-        clip.custom_queries.append(result)
-        updated.append(clip)
         succeeded.append({"clip_id": clip.id, **result})
 
-    if updated:
-        project.update_clips(updated)
     if progress_callback is not None:
         progress_callback(1.0, f"Done: {len(succeeded)} ok, {len(failed)} failed, {len(skipped)} skipped")
     return {"success": True, "result": {"succeeded": succeeded, "failed": failed, "skipped": skipped, "total_clips": total}}

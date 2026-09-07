@@ -100,11 +100,11 @@ def test_clip_browser_filters_by_selected_custom_queries_with_and_logic(qapp, so
     assert browser.get_visible_clip_count() == 4
 
 
-def test_custom_query_ready_updates_tabs_sidebar_and_dirty_state(source):
+def test_custom_query_ready_refreshes_views_without_reapplying_result(source):
     from ui.main_window import MainWindow
 
     clip = make_test_clip("c1")
-    clip.custom_queries = None
+    clip.custom_queries = [{"query": "red hat", "match": True, "confidence": 0.92, "model": "qwen3-vl-4b"}]
 
     analyze_calls = []
     cut_calls = []
@@ -153,7 +153,7 @@ def test_custom_query_ready_updates_tabs_sidebar_and_dirty_state(source):
     assert analyze_calls == [(clip.id, clip.custom_queries)]
     assert cut_calls == [(clip.id, clip.custom_queries)]
     assert sidebar_calls == [(clip.id, clip.custom_queries)]
-    assert dirty_calls == [True]
+    assert dirty_calls == []
 
 
 def test_custom_query_agent_summary_groups_actual_matches(source):
