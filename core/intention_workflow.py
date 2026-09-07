@@ -8,9 +8,14 @@ import logging
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional, TYPE_CHECKING
 
 from PySide6.QtCore import QObject, Signal
+
+from core.operations.intention import IntentionPlan
+
+if TYPE_CHECKING:
+    from models.clip import Clip, Source
 
 logger = logging.getLogger(__name__)
 
@@ -67,8 +72,8 @@ class IntentionWorkflowCoordinator(QObject):
     4. Analysis (if required by the algorithm, e.g., colors for Color sequence)
     5. Sequence building
 
-    The coordinator uses guard flags to prevent duplicate signal handling
-    (a documented gotcha from docs/solutions/).
+    The Qt-free plan owns phase order and consumes each completion once.
+    This adapter collects results and projects the active step through signals.
     """
 
     # Signals for progress updates
@@ -80,41 +85,25 @@ class IntentionWorkflowCoordinator(QObject):
     workflow_cancelled = Signal()
     workflow_error = Signal(str)  # error message
 
-    # Analysis requirements by algorithm
-    ANALYSIS_REQUIREMENTS = {
-        "color": ["colors"],  # Needs color analysis
-        "duration": [],  # Duration comes from detection
-        "shuffle": [],  # No analysis needed
-        "sequential": [],  # No analysis needed
-        "shot_type": ["shot_type"],  # Needs shot type analysis
-        "exquisite_corpus": [],  # Text extraction happens in the dialog
-        "storyteller": ["descriptions"],  # Needs description analysis
-    }
-
-    def __init__(self, parent=None):
+    def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
 
         # Workflow state
-        self._state = WorkflowState.IDLE
+        self.plan: IntentionPlan | None = None
+        self._state: WorkflowState = WorkflowState.IDLE
         self._algorithm: str = ""
         self._direction: Optional[str] = None
         self._local_files: list[Path] = []
         self._urls: list[str] = []
+        self._download_outcomes: set[str] = set()
         self._cancelled = False
 
         # Processing state
-        self._sources_to_process: list = []  # Sources waiting for detection
-        self._sources_processed: list = []  # Successfully processed sources
+        self._sources_to_process: list[dict[str, Any]] = []
+        self._sources_processed: list["Source"] = []
         self._sources_failed: list[dict] = []  # Failed sources with errors
-        self._all_clips: list = []  # All clips created
+        self._all_clips: list["Clip"] = []
         self._current_source_index = 0
-
-        # Guard flags to prevent duplicate signal handling
-        # (Critical pattern from docs/solutions/qthread-destroyed-duplicate-signal-delivery)
-        self._download_finished_handled = False
-        self._detection_finished_handled = False
-        self._thumbnails_finished_handled = False
-        self._analysis_finished_handled = False
 
         # Worker references (set by MainWindow when connecting)
         self._download_worker = None
@@ -166,61 +155,61 @@ class IntentionWorkflowCoordinator(QObject):
             logger.warning("Workflow already running, cannot start new workflow")
             return False
 
-        logger.info(f"Starting intention workflow: algorithm={algorithm}, "
-                    f"files={len(local_files)}, urls={len(urls)}")
+        logger.info(
+            f"Starting intention workflow: algorithm={algorithm}, "
+            f"files={len(local_files)}, urls={len(urls)}"
+        )
 
         # Reset state
         self._reset()
         self._algorithm = algorithm
         self._direction = direction
-        self._local_files = list(local_files)
-        self._urls = list(urls)
+        self._local_files = list(dict.fromkeys(local_files))
+        self._urls = list(dict.fromkeys(urls))
 
-        # Determine first step
-        if urls:
-            self._state = WorkflowState.DOWNLOADING
-            self._emit_progress("Starting downloads...")
-            self.step_started.emit("downloading", 1, self._calculate_total_steps())
-        elif local_files:
-            # Skip download, go straight to detection
-            self._sources_to_process = [{"path": f, "type": "local"} for f in local_files]
-            self._state = WorkflowState.DETECTING
-            self._emit_progress("Starting scene detection...")
-            self.step_started.emit("detecting", 1, self._calculate_total_steps())
-        else:
-            # No inputs - error
+        if not urls and not local_files:
             self._state = WorkflowState.ERROR
             self.workflow_error.emit("No files or URLs provided")
             return False
+        self.plan = IntentionPlan(algorithm, downloads=bool(urls))
+        if not urls:
+            self._sources_to_process = [
+                {"path": f, "type": "local"} for f in self._local_files
+            ]
+        self._enter_step()
 
         return True
 
-    def cancel(self):
+    def cancel(self) -> None:
         """Cancel the running workflow."""
         if not self.is_running:
             return
 
         logger.info("Cancelling intention workflow")
         self._cancelled = True
+        if self.plan is not None:
+            self.plan.cancelled = True
         self._state = WorkflowState.CANCELLED
 
         # Cancel any running workers
-        if self._download_worker and hasattr(self._download_worker, 'cancel'):
+        if self._download_worker and hasattr(self._download_worker, "cancel"):
             self._download_worker.cancel()
-        if self._detection_worker and hasattr(self._detection_worker, 'cancel'):
+        if self._detection_worker and hasattr(self._detection_worker, "cancel"):
             self._detection_worker.cancel()
-        if self._color_worker and hasattr(self._color_worker, 'cancel'):
+        if self._color_worker and hasattr(self._color_worker, "cancel"):
             self._color_worker.cancel()
 
         self.workflow_cancelled.emit()
 
     def _reset(self):
         """Reset all workflow state for a new run."""
+        self.plan = None
         self._state = WorkflowState.IDLE
         self._algorithm = ""
         self._direction = None
         self._local_files = []
         self._urls = []
+        self._download_outcomes = set()
         self._cancelled = False
 
         self._sources_to_process = []
@@ -229,54 +218,16 @@ class IntentionWorkflowCoordinator(QObject):
         self._all_clips = []
         self._current_source_index = 0
 
-        # Reset guard flags
-        self._download_finished_handled = False
-        self._detection_finished_handled = False
-        self._thumbnails_finished_handled = False
-        self._analysis_finished_handled = False
-
     def _calculate_total_steps(self) -> int:
-        """Calculate total number of steps in the workflow."""
-        steps = 0
-        if self._urls:
-            steps += 1  # Download
-        steps += 1  # Detection
-        steps += 1  # Thumbnails
-        if self._needs_analysis():
-            steps += 1  # Analysis
-        steps += 1  # Build sequence
-        return steps
+        return len(self.plan.steps) if self.plan is not None else 0
 
     def _needs_analysis(self) -> bool:
-        """Check if the algorithm requires analysis."""
-        requirements = self.ANALYSIS_REQUIREMENTS.get(self._algorithm, [])
-        return len(requirements) > 0
+        return bool(self.plan and self.plan.analysis_requirements)
 
     def _get_current_step_number(self) -> int:
-        """Get the current step number (1-based)."""
-        step = 0
-        if self._state == WorkflowState.DOWNLOADING:
-            return 1
-        if self._urls:
-            step += 1
-
-        if self._state == WorkflowState.DETECTING:
-            return step + 1
-        step += 1
-
-        if self._state == WorkflowState.THUMBNAILS:
-            return step + 1
-        step += 1
-
-        if self._state == WorkflowState.ANALYZING:
-            return step + 1
-        if self._needs_analysis():
-            step += 1
-
-        if self._state == WorkflowState.BUILDING:
-            return step + 1
-
-        return step + 1
+        if self.plan is None:
+            return 0
+        return min(len(self.plan.completed) + 1, len(self.plan.steps))
 
     def _emit_progress(self, message: str, step_progress: float = 0.0):
         """Emit a progress update."""
@@ -301,52 +252,47 @@ class IntentionWorkflowCoordinator(QObject):
         progress = current / total if total > 0 else 0
         self._emit_progress(message, progress)
 
-    def on_download_video_finished(self, url: str, result):
+    def on_download_video_finished(self, url: str, result: Any) -> None:
         """Handle individual video download completion."""
         if self._state != WorkflowState.DOWNLOADING or self._cancelled:
             return
+        if url not in self._urls or url in self._download_outcomes:
+            return
+        self._download_outcomes.add(url)
 
         if result and result.success and result.file_path:
             # Add to sources to process
-            self._sources_to_process.append({
-                "path": Path(result.file_path),
-                "type": "downloaded",
-                "url": url,
-            })
+            self._sources_to_process.append(
+                {
+                    "path": Path(result.file_path),
+                    "type": "downloaded",
+                    "url": url,
+                }
+            )
             logger.info(f"Download complete: {url} -> {result.file_path}")
         else:
             error = result.error if result else "Unknown error"
             self._sources_failed.append({"url": url, "error": error})
             logger.warning(f"Download failed: {url} - {error}")
 
-    def on_download_all_finished(self, results: list):
+    def on_download_all_finished(self, results: list) -> None:
         """Handle all downloads completed."""
-        if self._download_finished_handled:
-            logger.warning("Download finished already handled, ignoring duplicate")
-            return
-        self._download_finished_handled = True
-
-        if self._cancelled:
+        if not self._active("downloading"):
             return
 
-        logger.info(f"All downloads complete: {len(self._sources_to_process)} succeeded, "
-                    f"{len(self._sources_failed)} failed")
+        logger.info(
+            f"All downloads complete: {len(self._sources_to_process)} succeeded, "
+            f"{len(self._sources_failed)} failed"
+        )
 
         # Add local files to the processing queue
         for f in self._local_files:
-            self._sources_to_process.append({"path": f, "type": "local"})
+            if not any(item["path"] == f for item in self._sources_to_process):
+                self._sources_to_process.append({"path": f, "type": "local"})
 
-        self.step_completed.emit("downloading")
-
-        # Move to detection phase
         if self._sources_to_process:
-            self._state = WorkflowState.DETECTING
-            self.step_started.emit("detecting", self._get_current_step_number(),
-                                   self._calculate_total_steps())
-            self._emit_progress("Starting scene detection...")
-            # Signal that detection should start - MainWindow will handle
+            self._advance("downloading")
         else:
-            # All downloads failed
             self._complete_with_error("All downloads failed")
 
     # --- Detection phase handlers ---
@@ -367,13 +313,11 @@ class IntentionWorkflowCoordinator(QObject):
 
         self._emit_progress(message, overall)
 
-    def on_detection_completed(self, source, clips: list):
+    def on_detection_completed(self, source: "Source", clips: list["Clip"]) -> None:
         """Handle detection completion for a single source."""
-        if self._detection_finished_handled:
-            logger.warning("Detection finished already handled, ignoring duplicate")
-            return
-
-        if self._cancelled:
+        if not self._active("detecting") or any(
+            item.id == source.id for item in self._sources_processed
+        ):
             return
 
         logger.info(f"Detection complete for source: {source.id}, {len(clips)} clips")
@@ -393,13 +337,14 @@ class IntentionWorkflowCoordinator(QObject):
             # MainWindow will start next detection
         else:
             # All sources detected, move to thumbnails
-            self._detection_finished_handled = True
-            self.step_completed.emit("detecting")
-            self._advance_to_thumbnails()
+            if self._all_clips:
+                self._advance("detecting")
+            else:
+                self._complete_with_error("Scene detection produced no clips")
 
-    def on_detection_error(self, error: str):
+    def on_detection_error(self, error: str) -> None:
         """Handle detection error for a source."""
-        if self._cancelled:
+        if not self._active("detecting"):
             return
 
         logger.warning(f"Detection error: {error}")
@@ -407,10 +352,12 @@ class IntentionWorkflowCoordinator(QObject):
         # Record the failure
         if self._current_source_index < len(self._sources_to_process):
             source_info = self._sources_to_process[self._current_source_index]
-            self._sources_failed.append({
-                "path": str(source_info.get("path", "unknown")),
-                "error": error,
-            })
+            self._sources_failed.append(
+                {
+                    "path": str(source_info.get("path", "unknown")),
+                    "error": error,
+                }
+            )
 
         # Move to next source
         self._current_source_index += 1
@@ -422,22 +369,52 @@ class IntentionWorkflowCoordinator(QObject):
             )
         else:
             # All sources attempted
-            self._detection_finished_handled = True
-            self.step_completed.emit("detecting")
 
             if self._all_clips:
                 # We have some clips, continue
-                self._advance_to_thumbnails()
+                self._advance("detecting")
             else:
                 # No clips at all
                 self._complete_with_error("Scene detection failed for all sources")
 
-    def _advance_to_thumbnails(self):
-        """Advance workflow to thumbnail generation phase."""
-        self._state = WorkflowState.THUMBNAILS
-        self.step_started.emit("thumbnails", self._get_current_step_number(),
-                               self._calculate_total_steps())
-        self._emit_progress("Generating thumbnails...")
+    def _active(self, step: str) -> bool:
+        return bool(
+            self.plan and self.plan.active == step and self._state.name.lower() == step
+        )
+
+    def _enter_step(self) -> None:
+        plan = self.plan
+        if plan is None or plan.active is None:
+            return
+        step = plan.active
+        if step == "building" and not self._require_analysis():
+            return
+        if step == "detecting":
+            sources: dict[Path, dict[str, Any]] = {}
+            for source in self._sources_to_process:
+                sources.setdefault(source["path"].resolve(), source)
+            self._sources_to_process = list(sources.values())
+        self._state = WorkflowState[step.upper()]
+        messages = {
+            "downloading": "Starting downloads...",
+            "detecting": "Starting scene detection...",
+            "thumbnails": "Generating thumbnails...",
+            "analyzing": "Analyzing clips...",
+            "building": "Building sequence...",
+        }
+        self._emit_progress(messages[step])
+        if self.plan is plan and self._active(step):
+            self.step_started.emit(
+                step, self._get_current_step_number(), self._calculate_total_steps()
+            )
+
+    def _advance(self, step: str) -> None:
+        plan = self.plan
+        if plan is None or not self._active(step) or not plan.finish(step):
+            return
+        self.step_completed.emit(step)
+        if self.plan is plan and plan.active is not None:
+            self._enter_step()
 
     # --- Thumbnail phase handlers ---
 
@@ -448,28 +425,12 @@ class IntentionWorkflowCoordinator(QObject):
         progress = current / total if total > 0 else 0
         self._emit_progress(f"Generating thumbnails ({current}/{total})...", progress)
 
-    def on_thumbnails_finished(self):
-        """Handle thumbnail generation completion."""
-        if self._thumbnails_finished_handled:
-            logger.warning("Thumbnails finished already handled, ignoring duplicate")
+    def on_thumbnails_finished(self) -> None:
+        if not self._active("thumbnails"):
             return
-        self._thumbnails_finished_handled = True
-
-        if self._cancelled:
-            return
-
-        logger.info("Thumbnail generation complete")
-        self.step_completed.emit("thumbnails")
-
-        # Decide next step
-        if self._needs_analysis():
-            self._state = WorkflowState.ANALYZING
-            self.step_started.emit("analyzing", self._get_current_step_number(),
-                                   self._calculate_total_steps())
-            self._emit_progress("Analyzing clips...")
-        else:
+        if not self._needs_analysis():
             self.step_skipped.emit("analyzing")
-            self._advance_to_building()
+        self._advance("thumbnails")
 
     # --- Analysis phase handlers ---
 
@@ -480,51 +441,55 @@ class IntentionWorkflowCoordinator(QObject):
         progress = current / total if total > 0 else 0
         self._emit_progress(f"Analyzing clips ({current}/{total})...", progress)
 
-    def on_analysis_finished(self):
-        """Handle analysis completion."""
-        if self._analysis_finished_handled:
-            logger.warning("Analysis finished already handled, ignoring duplicate")
+    def on_analysis_finished(self) -> None:
+        if not self._active("analyzing"):
             return
-        self._analysis_finished_handled = True
+        if self._require_analysis():
+            self._advance("analyzing")
 
-        if self._cancelled:
-            return
+    def _require_analysis(self) -> bool:
+        assert self.plan is not None
+        missing = self.plan.missing_analysis(self._all_clips)
+        if missing:
+            self._complete_with_error(
+                f"Required analysis is missing for {len(missing)} clip(s)"
+            )
+            return False
+        return True
 
-        logger.info("Analysis complete")
-        self.step_completed.emit("analyzing")
-        self._advance_to_building()
-
-    def _advance_to_building(self):
-        """Advance workflow to sequence building phase."""
-        self._state = WorkflowState.BUILDING
-        self.step_started.emit("building", self._get_current_step_number(),
-                               self._calculate_total_steps())
-        self._emit_progress("Building sequence...")
+    def on_analysis_failed(self, message: str) -> None:
+        if self._active("analyzing"):
+            self._complete_with_error(message)
 
     # --- Building phase handlers ---
 
-    def on_building_complete(self, sequence_clips: list):
-        """Handle sequence building completion."""
-        if self._cancelled:
+    def on_building_complete(self, sequence_clips: list) -> None:
+        plan = self.plan
+        if plan is None or not self._active("building"):
             return
-
-        logger.info(f"Sequence built with {len(sequence_clips)} clips")
+        if not self._require_analysis() or not plan.finish("building"):
+            return
         self.step_completed.emit("building")
+        if self.plan is not plan or plan.cancelled or plan.error:
+            return
         self._state = WorkflowState.COMPLETE
-
-        result = WorkflowResult(
-            success=True,
-            algorithm=self._algorithm,
-            clips_created=len(self._all_clips),
-            sources_processed=len(self._sources_processed),
-            sources_failed=len(self._sources_failed),
-            failed_sources=self._sources_failed,
+        self.workflow_completed.emit(
+            WorkflowResult(
+                success=True,
+                algorithm=self._algorithm,
+                clips_created=len(self._all_clips),
+                sources_processed=len(self._sources_processed),
+                sources_failed=len(self._sources_failed),
+                failed_sources=list(self._sources_failed),
+            )
         )
-
-        self.workflow_completed.emit(result)
 
     def _complete_with_error(self, message: str):
         """Complete workflow with an error."""
+        if not self.is_running:
+            return
+        if self.plan is not None:
+            self.plan.error = message
         logger.error(f"Workflow error: {message}")
         self._state = WorkflowState.ERROR
 
@@ -549,7 +514,7 @@ class IntentionWorkflowCoordinator(QObject):
     def get_current_source_path(self) -> Optional[Path]:
         """Get the path of the current source being processed."""
         if self._current_source_index < len(self._sources_to_process):
-            return self._sources_to_process[self._current_source_index]["path"]
+            return Path(self._sources_to_process[self._current_source_index]["path"])
         return None
 
     def get_download_urls(self) -> list[str]:

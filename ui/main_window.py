@@ -8405,6 +8405,11 @@ class MainWindow(QMainWindow):
 
     def _on_intention_workflow_completed(self, result):
         """Handle workflow completion."""
+        if not result.success:
+            self._on_intention_workflow_error(
+                result.error_message or "Import workflow failed"
+            )
+            return
         logger.info(f"Intention workflow completed: {result.clips_created} clips, "
                     f"{result.sources_processed} sources")
 
@@ -8416,11 +8421,24 @@ class MainWindow(QMainWindow):
             )
 
         # Close dialog after brief delay
-        QTimer.singleShot(1500, self._finalize_intention_workflow)
+        workflow = self.intention_workflow
+        plan = workflow.plan
+        project = self.project
+        session_id = project.session.session_id
+        QTimer.singleShot(
+            1500,
+            lambda: self._finalize_intention_workflow(workflow, plan, project, session_id),
+        )
 
-    def _finalize_intention_workflow(self):
+    def _finalize_intention_workflow(self, workflow, plan, project, session_id):
         """Finalize the intention workflow and apply results."""
-        if not self.intention_workflow:
+        if (
+            self.intention_workflow is not workflow
+            or workflow.plan is not plan
+            or workflow.state != WorkflowState.COMPLETE
+            or self.project is not project
+            or project.session.session_id != session_id
+        ):
             return
 
         # Close dialog
@@ -8989,6 +9007,11 @@ class MainWindow(QMainWindow):
         if not self.intention_workflow:
             return
 
+        workflow = self.intention_workflow
+        plan = workflow.plan
+        project = self.project
+        session_id = project.session.session_id
+
         all_clips = self.intention_workflow.get_all_clips()
         algorithm, _ = self.intention_workflow.get_algorithm_with_direction()
 
@@ -9030,8 +9053,15 @@ class MainWindow(QMainWindow):
                 self.intention_workflow.on_analysis_finished()
                 return
 
-            if not self._ensure_analysis_operation_available("shots"):
-                self.intention_workflow.on_analysis_finished()
+            available = self._ensure_analysis_operation_available("shots")
+            if (
+                self.intention_workflow is not workflow or workflow.plan is not plan
+                or self.project is not project or project.session.session_id != session_id
+                or workflow.state != WorkflowState.ANALYZING
+            ):
+                return
+            if not available:
+                workflow.on_analysis_failed("Shot analysis is unavailable")
                 return
 
             self._shot_type_finished_handled = False
@@ -9062,8 +9092,15 @@ class MainWindow(QMainWindow):
             tier = self.settings.description_model_tier
             sources = self.project.sources_by_id
 
-            if not self._ensure_analysis_operation_available("describe", description_tier=tier):
-                self.intention_workflow.on_analysis_finished()
+            available = self._ensure_analysis_operation_available("describe", description_tier=tier)
+            if (
+                self.intention_workflow is not workflow or workflow.plan is not plan
+                or self.project is not project or project.session.session_id != session_id
+                or workflow.state != WorkflowState.ANALYZING
+            ):
+                return
+            if not available:
+                workflow.on_analysis_failed("Description analysis is unavailable")
                 return
 
             self._description_finished_handled = False

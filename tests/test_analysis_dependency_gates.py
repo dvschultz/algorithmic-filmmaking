@@ -208,34 +208,28 @@ def test_launch_transcription_worker_skips_runtime_broken_backend(monkeypatch):
     ]
 
 
-def test_intention_shot_analysis_finishes_when_dependency_missing():
-    class Workflow:
-        def __init__(self):
-            self.finished = False
+def test_intention_shot_analysis_fails_when_dependency_missing():
+    from pathlib import Path
+    from core.project import Project
+    from core.intention_workflow import IntentionWorkflowCoordinator, WorkflowState
+    from models.clip import Source, Clip
 
-        def get_all_clips(self):
-            return [SimpleNamespace(id="clip-1", shot_type=None)]
-
-        def get_algorithm_with_direction(self):
-            return "shot_type", None
-
-        def on_analysis_finished(self):
-            self.finished = True
-
-    class Harness:
-        def __init__(self):
-            self.intention_workflow = Workflow()
-            self.project = SimpleNamespace(sources_by_id={})
-            self.settings = SimpleNamespace(local_model_parallelism=1)
-            self.shot_type_worker = None
-
-        def _ensure_analysis_operation_available(self, op_key, **_kwargs):
-            assert op_key == "shots"
-            return False
-
-    harness = Harness()
-
+    workflow = IntentionWorkflowCoordinator()
+    source = Source(id="source", file_path=Path("video.mp4"))
+    clip = Clip(id="clip", source_id=source.id, start_frame=0, end_frame=30)
+    workflow.start("shot_type", [source.file_path], [])
+    workflow.on_detection_completed(source, [clip])
+    workflow.on_thumbnails_finished()
+    results = []
+    workflow.workflow_completed.connect(results.append)
+    harness = SimpleNamespace(
+        intention_workflow=workflow,
+        project=Project.new(),
+        settings=SimpleNamespace(local_model_parallelism=1),
+        shot_type_worker=None,
+        _ensure_analysis_operation_available=lambda *_args, **_kwargs: False,
+    )
     MainWindow._start_intention_analysis(harness)
-
-    assert harness.intention_workflow.finished is True
+    assert workflow.state == WorkflowState.ERROR
+    assert results[0].error_message == "Shot analysis is unavailable"
     assert harness.shot_type_worker is None

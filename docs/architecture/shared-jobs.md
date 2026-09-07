@@ -282,3 +282,28 @@ settle through the existing close preflight.
 
 This completes the frame coordinator slice, not U7: intention-workflow planning
 and the remaining analysis/import route audit are still required.
+
+## Intention phase plan
+
+`core/operations/intention.py` defines the ordered download, detection, thumbnail,
+analysis, and building steps without Qt. The existing intention coordinator
+projects this plan through its signals and retains partial source results.
+Phase completion is consumed once; out-of-order signals and cancellation from
+transition observers cannot start later steps. Download notifications are counted
+once per requested URL, and duplicate successful detection callbacks do not
+advance the source queue.
+
+Color, shot-type, and Storyteller workflows check their required metadata before
+building. Missing dependencies produce an error instead of a successful analysis
+completion. Failed workflows remain inspectable and do not schedule sequence
+finalization. Successful finalization captures its workflow, plan, project, and
+session so a delayed callback cannot finalize a replacement run.
+
+This is the phase-plan portion of the intention migration. Worker dispatch,
+native-thread advancement, and run ownership across the remaining intention
+adapters still need to leave `MainWindow`. U7 remains incomplete.
+
+The route audit also found that `ThumbnailWorker` in `ui/main_window.py` still
+mutates live clips off-thread and duplicates the loop in
+`core/spine/thumbnails.py`. Consolidating thumbnail computation and owner-thread
+publication is part of the remaining worker extraction, not completed U7 work.
