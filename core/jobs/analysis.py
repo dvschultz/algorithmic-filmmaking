@@ -17,6 +17,14 @@ from core.spine.project_io import load_with_mtime, project_writer, save_with_mti
 
 def analysis_job_spec(project: Project, *, arguments: dict) -> OperationSpec:
     inputs = {}
+    if "face_embeddings" in (arguments.get("operations") or []):
+        from core.jobs.faces import face_job_spec
+        from core.operations.faces import FaceOptions
+
+        faces = face_job_spec(
+            project, arguments.get("clip_ids"), FaceOptions(), arguments={},
+        )
+        inputs["faces"] = json.loads(faces.inputs_json)
     if "detect_objects" in (arguments.get("operations") or []):
         from core.jobs.object_detection import object_detection_job_spec
         from core.operations.object_detection import ObjectDetectionOptions
@@ -106,6 +114,7 @@ def run_analysis_job(
         cinematography = captured.get("cinematography")
         classification = captured.get("classification")
         object_detection = captured.get("object_detection")
+        faces = captured.get("faces")
         options = (
             TranscriptionOptions(**transcription["options"]) if transcription else None
         )
@@ -115,6 +124,21 @@ def run_analysis_job(
                 raise StaleJobResult("Analysis inputs changed while the job was queued")
 
         def execute(op: str, report: Progress | None) -> dict:
+            if op == "face_embeddings":
+                from core.jobs.faces import face_job_spec, run_face_job
+                from core.operations.faces import FaceOptions
+
+                if faces is None:
+                    raise StaleJobResult("Analysis job has no captured faces options")
+                current, _ = load_with_mtime(path)
+                step = face_job_spec(
+                    current, ids, FaceOptions(**faces["options"]), arguments={},
+                )
+                if json.loads(step.inputs_json) != faces:
+                    raise StaleJobResult("Face inputs changed before analysis")
+                return run_face_job(
+                    store, path, ids, report or (lambda *_: None), cancel, operation=step,
+                )
             if op == "detect_objects":
                 from core.jobs.object_detection import object_detection_job_spec, run_object_detection_job
                 from core.operations.object_detection import ObjectDetectionOptions

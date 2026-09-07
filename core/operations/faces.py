@@ -1,11 +1,12 @@
 """Detached face extraction and guarded project publication."""
 
+from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
 from math import isfinite
 from pathlib import Path
 from threading import Event, Lock
-from typing import Callable, TYPE_CHECKING
+from typing import Callable, Iterator, TYPE_CHECKING
 
 from core.operations.contracts import OutcomeStatus
 
@@ -85,6 +86,33 @@ class FaceOutcome:
         return [face.to_dict() for face in self.faces]
 
 
+@dataclass
+class _FaceModelSession:
+    acquired: bool = False
+    loaded: bool = False
+    model_error: str | None = None
+
+    def close(self) -> None:
+        if self.acquired:
+            try:
+                from core.analysis.faces import unload_model
+
+                unload_model()
+            finally:
+                self.acquired = False
+                _inference_lock.release()
+
+
+@contextmanager
+def face_model_session() -> Iterator[_FaceModelSession]:
+    """Retain one model across same-thread result commits; acquire only for inference."""
+    session = _FaceModelSession()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
 def run_faces(
     tasks: tuple[FaceTask, ...],
     options: FaceOptions,
@@ -92,13 +120,13 @@ def run_faces(
     cancel_event: Event | None = None,
     on_outcome: Callable[[FaceOutcome], None] | None = None,
     progress: Callable[[int, int], None] | None = None,
+    model_session: _FaceModelSession | None = None,
 ) -> tuple[FaceOutcome, ...]:
     """Serialize shared model use and unloading; never mutate project models."""
     cancel = cancel_event or Event()
     outcomes: list[FaceOutcome] = []
-    acquired = False
-    loaded = False
-    model_error = None
+    owns_session = model_session is None
+    session = model_session or _FaceModelSession()
     try:
         for task in tasks:
             if cancel.is_set():
@@ -109,7 +137,7 @@ def run_faces(
                 outcome = FaceOutcome(
                     task.clip_id, "failed", code="source_file_missing"
                 )
-            elif model_error is not None:
+            elif session.model_error is not None:
                 outcome = FaceOutcome(
                     task.clip_id, "unprocessed", code="model_unavailable"
                 )
@@ -124,8 +152,8 @@ def run_faces(
                         or options.sample_interval <= 0
                     ):
                         raise ValueError("Invalid face sampling range or interval")
-                    while not acquired and not cancel.is_set():
-                        acquired = _inference_lock.acquire(timeout=0.05)
+                    while not session.acquired and not cancel.is_set():
+                        session.acquired = _inference_lock.acquire(timeout=0.05)
                     if cancel.is_set():
                         outcome = FaceOutcome(
                             task.clip_id, "unprocessed", code="cancelled"
@@ -136,12 +164,12 @@ def run_faces(
                             extract_faces_from_clip,
                         )
 
-                        if not loaded:
+                        if not session.loaded:
                             try:
                                 _load_insightface()
-                                loaded = True
+                                session.loaded = True
                             except Exception as exc:
-                                model_error = str(exc)
+                                session.model_error = str(exc)
                                 raise
                         raw = extract_faces_from_clip(
                             source_path=task.source_path,
@@ -157,7 +185,7 @@ def run_faces(
                         task.clip_id,
                         "failed",
                         code="model_load_failed"
-                        if model_error is not None
+                        if session.model_error is not None
                         else "face_detection_failed",
                         message=str(exc),
                     )
@@ -170,13 +198,8 @@ def run_faces(
                 if progress:
                     progress(len(outcomes), len(tasks))
     finally:
-        if acquired:
-            try:
-                from core.analysis.faces import unload_model
-
-                unload_model()
-            finally:
-                _inference_lock.release()
+        if owns_session:
+            session.close()
     return tuple(outcomes)
 
 

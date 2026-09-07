@@ -21,8 +21,43 @@ def analyze() -> None:
         colors    Extract dominant colors from clips
         shots     Classify shot types (wide, medium, close-up)
         align     Add word timestamps to existing transcripts
+        faces     Extract face embeddings with resumable results
     """
     pass
+
+
+@analyze.command("faces")
+@click.argument("project_file", type=click.Path(exists=True, path_type=Path))
+@click.option("--clip-id", "-c", "clip_ids", multiple=True, help="Clip ID or eight-character prefix")
+@click.option("--sample-interval", type=float, default=1.0, show_default=True, help="Seconds between sampled frames")
+@click.option("--force", "-f", is_flag=True, help="Re-analyze existing face results")
+@click.pass_context
+def faces(ctx: click.Context, project_file: Path, clip_ids: tuple[str, ...], sample_interval: float, force: bool) -> None:
+    """Extract face embeddings and safely reuse interrupted computation."""
+    from math import isfinite
+    from threading import Event
+    from core.jobs.faces import run_face_job
+    from core.jobs.store import JobStore
+    from core.operations.faces import FaceOptions
+    from core.project import Project
+
+    if not isfinite(sample_interval) or sample_interval <= 0:
+        exit_with(ExitCode.VALIDATION_ERROR, "Sample interval must be a positive finite number")
+    project_file = own_project(ctx, project_file)
+    try:
+        project = Project.load(project_file, missing_source_callback=lambda path, sid: None)
+        selected = [c.id for c in project.clips if not clip_ids or c.id in clip_ids or c.id[:8] in clip_ids]
+        if clip_ids and not selected:
+            exit_with(ExitCode.VALIDATION_ERROR, "No matching clips found")
+        store = JobStore(CLIConfig.load().cache_dir / "jobs.db")
+        try:
+            with ProgressContext("Detecting faces") as progress:
+                result = run_face_job(store, project_file, selected, progress.update, Event(), options=FaceOptions(sample_interval), force=force)
+        finally:
+            store.close()
+    except Exception as exc:
+        exit_with(ExitCode.GENERAL_ERROR, f"Face analysis failed: {exc}")
+    output_result(result, as_json=ctx.obj.get("json", False))
 
 
 @analyze.command("align")

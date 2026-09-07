@@ -579,3 +579,18 @@ face jobs serialize model use and unloading. Invalid provider data and unreadabl
 video samples are failures; valid empty face results remain distinct from missing
 analysis and survive save/load. Existing embedding rounding in saved projects is
 unchanged. Durable face job recovery remains the next U7 step.
+
+### Durable headless face analysis
+
+Dedicated MCP face jobs, face steps in generic analysis plans, and CLI
+`analyze faces <project> [--sample-interval <seconds>] [--force]` now use
+`core/jobs/faces.py`. Source/range fingerprints, sampling options, runtime package
+versions, and model identity bind recorded results to their inputs. Forced
+refreshes create new generations; changed saved face data is preserved by default.
+
+The journal retains full-precision embeddings. Output reconciliation accepts
+either the recorded value or exactly its existing five-decimal project
+serialization, allowing checkpoint retries after save without another inference
+call. One lazily acquired model session spans a job's result commits and is
+released on success or failure; cache-only retries do not load the model.
+GUI face job history and recovery remain the next U7 step.

@@ -606,6 +606,41 @@ async def test_cinematography_submission_pins_options_and_records_results(lifesp
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("generic", [False, True])
+async def test_face_submission_records_durable_results(lifespan_ctx, tmp_path, monkeypatch, generic):
+    from core.project import Project
+    from scene_ripper_mcp.tools import jobs
+
+    ctx, store, _runtime = lifespan_ctx
+    path = _make_project_file(tmp_path)
+    project = Project.load(path)
+    thumbnail = tmp_path / "thumb.jpg"
+    thumbnail.write_bytes(b"image")
+    project.clips[0].thumbnail_path = thumbnail
+    assert project.save()
+    captured = {}
+    monkeypatch.setattr(jobs, "_start_job", lambda ctx, **kwargs: captured.update(kwargs) or "queued")
+    compute = Mock(return_value=[{"embedding": [.123456789] * 512, "confidence": .9, "bbox": [0, 0, 1, 1]}])
+    monkeypatch.setattr("core.analysis.faces.extract_faces_from_clip", compute)
+    monkeypatch.setattr("core.analysis.faces._load_insightface", Mock())
+    monkeypatch.setattr("core.analysis.faces.unload_model", Mock())
+    ids = ["clip-1"]
+    if generic:
+        response = await jobs.start_analyze_clips(str(path), clip_ids=ids, operations=["face_embeddings"], ctx=ctx)
+    else:
+        response = await jobs.start_detect_faces(str(path), clip_ids=ids, sample_interval=0.4, ctx=ctx)
+    assert response == "queued"
+    ids.clear()
+    result = captured["run"](lambda *_: None, threading.Event())
+    assert result["success"]
+    assert compute.call_args.kwargs["sample_interval"] == (1.0 if generic else .4)
+    saved = Project.load(path)
+    assert saved.clips[0].face_embeddings[0]["embedding"][0] == .12346
+    assert len(saved.metadata.job_results) == 1
+    assert all(store.get_result(rid)["committed"] for rid in saved.metadata.job_results)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("generic", [False, True])
 async def test_object_detection_submission_records_durable_results(lifespan_ctx, tmp_path, monkeypatch, generic):
     from core.project import Project
     from scene_ripper_mcp.tools import jobs
