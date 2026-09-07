@@ -402,3 +402,17 @@ values use a list of objects with `start_time`, `end_time`, and `text`; optional
 word objects use `start`, `end`, and `text`. Times must be finite, nonnegative,
 and ordered. Use an empty list to clear a transcript. JSON conversion happens
 before the edit, so malformed transcript input cannot partially change a clip.
+
+
+## Shared job lifecycle
+
+The MCP job API and existing task IDs are unchanged. Runtime, store, and project
+mutex implementations now live under `core/jobs`; old MCP imports remain
+compatible. Terminal job decisions are immutable: late progress or cancellation
+cannot reopen a completed job. Queued cancellation skips the runner, and a
+returned `success: false` is recorded as a failed job with its result preserved.
+
+The desktop has a Qt adapter over this runtime. Existing desktop workflows are
+still being migrated. This extraction does not yet provide recovery across a
+project save and a job checkpoint; durable result IDs and reconciliation are
+subsequent U6 work.

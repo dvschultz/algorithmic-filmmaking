@@ -48,7 +48,7 @@ async def lifespan(server: FastMCP) -> AsyncIterator[dict]:
     logger.info(f"Settings loaded: download_dir={settings.download_dir}")
     logger.info(f"Tool timeout: {timeout}s (set MCP_TOOL_TIMEOUT to customize)")
 
-    # Wire the jobs framework (R18 boot sweep, R27 MCP-only).
+    # Wire the shared jobs runtime and the existing MCP boot sweep.
     jobs_db_path = settings.cache_dir / "jobs.db"
     job_store = JobStore(jobs_db_path)
     swept = job_store.mark_running_jobs_as_crashed()

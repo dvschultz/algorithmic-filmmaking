@@ -1,4 +1,4 @@
-"""Compatibility surface for shared jobs; MCP tools retain their public API."""
+"""GUI-agnostic job persistence, cancellation, and execution lifecycle."""
 
 from core.jobs.store import (
     JobNotFoundError,

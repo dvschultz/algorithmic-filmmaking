@@ -1,7 +1,7 @@
 """Generic job-management MCP tools.
 
 These five tools sit on top of the jobs framework in
-``scene_ripper_mcp/jobs/`` and serve every long-running op (R5 — existing
+``core/jobs/`` (with MCP compatibility exports) and serve every long-running op (R5 — existing
 synchronous tools keep working alongside).
 
 Field names use ``snake_case`` consistent with the rest of the codebase
