@@ -846,6 +846,8 @@ class MainWindow(QMainWindow):
         self._project_adapter.source_updated.connect(self._on_source_updated)
         self._project_adapter.frames_removed.connect(self._on_frames_removed)
         self._project_adapter.sequence_changed.connect(lambda _: self._refresh_timeline_from_project())
+        self._project_adapter.sequences_changed.connect(lambda _: self.sequence_tab._sync_sequence_dropdown())
+        self._project_adapter.active_sequence_changed.connect(lambda _: self._refresh_timeline_from_project())
         self._project_adapter.audio_sources_changed.connect(self._on_audio_sources_changed)
 
         # Active audio import workers (kept alive while running)
@@ -2142,9 +2144,9 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 "Cannot Delete",
-                "The following sources have clips in sequences:\n"
+                "The following sources are used by sequences or Undo history:\n"
                 + "\n".join(lines)
-                + "\n\nDelete those sequences first.",
+                + "\n\nDelete the sequences, then save and reopen the project to release their Undo history.",
             )
 
         if not deletable:

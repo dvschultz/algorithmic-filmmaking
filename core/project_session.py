@@ -15,6 +15,7 @@ from uuid import uuid4
 
 if TYPE_CHECKING:
     from core.project import Project
+    from models.sequence import Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +98,15 @@ class ProjectSession:
             except Exception:
                 logger.exception("Project session observer failed")
 
+    @property
+    def retained_sequences(self) -> list[Sequence]:
+        """Sequences whose media must remain available for undo or redo."""
+        retained = {}
+        for entry in (*self._undo, *self._redo):
+            for sequence in getattr(entry.command, "retained_sequences", ()):
+                retained[id(sequence)] = sequence
+        return list(retained.values())
+
     def record_external_change(self) -> None:
         """Keep legacy edits and analysis outside editorial undo history."""
         self._external_revision += 1
@@ -110,6 +120,8 @@ class ProjectSession:
         self.project._mutation_generation += 1
         self.project._dirty = self._saved_state != (self._position, self._external_revision)
         self.project._notify_observers(command.event_name, command.event_data)
+        if command.event_name == "sequences_changed":
+            self.project._notify_observers("active_sequence_changed", self.project.active_sequence_index)
         self._notify()
 
     def execute(self, command: EditCommand[T]) -> list[T]:

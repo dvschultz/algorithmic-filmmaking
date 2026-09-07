@@ -41,8 +41,19 @@ render references invalidated by trim or transform edits. No-op edits do not ent
 Desktop drag/resize gestures use detached previews, leaving save snapshots stable,
 and commit one command on release. Frame entries resize their hold duration.
 
-This is an incremental U4 migration. Generated sequence population, clearing,
-sequence management, source removal, and metadata commands still need migration. Legacy direct model mutations are tracked as
+`add_sequence(..., activate=True)` combines creation and activation in one edit.
+`remove_sequence()` retains the original sequence, including clips and settings;
+deleting the last sequence creates a stable empty fallback that is also undone.
+`rename_sequence()` and `update_sequence_metadata()` validate and record names,
+frame rates, music paths, and repeat settings. Collection/settings changes publish
+`sequences_changed` followed by `active_sequence_changed` after dirty state settles.
+The Qt adapter forwards these events so dropdowns and the timeline follow agent
+commands and Undo/Redo. Source removal is blocked while an absent sequence in
+history retains it; restoring a sequence with permanently removed clips fails
+atomically. `core.spine.sequences` supplies listing and management wrappers.
+
+This is an incremental U4 migration. Generated sequence population/grouping,
+clearing, source removal, and other metadata commands still need migration. Legacy direct model mutations are tracked as
 external changes; they are not yet undoable or comprehensively thread-guarded.
 MCP and CLI do not yet expose history tools; the shared spine history functions
 are available to retained headless sessions. Cross-process locks, durable history,

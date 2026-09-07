@@ -64,14 +64,15 @@ def test_noops_leave_history_and_dirty_unchanged():
 def test_history_targets_original_sequence_after_active_sequence_switch():
     project = _make_project_with_clips()
     first = project.sequence
-    project.add_to_sequence(["c0"])
     second = Sequence()
     project.add_sequence(second)
+    project.mark_clean()
+    project.add_to_sequence(["c0"])
     project.set_active_sequence(1)
     project.session.undo()
     assert not first.get_all_clips() and not second.get_all_clips()
     assert project.sequence is second
-    assert project.is_dirty  # sequence creation is still an external edit
+    assert not project.is_dirty
 
 
 def test_multitrack_conflict_is_atomic():
@@ -224,6 +225,8 @@ def test_loading_empty_sequence_preserves_departing_sequence_and_history(qapp):
     SequenceTab._load_active_sequence(tab)
     assert first.get_all_clips() == [entry]
     assert timeline.sequence is project.sequence
+    project.session.undo()  # Undo creation of the empty sequence.
+    assert first.get_all_clips() == [entry]
     project.session.undo()
     assert not first.get_all_clips()
     timeline.close()

@@ -1140,47 +1140,16 @@ def update_sequence(
     Returns:
         Dict with success status and updated fields
     """
-    if project.sequence is None:
-        return {"success": False, "error": "No sequence exists. Use create_sequence first."}
+    from core.spine.sequences import update_sequence as _impl
 
-    updated_fields = {}
-
-    if name is not None:
-        project.sequence.name = name
-        updated_fields["name"] = name
-
-    if fps is not None:
-        if fps <= 0:
-            return {"success": False, "error": f"fps must be > 0, got {fps}"}
-        project.sequence.fps = fps
-        updated_fields["fps"] = fps
-
-    if music_path is not None:
-        is_valid, err_msg, validated_path = validate_path(music_path, must_exist=True)
-        if not is_valid:
-            return {"success": False, "error": err_msg}
-        project.sequence.music_path = str(validated_path)
-        updated_fields["music_path"] = str(validated_path)
-
-    if allow_repeats is not None:
-        project.sequence.allow_repeats = allow_repeats
-        updated_fields["allow_repeats"] = allow_repeats
-
-    if not updated_fields:
-        return {"success": False, "error": "No fields provided to update"}
-
-    project.mark_dirty()
-    project._notify_observers("sequence_changed", [])
-
-    return {
-        "success": True,
-        "message": f"Updated sequence: {', '.join(updated_fields.keys())}",
-        "updated_fields": updated_fields,
-    }
+    changes = {key: value for key, value in {
+        "name": name, "fps": fps, "music_path": music_path, "allow_repeats": allow_repeats,
+    }.items() if value is not None}
+    return _impl(project, **changes)
 
 
 @tools.register(
-    description="Create a new empty sequence, replacing any existing one. "
+    description="Create and activate a new empty sequence, preserving existing sequences. "
                 "Optionally set a name and frame rate.",
     requires_project=True,
     modifies_gui_state=True,
@@ -1200,25 +1169,32 @@ def create_sequence(
     Returns:
         Dict with success status and sequence info
     """
-    from models.sequence import Sequence
+    from core.spine.sequences import create_sequence as _impl
+    return _impl(project, name=name, fps=fps)
 
-    seq_name = name or project.metadata.name or "Untitled Sequence"
-    seq_fps = fps or (project.sources[0].fps if project.sources else 30.0)
 
-    if seq_fps <= 0:
-        return {"success": False, "error": f"fps must be > 0, got {seq_fps}"}
+@tools.register(description="List sequences with stable IDs, names and active selection.", requires_project=True)
+def list_sequences(project) -> dict:
+    from core.spine.sequences import list_sequences as _impl
+    return _impl(project)
 
-    new_seq = Sequence(name=seq_name, fps=seq_fps)
-    project.add_sequence(new_seq)
-    project.set_active_sequence(len(project.sequences) - 1)
 
-    return {
-        "success": True,
-        "message": f"Created sequence '{seq_name}' at {seq_fps} fps (now active)",
-        "name": seq_name,
-        "fps": seq_fps,
-        "sequence_index": project.active_sequence_index,
-    }
+@tools.register(
+    description="Delete a sequence by its stable sequence ID. This can be undone.",
+    requires_project=True, modifies_gui_state=True, modifies_project_state=True,
+)
+def delete_sequence(project, sequence_id: str) -> dict:
+    from core.spine.sequences import delete_sequence as _impl
+    return _impl(project, sequence_id)
+
+
+@tools.register(
+    description="Rename a sequence by its stable sequence ID. This can be undone.",
+    requires_project=True, modifies_gui_state=True, modifies_project_state=True,
+)
+def rename_sequence(project, sequence_id: str, name: str) -> dict:
+    from core.spine.sequences import update_sequence as _impl
+    return _impl(project, sequence_id, name=name)
 
 
 @tools.register(
@@ -1843,7 +1819,10 @@ def remove_source(
     source_name = source.filename if source.file_path else f"Source {source_id[:8]}"
 
     # Remove from project
-    project.remove_source(source_id)
+    try:
+        project.remove_source(source_id)
+    except ValueError as exc:
+        return {"success": False, "error": str(exc)}
 
     # Update UI if available
     if main_window:

@@ -32,6 +32,8 @@ SPINE_MODULES: tuple[str, ...] = (
     "core.project_session",
     "core.commands.clip_disabled",
     "core.commands.sequence_clips",
+    "core.commands.sequences",
+    "core.spine.sequences",
     "core.spine.history",
     "core.operations.contracts",
     "core.operations.colors",

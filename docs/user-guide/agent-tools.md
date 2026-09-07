@@ -73,13 +73,18 @@ See [Audio Sources](audio-sources.md) for the full audio import / transcription 
 | `add_note` | Add a note to a clip | "Note: this clip has lens flare" |
 | `update_clip_transcript` | Edit a transcript segment | "Fix the transcript — it should say 'hello' not 'halo'" |
 | `toggle_clip_disabled` | Enable/disable a clip | "Disable clip 3" |
+| `list_sequences` | List sequence IDs, names, and active selection | "List my sequences" |
+| `create_sequence` | Create and activate a sequence | "Create a sequence called Draft" |
+| `rename_sequence` | Rename a sequence by ID | "Rename Draft to Final" |
+| `delete_sequence` | Delete a sequence with Undo support | "Delete Draft" |
 | `undo` | Undo the last supported editorial edit | "Undo that" |
 | `redo` | Restore an undone editorial edit | "Redo that" |
 | `delete_clips` | Delete clips permanently | "Delete the selected clips" |
 
 Clip enable/disable and sequence insertion, removal, reordering, trimming, and
 track/transform changes share undo history with the desktop's Edit menu.
-History lasts until the project is cleared or replaced. Clearing and generated sequence creation are not yet included. Undo preserves analysis results and unrelated metadata edits.
+Sequence creation, deletion, renaming, and settings changes also support Undo/Redo.
+History lasts until the project is cleared or replaced. Clearing and grouping a whole generation run into one edit are not yet included. Undo preserves analysis results and unrelated metadata edits.
 
 ---
 

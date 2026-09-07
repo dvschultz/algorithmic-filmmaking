@@ -127,7 +127,10 @@ class TestAddSequence:
         project.add_observer(observer)
         seq2 = Sequence(name="New")
         project.add_sequence(seq2)
-        observer.assert_called_once_with("sequences_changed", project.sequences)
+        assert observer.call_args_list == [
+            (("sequences_changed", project.sequences),),
+            (("active_sequence_changed", project.active_sequence_index),),
+        ]
 
 
 class TestRemoveSequence:

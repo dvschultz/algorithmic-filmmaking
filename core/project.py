@@ -706,46 +706,34 @@ class Project:
 
     # --- Multi-sequence management ---
 
-    def add_sequence(self, sequence: Sequence) -> None:
-        """Append a sequence to the project.
+    def add_sequence(self, sequence: Sequence, *, activate: bool = False) -> None:
+        """Append a sequence and optionally activate it as one reversible edit."""
+        from core.commands.sequences import EditSequences
 
-        Args:
-            sequence: The Sequence to add
-        """
-        self.sequences.append(sequence)
-        self.mark_dirty()
-        self._notify_observers("sequences_changed", self.sequences)
+        self.session.assert_owner()
+        self.session.execute(EditSequences.add(self, sequence, activate))
 
     def remove_sequence(self, index: int) -> None:
-        """Remove a sequence by index. Enforces at-least-one invariant (R2).
+        """Remove a sequence; deleting the last creates an undoable empty fallback."""
+        from core.commands.sequences import EditSequences
 
-        If removing the last sequence, a fresh empty one is auto-created.
-        If removing a sequence before the active index, the active index is
-        decremented. If removing the active sequence, active switches to 0.
-
-        Args:
-            index: Index of the sequence to remove
-        """
-        if index < 0 or index >= len(self.sequences):
-            logger.warning(f"Cannot remove sequence at index {index}: out of range")
+        self.session.assert_owner()
+        if not 0 <= index < len(self.sequences):
             return
+        self.session.execute(EditSequences.remove(self, index))
 
-        self.sequences.pop(index)
+    def rename_sequence(self, index: int, name: str) -> None:
+        """Rename a sequence through shared history."""
+        if not 0 <= index < len(self.sequences):
+            raise IndexError("Sequence index out of range")
+        self.update_sequence_metadata(self.sequences[index], name=name)
 
-        if not self.sequences:
-            # R2 invariant: always at least one sequence
-            self.sequences.append(Sequence())
-            self.active_sequence_index = 0
-        elif index == self.active_sequence_index:
-            # Removed the active sequence — fall back to 0 (R8)
-            self.active_sequence_index = 0
-        elif index < self.active_sequence_index:
-            # Removed before active — adjust index to keep pointing at same sequence
-            self.active_sequence_index -= 1
+    def update_sequence_metadata(self, sequence: Sequence, **changes: Any) -> None:
+        """Apply a validated group of sequence settings atomically."""
+        from core.commands.sequences import EditSequenceMetadata
 
-        self.mark_dirty()
-        self._notify_observers("sequences_changed", self.sequences)
-        self._notify_observers("active_sequence_changed", self.active_sequence_index)
+        self.session.assert_owner()
+        self.session.execute(EditSequenceMetadata.capture(self, sequence, changes))
 
     def set_active_sequence(self, index: int) -> None:
         """Switch the active sequence.
@@ -774,7 +762,9 @@ class Project:
             List of sequence names containing clips from this source (empty if none)
         """
         names = []
-        for seq in self.sequences:
+        for seq in self.sequences + self.session.retained_sequences:
+            if seq.name in names:
+                continue
             if any(sc.source_id == source_id for sc in seq.get_all_clips()):
                 names.append(seq.name)
         return names
@@ -910,6 +900,11 @@ class Project:
         source = self.sources_by_id.get(source_id)
         if source is None:
             return None
+
+        retained = [s for s in self.session.retained_sequences
+                    if not any(current is s for current in self.sequences)]
+        if any(c.source_id == source_id for s in retained for c in s.get_all_clips()):
+            raise ValueError("Source is retained by sequence undo history")
 
         self._sources.remove(source)
         # Remove associated clips and frames

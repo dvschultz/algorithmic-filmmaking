@@ -1897,15 +1897,15 @@ class SequenceTab(BaseTab):
     @Slot()
     def _on_new_sequence_clicked(self):
         """Create a new empty sequence and switch to it."""
-        self._create_and_activate_sequence("manual", display_label="Untitled Sequence")
-        self.timeline.clear_timeline()
-        self.timeline_preview.clear()
-        self._current_algorithm = None
-        self.set_chromatic_color_bar_enabled(False, emit_signal=False)
-        self._update_chromatic_bar_controls(None)
-        self._emit_chromatic_bar_setting_changed()
-        self._algorithm_running = False
-        self._set_state(self.STATE_CARDS)
+        from models.sequence import Sequence
+
+        if self._project is None:
+            return
+        self._persist_current_sequence()
+        self._project.add_sequence(Sequence(name="Untitled Sequence", algorithm="manual"), activate=True)
+        self._sequence_dirty = False
+        self._sync_sequence_dropdown()
+        self._load_active_sequence()
 
     def clear(self):
         """Clear all state including available clips (called on new project)."""
@@ -2155,7 +2155,7 @@ class SequenceTab(BaseTab):
             result = QMessageBox.question(
                 self,
                 "Delete Sequence",
-                f"Delete \"{seq.name}\"? This cannot be undone.\n({clip_count} clips)",
+                f"Delete \"{seq.name}\"? You can undo this deletion.\n({clip_count} clips)",
                 QMessageBox.Yes | QMessageBox.No,
             )
             if result != QMessageBox.Yes:
@@ -2179,7 +2179,7 @@ class SequenceTab(BaseTab):
             self, "Rename Sequence", "Name:", text=seq.name
         )
         if ok and new_name.strip():
-            seq.name = new_name.strip()
+            self._project.rename_sequence(index, new_name.strip())
             self._sync_sequence_dropdown()
 
     def _is_chromatic_flow_algorithm(self, algorithm: Optional[str]) -> bool:
