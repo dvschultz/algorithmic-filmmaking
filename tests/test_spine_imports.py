@@ -55,6 +55,7 @@ SPINE_MODULES: tuple[str, ...] = (
     "core.jobs.sequence_embeddings",
     "core.operations.ocr",
     "core.jobs.ocr",
+    "core.jobs.gui_ocr",
     "core.jobs.gui_cinematography",
     "core.jobs.gui_classification",
     "core.jobs.gui_object_detection",

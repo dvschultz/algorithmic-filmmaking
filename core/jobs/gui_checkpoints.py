@@ -45,6 +45,8 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
                 "gui_faces",
                 "gui_gaze",
                 "gui_embeddings",
+                "gui_ocr_clip",
+                "gui_ocr_frame",
             )
             or identity["version"] != 1
         ):
@@ -59,7 +61,7 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
             "project_id"
         ] != snapshot.get("id"):
             continue
-        is_frame = (
+        is_frame = identity["kind"] == "gui_ocr_frame" or (
             identity["kind"]
             in ("gui_describe", "gui_cinematography", "gui_classification", "gui_object_detection")
             and identity["inputs"]["task"]["target_type"] == "frame"
@@ -73,6 +75,15 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
         payload = json.loads(row["payload_json"])
         if payload["clip_id"] != clip["id"] or payload["status"] != "succeeded":
             raise StaleJobResult("Saved GUI result does not match its target")
+        if identity["kind"] in ("gui_ocr_clip", "gui_ocr_frame"):
+            from core.operations.ocr import OcrOutcome
+
+            outcome = OcrOutcome.from_dict(payload)
+            if outcome.target_type != ("frame" if is_frame else "clip"):
+                raise StaleJobResult("Saved OCR target type changed")
+            if clip.get("extracted_texts") == [text.to_dict() for text in outcome.to_models()]:
+                pending.append((result_id, receipt_digest))
+            continue
         if identity["kind"] == "gui_embeddings":
             from core.operations.embeddings import EmbeddingOutcome
 

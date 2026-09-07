@@ -838,6 +838,21 @@ manual text edits remain intact without force. Clip serialization now preserves
 empty observations, matching frame serialization. Provider errors are not cached
 as successful empties, and cancellation retains the completed prefix.
 
-GUI and Exquisite Corpus durable OCR recovery remain under U7. Poem generation
+Desktop clip and frame OCR now use the shared job lifecycle. Saved projects
+journal successful inference before queued delivery; unsaved projects retain
+session-only execution. `core/jobs/gui_ocr.py` separates clip/frame receipt
+namespaces, captures prior text and resolved options, and rejects changed media
+or runtime identity. Retries reuse unpublished results, including empty text
+lists. Failed inference remains distinct from a successful empty observation.
+
+Owner delivery checks the current worker, project/session, workflow, media and
+previous text, plus the exact recorded payload and original save path. Only an
+accepted outcome adds a project receipt; explicit save acknowledges matching
+clip/frame results. OCR does not autosave unrelated edits. The clip pipeline
+now skips persisted empty observations. Explicit frame extraction continues to
+refresh selected targets. Legacy signals remain available, while typed outcomes
+retain distinct identities when clip and frame IDs coincide.
+
+Exquisite Corpus durable proposal recovery remains under U7. Poem generation
 still uses the dialog's existing synchronous path; its shared algorithm adapter
 remains U12 work. Runtime identity does not independently hash model weights.

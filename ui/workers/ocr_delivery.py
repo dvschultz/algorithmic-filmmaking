@@ -79,7 +79,20 @@ class OcrDelivery(QObject):
         self.delivered.add(key)
         try:
             outcome = OcrOutcome.from_dict(asdict(outcome))
+            receipt = None
+            cache = getattr(self.worker, "cache", None)
+            if cache is not None:
+                if (
+                    window.project.path is None
+                    or window.project.path.resolve() != cache.path
+                ):
+                    raise ValueError("Project save location changed during OCR")
+                receipt = cache.results[key]
+                if not receipt.matches(outcome):
+                    raise ValueError("Queued OCR differs from its recorded result")
             accepted = self.application.apply(window.project, outcome)
+            if accepted and receipt is not None:
+                window.project.record_job_result(receipt.result_id, receipt.digest)
         except Exception as exc:
             window._on_text_extraction_error(f"Could not apply OCR: {exc}")
             return

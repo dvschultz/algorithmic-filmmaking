@@ -132,3 +132,64 @@ for mode in ('current', 'project', 'session', 'worker', 'cancel', 'reply', 'fram
         env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_saved_ocr_queued_delivery_requires_matching_receipt():
+    code = r"""
+from dataclasses import replace
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
+from PySide6.QtCore import QCoreApplication, QObject
+from tests.test_description_operations import project_with_thumbnails
+from core.operations.ocr import OcrText
+from core.jobs.store import JobStore
+from ui.workers.ocr_delivery import OcrDelivery
+from ui.workers.text_extraction_worker import TextExtractionWorker
+app = QCoreApplication([])
+owners = []
+with TemporaryDirectory() as directory:
+    root = Path(directory)
+    with patch('core.settings.load_settings', lambda: SimpleNamespace(cache_dir=root, description_model_cloud='test')), patch('core.analysis.ocr.extract_text_from_clip', return_value=[]):
+        for mode in ('current', 'save_as', 'mismatch', 'edit', 'cancel', 'project'):
+            window = QObject()
+            window.project = project_with_thumbnails(root, 1)
+            window.project.save(root / (mode + '.json'))
+            original = window.project
+            worker = TextExtractionWorker(original.clips, original.sources_by_id, project=original)
+            window.text_extraction_worker = worker
+            window._on_text_extraction_error = Mock()
+            window.analyze_tab = SimpleNamespace(update_clip_extracted_text=Mock())
+            delivery = OcrDelivery(window, worker)
+            owners.append((window, worker, delivery))
+            worker.start(); assert worker.wait(10000)
+            assert worker.job_status == 'completed'
+            assert not original.metadata.job_results
+            if mode == 'save_as': original.save(root / 'copy.json')
+            if mode == 'mismatch':
+                key = worker.tasks[0].key
+                worker.cache.results[key] = replace(worker.cache.results[key], payload_json='{}')
+            if mode == 'edit': original.clips[0].extracted_texts = [OcrText(0, 'EDIT', 1, 'vlm').to_model()]
+            if mode == 'cancel': worker.cancel()
+            if mode == 'project': window.project = project_with_thumbnails(root, 1)
+            app.processEvents()
+            if mode == 'current':
+                assert original.clips[0].extracted_texts == []
+                assert len(original.metadata.job_results) == 1
+                window.analyze_tab.update_clip_extracted_text.assert_called_once()
+                store = JobStore(root / 'jobs.db')
+                assert not any(store.get_result(r)['committed'] for r in original.metadata.job_results)
+                original.save()
+                assert all(store.get_result(r)['committed'] for r in original.metadata.job_results)
+                store.close()
+            else:
+                assert not original.metadata.job_results
+                if mode == 'edit': assert original.clips[0].extracted_texts[0].text == 'EDIT'
+                else: assert original.clips[0].extracted_texts is None
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=30,
+        env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

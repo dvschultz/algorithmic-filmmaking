@@ -3668,7 +3668,7 @@ class MainWindow(QMainWindow):
         sources_by_id = {s.id: s for s in self.sources}
 
         # Filter to clips needing extraction
-        clips_to_process = [c for c in clips if not c.extracted_texts]
+        clips_to_process = [c for c in clips if c.extracted_texts is None]
         if not clips_to_process:
             logger.info("All clips already have extracted text, skipping")
             self._on_analysis_phase_worker_finished("extract_text")
@@ -3685,6 +3685,7 @@ class MainWindow(QMainWindow):
         self.text_extraction_worker = TextExtractionWorker(
             clips=clips_to_process,
             sources_by_id=sources_by_id,
+            project=self.project,
             num_keyframes=3,
             use_vlm_fallback=use_vlm,
             vlm_model=vlm_model,
@@ -6782,6 +6783,7 @@ class MainWindow(QMainWindow):
                 sources_by_id={},
                 analysis_targets=targets,
                 use_vlm_fallback=use_vlm,
+                project=self.project,
                 vlm_only=method == "vlm",
                 vlm_model=self.settings.text_extraction_vlm_model if use_vlm else None,
             )
