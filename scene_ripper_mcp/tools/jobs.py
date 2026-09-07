@@ -873,9 +873,12 @@ async def start_analyze_shots(
     surface as ``thumbnail_missing`` failures (this op does not generate
     thumbnails — that's a separate concern).
     """
+    from dataclasses import replace
     from scene_ripper_mcp.security import validate_project_path
     from core.project import MissingSourceError
     from core.spine.project_io import load_with_mtime
+    from core.jobs.shots import shot_job_spec, run_shot_job
+    from core.operations.shots import ShotTypeOptions
 
     valid, error, path = validate_project_path(project_path)
     if not valid:
@@ -893,13 +896,26 @@ async def start_analyze_shots(
             }
         )
 
-    runner_factory = _make_analyze_runner("analyze_shots")
-    run = runner_factory(path, mtime, clip_ids)
+    try:
+        operation = shot_job_spec(
+            _project, clip_ids, ShotTypeOptions(),
+            arguments={"project_path": canonical, "clip_ids": clip_ids},
+        )
+    except ValueError as exc:
+        return json.dumps(_wrap_error(exc))
+    store = _lifespan(ctx)["job_store"]
+
+    def run(progress_callback, cancel_event):
+        return run_shot_job(
+            store, path, operation.arguments["clip_ids"],
+            progress_callback, cancel_event, operation=operation,
+        )
 
     return _start_job(
         ctx,
         kind="analyze_shots",
-        args={"project_path": canonical, "clip_ids": clip_ids},
+        args=operation.arguments,
+        operation=replace(operation, kind="analyze_shots"),
         project_path=canonical,
         project_mtime_at_start=mtime,
         idempotency_key=idempotency_key,

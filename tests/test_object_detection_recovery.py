@@ -147,12 +147,12 @@ def test_generic_plan_keeps_object_detection_after_later_failure(setup, monkeypa
     path, store, compute = setup
     monkeypatch.setitem(
         ANALYZE_CLIP_OPERATION_MAP,
-        "shots",
+        "colors",
         Mock(side_effect=RuntimeError("later failure")),
     )
     for _ in range(2):
         operation = analysis_job_spec(
-            Project.load(path), arguments={"operations": ["detect_objects", "shots"]}
+            Project.load(path), arguments={"operations": ["detect_objects", "colors"]}
         )
         with pytest.raises(RuntimeError, match="later failure"):
             run_analysis_job(store, path, operation, lambda *_: None, Event())

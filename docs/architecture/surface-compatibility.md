@@ -1121,6 +1121,21 @@ Clip/frame ID collisions cannot redirect results. Frame shot completion waits fo
 native thread termination and rejects retired runs; active shot workers remain
 tracked until termination so window shutdown can cancel them safely.
 
-Durable shot result recovery remains the next migration step. Combined frame
-analysis orchestration and the ordered intention workflow remain outstanding;
-this cutover does not complete U7.
+### Headless shot recovery
+
+CLI `analyze shots`, `start_analyze_shots`, and `shots` steps in
+`start_analyze_clips` now use `core/jobs/shots.py`. Saved-project result receipts
+retain validated labels and confidence across failed saves and checkpoints.
+Matching retries reuse inference; manual labels remain intact. CLI `--force`
+records a fresh generation after successful completion and reuses an interrupted
+generation. Analysis thumbnails remain distinct from display thumbnails, and
+checkpoint recovery does not regenerate them for populated targets.
+
+Queued requests bind project revision, target IDs/ranges, media stamps, provider
+options, and model runtime. Receipt reuse additionally fingerprints media content.
+Missing or corrupt receipts fail closed. Public MCP job kind remains
+`analyze_shots`; its internal result kind is `shots`.
+
+Desktop shot recovery, the legacy synchronous MCP persistence adapter, combined
+frame-analysis orchestration, and the ordered intention workflow remain
+outstanding; this cutover does not complete U7.

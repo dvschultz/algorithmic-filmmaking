@@ -512,9 +512,10 @@ def shots(
     try:
         from core.project import Project, ProjectLoadError
         from core.thumbnail import ThumbnailGenerator
-        from core.operations.shots import (
-            ShotTypeTask, ShotTypeOptions, ShotTypeApplication, run_shot_types,
-        )
+        from core.operations.shots import ShotTypeOptions
+        from core.jobs.shots import run_shot_job
+        from core.jobs.store import JobStore
+        from threading import Event
     except ImportError as e:
         exit_with(ExitCode.DEPENDENCY_MISSING, f"Missing dependency: {e}")
 
@@ -542,81 +543,55 @@ def shots(
         if not clips_to_analyze:
             exit_with(ExitCode.VALIDATION_ERROR, "No matching clips found")
 
-    # Filter out already-analyzed clips unless force
-    if not force:
-        clips_to_analyze = [c for c in clips_to_analyze if c.shot_type is None]
-
-    if not clips_to_analyze:
-        output_info("All clips already have shot type data. Use --force to re-analyze.")
-        return
-
-    # Initialize thumbnail generator
-    try:
-        thumb_gen = ThumbnailGenerator(cache_dir=config.cache_dir / "thumbnails")
-    except RuntimeError as e:
-        exit_with(ExitCode.DEPENDENCY_MISSING, str(e))
-
-    analyzed_count = 0
     errors = []
-    shot_counts: dict[str, int] = {}
-
-    output_info("Loading CLIP model (this may take a moment on first run)...")
-
-    with ProgressContext("Classifying shots") as progress:
-        total = len(clips_to_analyze)
-        tasks = []
-        for i, clip in enumerate(clips_to_analyze):
-            progress.update(i / total, f"Clip {i + 1}/{total}")
-
-            source = sources_by_id.get(clip.source_id)
-            if not source or not source.file_path.exists():
-                errors.append(f"Clip {clip.id[:8]}: source not found")
-                continue
-
+    ready = []
+    prepared = {}
+    thumb_gen = None
+    for clip in clips_to_analyze:
+        if clip.shot_type is not None and not force:
+            ready.append(clip.id)
+            continue
+        source = sources_by_id.get(clip.source_id)
+        if source is None or not source.file_path.exists():
+            errors.append(f"Clip {clip.id[:8]}: source not found")
+            continue
+        if thumb_gen is None:
             try:
-                # Generate thumbnail for analysis
-                fps = source.fps
-                start_time = clip.start_time(fps)
-                end_time = clip.end_time(fps)
+                thumb_gen = ThumbnailGenerator(cache_dir=config.cache_dir / "thumbnails")
+            except RuntimeError as exc:
+                exit_with(ExitCode.DEPENDENCY_MISSING, str(exc))
+        try:
+            prepared[clip.id] = thumb_gen.generate_clip_thumbnail(
+                video_path=source.file_path,
+                start_seconds=clip.start_time(source.fps),
+                end_seconds=clip.end_time(source.fps),
+                width=320, height=180,
+            )
+            ready.append(clip.id)
+        except Exception as exc:
+            errors.append(f"Clip {clip.id[:8]}: {exc}")
 
-                thumb_path = thumb_gen.generate_clip_thumbnail(
-                    video_path=source.file_path,
-                    start_seconds=start_time,
-                    end_seconds=end_time,
-                    width=320,
-                    height=180,
-                )
-
-                tasks.append(ShotTypeTask(
-                    clip.id, thumb_path, source.file_path, clip.start_frame,
-                    clip.end_frame, source.fps,
-                ))
-
-            except Exception as e:
-                errors.append(f"Clip {clip.id[:8]}: {e}")
-
-        application = ShotTypeApplication(project, tuple(tasks))
-        outcomes = run_shot_types(
-            tuple(tasks), ShotTypeOptions(),
-            progress=lambda current, count: progress.update(
-                current / count if count else 1.0, f"Clip {current}/{count}",
-            ),
+    try:
+        store = JobStore(config.cache_dir / "jobs.db")
+        try:
+            with ProgressContext("Classifying shots") as progress:
+                batch = run_shot_job(
+                    store, project_file, ready, progress.update, Event(),
+                    options=ShotTypeOptions(), force=force, thumbnail_paths=prepared,
+                )["result"]
+        finally:
+            store.close()
+        analyzed_count = len(batch["succeeded"])
+        errors.extend(
+            f"Clip {item['clip_id'][:8]}: {item.get('message') or item['code']}"
+            for item in batch["failed"]
         )
-        for outcome in outcomes:
-            if outcome.status == "succeeded" and application.apply(project, outcome):
-                analyzed_count += 1
-                label = outcome.shot_type
-                assert label is not None
-                shot_counts[label] = shot_counts.get(label, 0) + 1
-            else:
-                errors.append(f"Clip {outcome.clip_id[:8]}: {outcome.message or outcome.code or 'stale input'}")
-        progress.update(1.0, "Complete")
-
-    # Save updated project
-    success = project.save()
-
-    if not success:
-        exit_with(ExitCode.GENERAL_ERROR, "Failed to save project")
+        shot_counts: dict[str, int] = {}
+        for item in batch["succeeded"]:
+            label = item["shot_type"]
+            shot_counts[label] = shot_counts.get(label, 0) + 1
+    except Exception as exc:
+        exit_with(ExitCode.GENERAL_ERROR, f"Shot classification failed: {exc}")
 
     result = {
         "analyzed_clips": analyzed_count,

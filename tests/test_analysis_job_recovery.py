@@ -26,13 +26,13 @@ def setup_job(tmp_path, operations):
 def test_completed_transcription_survives_later_step_failure(tmp_path):
     from core.spine.analyze import ANALYZE_CLIP_OPERATION_MAP
 
-    path, store, spec = setup_job(tmp_path, ["transcribe", "shots"])
+    path, store, spec = setup_job(tmp_path, ["transcribe", "colors"])
     with (
         patch("core.transcription.transcribe_clip", return_value=[]) as compute,
         patch.dict(
             ANALYZE_CLIP_OPERATION_MAP,
             {
-                "shots": lambda *a, **k: (_ for _ in ()).throw(
+                "colors": lambda *a, **k: (_ for _ in ()).throw(
                     RuntimeError("later failure")
                 )
             },
@@ -57,7 +57,7 @@ def test_completed_transcription_survives_later_step_failure(tmp_path):
 def test_later_step_reloads_transcription_and_preserves_receipts(tmp_path):
     from core.spine.analyze import ANALYZE_CLIP_OPERATION_MAP
 
-    path, store, spec = setup_job(tmp_path, ["transcribe", "shots"])
+    path, store, spec = setup_job(tmp_path, ["transcribe", "colors"])
 
     def shots(project, *args, **kwargs):
         assert project.clips[0].transcript == []
@@ -67,7 +67,7 @@ def test_later_step_reloads_transcription_and_preserves_receipts(tmp_path):
 
     with (
         patch("core.transcription.transcribe_clip", return_value=[]),
-        patch.dict(ANALYZE_CLIP_OPERATION_MAP, {"shots": shots}),
+        patch.dict(ANALYZE_CLIP_OPERATION_MAP, {"colors": shots}),
     ):
         run_analysis_job(store, path, spec, lambda *_: None, Event())
     saved = Project.load(path)
@@ -80,7 +80,7 @@ def test_media_changed_by_preceding_step_rejects_transcription(tmp_path):
     from core.jobs.commits import StaleJobResult
     from core.spine.analyze import ANALYZE_CLIP_OPERATION_MAP
 
-    path, store, spec = setup_job(tmp_path, ["shots", "transcribe"])
+    path, store, spec = setup_job(tmp_path, ["colors", "transcribe"])
 
     def shots(project, *args, **kwargs):
         project.sources[0].file_path.write_bytes(b"replacement")
@@ -88,7 +88,7 @@ def test_media_changed_by_preceding_step_rejects_transcription(tmp_path):
 
     with (
         patch("core.transcription.transcribe_clip") as compute,
-        patch.dict(ANALYZE_CLIP_OPERATION_MAP, {"shots": shots}),
+        patch.dict(ANALYZE_CLIP_OPERATION_MAP, {"colors": shots}),
     ):
         with pytest.raises(StaleJobResult, match="inputs changed"):
             run_analysis_job(store, path, spec, lambda *_: None, Event())
@@ -101,7 +101,7 @@ def test_progress_cancellation_stops_next_step():
     cancel = Event()
     with patch("builtins.print") as execute:
         result = run_analysis_plan(
-            ["shots"], execute, progress=lambda *_: cancel.set(), cancel=cancel
+            ["colors"], execute, progress=lambda *_: cancel.set(), cancel=cancel
         )
     execute.assert_not_called()
     assert result["result"]["operations"] == {}

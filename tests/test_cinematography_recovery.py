@@ -173,12 +173,12 @@ def test_generic_analysis_reuses_result_after_later_failure(setup, monkeypatch):
     monkeypatch.setattr("core.settings.load_settings", lambda: settings)
     monkeypatch.setitem(
         ANALYZE_CLIP_OPERATION_MAP,
-        "shots",
+        "colors",
         Mock(side_effect=RuntimeError("later failure")),
     )
     for _ in range(2):
         operation = analysis_job_spec(
-            Project.load(path), arguments={"operations": ["cinematography", "shots"]}
+            Project.load(path), arguments={"operations": ["cinematography", "colors"]}
         )
         with pytest.raises(RuntimeError, match="later failure"):
             run_analysis_job(store, path, operation, lambda *_: None, Event())

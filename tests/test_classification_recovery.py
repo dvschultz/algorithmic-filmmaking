@@ -141,12 +141,12 @@ def test_generic_plan_keeps_classification_after_later_failure(setup, monkeypatc
     path, store, compute = setup
     monkeypatch.setitem(
         ANALYZE_CLIP_OPERATION_MAP,
-        "shots",
+        "colors",
         Mock(side_effect=RuntimeError("later failure")),
     )
     for _ in range(2):
         operation = analysis_job_spec(
-            Project.load(path), arguments={"operations": ["classify", "shots"]}
+            Project.load(path), arguments={"operations": ["classify", "colors"]}
         )
         with pytest.raises(RuntimeError, match="later failure"):
             run_analysis_job(store, path, operation, lambda *_: None, Event())

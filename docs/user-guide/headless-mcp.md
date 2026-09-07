@@ -243,6 +243,16 @@ CLI `analyze describe` shares these receipts when options, media, and the config
 cache directory match. Missing committed cache payloads produce an error rather
 than an automatic paid recomputation.
 
+`start_analyze_shots` and `shots` steps in `start_analyze_clips` retain computed
+shot labels and confidence before saving the project. Retrying a failed save or
+checkpoint reuses matching inference. Queued jobs capture target ranges, media,
+options, and model runtime; changed inputs prevent publication. Existing shot
+labels are preserved. CLI `analyze shots` uses the same recovery journal and
+supports `--force` for a fresh generation after successful completion. Missing
+or corrupt recorded results produce an error rather than automatic recomputation.
+This recovery does not yet cover desktop shot jobs or the legacy synchronous
+`analyze_shots` MCP tool.
+
 `start_analyze_classify` and `classify` steps in `start_analyze_clips` retain
 recorded classification results across failed saves and checkpoint failures.
 Retries with matching media, model runtime, and options reuse computation and

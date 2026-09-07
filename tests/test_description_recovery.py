@@ -211,11 +211,11 @@ def test_generic_analysis_preserves_description_before_later_failure(
     def fail(*args, **kwargs):
         raise RuntimeError("later failure")
 
-    monkeypatch.setitem(ANALYZE_CLIP_OPERATION_MAP, "shots", fail)
+    monkeypatch.setitem(ANALYZE_CLIP_OPERATION_MAP, "colors", fail)
     for _ in range(2):
         project = Project.load(path)
         operation = analysis_job_spec(
-            project, arguments={"operations": ["describe", "shots"]}
+            project, arguments={"operations": ["describe", "colors"]}
         )
         with pytest.raises(RuntimeError, match="later failure"):
             run_analysis_job(store, path, operation, lambda *_: None, Event())

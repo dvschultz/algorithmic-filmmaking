@@ -17,6 +17,12 @@ from core.spine.project_io import load_with_mtime, project_writer, save_with_mti
 
 def analysis_job_spec(project: Project, *, arguments: dict) -> OperationSpec:
     inputs = {}
+    if "shots" in (arguments.get("operations") or []):
+        from core.jobs.shots import shot_job_spec
+        from core.operations.shots import ShotTypeOptions
+
+        shots = shot_job_spec(project, arguments.get("clip_ids"), ShotTypeOptions(), arguments={})
+        inputs["shots"] = json.loads(shots.inputs_json)
     if "boundary_embeddings" in (arguments.get("operations") or []):
         from core.jobs.boundary_embeddings import boundary_embedding_job_spec
 
@@ -152,6 +158,18 @@ def run_analysis_job(
                 raise StaleJobResult("Analysis inputs changed while the job was queued")
 
         def execute(op: str, report: Progress | None) -> dict:
+            if op == "shots":
+                from core.jobs.shots import shot_job_spec, run_shot_job
+                from core.operations.shots import ShotTypeOptions
+
+                shots = captured.get("shots")
+                if shots is None:
+                    raise StaleJobResult("Analysis job has no captured shot inputs")
+                current, _ = load_with_mtime(path)
+                step = shot_job_spec(current, ids, ShotTypeOptions(**shots["options"]), arguments={})
+                if json.loads(step.inputs_json) != shots:
+                    raise StaleJobResult("Shot inputs changed before analysis")
+                return run_shot_job(store, path, ids, report or (lambda *_: None), cancel, operation=step)
             if op == "boundary_embeddings":
                 from core.jobs.boundary_embeddings import boundary_embedding_job_spec, run_boundary_embedding_job
 

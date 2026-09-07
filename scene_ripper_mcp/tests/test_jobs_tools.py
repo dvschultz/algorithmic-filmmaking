@@ -683,7 +683,7 @@ async def test_gaze_submission_records_durable_results(lifespan_ctx, tmp_path, m
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("public_kind", ["analyze_gaze", "detect_faces", "detect_objects", "analyze_classify", "analyze_cinematography", "generate_embeddings", "extract_text"])
+@pytest.mark.parametrize("public_kind", ["analyze_shots", "analyze_gaze", "detect_faces", "detect_objects", "analyze_classify", "analyze_cinematography", "generate_embeddings", "extract_text"])
 async def test_durable_analysis_alias_submits_to_real_runtime(lifespan_ctx, tmp_path, monkeypatch, public_kind):
     from core.project import Project
     from core.jobs.spec import OperationSpec
@@ -711,6 +711,7 @@ async def test_durable_analysis_alias_submits_to_real_runtime(lifespan_ctx, tmp_
     monkeypatch.setattr("core.analysis.faces.unload_model", Mock())
     monkeypatch.setattr("core.analysis.detection.detect_objects", Mock(return_value=[]))
     monkeypatch.setattr("core.analysis.classification.classify_frame", Mock(return_value=[("cat", .9)]))
+    monkeypatch.setattr("core.analysis.shots.classify_shot_type", Mock(return_value=("wide", .9)))
     monkeypatch.setattr("core.analysis.cinematography.analyze_cinematography", Mock(return_value=CinematographyAnalysis(shot_size="CU")))
     tool = getattr(jobs, "start_" + public_kind)
     response = json.loads(await tool(str(path), ctx=ctx))
@@ -843,6 +844,42 @@ async def test_object_detection_submission_records_durable_results(lifespan_ctx,
     saved = Project.load(path)
     assert saved.clips[0].detected_objects[0]["label"] == "person"
     assert saved.clips[0].person_count == 1
+    assert len(saved.metadata.job_results) == 1
+    assert all(store.get_result(rid)["committed"] for rid in saved.metadata.job_results)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("generic", [False, True])
+async def test_shot_submission_captures_targets_and_recovers_results(
+    lifespan_ctx, tmp_path, monkeypatch, generic
+):
+    from core.project import Project
+    from scene_ripper_mcp.tools import jobs
+
+    ctx, store, _ = lifespan_ctx
+    path = _make_project_file(tmp_path)
+    project = Project.load(path)
+    thumbnail = tmp_path / "shot.jpg"
+    thumbnail.write_bytes(b"image")
+    project.clips[0].thumbnail_path = thumbnail
+    assert project.save()
+    captured = {}
+    monkeypatch.setattr(jobs, "_start_job", lambda ctx, **kwargs: captured.update(kwargs) or "queued")
+    compute = Mock(return_value=("wide", .9))
+    monkeypatch.setattr("core.analysis.shots.classify_shot_type", compute)
+    for _ in range(2):
+        ids = ["clip-1"]
+        if generic:
+            response = await jobs.start_analyze_clips(str(path), clip_ids=ids, operations=["shots"], ctx=ctx)
+        else:
+            response = await jobs.start_analyze_shots(str(path), clip_ids=ids, ctx=ctx)
+        assert response == "queued"
+        ids.clear()
+        result = captured["run"](lambda *_: None, threading.Event())
+        assert result["success"]
+    compute.assert_called_once()
+    saved = Project.load(path)
+    assert saved.clips[0].shot_type == "wide"
     assert len(saved.metadata.job_results) == 1
     assert all(store.get_result(rid)["committed"] for rid in saved.metadata.job_results)
 

@@ -223,12 +223,12 @@ def test_generic_plan_retains_results_after_later_failure(setup, monkeypatch):
     path, store, compute = setup
     monkeypatch.setitem(
         ANALYZE_CLIP_OPERATION_MAP,
-        "shots",
+        "colors",
         Mock(side_effect=RuntimeError("later failure")),
     )
     for _ in range(2):
         op = analysis_job_spec(
-            Project.load(path), arguments={"operations": ["gaze", "shots"]}
+            Project.load(path), arguments={"operations": ["gaze", "colors"]}
         )
         with pytest.raises(RuntimeError):
             run_analysis_job(store, path, op, lambda *_: None, Event())
