@@ -1,8 +1,7 @@
 """Resolve, compute and apply color analysis without GUI dependencies.
 
 Workers compute immutable snapshots. The owner of the project applies the
-result on its own thread through a one-use application object. This temporary
-commit adapter will be owned by the project session when sessions land.
+result through a one-use application object guarded by the project session.
 """
 
 from __future__ import annotations
@@ -242,13 +241,16 @@ class ColorApplication:
     """One-use application of a request's result to its originating project."""
 
     def __init__(self, project: Project, request: ColorRequest) -> None:
+        project.session.assert_owner()
         self.project = project
         self.request = request
         self._applied = False
         self._session_id = project.session.session_id
 
     def apply(self, result: ColorResult) -> ColorResult:
-        self.project.session.assert_owner()
+        return self.project.session.apply_external(lambda: self._apply(result))
+
+    def _apply(self, result: ColorResult) -> ColorResult:
         if self._session_id != self.project.session.session_id:
             raise ValueError("Color result belongs to an expired project session")
         if self._applied:

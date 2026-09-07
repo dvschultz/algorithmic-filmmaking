@@ -24,6 +24,11 @@ New Project clears history and rotates the session identity. Loading a different
 project closes the old session and rebinds menu actions to the new one. Color
 applications capture the session identity and verify it and the owner thread
 before touching results, in addition to the pilot's existing input checks.
+Color result application runs inside `ProjectSession.apply_external()`: observer
+callbacks cannot reset or close the session or start another editorial edit
+mid-application. The guard releases even when validation fails. Analysis still
+uses external dirty revisions and creates no undo entry; unchanged inputs remain
+valid through unrelated project or clip renames.
 
 `insert_sequence_clips()` accepts prepared entries, and `add_to_sequence()` and
 `add_frames_to_sequence()` resolve source IDs into one insertion command.

@@ -154,6 +154,20 @@ class ProjectSession:
         finally:
             self._busy = False
 
+    def apply_external(self, apply: Callable[[], T]) -> T:
+        """Apply an owner-thread result without adding editorial history.
+
+        The callback owns validation, mutation, and normal dirty notifications.
+        Observers cannot reset, close, or edit the session during application.
+        This is a reentrancy guard, not a rollback transaction.
+        """
+        self.assert_owner()
+        self._busy = True
+        try:
+            return apply()
+        finally:
+            self._busy = False
+
     def undo(self) -> str | None:
         return self._move_history(undo=True)
 

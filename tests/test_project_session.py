@@ -92,6 +92,31 @@ def test_session_rejects_foreign_thread_before_mutation():
     assert not session.can_undo
 
 
+def test_external_application_releases_guard_after_failure():
+    project = _make_project_with_clips()
+
+    def fail():
+        with pytest.raises(RuntimeError, match="already being published"):
+            project.session.close()
+        raise ValueError("invalid result")
+
+    with pytest.raises(ValueError, match="invalid result"):
+        project.session.apply_external(fail)
+    project.rename("Editable after failure")
+    assert project.session.can_undo
+
+
+def test_external_application_rejects_foreign_thread_before_callback():
+    project = _make_project_with_clips()
+    session = project.session
+    called = []
+    with ThreadPoolExecutor() as pool:
+        with pytest.raises(RuntimeError, match="owner thread"):
+            pool.submit(session.apply_external, lambda: called.append(True)).result()
+    assert called == []
+    assert not project.is_dirty
+
+
 def test_agent_toggle_shares_project_history():
     from core.chat_tools import toggle_clip_disabled
 

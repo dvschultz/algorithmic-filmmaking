@@ -106,6 +106,55 @@ def test_changed_inputs_reject_late_results(tmp_path):
     assert project.clips[0].dominant_colors is None
 
 
+def test_frame_application_cannot_reset_session_from_observer(tmp_path):
+    from core.analysis_target import AnalysisTarget
+    from core.operations.colors import request_from_targets
+    from core.operations.contracts import ColorOutcome, ColorResult
+    from models.frame import Frame
+
+    project = _build_project(tmp_path, 1)
+    frames = [Frame(id=f"frame-{index}", file_path=tmp_path / f"{index}.png") for index in range(2)]
+    for frame in frames:
+        frame.file_path.write_bytes(b"image")
+    project.add_frames(frames)
+    request = request_from_targets(AnalysisTarget.from_frame(frame) for frame in frames)
+    application = ColorApplication(project, request)
+    result = ColorResult(request.request_id, tuple(ColorOutcome(frame.id, "succeeded", colors=((1, 2, 3),)) for frame in frames))
+    resets_rejected = []
+
+    def observer(event, data):
+        if event == "frames_updated":
+            try:
+                project.clear()
+            except RuntimeError as exc:
+                resets_rejected.append(str(exc))
+
+    project.add_observer(observer)
+    applied = application.apply(result)
+    assert len(resets_rejected) == 2
+    assert project.frames == frames
+    assert all(frame.dominant_colors == [(1, 2, 3)] for frame in frames)
+    assert all(outcome.status == "succeeded" for outcome in applied.outcomes)
+    assert not project.session.can_undo
+    project.rename("Still editable")
+    assert project.session.can_undo
+
+
+def test_pending_color_survives_unrelated_editorial_rename(tmp_path):
+    project = _build_project(tmp_path, 1)
+    request = color_request(project)
+    application = ColorApplication(project, request)
+    with patch("core.analysis.color.extract_dominant_colors", return_value=[(1, 2, 3)]):
+        result = compute_colors(request)
+    project.rename("New title")
+    project.update_clip_metadata("c-0", name="New clip name")
+    assert application.apply(result).outcomes[0].status == "succeeded"
+    project.session.undo()
+    project.session.undo()
+    assert project.clips[0].dominant_colors == [(1, 2, 3)]
+    assert project.is_dirty
+
+
 @pytest.mark.parametrize("count", [0, -1, True, 1.5])
 def test_invalid_color_count_rejected_before_dispatch(tmp_path, count):
     with pytest.raises(ValueError, match="positive integer"):
