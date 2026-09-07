@@ -12,7 +12,10 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import Mock
 from PySide6.QtCore import QCoreApplication, QObject, QThread, Signal
-from core.operations.faces import FaceTask
+from core.operations.faces import FaceTask, FaceOutcome
+from core.jobs.gui_results import GuiResultReceipt
+from core.jobs.commits import canonical_json
+from dataclasses import asdict
 from ui.workers.face_delivery import FaceDelivery
 from tests.test_description_operations import project_with_thumbnails
 app = QCoreApplication([])
@@ -26,10 +29,16 @@ class Worker(QThread):
         self.faces_ready.emit('c-0', [])
 window = QObject()
 with TemporaryDirectory() as root:
-    for mode in ('current', 'worker', 'project', 'session', 'edit', 'cancel', 'pipeline', 'reply'):
+    for mode in ('current', 'worker', 'project', 'session', 'edit', 'cancel', 'pipeline', 'reply', 'receipt', 'tampered', 'save_as'):
         project=project_with_thumbnails(Path(root),1)
         clip=project.clips[0]; source=project.sources[0]
         worker=Worker(FaceTask(clip.id,clip.source_id,source.file_path,clip.start_frame,clip.end_frame,source.fps))
+        if mode in ('receipt', 'tampered', 'save_as'):
+            assert project.save(Path(root)/'project.json')
+            receipt=GuiResultReceipt('a'*64, 'b'*64, canonical_json(asdict(FaceOutcome(clip.id, 'succeeded'))))
+            worker.cache=SimpleNamespace(path=project.path.resolve(), results={clip.id:receipt})
+            if mode=='tampered': worker.cache.results[clip.id]=GuiResultReceipt('a'*64, 'b'*64, '{}')
+            if mode=='save_as': assert project.save(Path(root)/'copy.json')
         window.project=project; window.face_detection_worker=worker; window._analysis_run=None
         window._on_face_detection_error=Mock()
         reply=SimpleNamespace(is_current=lambda _: True); window._dispatch_gui_reply=reply
@@ -42,8 +51,9 @@ with TemporaryDirectory() as root:
         if mode=='pipeline': window._analysis_run=object()
         if mode=='reply': reply.is_current=lambda _:False
         worker.start(); assert worker.wait(5000); app.processEvents()
-        assert clip.face_embeddings == ([] if mode=='current' else [{'manual': True}] if mode=='edit' else None)
-        if mode=='edit': window._on_face_detection_error.assert_called_once()
+        assert clip.face_embeddings == ([] if mode in ('current', 'receipt') else [{'manual': True}] if mode=='edit' else None)
+        assert bool(project.metadata.job_results) == (mode=='receipt')
+        if mode in ('edit', 'tampered', 'save_as'): window._on_face_detection_error.assert_called_once()
         else: window._on_face_detection_error.assert_not_called()
 """
     result = subprocess.run(

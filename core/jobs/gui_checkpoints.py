@@ -42,6 +42,7 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
                 "gui_cinematography",
                 "gui_classification",
                 "gui_object_detection",
+                "gui_faces",
             )
             or identity["version"] != 1
         ):
@@ -70,6 +71,14 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
         payload = json.loads(row["payload_json"])
         if payload["clip_id"] != clip["id"] or payload["status"] != "succeeded":
             raise StaleJobResult("Saved GUI result does not match its target")
+        if identity["kind"] == "gui_faces":
+            from core.jobs.faces import _saved_faces
+            from core.operations.faces import FaceOutcome
+
+            expected = _saved_faces(FaceOutcome.from_dict(payload).face_dicts())
+            if clip.get("face_embeddings") == expected:
+                pending.append((result_id, receipt_digest))
+            continue
         if identity["kind"] == "gui_object_detection":
             if clip.get("person_count") == payload["person_count"] and (
                 not identity["arguments"]["detect_all"]

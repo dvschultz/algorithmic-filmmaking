@@ -594,3 +594,21 @@ serialization, allowing checkpoint retries after save without another inference
 call. One lazily acquired model session spans a job's result commits and is
 released on success or failure; cache-only retries do not load the model.
 GUI face job history and recovery remain the next U7 step.
+
+### GUI face recovery
+
+The desktop face-analysis launcher now uses the shared job runtime. Saved-project
+jobs journal successful results before queued GUI delivery; explicit retry can
+reuse these computations after reopening without loading the face model. Unsaved
+projects remain session-only. Workers never save unrelated project edits.
+
+Owner-thread delivery validates the launch context, target inputs, save location,
+and recorded payload before applying results and attaching receipts. Explicit
+project saves acknowledge only matching saved faces, using the existing five-digit
+embedding precision while computation and queued delivery retain full precision.
+Valid empty results are preserved, missing sources fail per item, and existing
+faces can be skipped even when their source is offline. Pending inference shares
+one model session; cache-only recovery does not initialize it.
+
+Gaze, embeddings, OCR, remaining analysis routes, and workflow orchestration are
+still pending in U7. This face cutover does not complete U7.

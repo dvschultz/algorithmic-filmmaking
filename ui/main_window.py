@@ -3605,7 +3605,7 @@ class MainWindow(QMainWindow):
         sources_by_id = {s.id: s for s in self.sources}
         logger.info(f"Creating FaceDetectionWorker (pipeline) for {len(clips)} clips...")
         self.face_detection_worker = FaceDetectionWorker(
-            clips, sources_by_id=sources_by_id,
+            clips, sources_by_id=sources_by_id, project=self.project,
         )
         self.face_detection_worker.progress.connect(self._on_face_detection_progress)
         from ui.workers.face_delivery import FaceDelivery

@@ -82,6 +82,12 @@ class FaceOutcome:
     code: str | None = None
     message: str | None = None
 
+    @classmethod
+    def from_dict(cls, data: dict) -> "FaceOutcome":
+        return cls(
+            **{**data, "faces": tuple(Face.from_dict(f) for f in data.get("faces", ()))}
+        )
+
     def face_dicts(self) -> list[dict]:
         return [face.to_dict() for face in self.faces]
 
