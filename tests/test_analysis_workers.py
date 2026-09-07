@@ -220,14 +220,11 @@ class TestShotTypeWorkerErrors:
         def _raise_for_all(*_args, **_kwargs):
             raise RuntimeError("torch import failed")
 
+        from core.operations.shots import ShotTypeOptions
+        worker.options = ShotTypeOptions()
         monkeypatch.setattr(
-            "core.analysis.shots.classify_shot_type_tiered",
+            "core.analysis.shots.classify_shot_type",
             _raise_for_all,
-        )
-        # Patch model pre-loading so it doesn't fail on CI (no torch/GPU)
-        monkeypatch.setattr(
-            "core.analysis.shots.is_model_loaded",
-            lambda: True,
         )
 
         errors = []

@@ -284,6 +284,7 @@ def _build_fake_worker(completion_signal: str, extra_signals: list[str]):
             del args, kwargs
             self.finished = SignalStub()
             self.tasks = ()
+            self.outcome_ready = SignalStub()
             if completion_signal == "detection_completed":
                 from core.operations.object_detection import ObjectDetectionOptions
                 self.options = ObjectDetectionOptions()

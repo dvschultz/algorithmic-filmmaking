@@ -118,7 +118,9 @@ def analyze_shots(
     """
     from pathlib import Path
 
-    from core.analysis.shots import classify_shot_type
+    from core.operations.shots import (
+        ShotTypeTask, ShotTypeOptions, ShotTypeApplication, run_shot_types,
+    )
 
     clips = _resolve_clip_ids(project, clip_ids)
     if not clips:
@@ -130,58 +132,39 @@ def analyze_shots(
     succeeded: list[dict] = []
     failed: list[dict] = []
     skipped: list[dict] = []
-    updated = []
-
     total = len(clips)
-    for i, clip in enumerate(clips):
-        if _check_cancel(cancel_event):
-            break
+    tasks = tuple(
+        ShotTypeTask(
+            clip.id, Path(clip.thumbnail_path) if clip.thumbnail_path else None,
+            source.file_path if (source := project.sources_by_id.get(clip.source_id)) else None,
+            clip.start_frame, clip.end_frame, source.fps if source else None,
+            skip=skip_existing and bool(clip.shot_type),
+        ) for clip in clips
+    )
+    application = ShotTypeApplication(project, tasks)
 
+    def report(current, count):
         if progress_callback is not None:
-            progress_callback(
-                i / total,
-                f"Shot classification ({i + 1}/{total}): {clip.id}",
-            )
+            progress_callback(current / count if count else 1.0,
+                              f"Shot classification ({current}/{count})")
 
-        if skip_existing and clip.shot_type:
-            skipped.append({"clip_id": clip.id, "reason": "already_populated"})
-            continue
-
-        thumbnail_path = clip.thumbnail_path
-        if not thumbnail_path:
-            failed.append({"clip_id": clip.id, "code": "thumbnail_missing"})
-            continue
-        thumb_p = Path(thumbnail_path)
-        if not thumb_p.exists():
-            failed.append({"clip_id": clip.id, "code": "thumbnail_missing"})
-            continue
-
-        try:
-            outcome = classify_shot_type(thumb_p)
-        except Exception as exc:  # noqa: BLE001
-            failed.append(
-                {"clip_id": clip.id, "code": "classification_failed", "message": str(exc)}
-            )
-            continue
-
-        # ``classify_shot_type`` returns ``(shot_type, confidence)`` per
-        # the existing API in ``core/analysis/shots.py``. Tolerate either
-        # shape so spine callers stubbing the function in tests don't
-        # have to care.
-        if isinstance(outcome, tuple):
-            shot_type, _confidence = outcome
+    outcomes = run_shot_types(tasks, ShotTypeOptions(), cancel_event=cancel_event, progress=report)
+    unprocessed = []
+    for outcome in outcomes:
+        if outcome.status == "succeeded":
+            if application.apply(project, outcome):
+                succeeded.append({"clip_id": outcome.clip_id, "shot_type": outcome.shot_type})
+            else:
+                failed.append({"clip_id": outcome.clip_id, "code": "stale_input"})
+        elif outcome.status == "skipped":
+            skipped.append({"clip_id": outcome.clip_id, "reason": outcome.code})
+        elif outcome.status == "unprocessed":
+            unprocessed.append({"clip_id": outcome.clip_id, "code": outcome.code})
         else:
-            shot_type = outcome
-
-        if shot_type and shot_type != "unknown":
-            clip.shot_type = shot_type
-            updated.append(clip)
-            succeeded.append({"clip_id": clip.id, "shot_type": shot_type})
-        else:
-            failed.append({"clip_id": clip.id, "code": "no_classification"})
-
-    if updated:
-        project.update_clips(updated)
+            failure = {"clip_id": outcome.clip_id, "code": outcome.code}
+            if outcome.message:
+                failure["message"] = outcome.message
+            failed.append(failure)
 
     if progress_callback is not None:
         progress_callback(
@@ -196,6 +179,7 @@ def analyze_shots(
             "failed": failed,
             "skipped": skipped,
             "total_clips": total,
+            "unprocessed": unprocessed,
         },
     }
 

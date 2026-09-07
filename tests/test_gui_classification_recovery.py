@@ -33,7 +33,9 @@ def setup(request, tmp_path, monkeypatch):
         )
     assert project.save(tmp_path / "project.json")
     monkeypatch.setattr(
-        "core.settings.load_settings", lambda: SimpleNamespace(cache_dir=tmp_path)
+        "core.settings.load_settings", lambda: SimpleNamespace(
+            cache_dir=tmp_path, shot_classifier_tier="cpu", shot_classifier_cloud_model=None,
+        )
     )
     compute = Mock(return_value=[("person", 0.9)])
     monkeypatch.setattr("core.analysis.classification.classify_frame", compute)

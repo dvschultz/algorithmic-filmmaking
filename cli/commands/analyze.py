@@ -512,7 +512,9 @@ def shots(
     try:
         from core.project import Project, ProjectLoadError
         from core.thumbnail import ThumbnailGenerator
-        from core.analysis.shots import classify_shot_type
+        from core.operations.shots import (
+            ShotTypeTask, ShotTypeOptions, ShotTypeApplication, run_shot_types,
+        )
     except ImportError as e:
         exit_with(ExitCode.DEPENDENCY_MISSING, f"Missing dependency: {e}")
 
@@ -562,6 +564,7 @@ def shots(
 
     with ProgressContext("Classifying shots") as progress:
         total = len(clips_to_analyze)
+        tasks = []
         for i, clip in enumerate(clips_to_analyze):
             progress.update(i / total, f"Clip {i + 1}/{total}")
 
@@ -584,17 +587,29 @@ def shots(
                     height=180,
                 )
 
-                # Classify shot type
-                shot_type, confidence = classify_shot_type(image_path=thumb_path)
-                clip.shot_type = shot_type
-                analyzed_count += 1
-
-                # Track counts
-                shot_counts[shot_type] = shot_counts.get(shot_type, 0) + 1
+                tasks.append(ShotTypeTask(
+                    clip.id, thumb_path, source.file_path, clip.start_frame,
+                    clip.end_frame, source.fps,
+                ))
 
             except Exception as e:
                 errors.append(f"Clip {clip.id[:8]}: {e}")
 
+        application = ShotTypeApplication(project, tuple(tasks))
+        outcomes = run_shot_types(
+            tuple(tasks), ShotTypeOptions(),
+            progress=lambda current, count: progress.update(
+                current / count if count else 1.0, f"Clip {current}/{count}",
+            ),
+        )
+        for outcome in outcomes:
+            if outcome.status == "succeeded" and application.apply(project, outcome):
+                analyzed_count += 1
+                label = outcome.shot_type
+                assert label is not None
+                shot_counts[label] = shot_counts.get(label, 0) + 1
+            else:
+                errors.append(f"Clip {outcome.clip_id[:8]}: {outcome.message or outcome.code or 'stale input'}")
         progress.update(1.0, "Complete")
 
     # Save updated project

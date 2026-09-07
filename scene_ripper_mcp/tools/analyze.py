@@ -124,14 +124,13 @@ def _analyze_shots_sync(path):
     """Synchronous body for ``analyze_shots`` (offloaded via ``asyncio.to_thread``)."""
     try:
         with project_writer(path):
-            from core.analysis.shots import classify_shot_type
+            from core.spine.analyze import analyze_shots as run_shots
             from core.project import MissingSourceError
             from core.spine.project_io import (
                 ProjectModifiedExternally,
                 load_with_mtime,
                 save_with_mtime_check,
             )
-            from core.thumbnail import get_thumbnail_path
 
             try:
                 project, mtime = load_with_mtime(path)
@@ -145,38 +144,23 @@ def _analyze_shots_sync(path):
             if not clips:
                 return json.dumps({"success": False, "error": "No clips in project"})
 
-            sources_by_id = project.sources_by_id
-
-            analyzed_count = 0
-            skipped_count = 0
+            # The project loader resolves persisted thumbnail paths. Do not
+            # regenerate images in this legacy analysis-only entry point.
+            selected = [c.id for c in clips if c.source_id in project.sources_by_id]
+            outcomes = run_shots(project, selected, skip_existing=False)["result"]
+            fatal = [
+                item for item in outcomes["failed"]
+                if item["code"] not in {"thumbnail_missing", "no_classification"}
+            ]
+            if fatal:
+                # Preserve the legacy all-or-nothing save on provider failure.
+                return json.dumps({"success": False, "error": fatal[0].get("message") or fatal[0]["code"]})
+            analyzed_count = len(outcomes["succeeded"])
+            skipped_count = len(clips) - analyzed_count
             shot_type_counts: dict = {}
-            updated: list = []
-
-            for clip in clips:
-                source = sources_by_id.get(clip.source_id)
-                if not source:
-                    skipped_count += 1
-                    continue
-
-                thumb_path = get_thumbnail_path(source.file_path, clip.start_frame)
-                if not thumb_path or not thumb_path.exists():
-                    if clip.thumbnail_path and Path(clip.thumbnail_path).exists():
-                        thumb_path = Path(clip.thumbnail_path)
-                    else:
-                        skipped_count += 1
-                        continue
-
-                shot_type, _confidence = classify_shot_type(thumb_path)
-                if shot_type != "unknown":
-                    clip.shot_type = shot_type
-                    analyzed_count += 1
-                    shot_type_counts[shot_type] = shot_type_counts.get(shot_type, 0) + 1
-                    updated.append(clip)
-                else:
-                    skipped_count += 1
-
-            if updated:
-                project.update_clips(updated)
+            for item in outcomes["succeeded"]:
+                shot_type = item["shot_type"]
+                shot_type_counts[shot_type] = shot_type_counts.get(shot_type, 0) + 1
 
             try:
                 save_with_mtime_check(project, path, mtime)

@@ -1100,3 +1100,27 @@ supports submission idempotency and validates each input through the shared path
 policy. Media fingerprinting is shared with the desktop recovery journal.
 
 U7 still includes frame-analysis orchestration and intention workflows.
+
+### Shot classification execution cutover
+
+GUI clip/frame analysis, GUI-agent shot analysis, intention prerequisites, CLI
+`analyze shots`, and both MCP shot routes now compute through
+`core/operations/shots.py`. The shared operation validates labels/confidence,
+reports per-target failure/skip/cancellation, and serializes admission to the
+process-wide local model, including cloud fallback. GUI provider options are
+captured at dispatch; headless callers preserve their local classification policy.
+CLI thumbnail generation and existing result keys remain compatible.
+The legacy synchronous MCP tool uses persisted thumbnail paths, removing its
+broken import of a nonexistent thumbnail lookup helper. Missing thumbnails and
+unknown classifications retain its skipped counter; provider/stale-input errors
+leave the saved project unchanged.
+
+Owner-thread shot publication checks project/session/save location, target type
+and object identity, source/range, media stamps, and existing shot metadata.
+Clip/frame ID collisions cannot redirect results. Frame shot completion waits for
+native thread termination and rejects retired runs; active shot workers remain
+tracked until termination so window shutdown can cancel them safely.
+
+Durable shot result recovery remains the next migration step. Combined frame
+analysis orchestration and the ordered intention workflow remain outstanding;
+this cutover does not complete U7.

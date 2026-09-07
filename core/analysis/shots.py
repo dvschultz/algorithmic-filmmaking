@@ -331,6 +331,9 @@ def classify_shot_type_tiered(
     fps: Optional[float] = None,
     threshold: float = 0.0,
     use_ensemble: bool = True,
+    *,
+    tier: Optional[str] = None,
+    cloud_model: Optional[str] = None,
 ) -> tuple[str, float]:
     """Classify shot type using the configured tier (local or cloud).
 
@@ -346,14 +349,18 @@ def classify_shot_type_tiered(
         fps: Video frame rate (used for cloud Replicate tier)
         threshold: Minimum confidence threshold
         use_ensemble: Whether to use ensemble prompts (local tier only)
+        tier: Captured provider tier; None reads the current settings.
+        cloud_model: Captured cloud model when tier is supplied.
 
     Returns:
         Tuple of (shot_type, confidence)
     """
-    from core.settings import load_settings
+    if tier is None:
+        from core.settings import load_settings
 
-    settings = load_settings()
-    tier = settings.shot_classifier_tier
+        settings = load_settings()
+        tier = settings.shot_classifier_tier
+        cloud_model = getattr(settings, "shot_classifier_cloud_model", None)
 
     if tier == "cloud":
         try:
@@ -361,7 +368,7 @@ def classify_shot_type_tiered(
 
             shot_type, confidence = classify_shot_cloud(
                 image_path=image_path,
-                model=getattr(settings, "shot_classifier_cloud_model", None),
+                model=cloud_model,
             )
 
             if confidence < threshold:

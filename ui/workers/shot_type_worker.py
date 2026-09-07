@@ -1,32 +1,23 @@
 """Background worker for shot type classification.
 
-Runs shot type classification on multiple clips in a background thread,
-using ThreadPoolExecutor for parallelism.
+Runs the shared detached operation on a background thread.
 """
 
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import Signal
 
 from ui.workers.base import CancellableWorker
 
+from core.operations.shots import (
+    ShotTypeTask,
+    ShotTypeOptions,
+    ShotTypeOutcome,
+    run_shot_types,
+)
+
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class ShotTypeTask:
-    """Immutable task data for thread pool execution."""
-
-    clip_id: str
-    thumbnail_path: Path
-    source_path: Optional[Path]
-    start_frame: int
-    end_frame: int
-    fps: Optional[float]
 
 
 class ShotTypeWorker(CancellableWorker):
@@ -38,8 +29,8 @@ class ShotTypeWorker(CancellableWorker):
 
     Supports both Clip and Frame inputs via AnalysisTarget.
 
-    Uses ThreadPoolExecutor for parallel processing. Default parallelism is 1
-    because the CLIP model singleton is not thread-safe for inference.
+    Inference is serialized across jobs because the local model is shared.
+    The parallelism argument is retained for existing callers.
 
     Signals:
         progress: Emitted with (current, total) during processing
@@ -51,6 +42,7 @@ class ShotTypeWorker(CancellableWorker):
     progress = Signal(int, int)  # current, total
     shot_type_ready = Signal(str, str, float)  # clip_id, shot_type, confidence
     analysis_completed = Signal()
+    outcome_ready = Signal(object)
 
     @staticmethod
     def _summarize_errors(errors: list[tuple[str, str]]) -> str:
@@ -78,7 +70,9 @@ class ShotTypeWorker(CancellableWorker):
         parent=None,
     ):
         super().__init__(parent)
-        self._parallelism = min(max(1, parallelism), 4)
+        self._parallelism = 1
+        self.options = ShotTypeOptions.from_settings()
+        self.result: tuple[ShotTypeOutcome, ...] = ()
         if analysis_targets:
             self._tasks = self._build_tasks_from_targets(
                 analysis_targets, skip_existing
@@ -124,9 +118,7 @@ class ShotTypeWorker(CancellableWorker):
                 continue
             image_path = target.image_path
             if not image_path or not image_path.exists():
-                logger.warning(
-                    f"Skipping target {target.id}: image not found"
-                )
+                logger.warning(f"Skipping target {target.id}: image not found")
                 continue
             tasks.append(
                 ShotTypeTask(
@@ -136,104 +128,48 @@ class ShotTypeWorker(CancellableWorker):
                     start_frame=target.start_frame or 0,
                     end_frame=target.end_frame or 0,
                     fps=target.fps,
+                    target_type=target.target_type,
                 )
             )
         return tasks
 
-    def _process_task(
-        self, task: ShotTypeTask
-    ) -> tuple[str, Optional[str], Optional[float], Optional[str]]:
-        """Process a single task (runs in thread pool).
+    @property
+    def tasks(self) -> tuple[ShotTypeTask, ...]:
+        return tuple(self._tasks)
 
-        Returns:
-            Tuple of (clip_id, shot_type, confidence, error_message)
-        """
-        if self.is_cancelled():
-            return task.clip_id, None, None, "Cancelled"
-
-        try:
-            from core.analysis.shots import classify_shot_type_tiered
-
-            shot_type, confidence = classify_shot_type_tiered(
-                image_path=task.thumbnail_path,
-                source_path=task.source_path,
-                start_frame=task.start_frame,
-                end_frame=task.end_frame,
-                fps=task.fps,
-            )
-            return task.clip_id, shot_type, confidence, None
-        except Exception as e:
-            return task.clip_id, None, None, str(e)
-
-    def run(self):
-        """Execute shot type classification on all clips."""
+    def run(self) -> None:
+        """Compute detached results and always report batch termination."""
         self._log_start()
-
-        total = len(self._tasks)
-        if total == 0:
-            logger.info("No clips to process for shot type classification")
-            self.analysis_completed.emit()
-            self._log_complete()
-            return
-
-        logger.info(
-            f"Starting shot type classification: {total} clips, "
-            f"parallelism={self._parallelism}"
-        )
-
-        # Pre-load the classification model so the user sees a download message
-        # instead of "processing N clips" while the model downloads (~400 MB).
-        try:
-            from core.analysis.shots import load_classification_model, is_model_loaded
-
-            if not is_model_loaded():
-                self.progress.emit(0, total)
-                logger.info("Downloading shot classification model (first run)...")
-                load_classification_model()
-        except Exception as e:
-            self.error.emit(f"Failed to load shot classification model: {e}")
-            self._log_complete()
-            return
-
-        if self.is_cancelled():
-            self._log_cancelled()
-            return
-
-        completed = 0
         errors: list[tuple[str, str]] = []
 
-        with ThreadPoolExecutor(max_workers=self._parallelism) as executor:
-            future_to_task = {
-                executor.submit(self._process_task, task): task
-                for task in self._tasks
-            }
+        def deliver(outcome: ShotTypeOutcome) -> None:
+            if outcome.status == "succeeded":
+                self.outcome_ready.emit(outcome)
+                self.shot_type_ready.emit(
+                    outcome.clip_id, outcome.shot_type, outcome.confidence
+                )
+            elif outcome.status == "failed":
+                errors.append(
+                    (
+                        outcome.clip_id,
+                        outcome.message or outcome.code or "Analysis failed",
+                    )
+                )
 
-            for future in as_completed(future_to_task):
-                if self.is_cancelled():
-                    self._log_cancelled()
-                    for f in future_to_task:
-                        f.cancel()
-                    break
-
-                task = future_to_task[future]
-                completed += 1
-
-                try:
-                    clip_id, shot_type, confidence, error_msg = future.result()
-
-                    if error_msg and error_msg != "Cancelled":
-                        self._log_error(error_msg, clip_id)
-                        errors.append((clip_id, error_msg))
-                    elif shot_type is not None:
-                        self.shot_type_ready.emit(clip_id, shot_type, confidence)
-                except Exception as e:
-                    self._log_error(str(e), task.clip_id)
-                    errors.append((task.clip_id, str(e)))
-
-                self.progress.emit(completed, total)
-
-        if errors:
-            self.error.emit(self._summarize_errors(errors))
-
-        self.analysis_completed.emit()
-        self._log_complete()
+        try:
+            if self.tasks:
+                self.progress.emit(0, len(self.tasks))
+            self.result = run_shot_types(
+                self.tasks,
+                self.options,
+                cancel_event=self._cancel_event,
+                on_outcome=deliver,
+                progress=self.progress.emit,
+            )
+            if errors and not self.is_cancelled():
+                self.error.emit(self._summarize_errors(errors))
+        except Exception as exc:
+            self.error.emit(str(exc))
+        finally:
+            self.analysis_completed.emit()
+            self._log_complete()

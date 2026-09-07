@@ -3564,7 +3564,8 @@ class MainWindow(QMainWindow):
         logger.info(f"Creating ShotTypeWorker (pipeline) for {len(clips)} clips...")
         self.shot_type_worker = ShotTypeWorker(clips, self.project.sources_by_id, parallelism=self.settings.local_model_parallelism)
         self.shot_type_worker.progress.connect(self._on_shot_type_progress)
-        self.shot_type_worker.shot_type_ready.connect(self._on_shot_type_ready)
+        from ui.workers.shot_type_delivery import ShotTypeDelivery
+        ShotTypeDelivery(self, self.shot_type_worker, pipeline=True)
         self.shot_type_worker.error.connect(self._on_shot_type_error)
         bind_pipeline_completion(
             self, self.shot_type_worker, "shot_type_worker",
@@ -5737,26 +5738,16 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(int((current / total) * 100))
 
     def _on_shot_type_ready(self, clip_id: str, shot_type: str, confidence: float):
-        """Handle shot type classification complete for a clip or frame."""
-        # Try clip first
+        """Refresh clip widgets after guarded shot classification publication."""
         clip = self.clips_by_id.get(clip_id)
         if clip:
-            clip.shot_type = shot_type
             # Update both tabs' clip browsers
             self.cut_tab.update_clip_shot_type(clip_id, shot_type)
             self.analyze_tab.update_clip_shot_type(clip_id, shot_type)
             # Refresh sidebar if it's showing this clip
             if hasattr(self, 'clip_details_sidebar'):
                 self.clip_details_sidebar.refresh_shot_type_if_showing(clip_id, shot_type)
-            self._mark_dirty()
             logger.debug(f"Clip {clip_id}: {shot_type} ({confidence:.2f})")
-            return
-        # Try frame
-        frame = self.project.frames_by_id.get(clip_id)
-        if frame:
-            self.project.update_frame(clip_id, shot_type=shot_type)
-            self._mark_dirty()
-            logger.debug(f"Frame {clip_id}: {shot_type} ({confidence:.2f})")
 
     def _on_transcription_progress(self, current: int, total: int):
         """Handle transcription progress."""
@@ -6755,11 +6746,12 @@ class MainWindow(QMainWindow):
                 parallelism=self.settings.local_model_parallelism,
             )
             worker.progress.connect(self._on_shot_type_progress)
-            worker.shot_type_ready.connect(self._on_shot_type_ready)
-            worker.error.connect(self._on_shot_type_error)
-            worker.analysis_completed.connect(
-                lambda: self._on_frame_analysis_op_finished("shots")
+            from ui.workers.shot_type_delivery import ShotTypeDelivery
+            ShotTypeDelivery(
+                self, worker, worker_attribute="_frame_shot_worker",
+                on_complete=lambda: self._on_frame_analysis_op_finished("shots"),
             )
+            worker.error.connect(self._on_shot_type_error)
             worker.finished.connect(worker.deleteLater)
             self._frame_shot_worker = worker
             worker.start()
@@ -7761,7 +7753,8 @@ class MainWindow(QMainWindow):
         from PySide6.QtCore import Qt
         self.shot_type_worker = ShotTypeWorker(clips, self.project.sources_by_id, parallelism=self.settings.local_model_parallelism)
         self.shot_type_worker.progress.connect(self._on_shot_type_progress)
-        self.shot_type_worker.shot_type_ready.connect(self._on_shot_type_ready)
+        from ui.workers.shot_type_delivery import ShotTypeDelivery
+        ShotTypeDelivery(self, self.shot_type_worker)
         self.shot_type_worker.error.connect(self._on_shot_type_error)
         completion = AgentAnalysisCompletion(
             self, self.shot_type_worker, "shot_type_worker", self._on_agent_shot_analysis_finished
@@ -9211,16 +9204,12 @@ class MainWindow(QMainWindow):
             self.shot_type_worker.progress.connect(
                 self.intention_workflow.on_analysis_progress
             )
-            self.shot_type_worker.shot_type_ready.connect(self._on_shot_type_ready)
+            from ui.workers.shot_type_delivery import ShotTypeDelivery
+            ShotTypeDelivery(
+                self, self.shot_type_worker, intention=True,
+                on_complete=self._on_intention_shot_analysis_finished,
+            )
             self.shot_type_worker.error.connect(self._on_shot_type_error)
-            self.shot_type_worker.analysis_completed.connect(
-                self._on_intention_shot_analysis_finished, Qt.UniqueConnection
-            )
-            # Clean up
-            self.shot_type_worker.finished.connect(self.shot_type_worker.deleteLater)
-            self.shot_type_worker.finished.connect(
-                lambda: setattr(self, 'shot_type_worker', None)
-            )
 
             self.shot_type_worker.start()
 
@@ -10643,7 +10632,7 @@ class MainWindow(QMainWindow):
         audio_workers = tuple(getattr(self, "_active_audio_transcribes", ())) + tuple(getattr(self, "_active_audio_imports", ()))
         frame_worker = getattr(self, "_frame_extraction_worker", None)
         image_worker = getattr(self, "_image_import_worker", None)
-        active_workers = audio_workers + tuple(worker for worker in (frame_worker, image_worker) if worker is not None)
+        active_workers = audio_workers + tuple(getattr(self, "_active_shot_workers", ())) + tuple(worker for worker in (frame_worker, image_worker) if worker is not None)
         for worker in active_workers:
             worker.cancel()
         if any(worker.isRunning() for worker in active_workers):
