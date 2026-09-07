@@ -43,6 +43,7 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
                 "gui_classification",
                 "gui_object_detection",
                 "gui_faces",
+                "gui_gaze",
             )
             or identity["version"] != 1
         ):
@@ -71,6 +72,21 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
         payload = json.loads(row["payload_json"])
         if payload["clip_id"] != clip["id"] or payload["status"] != "succeeded":
             raise StaleJobResult("Saved GUI result does not match its target")
+        if identity["kind"] == "gui_gaze":
+            from core.jobs.gaze import _saved_gaze
+            from core.operations.gaze import GazeOutcome
+
+            outcome = GazeOutcome.from_dict(payload)
+            expected = _saved_gaze(
+                {
+                    "gaze_yaw": outcome.yaw,
+                    "gaze_pitch": outcome.pitch,
+                    "gaze_category": outcome.category,
+                }
+            )
+            if {key: clip.get(key) for key in expected} == expected:
+                pending.append((result_id, receipt_digest))
+            continue
         if identity["kind"] == "gui_faces":
             from core.jobs.faces import _saved_faces
             from core.operations.faces import FaceOutcome

@@ -666,7 +666,10 @@ def gaze(
     result = {"succeeded": [], "failed": [], "skipped": [], "unprocessed": [], "total_clips": len(tasks)}
 
     def deliver(outcome):
-        if outcome.status == "succeeded":
+        if outcome.status == "succeeded" and outcome.category is None:
+            # Preserve the legacy wire response for an empty observation.
+            result["failed"].append({"clip_id": outcome.clip_id, "code": "no_gaze_detected"})
+        elif outcome.status == "succeeded":
             if application.apply(project, outcome):
                 result["succeeded"].append({"clip_id": outcome.clip_id, "gaze_category": outcome.category})
             else:

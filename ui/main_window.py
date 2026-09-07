@@ -3625,7 +3625,7 @@ class MainWindow(QMainWindow):
         sources_by_id = {s.id: s for s in self.sources}
         logger.info(f"Creating GazeAnalysisWorker (pipeline) for {len(clips)} clips...")
         self._gaze_worker = GazeAnalysisWorker(
-            clips, sources_by_id=sources_by_id,
+            clips, sources_by_id=sources_by_id, project=self.project,
         )
         self._gaze_worker.progress.connect(self._on_gaze_progress)
         from ui.workers.gaze_delivery import GazeDelivery
@@ -8192,7 +8192,7 @@ class MainWindow(QMainWindow):
             self.progress_bar.setValue(int(current / total * 100))
 
     @Slot(str, float, float, str)
-    def _on_gaze_ready(self, clip_id: str, yaw: float, pitch: float, category: str):
+    def _on_gaze_ready(self, clip_id: str, yaw: float | None, pitch: float | None, category: str | None):
         """Handle gaze analysis complete for a clip."""
         clip = self.clips_by_id.get(clip_id)
         if clip:
@@ -8202,7 +8202,7 @@ class MainWindow(QMainWindow):
             # Refresh sidebar if it's showing this clip
             if hasattr(self, 'clip_details_sidebar'):
                 self.clip_details_sidebar.refresh_gaze_if_showing(clip_id)
-            logger.debug(f"Clip {clip_id}: gaze={category} (yaw={yaw:.1f}, pitch={pitch:.1f})")
+            logger.debug("Clip %s: gaze=%s (yaw=%s, pitch=%s)", clip_id, category, yaw, pitch)
 
     @Slot(int, int)
     def _on_embeddings_progress(self, current: int, total: int):

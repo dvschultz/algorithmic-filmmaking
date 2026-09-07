@@ -648,6 +648,28 @@ with a completed empty observation. Ordinary retries preserve edited angles.
 One model session spans pending items and their commits. Cache-only retries never
 initialize the model. GUI gaze history and recovery remain the next U7 step.
 
+### Durable GUI gaze observations
+
+Saved-project GUI gaze workers now use shared job history and journal each
+successful observation before queued publication. Retrying after interruption
+reuses matching computations without loading the model. Unsaved projects remain
+session-only; analysis never saves unrelated desktop edits automatically.
+
+The owner-thread delivery validates launch context, target inputs, save location,
+and the recorded result before applying it once. Explicit project saves checkpoint
+matching receipts using the existing two-decimal gaze serialization. Both the
+typed observation signal and legacy populated-gaze signal can arrive without
+duplicating application or UI refresh.
+
+A completed empty observation clears old gaze fields and has a durable receipt.
+Normal retries skip saved empty observations only when media, range, options,
+runtime, and current empty fields match; an explicit refresh recomputes them.
+Missing analysis and failed decoding remain distinct from completed empty results.
+The headless public `no_gaze_detected` response remains compatible.
+
+Embeddings, OCR, remaining audio/frame analysis, and workflow orchestration remain
+U7 work. This gaze cutover does not complete U7 or isolate native inference.
+
 The MCP analysis adapter translates shared operation kinds to their existing
 public job names at submission. Gaze, faces, objects, classification, and
 cinematography are covered by tests that submit to the real job runtime and

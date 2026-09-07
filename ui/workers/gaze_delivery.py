@@ -1,6 +1,7 @@
-"""Owner-thread gazes publication bound to its launch context."""
+"""Owner-thread gaze publication bound to its launch context."""
 
 from typing import Any
+from dataclasses import asdict
 
 from PySide6.QtCore import QObject, Slot
 
@@ -31,12 +32,23 @@ class GazeDelivery(QObject):
         self.delivered: set[str] = set()
         worker.finished.connect(self.deleteLater)
         worker.gaze_ready.connect(self.result)
+        if hasattr(worker, "observation_ready"):
+            worker.observation_ready.connect(self.observation)
 
     @Slot(str, float, float, str)
     def result(self, target_id: str, yaw: float, pitch: float, category: str) -> None:
+        self.observation(GazeOutcome(target_id, "succeeded", yaw, pitch, category))
+
+    @Slot(object)
+    def observation(self, outcome: GazeOutcome) -> None:
         window = self.window
+        if not isinstance(outcome, GazeOutcome):
+            window._on_gaze_error("Invalid queued gaze observation")
+            return
+        target_id = outcome.clip_id
         if (
-            getattr(window, self.worker_attribute, None) is not self.worker
+            outcome.status != "succeeded"
+            or getattr(window, self.worker_attribute, None) is not self.worker
             or window.project is not self.application.project
             or window.project.session.session_id != self.application.session_id
             or self.worker.is_cancelled()
@@ -53,15 +65,25 @@ class GazeDelivery(QObject):
             return
         self.delivered.add(target_id)
         try:
-            outcome = GazeOutcome.from_result(
-                target_id,
-                {
-                    "gaze_yaw": yaw,
-                    "gaze_pitch": pitch,
-                    "gaze_category": category,
-                },
-            )
+            outcome = GazeOutcome.from_dict(asdict(outcome))
+            receipt = None
+            cache = getattr(self.worker, "cache", None)
+            if cache is not None:
+                if (
+                    window.project.path is None
+                    or window.project.path.resolve() != cache.path
+                ):
+                    raise ValueError(
+                        "Project save location changed during gaze analysis"
+                    )
+                receipt = cache.results[target_id]
+                if not receipt.matches(outcome):
+                    raise ValueError(
+                        "Queued gaze observation differs from its recorded result"
+                    )
             accepted = self.application.apply(window.project, outcome)
+            if accepted and receipt is not None:
+                window.project.record_job_result(receipt.result_id, receipt.digest)
         except Exception as exc:
             window._on_gaze_error(f"Could not apply gaze detection: {exc}")
             return
@@ -70,4 +92,6 @@ class GazeDelivery(QObject):
                 "Gaze detection discarded because the target changed. Run analysis again."
             )
         elif hasattr(window, "_on_gaze_ready"):
-            window._on_gaze_ready(target_id, yaw, pitch, category)
+            window._on_gaze_ready(
+                target_id, outcome.yaw, outcome.pitch, outcome.category
+            )

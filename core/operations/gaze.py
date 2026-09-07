@@ -42,6 +42,24 @@ class GazeOutcome:
     message: str | None = None
 
     @classmethod
+    def from_dict(cls, data: dict) -> "GazeOutcome":
+        outcome = cls(**data)
+        if outcome.status == "succeeded":
+            if outcome.category is None and outcome.code == "no_gaze_detected":
+                if outcome.yaw is not None or outcome.pitch is not None:
+                    raise ValueError("Empty gaze observation has angles")
+            else:
+                cls.from_result(
+                    outcome.clip_id,
+                    {
+                        "gaze_yaw": outcome.yaw,
+                        "gaze_pitch": outcome.pitch,
+                        "gaze_category": outcome.category,
+                    },
+                )
+        return outcome
+
+    @classmethod
     def from_result(cls, clip_id: str, data: dict) -> "GazeOutcome":
         from core.analysis.gaze import GAZE_CATEGORIES
 
@@ -153,7 +171,9 @@ def run_gaze(
                             sample_interval=options.sample_interval,
                         )
                         outcome = (
-                            GazeOutcome(task.clip_id, "failed", code="no_gaze_detected")
+                            GazeOutcome(
+                                task.clip_id, "succeeded", code="no_gaze_detected"
+                            )
                             if raw is None
                             else GazeOutcome.from_result(task.clip_id, raw)
                         )
