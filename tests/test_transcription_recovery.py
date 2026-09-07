@@ -7,6 +7,85 @@ from core.operations.transcription import TranscriptionOptions
 from tests.test_spine_analyze import _build_project
 
 
+def test_cli_retry_then_sync_mcp_refresh_share_result_cache(tmp_path):
+    import json
+    from types import SimpleNamespace
+    from click.testing import CliRunner
+    from cli.main import cli, register_commands
+    from core.project import Project
+    from scene_ripper_mcp.tools.analyze import _transcribe_sync
+
+    project = _build_project(tmp_path, 1)
+    path = tmp_path / "project.json"
+    assert project.save(path)
+    register_commands()
+    with (
+        patch(
+            "core.settings.load_settings",
+            return_value=SimpleNamespace(cache_dir=tmp_path),
+        ),
+        patch("core.transcription.transcribe_clip", return_value=[]) as compute,
+    ):
+        with patch(
+            "core.jobs.commits.save_with_mtime_check",
+            side_effect=RuntimeError("save failed"),
+        ):
+            failed = CliRunner().invoke(cli, ["transcribe", str(path)])
+            assert failed.exit_code == 1
+        result = CliRunner().invoke(cli, ["--json", "transcribe", str(path)])
+        assert result.exit_code == 0, result.output
+        assert compute.call_count == 1
+        assert len(Project.load(path).metadata.job_results) == 1
+        with patch(
+            "core.jobs.commits.save_with_mtime_check",
+            side_effect=RuntimeError("save failed"),
+        ):
+            assert (
+                json.loads(_transcribe_sync(path, "small.en", "en"))["success"] is False
+            )
+        result = json.loads(_transcribe_sync(path, "small.en", "en"))
+        assert result["transcribed_clips"] == 1
+        assert compute.call_count == 2
+        assert len(Project.load(path).metadata.job_results) == 2
+
+
+def test_forced_runs_recover_failed_save_and_allow_subsequent_refresh(tmp_path):
+    import pytest
+    from core.project import Project
+    from core.transcription_models import TranscriptSegment
+
+    project = _build_project(tmp_path, 1)
+    project.clips[0].transcript = [TranscriptSegment(0, 1, "manual")]
+    path = tmp_path / "project.json"
+    assert project.save(path)
+    store = JobStore(tmp_path / "jobs.db")
+
+    def run():
+        return run_transcription_job(
+            store,
+            path,
+            None,
+            TranscriptionOptions(backend="faster-whisper"),
+            lambda *_: None,
+            Event(),
+            force=True,
+        )
+
+    with patch("core.transcription.transcribe_clip", return_value=[]) as compute:
+        with patch(
+            "core.jobs.commits.save_with_mtime_check",
+            side_effect=RuntimeError("save failed"),
+        ):
+            with pytest.raises(RuntimeError, match="save failed"):
+                run()
+        assert Project.load(path).clips[0].transcript[0].text == "manual"
+        assert len(run()["result"]["succeeded"]) == 1
+        assert compute.call_count == 1
+        assert len(run()["result"]["succeeded"]) == 1
+        assert compute.call_count == 2
+    assert len(Project.load(path).metadata.job_results) == 2
+
+
 def test_submission_is_checked_after_acquiring_writer_lease(tmp_path):
     import pytest
     from contextlib import contextmanager

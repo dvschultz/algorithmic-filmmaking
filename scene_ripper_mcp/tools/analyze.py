@@ -229,23 +229,24 @@ async def transcribe(
     if not valid:
         return json.dumps({"success": False, "error": error})
 
-    return await asyncio.to_thread(_transcribe_sync, path, model, language)
+    store = ctx.request_context.lifespan_context["job_store"] if ctx else None
+    return await asyncio.to_thread(_transcribe_sync, path, model, language, store)
 
 
-def _transcribe_sync(path, model, language):
+def _transcribe_sync(path, model, language, store=None):
     """Synchronous body for ``transcribe`` (offloaded via ``asyncio.to_thread``)."""
     try:
         with project_writer(path):
             from core.project import MissingSourceError
-            from core.spine.project_io import (
-                ProjectModifiedExternally,
-                load_with_mtime,
-                save_with_mtime_check,
-            )
-            from core.spine.analyze import transcribe as transcribe_project
+            from threading import Event
+            from core.spine.project_io import load_with_mtime
+            from core.jobs.store import JobStore
+            from core.jobs.transcription import run_transcription_job
+            from core.operations.transcription import TranscriptionOptions
+            from core.settings import load_settings
 
             try:
-                project, mtime = load_with_mtime(path)
+                project, _ = load_with_mtime(path)
             except MissingSourceError as e:
                 return json.dumps({
                     "success": False,
@@ -256,8 +257,10 @@ def _transcribe_sync(path, model, language):
             if not clips:
                 return json.dumps({"success": False, "error": "No clips in project"})
 
-            batch = transcribe_project(
-                project, model=model, language=language, skip_existing=False,
+            batch = run_transcription_job(
+                store if store is not None else JobStore(load_settings().cache_dir / "jobs.db"),
+                path, None, TranscriptionOptions(model=model, language=language),
+                lambda *_: None, Event(), force=True,
             )["result"]
             transcribed_count = len(batch["succeeded"])
             total_segments = sum(item["segment_count"] for item in batch["succeeded"])
@@ -265,19 +268,6 @@ def _transcribe_sync(path, model, language):
             dependency_errors = [item for item in batch["failed"] if item["code"] == "dependency_missing"]
             if not transcribed_count and dependency_errors:
                 return json.dumps({"success": False, "error": dependency_errors[0]["message"]})
-
-            try:
-                save_with_mtime_check(project, path, mtime)
-            except ProjectModifiedExternally as exc:
-                return json.dumps({
-                    "success": False,
-                    "error": {
-                        "code": "project_modified_externally",
-                        "path": str(exc.path),
-                        "expected_mtime": exc.expected_mtime,
-                        "current_mtime": exc.current_mtime,
-                    },
-                })
 
             return json.dumps(
                 {

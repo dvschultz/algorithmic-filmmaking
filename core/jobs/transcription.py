@@ -98,6 +98,7 @@ def run_transcription_job(
     cancel: Event,
     *,
     operation: OperationSpec | None = None,
+    force: bool = False,
 ) -> dict:
     from core.transcription import _resolve_backend
 
@@ -191,7 +192,7 @@ def run_transcription_job(
                 )
                 break
             clip = project.clips_by_id[clip_id]
-            if clip_id in managed:
+            if clip_id in managed and not force:
                 current_segments = (
                     None
                     if clip.transcript is None
@@ -204,20 +205,34 @@ def run_transcription_job(
                     raise StaleJobResult(
                         "Previously committed output changed; refusing stale replay"
                     )
-            if clip.transcript is not None and clip_id not in managed:
+            if clip.transcript is not None and clip_id not in managed and not force:
                 output["skipped"].append(
                     {"clip_id": clip_id, "reason": "already_populated"}
                 )
                 continue
             try:
                 captured = inputs(project, clip_id)
+                identity_inputs = captured
+                if force:
+                    # A failed save leaves both the previous output and receipt
+                    # count unchanged, so retries reuse its pending computation.
+                    # A completed refresh advances the count even for silence.
+                    identity_inputs = {
+                        **captured,
+                        "refresh_generation": len(managed.get(clip_id, [])),
+                        "previous_transcript": (
+                            None
+                            if clip.transcript is None
+                            else [segment.to_dict() for segment in clip.transcript]
+                        ),
+                    }
                 spec = ResultSpec.build(
                     path,
                     kind="transcribe",
                     version=1,
                     target_id=clip_id,
                     arguments=asdict(options),
-                    inputs=captured,
+                    inputs=identity_inputs,
                 )
                 task = snapshot_tasks(
                     [clip], project.sources_by_id, skip_existing=False

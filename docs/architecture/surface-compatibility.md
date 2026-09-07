@@ -228,6 +228,13 @@ checkpoint failures without duplicate application. Source fingerprints include a
 SHA-256 digest, cached only while device/inode/size/mtime/ctime remain unchanged.
 Edited managed outputs are conflicts. Silent results are retained and reused.
 
-This is the dedicated MCP job cutover. GUI, CLI, synchronous MCP, and generic
-multi-analysis transcription still need durable receipt integration; they retain
-the shared computation and application guards documented above.
+CLI transcription and synchronous MCP also use the durable runner. CLI retains
+its selection and skip-existing rules. CLI `--force` and synchronous MCP request
+a refresh whose identity includes the previous transcript and count of committed
+transcription receipts for that target. Failed saves leave both unchanged and
+reuse pending computations; successful saves advance the count so another
+explicit refresh recomputes even silent output. The initial adapter model is
+never saved over the runner's updated model.
+
+GUI and generic multi-analysis transcription still need durable receipt
+integration; they retain the shared computation and application guards above.

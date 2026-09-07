@@ -455,9 +455,13 @@ failed save or checkpoint reuses verified computed results. Edited managed
 transcripts are reported as conflicts. Pending jobs reject changed project or
 media metadata; execution fingerprints source contents and revalidates them
 before publication. Cancellation preserves completed targets for retry.
-This recovery path currently applies to the dedicated MCP transcription job;
-GUI, CLI, synchronous MCP, and generic multi-analysis transcription still use
-the shared computation/application path without these durable receipts.
+The CLI transcription command and synchronous MCP `transcribe` tool also save
+these receipts in the shared job cache. CLI `--force` and synchronous MCP retain
+their explicit refresh behavior: a failed save can reuse its pending computation,
+while a successfully saved refresh allows the next request to compute again,
+including for silent clips. CLI runs without `--force` still skip existing
+transcripts. GUI and generic multi-analysis transcription do not yet use these
+durable receipts.
 
 `start_detect_scenes_bulk` also records computed scenes, saving one source and
 its receipt at a time. Retrying identical inputs reuses the recorded clip IDs;

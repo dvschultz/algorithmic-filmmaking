@@ -673,3 +673,18 @@ async def test_transcription_job_saves_receipts(lifespan_ctx, tmp_path, monkeypa
     project = Project.load(path)
     assert project.clips[0].transcript == []
     assert len(project.metadata.job_results) == 1
+
+
+@pytest.mark.asyncio
+async def test_sync_transcription_uses_server_result_store(lifespan_ctx, tmp_path, monkeypatch):
+    from scene_ripper_mcp.tools.analyze import transcribe
+    from core.project import Project
+
+    ctx, store, _ = lifespan_ctx
+    path = _make_project_file(tmp_path)
+    monkeypatch.setattr('core.transcription.transcribe_clip', lambda **_: [])
+    result = json.loads(await transcribe(str(path), ctx=ctx))
+    assert result['success'] is True
+    receipts = Project.load(path).metadata.job_results
+    assert len(receipts) == 1
+    assert all(store.get_result(result_id)['committed'] for result_id in receipts)

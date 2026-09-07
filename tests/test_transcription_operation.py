@@ -113,24 +113,29 @@ def test_cli_and_sync_mcp_use_shared_batch_and_persist_silence(tmp_path):
     from core.project import Project
     from scene_ripper_mcp.tools.analyze import _transcribe_sync
     from tests.test_spine_analyze import _build_project
-    from core.operations.transcription import run_transcription as real_run
+    from types import SimpleNamespace
 
     project = _build_project(tmp_path, 2)
     path = tmp_path / "project.json"
     assert project.save(path)
     register_commands()
     with (
-        patch("core.operations.transcription.run_transcription", wraps=real_run) as run,
-        patch("core.transcription.transcribe_clip", return_value=[]),
+        patch(
+            "core.settings.load_settings",
+            return_value=SimpleNamespace(cache_dir=tmp_path),
+        ),
+        patch("core.transcription.transcribe_clip", return_value=[]) as compute,
     ):
         result = CliRunner().invoke(cli, ["--json", "transcribe", str(path)])
         assert result.exit_code == 0, result.output
-        assert run.call_count == 1
+        assert compute.call_count == 2
         assert all(clip.transcript == [] for clip in Project.load(path).clips)
+        assert len(Project.load(path).metadata.job_results) == 2
         response = json.loads(_transcribe_sync(path, "small.en", "en"))
         assert response["success"] and response["transcribed_clips"] == 2
         assert response["skipped_clips"] == 0
-        assert run.call_count == 2
+        assert compute.call_count == 4
+        assert len(Project.load(path).metadata.job_results) == 4
 
 
 def test_headless_results_reject_project_replacement(tmp_path):
@@ -185,14 +190,21 @@ def test_cli_and_mcp_preserve_dependency_failure_envelopes(tmp_path):
     from core.transcription_models import FasterWhisperNotInstalledError
     from scene_ripper_mcp.tools.analyze import _transcribe_sync
     from tests.test_spine_analyze import _build_project
+    from types import SimpleNamespace
 
     project = _build_project(tmp_path, 2)
     path = tmp_path / "project.json"
     assert project.save(path)
     register_commands()
-    with patch(
-        "core.transcription.transcribe_clip",
-        side_effect=FasterWhisperNotInstalledError(),
+    with (
+        patch(
+            "core.settings.load_settings",
+            return_value=SimpleNamespace(cache_dir=tmp_path),
+        ),
+        patch(
+            "core.transcription.transcribe_clip",
+            side_effect=FasterWhisperNotInstalledError(),
+        ),
     ):
         result = CliRunner().invoke(cli, ["transcribe", str(path)])
         assert result.exit_code == 4, result.output

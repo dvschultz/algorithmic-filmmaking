@@ -133,14 +133,25 @@ def transcribe(
     output_info(f"Using Whisper model: {model}")
     output_info("Loading model (this may take a moment on first run)...")
 
-    from core.spine.analyze import transcribe as transcribe_project
+    from threading import Event
+    from core.jobs.store import JobStore
+    from core.jobs.transcription import run_transcription_job
+    from core.operations.transcription import TranscriptionOptions
+    from core.settings import load_settings
 
     with ProgressContext("Transcribing") as progress:
-        batch = transcribe_project(
-            project, [clip.id for clip in clips_to_transcribe], model=model,
-            language=language, skip_existing=not force,
-            progress_callback=progress.update,
-        )["result"]
+        try:
+            batch = run_transcription_job(
+                JobStore(load_settings().cache_dir / "jobs.db"),
+                project_file,
+                [clip.id for clip in clips_to_transcribe],
+                TranscriptionOptions(model=model, language=language),
+                progress.update,
+                Event(),
+                force=force,
+            )["result"]
+        except Exception as exc:
+            exit_with(ExitCode.GENERAL_ERROR, f"Transcription failed: {exc}")
         progress.update(1.0, "Complete")
     transcribed_count = len(batch["succeeded"])
     total_segments = sum(item["segment_count"] for item in batch["succeeded"])
@@ -148,12 +159,6 @@ def transcribe(
 
     if not transcribed_count and any(item["code"] == "dependency_missing" for item in batch["failed"]):
         exit_with(ExitCode.DEPENDENCY_MISSING, errors[0])
-
-    # Save updated project
-    success = project.save()
-
-    if not success:
-        exit_with(ExitCode.GENERAL_ERROR, "Failed to save project")
 
     result = {
         "transcribed_clips": transcribed_count,
