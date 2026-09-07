@@ -1,0 +1,74 @@
+"""Acknowledge GUI computation receipts from an atomically saved snapshot."""
+
+from hashlib import sha256
+import json
+from pathlib import Path
+
+from core.jobs.commits import StaleJobResult
+from core.jobs.store import JobStore
+from core.transcription_models import TranscriptSegment, WordTimestamp
+
+
+def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
+    """Call only after writing this exact snapshot, while holding its writer.
+
+    Historical results that no longer match the saved transcript stay unchanged.
+    Missing cache entries and other operation kinds cannot be acknowledged here.
+    """
+    receipts = snapshot.get("job_results", {})
+    if not receipts:
+        return 0
+    from core.settings import load_settings
+
+    database = load_settings().cache_dir / "jobs.db"
+    if not database.is_file():
+        return 0
+    store = JobStore(database)
+    canonical = str(path.expanduser().resolve())
+    clips = {clip["id"]: clip for clip in snapshot.get("clips", [])}
+    pending = []
+    for row in store.get_pending_results(list(receipts)):
+        result_id = row["result_id"]
+        receipt_digest = receipts[result_id]
+        identity = json.loads(row["spec_json"])
+        if (
+            identity["kind"] not in ("gui_transcribe", "gui_align_words")
+            or identity["version"] != 1
+        ):
+            continue
+        if (
+            sha256(row["spec_json"].encode()).hexdigest() != result_id
+            or sha256(row["payload_json"].encode()).hexdigest() != receipt_digest
+            or row["payload_digest"] != receipt_digest
+        ):
+            raise StaleJobResult("Saved GUI result identity or payload is corrupt")
+        if identity["project_path"] != canonical or identity["inputs"][
+            "project_id"
+        ] != snapshot.get("id"):
+            continue
+        clip = clips.get(identity["target_id"])
+        if clip is None or clip["source_id"] != identity["inputs"]["source_id"]:
+            continue
+        payload = json.loads(row["payload_json"])
+        if payload["clip_id"] != clip["id"] or payload["status"] != "succeeded":
+            raise StaleJobResult("Saved GUI result does not match its target")
+        if identity["kind"] == "gui_transcribe":
+            expected = [
+                TranscriptSegment.from_dict(s).to_dict() for s in payload["segments"]
+            ]
+        else:
+            from core.analysis.alignment import distribute_words_to_segments
+
+            segments = [
+                TranscriptSegment.from_dict(s)
+                for s in json.loads(identity["inputs"]["task"]["transcript_json"])
+            ]
+            distribute_words_to_segments(
+                segments, [WordTimestamp.from_dict(w) for w in payload["words"]]
+            )
+            expected = [segment.to_dict() for segment in segments]
+        if clip.get("transcript") == expected:
+            pending.append((result_id, receipt_digest))
+    if pending:
+        store.checkpoint_results(pending)
+    return len(pending)

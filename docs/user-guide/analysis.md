@@ -537,3 +537,9 @@ results are sent to inference. Model, language, segmentation, prior transcript,
 and media changes produce different inputs; an explicit new refresh after a
 saved result computes again. Keep the shared job cache for recovery. GUI and
 headless transcription currently keep separate computation identities.
+
+Normal saves acknowledge matching GUI transcription and alignment receipts only
+after the project file is safely written. If that acknowledgement fails, your
+project is still saved; saving again retries it without rerunning inference.
+The log identifies pending checkpoint errors. Keep the shared job cache for
+recovery; saving does not rebuild a missing cache.

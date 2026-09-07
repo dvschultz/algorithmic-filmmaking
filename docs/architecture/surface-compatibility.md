@@ -256,7 +256,7 @@ These GUI jobs are explicitly session-only, including when the editor has a
 saved project path: results become unsaved model changes until the user saves.
 Their temporary job store closes after delivery. For saved projects, computed
 outcomes are retained separately in the shared journal described below; durable
-GUI job history and save/checkpoint integration remain outstanding U7 work.
+GUI job history remains outstanding U7 work.
 
 ### Word alignment computation and application
 
@@ -307,7 +307,7 @@ project saves include words and receipts together; inference never saves unrelat
 edits automatically. Unsaved projects remain memory-only. GUI alignment uses a
 separate result identity from headless alignment because it records word outcomes
 before segment publication; it does not reuse headless segment-result entries.
-Durable GUI job history and save/checkpoint integration remain outstanding.
+Durable GUI job history remains outstanding.
 
 Saved GUI transcription now uses the same `core/jobs/gui_results.py` journal.
 Its adapter includes the resolved transcription options and prior transcript in
@@ -320,3 +320,18 @@ preparation, after preparation, and before recording or delivering results.
 GUI transcription uses its own outcome-cache identity; it does not reuse
 headless transcript-result entries. Neither GUI adapter saves unrelated edits
 automatically, and projects without a save location remain memory-only.
+
+The common atomic save path now acknowledges matching GUI result receipts after
+the project file is written, under the same writer lease. This covers synchronous
+and background saves. `core/jobs/gui_checkpoints.py` validates the serialized
+snapshot's project/path/target identity and transcript against the recorded
+outcome, including word distribution for alignment. Newer live edits are never
+used to acknowledge an older background-save snapshot. Changed or historical
+nonmatching outputs stay pending; identical saved refreshes are all reconciled.
+Pending rows are read in bounded queries through one database connection.
+
+A checkpoint error cannot turn an already-written project into a failed save.
+The error is logged and a later ordinary save retries acknowledgement without
+inference or result application. Missing caches are not recreated by saving;
+unknown receipts and headless result kinds are left to their owning recovery
+paths. Durable GUI job history remains a separate unfinished migration.

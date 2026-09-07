@@ -482,6 +482,11 @@ loading the alignment runtime. Saved GUI projects separately cache word outcomes
 before delivery and include their receipts in normal project saves; those entries
 are not reused by headless alignment.
 
+Ordinary project saves also acknowledge matching GUI transcript and alignment
+receipts after writing the file. A failed acknowledgement leaves the saved file
+intact and can be retried by saving again. Headless result receipts retain their
+existing job-specific checkpoint paths.
+
 `start_detect_scenes_bulk` also records computed scenes, saving one source and
 its receipt at a time. Retrying identical inputs reuses the recorded clip IDs;
 a failed save retries publication, and a failed checkpoint reconciles the saved

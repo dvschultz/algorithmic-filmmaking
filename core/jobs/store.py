@@ -436,6 +436,24 @@ class JobStore:
             ).fetchone()
         return dict(row) if row is not None else None
 
+    def get_pending_results(self, result_ids: Sequence[str]) -> list[dict]:
+        """Read pending receipts in bounded queries using one connection."""
+        if not result_ids:
+            return []
+        rows: list[dict] = []
+        with self._connect() as conn:
+            for offset in range(0, len(result_ids), 500):
+                batch = result_ids[offset : offset + 500]
+                placeholders = ",".join("?" for _ in batch)
+                rows.extend(
+                    dict(row)
+                    for row in conn.execute(
+                        f"SELECT * FROM job_results WHERE committed=0 AND result_id IN ({placeholders})",
+                        batch,
+                    ).fetchall()
+                )
+        return rows
+
     def get_download_receipt(self, request_id: str) -> dict | None:
         with self._connect() as conn:
             row = conn.execute(

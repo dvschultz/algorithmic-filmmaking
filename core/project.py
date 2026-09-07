@@ -410,6 +410,16 @@ def _save_project_owned(
                 pass
             raise
 
+        if project_data.get("job_results"):
+            try:
+                from core.jobs.gui_checkpoints import checkpoint_saved_gui_results
+
+                checkpoint_saved_gui_results(filepath, project_data)
+            except Exception:
+                # The project file is already durable. A retry must acknowledge
+                # its receipts, not report a failed save or repeat inference.
+                logger.warning("Project saved; GUI result checkpoints remain pending", exc_info=True)
+
         if progress_callback:
             progress_callback(1.0, "Project saved")
 
