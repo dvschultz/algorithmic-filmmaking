@@ -29,8 +29,8 @@ the matching `.bak` file. Keep the backup until the restored file has been
 verified with the previous application. A backup contains the JSON document;
 it does not duplicate referenced media.
 
-This implements part of U5. The MCP retained-session API remains separate work;
-shared headless models now check external revisions before offering history.
+This implements part of U5. Shared headless models check external revisions
+before offering history; MCP exposes the retained session API described below.
 
 Offline source files remain declared sources on load, so their clips and edits
 survive in every sequence. A relink callback can supply an existing replacement;
@@ -140,3 +140,14 @@ reload; restoring old bytes does not reactivate stale history. Clearing a
 project discards the revision. Plain `Project.load` does not opt into these
 headless checks. These checks detect observed changes; they cannot make an
 uncooperative external writer participate in the application lock protocol.
+
+MCP now retains explicit headless editing sessions in `core/spine/project_sessions.py`.
+A transport-owned serial executor keeps their model mutations on one owner
+thread. Session create/rename/delete sequence tools and undo/redo save each
+successful edit under load-through-save writer ownership. The session retains
+its model and history between calls, but releases the writer lease. External
+revision changes reload the model and invalidate previous history before the
+next operation; failed saves discard unpublished state. Shutdown drains queued
+session work and closes models. Legacy path-based tools still load independently;
+their writes trigger the same revision-driven reload. Migrating their remaining
+editorial operations into retained sessions is still outstanding.

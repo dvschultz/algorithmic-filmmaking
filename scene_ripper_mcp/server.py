@@ -58,6 +58,8 @@ async def lifespan(server: FastMCP) -> AsyncIterator[dict]:
             swept,
         )
     job_runtime = JobRuntime(job_store)
+    from scene_ripper_mcp.project_sessions import SessionRuntime
+    project_sessions = SessionRuntime()
 
     try:
         yield {
@@ -65,10 +67,14 @@ async def lifespan(server: FastMCP) -> AsyncIterator[dict]:
             "tool_timeout": timeout,
             "job_store": job_store,
             "job_runtime": job_runtime,
+            "project_sessions": project_sessions,
         }
     finally:
         logger.info("Scene Ripper MCP Server shutting down...")
-        job_runtime.shutdown(wait=False)
+        try:
+            await project_sessions.shutdown()
+        finally:
+            job_runtime.shutdown(wait=False)
 
 
 # Create the MCP server instance
@@ -87,6 +93,7 @@ from scene_ripper_mcp.tools import clips  # noqa: F401, E402
 from scene_ripper_mcp.tools import sequence  # noqa: F401, E402
 from scene_ripper_mcp.tools import export  # noqa: F401, E402
 from scene_ripper_mcp.tools import jobs  # noqa: F401, E402
+from scene_ripper_mcp.tools import sessions  # noqa: F401, E402
 
 
 def main():

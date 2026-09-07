@@ -46,6 +46,7 @@ SPINE_MODULES: tuple[str, ...] = (
     "core.spine.security",
     "core.spine.url_security",
     "core.spine.project_io",
+    "core.spine.project_sessions",
     "core.spine._agent_formatting",
     "core.spine.audio_sources",
     "core.spine.chatgpt_auth",

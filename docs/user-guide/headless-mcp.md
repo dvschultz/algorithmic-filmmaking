@@ -328,3 +328,36 @@ remote network exposure. The job database (`<cache>/jobs.db`) is created
 with mode `0o600` so other users on the machine cannot read job history
 (R29). Run it under your user account, behind whatever transport your
 agent uses (stdio or local HTTP).
+
+## Retained editing sessions
+
+Use `open_project_session(project_path)` to keep sequence edits and undo history
+across MCP calls. It returns a `session_id`. Reopening the same file reuses its
+session; `get_project_session(session_id)` reports sequences and history state.
+
+The initial retained editing tools are:
+
+- `create_session_sequence(session_id, name, fps=30.0)`
+- `rename_session_sequence(session_id, sequence_id, name)`
+- `delete_session_sequence(session_id, sequence_id)`
+- `undo_project_session(session_id)` and `redo_project_session(session_id)`
+- `close_project_session(session_id)`
+
+Each successful edit saves the project before returning. Undo and redo also
+save, and never rerun analysis, downloads, or generation. A failed save discards
+the unpublished in-memory edit; the next call reloads the on-disk project.
+Closing the session or stopping the server discards history, not saved edits.
+
+Existing path-based tools remain available. They do not add to retained undo
+history. If they or another process change the saved file, the retained session
+reloads and reports `history_reset: true`. An undo request after such a change
+finds no old history to replay. The next edit uses the reloaded project.
+
+The server serializes retained session calls on an owner thread and acquires
+writer ownership during each operation. A desktop-owned file returns
+`project_busy`. Ownership is released between calls. Newer-schema projects can
+be inspected but cannot be edited. Cancelling a request that is already running
+does not roll back its save; inspect the session before retrying that edit.
+
+If an open project path is retargeted through a symlink, close and reopen the
+session to accept the new location. Existing session handles reject that change.
