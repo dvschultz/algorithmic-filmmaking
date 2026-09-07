@@ -629,3 +629,26 @@ item, including skips. Pipeline summaries retain gaze errors.
 
 Durable gaze job recovery remains the next U7 step. This cutover does not complete
 U7 or add native-process isolation.
+
+### Durable headless gaze analysis
+
+Dedicated MCP gaze jobs, gaze steps in combined analysis plans, and CLI
+`analyze gaze <project> [--sample-interval <seconds>] [--force]` journal completed
+observations through `core/jobs/gaze.py`. Source and range fingerprints, sampling
+options, algorithm/model identity, and runtime package versions bind each result.
+Successful computations survive failed saves, and reconciliation recognizes the
+project format's two-decimal angle precision without rounding the journal payload.
+
+A completed no-gaze observation has an explicit receipt even though all three
+gaze fields are empty. The existing public `no_gaze_detected` response remains;
+retries reuse its receipt instead of repeating inference. Decode/model failures
+have no successful observation receipt. Forced refresh can replace old angles
+with a completed empty observation. Ordinary retries preserve edited angles.
+
+One model session spans pending items and their commits. Cache-only retries never
+initialize the model. GUI gaze history and recovery remain the next U7 step.
+
+The MCP analysis adapter translates shared operation kinds to their existing
+public job names at submission. Gaze, faces, objects, classification, and
+cinematography are covered by tests that submit to the real job runtime and
+verify completed jobs and saved receipts, with provider inference mocked.

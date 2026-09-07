@@ -17,6 +17,14 @@ from core.spine.project_io import load_with_mtime, project_writer, save_with_mti
 
 def analysis_job_spec(project: Project, *, arguments: dict) -> OperationSpec:
     inputs = {}
+    if "gaze" in (arguments.get("operations") or []):
+        from core.jobs.gaze import gaze_job_spec
+        from core.operations.gaze import GazeOptions
+
+        gaze = gaze_job_spec(
+            project, arguments.get("clip_ids"), GazeOptions(), arguments={},
+        )
+        inputs["gaze"] = json.loads(gaze.inputs_json)
     if "face_embeddings" in (arguments.get("operations") or []):
         from core.jobs.faces import face_job_spec
         from core.operations.faces import FaceOptions
@@ -114,6 +122,7 @@ def run_analysis_job(
         cinematography = captured.get("cinematography")
         classification = captured.get("classification")
         object_detection = captured.get("object_detection")
+        gaze = captured.get("gaze")
         faces = captured.get("faces")
         options = (
             TranscriptionOptions(**transcription["options"]) if transcription else None
@@ -124,6 +133,21 @@ def run_analysis_job(
                 raise StaleJobResult("Analysis inputs changed while the job was queued")
 
         def execute(op: str, report: Progress | None) -> dict:
+            if op == "gaze":
+                from core.jobs.gaze import gaze_job_spec, run_gaze_job
+                from core.operations.gaze import GazeOptions
+
+                if gaze is None:
+                    raise StaleJobResult("Analysis job has no captured gaze options")
+                current, _ = load_with_mtime(path)
+                step = gaze_job_spec(
+                    current, ids, GazeOptions(**gaze["options"]), arguments={},
+                )
+                if json.loads(step.inputs_json) != gaze:
+                    raise StaleJobResult("Gaze inputs changed before analysis")
+                return run_gaze_job(
+                    store, path, ids, report or (lambda *_: None), cancel, operation=step,
+                )
             if op == "face_embeddings":
                 from core.jobs.faces import face_job_spec, run_face_job
                 from core.operations.faces import FaceOptions

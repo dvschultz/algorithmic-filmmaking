@@ -562,6 +562,24 @@ async def _start_spine_analyze_job(
                 progress_callback, cancel_event, operation=operation,
                 force=operation.arguments.get("force", False),
             )
+    elif spine_fn_name == "gaze":
+        from core.jobs.gaze import gaze_job_spec, run_gaze_job
+        from core.operations.gaze import GazeOptions
+
+        try:
+            operation = gaze_job_spec(
+                _project, clip_ids, GazeOptions(payload["sample_interval"]),
+                arguments=payload,
+            )
+        except ValueError as exc:
+            return json.dumps(_wrap_error(exc))
+        store = _lifespan(ctx)["job_store"]
+
+        def run(progress_callback, cancel_event):
+            return run_gaze_job(
+                store, path, operation.arguments["clip_ids"],
+                progress_callback, cancel_event, operation=operation,
+            )
     elif spine_fn_name == "face_embeddings":
         from core.jobs.faces import face_job_spec, run_face_job
         from core.operations.faces import FaceOptions
@@ -670,6 +688,11 @@ async def _start_spine_analyze_job(
         runner_factory = _make_analyze_runner(spine_fn_name, **op_kwargs)
         run = runner_factory(path, mtime, clip_ids)
 
+    # Public MCP job names are compatibility aliases for shared operations.
+    # Project/result identity stays internal; submitted job metadata must use
+    # the public name that callers will poll and find in their job history.
+    from dataclasses import replace
+
     return _start_job(
         ctx,
         kind=kind,
@@ -678,7 +701,7 @@ async def _start_spine_analyze_job(
         project_mtime_at_start=mtime,
         idempotency_key=idempotency_key,
         run=run,
-        operation=operation,
+        operation=replace(operation, kind=kind) if operation is not None else None,
     )
 
 

@@ -606,6 +606,77 @@ async def test_cinematography_submission_pins_options_and_records_results(lifesp
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("generic", [False, True])
+async def test_gaze_submission_records_durable_results(lifespan_ctx, tmp_path, monkeypatch, generic):
+    from core.project import Project
+    from scene_ripper_mcp.tools import jobs
+
+    ctx, store, _runtime = lifespan_ctx
+    path = _make_project_file(tmp_path)
+    captured = {}
+    monkeypatch.setattr(jobs, "_start_job", lambda ctx, **kwargs: captured.update(kwargs) or "queued")
+    compute = Mock(return_value={"gaze_yaw": 2.123456, "gaze_pitch": -1.23456, "gaze_category": "at_camera"})
+    monkeypatch.setattr("core.analysis.gaze.extract_gaze_from_clip", compute)
+    monkeypatch.setattr("core.analysis.gaze.load_face_mesh", Mock())
+    monkeypatch.setattr("core.analysis.gaze.unload_model", Mock())
+    ids = ["clip-1"]
+    if generic:
+        response = await jobs.start_analyze_clips(str(path), clip_ids=ids, operations=["gaze"], ctx=ctx)
+    else:
+        response = await jobs.start_analyze_gaze(str(path), clip_ids=ids, sample_interval=.4, ctx=ctx)
+    assert response == "queued"
+    ids.clear()
+    result = captured["run"](lambda *_: None, threading.Event())
+    assert result["success"]
+    assert compute.call_args.kwargs["sample_interval"] == (1.0 if generic else .4)
+    saved = Project.load(path)
+    assert saved.clips[0].gaze_yaw == 2.12
+    assert saved.clips[0].gaze_pitch == -1.23
+    assert len(saved.metadata.job_results) == 1
+    assert all(store.get_result(rid)["committed"] for rid in saved.metadata.job_results)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("public_kind", ["analyze_gaze", "detect_faces", "detect_objects", "analyze_classify", "analyze_cinematography"])
+async def test_durable_analysis_alias_submits_to_real_runtime(lifespan_ctx, tmp_path, monkeypatch, public_kind):
+    from core.project import Project
+    from core.jobs.spec import OperationSpec
+    from core.settings import Settings
+    from models.cinematography import CinematographyAnalysis
+    from scene_ripper_mcp.tools import jobs
+
+    ctx, store, _ = lifespan_ctx
+    path = _make_project_file(tmp_path)
+    project = Project.load(path)
+    thumbnail = tmp_path / "thumb.jpg"
+    thumbnail.write_bytes(b"image")
+    project.clips[0].thumbnail_path = thumbnail
+    assert project.save()
+    settings = Settings(cinematography_tier="cloud", cinematography_model="test-model")
+    monkeypatch.setattr("core.settings.load_settings", lambda: settings)
+    monkeypatch.setattr("core.analysis.gaze.extract_gaze_from_clip", Mock(return_value={"gaze_yaw": 2., "gaze_pitch": 1., "gaze_category": "at_camera"}))
+    monkeypatch.setattr("core.analysis.gaze.load_face_mesh", Mock())
+    monkeypatch.setattr("core.analysis.gaze.unload_model", Mock())
+    monkeypatch.setattr("core.analysis.faces.extract_faces_from_clip", Mock(return_value=[]))
+    monkeypatch.setattr("core.analysis.faces._load_insightface", Mock())
+    monkeypatch.setattr("core.analysis.faces.unload_model", Mock())
+    monkeypatch.setattr("core.analysis.detection.detect_objects", Mock(return_value=[]))
+    monkeypatch.setattr("core.analysis.classification.classify_frame", Mock(return_value=[("cat", .9)]))
+    monkeypatch.setattr("core.analysis.cinematography.analyze_cinematography", Mock(return_value=CinematographyAnalysis(shot_size="CU")))
+    tool = getattr(jobs, "start_" + public_kind)
+    response = json.loads(await tool(str(path), ctx=ctx))
+    assert response["success"], response
+    _wait_for_status(store, response["task_id"], STATUS_COMPLETED)
+    row = store.get(response["task_id"])
+    assert row.kind == public_kind
+    assert OperationSpec.from_json(row.operation_json).kind == public_kind
+    assert len(row.result["result"]["succeeded"]) == 1
+    receipts = Project.load(path).metadata.job_results
+    assert len(receipts) == 1
+    assert all(store.get_result(rid)["committed"] for rid in receipts)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("generic", [False, True])
 async def test_face_submission_records_durable_results(lifespan_ctx, tmp_path, monkeypatch, generic):
     from core.project import Project
     from scene_ripper_mcp.tools import jobs

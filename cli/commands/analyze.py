@@ -22,8 +22,43 @@ def analyze() -> None:
         shots     Classify shot types (wide, medium, close-up)
         align     Add word timestamps to existing transcripts
         faces     Extract face embeddings with resumable results
+        gaze      Estimate gaze direction with resumable results
     """
     pass
+
+
+@analyze.command("gaze")
+@click.argument("project_file", type=click.Path(exists=True, path_type=Path))
+@click.option("--clip-id", "-c", "clip_ids", multiple=True, help="Clip ID or eight-character prefix")
+@click.option("--sample-interval", type=float, default=1.0, show_default=True, help="Seconds between sampled frames")
+@click.option("--force", "-f", is_flag=True, help="Re-analyze existing gaze results")
+@click.pass_context
+def gaze(ctx: click.Context, project_file: Path, clip_ids: tuple[str, ...], sample_interval: float, force: bool) -> None:
+    """Estimate gaze direction and safely reuse interrupted computation."""
+    from math import isfinite
+    from threading import Event
+    from core.jobs.gaze import run_gaze_job
+    from core.jobs.store import JobStore
+    from core.operations.gaze import GazeOptions
+    from core.project import Project
+
+    if not isfinite(sample_interval) or sample_interval <= 0:
+        exit_with(ExitCode.VALIDATION_ERROR, "Sample interval must be a positive finite number")
+    project_file = own_project(ctx, project_file)
+    try:
+        project = Project.load(project_file, missing_source_callback=lambda path, sid: None)
+        selected = [c.id for c in project.clips if not clip_ids or c.id in clip_ids or c.id[:8] in clip_ids]
+        if clip_ids and not selected:
+            exit_with(ExitCode.VALIDATION_ERROR, "No matching clips found")
+        store = JobStore(CLIConfig.load().cache_dir / "jobs.db")
+        try:
+            with ProgressContext("Detecting gaze") as progress:
+                result = run_gaze_job(store, project_file, selected, progress.update, Event(), options=GazeOptions(sample_interval), force=force)
+        finally:
+            store.close()
+    except Exception as exc:
+        exit_with(ExitCode.GENERAL_ERROR, f"Gaze analysis failed: {exc}")
+    output_result(result, as_json=ctx.obj.get("json", False))
 
 
 @analyze.command("faces")
