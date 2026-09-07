@@ -329,7 +329,7 @@ all retained thumbnail workers; closing waits for them through the existing
 close preflight. Model changes use `Project.update_clips()` on the owner thread;
 saving remains explicit. Intention thumbnails also check their originating plan.
 
-Remaining intention download/analysis worker ownership and the broader
+Remaining intention analysis worker ownership and the broader
 U7 route audit are still required.
 
 ## Intention detection ownership
@@ -351,5 +351,31 @@ Callbacks also check the originating coordinator and plan; an old standalone
 detection completion cannot clear a replacement intention worker. The controller
 checks ownership again after model and UI callbacks before advancing the plan.
 
-U7 remains partial: intention download and analysis ownership plus the remaining
+U7 remains partial: intention analysis ownership plus the remaining
 route audit still need migration.
+
+## Intention download ownership
+
+`ui/workers/intention_download.py` binds the existing recoverable URL download
+worker to one intention run. Detection and download adapters share
+`IntentionRun` identity checks for the project, session, save path, coordinator,
+plan, and requesting agent. Dependency and directory dialogs recheck that
+identity before dispatch; cancelled or failed gates terminate the current run.
+Directory selection uses the existing validated-path dialog helper.
+
+The worker captures immutable `DownloadItem` records when each file completes.
+`DownloadApplication` admits them on the owner thread, validating media identity
+and retaining existing source IDs and editorial metadata. Successful sources can
+appear in Collect while other downloads continue. Cancellation preserves sources
+already admitted and rejects later delivery; it does not implicitly save.
+
+Only native worker completion advances the plan. Before that transition, the
+adapter rechecks source and media identity so removed or replaced sources do not
+enter detection. The coordinator reconciles terminal summaries, counts failures
+and missing outcomes once, and keeps successful downloads and local files when
+other URLs fail. Distinct Qt slots preserve sender identity for progress and
+native completion while reusing the shared download channel's retention.
+
+Reset, replacement, and close cancel workers while retaining them until native
+completion. A worker that cannot start is released immediately. The remaining
+intention analysis adapters and the broader U7 route audit are still open.

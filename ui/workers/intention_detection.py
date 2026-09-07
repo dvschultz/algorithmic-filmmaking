@@ -10,6 +10,7 @@ from core.intention_workflow import WorkflowState
 from core.operations.detection import DetectionApplication, DetectionGuard
 from core.scene_detect import DetectionConfig, KaraokeDetectionConfig
 from ui.workers.detection_worker import DetectionWorker
+from ui.workers.intention_run import IntentionRun
 
 if TYPE_CHECKING:
     from models.clip import Source, Clip
@@ -21,12 +22,10 @@ class IntentionDetectionController(QObject):
     def __init__(self, window: Any) -> None:
         super().__init__(window)
         self.window = window
-        self.project = window.project
-        self.session_id = self.project.session.session_id
-        self.path = self.project.path
-        self.workflow = window.intention_workflow
-        self.plan = self.workflow.plan
-        self.reply = getattr(window, "_dispatch_gui_reply", None)
+        self.run_identity = IntentionRun.capture(window)
+        self.project = self.run_identity.project
+        self.workflow = self.run_identity.workflow
+        self.plan = self.run_identity.plan
         self.worker: DetectionWorker | None = None
         self.application: DetectionApplication | None = None
         self.result: tuple[Source, list[Clip]] | None = None
@@ -65,13 +64,7 @@ class IntentionDetectionController(QObject):
             not self.cancelled
             and not self.disposed
             and self.window._intention_detection is self
-            and self.window.project is self.project
-            and self.project.session.session_id == self.session_id
-            and self.project.path == self.path
-            and self.window.intention_workflow is self.workflow
-            and self.workflow.plan is self.plan
-            and self.workflow.state == WorkflowState.DETECTING
-            and (self.reply is None or self.reply.is_current(self.window))
+            and self.run_identity.is_current(self.window, WorkflowState.DETECTING)
         )
 
     def start(self) -> None:

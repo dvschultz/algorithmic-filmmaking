@@ -38,3 +38,31 @@ def test_download_urls_are_exposed_as_copy():
     urls.append("https://example.com/two")
 
     assert workflow.get_download_urls() == ["https://example.com/one"]
+
+
+def test_terminal_summary_records_failures_and_missing_item_signals(tmp_path):
+    from core.intention_workflow import WorkflowState
+
+    workflow = IntentionWorkflowCoordinator()
+    urls = ["https://example.com/one", "https://example.com/two"]
+    workflow.start("shuffle", [], urls)
+    results = [
+        {"url": urls[0], "success": True, "file_path": str(tmp_path / "one.mp4")},
+        {"url": urls[1], "success": False, "error": "provider rejected URL"},
+    ]
+    workflow.on_download_all_finished(results)
+    assert workflow.state == WorkflowState.DETECTING
+    assert workflow.get_sources_to_detect() == [tmp_path / "one.mp4"]
+    assert workflow._sources_failed == [
+        {"url": urls[1], "error": "provider rejected URL"}
+    ]
+    workflow.on_download_all_finished(results)
+    assert len(workflow._sources_failed) == 1
+
+
+def test_missing_terminal_outcomes_are_counted_as_failures():
+    workflow = IntentionWorkflowCoordinator()
+    urls = ["https://example.com/one", "https://example.com/two"]
+    workflow.start("shuffle", [], urls)
+    workflow.on_download_all_finished([])
+    assert [item["url"] for item in workflow._sources_failed] == urls

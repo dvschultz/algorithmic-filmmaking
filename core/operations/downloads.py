@@ -11,6 +11,8 @@ from core.spine.url_security import validate_url
 
 if TYPE_CHECKING:
     from core.downloader import DownloadResult, VideoDownloader
+    from core.project import Project
+    from models.clip import Source
 
 
 class DownloadCancelled(RuntimeError):
@@ -124,6 +126,120 @@ class DownloadOutcome:
     result: DownloadResult | None = None
     error_code: str | None = None
     error_message: str | None = None
+
+
+@dataclass(frozen=True)
+class DownloadItem:
+    """Immutable per-item delivery captured when the file download completes."""
+
+    index: int
+    url: str
+    status: Literal["succeeded", "failed", "cancelled"]
+    path: Path | None
+    stamp: tuple[int, ...] | None
+    title: str | None = None
+    duration: float | None = None
+    error: str | None = None
+
+    @classmethod
+    def capture(cls, outcome: DownloadOutcome) -> DownloadItem:
+        from core.jobs.media import media_stamp
+
+        result = outcome.result
+        path = Path(result.file_path) if result and result.file_path else None
+        status = outcome.status
+        if status == "succeeded" and (
+            result is None or not result.success or path is None
+        ):
+            status = "failed"
+        return cls(
+            outcome.index,
+            outcome.request.url,
+            status,
+            path,
+            media_stamp(path) if path is not None else None,
+            result.title if result else None,
+            result.duration if result else None,
+            outcome.error_message or (result.error if result else None),
+        )
+
+    def as_result(self) -> DownloadResult:
+        from core.downloader import DownloadResult
+
+        return DownloadResult(
+            success=self.status == "succeeded",
+            file_path=self.path,
+            title=self.title,
+            duration=self.duration,
+            error=self.error
+            or (None if self.status == "succeeded" else "Download did not complete"),
+        )
+
+
+class DownloadApplication:
+    """Admit completed files once without overwriting newer source identity."""
+
+    def __init__(self, project: Project) -> None:
+        project.session.assert_owner()
+        self.project = project
+        self.session_id = project.session.session_id
+        self.path = project.path
+        self.original_sources = tuple(
+            (source, Path(source.file_path)) for source in project.sources
+        )
+
+    def apply(
+        self, item: DownloadItem, *, still_current: Callable[[], bool]
+    ) -> tuple[Source, bool] | None:
+        from core.jobs.media import media_stamp
+        from core.spine.sources import find_source_by_path, same_source_path
+        from models.clip import Source
+
+        project = self.project
+
+        def publish() -> tuple[Source, bool] | None:
+            if (
+                not still_current()
+                or project.session.session_id != self.session_id
+                or project.path != self.path
+            ):
+                return None
+            if (
+                item.status != "succeeded"
+                or item.path is None
+                or item.stamp is None
+                or media_stamp(item.path) != item.stamp
+                or not item.path.is_file()
+            ):
+                raise ValueError("Downloaded media changed or is unavailable")
+            original = next(
+                (
+                    source
+                    for source, path in self.original_sources
+                    if same_source_path(path, item.path)
+                ),
+                None,
+            )
+            current = find_source_by_path(project, item.path)
+            added = current is None
+            if original is not None and current is not original:
+                raise ValueError("Download source was removed or replaced")
+            if current is None:
+                current = Source(
+                    file_path=item.path,
+                    duration_seconds=item.duration or 0,
+                    fps=30,
+                    width=1920,
+                    height=1080,
+                )
+                project.add_source(current)
+            if not still_current():
+                return None
+            if project.sources_by_id.get(current.id) is not current:
+                raise ValueError("Download source was replaced during publication")
+            return current, added
+
+        return project.session.apply_external(publish)
 
 
 def run_download_batch(

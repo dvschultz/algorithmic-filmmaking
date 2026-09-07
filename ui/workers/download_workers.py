@@ -7,6 +7,7 @@ from core.operations.downloads import (
     DownloadRequest,
     DownloadCancelled,
     DownloadOutcome,
+    DownloadItem,
 )
 from ui.workers.base import CancellableWorker
 from core.jobs.downloads import open_download_store, run_recoverable_batch
@@ -105,6 +106,7 @@ class URLBulkDownloadWorker(CancellableWorker):
     progress = Signal(int, int, str)
     video_finished = Signal(str, object)
     all_finished = Signal(list)
+    item_ready = Signal(object)
     MAX_WORKERS = 3
 
     def __init__(self, urls: list[str], download_dir: Path):
@@ -113,8 +115,10 @@ class URLBulkDownloadWorker(CancellableWorker):
         self.requests = tuple(
             DownloadRequest(url, download_dir, adaptive_timeout=True) for url in urls
         )
+        self.items: dict[int, DownloadItem] = {}
 
     def run(self) -> None:
+        self.items = {}
         total = len(self.requests)
         completed = 0
         self.progress.emit(0, total, f"Starting {total} downloads...")
@@ -122,6 +126,9 @@ class URLBulkDownloadWorker(CancellableWorker):
         def on_item(outcome: DownloadOutcome) -> None:
             nonlocal completed
             completed += 1
+            item = DownloadItem.capture(outcome)
+            self.items[outcome.index] = item
+            self.item_ready.emit(item)
             if outcome.status == "succeeded":
                 self.video_finished.emit(outcome.request.url, outcome.result)
             self.progress.emit(

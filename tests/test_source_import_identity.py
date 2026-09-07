@@ -76,7 +76,7 @@ def test_unresolvable_old_source_does_not_block_other_imports(
     assert added and source.file_path == media
 
 
-def test_all_desktop_import_entry_points_reuse_downloaded_alias(tmp_path):
+def test_desktop_import_helpers_reuse_downloaded_alias(tmp_path):
     code = """
 import sys
 from pathlib import Path
@@ -91,7 +91,7 @@ media = root / 'media.mp4'
 media.write_bytes(b'video')
 alias = root / 'alias.mp4'
 alias.hardlink_to(media)
-for name in ('_load_video', '_add_video_to_library', '_on_agent_video_finished', '_on_intention_video_downloaded'):
+for name in ('_load_video', '_add_video_to_library', '_on_agent_video_finished'):
     project = Project.new(name=name)
     source = Source(file_path=media)
     project.add_source(source)
@@ -108,14 +108,6 @@ for name in ('_load_video', '_add_video_to_library', '_on_agent_video_finished',
     window._queue_source_import.assert_not_called()
     window.collect_tab.add_source.assert_not_called()
     window._generate_source_thumbnail.assert_not_called()
-# The real downloader result omits optional fps/size fields.
-from core.downloader import DownloadResult
-project = Project.new(name='real download result')
-window.project = project
-MainWindow._on_intention_video_downloaded(window, 'url',
-    DownloadResult(success=True, file_path=media, duration=2))
-assert len(project.sources) == 1
-assert project.sources[0].fps == 30
 """
     result = subprocess.run(
         [sys.executable, "-c", code, str(tmp_path)],
@@ -125,6 +117,45 @@ assert project.sources[0].fps == 30
         timeout=30,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_intention_download_application_reuses_alias_and_preserves_defaults(tmp_path):
+    from core.downloader import DownloadResult
+    from core.operations.downloads import (
+        DownloadApplication,
+        DownloadItem,
+        DownloadOutcome,
+        DownloadRequest,
+    )
+
+    media = tmp_path / "media.mp4"
+    media.write_bytes(b"video")
+    alias = tmp_path / "alias.mp4"
+    alias.hardlink_to(media)
+    item = DownloadItem.capture(
+        DownloadOutcome(
+            0,
+            DownloadRequest("https://youtube.com/video", tmp_path),
+            "succeeded",
+            DownloadResult(success=True, file_path=alias, duration=2),
+        )
+    )
+    project = Project.new()
+    source = Source(file_path=media, fps=24, color_profile="grayscale")
+    project.add_source(source)
+    project.mark_clean()
+    assert DownloadApplication(project).apply(item, still_current=lambda: True) == (
+        source,
+        False,
+    )
+    assert project.sources == [source] and not project.is_dirty
+    assert source.fps == 24 and source.color_profile == "grayscale"
+
+    empty = Project.new()
+    imported, added = DownloadApplication(empty).apply(item, still_current=lambda: True)
+    assert added and empty.sources == [imported]
+    assert imported.fps == 30 and imported.duration_seconds == 2
+    assert (imported.width, imported.height) == (1920, 1080)
 
 
 @pytest.mark.parametrize("edited", [False, True])

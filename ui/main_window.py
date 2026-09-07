@@ -831,6 +831,8 @@ class MainWindow(QMainWindow):
         """
         self._source_import_queue.cancel_pending()
         self._deferred_agent_download_results = None
+        for delivery in tuple(getattr(self, "_active_intention_downloads", ())):
+            delivery.cancel()
         self._cancel_download_workers()
         self._active_detection_reply = None
         self._pending_thumbnail_clips = []
@@ -8512,55 +8514,47 @@ class MainWindow(QMainWindow):
     # --- Intention workflow phase helpers ---
 
     def _start_intention_downloads(self, urls: list):
-        """Start downloading URLs for the intention workflow."""
-        if not urls:
+        """Gate downloads, then bind their delivery to the requesting run."""
+        if not urls or not self.intention_workflow:
             return
+        from ui.workers.intention_download import IntentionDownloadDelivery
+        from ui.workers.intention_run import IntentionRun
 
+        run = IntentionRun.capture(self)
+        if not run.is_current(self, WorkflowState.DOWNLOADING):
+            return
+        previous = self._download_deliveries.get("url_bulk_download_worker")
+        if (isinstance(previous, IntentionDownloadDelivery)
+                and previous.run_identity.plan is run.plan and not previous.cancelled):
+            return
         if not self._ensure_video_download_available():
-            self._on_intention_workflow_error("yt-dlp is required to download videos.")
+            if run.is_current(self, WorkflowState.DOWNLOADING):
+                run.workflow.fail("yt-dlp is required to download videos.")
             return
-
-        download_dir = validate_download_dir(self.settings.download_dir)
-        if not download_dir:
-            download_dir = get_default_download_dir()
-
-        self.url_bulk_download_worker = URLBulkDownloadWorker(urls, download_dir)
-
-        self._bind_download_worker("url_bulk_download_worker", {
-            "progress": ("bulk_progress", self.intention_workflow.on_download_progress),
-            "video_finished": ("url_result", self._on_intention_video_downloaded),
-            "all_finished": ("bulk_completed", self.intention_workflow.on_download_all_finished),
-        })
-
-        self.url_bulk_download_worker.start()
-
-    def _on_intention_video_downloaded(self, url: str, result):
-        """Handle individual video download completion during intention workflow."""
-        # Notify coordinator
-        if self.intention_workflow:
-            self.intention_workflow.on_download_video_finished(url, result)
-
-        # Also add to project and collect tab
-        if result and result.success and result.file_path:
-            from models.clip import Source
-            file_path = Path(result.file_path)
-
-            # Check if already in project
-            if find_source_by_path(self.project, file_path) is not None:
-                return
-
-            # Create source and add to project
-            source = Source(
-                file_path=file_path,
-                duration_seconds=result.duration or 0,
-                fps=getattr(result, "fps", None) or 30.0,
-                width=getattr(result, "width", None) or 1920,
-                height=getattr(result, "height", None) or 1080,
-            )
-            source, added = add_source_if_missing(self.project, source)
-            if not added:
-                return
-            self.collect_tab.add_source(source)
+        if not run.is_current(self, WorkflowState.DOWNLOADING):
+            return
+        download_dir = self._validate_download_directory(self.settings.download_dir)
+        if not run.is_current(self, WorkflowState.DOWNLOADING):
+            return
+        if download_dir is None:
+            run.workflow.cancel()
+            return
+        worker = None
+        delivery = None
+        try:
+            worker = URLBulkDownloadWorker(run.workflow.get_download_urls(), download_dir)
+            self.url_bulk_download_worker = worker
+            delivery = IntentionDownloadDelivery(self, worker, run)
+            worker.start()
+        except Exception as exc:
+            if run.is_current(self, WorkflowState.DOWNLOADING):
+                run.workflow.fail(str(exc))
+            if delivery is not None:
+                delivery.abort_start()
+            elif worker is not None:
+                if self.url_bulk_download_worker is worker:
+                    self.url_bulk_download_worker = None
+                worker.deleteLater()
 
     def _start_intention_detection(self):
         """Dispatch this plan's serial detection through its owning adapter."""
@@ -10180,9 +10174,12 @@ class MainWindow(QMainWindow):
         audio_workers = tuple(getattr(self, "_active_audio_transcribes", ())) + tuple(getattr(self, "_active_audio_imports", ()))
         frame_analyses = tuple(getattr(self, "_active_frame_analyses", ()))
         intention_detections = tuple(getattr(self, "_active_intention_detections", ()))
+        intention_downloads = tuple(getattr(self, "_active_intention_downloads", ()))
+        for delivery in intention_downloads:
+            delivery.cancel()
         for controller in intention_detections:
             controller.cancel()
-        intention_workers = tuple(controller.worker for controller in intention_detections if controller.worker is not None)
+        intention_workers = tuple(controller.worker for controller in intention_detections if controller.worker is not None) + tuple(delivery.worker for delivery in intention_downloads)
         for controller in frame_analyses:
             controller.cancel()
         analysis_workers = tuple(controller.worker for controller in frame_analyses if controller.worker is not None)

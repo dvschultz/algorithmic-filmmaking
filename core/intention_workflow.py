@@ -106,7 +106,6 @@ class IntentionWorkflowCoordinator(QObject):
         self._current_source_index = 0
 
         # Worker references (set by MainWindow when connecting)
-        self._download_worker = None
         self._thumbnail_worker = None
         self._color_worker = None
 
@@ -191,8 +190,6 @@ class IntentionWorkflowCoordinator(QObject):
         self._state = WorkflowState.CANCELLED
 
         # Cancel any running workers
-        if self._download_worker and hasattr(self._download_worker, "cancel"):
-            self._download_worker.cancel()
         if self._color_worker and hasattr(self._color_worker, "cancel"):
             self._color_worker.cancel()
 
@@ -276,6 +273,37 @@ class IntentionWorkflowCoordinator(QObject):
         """Handle all downloads completed."""
         if not self._active("downloading"):
             return
+
+        # Terminal summaries include failures that have no success-only item signal.
+        from core.downloader import DownloadResult
+
+        for item in results:
+            if not isinstance(item, dict):
+                continue  # Older callers already delivered DownloadResult objects.
+            url = item.get("url")
+            if url not in self._urls or url in self._download_outcomes:
+                continue
+            path = item.get("file_path")
+            self.on_download_video_finished(
+                url,
+                DownloadResult(
+                    success=bool(item.get("success") and path),
+                    file_path=Path(path) if path else None,
+                    error=item.get("error") or "Download did not complete",
+                ),
+            )
+        if not self._active("downloading"):
+            return
+
+        for url in self._urls:
+            if url not in self._download_outcomes:
+                self.on_download_video_finished(
+                    url,
+                    DownloadResult(
+                        success=False,
+                        error="Download completed without a result",
+                    ),
+                )
 
         logger.info(
             f"All downloads complete: {len(self._sources_to_process)} succeeded, "

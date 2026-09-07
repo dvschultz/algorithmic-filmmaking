@@ -6,9 +6,21 @@ from PySide6.QtCore import QObject, Slot
 
 
 class DownloadDelivery(QObject):
-    """Owner-thread relay that retains replaced workers until they finish."""
+    """Owner-thread relay that retains replaced workers until they finish.
 
-    def __init__(self, window, attribute: str, worker, handlers: dict[str, Callable]):
+    A custom finished hook must eventually call `_finished()` to release the
+    channel. Give subclass Qt slots distinct names to preserve sender identity.
+    """
+
+    def __init__(
+        self,
+        window,
+        attribute: str,
+        worker,
+        handlers: dict[str, Callable],
+        *,
+        finished: Callable[[], None] | None = None,
+    ) -> None:
         super().__init__(window)
         self.window = window
         self.attribute = attribute
@@ -22,7 +34,7 @@ class DownloadDelivery(QObject):
         window._download_deliveries[attribute] = self
         window._active_download_workers.add(worker)
         worker.setParent(self)
-        worker.finished.connect(self._finished)
+        worker.finished.connect(finished or self._finished)
 
     def bind_signal(self, signal, handler: str) -> None:
         signal.connect(getattr(self, handler))
