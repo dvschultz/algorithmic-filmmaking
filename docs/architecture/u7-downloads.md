@@ -27,9 +27,23 @@ work after submission. Intention source admission accepts the actual
 `DownloadResult` shape, which does not promise fps or dimensions, and keeps the
 existing defaults when those fields are unavailable.
 
-This slice consolidates native execution and desktop delivery guards. The GUI's
-parallel batch loops and the spine's serial batch loop still require a shared
-orchestration layer. Durable per-download results, shared ordered intention plans,
+`run_download_batch` now owns both parallel desktop and serial headless scheduling.
+It snapshots requests, keeps at most the configured number of downloads active,
+and stops starting native work once cancellation is observed. It returns exactly
+one outcome per input in input order, including duplicate URLs and cancelled
+items. Previously completed successes survive later failures or cancellation.
+Callbacks run on the scheduler's calling thread, not its download executor threads.
+A callback failure stops further dispatch, signals cancellation, waits for active
+work, and propagates the error.
+
+The Qt adapters live in `ui.workers.download_workers`; their former MainWindow
+names remain import aliases. Search-result IDs and URLs are copied at construction.
+URL-batch final results now have deterministic input ordering and explicitly
+include cancelled items with `success: false` and `cancelled: true`. Existing
+success and failure fields and per-item signals remain. The headless spine retains
+its separate succeeded/failed/cancelled lists.
+
+Durable per-download results, shared ordered intention plans,
 and the remaining analysis workflows are outstanding U7 work. A direct chat
 download notification is still associated with the chat worker rather than these
 download-worker relays and needs its own submission/session guard.
@@ -37,3 +51,6 @@ download-worker relays and needs its own submission/session guard.
 Tests cover timeout/resolution forwarding, cancellation at each stage, invalid
 URLs, failure aggregation, frozen MCP submission arguments, actual intention
 download results, and real queued Qt delivery after reset and worker replacement.
+Scheduler tests also cover bounded parallelism, callback thread ownership,
+ordered outcomes, cancelled pending work, per-item failure isolation, and callback
+failure. Adapter tests exercise input snapshots and existing result envelopes.

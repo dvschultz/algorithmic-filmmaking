@@ -20,14 +20,13 @@ import threading
 from pathlib import Path
 from typing import Callable, Optional
 
-from core.spine.url_security import validate_url
-from core.operations.downloads import DownloadRequest, DownloadCancelled, run_download
+from core.operations.downloads import (
+    DownloadRequest,
+    DownloadOutcome,
+    run_download_batch,
+)
 
 logger = logging.getLogger(__name__)
-
-
-def _check_cancel(cancel_event: Optional[threading.Event]) -> bool:
-    return cancel_event is not None and cancel_event.is_set()
 
 
 def download_videos(
@@ -69,65 +68,46 @@ def download_videos(
             "error": {"code": "downloader_unavailable", "message": str(exc)},
         }
 
-    total = max(len(urls), 1)
-    for i, url in enumerate(urls):
-        if _check_cancel(cancel_event):
-            cancelled.extend(urls[i:])
-            break
+    requests = tuple(DownloadRequest(url, target) for url in urls)
+    completed = 0
+    if progress_callback is not None:
+        progress_callback(0.0, f"Starting {len(requests)} downloads")
 
+    def on_item(outcome: DownloadOutcome) -> None:
+        nonlocal completed
+        completed += 1
         if progress_callback is not None:
             progress_callback(
-                i / total, f"Downloading ({i + 1}/{len(urls)}): {url}"
+                completed / max(len(requests), 1),
+                f"Processed {completed}/{len(requests)} downloads",
             )
 
-        # Scheme + host whitelist check before yt-dlp gets the URL.
-        url_ok, url_err = validate_url(url)
-        if not url_ok:
-            failed.append(
-                {
-                    "url": url,
-                    "error_code": "invalid_url",
-                    "error_message": url_err,
-                }
-            )
-            continue
-
-        try:
-            result = run_download(
-                DownloadRequest(url, target),
-                downloader=downloader,
-                cancel_event=cancel_event,
-            )
-        except DownloadCancelled:
-            cancelled.extend(urls[i:])
-            break
-        except Exception as exc:  # noqa: BLE001 — per-URL resilience
-            failed.append(
-                {
-                    "url": url,
-                    "error_code": "download_exception",
-                    "error_message": str(exc),
-                }
-            )
-            continue
-
-        if result.success:
+    outcomes = run_download_batch(
+        requests,
+        downloader=downloader,
+        cancel_event=cancel_event,
+        item_callback=on_item,
+    )
+    for outcome in outcomes:
+        url = outcome.request.url
+        result = outcome.result
+        if outcome.status == "succeeded" and result is not None:
             succeeded.append(
                 {
                     "url": url,
-                    "file_path": str(result.file_path)
-                    if result.file_path
-                    else None,
+                    "file_path": str(result.file_path) if result.file_path else None,
                     "title": result.title,
                     "duration": result.duration,
                 }
             )
+        elif outcome.status == "cancelled":
+            cancelled.append(url)
         else:
             failed.append(
                 {
                     "url": url,
-                    "error_code": "download_failed",
-                    "error_message": result.error or "unknown",
+                    "error_code": outcome.error_code,
+                    "error_message": outcome.error_message,
                 }
             )
 

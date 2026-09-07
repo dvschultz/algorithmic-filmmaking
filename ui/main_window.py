@@ -31,13 +31,13 @@ from PySide6.QtGui import QDesktopServices, QKeySequence, QAction, QDragEnterEve
 from models.clip import Source, Clip
 from core.project_lock import ProjectWriter
 from core.operations.downloads import (
-    DownloadRequest, DownloadCancelled, run_download,
     calculate_download_timeout as _calculate_download_timeout,
 )
 from core.spine.sources import find_source_by_path, add_source_if_missing
 from core.scene_detect import DetectionConfig, KaraokeDetectionConfig
 from core.operations.detection import StaleDetectionResult
 from ui.workers.detection_worker import DetectionWorker
+from ui.workers.download_workers import DownloadWorker, URLBulkDownloadWorker, BulkDownloadWorker
 from core.thumbnail import ThumbnailGenerator
 from core.downloader import (
     YTDLP_COOKIE_HELP_URL,
@@ -271,137 +271,6 @@ class SaveProjectWorker(QThread):
             self.save_finished.emit(False, str(self.filepath), str(e))
 
 
-class DownloadWorker(CancellableWorker):
-    """Background worker for video downloads."""
-
-    progress = Signal(float, str)  # progress (0-100), status message
-    download_completed = Signal(object)  # DownloadResult (renamed from 'finished' to avoid shadowing QThread.finished)
-
-    def __init__(self, url: str, resolution: Optional[str] = None):
-        super().__init__()
-        self.url = url
-        self.resolution = resolution
-        self.request = DownloadRequest(url, resolution=resolution)
-
-    def run(self):
-        try:
-            result = run_download(
-                self.request,
-                progress_callback=lambda p, m: self.progress.emit(p, m),
-                cancel_event=self._cancel_event,
-            )
-            if result.success:
-                self.download_completed.emit(result)
-            else:
-                self.error.emit(result.error or "Download failed")
-        except DownloadCancelled:
-            return
-        except Exception as e:
-            self.error.emit(str(e))
-
-
-
-
-class URLBulkDownloadWorker(CancellableWorker):
-    """Background worker for downloading multiple videos from URLs in parallel."""
-
-    progress = Signal(int, int, str)  # current, total, message
-    video_finished = Signal(str, object)  # url, DownloadResult
-    all_finished = Signal(list)  # list of result dicts
-
-    MAX_WORKERS = 3  # Parallel download limit
-
-    def __init__(self, urls: list[str], download_dir: Path):
-        super().__init__()
-        self.urls = tuple(urls)
-        self.download_dir = download_dir
-        self._results = []
-        self._completed_count = 0
-        self._lock = None  # Initialized in run()
-
-    def _download_single(self, url: str) -> dict:
-        """Run the shared download operation from the executor."""
-        try:
-            result = run_download(
-                DownloadRequest(url, self.download_dir, adaptive_timeout=True),
-                cancel_event=self._cancel_event,
-            )
-
-            if result.success:
-                return {
-                    "url": url,
-                    "success": True,
-                    "file_path": str(result.file_path) if result.file_path else None,
-                    "title": result.title,
-                    "duration": result.duration,
-                    "result": result,
-                }
-            else:
-                return {
-                    "url": url,
-                    "success": False,
-                    "error": result.error or "Download failed",
-                    "result": None,
-                }
-
-        except Exception as e:
-            return {"url": url, "success": False, "error": str(e), "result": None}
-
-    def run(self):
-        """Download videos in parallel using ThreadPoolExecutor."""
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        import threading
-        import time
-
-        total = len(self.urls)
-        self._lock = threading.Lock()
-        self._completed_count = 0
-        start_time = time.time()
-
-        logger.info(f"URLBulkDownloadWorker starting: {total} URLs")
-        self.progress.emit(0, total, f"Starting {total} downloads...")
-
-        with ThreadPoolExecutor(max_workers=self.MAX_WORKERS) as executor:
-            # Submit all download tasks
-            future_to_url = {executor.submit(self._download_single, url): url for url in self.urls}
-
-            # Process results as they complete
-            for future in as_completed(future_to_url):
-                if self.is_cancelled():
-                    executor.shutdown(wait=False, cancel_futures=True)
-                    break
-
-                url = future_to_url[future]
-                try:
-                    result_dict = future.result()
-
-                    # Remove the internal 'result' object before storing
-                    download_result = result_dict.pop("result", None)
-
-                    with self._lock:
-                        self._results.append(result_dict)
-                        self._completed_count += 1
-                        count = self._completed_count
-
-                    # Emit progress from main QThread (safe)
-                    self.progress.emit(count, total, f"Downloaded {count}/{total}...")
-
-                    # Emit video_finished for successful downloads
-                    if result_dict["success"] and download_result:
-                        self.video_finished.emit(url, download_result)
-
-                except Exception as e:
-                    with self._lock:
-                        self._results.append({"url": url, "success": False, "error": str(e)})
-                        self._completed_count += 1
-
-        elapsed = time.time() - start_time
-        success_count = sum(1 for r in self._results if r.get("success"))
-        logger.info(f"URLBulkDownloadWorker finished: {success_count}/{total} succeeded in {elapsed:.1f}s")
-        self.progress.emit(total, total, "Downloads complete")
-        self.all_finished.emit(self._results)
-
-
 class SequenceExportWorker(QThread):
     """Background worker for sequence export."""
 
@@ -483,94 +352,6 @@ class InternetArchiveSearchWorker(QThread):
             self.error.emit(str(e))
         except Exception as e:
             self.error.emit(f"Search failed: {e}")
-
-
-class BulkDownloadWorker(QThread):
-    """Background worker for parallel bulk downloads."""
-
-    progress = Signal(int, int, str)  # current, total, message
-    video_finished = Signal(object)  # DownloadResult
-    video_error = Signal(str, str)  # video_id, error message
-    all_finished = Signal()
-
-    def __init__(self, videos: list, download_dir: Path, max_parallel: int = 2):
-        super().__init__()
-        self.videos = videos
-        self.download_dir = download_dir
-        self.max_parallel = max_parallel
-        import threading
-        self._cancel_event = threading.Event()
-        self._completed = 0
-
-    def cancel(self):
-        """Request cancellation."""
-        self._cancel_event.set()
-
-    def run(self):
-        """Run parallel downloads."""
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
-        total = len(self.videos)
-        logger.info(f"BulkDownloadWorker starting download of {total} videos")
-        self.progress.emit(0, total, f"Starting download of {total} videos...")
-
-        with ThreadPoolExecutor(max_workers=self.max_parallel) as executor:
-            # Submit all downloads
-            future_to_video = {
-                executor.submit(self._download_one, video): video
-                for video in self.videos
-            }
-
-            # Process completions
-            for future in as_completed(future_to_video):
-                if self._cancel_event.is_set():
-                    logger.info("BulkDownloadWorker cancelled")
-                    executor.shutdown(wait=False, cancel_futures=True)
-                    break
-
-                video = future_to_video[future]
-                try:
-                    result = future.result()
-                    if result.success:
-                        logger.info(f"Download succeeded: {video.title}")
-                        self.video_finished.emit(result)
-                    else:
-                        error_msg = result.error or "Download failed (no error message)"
-                        logger.error(f"Download failed for '{video.title}': {error_msg}")
-                        self.video_error.emit(video.video_id, error_msg)
-                except Exception as e:
-                    logger.exception(f"Download exception for '{video.title}': {e}")
-                    self.video_error.emit(video.video_id, str(e))
-
-                self._completed += 1
-                self.progress.emit(
-                    self._completed, total, f"Downloaded {self._completed}/{total}"
-                )
-
-        logger.info(f"BulkDownloadWorker finished: {self._completed}/{total} completed")
-        self.all_finished.emit()
-
-    def _download_one(self, video):
-        """Download a single video (YouTube or Internet Archive)."""
-        logger.debug(f"Starting download: {video.title} ({video.video_id}) to {self.download_dir}")
-        # Get the appropriate URL based on video type
-        if hasattr(video, 'youtube_url'):
-            url = video.youtube_url
-        elif hasattr(video, 'download_url'):
-            url = video.download_url
-        else:
-            # Fallback - should not happen
-            raise ValueError(f"Unknown video type: {type(video)}")
-
-        result = run_download(
-            DownloadRequest(url, self.download_dir),
-            cancel_event=self._cancel_event,
-        )
-        if result.success:
-            logger.debug(f"Download finished: {video.title} -> {result.file_path}")
-        else:
-            logger.debug(f"Download returned failure: {video.title} - {result.error}")
-        return result
 
 
 class MainWindow(QMainWindow):

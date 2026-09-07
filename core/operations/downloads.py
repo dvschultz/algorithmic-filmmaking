@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Callable, Literal
 
 from core.spine.url_security import validate_url
 
@@ -114,3 +114,101 @@ def run_download(
         raise
     check_cancelled()
     return result
+
+
+@dataclass(frozen=True)
+class DownloadOutcome:
+    index: int
+    request: DownloadRequest
+    status: Literal["succeeded", "failed", "cancelled"]
+    result: DownloadResult | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+
+
+def run_download_batch(
+    requests: list[DownloadRequest] | tuple[DownloadRequest, ...],
+    *,
+    max_workers: int = 1,
+    cancel_event: Event | None = None,
+    item_callback: Callable[[DownloadOutcome], None] | None = None,
+    downloader: VideoDownloader | None = None,
+) -> tuple[DownloadOutcome, ...]:
+    """Run a bounded batch and return one outcome per input in input order.
+
+    Item callbacks run on the calling thread as results arrive. A callback error
+    stops dispatch and propagates after active downloads observe cancellation.
+    Completed successes remain successes even when a later item is cancelled.
+    A supplied downloader is supported only for serial execution.
+    """
+    from concurrent.futures import Future, ThreadPoolExecutor, wait, FIRST_COMPLETED
+
+    if max_workers < 1:
+        raise ValueError("max_workers must be positive")
+    if downloader is not None and max_workers != 1:
+        raise ValueError("A shared downloader requires serial execution")
+    pending_requests = tuple(requests)
+    cancel = cancel_event if cancel_event is not None else Event()
+    results: dict[int, DownloadOutcome] = {}
+
+    def execute(index: int) -> DownloadOutcome:
+        request = pending_requests[index]
+        if cancel.is_set():
+            return DownloadOutcome(index, request, "cancelled")
+        valid, error = validate_url(request.url)
+        if not valid:
+            return DownloadOutcome(
+                index, request, "failed", error_code="invalid_url", error_message=error
+            )
+        try:
+            result = run_download(request, downloader=downloader, cancel_event=cancel)
+            if result.success:
+                return DownloadOutcome(index, request, "succeeded", result=result)
+            return DownloadOutcome(
+                index,
+                request,
+                "failed",
+                result=result,
+                error_code="download_failed",
+                error_message=result.error or "unknown",
+            )
+        except DownloadCancelled:
+            return DownloadOutcome(index, request, "cancelled")
+        except Exception as exc:
+            return DownloadOutcome(
+                index,
+                request,
+                "failed",
+                error_code="download_exception",
+                error_message=str(exc),
+            )
+
+    def publish(outcome: DownloadOutcome) -> None:
+        results[outcome.index] = outcome
+        if item_callback is not None:
+            item_callback(outcome)
+
+    next_index = 0
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        active: dict[Future[DownloadOutcome], int] = {}
+        try:
+            while active or next_index < len(pending_requests):
+                while (
+                    not cancel.is_set()
+                    and len(active) < max_workers
+                    and next_index < len(pending_requests)
+                ):
+                    active[executor.submit(execute, next_index)] = next_index
+                    next_index += 1
+                if not active:
+                    break
+                done, _ = wait(active, return_when=FIRST_COMPLETED)
+                for future in sorted(done, key=lambda item: active[item]):
+                    del active[future]
+                    publish(future.result())
+            for index in range(next_index, len(pending_requests)):
+                publish(DownloadOutcome(index, pending_requests[index], "cancelled"))
+        except BaseException:
+            cancel.set()
+            raise
+    return tuple(results[index] for index in range(len(pending_requests)))
