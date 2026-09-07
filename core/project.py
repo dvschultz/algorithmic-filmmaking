@@ -1308,15 +1308,18 @@ class Project:
             return 0
         return len(self.session.execute(EditSequenceClips.clear(target)))
 
-    def reorder_sequence(self, clip_ids: list[str]) -> bool:
-        """Reorder the active sequence's first track as one reversible edit."""
+    def reorder_sequence(
+        self, clip_ids: list[str], *, sequence: Sequence | None = None, track_index: int = 0,
+    ) -> bool:
+        """Reorder a sequence track as one reversible edit."""
         from core.commands.sequence_clips import EditSequenceClips
 
         self.session.assert_owner()
-        if self.sequence is None:
+        target = sequence if sequence is not None else self.sequence
+        if target is None:
             return False
         try:
-            command = EditSequenceClips.reorder(self.sequence, clip_ids)
+            command = EditSequenceClips.reorder(target, clip_ids, track_index=track_index)
         except ValueError:
             return False
         self.session.execute(command)

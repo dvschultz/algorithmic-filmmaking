@@ -96,3 +96,131 @@ async def undo_project_session(session_id: str, ctx: Context) -> str:
 async def redo_project_session(session_id: str, ctx: Context) -> str:
     """Redo and save the last undone edit without repeating media computation."""
     return await _call(ctx, lambda sessions: sessions.edit(session_id, history.redo))
+
+
+@mcp.tool()
+async def get_session_timeline(session_id: str, sequence_id: str, ctx: Context) -> str:
+    """Inspect a retained sequence, including stable timeline clip IDs and tracks."""
+    from core.spine import timeline
+
+    return await _call(
+        ctx,
+        lambda sessions: sessions.read(
+            session_id, lambda project: timeline.get_timeline(project, sequence_id)
+        ),
+    )
+
+
+@mcp.tool()
+async def insert_session_clips(
+    session_id: str,
+    sequence_id: str,
+    clip_ids: list[str],
+    ctx: Context,
+    track_index: int = 0,
+    start_frame: int | None = None,
+) -> str:
+    """Insert library clip IDs as one saved edit. Uses existing tracks.
+
+    Omit start_frame to append; explicit placement does not ripple existing clips.
+    Disabled or unknown clips reject the entire batch. Repeated IDs insert copies.
+    """
+    from core.spine import timeline
+
+    return await _call(
+        ctx,
+        lambda sessions: sessions.edit(
+            session_id,
+            lambda project: timeline.insert_clips(
+                project,
+                sequence_id,
+                clip_ids,
+                track_index=track_index,
+                start_frame=start_frame,
+            ),
+        ),
+    )
+
+
+@mcp.tool()
+async def remove_session_clips(
+    session_id: str,
+    sequence_id: str,
+    clip_ids: list[str],
+    ctx: Context,
+    ripple: bool = False,
+) -> str:
+    """Remove timeline clip IDs as one saved edit; optionally close affected track gaps."""
+    from core.spine import timeline
+
+    return await _call(
+        ctx,
+        lambda sessions: sessions.edit(
+            session_id,
+            lambda project: timeline.remove_clips(
+                project, sequence_id, clip_ids, ripple=ripple
+            ),
+        ),
+    )
+
+
+@mcp.tool()
+async def reorder_session_clips(
+    session_id: str,
+    sequence_id: str,
+    clip_ids: list[str],
+    ctx: Context,
+    track_index: int = 0,
+) -> str:
+    """Pack a track in timeline-ID order; omitted clips follow in their existing order."""
+    from core.spine import timeline
+
+    return await _call(
+        ctx,
+        lambda sessions: sessions.edit(
+            session_id,
+            lambda project: timeline.reorder_clips(
+                project, sequence_id, clip_ids, track_index=track_index
+            ),
+        ),
+    )
+
+
+@mcp.tool()
+async def edit_session_timeline_clip(
+    session_id: str,
+    sequence_id: str,
+    clip_id: str,
+    changes: dict,
+    ctx: Context,
+) -> str:
+    """Save timing or transform changes as one undoable edit.
+
+    Fields: start_frame, in_point, out_point, hold_frames, track_index,
+    hflip, vflip, reverse. In/out points are absolute source frames (out exclusive).
+    Frame clips use hold_frames; edits preserve other sequences and tracks.
+    """
+    from core.spine import timeline
+
+    return await _call(
+        ctx,
+        lambda sessions: sessions.edit(
+            session_id,
+            lambda project: timeline.edit_clip(project, sequence_id, clip_id, changes),
+        ),
+    )
+
+
+@mcp.tool()
+async def clear_session_timeline(
+    session_id: str, sequence_id: str, ctx: Context
+) -> str:
+    """Clear all tracks as one saved edit; undo restores clips and their references."""
+    from core.spine import timeline
+
+    return await _call(
+        ctx,
+        lambda sessions: sessions.edit(
+            session_id, lambda project: timeline.clear_timeline(project, sequence_id)
+        ),
+    )

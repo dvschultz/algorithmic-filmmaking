@@ -166,6 +166,12 @@ async def test_tool_registration_exposes_session_arguments():
         "delete_session_sequence",
         "undo_project_session",
         "redo_project_session",
+        "get_session_timeline",
+        "insert_session_clips",
+        "remove_session_clips",
+        "reorder_session_clips",
+        "edit_session_timeline_clip",
+        "clear_session_timeline",
     ):
         assert name in registered
         properties = registered[name].inputSchema["properties"]

@@ -148,6 +148,13 @@ successful edit under load-through-save writer ownership. The session retains
 its model and history between calls, but releases the writer lease. External
 revision changes reload the model and invalidate previous history before the
 next operation; failed saves discard unpublished state. Shutdown drains queued
-session work and closes models. Legacy path-based tools still load independently;
+session work and closes models. Unmigrated path-based tools still load independently;
 their writes trigger the same revision-driven reload. Migrating their remaining
 editorial operations into retained sessions is still outstanding.
+
+Retained timeline tools delegate to `core/spine/timeline.py` and shared reversible
+commands, using explicit sequence IDs and validated track indices. The migrated
+path-based remove/reorder/clear/shuffle tools enter the same retained session
+through `edit_path`; standalone calls still acquire ownership and save on an
+owner thread without retained history. Legacy insertion and remaining library
+mutators still require migration.

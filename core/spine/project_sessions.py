@@ -93,6 +93,17 @@ class ProjectSessions:
             reloaded = entry.refresh()
             return self._state(session_id, entry, reloaded=reloaded)
 
+    def read(self, session_id: str, operation: Callable[[Project], dict]) -> dict:
+        entry = self._entry(session_id)
+        with project_writer(entry.path):
+            reloaded = entry.refresh()
+            assert entry.project is not None
+            result = operation(entry.project)
+            return {
+                **result,
+                "session": self._state(session_id, entry, reloaded=reloaded),
+            }
+
     def edit(self, session_id: str, operation: Callable[[Project], dict]) -> dict:
         entry = self._entry(session_id)
         with project_writer(entry.path):
@@ -122,6 +133,16 @@ class ProjectSessions:
                 if project.mutation_generation != generation:
                     entry.discard()
                 raise
+
+    def edit_path(self, path: Path, operation: Callable[[Project], dict]) -> dict:
+        canonical = path.expanduser().resolve()
+        for session_id, entry in self._sessions.items():
+            if entry.path == canonical or (
+                entry.path.exists() and entry.path.samefile(canonical)
+            ):
+                return self.edit(session_id, operation)
+        session_id = self.open(canonical)["session_id"]
+        return self.edit(session_id, operation)
 
     def close(self, session_id: str) -> dict:
         entry = self._entry(session_id)

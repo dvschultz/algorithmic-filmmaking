@@ -156,8 +156,12 @@ class EditSequenceClips:
         return replace(command, label="Clear sequence", notification_ids=())
 
     @classmethod
-    def reorder(cls, sequence: Sequence, clip_ids: list[str]) -> EditSequenceClips:
-        track = sequence.tracks[0]
+    def reorder(
+        cls, sequence: Sequence, clip_ids: list[str], *, track_index: int = 0,
+    ) -> EditSequenceClips:
+        if isinstance(track_index, bool) or not isinstance(track_index, int) or not 0 <= track_index < len(sequence.tracks):
+            raise ValueError("Invalid sequence track")
+        track = sequence.tracks[track_index]
         lookup = {c.id: c for c in track.clips}
         if len(set(clip_ids)) != len(clip_ids) or any(
             cid not in lookup for cid in clip_ids
@@ -173,7 +177,7 @@ class EditSequenceClips:
             after.append(Placement.capture(clip, position))
             position += clip.duration_frames
         edits = (
-            (TrackEdit(track, 0, before, tuple(after)),)
+            (TrackEdit(track, track_index, before, tuple(after)),)
             if before != tuple(after)
             else ()
         )

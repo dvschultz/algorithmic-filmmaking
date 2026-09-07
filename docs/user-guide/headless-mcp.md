@@ -348,7 +348,7 @@ save, and never rerun analysis, downloads, or generation. A failed save discards
 the unpublished in-memory edit; the next call reloads the on-disk project.
 Closing the session or stopping the server discards history, not saved edits.
 
-Existing path-based tools remain available. They do not add to retained undo
+Unmigrated path-based tools remain available. They do not add to retained undo
 history. If they or another process change the saved file, the retained session
 reloads and reports `history_reset: true`. An undo request after such a change
 finds no old history to replay. The next edit uses the reloaded project.
@@ -361,3 +361,25 @@ does not roll back its save; inspect the session before retrying that edit.
 
 If an open project path is retargeted through a symlink, close and reopen the
 session to accept the new location. Existing session handles reject that change.
+
+### Retained timeline edits
+
+`get_session_timeline(session_id, sequence_id)` returns tracks and stable timeline
+clip IDs. The following tools target that sequence even when it is inactive:
+
+- `insert_session_clips` inserts enabled library clip IDs into an existing track.
+  Omit `start_frame` to append after the track's latest end. Explicit placement
+  does not ripple existing clips. Unknown or disabled IDs reject the whole batch.
+- `remove_session_clips` removes timeline IDs; `ripple` defaults to false.
+- `reorder_session_clips` packs the selected track in the requested timeline-ID
+  order, followed by omitted clips in their existing order.
+- `edit_session_timeline_clip` accepts a `changes` object for timing, track, or
+  transforms. In/out points are absolute source frames, with an exclusive out.
+- `clear_session_timeline` clears all tracks while preserving their structure.
+
+Each call is one saved undoable edit. The existing path-based `reorder_sequence`,
+`remove_from_sequence`, `clear_sequence`, and `shuffle_sequence` tools now join
+the same retained session when called through the running server. Shuffle redo
+uses its saved order, without running randomness or analysis again. Legacy
+`add_to_sequence` and other unmigrated path tools still save independently and
+invalidate retained history; use `insert_session_clips` for retained insertion.

@@ -259,7 +259,7 @@ class TestSequenceTools:
         """Clear sequence."""
         from scene_ripper_mcp.tools.sequence import clear_sequence
 
-        ctx = AsyncMock()
+        ctx = None  # Standalone compatibility path; retained runtime has dedicated tests.
         result = await clear_sequence(
             project_path=str(project_with_sequence),
             ctx=ctx,

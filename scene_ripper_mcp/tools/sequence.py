@@ -1,8 +1,9 @@
 """Sequence/timeline manipulation MCP tools."""
 
+import asyncio
 import json
 import logging
-from typing import Annotated, Optional
+from typing import Annotated, Optional, Callable
 
 from mcp.server.fastmcp import Context
 
@@ -12,6 +13,38 @@ from scene_ripper_mcp.security import validate_project_path
 from core.spine.project_io import project_error, project_writer
 
 logger = logging.getLogger(__name__)
+
+
+async def _editorial_call(project_path: str, ctx: Context, operation: Callable) -> str:
+    valid, error, path = validate_project_path(project_path)
+    if not valid:
+        return json.dumps({"success": False, "error": error})
+    try:
+        if ctx is not None:
+            runtime = ctx.request_context.lifespan_context["project_sessions"]
+            result = await runtime.call(
+                lambda sessions: sessions.edit_path(path, operation)
+            )
+        else:
+
+            def standalone():
+                from core.spine.project_io import load_with_mtime, save_with_mtime_check
+
+                with project_writer(path):
+                    project, mtime = load_with_mtime(path)
+                    generation = project.mutation_generation
+                    result = operation(project)
+                    if (
+                        result.get("success")
+                        and project.mutation_generation != generation
+                    ):
+                        save_with_mtime_check(project, path, mtime)
+                    return result
+
+            result = await asyncio.to_thread(standalone)
+        return json.dumps(result)
+    except Exception as exc:
+        return json.dumps({"success": False, "error": project_error(exc)})
 
 
 @mcp.tool()
@@ -258,66 +291,16 @@ async def remove_from_sequence(
     Returns:
         JSON with removal result
     """
-    valid, error, path = validate_project_path(project_path)
-    if not valid:
-        return json.dumps({"success": False, "error": error})
 
-    try:
-        with project_writer(path):
-            from core.project import MissingSourceError
-            from core.spine.project_io import (
-                ProjectModifiedExternally,
-                load_with_mtime,
-                save_with_mtime_check,
-            )
+    def operation(project):
+        removed = project.remove_from_sequence(sequence_clip_ids, ripple=False)
+        return {
+            "success": True,
+            "clips_removed": len(removed),
+            "sequence_duration": project.sequence.duration_seconds,
+        }
 
-            try:
-                project, mtime = load_with_mtime(path)
-            except MissingSourceError as e:
-                return json.dumps({
-                    "success": False,
-                    "error": {"code": "source_files_missing", "message": str(e)},
-                })
-
-            sequence = project.sequence
-            if not sequence:
-                return json.dumps({"success": False, "error": "No sequence in project"})
-
-            # Remove clips across all tracks (the existing tool ignored track scoping).
-            removed_count = 0
-            ids_to_remove = set(sequence_clip_ids)
-
-            for track in sequence.tracks:
-                original_count = len(track.clips)
-                track.clips = [c for c in track.clips if c.id not in ids_to_remove]
-                removed_count += original_count - len(track.clips)
-
-            if removed_count:
-                project.mark_dirty()
-
-            try:
-                save_with_mtime_check(project, path, mtime)
-            except ProjectModifiedExternally as exc:
-                return json.dumps({
-                    "success": False,
-                    "error": {
-                        "code": "project_modified_externally",
-                        "path": str(exc.path),
-                        "expected_mtime": exc.expected_mtime,
-                        "current_mtime": exc.current_mtime,
-                    },
-                })
-
-            return json.dumps(
-                {
-                    "success": True,
-                    "clips_removed": removed_count,
-                    "sequence_duration": sequence.duration_seconds,
-                }
-            )
-    except Exception as e:
-        logger.exception("Failed to remove from sequence")
-        return json.dumps({"success": False, "error": project_error(e)})
+    return await _editorial_call(project_path, ctx, operation)
 
 
 @mcp.tool()
@@ -340,87 +323,28 @@ async def reorder_sequence(
     Returns:
         JSON with reorder result
     """
-    valid, error, path = validate_project_path(project_path)
-    if not valid:
-        return json.dumps({"success": False, "error": error})
 
-    try:
-        with project_writer(path):
-            from core.project import MissingSourceError
-            from core.spine.project_io import (
-                ProjectModifiedExternally,
-                load_with_mtime,
-                save_with_mtime_check,
-            )
+    def operation(project):
+        from core.spine.timeline import reorder_clips
 
-            try:
-                project, mtime = load_with_mtime(path)
-            except MissingSourceError as e:
-                return json.dumps({
-                    "success": False,
-                    "error": {"code": "source_files_missing", "message": str(e)},
-                })
+        known = {
+            c.id
+            for i, track in enumerate(project.sequence.tracks)
+            if i == track_index
+            for c in track.clips
+        }
+        requested = [clip_id for clip_id in clip_order if clip_id in known]
+        result = reorder_clips(
+            project, project.sequence.id, requested, track_index=track_index
+        )
+        return {
+            "success": True,
+            "clips_reordered": len(result["clip_order"]),
+            "new_order": result["clip_order"],
+            "sequence_duration": project.sequence.duration_seconds,
+        }
 
-            sequence = project.sequence
-            if not sequence:
-                return json.dumps({"success": False, "error": "No sequence in project"})
-
-            if track_index >= len(sequence.tracks):
-                return json.dumps({"success": False, "error": f"Track {track_index} does not exist"})
-
-            track = sequence.tracks[track_index]
-
-            # Build lookup of existing clips
-            existing = {c.id: c for c in track.clips}
-
-            # Reorder based on provided order
-            new_clips = []
-            current_frame = 0
-
-            for clip_id in clip_order:
-                if clip_id not in existing:
-                    logger.warning(f"Clip not found in sequence: {clip_id}")
-                    continue
-
-                clip = existing[clip_id]
-                clip.start_frame = current_frame
-                new_clips.append(clip)
-                current_frame += clip.duration_frames
-
-            # Add any clips not in the order list at the end
-            for clip_id, clip in existing.items():
-                if clip not in new_clips:
-                    clip.start_frame = current_frame
-                    new_clips.append(clip)
-                    current_frame += clip.duration_frames
-
-            track.clips = new_clips
-            project.mark_dirty()
-
-            try:
-                save_with_mtime_check(project, path, mtime)
-            except ProjectModifiedExternally as exc:
-                return json.dumps({
-                    "success": False,
-                    "error": {
-                        "code": "project_modified_externally",
-                        "path": str(exc.path),
-                        "expected_mtime": exc.expected_mtime,
-                        "current_mtime": exc.current_mtime,
-                    },
-                })
-
-            return json.dumps(
-                {
-                    "success": True,
-                    "clips_reordered": len(new_clips),
-                    "new_order": [c.id for c in new_clips],
-                    "sequence_duration": sequence.duration_seconds,
-                }
-            )
-    except Exception as e:
-        logger.exception("Failed to reorder sequence")
-        return json.dumps({"success": False, "error": project_error(e)})
+    return await _editorial_call(project_path, ctx, operation)
 
 
 @mcp.tool()
@@ -438,75 +362,24 @@ async def clear_sequence(
     Returns:
         JSON with clear result
     """
-    valid, error, path = validate_project_path(project_path)
-    if not valid:
-        return json.dumps({"success": False, "error": error})
 
-    try:
-        with project_writer(path):
-            from core.project import MissingSourceError
-            from core.spine.project_io import (
-                ProjectModifiedExternally,
-                load_with_mtime,
-                save_with_mtime_check,
-            )
+    def operation(project):
+        removed = project.clear_sequence()
+        return {
+            "success": True,
+            "clips_removed": removed,
+            "tracks_preserved": len(project.sequence.tracks),
+        }
 
-            try:
-                project, mtime = load_with_mtime(path)
-            except MissingSourceError as e:
-                return json.dumps({
-                    "success": False,
-                    "error": {"code": "source_files_missing", "message": str(e)},
-                })
-
-            sequence = project.sequence
-            if not sequence:
-                return json.dumps(
-                    {
-                        "success": True,
-                        "message": "No sequence to clear",
-                        "clips_removed": 0,
-                    }
-                )
-
-            # Count and clear clips
-            total_removed = sum(len(track.clips) for track in sequence.tracks)
-
-            for track in sequence.tracks:
-                track.clips = []
-
-            if total_removed:
-                project.mark_dirty()
-
-            try:
-                save_with_mtime_check(project, path, mtime)
-            except ProjectModifiedExternally as exc:
-                return json.dumps({
-                    "success": False,
-                    "error": {
-                        "code": "project_modified_externally",
-                        "path": str(exc.path),
-                        "expected_mtime": exc.expected_mtime,
-                        "current_mtime": exc.current_mtime,
-                    },
-                })
-
-            return json.dumps(
-                {
-                    "success": True,
-                    "clips_removed": total_removed,
-                    "tracks_preserved": len(sequence.tracks),
-                }
-            )
-    except Exception as e:
-        logger.exception("Failed to clear sequence")
-        return json.dumps({"success": False, "error": project_error(e)})
+    return await _editorial_call(project_path, ctx, operation)
 
 
 @mcp.tool()
 async def shuffle_sequence(
     project_path: Annotated[str, "Path to project file"],
-    method: Annotated[str, "Shuffle method: random, reverse, by_color, by_shot_type"] = "random",
+    method: Annotated[
+        str, "Shuffle method: random, reverse, by_color, by_shot_type"
+    ] = "random",
     track_index: Annotated[int, "Track index to shuffle"] = 0,
     ctx: Context = None,
 ) -> str:
@@ -520,105 +393,25 @@ async def shuffle_sequence(
     Returns:
         JSON with shuffle result
     """
-    valid, error, path = validate_project_path(project_path)
-    if not valid:
-        return json.dumps({"success": False, "error": error})
 
-    try:
-        with project_writer(path):
-            import random
+    def operation(project):
+        from core.spine.timeline import shuffle_clips
 
-            from core.project import MissingSourceError
-            from core.spine.project_io import (
-                ProjectModifiedExternally,
-                load_with_mtime,
-                save_with_mtime_check,
-            )
+        result = shuffle_clips(
+            project, project.sequence.id, method, track_index=track_index
+        )
+        if not result["clips_shuffled"]:
+            return {
+                "success": True,
+                "message": "No clips to shuffle",
+                "clips_shuffled": 0,
+            }
+        return {
+            "success": True,
+            "method": method,
+            "clips_shuffled": result["clips_shuffled"],
+            "new_order": result["clip_order"],
+            "sequence_duration": project.sequence.duration_seconds,
+        }
 
-            try:
-                project, mtime = load_with_mtime(path)
-            except MissingSourceError as e:
-                return json.dumps({
-                    "success": False,
-                    "error": {"code": "source_files_missing", "message": str(e)},
-                })
-
-            sequence = project.sequence
-            if not sequence:
-                return json.dumps({"success": False, "error": "No sequence in project"})
-
-            if track_index >= len(sequence.tracks):
-                return json.dumps({"success": False, "error": f"Track {track_index} does not exist"})
-
-            track = sequence.tracks[track_index]
-
-            if not track.clips:
-                return json.dumps({"success": True, "message": "No clips to shuffle", "clips_shuffled": 0})
-
-            clips_by_id = project.clips_by_id
-
-            # Get list of sequence clips
-            seq_clips = list(track.clips)
-
-            if method == "random":
-                random.shuffle(seq_clips)
-            elif method == "reverse":
-                seq_clips.reverse()
-            elif method == "by_color":
-                # Sort by primary color hue
-                def get_hue(seq_clip):
-                    orig = clips_by_id.get(seq_clip.source_clip_id)
-                    if orig and orig.dominant_colors:
-                        from core.analysis.color import rgb_to_hsv
-
-                        return rgb_to_hsv(orig.dominant_colors[0])[0]
-                    return 0
-
-                seq_clips.sort(key=get_hue)
-            elif method == "by_shot_type":
-                # Group by shot type
-                shot_order = ["wide shot", "medium shot", "close-up", "extreme close-up", None]
-
-                def get_shot_index(seq_clip):
-                    orig = clips_by_id.get(seq_clip.source_clip_id)
-                    shot = orig.shot_type if orig else None
-                    return shot_order.index(shot) if shot in shot_order else len(shot_order)
-
-                seq_clips.sort(key=get_shot_index)
-            else:
-                return json.dumps({"success": False, "error": f"Unknown shuffle method: {method}"})
-
-            # Update positions
-            current_frame = 0
-            for clip in seq_clips:
-                clip.start_frame = current_frame
-                current_frame += clip.duration_frames
-
-            track.clips = seq_clips
-            project.mark_dirty()
-
-            try:
-                save_with_mtime_check(project, path, mtime)
-            except ProjectModifiedExternally as exc:
-                return json.dumps({
-                    "success": False,
-                    "error": {
-                        "code": "project_modified_externally",
-                        "path": str(exc.path),
-                        "expected_mtime": exc.expected_mtime,
-                        "current_mtime": exc.current_mtime,
-                    },
-                })
-
-            return json.dumps(
-                {
-                    "success": True,
-                    "method": method,
-                    "clips_shuffled": len(seq_clips),
-                    "new_order": [c.id for c in seq_clips],
-                    "sequence_duration": sequence.duration_seconds,
-                }
-            )
-    except Exception as e:
-        logger.exception("Failed to shuffle sequence")
-        return json.dumps({"success": False, "error": project_error(e)})
+    return await _editorial_call(project_path, ctx, operation)
