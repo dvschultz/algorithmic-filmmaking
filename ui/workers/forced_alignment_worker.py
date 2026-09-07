@@ -10,6 +10,8 @@ from PySide6.QtCore import Signal, Slot
 
 from core.jobs import JobRuntime
 from core.jobs.alignment import alignment_operation_spec
+from core.jobs.gui_alignment import GuiAlignmentCache
+from core.jobs.media import media_stamp
 from core.transcription_models import WordTimestamp
 from core.operations.alignment import (
     AlignmentOutcome,
@@ -63,6 +65,22 @@ class ForcedAlignmentWorker(CancellableWorker):
         self.task_id: str | None = None
         self.job_status: str | None = None
         self._runtime: JobRuntime | None = None
+        self.cache = (
+            GuiAlignmentCache(
+                project.path,
+                project.metadata.id,
+                {clip.id: clip.source_id for clip in clips},
+                project.metadata.job_results,
+                force=not skip_existing,
+                media_stamps={
+                    task.target.source_path: media_stamp(task.target.source_path)
+                    for task in self.tasks
+                    if task.target.source_path is not None
+                },
+            )
+            if project is not None and project.path is not None
+            else None
+        )
 
     def cancel(self) -> None:
         super().cancel()
@@ -100,26 +118,28 @@ class ForcedAlignmentWorker(CancellableWorker):
 
         def compute(progress, cancel):
             try:
-                if not self._prepare():
+
+                def deliver(outcome: AlignmentOutcome) -> None:
+                    if outcome.status == "succeeded":
+                        events.put(("aligned", (outcome.clip_id, list(outcome.words))))
+
+                def report(current: int, total: int) -> None:
+                    progress(
+                        current / total if total else 1.0,
+                        f"Aligning words ({current}/{total})",
+                    )
+                    events.put(("progress", (current, total)))
+
+                if self.cache is not None:
+                    outcomes = self.cache.run(
+                        self.tasks, cancel, self._prepare, deliver, report
+                    )
+                elif not self._prepare():
                     outcomes = tuple(
                         AlignmentOutcome(task.clip_id, "unprocessed", code="cancelled")
                         for task in self.tasks
                     )
                 else:
-
-                    def deliver(outcome: AlignmentOutcome) -> None:
-                        if outcome.status == "succeeded":
-                            events.put(
-                                ("aligned", (outcome.clip_id, list(outcome.words)))
-                            )
-
-                    def report(current: int, total: int) -> None:
-                        progress(
-                            current / total if total else 1.0,
-                            f"Aligning words ({current}/{total})",
-                        )
-                        events.put(("progress", (current, total)))
-
                     outcomes = run_alignment(
                         self.tasks,
                         cancel_event=cancel,

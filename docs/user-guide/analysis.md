@@ -520,5 +520,12 @@ cached before saving the project. Retry the same request after a failed save to
 reuse matching results, including a pending forced refresh. After a successful
 save, another `--force` request computes a new result. A default retry reconciles
 failed checkpoints while preserving completed word data, including empty word
-lists. Keep the shared job cache for recovery. GUI alignment does not yet use
-these durable receipts.
+lists. Keep the shared job cache for recovery.
+
+For a GUI project that already has a save location, word alignment also caches
+completed computations before applying them. After a crash or failed save, reopen
+the project and run alignment again to reuse matching results. Save the project
+normally to persist its words and receipts; alignment does not automatically save
+your other edits. Projects without a save location remain memory-only. GUI and
+headless alignment currently keep separate computation identities, and GUI job
+history itself does not survive restart.

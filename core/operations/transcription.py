@@ -211,11 +211,13 @@ def run_transcription(
     )
 
 
-def _media_stamp(path: Path | None) -> tuple[int, int, int, int] | None:
+def _media_stamp(path: Path | None) -> tuple[int, int, int, int, int] | None:
     try:
         stat = path.stat() if path is not None else None
         return (
-            (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns) if stat else None
+            (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+            if stat
+            else None
         )
     except OSError:
         return None

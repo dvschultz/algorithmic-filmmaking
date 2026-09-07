@@ -101,7 +101,8 @@ def test_preflight_failure_records_failed_job_once(worker, monkeypatch):
     assert worker._runtime is None
 
 
-def test_real_job_applies_on_project_owner_thread():
+@pytest.mark.parametrize("saved", [False, True])
+def test_real_job_applies_on_project_owner_thread(saved):
     import os
     import subprocess
     import sys
@@ -109,9 +110,11 @@ def test_real_job_applies_on_project_owner_thread():
     code = r"""
 import tempfile, threading
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from PySide6.QtCore import QCoreApplication, QObject
 from core.transcription_models import TranscriptSegment
+from core.project import Project
 from tests.test_spine_analyze import _build_project
 from ui.workers.forced_alignment_worker import ForcedAlignmentWorker
 from ui.workers.alignment_delivery import AlignmentDelivery
@@ -129,12 +132,14 @@ with tempfile.TemporaryDirectory() as directory:
     tab.project = _build_project(Path(directory), 1)
     tab._project_provider = lambda: tab.project
     tab.project.clips[0].transcript = [TranscriptSegment(0, 1, 'hello', language='en')]
+    if SAVED:
+        assert tab.project.save(Path(directory) / 'project.json')
     worker = ForcedAlignmentWorker(tab.project.clips, tab.project.sources_by_id, project=tab.project)
     tab._forced_alignment_worker = worker
     delivery = AlignmentDelivery(tab, worker, tab.project)
     wav = Path(directory) / 'audio.wav'
     wav.write_bytes(b'fake')
-    with patch.object(worker, '_prepare', return_value=True), patch('core.analysis.alignment.extract_audio_to_wav', return_value=wav), patch('core.analysis.alignment.align_words', return_value=[]):
+    with patch.object(worker, '_prepare', return_value=True), patch('core.analysis.alignment.extract_audio_to_wav', return_value=wav), patch('core.analysis.alignment.align_words', return_value=[]), patch('core.settings.load_settings', return_value=SimpleNamespace(cache_dir=Path(directory))):
         worker.start()
         assert worker.wait(5000)
     assert worker.task_id and worker.job_status == 'completed'
@@ -145,9 +150,14 @@ with tempfile.TemporaryDirectory() as directory:
     assert tab.project.clips[0].transcript[0].words == []
     tab._on_alignment_error.assert_not_called()
     tab._on_alignment_completed.assert_called_once()
+    if SAVED:
+        assert len(tab.project.metadata.job_results) == 1
+        assert Project.load(tab.project.path).clips[0].transcript[0].words is None
+        assert tab.project.save()
+        assert Project.load(tab.project.path).clips[0].transcript[0].words == []
 """
     result = subprocess.run(
-        [sys.executable, "-c", code],
+        [sys.executable, "-c", f"SAVED={saved!r}\n" + code],
         env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},
         capture_output=True,
         text=True,

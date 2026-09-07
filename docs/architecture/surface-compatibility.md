@@ -282,8 +282,9 @@ job uses standard progress/result/cancellation tools. Computed results and proje
 receipts support retries after failed saves or checkpoints. Media content hashes
 and transcript inputs guard reuse; forced refreshes advance only after a saved
 receipt. Matching identical refresh receipts are all reconciled on retry.
-GUI alignment and direct spine calls do not yet use durable receipts. Durable GUI
-publication and the explicit capability-install workflow remain outstanding.
+Direct spine calls do not yet use durable receipts. GUI alignment records its
+detached word outcomes separately from headless publication, as described below.
+The explicit capability-install workflow remains outstanding.
 
 The GUI alignment worker now submits immutable alignment metadata to the shared
 session job runtime, records a task ID and terminal status, and closes the runtime
@@ -291,5 +292,19 @@ before emitting completion. Dependency preparation runs inside the job; cancella
 before or during preparation prevents inference. The Qt adapter drains progress
 and detached word results before completion, while `AlignmentDelivery` still
 publishes only on the project owner thread for the current run. Like GUI
-transcription, these jobs are `session_only` even for saved projects; saving the
-project remains required to persist their results.
+transcription, job history is `session_only` even for saved projects; saving the
+project remains required to persist its edits.
+
+For an already saved GUI project, `core/jobs/gui_alignment.py` records successful
+word outcomes in the shared computed-result store before Qt delivery. Input
+identity includes transcript data, media hashes, project/source identity, and a
+receipt generation for explicit refreshes. Matching restarts reuse computation
+without dependency preparation. The owner-thread delivery checks the output
+against its immutable recorded payload, rejects changed save destinations and
+stale media, and attaches a receipt only after guarded application. Ordinary
+project saves include words and receipts together; inference never saves unrelated
+edits automatically. Unsaved projects remain memory-only. GUI alignment uses a
+separate result identity from headless alignment because it records word outcomes
+before segment publication; it does not reuse headless segment-result entries.
+Durable GUI job history, save/checkpoint integration, and GUI transcription
+computation recovery remain outstanding.

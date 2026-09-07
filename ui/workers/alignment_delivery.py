@@ -44,11 +44,27 @@ class AlignmentDelivery(QObject):
         if not self._current() or clip_id in self._delivered:
             return
         self._delivered.add(clip_id)
+        cache = getattr(self.worker, "cache", None)
+        if cache is not None and (
+            self.project.path is None or self.project.path.resolve() != cache.path
+        ):
+            self.error(
+                "Alignment result discarded because the project save location changed."
+            )
+            return
         try:
+            receipt = cache.results[clip_id] if cache is not None else None
+            outcome = AlignmentOutcome(clip_id, "succeeded", tuple(words))
+            if receipt is not None and not receipt.matches(outcome):
+                raise ValueError(
+                    "Queued alignment output differs from its recorded result"
+                )
             applied = self.application.apply(
                 self.project,
-                AlignmentOutcome(clip_id, "succeeded", tuple(words)),
+                outcome,
             )
+            if applied and receipt is not None:
+                self.project.record_job_result(receipt.result_id, receipt.digest)
         except Exception as exc:
             self.error(f"Could not apply word alignment: {exc}")
             return

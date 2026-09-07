@@ -476,7 +476,9 @@ output. Transcript text, timing, language, and media fingerprints guard reuse.
 Completed word data is preserved by default; `force=True` requests a refresh.
 A failed refresh save can reuse its pending computation, while a saved refresh
 allows the next forced request to compute again. Cached recovery does not require
-loading the alignment runtime. GUI alignment does not yet use durable receipts.
+loading the alignment runtime. Saved GUI projects separately cache word outcomes
+before delivery and include their receipts in normal project saves; those entries
+are not reused by headless alignment.
 
 `start_detect_scenes_bulk` also records computed scenes, saving one source and
 its receipt at a time. Retrying identical inputs reuses the recorded clip IDs;
