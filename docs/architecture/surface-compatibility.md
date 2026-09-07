@@ -502,3 +502,19 @@ The existing QThread API remains a compatibility shell for start/cancel/wait and
 completion callers. Its removal condition is migrating those callers to the
 task-aware adapter. Object detection and the remaining U7 families still await
 their own cutovers; this does not mark U7 complete.
+
+### Object detection computation
+
+GUI workers, CLI `analyze objects` / `analyze people`, and spine detection
+(including MCP jobs) now use `core/operations/object_detection.py`. Tasks retain
+clip/frame identity; results contain immutable detections and person counts.
+Legacy signals and model adapters receive fresh dictionaries and bounding-box
+lists. Malformed responses become per-item failures; empty detections are valid.
+
+Inference is serial across shared callers because the YOLO model is a singleton.
+The GUI parallelism argument remains accepted. Cancellation before model access
+or during inference suppresses late replies and prevents later work. Model-load
+failure stops the batch without repeated downloads; untouched targets are
+reported as unprocessed. Existing data-selection and publication policies remain
+at the adapters. Guarded publication and durable object-detection recovery are
+the next U7 migration steps.

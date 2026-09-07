@@ -1,17 +1,21 @@
 """Background worker for object detection using YOLOv8.
 
 Runs object detection on multiple clips in a background thread,
-using ThreadPoolExecutor for parallelism.
+using shared serial inference.
 """
 
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import Signal
 
+from core.operations.object_detection import (
+    ObjectDetectionTask,
+    ObjectDetectionOptions,
+    ObjectDetectionOutcome,
+    compute_object_detection,
+    run_object_detection,
+)
 from ui.workers.base import CancellableWorker, summarize_clip_errors
 
 logger = logging.getLogger(__name__)
@@ -22,19 +26,11 @@ def _summarize_errors(errors: list[tuple[str, str]]) -> str:
     return summarize_clip_errors(errors, operation_label="Object detection")
 
 
-@dataclass(frozen=True)
-class ObjectDetectionTask:
-    """Immutable task data for thread pool execution."""
-
-    clip_id: str
-    thumbnail_path: Path
-
-
 class ObjectDetectionWorker(CancellableWorker):
     """Background worker for object detection using YOLOv8.
 
-    Uses ThreadPoolExecutor for parallel processing. Default parallelism is 1
-    because the YOLO model singleton is not thread-safe for inference.
+    Inference is serialized across callers sharing the YOLO singleton.
+    The parallelism argument remains accepted for compatibility.
 
     Supports both Clip and Frame inputs via AnalysisTarget.
 
@@ -58,11 +54,13 @@ class ObjectDetectionWorker(CancellableWorker):
         skip_existing: bool = True,
         analysis_targets: Optional[list] = None,
         parent=None,
-    ):
+    ) -> None:
         super().__init__(parent)
         self._confidence = confidence
         self._detect_all = detect_all
-        self._parallelism = min(max(1, parallelism), 4)
+        self._parallelism = 1
+        self.options = ObjectDetectionOptions(confidence, detect_all)
+        self.result: tuple[ObjectDetectionOutcome, ...] = ()
         if analysis_targets:
             self._tasks = self._build_tasks_from_targets(
                 analysis_targets, skip_existing
@@ -99,121 +97,78 @@ class ObjectDetectionWorker(CancellableWorker):
                 continue
             image_path = target.image_path
             if not image_path or not image_path.exists():
-                logger.warning(
-                    f"Skipping target {target.id}: image not found"
-                )
+                logger.warning(f"Skipping target {target.id}: image not found")
                 continue
             tasks.append(
                 ObjectDetectionTask(
                     clip_id=target.id,
                     thumbnail_path=image_path,
+                    target_type=target.target_type,
                 )
             )
         return tasks
 
+    @property
+    def tasks(self) -> tuple[ObjectDetectionTask, ...]:
+        return tuple(self._tasks)
+
     def _process_task(
         self, task: ObjectDetectionTask
     ) -> tuple[str, Optional[list], Optional[int], Optional[str]]:
-        """Process a single task (runs in thread pool).
-
-        Returns:
-            Tuple of (clip_id, detections, person_count, error_message)
-        """
-        if self.is_cancelled():
-            return task.clip_id, None, None, "Cancelled"
-
-        try:
-            from core.analysis.detection import detect_objects, count_people
-
-            if self._detect_all:
-                detections = detect_objects(
-                    task.thumbnail_path,
-                    confidence_threshold=self._confidence,
-                )
-                person_count = sum(
-                    1 for d in detections if d["label"] == "person"
-                )
-            else:
-                detections = []
-                person_count = count_people(
-                    task.thumbnail_path,
-                    confidence_threshold=self._confidence,
-                )
-            return task.clip_id, detections, person_count, None
-        except Exception as e:
-            return task.clip_id, None, None, str(e)
-
-    def run(self):
-        """Execute object detection on all clips."""
-        self._log_start()
-
-        total = len(self._tasks)
-        if total == 0:
-            logger.info("No clips to process for object detection")
-            self.detection_completed.emit()
-            self._log_complete()
-            return
-
-        logger.info(
-            f"Starting object detection: {total} clips, "
-            f"parallelism={self._parallelism}"
+        outcome = compute_object_detection(task, self.options, self._cancel_event)
+        if outcome.status == "succeeded":
+            return task.clip_id, outcome.detection_dicts(), outcome.person_count, None
+        return (
+            task.clip_id,
+            None,
+            None,
+            (
+                "Cancelled"
+                if outcome.status == "unprocessed"
+                else outcome.message or outcome.code
+            ),
         )
 
-        try:
-            from core.analysis.detection import (
-                ensure_default_detection_model_loaded,
-                is_model_loaded,
-            )
-
-            if not is_model_loaded():
-                self.progress.emit(0, total)
-            ensure_default_detection_model_loaded()
-        except Exception as e:
-            error_msg = str(e)
-            self._log_error(error_msg)
-            self.error.emit(error_msg)
-            self.detection_completed.emit()
-            self._log_complete()
-            return
-
-        completed = 0
+    def run(self) -> None:
+        """Run shared inference and always settle the compatibility signal."""
+        self._log_start()
         errors: list[tuple[str, str]] = []
+        try:
+            self.progress.emit(0, len(self.tasks))
 
-        with ThreadPoolExecutor(max_workers=self._parallelism) as executor:
-            future_to_task = {
-                executor.submit(self._process_task, task): task
-                for task in self._tasks
-            }
-
-            for future in as_completed(future_to_task):
-                if self.is_cancelled():
-                    self._log_cancelled()
-                    for f in future_to_task:
-                        f.cancel()
-                    break
-
-                task = future_to_task[future]
-                completed += 1
-
-                try:
-                    clip_id, detections, person_count, error_msg = (
-                        future.result()
+            def deliver(outcome: ObjectDetectionOutcome) -> None:
+                if outcome.status == "succeeded":
+                    self.objects_ready.emit(
+                        outcome.clip_id, outcome.detection_dicts(), outcome.person_count
+                    )
+                elif outcome.status == "failed":
+                    errors.append(
+                        (
+                            outcome.clip_id,
+                            outcome.message
+                            or outcome.code
+                            or "Object detection failed",
+                        )
                     )
 
-                    if error_msg and error_msg != "Cancelled":
-                        self._log_error(error_msg, clip_id)
-                        errors.append((clip_id, error_msg))
-                    elif detections is not None:
-                        self.objects_ready.emit(
-                            clip_id, detections, person_count
-                        )
-                except Exception as e:
-                    self._log_error(str(e), task.clip_id)
-                    errors.append((task.clip_id, str(e)))
-
-                self.progress.emit(completed, total)
-
-        if errors:
-            self.error.emit(_summarize_errors(errors))
-        self.detection_completed.emit()
-        self._log_complete()
+            self.result = run_object_detection(
+                self.tasks,
+                self.options,
+                cancel_event=self._cancel_event,
+                on_outcome=deliver,
+                progress=self.progress.emit,
+            )
+            if errors and not self.is_cancelled():
+                model_failure = next(
+                    (outcome for outcome in self.result if outcome.code == "model_load_failed"),
+                    None,
+                )
+                if model_failure is not None:
+                    self.error.emit(model_failure.message or "Object detection model unavailable")
+                else:
+                    self.error.emit(_summarize_errors(errors))
+        except Exception as exc:
+            self.error.emit(str(exc))
+        finally:
+            self.detection_completed.emit()
+            self._log_complete()

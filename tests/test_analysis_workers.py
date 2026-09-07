@@ -362,17 +362,13 @@ class TestObjectDetectionWorkerErrors:
             skip_existing=False,
         )
 
-        def _raise_model_load_failure():
+        def _raise_model_load_failure(*args, **kwargs):
             raise ModelDownloadError("Failed to load YOLO26n model: network down")
 
-        def _process_should_not_run(_task):
-            raise AssertionError("per-clip detection should not run after model preload fails")
-
         monkeypatch.setattr(
-            "core.analysis.detection.ensure_default_detection_model_loaded",
+            "core.analysis.detection.detect_objects",
             _raise_model_load_failure,
         )
-        monkeypatch.setattr(worker, "_process_task", _process_should_not_run)
 
         errors = []
         completed = []

@@ -373,47 +373,43 @@ def detect_objects(
     cancel_event: Optional[threading.Event] = None,
 ) -> dict:
     """Detect objects and person count on clip thumbnails."""
-    from core.analysis.detection import count_people, detect_objects as detect_objects_in_image
+    from core.operations.object_detection import ObjectDetectionOptions, ObjectDetectionTask, run_object_detection
 
     clips = _resolve_clip_ids(project, clip_ids)
-    succeeded: list[dict] = []
-    failed: list[dict] = []
-    skipped: list[dict] = []
+    clips_by_id = {clip.id: clip for clip in clips}
+    result = {"succeeded": [], "failed": [], "skipped": [], "unprocessed": [], "total_clips": len(clips)}
     updated = []
-    total = len(clips)
+    tasks = tuple(ObjectDetectionTask(clip.id, _thumbnail_for_clip(clip),
+        skip=skip_existing and clip.detected_objects is not None) for clip in clips)
 
-    for i, clip in enumerate(clips):
-        if _check_cancel(cancel_event):
-            break
-        if progress_callback is not None and total:
-            progress_callback(i / total, f"Object detection ({i + 1}/{total}): {clip.id}")
-        if skip_existing and clip.detected_objects is not None:
-            skipped.append({"clip_id": clip.id, "reason": "already_populated"})
-            continue
-        thumbnail_path = _thumbnail_for_clip(clip)
-        if thumbnail_path is None:
-            failed.append({"clip_id": clip.id, "code": "thumbnail_missing"})
-            continue
-        try:
-            if detect_all:
-                detections = detect_objects_in_image(thumbnail_path, confidence_threshold=confidence)
-                person_count = sum(1 for d in detections if d.get("label") == "person")
-            else:
-                detections = []
-                person_count = count_people(thumbnail_path, confidence_threshold=confidence)
-        except Exception as exc:  # noqa: BLE001
-            failed.append({"clip_id": clip.id, "code": "detection_failed", "message": str(exc)})
-            continue
-        clip.detected_objects = detections
-        clip.person_count = person_count
-        updated.append(clip)
-        succeeded.append({"clip_id": clip.id, "object_count": len(detections), "person_count": person_count})
+    def deliver(outcome):
+        clip = clips_by_id[outcome.clip_id]
+        if outcome.status == "succeeded":
+            clip.detected_objects = outcome.detection_dicts()
+            clip.person_count = outcome.person_count
+            updated.append(clip)
+            result["succeeded"].append({"clip_id": clip.id, "object_count": len(outcome.detections), "person_count": outcome.person_count})
+        elif outcome.status == "skipped":
+            result["skipped"].append({"clip_id": clip.id, "reason": outcome.code})
+        elif outcome.status == "failed":
+            failure = {"clip_id": clip.id, "code": outcome.code}
+            if outcome.message:
+                failure["message"] = outcome.message
+            result["failed"].append(failure)
 
+    def report(current, total):
+        if progress_callback:
+            progress_callback(current / total if total else 1.0, f"Object detection ({current}/{total})")
+
+    outcomes = run_object_detection(tasks, ObjectDetectionOptions(confidence, detect_all),
+        cancel_event=cancel_event, on_outcome=deliver, progress=report)
+    result["unprocessed"] = [{"clip_id": outcome.clip_id, "code": outcome.code}
+        for outcome in outcomes if outcome.status == "unprocessed"]
     if updated:
         project.update_clips(updated)
-    if progress_callback is not None:
-        progress_callback(1.0, f"Done: {len(succeeded)} ok, {len(failed)} failed, {len(skipped)} skipped")
-    return {"success": True, "result": {"succeeded": succeeded, "failed": failed, "skipped": skipped, "total_clips": total}}
+    if progress_callback:
+        progress_callback(1.0, f"Done: {len(result['succeeded'])} ok, {len(result['failed'])} failed, {len(result['skipped'])} skipped")
+    return {"success": True, "result": result}
 
 
 def extract_text(
