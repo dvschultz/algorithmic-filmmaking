@@ -892,6 +892,9 @@ class MainWindow(QMainWindow):
         self._cancel_download_workers()
         self._active_detection_reply = None
 
+        for controller in tuple(getattr(self, "_active_frame_analyses", ())):
+            controller.cancel()
+
         # Stop chat worker if running
         stop_chat_workers(self)
 
@@ -6675,229 +6678,61 @@ class MainWindow(QMainWindow):
         self._run_frame_analysis(targets, frame_ops)
 
     def _run_frame_analysis(self, targets: list, operations: list[str]):
-        """Run analysis operations on AnalysisTarget objects.
-
-        Launches workers with the analysis_targets parameter instead of clips.
-        Reuses existing result handlers which now support frame write-back.
-
-        Args:
-            targets: List of AnalysisTarget objects
-            operations: List of operation keys to run
-        """
+        """Gate capabilities, then delegate the ordered frame workflow."""
         if not targets or not operations:
             return
-
+        project = self.project
+        session_id = project.session.session_id
+        frames = {target.id: project.frames_by_id.get(target.id) for target in targets}
         operations = self._filter_available_analysis_operations(operations)
-        if not operations:
+        if (
+            not operations
+            or self.project is not project
+            or project.session.session_id != session_id
+            or any(
+                frame is None or project.frames_by_id.get(fid) is not frame
+                for fid, frame in frames.items()
+            )
+        ):
             return
+        from ui.workers.frame_analysis import FrameAnalysisController
 
-        for op_key in operations:
-            self._reset_analysis_run_error(op_key)
-
-        logger.info(
-            f"Starting frame analysis: {operations} on {len(targets)} targets"
+        controller = FrameAnalysisController(
+            self, [target.id for target in targets], operations
         )
+        controller.progress.connect(self._on_frame_analysis_progress)
+        controller.completed.connect(self._on_frame_analysis_finished)
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 100)
-        self.status_bar.showMessage(
-            f"Analyzing {len(targets)} frames..."
-        )
+        self.status_bar.showMessage(f"Analyzing {len(targets)} frames...")
+        controller.start()
 
-        # Track running workers for completion
-        self._frame_analysis_remaining = len(operations)
-        self._frame_analysis_targets = targets
-        self._frame_analysis_ops = list(operations)
+    @Slot(object, int, str)
+    def _on_frame_analysis_progress(self, controller, value: int, message: str) -> None:
+        if getattr(self, "_frame_analysis_controller", None) is controller:
+            self.progress_bar.setValue(value)
+            self.status_bar.showMessage(message)
 
-        for op_key in operations:
-            self._launch_frame_analysis_worker(op_key, targets)
-
-    def _launch_frame_analysis_worker(self, op_key: str, targets: list):
-        """Launch a worker for frame analysis using AnalysisTarget objects.
-
-        Args:
-            op_key: Operation key (e.g., "colors", "shots")
-            targets: List of AnalysisTarget objects
-        """
-        if op_key == "colors":
-            from ui.workers.color_worker import ColorAnalysisWorker
-            worker = ColorAnalysisWorker(
-                clips=[],
-                analysis_targets=targets,
-                parallelism=self.settings.color_analysis_parallelism,
-                project=self.project,
-            )
-            worker.progress.connect(self._on_color_progress)
-            worker.job_started.connect(self._on_color_job_started)
-            worker.result_ready.connect(self._on_color_result)
-            worker.error.connect(self._on_color_error)
-            worker.analysis_completed.connect(
-                lambda: self._on_frame_analysis_op_finished("colors")
-            )
-            worker.finished.connect(worker.deleteLater)
-            self._frame_color_worker = worker
-            worker.start()
-
-        elif op_key == "shots":
-            from ui.workers.shot_type_worker import ShotTypeWorker
-            worker = ShotTypeWorker(
-                clips=[],
-                sources_by_id={},
-                analysis_targets=targets,
-                parallelism=self.settings.local_model_parallelism,
-                project=self.project,
-            )
-            worker.progress.connect(self._on_shot_type_progress)
-            from ui.workers.shot_type_delivery import ShotTypeDelivery
-            ShotTypeDelivery(
-                self, worker, worker_attribute="_frame_shot_worker",
-                on_complete=lambda: self._on_frame_analysis_op_finished("shots"),
-            )
-            worker.error.connect(self._on_shot_type_error)
-            worker.finished.connect(worker.deleteLater)
-            self._frame_shot_worker = worker
-            worker.start()
-
-        elif op_key == "classify":
-            from ui.workers.classification_worker import ClassificationWorker
-            worker = ClassificationWorker(
-                clips=[],
-                analysis_targets=targets,
-                parallelism=self.settings.local_model_parallelism,
-                project=self.project,
-            )
-            worker.progress.connect(self._on_classification_progress)
-            from ui.workers.classification_delivery import ClassificationDelivery
-            ClassificationDelivery(self, worker, worker_attribute="_frame_classify_worker")
-            worker.error.connect(self._on_classification_error)
-            worker.classification_completed.connect(
-                lambda: self._on_frame_analysis_op_finished("classify")
-            )
-            worker.finished.connect(worker.deleteLater)
-            self._frame_classify_worker = worker
-            worker.start()
-
-        elif op_key == "detect_objects":
-            from ui.workers.object_detection_worker import ObjectDetectionWorker
-            worker = ObjectDetectionWorker(
-                clips=[],
-                analysis_targets=targets,
-                parallelism=self.settings.local_model_parallelism,
-                project=self.project,
-            )
-            worker.progress.connect(self._on_object_detection_progress)
-            from ui.workers.object_detection_delivery import ObjectDetectionDelivery
-            ObjectDetectionDelivery(self, worker, worker_attribute="_frame_detect_worker")
-            worker.error.connect(self._on_object_detection_error)
-            worker.detection_completed.connect(
-                lambda: self._on_frame_analysis_op_finished("detect_objects")
-            )
-            worker.finished.connect(worker.deleteLater)
-            self._frame_detect_worker = worker
-            worker.start()
-
-        elif op_key == "extract_text":
-            from ui.workers.text_extraction_worker import TextExtractionWorker
-            method = self.settings.text_extraction_method
-            use_vlm = method in ("vlm", "hybrid")
-            worker = TextExtractionWorker(
-                clips=[],
-                sources_by_id={},
-                analysis_targets=targets,
-                use_vlm_fallback=use_vlm,
-                project=self.project,
-                vlm_only=method == "vlm",
-                vlm_model=self.settings.text_extraction_vlm_model if use_vlm else None,
-            )
-            worker.progress.connect(self._on_text_extraction_progress)
-            from ui.workers.ocr_delivery import OcrDelivery
-            OcrDelivery(
-                self, worker, worker_attribute="_frame_text_worker",
-                on_complete=lambda: self._on_frame_analysis_op_finished("extract_text"),
-            )
-            worker.error.connect(self._on_text_extraction_error)
-            worker.finished.connect(worker.deleteLater)
-            self._frame_text_worker = worker
-            worker.start()
-
-        elif op_key == "describe":
-            from ui.workers.description_worker import DescriptionWorker
-            worker = DescriptionWorker(
-                clips=[],
-                analysis_targets=targets,
-                parallelism=self.settings.description_parallelism, project=self.project,
-            )
-            worker.progress.connect(self._on_description_progress)
-            from ui.workers.description_delivery import DescriptionDelivery
-            DescriptionDelivery(self, worker, worker_attribute="_frame_desc_worker")
-            worker.error.connect(self._on_description_error)
-            worker.description_completed.connect(
-                lambda: self._on_frame_analysis_op_finished("describe")
-            )
-            worker.finished.connect(worker.deleteLater)
-            self._frame_desc_worker = worker
-            worker.start()
-
-        elif op_key == "cinematography":
-            from ui.workers.cinematography_worker import CinematographyWorker
-            worker = CinematographyWorker(
-                clips=[],
-                project=self.project,
-                sources_by_id={},
-                analysis_targets=targets,
-                parallelism=min(self.settings.description_parallelism, 2),
-            )
-            worker.progress.connect(self._on_cinematography_progress)
-            from ui.workers.cinematography_delivery import CinematographyDelivery
-            CinematographyDelivery(self, worker, worker_attribute="_frame_cine_worker")
-            worker.error.connect(self._on_cinematography_error)
-            worker.analysis_completed.connect(
-                lambda _: self._on_frame_analysis_op_finished("cinematography")
-            )
-            worker.finished.connect(worker.deleteLater)
-            self._frame_cine_worker = worker
-            worker.start()
-
-        else:
-            logger.warning(f"Unknown frame analysis operation: {op_key}")
-            self._on_frame_analysis_op_finished(op_key)
-
-    def _on_frame_analysis_op_finished(self, op_key: str):
-        """Handle completion of a single frame analysis operation."""
-        self._frame_analysis_remaining -= 1
-        logger.info(
-            f"Frame analysis op '{op_key}' finished "
-            f"({self._frame_analysis_remaining} remaining)"
-        )
-        if self._frame_analysis_remaining <= 0:
-            self._on_frame_analysis_complete()
-
-    def _on_frame_analysis_complete(self):
-        """Handle completion of all frame analysis operations."""
-        logger.info("Frame analysis complete")
+    @Slot(object, object)
+    def _on_frame_analysis_finished(self, controller, result: dict) -> None:
+        if (
+            getattr(self, "_frame_analysis_controller", None) is not controller
+            or self.project is not controller.project
+            or self.project.session.session_id != controller.session_id
+        ):
+            return
         self.progress_bar.setVisible(False)
-        completed_ops = getattr(self, "_frame_analysis_ops", [])
-        error_labels = self._get_completed_analysis_error_labels(completed_ops)
-        if error_labels:
-            self.status_bar.showMessage(
-                f"Frame analysis finished with errors ({', '.join(error_labels)})",
-                5000,
-            )
-            self._show_completed_analysis_error_dialog(completed_ops)
-        else:
-            self.status_bar.showMessage("Frame analysis complete", 3000)
-
-        # Mark analyzed frames
-        targets = getattr(self, '_frame_analysis_targets', [])
-        for target in targets:
-            self.project.update_frame(target.id, analyzed=True)
-
-        # Refresh the frame browser to show updated metadata
         self.frames_tab.update_frame_browser()
-        self._mark_dirty()
-
-        # Save project
-        if self.project.path:
-            self.project.save()
+        self._update_window_title()
+        if result["cancelled"]:
+            message = "Frame analysis cancelled"
+        elif result["failed"]:
+            message = f"Frame analysis finished: {len(result['succeeded'])} complete, {len(result['failed'])} incomplete"
+        else:
+            message = f"Frame analysis complete: {len(result['succeeded'])} frames"
+        self.status_bar.showMessage(message, 5000)
+        if result["errors"]:
+            logger.warning("Frame analysis errors: %s", "; ".join(result["errors"]))
 
     def _on_add_frames_to_sequence(self, frame_ids: list):
         """Add selected frames to the active sequence."""
@@ -10631,9 +10466,13 @@ class MainWindow(QMainWindow):
             return
 
         audio_workers = tuple(getattr(self, "_active_audio_transcribes", ())) + tuple(getattr(self, "_active_audio_imports", ()))
+        frame_analyses = tuple(getattr(self, "_active_frame_analyses", ()))
+        for controller in frame_analyses:
+            controller.cancel()
+        analysis_workers = tuple(controller.worker for controller in frame_analyses if controller.worker is not None)
         frame_worker = getattr(self, "_frame_extraction_worker", None)
         image_worker = getattr(self, "_image_import_worker", None)
-        active_workers = audio_workers + tuple(getattr(self, "_active_shot_workers", ())) + tuple(worker for worker in (frame_worker, image_worker) if worker is not None)
+        active_workers = audio_workers + analysis_workers + tuple(getattr(self, "_active_shot_workers", ())) + tuple(worker for worker in (frame_worker, image_worker) if worker is not None)
         for worker in active_workers:
             worker.cancel()
         if any(worker.isRunning() for worker in active_workers):

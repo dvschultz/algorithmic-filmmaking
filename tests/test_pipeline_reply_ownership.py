@@ -115,13 +115,12 @@ for cls, op, signal in [(TextExtractionWorker, 'extract_text', 'extraction_compl
     window._on_text_extraction_progress = Mock()
     window._on_text_extraction_error = Mock(); window._on_cinematography_progress = Mock()
     window._on_cinematography_clip_ready = Mock(); window._on_cinematography_error = Mock()
-    window._on_frame_analysis_op_finished = Mock()
-    with patch.object(cls, 'start', lambda worker: getattr(worker, signal).emit({})):
-        MainWindow._launch_frame_analysis_worker(window, op, [])
+    from ui.workers.frame_analysis import create_frame_analysis_worker
+    worker, application = create_frame_analysis_worker(window.project, window.settings, op, [])
     if op == 'extract_text':
-        assert window._frame_text_worker.options.vlm_only is True
-        assert window._frame_text_worker.options.vlm_model == 'test'
-    window._on_frame_analysis_op_finished.assert_called_once_with(op)
+        assert worker.options.vlm_only is True
+        assert worker.options.vlm_model == 'test'
+    assert application.project is window.project
 # Empty or filtered dispatch must report failure instead of waiting forever.
 harness = SimpleNamespace(project=window.project,
     _filter_available_analysis_operations=lambda _: [], _custom_query_text=None)

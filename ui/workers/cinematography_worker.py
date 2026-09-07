@@ -5,7 +5,7 @@ emitting progress signals to keep the UI responsive.
 """
 
 import logging
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from queue import Empty, Queue
 from typing import Optional, TYPE_CHECKING
 
@@ -20,6 +20,7 @@ from core.jobs.spec import OperationSpec
 from core.operations.cinematography import (
     CinematographyTask as ClipAnalysisTask,
     CinematographyOutcome,
+    CinematographyOptions,
     compute_cinematography,
     resolve_options,
     run_cinematography,
@@ -75,6 +76,7 @@ class CinematographyWorker(CancellableWorker):
         parent=None,
         *,
         project: Optional["Project"] = None,
+        options: Optional[CinematographyOptions] = None,
     ) -> None:
         """Initialize the cinematography analysis worker.
 
@@ -91,10 +93,13 @@ class CinematographyWorker(CancellableWorker):
         super().__init__(parent)
         self._mode = mode
         self._model = model
-        self.options = resolve_options(mode, model, parallelism)
+        self.options = options or resolve_options(mode, model, parallelism)
         self._parallelism = (
-            1 if self.options.tier == "local" else min(max(1, parallelism), 5)
+            1
+            if self.options.tier == "local"
+            else min(max(1, self.options.parallelism), 5)
         )
+        self.options = replace(self.options, parallelism=self._parallelism)
         self.result: tuple[CinematographyOutcome, ...] = ()
 
         # Build immutable task list upfront - no mutable state in thread pool

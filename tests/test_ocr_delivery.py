@@ -98,7 +98,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from PySide6.QtCore import QCoreApplication, QObject
 from core.project import Project
-from ui.main_window import MainWindow
+from ui.workers.ocr_delivery import OcrDelivery
 from ui.workers.text_extraction_worker import TextExtractionWorker
 app = QCoreApplication([])
 for mode in ('current', 'project', 'session', 'worker', 'cancel', 'reply', 'frame_run'):
@@ -110,9 +110,10 @@ for mode in ('current', 'project', 'session', 'worker', 'cancel', 'reply', 'fram
     window._on_frame_analysis_op_finished = Mock()
     window._frame_analysis_ops = ['extract_text']
     window._dispatch_gui_reply = SimpleNamespace(is_current=lambda _: True)
-    with patch.object(TextExtractionWorker, 'start', lambda worker: None):
-        MainWindow._launch_frame_analysis_worker(window, 'extract_text', [])
-    worker = window._frame_text_worker
+    worker = TextExtractionWorker([], {}, project=window.project)
+    window._frame_text_worker = worker
+    delivery = OcrDelivery(window, worker, worker_attribute='_frame_text_worker',
+        on_complete=lambda: window._on_frame_analysis_op_finished('extract_text'))
     if mode == 'project': window.project = Project.new()
     if mode == 'session': window.project.clear()
     if mode == 'worker': window._frame_text_worker = object()

@@ -5,7 +5,7 @@ using ThreadPoolExecutor for parallelism with retry logic for cloud APIs.
 """
 
 import logging
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from queue import Empty, Queue
 from typing import TYPE_CHECKING, Optional
 
@@ -27,6 +27,7 @@ from core.operations.description import (
     DEFAULT_PROMPT,
     DescriptionTask,
     DescriptionOutcome,
+    DescriptionOptions,
     compute_description,
     run_description,
     resolve_options,
@@ -73,15 +74,23 @@ class DescriptionWorker(CancellableWorker):
         parent=None,
         *,
         project: Optional["Project"] = None,
+        options: Optional[DescriptionOptions] = None,
     ) -> None:
         super().__init__(parent)
-        self._tier = self._resolve_tier(tier)
-        self._prompt = prompt or DEFAULT_PROMPT
-        requested_parallelism = min(max(1, parallelism), 5)
+        self._tier = options.tier if options is not None else self._resolve_tier(tier)
+        self._prompt = (
+            options.prompt if options is not None else prompt or DEFAULT_PROMPT
+        )
+        requested_parallelism = min(
+            max(1, options.parallelism if options is not None else parallelism), 5
+        )
         # Local MLX/Moondream inference shares model state and can crash native
         # backends if multiple descriptions run at once.
         self._parallelism = 1 if self._tier == "local" else requested_parallelism
-        self.options = resolve_options(self._tier, self._prompt, self._parallelism)
+        self.options = options or resolve_options(
+            self._tier, self._prompt, self._parallelism
+        )
+        self.options = replace(self.options, parallelism=self._parallelism)
         self.result: tuple[DescriptionOutcome, ...] = ()
         self.error_count = 0
         self.success_count = 0

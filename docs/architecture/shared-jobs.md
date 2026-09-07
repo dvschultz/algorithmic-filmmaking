@@ -257,3 +257,28 @@ acknowledges only the matching labels, including an empty successful result.
 Save As and manually changed labels do not acknowledge old results. A refresh
 after save starts a new generation. The other remaining workflow families are
 still outstanding in U7.
+
+## Ordered frame analysis
+
+`core/operations/frame_analysis.py` tracks the requested steps and each frame's
+outcomes without importing Qt. `ui/workers/frame_analysis.py` coordinates the
+existing analysis workers, starting the next operation only after the previous
+worker's native thread has finished. The main window gates capabilities and
+displays progress; it no longer counts completion signals or saves implicitly.
+
+Provider options are captured at submission. Each step constructs fresh tasks
+and publication adapters after preceding results have updated the project.
+Changing settings during a run therefore cannot change later provider choices.
+Existing metadata is preserved, including valid empty results. A frame is marked
+analyzed only when every requested operation succeeds or already has a result.
+Failures leave successful metadata available for inspection and explicit saving.
+
+Cancellation prevents subsequent steps. Replaced runs retain their workers until
+native completion but discard late results. Publication verifies project/session,
+save location, frame object and media identity, request ownership, and durable
+receipts. Dependency dialogs also cannot redirect an existing request into a
+replacement project or frame. Closing the window waits for active workers to
+settle through the existing close preflight.
+
+This completes the frame coordinator slice, not U7: intention-workflow planning
+and the remaining analysis/import route audit are still required.

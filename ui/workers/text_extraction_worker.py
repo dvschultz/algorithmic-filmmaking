@@ -48,9 +48,10 @@ class TextExtractionWorker(CancellableWorker):
         parent=None,
         *,
         project: "Project | None" = None,
+        options: OcrOptions | None = None,
     ) -> None:
         super().__init__(parent)
-        self.options = resolve_options(
+        self.options = options or resolve_options(
             OcrOptions(
                 min(max(1, num_keyframes), 5),
                 use_vlm_fallback,

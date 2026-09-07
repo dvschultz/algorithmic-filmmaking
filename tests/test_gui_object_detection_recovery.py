@@ -300,32 +300,18 @@ def test_recorded_outcomes_detach_json_box_arrays():
     assert outcome.detections[0].bbox == (0, 0, 1, 1)
 
 
-def test_frame_launch_enables_recovery(setup, monkeypatch):
-    from PySide6.QtCore import QObject
-    from ui.main_window import MainWindow
-
+def test_frame_launch_enables_recovery(setup):
+    from ui.workers.frame_analysis import create_frame_analysis_worker
     project, _ = setup
     if not project.frames:
-        project.add_frames(
-            [Frame(id="frame", file_path=project.clips[0].thumbnail_path)]
-        )
-    window = QObject()
-    window.project = project
-    window.settings = SimpleNamespace(local_model_parallelism=1)
-    for name in (
-        "_on_object_detection_progress",
-        "_on_object_detection_error",
-        "_on_frame_analysis_op_finished",
-    ):
-        setattr(window, name, Mock())
-    monkeypatch.setattr(ObjectDetectionWorker, "start", Mock())
-    MainWindow._launch_frame_analysis_worker(
-        window,
-        "detect_objects",
+        project.add_frames([Frame(id="frame", file_path=project.clips[0].thumbnail_path)])
+    worker, application = create_frame_analysis_worker(
+        project, SimpleNamespace(local_model_parallelism=1), "detect_objects",
         [AnalysisTarget.from_frame(frame) for frame in project.frames],
     )
-    assert window._frame_detect_worker.cache is not None
-    assert window._frame_detect_worker.cache.path == project.path
+    assert worker.cache is not None
+    assert worker.cache.path == project.path
+    assert application.project is project
 
 
 def test_people_only_recovery_preserves_objects_and_checkpoints_zero(

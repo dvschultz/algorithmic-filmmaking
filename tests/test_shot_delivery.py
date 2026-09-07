@@ -75,8 +75,8 @@ from PySide6.QtCore import QCoreApplication, QObject
 from core.project import Project
 from core.analysis_target import AnalysisTarget
 from models.frame import Frame
-from ui.main_window import MainWindow
 from ui.workers.shot_type_worker import ShotTypeWorker
+from ui.workers.shot_type_delivery import ShotTypeDelivery
 from pathlib import Path
 import sys
 app = QCoreApplication([])
@@ -89,10 +89,11 @@ window.clips_by_id = {}
 window.settings = SimpleNamespace(local_model_parallelism=1)
 window._on_shot_type_progress = Mock(); window._on_shot_type_error = Mock()
 window._on_frame_analysis_op_finished = Mock(); window._mark_dirty = Mock()
-window._on_shot_type_ready = lambda *args: MainWindow._on_shot_type_ready(window, *args)
-with patch.object(ShotTypeWorker, 'start', lambda _: None):
-    MainWindow._launch_frame_analysis_worker(window, 'shots',
-        [AnalysisTarget.from_frame(original.frames[0])])
+window._on_shot_type_ready = Mock()
+window._frame_shot_worker = ShotTypeWorker([], {},
+    analysis_targets=[AnalysisTarget.from_frame(original.frames[0])])
+delivery = ShotTypeDelivery(window, window._frame_shot_worker,
+    worker_attribute='_frame_shot_worker', on_complete=lambda: window._on_frame_analysis_op_finished('shots'))
 replacement = Project.new(); replacement.add_frames([Frame(id='same', file_path=image)])
 window.project = replacement
 worker = window._frame_shot_worker

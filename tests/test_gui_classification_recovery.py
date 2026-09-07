@@ -288,37 +288,15 @@ def test_recorded_outcomes_detach_json_label_arrays():
 
 
 @pytest.mark.parametrize("operation", ["shots", "classify"])
-def test_frame_launch_preserves_worker_contracts(setup, monkeypatch, operation):
-    from PySide6.QtCore import QObject
-    from ui.main_window import MainWindow
-    from ui.workers.shot_type_worker import ShotTypeWorker
-
+def test_frame_launch_preserves_worker_contracts(setup, operation):
+    from ui.workers.frame_analysis import create_frame_analysis_worker
     project, _ = setup
     if not project.frames:
-        project.add_frames(
-            [Frame(id="frame", file_path=project.clips[0].thumbnail_path)]
-        )
-    window = QObject()
-    window.project = project
-    window.settings = SimpleNamespace(local_model_parallelism=1)
-    for name in (
-        "_on_shot_type_progress",
-        "_on_shot_type_ready",
-        "_on_shot_type_error",
-        "_on_classification_progress",
-        "_on_classification_error",
-        "_on_frame_analysis_op_finished",
-    ):
-        setattr(window, name, Mock())
-    monkeypatch.setattr(ShotTypeWorker, "start", Mock())
-    monkeypatch.setattr(ClassificationWorker, "start", Mock())
-    MainWindow._launch_frame_analysis_worker(
-        window,
-        operation,
+        project.add_frames([Frame(id="frame", file_path=project.clips[0].thumbnail_path)])
+    worker, application = create_frame_analysis_worker(
+        project, SimpleNamespace(local_model_parallelism=1), operation,
         [AnalysisTarget.from_frame(frame) for frame in project.frames],
     )
-    if operation == "classify":
-        assert window._frame_classify_worker.cache is not None
-        assert window._frame_classify_worker.cache.path == project.path
-    else:
-        assert isinstance(window._frame_shot_worker, ShotTypeWorker)
+    assert worker.cache is not None
+    assert worker.cache.path == project.path
+    assert application.project is project

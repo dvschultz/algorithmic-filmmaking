@@ -84,10 +84,11 @@ class ShotTypeWorker(CancellableWorker):
         parent=None,
         *,
         project: Optional["Project"] = None,
+        options: Optional[ShotTypeOptions] = None,
     ) -> None:
         super().__init__(parent)
         self._parallelism = 1
-        self.options = ShotTypeOptions.from_settings()
+        self.options = options or ShotTypeOptions.from_settings()
         self.result: tuple[ShotTypeOutcome, ...] = ()
         if analysis_targets:
             self._tasks = self._build_tasks_from_targets(
