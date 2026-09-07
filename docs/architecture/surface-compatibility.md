@@ -255,6 +255,21 @@ Save As and edited descriptions do not acknowledge the original result; failed
 checkpoints can be retried by saving again without inference. GUI and headless
 receipts retain separate identities because their publication policies differ.
 
+## Custom-query computation cutover
+
+GUI clip/frame queries and spine/MCP queries share `core/operations/custom_query.py`.
+Tasks retain target identity and trimmed query text; options snapshot the provider
+model before execution. Cloud admission is bounded to the configured concurrency
+(at most five), while local inference stays serial on the calling worker thread.
+Both paths use the same transient retry classification and cancellation-aware
+waits. Cancellation stops admission and suppresses in-flight results. GUI workers
+emit completion even if local model preparation fails.
+
+The existing custom-query legacy tier mapping is preserved: `cpu` means local and
+`gpu` means cloud. Existing append/skip result behavior remains, with whitespace
+normalized before skip checks. Guarded owner-thread publication and durable
+custom-query result recovery remain pending U7 work.
+
 ## Transcription batch cutover
 
 GUI clip transcription, spine (including MCP jobs), CLI transcription, and

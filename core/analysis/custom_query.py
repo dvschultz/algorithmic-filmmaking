@@ -114,6 +114,7 @@ def _resolve_cloud_api_key(model: str) -> Optional[str]:
 def evaluate_custom_query_cloud(
     image_path: Path,
     query: str,
+    *, model_name: Optional[str] = None,
 ) -> tuple[bool, float, str]:
     """Evaluate a custom visual query using cloud VLM via LiteLLM.
 
@@ -127,8 +128,7 @@ def evaluate_custom_query_cloud(
     from core.analysis.description import encode_image_base64, _format_cloud_api_error
     from core.settings import load_settings
 
-    settings = load_settings()
-    original_model = settings.description_model_cloud
+    original_model = model_name or load_settings().description_model_cloud
     model = _normalize_cloud_model(original_model)
     api_key = _resolve_cloud_api_key(model)
 
@@ -180,6 +180,7 @@ def evaluate_custom_query_cloud(
 def evaluate_custom_query_local(
     image_path: Path,
     query: str,
+    *, model_name: Optional[str] = None,
 ) -> tuple[bool, float, str]:
     """Evaluate a custom visual query using local VLM (Moondream/Qwen3-VL).
 
@@ -198,10 +199,12 @@ def evaluate_custom_query_local(
     prompt = _build_query_prompt(query)
 
     # Use the existing local VLM infrastructure
-    response = describe_frame_local(image_path, prompt)
+    response = describe_frame_local(image_path, prompt, model_name=model_name)
     match, confidence = _parse_yes_no_response(response)
 
     # Determine model name from what's loaded
+    if model_name is not None:
+        return match, confidence, model_name
     if is_mlx_vlm_available():
         model_name = "qwen3-vl-4b"
     else:
@@ -214,6 +217,7 @@ def evaluate_custom_query(
     image_path: Path,
     query: str,
     tier: Optional[str] = None,
+    *, model_name: Optional[str] = None,
 ) -> tuple[bool, float, str]:
     """Evaluate a custom visual query using the configured VLM tier.
 
@@ -239,6 +243,6 @@ def evaluate_custom_query(
     logger.info(f"Evaluating custom query '{query}' with tier={tier}")
 
     if tier == "cloud":
-        return evaluate_custom_query_cloud(image_path, query)
+        return evaluate_custom_query_cloud(image_path, query, model_name=model_name)
     else:
-        return evaluate_custom_query_local(image_path, query)
+        return evaluate_custom_query_local(image_path, query, model_name=model_name)

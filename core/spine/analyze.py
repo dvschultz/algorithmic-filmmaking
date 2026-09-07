@@ -777,7 +777,7 @@ def custom_query(
     cancel_event: Optional[threading.Event] = None,
 ) -> dict:
     """Evaluate a yes/no VLM visual query against clip thumbnails."""
-    from core.analysis.custom_query import evaluate_custom_query
+    from core.operations.custom_query import CustomQueryTask, resolve_options, run_custom_query
 
     if not query or not query.strip():
         return {"success": False, "error": {"code": "missing_query", "message": "query is required"}}
@@ -789,30 +789,35 @@ def custom_query(
     updated = []
     total = len(clips)
 
-    for i, clip in enumerate(clips):
-        if _check_cancel(cancel_event):
-            break
-        if progress_callback is not None and total:
-            progress_callback(i / total, f"Custom query ({i + 1}/{total}): {clip.id}")
-        if skip_existing and clip.custom_queries and any(q.get("query") == query for q in clip.custom_queries):
-            skipped.append({"clip_id": clip.id, "reason": "already_populated"})
+    query = query.strip()
+    tasks = tuple(CustomQueryTask(
+        clip.id, _thumbnail_for_clip(clip), query,
+        skip=bool(skip_existing and clip.custom_queries and any(q.get("query") == query for q in clip.custom_queries)),
+    ) for clip in clips)
+
+    def report(current: int, count: int) -> None:
+        if progress_callback is not None:
+            progress_callback(current / count if count else 1.0, f"Custom query ({current}/{count})")
+
+    outcomes = run_custom_query(tasks, resolve_options(tier), cancel_event=cancel_event, progress=report)
+    for clip, outcome in zip(clips, outcomes):
+        if outcome.status == "skipped":
+            skipped.append({"clip_id": clip.id, "reason": outcome.code})
             continue
-        thumbnail_path = _thumbnail_for_clip(clip)
-        if thumbnail_path is None:
-            failed.append({"clip_id": clip.id, "code": "thumbnail_missing"})
-            continue
-        try:
-            match, confidence, model = evaluate_custom_query(thumbnail_path, query.strip(), tier=tier)
-        except Exception as exc:  # noqa: BLE001
-            failed.append({"clip_id": clip.id, "code": "custom_query_failed", "message": str(exc)})
+        if outcome.status != "succeeded":
+            if outcome.status == "failed":
+                failure = {"clip_id": clip.id, "code": outcome.code}
+                if outcome.message:
+                    failure["message"] = outcome.message
+                failed.append(failure)
             continue
         if clip.custom_queries is None:
             clip.custom_queries = []
         result = {
-            "query": query.strip(),
-            "match": match,
-            "confidence": round(confidence, 4),
-            "model": model,
+            "query": query,
+            "match": outcome.match,
+            "confidence": round(outcome.confidence or 0.0, 4),
+            "model": outcome.model,
         }
         clip.custom_queries.append(result)
         updated.append(clip)

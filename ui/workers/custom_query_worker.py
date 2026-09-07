@@ -7,31 +7,21 @@ thread-local.
 """
 
 import logging
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import Signal
 
 from core.settings import load_settings
-from ui.workers.base import CancellableWorker, is_transient_provider_error
+from ui.workers.base import CancellableWorker
+from core.operations.custom_query import (
+    CustomQueryTask,
+    CustomQueryOutcome,
+    compute_custom_query,
+    resolve_options,
+    run_custom_query,
+)
 
 logger = logging.getLogger(__name__)
-
-# Retry configuration for cloud API rate limits
-_MAX_RETRIES = 3
-_RETRY_DELAYS = [2, 5, 10]  # seconds
-
-
-@dataclass(frozen=True)
-class CustomQueryTask:
-    """Immutable task data for thread pool execution."""
-
-    clip_id: str
-    thumbnail_path: Path
-    query: str
 
 
 class CustomQueryWorker(CancellableWorker):
@@ -51,7 +41,9 @@ class CustomQueryWorker(CancellableWorker):
     """
 
     progress = Signal(int, int)  # current, total
-    query_result_ready = Signal(str, str, bool, float, str)  # clip_id, query, match, confidence, model
+    query_result_ready = Signal(
+        str, str, bool, float, str
+    )  # clip_id, query, match, confidence, model
     analysis_completed = Signal()
 
     @staticmethod
@@ -65,10 +57,7 @@ class CustomQueryWorker(CancellableWorker):
 
         remaining = len(errors) - 3
         extra = f"\n- ...and {remaining} more clip(s)" if remaining > 0 else ""
-        return (
-            f"Custom query failed for {len(errors)} clips:\n\n"
-            f"{preview}{extra}"
-        )
+        return f"Custom query failed for {len(errors)} clips:\n\n{preview}{extra}"
 
     def __init__(
         self,
@@ -80,12 +69,15 @@ class CustomQueryWorker(CancellableWorker):
         skip_existing: bool = False,
         analysis_targets: Optional[list] = None,
         parent=None,
-    ):
+    ) -> None:
         super().__init__(parent)
+        query = query.strip()
         self._query = query
         self._tier = self._resolve_tier(tier)
         requested_parallelism = min(max(1, parallelism), 5)
         self._parallelism = 1 if self._tier == "local" else requested_parallelism
+        self.options = resolve_options(self._tier, self._parallelism)
+        self.result: tuple[CustomQueryOutcome, ...] = ()
         if analysis_targets:
             self._tasks = self._build_tasks_from_targets(
                 analysis_targets, query, skip_existing
@@ -138,6 +130,7 @@ class CustomQueryWorker(CancellableWorker):
                     clip_id=target.id,
                     thumbnail_path=image_path,
                     query=query,
+                    target_type=target.target_type,
                 )
             )
         return tasks
@@ -165,49 +158,32 @@ class CustomQueryWorker(CancellableWorker):
         Returns:
             Tuple of (clip_id, query, match, confidence, model, error_message)
         """
-        if self.is_cancelled():
-            return task.clip_id, task.query, None, None, None, "Cancelled"
-
-        from core.analysis.custom_query import evaluate_custom_query
-
-        last_error = None
-        for attempt in range(_MAX_RETRIES + 1):
-            if self.is_cancelled():
-                return task.clip_id, task.query, None, None, None, "Cancelled"
-
-            try:
-                match, confidence, model = evaluate_custom_query(
-                    image_path=task.thumbnail_path,
-                    query=task.query,
-                    tier=self._tier,
-                )
-                return task.clip_id, task.query, match, confidence, model, None
-            except Exception as e:
-                last_error = str(e)
-                if is_transient_provider_error(last_error) and attempt < _MAX_RETRIES:
-                    delay = _RETRY_DELAYS[attempt]
-                    logger.warning(
-                        f"Transient query failure for {task.clip_id}, "
-                        f"retry {attempt + 1}/{_MAX_RETRIES} in {delay}s"
-                    )
-                    time.sleep(delay)
-                    continue
-                break
-
-        return task.clip_id, task.query, None, None, None, last_error
+        outcome = compute_custom_query(task, self.options, self._cancel_event)
+        error = (
+            "Cancelled"
+            if outcome.status == "unprocessed"
+            else outcome.message or outcome.code
+        )
+        return (
+            outcome.clip_id,
+            outcome.query,
+            outcome.match,
+            outcome.confidence,
+            outcome.model,
+            error,
+        )
 
     def _preload_local_model(self, total: int) -> bool:
         """Load local VLM model in this worker thread before local inference."""
         try:
             from core.analysis.description import is_model_loaded, _load_local_model
 
-            if not is_model_loaded():
+            if not is_model_loaded(self.options.model):
                 self.progress.emit(0, total)
-                _load_local_model()
+                _load_local_model(self.options.model)
             return True
         except Exception as e:
             self.error.emit(f"Failed to load local VLM: {e}")
-            self._log_complete()
             return False
 
     def _handle_task_result(
@@ -231,75 +207,44 @@ class CustomQueryWorker(CancellableWorker):
         elif match is not None:
             self.query_result_ready.emit(clip_id, query, match, confidence, model)
 
-    def _run_local_serial(self, total: int, errors: list[tuple[str, str]]) -> int:
-        """Run local VLM inference serially in this worker thread."""
-        completed = 0
-        for task in self._tasks:
-            if self.is_cancelled():
-                self._log_cancelled()
-                break
+    @property
+    def tasks(self) -> tuple[CustomQueryTask, ...]:
+        return tuple(self._tasks)
 
-            completed += 1
-            result = self._process_task(task)
-            self._handle_task_result(result, errors)
-            self.progress.emit(completed, total)
-        return completed
-
-    def _run_cloud_parallel(self, total: int, errors: list[tuple[str, str]]) -> int:
-        """Run cloud VLM query tasks in a bounded thread pool."""
-        completed = 0
-        with ThreadPoolExecutor(max_workers=self._parallelism) as executor:
-            future_to_task = {
-                executor.submit(self._process_task, task): task
-                for task in self._tasks
-            }
-
-            for future in as_completed(future_to_task):
-                if self.is_cancelled():
-                    self._log_cancelled()
-                    for f in future_to_task:
-                        f.cancel()
-                    break
-
-                task = future_to_task[future]
-                completed += 1
-
-                try:
-                    self._handle_task_result(future.result(), errors)
-                except Exception as e:
-                    self._log_error(str(e), task.clip_id)
-                    errors.append((task.clip_id, str(e)))
-
-                self.progress.emit(completed, total)
-        return completed
-
-    def run(self):
-        """Execute custom query evaluation on all clips."""
+    def run(self) -> None:
+        """Compute detached outcomes and always settle the worker lifecycle."""
         self._log_start()
+        errors: list[tuple[str, str]] = []
+        try:
+            if not self.tasks or self.is_cancelled():
+                return
+            if self._tier == "local" and not self._preload_local_model(len(self.tasks)):
+                return
 
-        total = len(self._tasks)
-        if total == 0:
-            logger.info("No clips to process for custom query")
+            def deliver(outcome: CustomQueryOutcome) -> None:
+                self._handle_task_result(
+                    (
+                        outcome.clip_id,
+                        outcome.query,
+                        outcome.match,
+                        outcome.confidence,
+                        outcome.model,
+                        outcome.message or outcome.code,
+                    ),
+                    errors,
+                )
+
+            self.result = run_custom_query(
+                self.tasks,
+                self.options,
+                cancel_event=self._cancel_event,
+                on_outcome=deliver,
+                progress=self.progress.emit,
+            )
+            if errors:
+                self.error.emit(self._summarize_errors(errors))
+        except Exception as exc:
+            self.error.emit(str(exc))
+        finally:
             self.analysis_completed.emit()
             self._log_complete()
-            return
-
-        logger.info(
-            f"Starting custom query '{self._query}': {total} clips, "
-            f"tier={self._tier}, parallelism={self._parallelism}"
-        )
-
-        errors: list[tuple[str, str]] = []
-
-        if self._tier == "local":
-            if not self._preload_local_model(total):
-                return
-            self._run_local_serial(total, errors)
-        else:
-            self._run_cloud_parallel(total, errors)
-
-        if errors:
-            self.error.emit(self._summarize_errors(errors))
-
-        self.analysis_completed.emit()
-        self._log_complete()

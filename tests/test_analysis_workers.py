@@ -1029,7 +1029,7 @@ class TestCustomQueryWorkerTaskBuilding:
 
         monkeypatch.setattr(
             "core.analysis.description.is_model_loaded",
-            lambda: True,
+            lambda *_: True,
         )
 
         def _evaluate_custom_query(*_args, **_kwargs):
