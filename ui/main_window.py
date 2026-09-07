@@ -3135,7 +3135,7 @@ class MainWindow(QMainWindow):
             return
         self._queue_source_import(path)
 
-    def _on_audio_files_added(self, paths: list[Path]):
+    def _on_audio_files_added(self, paths: list[Path]) -> bool:
         """Spawn an AudioImportWorker for each picked audio file."""
         from ui.workers.audio_import_worker import AudioImportWorker
         from ui.workers.audio_import_delivery import AudioImportDelivery
@@ -3145,6 +3145,7 @@ class MainWindow(QMainWindow):
         existing_paths.update(w.task.path for w in self._active_audio_imports
             if w.session_id == self.project.session.session_id)
 
+        started = False
         for path in paths:
             path = path.expanduser().resolve()
             if path in existing_paths:
@@ -3157,6 +3158,8 @@ class MainWindow(QMainWindow):
 
             AudioImportDelivery(self, worker)
             worker.start()
+            started = True
+        return started
 
     def _on_audio_imported(self, audio):
         """Handle a successful audio import — add to project."""
@@ -7572,6 +7575,9 @@ class MainWindow(QMainWindow):
 
         elif wait_type == "audio_transcription":
             return self._on_audio_transcribe_requested(tool_result["audio_source_id"])
+
+        elif wait_type == "audio_import":
+            return self._on_audio_files_added([Path(tool_result["file_path"])])
 
         elif wait_type == "extract_frames":
             return self._on_extract_frames_requested(tool_result["_source_id"],

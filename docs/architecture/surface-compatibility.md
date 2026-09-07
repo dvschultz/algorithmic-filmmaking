@@ -1027,7 +1027,14 @@ from an old project do not block the new project. Closing cancels active imports
 and waits for native completion before teardown. The spine retains its existing
 response fields and returns an existing audio ID for repeated canonical paths.
 
+The desktop agent's `import_audio_source` now dispatches the same worker as the
+Collect tab and replies only after native completion. It preserves the audio ID,
+filename, and duration result fields. Existing canonical imports return immediately;
+an overlapping pending import returns an error. Project-relative paths are resolved
+before dispatch. Expired or replaced requests cannot publish late results, and
+request cancellation targets only the worker carrying that request's identity.
+
 This step does not complete U7. Audio import job-runtime integration and durable
-dispatch, image import, frame-analysis orchestration, and intention workflows
+recovery, image import, frame-analysis orchestration, and intention workflows
 remain. FFprobe cancellation is checked around the bounded probe call; it does
 not interrupt that call mid-probe.

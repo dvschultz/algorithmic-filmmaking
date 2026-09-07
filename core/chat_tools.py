@@ -67,6 +67,7 @@ TOOL_TIMEOUTS = {
     "describe_content_live": 600,   # 10 minutes for descriptions
     "transcribe_clips": 1200,       # 20 minutes
     "transcribe_audio_source": 1200,
+    "import_audio_source": 120,
     "extract_frames": 1200,
     "export_sequence": 600,    # 10 minutes
     "export_bundle": 1800,     # 30 minutes (copies video files)
@@ -442,20 +443,34 @@ def transcribe_audio_source(main_window, audio_source_id: str) -> dict:
     description=(
         "Import an audio file (mp3/wav/flac/m4a/aac/ogg) into the project. "
         "The file is added to the project's audio library and becomes available "
-        "to Staccato and transcription. Returns the new audio source ID."
+        "to Staccato and transcription. Returns after import completes, with the "
+        "audio source ID. Save the project to persist the import."
     ),
     requires_project=True,
-    modifies_gui_state=False,
+    modifies_gui_state=True,
     modifies_project_state=True,
 )
-def import_audio_source(project, file_path: str) -> dict:
-    """Synchronously import an audio file and add it to the project.
+def import_audio_source(main_window, file_path: str) -> dict:
+    """Resolve an import request for asynchronous desktop dispatch.
 
     Args:
         file_path: Absolute or project-relative path to the audio file.
     """
-    from core.spine.audio_sources import import_audio_source as _impl
-    return _impl(project, file_path)
+    from pathlib import Path
+
+    project = main_window.project
+    path = Path(file_path).expanduser()
+    if not path.is_absolute() and project.path:
+        path = project.path.parent / path
+    path = path.resolve()
+    for audio in project.audio_sources:
+        if audio.file_path.expanduser().resolve() == path:
+            return {"success": True, "audio_source_id": audio.id,
+                    "filename": audio.filename, "duration": audio.duration_seconds}
+    if any(worker.session_id == project.session.session_id and worker.task.path == path
+           for worker in main_window._active_audio_imports):
+        raise ValueError("Audio import is already running for this file")
+    return {"_wait_for_worker": "audio_import", "file_path": str(path)}
 
 
 @tools.register(

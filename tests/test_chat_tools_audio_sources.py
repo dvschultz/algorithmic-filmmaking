@@ -7,9 +7,9 @@ import pytest
 
 from core.chat_tools import (
     get_audio_source,
-    import_audio_source,
     list_audio_sources,
 )
+from core.spine.audio_sources import import_audio_source
 from core.project import Project
 from core.transcription import TranscriptSegment
 from models.audio_source import AudioSource

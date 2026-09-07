@@ -12,6 +12,7 @@ def cancel_gui_tool_work(
     if window._chat_worker is None:
         return
     workers = list(getattr(window, "_active_download_workers", ()))
+    workers.extend(getattr(window, "_active_audio_imports", ()))
     detection = getattr(window, "detection_worker", None)
     if detection is not None:
         workers.append(detection)

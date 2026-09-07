@@ -50,3 +50,18 @@ def test_detection_requires_matching_token_and_running_worker():
     worker.isRunning.return_value = True
     cancel_gui_tool_work(window, name=reply.name, token=reply.token)
     worker.cancel.assert_called_once()
+
+
+def test_audio_import_timeout_cancels_only_its_captured_worker():
+    from ui.workers.gui_tool_cancellation import cancel_gui_tool_work
+
+    window = SimpleNamespace(project=Project.new(), _chat_worker=object())
+    reply = GuiToolReply.capture(window, "import_audio_source", "expired")
+    worker = Mock(gui_tool_reply=reply)
+    manual = Mock(gui_tool_reply=None)
+    other = Mock(gui_tool_reply=GuiToolReply.capture(window, reply.name, "other"))
+    window._active_audio_imports = {worker, manual, other}
+    cancel_gui_tool_work(window, name=reply.name, token=reply.token)
+    worker.cancel.assert_called_once()
+    manual.cancel.assert_not_called()
+    other.cancel.assert_not_called()
