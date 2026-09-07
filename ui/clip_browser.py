@@ -3279,6 +3279,9 @@ class ClipBrowser(QWidget):
 
     def toggle_disabled(self, clip_ids: list[str]):
         """Toggle the disabled state of clips by ID via undo stack."""
+        from ui.project_access import is_read_only
+        if is_read_only(self):
+            return
         selection_before = set(self.selected_clips)
         clips_by_id = {clip.id: clip for clip, _source in self._all_entries()}
         becoming_disabled = {

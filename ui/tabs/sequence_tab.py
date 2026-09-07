@@ -2161,6 +2161,8 @@ class SequenceTab(BaseTab):
         rename_action = menu.addAction(f"Rename \"{seq.name}\"...")
         menu.addSeparator()
         delete_action = menu.addAction(f"Delete \"{seq.name}\"")
+        rename_action.setEnabled(not self._project.is_read_only)
+        delete_action.setEnabled(not self._project.is_read_only)
 
         action = menu.exec(dropdown.mapToGlobal(pos))
 

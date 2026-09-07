@@ -1258,14 +1258,6 @@ def navigate_to_tab(tab_name: str, gui_state=None) -> dict:
     }
 
 
-@tools.register(
-    description="Apply filters to the clip browser in the active tab (Cut or Analyze). "
-                "Filters clips by duration range, aspect ratio, shot type, color palette, "
-                "transcript search, gaze direction, object labels, and/or description text. "
-                "Use clear_all=True to reset all filters.",
-    requires_project=True,
-    modifies_gui_state=True
-)
 def _validate_enum_arg(value, valid_set, field_name: str):
     """Accept str or list[str] for an agent-tool enum filter. Return (ok_value, error)."""
     if value is None:
@@ -1286,6 +1278,14 @@ def _validate_enum_arg(value, valid_set, field_name: str):
     return items if len(items) != 1 else items[0], None
 
 
+@tools.register(
+    description="Apply filters to the clip browser in the active tab (Cut or Analyze). "
+                "Filters clips by duration range, aspect ratio, shot type, color palette, "
+                "transcript search, gaze direction, object labels, and/or description text. "
+                "Use clear_all=True to reset all filters.",
+    requires_project=True,
+    modifies_gui_state=True
+)
 def apply_filters(
     main_window,
     min_duration: Optional[float] = None,
@@ -1808,7 +1808,8 @@ def remove_source(
                 "Supports updating: color_profile ('color', 'grayscale', 'sepia'), "
                 "fps (float), analyzed (bool).",
     requires_project=True,
-    modifies_gui_state=True
+    modifies_gui_state=True,
+    modifies_project_state=True
 )
 def update_source(
     project,
@@ -2672,7 +2673,8 @@ def download_video(url: str, output_dir: Optional[str] = None) -> dict:
     description="Download multiple videos from YouTube URLs. Downloads in background thread to keep UI responsive. "
                 "Returns status for each video. Use search_youtube first to find video URLs.",
     requires_project=False,
-    modifies_gui_state=True
+    modifies_gui_state=True,
+    modifies_project_state=True
 )
 def download_videos(
     main_window,
@@ -5819,7 +5821,8 @@ def clear_clip_cinematography(
     description="Undo the last undoable action. Returns the name of the action undone, "
                 "or reports if there is nothing to undo.",
     requires_project=False,
-    modifies_gui_state=True
+    modifies_gui_state=True,
+    modifies_project_state=True
 )
 def undo(main_window) -> dict:
     """Undo the last action.
@@ -5841,7 +5844,8 @@ def undo(main_window) -> dict:
     description="Redo the last undone action. Returns the name of the action redone, "
                 "or reports if there is nothing to redo.",
     requires_project=False,
-    modifies_gui_state=True
+    modifies_gui_state=True,
+    modifies_project_state=True
 )
 def redo(main_window) -> dict:
     """Redo the last undone action.

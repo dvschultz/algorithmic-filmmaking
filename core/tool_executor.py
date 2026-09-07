@@ -90,6 +90,12 @@ class ToolExecutor:
                 f"Unknown tool: {name}. Available tools: {[t.name for t in self.registry.all_tools()]}"
             )
 
+        from core.project_access import read_only_tool_error
+
+        access_error = read_only_tool_error(self.project, tool)
+        if access_error:
+            return self._error_result(tool_call_id, name, access_error)
+
         # Check for conflicting operations with wait-retry
         if tool.conflicts_with_workers and self.busy_check:
             wait_result = self._wait_for_busy_operation(name)

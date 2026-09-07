@@ -155,6 +155,11 @@ class ClipItem(QGraphicsRectItem):
 
     # --- Mouse handling for drag and resize ---
     def mousePressEvent(self, event):
+        from ui.project_access import is_read_only
+        if is_read_only(self):
+            self.setSelected(True)
+            event.accept()
+            return
         if event.button() != Qt.LeftButton:
             event.ignore()
             return
@@ -189,6 +194,10 @@ class ClipItem(QGraphicsRectItem):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
+        from ui.project_access import is_read_only
+        if is_read_only(self):
+            event.ignore()
+            return
         if not (self._dragging or self._resizing):
             return
 
@@ -303,6 +312,10 @@ class ClipItem(QGraphicsRectItem):
 
     # --- Context menu ---
     def contextMenuEvent(self, event):
+        from ui.project_access import is_read_only
+        if is_read_only(self):
+            event.ignore()
+            return
         from PySide6.QtWidgets import QMenu
 
         menu = QMenu()

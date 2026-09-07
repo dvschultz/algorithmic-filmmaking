@@ -205,6 +205,9 @@ class SourceThumbnail(QFrame):
 
     def contextMenuEvent(self, event):
         """Show context menu with delete option."""
+        from ui.project_access import is_read_only
+        if is_read_only(self):
+            return
         menu = QMenu(self)
         delete_action = menu.addAction(f"Delete \"{self.source.filename}\"")
         action = menu.exec_(event.globalPos())
@@ -216,10 +219,16 @@ class SourceThumbnail(QFrame):
         if event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
             self.clicked.emit(self.source)
         elif event.key() == Qt.Key_Delete or event.key() == Qt.Key_Backspace:
+            from ui.project_access import is_read_only
+            if is_read_only(self):
+                return
             self.delete_requested.emit(self.source)
         elif event.key() == Qt.Key_Menu or (
             event.key() == Qt.Key_F10 and event.modifiers() & Qt.ShiftModifier
         ):
+            from ui.project_access import is_read_only
+            if is_read_only(self):
+                return
             center = self.rect().center()
             menu = QMenu(self)
             delete_action = menu.addAction(f"Delete \"{self.source.filename}\"")

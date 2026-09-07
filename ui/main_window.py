@@ -1583,6 +1583,7 @@ class MainWindow(QMainWindow):
 
         # Import submenu
         import_menu = file_menu.addMenu("&Import")
+        self.import_project_action = import_menu.menuAction()
 
         import_video_action = QAction("&Video...", self)
         import_video_action.setShortcut(QKeySequence("Ctrl+I"))
@@ -1597,6 +1598,7 @@ class MainWindow(QMainWindow):
         import_url_action = QAction("From &URL...", self)
         import_url_action.triggered.connect(self._on_import_url_click)
         import_menu.addAction(import_url_action)
+        self._project_import_actions = (import_video_action, import_folder_action, import_url_action)
 
         file_menu.addSeparator()
 
@@ -2504,6 +2506,10 @@ class MainWindow(QMainWindow):
         else:
             try:
                 # Check what parameters the tool accepts
+                from core.project_access import read_only_tool_error
+                access_error = read_only_tool_error(self.project, tool)
+                if access_error:
+                    raise RuntimeError(access_error)
                 sig = inspect.signature(tool.func)
                 params = sig.parameters
 
@@ -5269,6 +5275,9 @@ class MainWindow(QMainWindow):
         event.ignore()
 
     def dropEvent(self, event: QDropEvent):
+        if self.project.is_read_only:
+            event.ignore()
+            return
         for url in event.mimeData().urls():
             if url.isLocalFile():
                 path = Path(url.toLocalFile())
@@ -10043,6 +10052,10 @@ class MainWindow(QMainWindow):
         if self._is_dirty:
             title += "*"
 
+        if self.project.is_read_only:
+            title += " [Read-only: newer project version]"
+        from ui.project_access import refresh_project_access
+        refresh_project_access(self)
         self.setWindowTitle(title)
 
     def _get_recent_projects(self) -> list[str]:
@@ -10227,6 +10240,10 @@ class MainWindow(QMainWindow):
 
     def _save_project_to_file(self, filepath: Path, *, asynchronous: bool = True):
         """Save project to the specified file."""
+        if self.project.is_read_only:
+            from core.project_access import READ_ONLY_MESSAGE
+            QMessageBox.warning(self, "Read-only Project", READ_ONLY_MESSAGE)
+            return
         if self.save_worker and self.save_worker.isRunning():
             self.status_bar.showMessage("Save already in progress...")
             return
@@ -10418,6 +10435,8 @@ class MainWindow(QMainWindow):
         # Set the new project
         self.project.session.close()
         self.project = loaded_project
+        from ui.project_access import refresh_project_access
+        refresh_project_access(self)
         self.undo_stack.set_session(self.project.session)
         self._project_adapter.set_project(self.project)
 
@@ -10583,6 +10602,8 @@ class MainWindow(QMainWindow):
 
         # Clear project data
         self.project.clear()
+        from ui.project_access import refresh_project_access
+        refresh_project_access(self)
 
         # Clear UI state
         self.current_source = None
@@ -10672,6 +10693,9 @@ class MainWindow(QMainWindow):
 
         Called after setting a new project to update all UI elements.
         """
+        from ui.project_access import refresh_project_access
+        refresh_project_access(self)
+
         # Add all sources to CollectTab
         for source in self.sources:
             self.collect_tab.add_source(source)

@@ -140,6 +140,10 @@ class AddVideoCard(QFrame):
         self._apply_theme(dragging=False)
 
     def dropEvent(self, event: QDropEvent):
+        from ui.project_access import is_read_only
+        if is_read_only(self):
+            event.ignore()
+            return
         self._apply_theme(dragging=False)
         paths = []
         for url in event.mimeData().urls():
@@ -332,6 +336,9 @@ class SourceBrowser(QWidget):
 
     def _on_thumbnail_delete_requested(self, source: Source):
         """Handle delete request — include all selected sources if this one is selected."""
+        from ui.project_access import is_read_only
+        if is_read_only(self):
+            return
         if source.id in self.selected_source_ids and len(self.selected_source_ids) > 1:
             # Multi-select: delete all selected sources
             self.delete_sources_requested.emit(list(self.selected_source_ids))

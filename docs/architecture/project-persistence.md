@@ -29,8 +29,8 @@ the matching `.bak` file. Keep the backup until the restored file has been
 verified with the previous application. A backup contains the JSON document;
 it does not duplicate referenced media.
 
-This implements part of U5. Full UI read-only affordances and retained-session
-external-revision handling remain separate work.
+This implements part of U5. Retained-session external-revision handling remains
+separate work.
 
 Offline source files remain declared sources on load, so their clips and edits
 survive in every sequence. A relink callback can supply an existing replacement;
@@ -122,3 +122,10 @@ Save-only locking cannot detect a stale document loaded before another writer
 completed. The mtime check remains a supplementary
 diagnostic with a one-second tolerance; it does not replace lifetime ownership
 and does not prevent writes by applications that ignore these locks.
+
+Newer-schema projects display a read-only title in the desktop. Save, bundle,
+import, analysis, sequencing, and metadata-edit controls are disabled; selection
+handlers cannot re-enable them. Delete, drag, and context-menu editing gestures
+are guarded too. Browsing, playback, filters, and inspection exports remain
+available. Agent dispatch rejects project mutations and project-file writes
+before starting workers. Opening a supported project restores editing controls.

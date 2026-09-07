@@ -92,6 +92,10 @@ class AudioLibraryList(QWidget):
         self._table.setCellWidget(row, self._COL_TRANSCRIBE, transcribe_btn)
 
         remove_btn = QPushButton("Remove")
+        from ui.project_access import is_read_only
+        if is_read_only(self):
+            transcribe_btn.setEnabled(False)
+            remove_btn.setEnabled(False)
         remove_btn.clicked.connect(lambda _checked=False, aid=audio.id: self.remove_requested.emit(aid))
         self._table.setCellWidget(row, self._COL_REMOVE, remove_btn)
 

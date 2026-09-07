@@ -378,6 +378,9 @@ class ClipDetailsSidebar(QDockWidget):
     def _apply_metadata_edit(self, changes: dict[str, Any]) -> None:
         """Submit detached values before changing the project's live clip."""
         try:
+            from ui.project_access import is_read_only
+            if is_read_only(self):
+                return
             if self.metadata_editor is not None:
                 self.metadata_editor(self._clip_ref, changes)
             else:
@@ -671,6 +674,8 @@ class ClipDetailsSidebar(QDockWidget):
         Args:
             enabled: Whether editing should be enabled
         """
+        from ui.project_access import is_read_only
+        enabled = enabled and not is_read_only(self)
         self.name_edit.setEnabled(enabled)
         self.shot_type_dropdown.setEnabled(enabled)
         self.transcript_edit.setEnabled(enabled)
@@ -846,6 +851,8 @@ class ClipDetailsSidebar(QDockWidget):
             row = self._build_custom_query_row(index, query_result)
             self.custom_queries_layout.addWidget(row)
             self._custom_query_row_widgets.append(row)
+            from ui.project_access import is_read_only
+            row.setEnabled(not is_read_only(self))
 
         self.custom_queries_header.setVisible(True)
         self.custom_queries_container.setVisible(True)
@@ -942,6 +949,9 @@ class ClipDetailsSidebar(QDockWidget):
 
     def _on_custom_query_removed(self, row_index: int):
         """Handle removing a saved custom query result."""
+        from ui.project_access import is_read_only
+        if is_read_only(self):
+            return
         if self._change_in_progress or self._loading or not self._clip_ref:
             return
 

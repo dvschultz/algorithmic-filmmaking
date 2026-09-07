@@ -24,7 +24,8 @@ def test_menu_and_agent_share_history_and_saved_marker(qapp):
     undo_action = adapter.createUndoAction(adapter, "Undo")
     redo_action = adapter.createRedoAction(adapter, "Redo")
 
-    class Window:
+    from PySide6.QtCore import QObject
+    class Window(QObject):
         _title_build_suffix = "test"
         current_project_path = None
         current_source = None

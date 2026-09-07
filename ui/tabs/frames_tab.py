@@ -264,6 +264,9 @@ class FramesTab(BaseTab):
 
     def _on_import_clicked(self):
         """Handle Import Images button click."""
+        from ui.project_access import is_read_only
+        if is_read_only(self):
+            return
         file_paths, _ = QFileDialog.getOpenFileNames(
             self,
             "Import Images",
