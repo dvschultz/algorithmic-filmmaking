@@ -20,8 +20,8 @@ Status values:
   ``completed`` — terminal, success.
   ``failed`` — terminal, the spine fn raised.
   ``cancelled`` — terminal, cancellation observed.
-  ``crashed`` — terminal, set by the boot sweep when a row was found in
-    ``running`` or ``cancelling`` after server restart.
+  ``crashed`` — terminal, set by the boot sweep for abandoned owner jobs,
+    or legacy unowned running/cancelling rows after server restart.
 """
 
 from __future__ import annotations
@@ -252,6 +252,11 @@ class JobStore:
         with self._connect() as conn:
             conn.executescript(sql)
             conn.executescript(RESULT_SCHEMA)
+            with conn:
+                conn.execute("BEGIN IMMEDIATE")
+                columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
+                if "owner_id" not in columns:
+                    conn.execute("ALTER TABLE jobs ADD COLUMN owner_id TEXT")
 
     # --- Mutations ---
 
@@ -266,6 +271,7 @@ class JobStore:
         status: str = STATUS_QUEUED,
         queue_position: Optional[int] = None,
         blocking_job_id: Optional[str] = None,
+        owner_id: str | None = None,
     ) -> JobRow:
         """Insert a new job row and return it.
 
@@ -295,9 +301,9 @@ class JobStore:
                     id, kind, status, idempotency_key, args_json,
                     project_path, project_mtime_at_start, progress,
                     status_message, queue_position, blocking_job_id,
-                    created_at, updated_at
+                    created_at, updated_at, owner_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     row.id,
@@ -313,6 +319,7 @@ class JobStore:
                     row.blocking_job_id,
                     row.created_at,
                     row.updated_at,
+                    owner_id,
                 ),
             )
         return row
@@ -504,16 +511,22 @@ class JobStore:
     # --- Boot sweep + pruning ---
 
     def mark_running_jobs_as_crashed(self) -> int:
-        """Boot sweep: mark every still-running row as crashed.
+        """Recover abandoned owners, preserving live runtimes and terminal rows.
 
-        Called unconditionally on lifespan startup. The MCP server is
-        single-process by design — any row in ``running`` or ``cancelling``
-        after we boot was running under a dead process (R18).
-
-        Returns the number of rows updated.
+        Legacy unowned rows keep their historical running/cancelling sweep.
+        Owned queued jobs are also abandoned when their runtime lease is gone.
         """
+        from core.jobs.ownership import acquire_owner
+        from core.project_lock import LockUnavailableError
+
+        if self.persistence == "session_only":
+            return 0
         now = time.time()
         with self._connect() as conn:
+            owners = conn.execute(
+                "SELECT DISTINCT owner_id FROM jobs WHERE owner_id IS NOT NULL "
+                "AND status IN ('queued', 'running', 'cancelling')"
+            ).fetchall()
             cur = conn.execute(
                 """
                 UPDATE jobs
@@ -523,11 +536,28 @@ class JobStore:
                     updated_at = ?,
                     queue_position = NULL,
                     blocking_job_id = NULL
-                WHERE status IN ('running', 'cancelling')
+                WHERE owner_id IS NULL AND status IN ('running', 'cancelling')
                 """,
                 (now, now),
             )
-            return cur.rowcount
+            recovered = cur.rowcount
+        for row in owners:
+            owner_id = row[0]
+            try:
+                lease = acquire_owner(owner_id)
+            except LockUnavailableError:
+                continue
+            try:
+                with self._connect() as conn:
+                    recovered += conn.execute(
+                        "UPDATE jobs SET status='crashed', error='job runtime exited', "
+                        "finished_at=?, updated_at=?, queue_position=NULL, blocking_job_id=NULL "
+                        "WHERE owner_id=? AND status IN ('queued','running','cancelling')",
+                        (now, now, owner_id),
+                    ).rowcount
+            finally:
+                lease.close()
+        return recovered
 
     def purge_old_jobs(self, days: int = 30) -> int:
         """Delete terminal-status rows older than ``days``. Running and queued

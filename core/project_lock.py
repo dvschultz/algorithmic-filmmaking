@@ -62,6 +62,31 @@ def _lock(stream: BinaryIO) -> None:
         fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
+class LockUnavailableError(OSError):
+    """An OS lock record is already held by another lease."""
+
+
+def acquire_lock_record(key: str) -> BinaryIO:
+    """Hold a permanent managed OS lock record until the returned stream closes.
+
+    The caller controls the stream's lifetime. ProjectWriter adds its stricter
+    owner-thread and borrowing checks above this primitive.
+    """
+    directory = _lock_directory()
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    record = directory / (sha256(key.encode()).hexdigest() + ".lock")
+    fd = os.open(record, os.O_RDWR | os.O_CREAT, 0o600)
+    stream = os.fdopen(fd, "r+b")
+    try:
+        _lock(stream)
+    except OSError as exc:
+        stream.close()
+        if exc.errno in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+            raise LockUnavailableError(key) from exc
+        raise
+    return stream
+
+
 class ProjectWriter:
     """Own a canonical path and its file identity until explicitly closed.
 
@@ -112,19 +137,10 @@ class ProjectWriter:
             self._use_lock.release()
 
     def _acquire_record(self, key: str) -> BinaryIO:
-        directory = _lock_directory()
-        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-        record = directory / (sha256(key.encode()).hexdigest() + ".lock")
-        fd = os.open(record, os.O_RDWR | os.O_CREAT, 0o600)
-        stream = os.fdopen(fd, "r+b")
         try:
-            _lock(stream)
-        except OSError as exc:
-            stream.close()
-            if exc.errno in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
-                raise ProjectBusyError(self.path) from exc
-            raise
-        return stream
+            return acquire_lock_record(key)
+        except LockUnavailableError as exc:
+            raise ProjectBusyError(self.path) from exc
 
     def _acquire_identity(self, path: Path) -> BinaryIO:
         stat = path.stat()

@@ -36,6 +36,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,6 +46,7 @@ from contextlib import nullcontext
 from core.project_lock import ProjectBusyError, project_writer
 
 from core.jobs.lock import ProjectLockRegistry
+from core.jobs.ownership import acquire_owner
 from core.jobs.store import (
     JobStore,
     STATUS_CANCELLED,
@@ -118,6 +120,14 @@ class JobRuntime:
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
         self._handles: dict[str, _JobHandle] = {}
         self._handles_lock = threading.Lock()
+        self._submission_lock = threading.Lock()
+        self._closing = False
+        self._owner_id = (
+            str(uuid.uuid4()) if store.persistence == "job_history" else None
+        )
+        self._owner_lease = (
+            acquire_owner(self._owner_id) if self._owner_id else None
+        )
 
     @classmethod
     def for_session(cls, *, max_workers: int = DEFAULT_MAX_WORKERS) -> JobRuntime:
@@ -136,11 +146,48 @@ class JobRuntime:
     def shutdown(self, *, wait: bool = True) -> None:
         """Shut down the executor; blocks until in-flight jobs settle when
         ``wait=True``."""
-        self._executor.shutdown(wait=wait)
+        with self._submission_lock:
+            self._closing = True
+            self._executor.shutdown(wait=False)
+            with self._handles_lock:
+                self._release_owner_if_idle()
+        if wait:
+            self._executor.shutdown(wait=True)
+
+    def _release_owner_if_idle(self) -> None:
+        """Caller holds _handles_lock; closing runtimes cannot submit new work."""
+        if self._closing and not self._handles and self._owner_lease is not None:
+            self._owner_lease.close()
+            self._owner_lease = None
 
     # --- Submission ---
 
     def submit(
+        self,
+        *,
+        kind: str,
+        args: dict,
+        run: RunCallable,
+        project_path: Optional[str | Path] = None,
+        project_mtime_at_start: Optional[float] = None,
+        idempotency_key: Optional[str] = None,
+        cancellation_event: threading.Event | None = None,
+    ) -> dict:
+        """Submit work while its runtime lease is held; reject closed runtimes."""
+        with self._submission_lock:
+            if self._closing:
+                raise RuntimeError("Job runtime is shut down")
+            return self._submit(
+                kind=kind,
+                args=args,
+                run=run,
+                project_path=project_path,
+                project_mtime_at_start=project_mtime_at_start,
+                idempotency_key=idempotency_key,
+                cancellation_event=cancellation_event,
+            )
+
+    def _submit(
         self,
         *,
         kind: str,
@@ -236,6 +283,7 @@ class JobRuntime:
             status=STATUS_QUEUED,
             queue_position=queue_position,
             blocking_job_id=blocking_job_id,
+            owner_id=self._owner_id,
         )
 
         cancel_event = (
@@ -399,6 +447,7 @@ class JobRuntime:
         finally:
             with self._handles_lock:
                 self._handles.pop(task_id, None)
+                self._release_owner_if_idle()
             if canonical_path is not None:
                 self.lock_registry.clear_holder(canonical_path, task_id)
             if lock is not None:

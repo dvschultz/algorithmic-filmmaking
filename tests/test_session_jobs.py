@@ -142,7 +142,7 @@ def test_session_store_has_no_database_file_and_close_is_final():
     task = runtime.submit(
         kind="test", args={}, run=lambda p, c: {}, idempotency_key="completed"
     )
-    runtime.shutdown()
+    runtime._executor.shutdown(wait=True)
     cached = runtime.submit(
         kind="test", args={}, run=lambda p, c: {}, idempotency_key="completed"
     )

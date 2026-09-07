@@ -216,16 +216,17 @@ multi-film batches use the `start_*` job variants instead.
                                │   failed     │
                                └──────────────┘
 
-server boot finds rows still in running/cancelling? → marked crashed.
+server boot finds jobs whose runtime owner has exited? -> marked crashed.
 ```
 
 ## Calling-agent UX contract
 
 - **Discover in-flight work at session start.** When the agent begins a
   session, call `list_jobs(status_filter=["queued", "running"])` to see
-  what's already running. Background work survives MCP server restarts
-  (rows in `running` / `cancelling` are flipped to `crashed` on the next
-  boot, so the caller can decide whether to retry).
+  what's already running. Job history survives MCP server restarts.
+  Abandoned queued/running/cancelling jobs become `crashed` on the next
+  boot, so the caller can decide whether to retry. Jobs owned by another
+  live runtime keep running.
 - **Use the `poll_interval` returned by `start_*` and `get_job_status`.**
   It's the recommended cadence; ignoring it just costs more SQLite reads.
   Default is 5 seconds.
@@ -306,20 +307,24 @@ last 10 frames, capped at 4 KB, with absolute source paths stripped.
 
 If the MCP server process dies mid-job (SIGKILL, OOM, machine reboot),
 the in-memory worker state is gone but the job row in `<cache>/jobs.db`
-survives. On the next boot, every row found in `running` or `cancelling`
-is unconditionally flipped to `crashed`:
+survives. Each runtime holds an OS-backed lease, and its ID is recorded with
+its jobs. On the next boot, queued/running/cancelling rows whose owner lease
+is no longer held become `crashed`. Another live server's jobs are preserved:
 
 ```
 status = "crashed"
-error  = "server restarted while in flight"
+error  = "job runtime exited"
 ```
 
-Per-item results that the spine fn already wrote to the project file
-**before the crash** are preserved (most analysis ops commit per-clip).
-The caller is expected to re-issue the same `start_*` with the same
-`idempotency_key` — terminal-error rows don't block resubmission, and
-skip-existing semantics on each spine fn make the retry resume from
-where it left off.
+Older job rows without owner IDs retain their prior running/cancelling recovery
+policy and error message; legacy queued rows remain untouched. Do not share the
+database with older binaries that still run an unconditional boot sweep.
+
+Results written to the project file **before the crash** are preserved. Re-issue
+the same `start_*` with the same `idempotency_key`: terminal-error rows do not
+block resubmission. Color analysis uses recorded results and project receipts to
+reconcile retries; other operations retain their existing save and skip-existing
+behavior. Work that was never saved or recorded may need to run again.
 
 ## Local-only
 

@@ -135,10 +135,11 @@ def test_qt_adapter_emits_terminal_once_on_owner_thread(tmp_path):
 
 def test_rejected_submission_does_not_leave_queued_row(tmp_path):
     runtime = JobRuntime(JobStore(tmp_path / "closed.db"))
-    runtime.shutdown()
+    runtime._executor.shutdown()
     with pytest.raises(RuntimeError):
         runtime.submit(kind="closed", args={}, run=lambda p, c: {})
     assert runtime.store.list()[0].status == "failed"
+    runtime.shutdown()
 
 
 def test_qt_adapter_settles_if_completed_history_was_purged(tmp_path):

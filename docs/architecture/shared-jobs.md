@@ -90,7 +90,29 @@ task-aware start, wait and cleanup instead of the legacy worker API.
 This is a partial U6 implementation. Recovery covers recorded results; a crash
 after a provider response but before recording it cannot guarantee avoiding a
 repeat call. Paid workflows, other analysis runners, and GUI workflow migration
-remain outstanding. Per-clip project saves favor
-recovery over throughput. The legacy boot sweep/idempotency behavior is preserved;
-sharing a jobs database across independent live processes requires further
-ownership work.
+remain outstanding. Per-clip project saves favor recovery over throughput.
+
+## Runtime ownership and restart recovery
+
+Each disk-backed runtime acquires a unique OS-backed owner lease before accepting
+work. Its owner ID is written atomically with each job row. The lease uses the
+existing managed OS-lock primitive keyed by owner UUID; no PID or heartbeat
+timeout establishes liveness. Runtime leases may close on the last worker's
+thread; project-writer leases retain their owner-thread checks. The OS releases
+the lease after process death. Lock records remain
+permanent so deleting a record cannot split its lock identity.
+
+Boot recovery probes these leases. Live owners are skipped; abandoned owners'
+queued, running and cancelling jobs become crashed. Completed and other terminal
+states stay unchanged, and saved result receipts remain available for retry.
+Nonblocking shutdown retains the lease until the last worker settles. Submission
+and shutdown are serialized so no job can be inserted after its lease is released;
+closed runtimes reject submissions before writing a row.
+
+The additive `owner_id` column is installed under an SQLite write transaction,
+preserving historical job IDs and public projections. Legacy rows without owners
+retain the earlier running/cancelling recovery policy; their queued rows remain
+untouched. Concurrent old binaries that perform the unconditional legacy sweep
+are not supported. Session-only stores need neither leases nor restart recovery.
+This does not add cross-process cancellation or a distributed queue: a runtime
+can cancel its own handles, and project writer leases still guard file mutation.
