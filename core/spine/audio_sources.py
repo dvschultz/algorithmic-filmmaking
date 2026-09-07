@@ -67,54 +67,24 @@ def import_audio_source(project, file_path: str) -> dict:
     """Import an audio file into ``project``."""
     from pathlib import Path
 
-    from core.audio_formats import is_audio_file
-    from core.ffmpeg import FFmpegProcessor
-    from models.audio_source import AudioSource
+    from core.operations.audio_import import (
+        AudioImportTask,
+        AudioImportApplication,
+        run_audio_import,
+    )
 
     path = Path(file_path).expanduser()
     if not path.is_absolute() and getattr(project, "path", None):
         path = project.path.parent / path
-    if not path.exists():
-        return {"success": False, "error": f"File not found: {file_path}"}
-    if not is_audio_file(path):
-        return {
-            "success": False,
-            "error": (
-                f"Unsupported audio format: {path.suffix or '<no extension>'}. "
-                "Supported: .mp3, .wav, .flac, .m4a, .aac, .ogg."
-            ),
-        }
-
-    try:
-        processor = FFmpegProcessor()
-    except RuntimeError as exc:
-        return {"success": False, "error": f"FFmpeg unavailable: {exc}"}
-
-    if not processor.ffprobe_available:
-        return {"success": False, "error": "FFprobe is not available"}
-
-    try:
-        info = processor.get_audio_info(path)
-    except ValueError:
-        return {"success": False, "error": f"Not an audio file: {path.name}"}
-    except RuntimeError as exc:
-        return {"success": False, "error": f"Failed to probe audio: {exc}"}
-
-    duration = info.get("duration", 0.0)
-    if duration <= 0:
-        return {
-            "success": False,
-            "error": f"Audio file has zero duration: {path.name}",
-        }
-
-    audio = AudioSource(
-        file_path=path,
-        duration_seconds=duration,
-        sample_rate=info.get("sample_rate", 0),
-        channels=info.get("channels", 0),
-    )
-    project.add_audio_source(audio)
-
+    task = AudioImportTask.from_path(path)
+    application = AudioImportApplication(project, task)
+    outcome = run_audio_import(task)
+    if outcome.status != "succeeded":
+        return {"success": False, "error": outcome.message or "Audio import failed"}
+    application.apply(project, outcome)
+    audio = application.audio
+    if audio is None:
+        return {"success": False, "error": "Audio import target changed"}
     return {
         "success": True,
         "audio_source_id": audio.id,

@@ -1011,3 +1011,23 @@ clip range, options, and runtime are frozen. Cancellation cannot publish a parti
 batch. Results expose source ID, frame IDs, count, and publication status. GUI
 and headless receipt identities remain separate. U7 still includes image/audio
 import, remaining frame-analysis orchestration, and intention workflows.
+
+### Shared audio import and owner delivery
+
+Desktop audio import and the agent/MCP spine now use
+`core/operations/audio_import.py` for file validation and probing. Inputs are
+detached, and source-file changes or cancellation suppress publication. Invalid
+duration, sample rate, and channel metadata cannot become project audio items.
+Both routes enforce the supported extensions in `core/audio_formats.py`.
+
+The desktop queues immutable outcomes to the original project/session/save path
+and retains workers until native completion. Canonical paths prevent duplicate
+imports, including overlapping requests and symlink aliases; pending requests
+from an old project do not block the new project. Closing cancels active imports
+and waits for native completion before teardown. The spine retains its existing
+response fields and returns an existing audio ID for repeated canonical paths.
+
+This step does not complete U7. Audio import job-runtime integration and durable
+dispatch, image import, frame-analysis orchestration, and intention workflows
+remain. FFprobe cancellation is checked around the bounded probe call; it does
+not interrupt that call mid-probe.

@@ -57,7 +57,7 @@ class TestAudioImportWorker:
         audio_emissions, errors, progress, finished = _capture_signals(worker)
 
         with patch(
-            "ui.workers.audio_import_worker.FFmpegProcessor",
+            "core.ffmpeg.FFmpegProcessor",
             lambda: fake_processor(audio_info=info),
         ):
             worker.run()
@@ -85,14 +85,14 @@ class TestAudioImportWorker:
         assert finished == [True]
 
     def test_no_audio_stream_emits_error(self, tmp_path, fake_processor):
-        not_audio = tmp_path / "wat.bin"
+        not_audio = tmp_path / "wat.wav"
         not_audio.write_bytes(b"\x00" * 16)
 
         worker = AudioImportWorker(not_audio)
         audio_emissions, errors, _, _ = _capture_signals(worker)
 
         with patch(
-            "ui.workers.audio_import_worker.FFmpegProcessor",
+            "core.ffmpeg.FFmpegProcessor",
             lambda: fake_processor(raise_on_probe=ValueError("No audio stream found")),
         ):
             worker.run()
@@ -108,7 +108,7 @@ class TestAudioImportWorker:
         audio_emissions, errors, _, _ = _capture_signals(worker)
 
         with patch(
-            "ui.workers.audio_import_worker.FFmpegProcessor",
+            "core.ffmpeg.FFmpegProcessor",
             lambda: fake_processor(raise_on_probe=RuntimeError("FFprobe failed")),
         ):
             worker.run()
@@ -125,7 +125,7 @@ class TestAudioImportWorker:
         audio_emissions, errors, _, _ = _capture_signals(worker)
 
         with patch(
-            "ui.workers.audio_import_worker.FFmpegProcessor",
+            "core.ffmpeg.FFmpegProcessor",
             lambda: fake_processor(audio_info=info),
         ):
             worker.run()
@@ -143,7 +143,7 @@ class TestAudioImportWorker:
         audio_emissions, errors, _, _ = _capture_signals(worker)
 
         with patch(
-            "ui.workers.audio_import_worker.FFmpegProcessor",
+            "core.ffmpeg.FFmpegProcessor",
             lambda: fake_processor(audio_info=info),
         ):
             worker.run()
@@ -160,7 +160,7 @@ class TestAudioImportWorker:
         audio_emissions, errors, _, _ = _capture_signals(worker)
 
         with patch(
-            "ui.workers.audio_import_worker.FFmpegProcessor",
+            "core.ffmpeg.FFmpegProcessor",
             lambda: fake_processor(audio_info=None, ffprobe_available=False),
         ):
             worker.run()

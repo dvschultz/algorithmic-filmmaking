@@ -3138,29 +3138,28 @@ class MainWindow(QMainWindow):
     def _on_audio_files_added(self, paths: list[Path]):
         """Spawn an AudioImportWorker for each picked audio file."""
         from ui.workers.audio_import_worker import AudioImportWorker
+        from ui.workers.audio_import_delivery import AudioImportDelivery
 
         # Reject duplicates by file path (matches video import behavior)
-        existing_paths = {a.file_path for a in self.project.audio_sources}
+        existing_paths = {a.file_path.expanduser().resolve() for a in self.project.audio_sources}
+        existing_paths.update(w.task.path for w in self._active_audio_imports
+            if w.session_id == self.project.session.session_id)
 
         for path in paths:
+            path = path.expanduser().resolve()
             if path in existing_paths:
                 self.status_bar.showMessage(f"Audio already in library: {path.name}")
                 continue
             existing_paths.add(path)
 
-            worker = AudioImportWorker(path, parent=self)
+            worker = AudioImportWorker(path, parent=self, session_id=self.project.session.session_id)
             self._active_audio_imports.add(worker)
 
-            worker.audio_ready.connect(self._on_audio_imported)
-            worker.error.connect(self._on_audio_import_error)
-            worker.finished_signal.connect(
-                lambda w=worker: self._active_audio_imports.discard(w)
-            )
+            AudioImportDelivery(self, worker)
             worker.start()
 
     def _on_audio_imported(self, audio):
         """Handle a successful audio import — add to project."""
-        self.project.add_audio_source(audio)
         self._update_chat_project_state()
         self.status_bar.showMessage(f"Audio added: {audio.filename}")
 
@@ -10639,7 +10638,7 @@ class MainWindow(QMainWindow):
             event.accept()
             return
 
-        audio_workers = tuple(getattr(self, "_active_audio_transcribes", ()))
+        audio_workers = tuple(getattr(self, "_active_audio_transcribes", ())) + tuple(getattr(self, "_active_audio_imports", ()))
         frame_worker = getattr(self, "_frame_extraction_worker", None)
         active_workers = audio_workers + ((frame_worker,) if frame_worker is not None else ())
         for worker in active_workers:

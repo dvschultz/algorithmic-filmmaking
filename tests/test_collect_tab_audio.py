@@ -202,8 +202,10 @@ def test_main_window_audio_import_deduplicates_single_batch(tmp_path, monkeypatc
     started_paths = []
 
     class FakeAudioImportWorker:
-        def __init__(self, path, parent=None):
+        def __init__(self, path, parent=None, *, session_id=None):
             self.path = path
+            self.task = SimpleNamespace(path=path)
+            self.session_id = session_id
             self.audio_ready = DummySignal()
             self.error = DummySignal()
             self.finished_signal = DummySignal()
@@ -226,10 +228,17 @@ def test_main_window_audio_import_deduplicates_single_batch(tmp_path, monkeypatc
         "ui.workers.audio_import_worker.AudioImportWorker",
         FakeAudioImportWorker,
     )
+    # Owner delivery is exercised with real Qt workers in the ownership tests.
+    monkeypatch.setattr(
+        "ui.workers.audio_import_delivery.AudioImportDelivery",
+        lambda window, worker: None,
+    )
 
     MainWindow._on_audio_files_added(window, [audio_file, audio_file])
+    MainWindow._on_audio_files_added(window, [audio_file])
 
-    assert started_paths == [audio_file]
+    assert started_paths == [audio_file.resolve()]
+    assert len(window._active_audio_imports) == 1
 
 
 def test_audio_format_helpers():
