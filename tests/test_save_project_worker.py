@@ -84,6 +84,41 @@ def test_snapshot_for_save_is_independent_of_live_project(tmp_path):
     assert snapshot["clips"][0].shot_type is None
 
 
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_desktop_save_preserves_manual_project_name_and_undo(
+    qapp, tmp_path, monkeypatch, asynchronous
+):
+    import json
+
+    from ui.main_window import MainWindow, SaveProjectWorker
+
+    project = _make_project_with_clip(tmp_path)
+    project.mark_clean()
+    original_name = project.metadata.name
+    project.rename("Editorial title")
+    window = _SaveCompletionWindowStub(project, None)
+    window.save_worker = None
+    window.sequence_tab = SimpleNamespace(_persist_current_sequence=lambda: None)
+    window.analyze_tab = SimpleNamespace(get_clip_ids=lambda: [])
+    window._on_project_save_finished = lambda *args: MainWindow._on_project_save_finished(
+        window, *args
+    )
+    monkeypatch.setattr(SaveProjectWorker, "start", lambda worker: worker.run())
+    target = tmp_path / "different-filename.sceneripper"
+
+    MainWindow._save_project_to_file(window, target, asynchronous=asynchronous)
+
+    assert project.metadata.name == "Editorial title"
+    assert json.loads(target.read_text())["project_name"] == "Editorial title"
+    assert not project.is_dirty
+    project.session.undo()
+    assert project.metadata.name == original_name
+    assert project.is_dirty
+    project.session.redo()
+    assert project.metadata.name == "Editorial title"
+    assert not project.is_dirty
+
+
 def test_project_mutation_generation_increments_even_when_already_dirty(tmp_path):
     """Save completion needs a monotonic mutation generation, not just dirty bool."""
     project = _make_project_with_clip(tmp_path)

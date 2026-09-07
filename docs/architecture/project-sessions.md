@@ -88,6 +88,8 @@ playback or resetting unchanged fields that the user is still editing.
 Automatic analysis continues to use `update_clips()`, `update_frame()`, and
 `update_source()` outside history. Undo preserves unrelated analysis fields and
 rejects conflicts on the fields it would restore.
+Saving or choosing a new save filename preserves the project's editorial name;
+it does not introduce an implicit rename or invalidate name history.
 
 This is an incremental U4 migration.
 Legacy direct model mutations are tracked as

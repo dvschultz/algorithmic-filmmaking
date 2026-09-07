@@ -10235,9 +10235,6 @@ class MainWindow(QMainWindow):
             "analyze_clip_ids": self.analyze_tab.get_clip_ids(),
         }
 
-        # Update metadata name to match filename
-        self.project.metadata.name = filepath.stem
-
         if not asynchronous:
             started = time.perf_counter()
             success = self.project.save(filepath)
