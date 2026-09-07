@@ -3648,7 +3648,7 @@ class MainWindow(QMainWindow):
         self._embeddings_finished_handled = False
         self._reset_analysis_run_error("embeddings")
         logger.info(f"Creating EmbeddingAnalysisWorker (pipeline) for {len(clips)} clips...")
-        self._embeddings_worker = EmbeddingAnalysisWorker(clips)
+        self._embeddings_worker = EmbeddingAnalysisWorker(clips, project=self.project)
         self._embeddings_worker.progress.connect(self._on_embeddings_progress)
         from ui.workers.embedding_delivery import EmbeddingDelivery
         self._embeddings_worker._delivery = EmbeddingDelivery(

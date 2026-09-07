@@ -44,6 +44,7 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
                 "gui_object_detection",
                 "gui_faces",
                 "gui_gaze",
+                "gui_embeddings",
             )
             or identity["version"] != 1
         ):
@@ -72,6 +73,16 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
         payload = json.loads(row["payload_json"])
         if payload["clip_id"] != clip["id"] or payload["status"] != "succeeded":
             raise StaleJobResult("Saved GUI result does not match its target")
+        if identity["kind"] == "gui_embeddings":
+            from core.operations.embeddings import EmbeddingOutcome
+
+            outcome = EmbeddingOutcome.from_dict(payload)
+            if (
+                clip.get("embedding") == list(outcome.vector)
+                and clip.get("embedding_model") == outcome.model
+            ):
+                pending.append((result_id, receipt_digest))
+            continue
         if identity["kind"] == "gui_gaze":
             from core.jobs.gaze import _saved_gaze
             from core.operations.gaze import GazeOutcome

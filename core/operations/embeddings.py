@@ -37,6 +37,15 @@ class EmbeddingOutcome:
     message: str | None = None
 
     @classmethod
+    def from_dict(cls, data: dict) -> "EmbeddingOutcome":
+        outcome = cls(**{**data, "vector": tuple(data.get("vector", ()))})
+        if outcome.status == "succeeded":
+            checked = cls.from_vector(outcome.clip_id, outcome.vector)
+            if outcome.model != checked.model:
+                raise ValueError("Embedding model identity does not match its vector")
+        return outcome
+
+    @classmethod
     def from_vector(cls, clip_id: str, values: Sequence[float]) -> "EmbeddingOutcome":
         from core.analysis.embeddings import _EMBEDDING_DIM, _EMBEDDING_MODEL_TAG
 

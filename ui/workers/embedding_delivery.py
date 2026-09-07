@@ -42,7 +42,24 @@ class EmbeddingDelivery(QObject):
             return
         self.delivered.add(outcome.clip_id)
         try:
+            receipt = None
+            cache = getattr(self.worker, "cache", None)
+            if cache is not None:
+                if (
+                    window.project.path is None
+                    or window.project.path.resolve() != cache.path
+                ):
+                    raise ValueError(
+                        "Project save location changed during embedding analysis"
+                    )
+                receipt = cache.results[outcome.clip_id]
+                if not receipt.matches(outcome):
+                    raise ValueError(
+                        "Queued embedding differs from its recorded result"
+                    )
             accepted = self.application.apply(window.project, outcome)
+            if accepted and receipt is not None:
+                window.project.record_job_result(receipt.result_id, receipt.digest)
         except Exception as exc:
             window._on_embeddings_error(f"Could not apply embedding: {exc}")
             return

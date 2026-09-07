@@ -56,6 +56,7 @@ SPINE_MODULES: tuple[str, ...] = (
     "core.jobs.gui_object_detection",
     "core.jobs.gui_faces",
     "core.jobs.gui_gaze",
+    "core.jobs.gui_embeddings",
     "core.jobs.analysis",
     "core.operations.analysis_plan",
     "core.project_migrations",

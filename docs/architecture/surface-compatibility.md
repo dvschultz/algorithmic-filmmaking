@@ -715,6 +715,25 @@ recorded but unapplied neighbors available for an explicit retry.
 Public MCP job names remain unchanged. GUI embedding job history and recovery,
 remaining embedding routes, OCR, and the rest of U7 remain outstanding.
 
+### Durable GUI thumbnail embeddings
+
+Saved-project GUI embedding workers now adapt the shared job runtime and use
+`core/jobs/gui_embeddings.py` to journal complete computed batches before queued
+publication. Matching retries reuse recorded vectors without loading or unloading
+the model. Unsaved projects remain session-only, and analysis does not save
+unrelated desktop edits.
+
+The journal binds source, thumbnail, range, previous vector/model, options, and
+runtime metadata. Owner-thread delivery additionally verifies the exact recorded
+payload and current save location before attaching its receipt. Explicit saves
+checkpoint only matching saved vectors/model identifiers at full precision.
+Changed output, Save As, invalid vectors, and corrupt cache records cannot be
+acknowledged as matching results. Both legacy and typed computation signals
+remain available; only typed delivery applies project changes.
+
+Boundary/sequencer embedding routes, OCR, remaining audio/frame analysis, and
+workflow orchestration remain U7 work. Native-process isolation remains later.
+
 The MCP analysis adapter translates shared operation kinds to their existing
 public job names at submission. Gaze, faces, objects, classification, and
 cinematography are covered by tests that submit to the real job runtime and

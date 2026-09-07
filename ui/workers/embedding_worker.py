@@ -1,10 +1,17 @@
-"""Compatibility QThread for detached shared DINOv2 extraction."""
+"""Compatibility QThread for shared, recoverable thumbnail embeddings."""
 
+from dataclasses import asdict
 from pathlib import Path
+from queue import Empty, Queue
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Signal, Slot
+from PySide6.QtCore import Signal
 
+from core.jobs import JobRuntime
+from core.jobs.embeddings import _runtime, _target
+from core.jobs.gui_embeddings import GuiEmbeddingCache
+from core.jobs.media import media_stamp
+from core.jobs.spec import OperationSpec
 from core.operations.embeddings import (
     EmbeddingOptions,
     EmbeddingOutcome,
@@ -12,15 +19,21 @@ from core.operations.embeddings import (
     run_embeddings,
 )
 from ui.workers.base import CancellableWorker, summarize_clip_errors
+from ui.workers.job_adapter import (
+    gui_job_operation,
+    gui_job_runtime,
+    close_gui_job_runtime,
+)
 
 if TYPE_CHECKING:
+    from core.project import Project
     from models.clip import Clip, Source
 
 DEFAULT_CHUNK_SIZE = 16
 
 
 class EmbeddingAnalysisWorker(CancellableWorker):
-    """Emit immutable vectors; publication belongs to the project owner."""
+    """Compute detached vectors; model publication belongs to the project owner."""
 
     progress = Signal(int, int)
     embedding_ready = Signal(str)
@@ -34,6 +47,8 @@ class EmbeddingAnalysisWorker(CancellableWorker):
         skip_existing: bool = True,
         chunk_size: int = DEFAULT_CHUNK_SIZE,
         parent=None,
+        *,
+        project: "Project | None" = None,
     ) -> None:
         super().__init__(parent)
         self.options = EmbeddingOptions(max(1, chunk_size))
@@ -46,41 +61,197 @@ class EmbeddingAnalysisWorker(CancellableWorker):
             for c in clips
         )
         self.result: tuple[EmbeddingOutcome, ...] = ()
+        targets = {
+            c.id: _target(project, c.id)
+            if project is not None
+            else {
+                "clip_id": c.id,
+                "source_id": c.source_id,
+                "thumbnail_path": str(c.thumbnail_path) if c.thumbnail_path else None,
+                "start_frame": c.start_frame,
+                "end_frame": c.end_frame,
+                "source_path": None,
+                "fps": None,
+            }
+            for c in clips
+        }
+        previous = {
+            c.id: {"vector": c.embedding, "model": c.embedding_model} for c in clips
+        }
+        paths = {
+            task.thumbnail_path
+            for task in self.tasks
+            if task.thumbnail_path and not task.skip
+        }
+        paths.update(
+            Path(targets[t.clip_id]["source_path"])
+            for t in self.tasks
+            if not t.skip and targets[t.clip_id]["source_path"]
+        )
+        self._media_stamps = {path: media_stamp(path) for path in paths}
+        self.operation = gui_job_operation(
+            OperationSpec.build(
+                kind="embeddings",
+                version=1,
+                arguments={"clip_ids": [t.clip_id for t in self.tasks]},
+                inputs={
+                    "targets": targets,
+                    "options": asdict(self.options),
+                    "runtime": _runtime(),
+                    "previous": previous,
+                },
+                persistence="session_only",
+                session_id=project.session.session_id if project else None,
+                input_revision=str(project.mutation_generation) if project else None,
+            ),
+            project.path if project else None,
+        )
+        self.task_id: str | None = None
+        self.job_status: str | None = None
+        self._runtime: JobRuntime | None = None
+        self.cache: GuiEmbeddingCache | None = None
+        if project is not None and project.path is not None:
+            self.cache = GuiEmbeddingCache(
+                project.path,
+                project.metadata.id,
+                {c.id: c.source_id for c in clips},
+                project.metadata.job_results,
+                options=self.options,
+                targets=targets,
+                previous_results=previous,
+                media_stamps=self._media_stamps,
+            )
 
-    @Slot()
+    def cancel(self) -> None:
+        super().cancel()
+        if self._runtime is not None and self.task_id is not None:
+            self._runtime.cancel(self.task_id)
+
+    def _prepare(self) -> bool:
+        if any(
+            media_stamp(path) != stamp for path, stamp in self._media_stamps.items()
+        ):
+            raise RuntimeError("Embedding extraction media changed while queued")
+        return not self.is_cancelled()
+
     def run(self) -> None:
+        """Relay shared-job results on the QThread; publish models on their owner."""
         self._log_start()
         self.progress.emit(0, len(self.tasks))
-        errors = []
+        runtime = None
+        events: Queue = Queue()
+        errors: list[tuple[str, str]] = []
 
-        def deliver(outcome: EmbeddingOutcome) -> None:
-            if outcome.status == "succeeded":
-                self.outcome_ready.emit(outcome)
-                self.embedding_ready.emit(outcome.clip_id)
-            elif outcome.status == "failed":
+        def emit(event):
+            kind, value = event
+            if kind == "progress":
+                self.progress.emit(*value)
+            elif value.status == "succeeded":
+                self.outcome_ready.emit(value)
+                self.embedding_ready.emit(value.clip_id)
+            elif value.status == "failed":
                 errors.append(
-                    (
-                        outcome.clip_id,
-                        outcome.message or outcome.code or "Embedding failed",
-                    )
+                    (value.clip_id, value.message or value.code or "Analysis failed")
                 )
+
+        def compute(progress, cancel):
+            collected = {}
+
+            def deliver(outcome):
+                collected[outcome.clip_id] = outcome
+                events.put(("outcome", outcome))
+
+            def report(current, total):
+                progress(
+                    current / total if total else 1.0,
+                    f"Embedding extraction ({current}/{total})",
+                )
+                events.put(("progress", (current, total)))
+
+            try:
+                if self.cache is not None:
+                    outcomes = self.cache.run(
+                        self.tasks, cancel, self._prepare, deliver, report
+                    )
+                elif self._prepare():
+                    outcomes = run_embeddings(
+                        self.tasks,
+                        self.options,
+                        cancel_event=cancel,
+                        on_outcome=deliver,
+                        progress=report,
+                    )
+                else:
+                    outcomes = tuple(
+                        EmbeddingOutcome(task.clip_id, "unprocessed", code="cancelled")
+                        for task in self.tasks
+                    )
+                return {"outcomes": [asdict(outcome) for outcome in outcomes]}
+            except Exception as exc:
+                for task in self.tasks:
+                    if task.clip_id not in collected:
+                        deliver(
+                            EmbeddingOutcome(
+                                task.clip_id,
+                                "failed",
+                                code="embedding_failed",
+                                message=str(exc),
+                            )
+                        )
+                return {
+                    "success": False,
+                    "error": str(exc),
+                    "outcomes": [
+                        asdict(collected[task.clip_id]) for task in self.tasks
+                    ],
+                }
 
         try:
-            self.result = run_embeddings(
-                self.tasks,
-                self.options,
-                cancel_event=self._cancel_event,
-                on_outcome=deliver,
-                progress=self.progress.emit,
+            runtime = gui_job_runtime(self.operation)
+            self._runtime = runtime
+            submission = runtime.submit(
+                kind=self.operation.kind,
+                args=self.operation.arguments,
+                operation=self.operation,
+                run=compute,
+                cancellation_event=self._cancel_event,
+                project_path=self.operation.arguments.get("project_path"),
             )
-        except Exception as exc:
-            self.error.emit(f"Embedding extraction failed: {exc}")
-        finally:
-            if errors and not self.is_cancelled():
-                self.error.emit(
-                    summarize_clip_errors(
-                        errors, operation_label="Embedding extraction"
-                    )
+            self.task_id = submission["task_id"]
+            while runtime.is_handle_live(self.task_id):
+                try:
+                    emit(events.get(timeout=0.05))
+                except Empty:
+                    pass
+            runtime.shutdown()
+            while not events.empty():
+                emit(events.get_nowait())
+            row = runtime.store.get(self.task_id)
+            self.job_status = row.status
+            self.result = tuple(
+                EmbeddingOutcome.from_dict(value)
+                for value in (row.result or {}).get("outcomes", [])
+            )
+            if row.status == "cancelled" and not self.result:
+                self.result = tuple(
+                    EmbeddingOutcome(task.clip_id, "unprocessed", code="cancelled")
+                    for task in self.tasks
                 )
-            self.analysis_completed.emit()
-            self._log_complete()
+            if row.status == "failed" and not self.result:
+                raise RuntimeError(row.error or "Embedding extraction failed")
+        except Exception as exc:
+            self.error.emit(str(exc))
+        finally:
+            try:
+                if runtime is not None:
+                    close_gui_job_runtime(runtime)
+            finally:
+                self._runtime = None
+                if errors and not self.is_cancelled():
+                    self.error.emit(
+                        summarize_clip_errors(
+                            errors, operation_label="Embedding extraction"
+                        )
+                    )
+                self.analysis_completed.emit()
+                self._log_complete()
