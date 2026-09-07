@@ -241,8 +241,8 @@ def extract_faces_from_clip(
 
     cap = cv2.VideoCapture(str(source_path))
     if not cap.isOpened():
-        logger.warning(f"Could not open video: {source_path}")
-        return []
+        cap.release()
+        raise ValueError(f"Could not open video: {source_path}")
 
     results = []
     try:
@@ -250,7 +250,7 @@ def extract_faces_from_clip(
             cap.set(cv2.CAP_PROP_POS_FRAMES, frame_pos)
             ret, frame = cap.read()
             if not ret:
-                continue
+                raise ValueError(f"Could not decode frame {frame_pos} from {source_path}")
 
             faces = model.get(frame)
             results.extend(_format_face(face, frame_number=frame_pos) for face in faces)

@@ -290,7 +290,8 @@ def test_transcribe_empty_segments_treated_as_success(tmp_path):
 # job so long-lived MCP servers don't accumulate InsightFace / MediaPipe state.
 def test_face_embeddings_unloads_model_on_success(tmp_path):
     project = _build_project(tmp_path, n_clips=2)
-    with patch("core.analysis.faces.extract_faces_from_clip", return_value=[]), \
+    with patch("core.analysis.faces._load_insightface"), \
+         patch("core.analysis.faces.extract_faces_from_clip", return_value=[]), \
          patch("core.analysis.faces.unload_model") as mock_unload:
         face_embeddings(project)
     assert mock_unload.call_count == 1
@@ -301,20 +302,21 @@ def test_face_embeddings_unloads_model_on_exception(tmp_path):
     with patch(
         "core.analysis.faces.extract_faces_from_clip",
         side_effect=RuntimeError("boom"),
-    ), patch("core.analysis.faces.unload_model") as mock_unload:
+    ), patch("core.analysis.faces._load_insightface"), \
+         patch("core.analysis.faces.unload_model") as mock_unload:
         face_embeddings(project)
     # Per-clip errors are aggregated, not raised — but unload still runs.
     assert mock_unload.call_count == 1
 
 
-def test_face_embeddings_unloads_model_on_cancel(tmp_path):
+def test_precancelled_face_embeddings_does_not_unload_another_job_model(tmp_path):
     project = _build_project(tmp_path, n_clips=3)
     cancel = threading.Event()
     cancel.set()
     with patch("core.analysis.faces.extract_faces_from_clip", return_value=[]), \
          patch("core.analysis.faces.unload_model") as mock_unload:
         face_embeddings(project, cancel_event=cancel)
-    assert mock_unload.call_count == 1
+    assert mock_unload.call_count == 0
 
 
 def test_gaze_unloads_model_on_success(tmp_path):

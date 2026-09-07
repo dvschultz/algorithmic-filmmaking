@@ -608,46 +608,36 @@ def face_embeddings(
     cancel_event: Optional[threading.Event] = None,
 ) -> dict:
     """Extract face embeddings from clip frame samples."""
-    from core.analysis.faces import extract_faces_from_clip, unload_model
+    from core.operations.faces import FaceTask, FaceOptions, FaceApplication, run_faces
 
     clips = _resolve_clip_ids(project, clip_ids)
-    sources_by_id = project.sources_by_id
-    succeeded: list[dict] = []
-    failed: list[dict] = []
-    skipped: list[dict] = []
-    updated = []
-    total = len(clips)
-
-    try:
-        for i, clip in enumerate(clips):
-            if _check_cancel(cancel_event):
-                break
-            if progress_callback is not None and total:
-                progress_callback(i / total, f"Face detection ({i + 1}/{total}): {clip.id}")
-            if skip_existing and clip.face_embeddings is not None:
-                skipped.append({"clip_id": clip.id, "reason": "already_populated"})
-                continue
-            source = sources_by_id.get(clip.source_id)
-            if source is None or not source.file_path.exists():
-                failed.append({"clip_id": clip.id, "code": "source_file_missing"})
-                continue
-            try:
-                faces = extract_faces_from_clip(source.file_path, clip.start_frame, clip.end_frame, source.fps, sample_interval)
-            except Exception as exc:  # noqa: BLE001
-                failed.append({"clip_id": clip.id, "code": "face_detection_failed", "message": str(exc)})
-                continue
-            clip.face_embeddings = faces if faces else []
-            updated.append(clip)
-            succeeded.append({"clip_id": clip.id, "face_count": len(clip.face_embeddings)})
-
-        if updated:
-            project.update_clips(updated)
-        if progress_callback is not None:
-            progress_callback(1.0, f"Done: {len(succeeded)} ok, {len(failed)} failed, {len(skipped)} skipped")
-        return {"success": True, "result": {"succeeded": succeeded, "failed": failed, "skipped": skipped, "total_clips": total}}
-    finally:
-        # Long-lived MCP servers must not retain InsightFace state across jobs.
-        unload_model()
+    sources = project.sources_by_id
+    tasks = tuple(FaceTask(c.id, c.source_id,
+        sources[c.source_id].file_path if c.source_id in sources else None,
+        c.start_frame, c.end_frame,
+        sources[c.source_id].fps if c.source_id in sources else 0.0,
+        skip=skip_existing and c.face_embeddings is not None) for c in clips)
+    application = FaceApplication(project, tasks)
+    result: dict = {"succeeded": [], "failed": [], "skipped": [], "unprocessed": [], "total_clips": len(clips)}
+    def deliver(outcome):
+        if outcome.status == "succeeded":
+            if application.apply(project, outcome):
+                result["succeeded"].append({"clip_id": outcome.clip_id, "face_count": len(outcome.faces)})
+            else:
+                result["failed"].append({"clip_id": outcome.clip_id, "code": "stale_result"})
+        elif outcome.status == "skipped":
+            result["skipped"].append({"clip_id": outcome.clip_id, "reason": outcome.code})
+        elif outcome.status == "failed":
+            result["failed"].append({"clip_id": outcome.clip_id, "code": outcome.code, "message": outcome.message})
+    def report(current, total):
+        if progress_callback:
+            progress_callback(current / total if total else 1.0, f"Face detection ({current}/{total})")
+    outcomes = run_faces(tasks, FaceOptions(sample_interval), cancel_event=cancel_event,
+                         on_outcome=deliver, progress=report)
+    result["unprocessed"] = [{"clip_id": outcome.clip_id, "code": outcome.code} for outcome in outcomes if outcome.status == "unprocessed"]
+    if progress_callback:
+        progress_callback(1.0, "Face detection finished")
+    return {"success": True, "result": result}
 
 
 def gaze(

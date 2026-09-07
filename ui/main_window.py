@@ -3601,12 +3601,16 @@ class MainWindow(QMainWindow):
     def _launch_face_detection_worker(self, clips: list):
         """Launch face detection worker."""
         self._face_detection_finished_handled = False
+        self._reset_analysis_run_error("face_embeddings")
         sources_by_id = {s.id: s for s in self.sources}
         logger.info(f"Creating FaceDetectionWorker (pipeline) for {len(clips)} clips...")
         self.face_detection_worker = FaceDetectionWorker(
             clips, sources_by_id=sources_by_id,
         )
         self.face_detection_worker.progress.connect(self._on_face_detection_progress)
+        from ui.workers.face_delivery import FaceDelivery
+        FaceDelivery(self, self.face_detection_worker, pipeline=True)
+        self.face_detection_worker.error.connect(self._on_face_detection_error)
         bind_pipeline_completion(
             self, self.face_detection_worker, "face_detection_worker",
             self.face_detection_worker.detection_completed, self._on_pipeline_face_detection_finished,
@@ -4585,6 +4589,7 @@ class MainWindow(QMainWindow):
             "colors": "_color_run_error",
             "classify": "_classification_run_error",
             "detect_objects": "_object_detection_run_error",
+            "face_embeddings": "_face_detection_run_error",
             "extract_text": "_text_extraction_run_error",
             "cinematography": "_cinematography_run_error",
         }
@@ -4627,6 +4632,7 @@ class MainWindow(QMainWindow):
             ("shots", self._shot_type_run_error, "shot type"),
             ("classify", self._classification_run_error, "classification"),
             ("detect_objects", self._object_detection_run_error, "object detection"),
+            ("face_embeddings", getattr(self, "_face_detection_run_error", None), "face detection"),
             ("extract_text", self._text_extraction_run_error, "text extraction"),
             ("transcribe", self._transcription_run_error, "transcription"),
             ("describe", self._description_run_error, "description"),
@@ -8164,6 +8170,11 @@ class MainWindow(QMainWindow):
             else:
                 self.status_bar.showMessage(f"Detecting faces: {current}/{total} clips...")
             self.progress_bar.setValue(int(current / total * 100))
+
+    @Slot(str)
+    def _on_face_detection_error(self, message: str) -> None:
+        self._record_analysis_run_error("_face_detection_run_error", "Face detection", message)
+        self.status_bar.showMessage(f"Face detection error: {message}", 5000)
 
     @Slot(int, int)
     def _on_gaze_progress(self, current: int, total: int):

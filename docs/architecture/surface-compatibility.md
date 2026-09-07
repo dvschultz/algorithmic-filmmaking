@@ -564,3 +564,18 @@ recorded payload and save location before applying it. A project save checkpoint
 only receipts whose exact affected outputs are present in the saved snapshot,
 including zero people and empty detections. Changed outputs or Save As cannot
 acknowledge an unrelated result. Other U7 analysis families still await migration.
+
+### Shared face computation and guarded publication
+
+GUI face analysis and spine/MCP face-embedding analysis now use
+`core/operations/faces.py`. Workers receive source/range snapshots and return
+immutable bounding boxes and embeddings. The GUI worker no longer mutates clips;
+launch-bound queued delivery applies accepted results on the project owner thread.
+Spine publication uses the same source, target, and prior-output guards.
+
+Cancellation suppresses late replies, model-load failures stop further inference,
+and completion is emitted after cleanup even on cancellation or failure. Shared
+face jobs serialize model use and unloading. Invalid provider data and unreadable
+video samples are failures; valid empty face results remain distinct from missing
+analysis and survive save/load. Existing embedding rounding in saved projects is
+unchanged. Durable face job recovery remains the next U7 step.

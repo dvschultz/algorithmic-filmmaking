@@ -430,7 +430,7 @@ class Clip:
             data["object_labels"] = list(self.object_labels)
         if self.detected_objects is not None:
             data["detected_objects"] = self.detected_objects
-        if self.face_embeddings:
+        if self.face_embeddings is not None:
             data["face_embeddings"] = [
                 {
                     "bbox": fe["bbox"],
@@ -556,7 +556,7 @@ class Clip:
                 if "frame_number" in entry and isinstance(entry["frame_number"], int):
                     clean["frame_number"] = entry["frame_number"]
                 face_embeddings.append(clean)
-            if not face_embeddings:
+            if not face_embeddings and data["face_embeddings"]:
                 face_embeddings = None
 
         thumbnail_path = _resolve_thumbnail_path(data, base_path)
