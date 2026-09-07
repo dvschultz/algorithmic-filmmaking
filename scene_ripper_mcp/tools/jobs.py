@@ -591,8 +591,11 @@ async def start_analyze_colors(
             }
         )
 
-    runner_factory = _make_analyze_runner("analyze_colors", num_colors=num_colors)
-    run = runner_factory(path, mtime, clip_ids)
+    from core.jobs.colors import run_colors
+    store = _lifespan(ctx)["job_store"]
+
+    def run(progress_callback, cancel_event):
+        return run_colors(store, path, clip_ids, num_colors, progress_callback, cancel_event)
 
     return _start_job(
         ctx,

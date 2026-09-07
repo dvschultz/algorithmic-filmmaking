@@ -594,7 +594,7 @@ class TestProjectFramePersistence:
 
     def test_schema_version_bumped(self):
         """Schema version should be 1.4 (multi-sequence support)."""
-        assert SCHEMA_VERSION == "1.4"
+        assert SCHEMA_VERSION == "1.5"
 
     def test_repr_includes_frames(self):
         """Project repr includes frame count."""

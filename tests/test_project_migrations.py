@@ -24,13 +24,13 @@ def test_legacy_upgrade_is_in_memory_until_save_and_keeps_backup(tmp_path):
     original = write_document(path)
     project = Project.load(path)
     assert path.read_bytes() == original
-    assert project.metadata.version == "1.4"
+    assert project.metadata.version == "1.5"
     assert project.sequence.id == "sequence-old"
     assert project.save()
     saved = json.loads(path.read_text())
-    assert saved["version"] == "1.4"
+    assert saved["version"] == "1.5"
     assert saved["sequences"][0]["id"] == "sequence-old"
-    backups = list(tmp_path.glob("old.sceneripper.pre-v1.4-*.bak"))
+    backups = list(tmp_path.glob("old.sceneripper.pre-v1.5-*.bak"))
     assert len(backups) == 1
     assert backups[0].read_bytes() == original
 

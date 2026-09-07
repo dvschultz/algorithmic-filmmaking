@@ -209,11 +209,12 @@ class JobStore:
             conn.close()
 
     def _init_schema(self) -> None:
-        from core.jobs.schema import INITIAL_SCHEMA
+        from core.jobs.schema import INITIAL_SCHEMA, RESULT_SCHEMA
 
         sql = INITIAL_SCHEMA
         with self._connect() as conn:
             conn.executescript(sql)
+            conn.executescript(RESULT_SCHEMA)
 
     # --- Mutations ---
 
@@ -369,6 +370,44 @@ class JobStore:
         with self._connect() as conn:
             cur = conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
             return cur.rowcount > 0
+
+    def get_result(self, result_id: str) -> dict | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM job_results WHERE result_id = ?", (result_id,)
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def record_result(
+        self, result_id: str, spec_json: str, payload_json: str, digest: str
+    ) -> dict:
+        """Persist immutable computed output before publishing it to a project."""
+        with self._connect() as conn:
+            conn.execute("PRAGMA synchronous=FULL")
+            conn.execute(
+                "INSERT OR IGNORE INTO job_results (result_id,spec_json,payload_json,payload_digest,created_at) VALUES (?,?,?,?,?)",
+                (result_id, spec_json, payload_json, digest, time.time()),
+            )
+        row = self.get_result(result_id)
+        assert row is not None
+        if (row["spec_json"], row["payload_json"], row["payload_digest"]) != (
+            spec_json,
+            payload_json,
+            digest,
+        ):
+            raise ValueError("Result identity already contains different data")
+        return row
+
+    def checkpoint_result(self, result_id: str, digest: str) -> None:
+        """Acknowledge an already-durable project receipt; never apply work here."""
+        with self._connect() as conn:
+            conn.execute("PRAGMA synchronous=FULL")
+            changed = conn.execute(
+                "UPDATE job_results SET committed=1 WHERE result_id=? AND payload_digest=?",
+                (result_id, digest),
+            ).rowcount
+            if not changed:
+                raise ValueError("Computed result is missing or has a different digest")
 
     # --- Reads ---
 

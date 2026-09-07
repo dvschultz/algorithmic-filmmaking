@@ -413,6 +413,17 @@ cannot reopen a completed job. Queued cancellation skips the runner, and a
 returned `success: false` is recorded as a failed job with its result preserved.
 
 The desktop has a Qt adapter over this runtime. Existing desktop workflows are
-still being migrated. This extraction does not yet provide recovery across a
-project save and a job checkpoint; durable result IDs and reconciliation are
-subsequent U6 work.
+still being migrated.
+
+Color-analysis jobs now save each computed palette before applying it and write a
+receipt with the project. Start another color job after a failure to reuse its
+recorded results: a failed project save retries application, while a failed job
+checkpoint verifies the saved palette without applying it twice. Edited palettes
+are preserved and reported as a conflict. Other analysis jobs do not yet use this
+recovery path.
+
+Projects save in schema 1.5 to retain these receipts; schema-aware 1.4 clients can
+inspect them read-only. Job-history cleanup retains the computed-result cache.
+Keep that cache when moving projects between installations if you need to retry
+managed color analysis; missing cached results are reported instead of silently
+recomputing them.

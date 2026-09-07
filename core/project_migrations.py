@@ -11,7 +11,7 @@ import re
 import tempfile
 from typing import Any
 
-SCHEMA_VERSION = "1.4"
+SCHEMA_VERSION = "1.5"
 
 
 def schema_version(value: Any) -> tuple[int, ...]:
@@ -34,7 +34,11 @@ def _multiple_sequences(data: dict) -> None:
         data["active_sequence_index"] = 0
 
 
-MIGRATIONS = (("1.4", _multiple_sequences),)
+def _job_receipts(data: dict) -> None:
+    data.setdefault("job_results", {})
+
+
+MIGRATIONS = (("1.4", _multiple_sequences), ("1.5", _job_receipts))
 
 
 def migrate_project_data(data: dict) -> dict:

@@ -55,6 +55,7 @@ class ProjectMetadata:
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     modified_at: str = field(default_factory=lambda: datetime.now().isoformat())
     version: str = SCHEMA_VERSION
+    job_results: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -63,16 +64,30 @@ class ProjectMetadata:
             "created_at": self.created_at,
             "modified_at": self.modified_at,
             "version": self.version,
+            "job_results": dict(self.job_results),
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> "ProjectMetadata":
+        receipts = data.get("job_results", {})
+        if is_future_schema(data.get("version", "1.0")):
+            receipts = {}
+        if not isinstance(receipts, dict) or any(
+            not isinstance(key, str)
+            or not isinstance(value, str)
+            or len(key) != 64
+            or len(value) != 64
+            or any(c not in "0123456789abcdef" for c in key + value)
+            for key, value in receipts.items()
+        ):
+            raise ValueError("Invalid project job result receipts")
         return cls(
             id=data.get("id", str(uuid.uuid4())),
             name=data.get("project_name", "Untitled Project"),
             created_at=data.get("created_at", datetime.now().isoformat()),
             modified_at=data.get("modified_at", datetime.now().isoformat()),
             version=data.get("version", "1.0"),
+            job_results=dict(receipts),
         )
 
 
@@ -1380,6 +1395,23 @@ class Project:
         """Mark project as saved (no unsaved changes)."""
         self._dirty = False
         self.session.record_saved()
+
+    def record_job_result(self, result_id: str, digest: str) -> None:
+        """Include a validated job receipt in the next atomic project save."""
+        if any(
+            len(value) != 64 or any(c not in "0123456789abcdef" for c in value)
+            for value in (result_id, digest)
+        ):
+            raise ValueError("Invalid job receipt identity")
+
+        def record() -> None:
+            existing = self.metadata.job_results.get(result_id)
+            if existing is not None and existing != digest:
+                raise ValueError("Job receipt conflicts with an existing result")
+            self.metadata.job_results[result_id] = digest
+            self.mark_dirty()
+
+        self.session.apply_external(record)
 
     # --- Persistence ---
 

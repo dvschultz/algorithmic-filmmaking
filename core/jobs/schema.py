@@ -41,3 +41,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_idempotency
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs (status);
 CREATE INDEX IF NOT EXISTS idx_jobs_finished_at ON jobs (finished_at);
 """
+
+
+RESULT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS job_results (
+    result_id TEXT PRIMARY KEY,
+    spec_json TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    payload_digest TEXT NOT NULL,
+    committed INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL
+);
+"""
