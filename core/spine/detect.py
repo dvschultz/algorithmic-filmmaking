@@ -26,7 +26,9 @@ import threading
 from pathlib import Path
 from typing import Callable, Optional
 
-from core.operations.detection import DetectionCancelled, DetectionRequest, run_detection
+from core.operations.detection import (
+    DetectionCancelled, DetectionGuard, DetectionRequest, StaleDetectionResult, run_detection,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +107,7 @@ def detect_scenes_for_source(
         progress_callback(0.0, f"Detecting scenes in {source.filename}")
 
     config = DetectionConfig(threshold=sensitivity, luma_only=luma_only)
+    guard = DetectionGuard.capture(project, source.file_path, source_id=source.id)
     request = DetectionRequest.build(source.file_path, config)
 
     if _check_cancel(cancel_event):
@@ -118,6 +121,8 @@ def detect_scenes_for_source(
         )
     except DetectionCancelled:
         return {"success": False, "error": {"code": "cancelled"}}
+    except StaleDetectionResult as exc:
+        return {"success": False, "error": {"code": "stale_detection", "message": str(exc)}}
     except FileNotFoundError as exc:
         return {
             "success": False,
@@ -145,6 +150,11 @@ def detect_scenes_for_source(
 
     if _check_cancel(cancel_event):
         return {"success": False, "error": {"code": "cancelled"}}
+
+    try:
+        guard.validate(project)
+    except StaleDetectionResult as exc:
+        return {"success": False, "error": {"code": "stale_detection", "message": str(exc)}}
 
     source.analyzed = True
     project.replace_source_clips(source.id, clips)
@@ -207,6 +217,7 @@ def detect_scenes_for_video(
         return {"success": False, "error": {"code": "cancelled"}}
 
     config = DetectionConfig(threshold=sensitivity, luma_only=luma_only)
+    guard = DetectionGuard.capture(project, video)
     request = DetectionRequest.build(video, config)
     if progress_callback is not None:
         progress_callback(0.0, f"Detecting scenes in {video.name}")
@@ -219,6 +230,8 @@ def detect_scenes_for_video(
         )
     except DetectionCancelled:
         return {"success": False, "error": {"code": "cancelled"}}
+    except StaleDetectionResult as exc:
+        return {"success": False, "error": {"code": "stale_detection", "message": str(exc)}}
 
     if _check_cancel(cancel_event):
         return {"success": False, "error": {"code": "cancelled"}}
@@ -238,6 +251,11 @@ def detect_scenes_for_video(
     )
     if _check_cancel(cancel_event):
         return {"success": False, "error": {"code": "cancelled"}}
+
+    try:
+        guard.validate(project)
+    except StaleDetectionResult as exc:
+        return {"success": False, "error": {"code": "stale_detection", "message": str(exc)}}
 
     source.analyzed = True
     if existing_source:

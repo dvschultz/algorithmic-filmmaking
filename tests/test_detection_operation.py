@@ -73,3 +73,44 @@ def test_progress_and_errors_are_preserved(tmp_path, monkeypatch):
         run_detection(DetectionRequest.build(tmp_path / "v.mp4"), progress_callback=progress)
     assert raised.value is failure
     progress.assert_called_once_with(0.5, "Analyzing")
+
+
+@pytest.mark.parametrize("when", ["before", "during"])
+def test_changed_media_is_not_delivered(tmp_path, monkeypatch, when):
+    path = tmp_path / "v.mp4"
+    path.write_bytes(b"original")
+    request = DetectionRequest.build(path)
+    detector = Mock()
+
+    def detect(path, progress):
+        path.write_bytes(b"changed media")
+        return object(), []
+
+    detector.detect_scenes_with_progress.side_effect = detect
+    constructor = Mock(return_value=detector)
+    monkeypatch.setattr("core.scene_detect.SceneDetector", constructor)
+    if when == "before":
+        path.write_bytes(b"changed before dispatch")
+    with pytest.raises(RuntimeError, match="media changed"):
+        run_detection(request)
+    assert constructor.call_count == (0 if when == "before" else 1)
+
+
+def test_guard_preserves_unrelated_edits_but_rejects_target_edits(tmp_path):
+    from core.operations.detection import DetectionGuard, StaleDetectionResult
+    from core.project import Project
+    from models.clip import Clip, Source
+
+    project = Project.new(name="target")
+    source = Source(file_path=tmp_path / "v.mp4")
+    project.add_source(source)
+    clip = Clip(source_id=source.id, start_frame=0, end_frame=30)
+    project.add_clips([clip])
+    guard = DetectionGuard.capture(project, source.file_path)
+    project.add_source(Source(file_path=tmp_path / "unrelated.mp4"))
+    guard.validate(project)
+    clip.notes = "preserve this edit"
+    with pytest.raises(StaleDetectionResult):
+        guard.validate(project)
+    with pytest.raises(StaleDetectionResult):
+        guard.validate(Project.new(name="different session"))

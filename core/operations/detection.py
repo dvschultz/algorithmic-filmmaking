@@ -2,19 +2,92 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
+from hashlib import sha256
 import json
 from pathlib import Path
 from threading import Event
 from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
+    from core.project import Project
     from core.scene_detect import DetectionConfig, KaraokeDetectionConfig
     from models.clip import Clip, Source
 
 
 class DetectionCancelled(RuntimeError):
     """Detection was cancelled before its result could be delivered."""
+
+
+class StaleDetectionResult(RuntimeError):
+    """Detection inputs changed before the result could be accepted."""
+
+
+def _media_stamp(path: Path) -> tuple[int, int, int, int, int] | None:
+    try:
+        stat = path.stat()
+        return (
+            stat.st_dev,
+            stat.st_ino,
+            stat.st_size,
+            stat.st_mtime_ns,
+            stat.st_ctime_ns,
+        )
+    except OSError:
+        return None
+
+
+def _target_digest(project: Project, path: Path) -> str:
+    sources = [s for s in project.sources if s.file_path.resolve() == path]
+    ids = {s.id for s in sources}
+    payload = {
+        "sources": [s.to_dict() for s in sources],
+        "clips": [c.to_dict() for c in project.clips if c.source_id in ids],
+    }
+    return sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+
+@dataclass(frozen=True)
+class DetectionGuard:
+    """Owner-thread snapshot of the target that detection may replace."""
+
+    session_id: str
+    video_path: Path
+    source_id: str | None
+    target_digest: str
+    media_stamp: tuple[int, int, int, int, int] | None
+
+    @classmethod
+    def capture(
+        cls, project: Project, video_path: Path, *, source_id: str | None = None
+    ) -> DetectionGuard:
+        project.session.assert_owner()
+        path = Path(video_path).resolve()
+        source = (
+            project.sources_by_id.get(source_id)
+            if source_id
+            else next(
+                (s for s in project.sources if s.file_path.resolve() == path), None
+            )
+        )
+        if source_id and (source is None or source.file_path.resolve() != path):
+            raise StaleDetectionResult("Detection source no longer matches its media")
+        return cls(
+            project.session.session_id,
+            path,
+            source.id if source else None,
+            _target_digest(project, path),
+            _media_stamp(path),
+        )
+
+    def validate(self, project: Project) -> None:
+        project.session.assert_owner()
+        if (
+            project.session.session_id != self.session_id
+            or _media_stamp(self.video_path) != self.media_stamp
+            or _target_digest(project, self.video_path) != self.target_digest
+        ):
+            raise StaleDetectionResult("Detection target changed; run detection again")
 
 
 @dataclass(frozen=True)
@@ -25,6 +98,11 @@ class DetectionRequest:
     config_json: str = "{}"
     mode: str = "adaptive"
     karaoke_config_json: str = "{}"
+    media_stamp: tuple[int, int, int, int, int] | None = field(init=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "video_path", Path(self.video_path).resolve())
+        object.__setattr__(self, "media_stamp", _media_stamp(self.video_path))
 
     @classmethod
     def build(
@@ -36,7 +114,7 @@ class DetectionRequest:
         karaoke_config: KaraokeDetectionConfig | None = None,
     ) -> DetectionRequest:
         return cls(
-            Path(video_path),
+            Path(video_path).resolve(),
             json.dumps(asdict(config) if config is not None else {}, allow_nan=False),
             mode,
             json.dumps(
@@ -44,6 +122,10 @@ class DetectionRequest:
                 allow_nan=False,
             ),
         )
+
+    def validate_media(self) -> None:
+        if _media_stamp(self.video_path) != self.media_stamp:
+            raise StaleDetectionResult("Detection media changed; run detection again")
 
 
 def run_detection(
@@ -60,6 +142,8 @@ def run_detection(
     if cancel_event is not None and cancel_event.is_set():
         raise DetectionCancelled()
 
+    request.validate_media()
+
     from core.scene_detect import DetectionConfig, KaraokeDetectionConfig, SceneDetector
 
     detector = SceneDetector(config=DetectionConfig(**json.loads(request.config_json)))
@@ -74,4 +158,5 @@ def run_detection(
         result = detector.detect_scenes_with_progress(request.video_path, progress)
     if cancel_event is not None and cancel_event.is_set():
         raise DetectionCancelled()
+    request.validate_media()
     return result

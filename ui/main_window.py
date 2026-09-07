@@ -31,7 +31,9 @@ from PySide6.QtGui import QDesktopServices, QKeySequence, QAction, QDragEnterEve
 from models.clip import Source, Clip
 from core.project_lock import ProjectWriter
 from core.scene_detect import DetectionConfig, KaraokeDetectionConfig
-from core.operations.detection import DetectionRequest, run_detection
+from core.operations.detection import (
+    DetectionGuard, DetectionRequest, StaleDetectionResult, run_detection,
+)
 from core.thumbnail import ThumbnailGenerator
 from core.downloader import (
     VideoDownloader,
@@ -175,6 +177,7 @@ class DetectionWorker(CancellableWorker):
     """
 
     progress = Signal(float, str)  # progress (0-1), status message
+    result_ready = Signal(object, object, list)  # guard, source, clips
     detection_completed = Signal(object, list)  # source, clips (renamed from 'finished' to avoid shadowing QThread.finished)
 
     def __init__(
@@ -183,12 +186,15 @@ class DetectionWorker(CancellableWorker):
         config: DetectionConfig = None,
         mode: str = "adaptive",
         karaoke_config: KaraokeDetectionConfig = None,
+        project: Project | None = None,
+        source_id: str | None = None,
     ):
         super().__init__()
         self.video_path = video_path
         self.config = config or DetectionConfig()
         self.mode = mode
         self.karaoke_config = karaoke_config
+        self.guard = DetectionGuard.capture(project, video_path, source_id=source_id) if project is not None else None
         self.request = DetectionRequest.build(
             self.video_path, self.config, mode=mode, karaoke_config=karaoke_config
         )
@@ -209,6 +215,8 @@ class DetectionWorker(CancellableWorker):
             if self.is_cancelled():
                 self._log_cancelled()
                 return
+            if self.guard is not None:
+                self.result_ready.emit(self.guard, source, clips)
             self.detection_completed.emit(source, clips)
             self._log_complete()
         except Exception as e:
@@ -5667,6 +5675,8 @@ class MainWindow(QMainWindow):
             logger.warning("Detection already in progress, ignoring request")
             return
 
+        self._detection_generation += 1
+
         # Reset guards for new detection run
         self._detection_finished_handled = False
         self._thumbnails_finished_handled = False
@@ -5712,13 +5722,19 @@ class MainWindow(QMainWindow):
             config=visual_config,
             mode=mode,
             karaoke_config=karaoke_config,
+            project=self.project,
+            source_id=self.current_source.id,
         )
+        self._active_detection_guard = self.detection_worker.guard
         self.detection_worker.progress.connect(self._on_detection_progress)
-        self.detection_worker.detection_completed.connect(self._on_detection_finished, Qt.UniqueConnection)
-        self.detection_worker.error.connect(self._on_detection_error)
+        self.detection_worker.result_ready.connect(self._on_guarded_detection_finished, Qt.UniqueConnection)
+        self.detection_worker.error.connect(
+            lambda error, guard=self.detection_worker.guard: self._on_guarded_detection_error(guard, error)
+        )
         # Clean up thread safely after it finishes to prevent "QThread: Destroyed while running" crash
-        self.detection_worker.finished.connect(self.detection_worker.deleteLater)
-        self.detection_worker.finished.connect(lambda: setattr(self, 'detection_worker', None))
+        self.detection_worker.finished.connect(
+            lambda g=self._detection_generation: self._on_detection_worker_finished(g)
+        )
         logger.info("Starting DetectionWorker...")
         self._gui_state.set_processing("scene_detection", f"running on {self.current_source.filename}")
         self.detection_worker.start()
@@ -5730,8 +5746,29 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(message)
         self._detection_current_progress = progress  # Track for agent status checks
 
+    def _on_guarded_detection_error(self, guard, error):
+        if (guard is self._active_detection_guard
+                and not self._detection_finished_handled
+                and guard.session_id == self.project.session.session_id):
+            self._on_detection_error(error)
+
+    @Slot(object, object, list)
+    def _on_guarded_detection_finished(self, guard, source, clips):
+        if guard is not self._active_detection_guard or self._detection_finished_handled:
+            return
+        # A result queued by an old project must not change the new project's UI.
+        if guard.session_id != self.project.session.session_id:
+            return
+        try:
+            guard.validate(self.project)
+        except StaleDetectionResult as exc:
+            self._detection_finished_handled = True
+            self._on_detection_error(str(exc))
+            return
+        self._on_detection_finished(source, clips, target_id=guard.source_id)
+
     @Slot(object, list)
-    def _on_detection_finished(self, source: Source, clips: list[Clip]):
+    def _on_detection_finished(self, source: Source, clips: list[Clip], target_id: str | None = None):
         """Handle detection completion."""
         logger.info("=== DETECTION FINISHED ===")
         self._gui_state.clear_processing("scene_detection")
@@ -5744,27 +5781,31 @@ class MainWindow(QMainWindow):
 
         logger.info(f"Detection worker running: {self.detection_worker.isRunning() if self.detection_worker else 'None'}")
 
+        target_source = self.sources_by_id.get(target_id) if target_id else self.current_source
+
         # Update the existing source in the library with detected metadata
-        if self.current_source and self.current_source.id in self.sources_by_id:
+        if target_source and target_source.id in self.sources_by_id:
             # Update metadata from detection
-            self.current_source.duration_seconds = source.duration_seconds
-            self.current_source.fps = source.fps
-            self.current_source.width = source.width
-            self.current_source.height = source.height
-            self.current_source.analyzed = True
+            target_source.duration_seconds = source.duration_seconds
+            target_source.fps = source.fps
+            target_source.width = source.width
+            target_source.height = source.height
+            target_source.analyzed = True
 
             # Update CollectTab to show analyzed badge
-            self.collect_tab.update_source_analyzed(self.current_source.id, True)
+            self.collect_tab.update_source_analyzed(target_source.id, True)
         else:
             # Source not in library yet (shouldn't happen normally)
-            self.current_source = source
+            target_source = source
             source.analyzed = True
+
+        self._detected_source_id = target_source.id
 
         # Update clips to reference the existing source ID (detection creates a new Source object)
         # This ensures clips_by_source lookups work correctly
-        logger.info(f"Updating {len(clips)} clips to use source_id={self.current_source.id}")
+        logger.info(f"Updating {len(clips)} clips to use source_id={target_source.id}")
         for clip in clips:
-            clip.source_id = self.current_source.id
+            clip.source_id = target_source.id
 
         # Add new clips to the collection (don't replace existing clips from other sources)
         # This replaces any existing clips from this source (handles re-analysis case)
@@ -5774,14 +5815,14 @@ class MainWindow(QMainWindow):
         # asynchronous, this flag would be cleared before the handler runs.
         self._suppress_clips_added_thumbnails = True
         try:
-            self.project.replace_source_clips(self.current_source.id, clips)
+            self.project.replace_source_clips(target_source.id, clips)
         finally:
             self._suppress_clips_added_thumbnails = False
         self._update_window_title()
 
         # Remove old clips for this source from the Cut tab UI (handles re-analysis case)
-        self.cut_tab.remove_clips_for_source(self.current_source.id)
-        self.cut_tab.add_clips([(clip, self.current_source) for clip in clips])
+        self.cut_tab.remove_clips_for_source(target_source.id)
+        self.cut_tab.add_clips([(clip, target_source) for clip in clips])
 
         # Remove orphaned clips from Analyze tab (clips that no longer exist)
         valid_clip_ids = set(self.clips_by_id.keys())
@@ -5795,7 +5836,7 @@ class MainWindow(QMainWindow):
         self._stop_worker_safely(self.thumbnail_worker, "thumbnail")
         logger.info("Creating ThumbnailWorker...")
         self.thumbnail_worker = ThumbnailWorker(
-            self.current_source,
+            target_source,
             clips,
             cache_dir=self.settings.thumbnail_cache_dir,
             sources_by_id=self.sources_by_id,
@@ -5893,25 +5934,26 @@ class MainWindow(QMainWindow):
         # If agent was waiting for detection, send result back
         if self._pending_agent_detection and self._chat_worker:
             self._pending_agent_detection = False
-            if self.current_source:
-                current_source_clips = self.project.clips_by_source.get(
-                    self.current_source.id, []
+            detected_source = self.sources_by_id.get(self._detected_source_id)
+            if detected_source:
+                detected_source_clips = self.project.clips_by_source.get(
+                    detected_source.id, []
                 )
             else:
-                current_source_clips = []
-            clip_ids = [c.id for c in current_source_clips]
+                detected_source_clips = []
+            clip_ids = [c.id for c in detected_source_clips]
             result = {
                 "tool_call_id": self._pending_agent_tool_call_id,
                 "name": self._pending_agent_tool_name,
                 "success": True,
                 "result": {
                     "success": True,
-                    "source_id": self.current_source.id if self.current_source else None,
-                    "source_name": self.current_source.filename if self.current_source else None,
+                    "source_id": detected_source.id if detected_source else None,
+                    "source_name": detected_source.filename if detected_source else None,
                     "clip_count": len(clip_ids),
                     "clip_ids": clip_ids,
                     "detected_clips": self._build_agent_detected_clip_summary(
-                        current_source_clips
+                        detected_source_clips
                     ),
                     "response_guidance": (
                         "Summarize the scene detection using only these clip IDs, "
@@ -9155,7 +9197,7 @@ class MainWindow(QMainWindow):
             self._cleanup_worker(
                 self.detection_worker,
                 "detection",
-                ["progress", "detection_completed", "error", "finished"],
+                ["progress", "result_ready", "detection_completed", "error", "finished"],
                 wait_timeout=2000,
                 allow_terminate=False,  # Don't terminate - let it finish, ignore its signals
             )
@@ -9177,6 +9219,7 @@ class MainWindow(QMainWindow):
                 source_path,
                 mode="karaoke",
                 karaoke_config=karaoke_config,
+                project=self.project,
             )
         else:
             config = DetectionConfig(
@@ -9184,8 +9227,9 @@ class MainWindow(QMainWindow):
                 min_scene_length=15,
                 use_adaptive=True,
             )
-            self.detection_worker = DetectionWorker(source_path, config)
+            self.detection_worker = DetectionWorker(source_path, config, project=self.project)
 
+        self._active_detection_guard = self.detection_worker.guard
         # Capture generation for lambda closures - used to ignore stale signals
         gen = current_gen
 
@@ -9193,11 +9237,11 @@ class MainWindow(QMainWindow):
             self.intention_workflow.on_detection_progress
         )
         # Use lambda with generation check to ignore signals from old workers
-        self.detection_worker.detection_completed.connect(
-            lambda src, clps, g=gen: self._on_intention_detection_completed(src, clps, g)
+        self.detection_worker.result_ready.connect(
+            lambda guard, src, clps, g=gen: self._on_guarded_intention_detection_finished(guard, src, clps, g)
         )
         self.detection_worker.error.connect(
-            lambda err, g=gen: self._on_intention_detection_error(err, g)
+            lambda err, g=gen, guard=self.detection_worker.guard: self._on_guarded_intention_detection_error(guard, err, g)
         )
         # Clean up - use generation check to avoid cleaning up wrong worker
         self.detection_worker.finished.connect(
@@ -9216,6 +9260,27 @@ class MainWindow(QMainWindow):
         if self.detection_worker:
             self.detection_worker.deleteLater()
             self.detection_worker = None
+
+    def _on_guarded_intention_detection_error(self, guard, error, generation):
+        if (guard is self._active_detection_guard
+                and not self._detection_finished_handled
+                and guard.session_id == self.project.session.session_id):
+            self._on_intention_detection_error(error, generation)
+
+    def _on_guarded_intention_detection_finished(self, guard, source, clips, generation):
+        if guard is not self._active_detection_guard or self._detection_finished_handled:
+            return
+        if generation != self._detection_generation or guard.session_id != self.project.session.session_id:
+            return
+        try:
+            guard.validate(self.project)
+        except StaleDetectionResult as exc:
+            self._on_intention_detection_error(str(exc), generation)
+            return
+        if guard.source_id is not None:
+            # Preserve the imported source identity instead of inserting a duplicate.
+            source.id = guard.source_id
+        self._on_intention_detection_completed(source, clips, generation)
 
     def _on_intention_detection_completed(self, source, clips, generation: int = 0):
         """Handle detection completion during intention workflow.
@@ -9236,7 +9301,15 @@ class MainWindow(QMainWindow):
 
         logger.info(f"Intention detection completed: {len(clips)} clips")
 
-        # Add source and clips to project
+        # Add source and clips to project, retaining the identity of imported media.
+        existing = self.sources_by_id.get(source.id)
+        if existing is not None:
+            existing.duration_seconds = source.duration_seconds
+            existing.fps = source.fps
+            existing.width = source.width
+            existing.height = source.height
+            source = existing
+        source.analyzed = True
         if source.id not in self.sources_by_id:
             self.project.add_source(source)
             self.collect_tab.add_source(source)
@@ -9248,7 +9321,7 @@ class MainWindow(QMainWindow):
             # Sync clip source_id to match the source we just added
             clip.source_id = source.id
 
-        self.project.add_clips(clips)
+        self.project.replace_source_clips(source.id, clips)
 
         # Notify coordinator
         if self.intention_workflow:

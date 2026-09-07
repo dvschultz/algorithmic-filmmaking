@@ -77,6 +77,34 @@ def test_bulk_cancel_during_detection_reports_current_and_remaining(tmp_path):
     }
 
 
+@pytest.mark.parametrize("entry", ["source", "video"])
+def test_detection_preserves_target_edits_made_before_publication(tmp_path, entry):
+    from models.clip import Clip
+
+    project, source, path = _build_project_with_source(tmp_path)
+    old = Clip(source_id=source.id, start_frame=0, end_frame=60)
+    project.add_clips([old])
+    detected = [Clip(source_id=source.id, start_frame=0, end_frame=30)]
+
+    def thumbnails(*args, **kwargs):
+        old.notes = "Keep the user's edit"
+        return {"generated": [], "failed": [], "skipped": []}
+
+    with _stub_detect_returns(source, detected), patch(
+        "core.spine.detect._generate_detected_clip_thumbnails", side_effect=thumbnails
+    ):
+        if entry == "source":
+            result = detect_scenes_for_source(project, source.id)
+        else:
+            result = detect_scenes_for_video(project, path)
+
+    assert result["success"] is False
+    assert result["error"]["code"] == "stale_detection"
+    assert project.clips == [old]
+    assert old.notes == "Keep the user's edit"
+    assert not source.analyzed
+
+
 def _build_project_with_source(tmp_path: Path, source_id: str = "src-1"):
     """Create a Project with a single source pointing to a real on-disk file
     (so the file_path.exists() check passes)."""
