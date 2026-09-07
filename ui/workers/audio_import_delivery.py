@@ -2,7 +2,12 @@
 
 from typing import Any
 from PySide6.QtCore import QObject, Slot
-from core.operations.audio_import import AudioImportApplication, AudioImportOutcome
+from core.operations.audio_import import (
+    AudioImportApplication,
+    AudioImportOutcome,
+    AudioImportTask,
+)
+from core.jobs.audio_import import AudioImportRecord
 
 
 class AudioImportDelivery(QObject):
@@ -32,7 +37,28 @@ class AudioImportDelivery(QObject):
             self.window._on_audio_import_error(self.failure)
         elif outcome.status == "succeeded":
             try:
-                added = self.application.apply(self.window.project, outcome)
+                cache = getattr(self.worker, "cache", None)
+                receipt = None
+                recovered_task = None
+                if cache is not None:
+                    recorded = cache.recorded
+                    if recorded is None:
+                        raise ValueError("Audio import result has no durable receipt")
+                    recovered_task = AudioImportTask.from_dict(recorded.task)
+                    receipt = cache.results[str(self.worker.task.path)]
+                    if not receipt.matches(
+                        AudioImportRecord.build(recovered_task, outcome)
+                    ):
+                        raise ValueError(
+                            "Queued audio import differs from its recorded result"
+                        )
+                added = self.application.apply(
+                    self.window.project, outcome, recovered_task=recovered_task
+                )
+                if added and receipt is not None:
+                    self.window.project.record_job_result(
+                        receipt.result_id, receipt.digest
+                    )
             except Exception as exc:
                 self.failure = str(exc)
                 self.window._on_audio_import_error(self.failure)

@@ -1,6 +1,6 @@
 """Detached audio probing and owner-bound import publication."""
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from math import isfinite
 from pathlib import Path
 from threading import Event
@@ -26,6 +26,31 @@ class AudioImportTask:
         path = path.expanduser().resolve()
         return cls(uuid4().hex, path, _media_stamp(path))
 
+    def to_dict(self) -> dict:
+        return {**asdict(self), "path": str(self.path)}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "AudioImportTask":
+        aid, path, stamp = (
+            data.get("audio_source_id"),
+            data.get("path"),
+            data.get("media_stamp"),
+        )
+        if (
+            not isinstance(aid, str)
+            or not aid
+            or not isinstance(path, str)
+            or not Path(path).is_absolute()
+        ):
+            raise ValueError("Invalid audio import identity or path")
+        if stamp is not None and (
+            not isinstance(stamp, (list, tuple))
+            or len(stamp) != 5
+            or any(type(value) is not int for value in stamp)
+        ):
+            raise ValueError("Invalid audio import media stamp")
+        return cls(aid, Path(path), tuple(stamp) if stamp is not None else None)
+
 
 @dataclass(frozen=True)
 class AudioImportOutcome:
@@ -35,6 +60,33 @@ class AudioImportOutcome:
     sample_rate: int = 0
     channels: int = 0
     message: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "AudioImportOutcome":
+        aid, status = data.get("audio_source_id"), data.get("status")
+        if (
+            not isinstance(aid, str)
+            or not aid
+            or status not in ("succeeded", "failed", "unprocessed")
+        ):
+            raise ValueError("Invalid audio import outcome identity or status")
+        duration, rate, channels = (
+            data.get("duration", 0.0),
+            data.get("sample_rate", 0),
+            data.get("channels", 0),
+        )
+        if (
+            type(duration) not in (int, float)
+            or not isfinite(duration)
+            or duration < 0
+            or (status == "succeeded" and duration == 0)
+            or any(type(value) is not int or value < 0 for value in (rate, channels))
+        ):
+            raise ValueError("Invalid audio import metadata")
+        message = data.get("message")
+        if message is not None and not isinstance(message, str):
+            raise ValueError("Invalid audio import message")
+        return cls(aid, status, float(duration), rate, channels, message)
 
     def to_model(self, task: AudioImportTask) -> "AudioSource":
         from models.audio_source import AudioSource
@@ -134,11 +186,20 @@ class AudioImportApplication:
             and (project.path.resolve() if project.path else None) == self.path
         )
 
-    def apply(self, project: "Project", outcome: AudioImportOutcome) -> bool:
+    def apply(
+        self,
+        project: "Project",
+        outcome: AudioImportOutcome,
+        *,
+        recovered_task: AudioImportTask | None = None,
+    ) -> bool:
+        task = recovered_task or self.task
+        if replace(self.task, audio_source_id=task.audio_source_id) != task:
+            return False
         if (
             not self.is_current(project)
             or self.consumed
-            or outcome.audio_source_id != self.task.audio_source_id
+            or outcome.audio_source_id != task.audio_source_id
             or outcome.status != "succeeded"
         ):
             return False
@@ -163,7 +224,7 @@ class AudioImportApplication:
                 return False
             if project.get_audio_source(outcome.audio_source_id) is not None:
                 raise ValueError("Imported audio ID already exists")
-            self.audio = outcome.to_model(self.task)
+            self.audio = outcome.to_model(task)
             project.add_audio_source(self.audio)
             return True
 

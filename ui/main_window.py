@@ -3153,7 +3153,7 @@ class MainWindow(QMainWindow):
                 continue
             existing_paths.add(path)
 
-            worker = AudioImportWorker(path, parent=self, session_id=self.project.session.session_id)
+            worker = AudioImportWorker(path, parent=self, project=self.project)
             self._active_audio_imports.add(worker)
 
             AudioImportDelivery(self, worker)

@@ -1034,7 +1034,14 @@ an overlapping pending import returns an error. Project-relative paths are resol
 before dispatch. Expired or replaced requests cannot publish late results, and
 request cancellation targets only the worker carrying that request's identity.
 
-This step does not complete U7. Audio import job-runtime integration and durable
-recovery, image import, frame-analysis orchestration, and intention workflows
-remain. FFprobe cancellation is checked around the bounded probe call; it does
-not interrupt that call mid-probe.
+Audio import now uses shared job history. Unsaved projects keep session-only jobs;
+saved projects journal successful probes before queued delivery. Retrying after an
+interruption reuses the recorded metadata and audio ID when the project, file,
+runtime and import generation match. Explicit Save acknowledges the receipt only
+when the saved audio identity, path and probe metadata match. Failed saves leave
+results reusable, and failed checkpoints can be acknowledged on a later save.
+Removing and reimporting a previously published item starts a new generation.
+
+This step does not complete U7. Headless audio-import job exposure, image import,
+frame-analysis orchestration, and intention workflows remain. FFprobe cancellation
+is checked around the bounded probe call; it does not interrupt that call mid-probe.

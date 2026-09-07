@@ -21,6 +21,7 @@ owners = []
 tool = tools.get('import_audio_source')
 assert tool.modifies_gui_state and tool.modifies_project_state
 with TemporaryDirectory() as directory:
+    patch('core.settings.load_settings', return_value=SimpleNamespace(cache_dir=Path(directory))).start()
     media = Path(directory) / 'voice.wav'; media.write_bytes(b'audio')
     for mode in ('current', 'reply', 'expired', 'project', 'save_as', 'cancel', 'failure', 'apply_failure', 'duplicate'):
         window = QObject(); owners.append(window)

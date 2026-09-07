@@ -38,6 +38,7 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
             not in (
                 "gui_transcribe",
                 "gui_audio_transcribe",
+                "gui_audio_import",
                 "gui_extract_frames",
                 "gui_align_words",
                 "gui_describe",
@@ -64,6 +65,23 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
         if identity["project_path"] != canonical or identity["inputs"][
             "project_id"
         ] != snapshot.get("id"):
+            continue
+        if identity["kind"] == "gui_audio_import":
+            from core.jobs.audio_import import AudioImportRecord
+            from core.operations.audio_import import AudioImportTask, AudioImportOutcome
+            from models.audio_source import AudioSource
+
+            recorded = AudioImportRecord.from_dict(json.loads(row["payload_json"]))
+            if recorded.path != identity["target_id"] or recorded.path != identity["inputs"]["source_id"]:
+                raise StaleJobResult("Saved audio import does not match its target")
+            task = AudioImportTask.from_dict(recorded.task)
+            outcome = AudioImportOutcome.from_dict(recorded.outcome)
+            saved = audio_sources.get(outcome.audio_source_id)
+            if saved is not None:
+                actual = AudioSource.from_dict(saved, path.parent).to_dict()
+                expected = outcome.to_model(task).to_dict()
+                if all(actual.get(key) == expected.get(key) for key in ("id", "file_path", "duration_seconds", "sample_rate", "channels")):
+                    pending.append((result_id, receipt_digest))
             continue
         if identity["kind"] == "gui_audio_transcribe":
             from core.operations.audio_transcription import AudioTranscriptionOutcome

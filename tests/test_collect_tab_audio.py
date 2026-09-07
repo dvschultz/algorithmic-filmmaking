@@ -202,10 +202,10 @@ def test_main_window_audio_import_deduplicates_single_batch(tmp_path, monkeypatc
     started_paths = []
 
     class FakeAudioImportWorker:
-        def __init__(self, path, parent=None, *, session_id=None):
+        def __init__(self, path, parent=None, *, project=None):
             self.path = path
             self.task = SimpleNamespace(path=path)
-            self.session_id = session_id
+            self.session_id = project.session.session_id
             self.audio_ready = DummySignal()
             self.error = DummySignal()
             self.finished_signal = DummySignal()
