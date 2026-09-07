@@ -13,6 +13,7 @@ class JobAdapter(QObject):
 
     progress = Signal(str, float, str)
     started = Signal(str, str)
+    result_ready = Signal(str, dict)  # available terminal output, before outcome
     completed = Signal(str, dict)
     failed = Signal(str, str)
     cancelled = Signal(str)
@@ -73,8 +74,11 @@ class JobAdapter(QObject):
             self.progress.emit(row.id, *progress)
         if not terminal:
             return
+        payload = row.result
+        if payload is not None:
+            self.result_ready.emit(row.id, payload)
         if row.status == STATUS_COMPLETED:
-            self.completed.emit(row.id, row.result or {})
+            self.completed.emit(row.id, payload or {})
         elif row.status == STATUS_CANCELLED:
             self.cancelled.emit(row.id)
         else:

@@ -174,10 +174,16 @@ included — you must poll `get_job_status` until terminal, then call
 | Tool | What it does |
 |---|---|
 | `get_job_status(task_id)` | Status, progress, queue position. **No payload** (R28). |
-| `get_job_result(task_id)` | Final result on completed; sanitized error on failed/cancelled/crashed. Errors `not_terminal` while still running. |
+| `get_job_result(task_id)` | Final result on completed; sanitized error plus any available `result` on failed/cancelled/crashed. Errors `not_terminal` while still running. |
 | `cancel_job(task_id)` | Signals cancellation. Job transitions running → cancelling → cancelled. |
 | `list_jobs(status_filter, kind_filter, project_filter)` | Safe-projection list. Use to discover in-flight work at session start. |
 | `purge_old_jobs(days=30)` | Delete terminal-status rows older than `days`. Running and queued rows are never purged. |
+
+A terminal `success: false` describes the overall job. If the response also
+contains `result`, inspect its per-item outcomes: some items may have succeeded
+before cancellation or failure. An absent `result` means no output was recorded.
+Status and list endpoints continue to omit payloads, and nonterminal jobs do not
+expose their unfinished output through `get_job_result`.
 
 ### Synchronous tools (unchanged from v0)
 

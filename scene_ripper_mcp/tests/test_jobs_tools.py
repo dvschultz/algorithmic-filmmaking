@@ -68,6 +68,30 @@ def _wait_for_status(store, task_id, expected, timeout=5.0):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["cancelled", "failed"])
+async def test_terminal_error_exposes_available_output_only_through_result(lifespan_ctx, status):
+    ctx, store, runtime = lifespan_ctx
+    payload = {"succeeded": ["clip-1"], "unprocessed": ["clip-2"]}
+    if status == "failed":
+        payload.update(success=False, error="second clip failed")
+
+    def run(progress, cancel):
+        if status == "cancelled":
+            cancel.set()
+        return payload
+
+    task = runtime.submit(kind="partial", args={}, run=run)["task_id"]
+    _wait_for_status(store, task, status)
+    response = json.loads(await get_job_result(task_id=task, ctx=ctx))
+    assert response["success"] is False
+    assert response["status"] == status
+    assert response["error"]["code"] == f"job_{status}"
+    assert response["result"] == payload
+    projection = json.loads(await get_job_status(task_id=task, ctx=ctx))
+    assert "clip-1" not in json.dumps(projection)
+
+
+@pytest.mark.asyncio
 async def test_color_job_persists_success_and_reports_each_failed_target(lifespan_ctx, tmp_path):
     from unittest.mock import patch
 
@@ -171,10 +195,12 @@ async def test_get_job_status_excludes_payload(lifespan_ctx):
 async def test_get_job_result_not_terminal(lifespan_ctx):
     ctx, store, _ = lifespan_ctx
     row = store.insert(kind="x", args={}, status=STATUS_RUNNING)
+    store.update_status(row.id, STATUS_RUNNING, result={"private_output": "unfinished"})
     out = json.loads(await get_job_result(task_id=row.id, ctx=ctx))
     assert out["success"] is False
     assert out["error"]["code"] == "not_terminal"
     assert out["error"]["status"] == STATUS_RUNNING
+    assert "private_output" not in json.dumps(out)
 
 
 @pytest.mark.asyncio
@@ -208,6 +234,7 @@ async def test_get_job_result_failed_surfaces_sanitized_error(lifespan_ctx):
     assert out["status"] == STATUS_FAILED
     assert out["error"]["code"] == "job_failed"
     assert "kaboom" in out["error"]["message"]
+    assert "result" not in out
     # Sanitized — no absolute paths.
     assert "/Users/" not in out["error"]["message"]
 

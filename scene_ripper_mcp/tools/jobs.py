@@ -99,8 +99,10 @@ async def get_job_result(
     task_id: Annotated[str, "Job task_id returned by start_*"],
     ctx: Context = None,
 ) -> str:
-    """Return the final result for a completed job, or the structured error
-    for a failed/cancelled/crashed job.
+    """Return terminal output and, for failed/cancelled/crashed jobs, an error.
+
+    Error responses include ``result`` when the runner recorded available output.
+    The terminal status still describes the overall job, not each item's outcome.
 
     Returns a ``not_terminal`` error when the job is still running or
     queued — never returns a partial result.
@@ -137,13 +139,14 @@ async def get_job_result(
                 }
             )
 
+        payload = row.result
         if row.status == STATUS_COMPLETED:
             return json.dumps(
                 {
                     "success": True,
                     "task_id": row.id,
                     "status": row.status,
-                    "result": row.result,
+                    "result": payload,
                 }
             )
 
@@ -154,8 +157,8 @@ async def get_job_result(
             STATUS_CRASHED: "job_crashed",
         }
         error = {"code": code_map[row.status], "message": row.error or row.status}
-        if row.status == STATUS_FAILED and isinstance(row.result, dict):
-            conflict = row.result.get("error")
+        if row.status == STATUS_FAILED and isinstance(payload, dict):
+            conflict = payload.get("error")
             if isinstance(conflict, dict) and conflict.get("code") == "project_busy":
                 error = conflict
         return json.dumps(
@@ -164,6 +167,7 @@ async def get_job_result(
                 "task_id": row.id,
                 "status": row.status,
                 "error": error,
+                **({"result": payload} if payload is not None else {}),
             }
         )
     except BaseException as exc:  # noqa: BLE001

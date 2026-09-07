@@ -8,6 +8,49 @@ from core.jobs import JobRuntime, JobStore
 from core.jobs.store import STATUS_COMPLETED, STATUS_RUNNING, STATUS_CANCELLED
 
 
+@pytest.mark.parametrize("status", ["completed", "cancelled", "failed"])
+def test_qt_adapter_delivers_available_output_before_terminal(status):
+    from PySide6.QtCore import QThread
+    from PySide6.QtWidgets import QApplication
+    from ui.workers.job_adapter import JobAdapter
+
+    _app = QApplication.instance() or QApplication([])
+    runtime = JobRuntime.for_session()
+    adapter = JobAdapter(runtime)
+    events = []
+    owner = QThread.currentThread()
+    payload = {"succeeded": ["clip-1"]}
+    if status == "failed":
+        payload.update(success=False, error="second clip failed")
+
+    def run(progress, cancel):
+        if status == "cancelled":
+            cancel.set()
+        return payload
+
+    adapter.result_ready.connect(
+        lambda task, result: events.append(
+            ("result", task, result, QThread.currentThread())
+        )
+    )
+    adapter.completed.connect(lambda task, result: events.append(("completed", task)))
+    adapter.cancelled.connect(lambda task: events.append(("cancelled", task)))
+    adapter.failed.connect(lambda task, error: events.append(("failed", task)))
+    adapter.settled.connect(lambda task: events.append(("settled", task)))
+    try:
+        task = adapter.start(kind="partial", args={}, run=run)["task_id"]
+        runtime.shutdown()
+        adapter._poll()
+        adapter._poll()
+        assert events == [
+            ("result", task, payload, owner),
+            (status, task),
+            ("settled", task),
+        ]
+    finally:
+        runtime.close_session()
+
+
 def test_terminal_result_cannot_be_overwritten(tmp_path):
     store = JobStore(tmp_path / "jobs.db")
     row = store.insert(kind="test", args={})

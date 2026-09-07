@@ -17,6 +17,14 @@ carry task IDs and emit a terminal outcome once, including when completed
 history was purged before polling. Existing GUI workers remain in place until
 their workflows migrate; the adapter itself does not mutate project models.
 
+The adapter's `result_ready(task_id, output)` signal delivers any recorded
+terminal payload before the completed/cancelled/failed notification, exactly once
+per task. Consumers that need partial outcomes should apply through this signal
+and use outcome signals for status; do not apply again through `completed`'s
+legacy payload. MCP `get_job_result` similarly includes available output on error
+responses without changing their `success: false` or terminal error code. Neither
+surface treats a partial payload as overall job success.
+
 ## Saved-result recovery
 
 `core/jobs/commits.py` identifies an operation by canonical project path, operation
