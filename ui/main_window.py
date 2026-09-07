@@ -30,13 +30,16 @@ from PySide6.QtGui import QDesktopServices, QKeySequence, QAction, QDragEnterEve
 
 from models.clip import Source, Clip
 from core.project_lock import ProjectWriter
+from core.operations.downloads import (
+    DownloadRequest, DownloadCancelled, run_download,
+    calculate_download_timeout as _calculate_download_timeout,
+)
 from core.spine.sources import find_source_by_path, add_source_if_missing
 from core.scene_detect import DetectionConfig, KaraokeDetectionConfig
 from core.operations.detection import StaleDetectionResult
 from ui.workers.detection_worker import DetectionWorker
 from core.thumbnail import ThumbnailGenerator
 from core.downloader import (
-    VideoDownloader,
     YTDLP_COOKIE_HELP_URL,
     DOWNLOAD_ERROR_COOKIES_REQUIRED,
     DOWNLOAD_ERROR_JS_RUNTIME_REQUIRED,
@@ -278,62 +281,25 @@ class DownloadWorker(CancellableWorker):
         super().__init__()
         self.url = url
         self.resolution = resolution
+        self.request = DownloadRequest(url, resolution=resolution)
 
     def run(self):
         try:
-            downloader = VideoDownloader()
-            result = downloader.download(
-                self.url,
+            result = run_download(
+                self.request,
                 progress_callback=lambda p, m: self.progress.emit(p, m),
-                cancel_check=lambda: self.is_cancelled(),
-                resolution=self.resolution,
+                cancel_event=self._cancel_event,
             )
             if result.success:
                 self.download_completed.emit(result)
             else:
                 self.error.emit(result.error or "Download failed")
+        except DownloadCancelled:
+            return
         except Exception as e:
             self.error.emit(str(e))
 
 
-def _calculate_download_timeout(duration_seconds: float, height: int | None) -> int:
-    """Calculate download timeout based on video duration and resolution.
-
-    Args:
-        duration_seconds: Video duration in seconds
-        height: Video height in pixels (e.g., 1080 for 1080p), or None if unknown
-
-    Returns:
-        Timeout in seconds
-    """
-    # Seconds of timeout per minute of video, by resolution
-    # Higher resolutions = larger files = more download time needed
-    TIMEOUT_MULTIPLIERS = {
-        4320: 180,  # 8K: 3 min timeout per video minute
-        2160: 120,  # 4K: 2 min timeout per video minute
-        1440: 90,   # 1440p: 1.5 min timeout per video minute
-        1080: 60,   # 1080p: 1 min timeout per video minute
-        720: 45,    # 720p: 45 sec timeout per video minute
-        480: 30,    # 480p: 30 sec timeout per video minute
-        360: 20,    # 360p: 20 sec timeout per video minute
-    }
-    MIN_TIMEOUT = 120   # 2 minutes minimum
-    MAX_TIMEOUT = 3600  # 1 hour cap
-    DEFAULT_MULTIPLIER = 60  # Default to 1080p assumption
-
-    # Find the appropriate multiplier based on resolution
-    if height is None:
-        multiplier = DEFAULT_MULTIPLIER
-    else:
-        # Find closest resolution tier (round down to nearest tier)
-        multiplier = DEFAULT_MULTIPLIER
-        for tier_height, tier_multiplier in sorted(TIMEOUT_MULTIPLIERS.items()):
-            if height >= tier_height:
-                multiplier = tier_multiplier
-
-    duration_minutes = duration_seconds / 60
-    timeout = int(duration_minutes * multiplier)
-    return max(MIN_TIMEOUT, min(timeout, MAX_TIMEOUT))
 
 
 class URLBulkDownloadWorker(CancellableWorker):
@@ -347,34 +313,19 @@ class URLBulkDownloadWorker(CancellableWorker):
 
     def __init__(self, urls: list[str], download_dir: Path):
         super().__init__()
-        self.urls = urls
+        self.urls = tuple(urls)
         self.download_dir = download_dir
         self._results = []
         self._completed_count = 0
         self._lock = None  # Initialized in run()
 
     def _download_single(self, url: str) -> dict:
-        """Download a single URL (called from thread pool)."""
-        downloader = VideoDownloader(download_dir=self.download_dir)
-
+        """Run the shared download operation from the executor."""
         try:
-            valid, error = downloader.is_valid_url(url)
-            if not valid:
-                return {"url": url, "success": False, "error": error, "result": None}
-
-            # Get video info first to calculate appropriate timeout
-            try:
-                info = downloader.get_video_info(url, include_format_details=True)
-                duration = info.get("duration", 0) or 0
-                height = info.get("height")
-                timeout = _calculate_download_timeout(duration, height)
-                logger.debug(f"Download timeout for {url}: {timeout}s (duration={duration}s, height={height})")
-            except Exception as e:
-                # If we can't get info, use a generous default
-                logger.warning(f"Could not get video info for timeout calc: {e}, using 10 min default")
-                timeout = 600
-
-            result = downloader.download(url, max_download_seconds=timeout)
+            result = run_download(
+                DownloadRequest(url, self.download_dir, adaptive_timeout=True),
+                cancel_event=self._cancel_event,
+            )
 
             if result.success:
                 return {
@@ -602,8 +553,6 @@ class BulkDownloadWorker(QThread):
     def _download_one(self, video):
         """Download a single video (YouTube or Internet Archive)."""
         logger.debug(f"Starting download: {video.title} ({video.video_id}) to {self.download_dir}")
-        downloader = VideoDownloader(download_dir=self.download_dir)
-
         # Get the appropriate URL based on video type
         if hasattr(video, 'youtube_url'):
             url = video.youtube_url
@@ -613,9 +562,9 @@ class BulkDownloadWorker(QThread):
             # Fallback - should not happen
             raise ValueError(f"Unknown video type: {type(video)}")
 
-        result = downloader.download(
-            url,
-            cancel_check=self._cancel_event.is_set,
+        result = run_download(
+            DownloadRequest(url, self.download_dir),
+            cancel_event=self._cancel_event,
         )
         if result.success:
             logger.debug(f"Download finished: {video.title} -> {result.file_path}")
@@ -814,6 +763,8 @@ class MainWindow(QMainWindow):
         self._source_import_queue.drained.connect(self._on_source_imports_drained)
         self._source_selection_generation = 0
         self._deferred_agent_download_results = None
+        self._download_deliveries = {}
+        self._active_download_workers = set()
         self._active_audio_transcribes: set = set()
 
         # UI state (not part of Project - these are GUI-specific selections)
@@ -1091,6 +1042,15 @@ class MainWindow(QMainWindow):
 
     # --- Worker lifecycle management ---
 
+    def _bind_download_worker(self, attribute: str, connections: dict) -> None:
+        from ui.workers.download_delivery import DownloadDelivery
+        worker = getattr(self, attribute)
+        handlers = {slot: callback for slot, callback in connections.values()}
+        delivery = DownloadDelivery(self, attribute, worker, handlers)
+        for signal, (slot, _callback) in connections.items():
+            delivery.bind_signal(getattr(worker, signal), slot)
+
+
     def _stop_worker_safely(self, worker: Optional[QThread], name: str, timeout_ms: int = 3000) -> None:
         """Safely stop a running QThread worker.
 
@@ -1135,6 +1095,7 @@ class MainWindow(QMainWindow):
         """
         self._source_import_queue.cancel_pending()
         self._deferred_agent_download_results = None
+        self._download_deliveries.clear()
 
         # Stop chat worker if running
         if self._chat_worker and self._chat_worker.isRunning():
@@ -1163,6 +1124,7 @@ class MainWindow(QMainWindow):
             (getattr(self, '_gaze_worker', None), "Gaze"),
         ]
 
+        workers_to_stop.extend((worker, "Download") for worker in self._active_download_workers)
         for worker, name in workers_to_stop:
             self._stop_worker_safely(worker, name, timeout_ms=2000)
 
@@ -5297,12 +5259,11 @@ class MainWindow(QMainWindow):
         self.progress_bar.setRange(0, 100)
 
         self.download_worker = DownloadWorker(url, resolution=resolution)
-        self.download_worker.progress.connect(self._on_download_progress)
-        self.download_worker.download_completed.connect(self._on_download_finished)
-        self.download_worker.error.connect(self._on_download_error)
-        # Clean up thread safely after it finishes to prevent "QThread: Destroyed while running" crash
-        self.download_worker.finished.connect(self.download_worker.deleteLater)
-        self.download_worker.finished.connect(lambda: setattr(self, 'download_worker', None))
+        self._bind_download_worker("download_worker", {
+            "progress": ("progress", self._on_download_progress),
+            "download_completed": ("result", self._on_download_finished),
+            "error": ("error", self._on_download_error),
+        })
         self._gui_state.set_processing("download", url[:60])
         self.download_worker.start()
 
@@ -5527,13 +5488,12 @@ class MainWindow(QMainWindow):
             download_dir=self.settings.download_dir,
             max_parallel=self.settings.youtube_parallel_downloads,
         )
-        self.bulk_download_worker.progress.connect(self._on_bulk_progress)
-        self.bulk_download_worker.video_finished.connect(self._on_bulk_video_finished)
-        self.bulk_download_worker.video_error.connect(self._on_bulk_video_error)
-        self.bulk_download_worker.all_finished.connect(self._on_bulk_finished)
-        # Clean up thread safely after it finishes to prevent "QThread: Destroyed while running" crash
-        self.bulk_download_worker.finished.connect(self.bulk_download_worker.deleteLater)
-        self.bulk_download_worker.finished.connect(lambda: setattr(self, 'bulk_download_worker', None))
+        self._bind_download_worker("bulk_download_worker", {
+            "progress": ("bulk_progress", self._on_bulk_progress),
+            "video_finished": ("result", self._on_bulk_video_finished),
+            "video_error": ("video_error", self._on_bulk_video_error),
+            "all_finished": ("completed", self._on_bulk_finished),
+        })
         self.bulk_download_worker.start()
 
     @Slot(int, int, str)
@@ -7709,12 +7669,11 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(f"Downloading {len(urls)} videos...")
 
         self.url_bulk_download_worker = URLBulkDownloadWorker(urls, validated_dir)
-        self.url_bulk_download_worker.progress.connect(self._on_agent_download_progress)
-        self.url_bulk_download_worker.video_finished.connect(self._on_agent_video_finished)
-        self.url_bulk_download_worker.all_finished.connect(self._on_agent_bulk_download_finished)
-        # Clean up thread safely after it finishes to prevent "QThread: Destroyed while running" crash
-        self.url_bulk_download_worker.finished.connect(self.url_bulk_download_worker.deleteLater)
-        self.url_bulk_download_worker.finished.connect(lambda: setattr(self, 'url_bulk_download_worker', None))
+        self._bind_download_worker("url_bulk_download_worker", {
+            "progress": ("bulk_progress", self._on_agent_download_progress),
+            "video_finished": ("url_result", self._on_agent_video_finished),
+            "all_finished": ("bulk_completed", self._on_agent_bulk_download_finished),
+        })
         self.url_bulk_download_worker.start()
         return True
 
@@ -8988,23 +8947,11 @@ class MainWindow(QMainWindow):
 
         self.url_bulk_download_worker = URLBulkDownloadWorker(urls, download_dir)
 
-        # Connect to coordinator handlers
-        self.url_bulk_download_worker.progress.connect(
-            self.intention_workflow.on_download_progress
-        )
-        self.url_bulk_download_worker.video_finished.connect(
-            self._on_intention_video_downloaded
-        )
-        self.url_bulk_download_worker.all_finished.connect(
-            self.intention_workflow.on_download_all_finished
-        )
-        # Clean up thread safely
-        self.url_bulk_download_worker.finished.connect(
-            self.url_bulk_download_worker.deleteLater
-        )
-        self.url_bulk_download_worker.finished.connect(
-            lambda: setattr(self, 'url_bulk_download_worker', None)
-        )
+        self._bind_download_worker("url_bulk_download_worker", {
+            "progress": ("bulk_progress", self.intention_workflow.on_download_progress),
+            "video_finished": ("url_result", self._on_intention_video_downloaded),
+            "all_finished": ("bulk_completed", self.intention_workflow.on_download_all_finished),
+        })
 
         self.url_bulk_download_worker.start()
 
@@ -9027,9 +8974,9 @@ class MainWindow(QMainWindow):
             source = Source(
                 file_path=file_path,
                 duration_seconds=result.duration or 0,
-                fps=result.fps or 30.0,
-                width=result.width or 1920,
-                height=result.height or 1080,
+                fps=getattr(result, "fps", None) or 30.0,
+                width=getattr(result, "width", None) or 1920,
+                height=getattr(result, "height", None) or 1080,
             )
             source, added = add_source_if_missing(self.project, source)
             if not added:
@@ -10926,6 +10873,9 @@ class MainWindow(QMainWindow):
             ("save", self.save_worker),
             ("gaze", getattr(self, '_gaze_worker', None)),
         ]
+
+        self._download_deliveries.clear()
+        workers.extend(("download", worker) for worker in self._active_download_workers)
 
         for name, worker in workers:
             if worker:

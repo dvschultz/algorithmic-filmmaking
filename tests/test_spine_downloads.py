@@ -61,7 +61,7 @@ def test_download_videos_invalid_url_fails_fast(tmp_path):
     """URL that fails scheme/host validation never reaches yt-dlp."""
     download_calls = []
 
-    def fake_download(self, url):
+    def fake_download(self, url, **kwargs):
         download_calls.append(url)
         return _ok_result(tmp_path / "x.mp4")
 
@@ -92,7 +92,7 @@ def test_download_videos_per_url_failure_aggregated(tmp_path):
 
     call_count = [0]
 
-    def fake_download(self, url):
+    def fake_download(self, url, **kwargs):
         call_count[0] += 1
         if "geo" in url:
             return _fail_result("geo-blocked")
@@ -208,7 +208,7 @@ def test_download_videos_per_url_exception_is_aggregated(tmp_path):
 
     call_count = [0]
 
-    def fake_download(self, url):
+    def fake_download(self, url, **kwargs):
         call_count[0] += 1
         if call_count[0] == 1:
             raise RuntimeError("network error")

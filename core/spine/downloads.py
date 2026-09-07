@@ -8,12 +8,9 @@ job.
 URL validation goes through ``core.spine.url_security.validate_url``;
 ``core.downloader.VideoDownloader`` is the underlying yt-dlp wrapper.
 
-Cancellation: per-URL granularity. The yt-dlp subprocess inside the
-``VideoDownloader.download`` call cannot be interrupted mid-download from
-this layer; if cancellation lands during a download, it is observed
-between URLs. This is acceptable for v1 (typical clip downloads complete
-in 10-60s), but a follow-up could plumb ``proc.terminate()`` into the
-downloader for true mid-download cancellation.
+Cancellation reaches the downloader's cooperative cancellation check and is
+checked between stages by the shared operation. Native metadata requests may
+still run until their existing timeout.
 """
 
 from __future__ import annotations
@@ -24,6 +21,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from core.spine.url_security import validate_url
+from core.operations.downloads import DownloadRequest, DownloadCancelled, run_download
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +93,14 @@ def download_videos(
             continue
 
         try:
-            result = downloader.download(url)
+            result = run_download(
+                DownloadRequest(url, target),
+                downloader=downloader,
+                cancel_event=cancel_event,
+            )
+        except DownloadCancelled:
+            cancelled.extend(urls[i:])
+            break
         except Exception as exc:  # noqa: BLE001 — per-URL resilience
             failed.append(
                 {

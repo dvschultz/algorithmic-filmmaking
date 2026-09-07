@@ -339,8 +339,11 @@ def download(
     # Download with progress
     progress = create_progress_callback("Downloading")
 
-    result = downloader.download(
-        url=url,
+    from core.operations.downloads import DownloadRequest, run_download
+
+    result = run_download(
+        DownloadRequest(url, output_dir),
+        downloader=downloader,
         progress_callback=progress,
     )
 

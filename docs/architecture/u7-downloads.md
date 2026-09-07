@@ -1,0 +1,39 @@
+# U7 download migration
+
+`core.operations.downloads.run_download` is the shared execution entry point for
+desktop single downloads, URL batches, search-result batches, CLI downloads, and
+the headless download spine used by MCP. Its frozen request carries the URL,
+output directory, resolution, and adaptive-timeout policy. Provider behavior stays
+in `VideoDownloader`.
+
+The operation validates URLs before metadata lookup, forwards cooperative
+cancellation to the native downloader, and checks cancellation between metadata,
+download, and publication. A native error after cancellation is classified as
+cancellation. URL batches retain adaptive timeout calculation; other adapters
+retain the downloader's default timeout. CLI metadata preview remains in its
+adapter. The spine keeps its succeeded/failed/cancelled result envelope and
+preserves earlier successes when later work fails or is cancelled. Cancellation
+can leave downloaded files that were not published as successful results.
+
+Desktop download signals pass through an owner-thread `DownloadDelivery` relay.
+It captures the project session and worker channel at submission. Results,
+progress, errors, and workflow completion from replaced workers or old sessions
+are discarded. Replaced workers are cancelled and retained until finished; their
+cleanup cannot clear a newer worker reference. Reset and shutdown include retained
+download workers. The relay does not change existing shutdown timeout policy.
+
+MCP queued jobs snapshot their URL lists so caller mutation cannot change the
+work after submission. Intention source admission accepts the actual
+`DownloadResult` shape, which does not promise fps or dimensions, and keeps the
+existing defaults when those fields are unavailable.
+
+This slice consolidates native execution and desktop delivery guards. The GUI's
+parallel batch loops and the spine's serial batch loop still require a shared
+orchestration layer. Durable per-download results, shared ordered intention plans,
+and the remaining analysis workflows are outstanding U7 work. A direct chat
+download notification is still associated with the chat worker rather than these
+download-worker relays and needs its own submission/session guard.
+
+Tests cover timeout/resolution forwarding, cancellation at each stage, invalid
+URLs, failure aggregation, frozen MCP submission arguments, actual intention
+download results, and real queued Qt delivery after reset and worker replacement.

@@ -1111,12 +1111,13 @@ async def start_download_videos(
         target = load_settings().download_dir
 
     canonical_target = str(target)
+    download_urls = tuple(urls)
 
     def run(progress_callback, cancel_event):
         from core.spine.downloads import download_videos
 
         return download_videos(
-            urls,
+            list(download_urls),
             target,
             progress_callback=progress_callback,
             cancel_event=cancel_event,
@@ -1125,7 +1126,7 @@ async def start_download_videos(
     return _start_job(
         ctx,
         kind="download_videos",
-        args={"urls": urls, "output_dir": canonical_target},
+        args={"urls": list(download_urls), "output_dir": canonical_target},
         # Downloads do not target a specific project; the per-project
         # mutex is bypassed (project_path=None).
         project_path=None,

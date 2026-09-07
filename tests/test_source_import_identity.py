@@ -108,6 +108,14 @@ for name in ('_load_video', '_add_video_to_library', '_on_agent_video_finished',
     window._queue_source_import.assert_not_called()
     window.collect_tab.add_source.assert_not_called()
     window._generate_source_thumbnail.assert_not_called()
+# The real downloader result omits optional fps/size fields.
+from core.downloader import DownloadResult
+project = Project.new(name='real download result')
+window.project = project
+MainWindow._on_intention_video_downloaded(window, 'url',
+    DownloadResult(success=True, file_path=media, duration=2))
+assert len(project.sources) == 1
+assert project.sources[0].fps == 30
 """
     result = subprocess.run(
         [sys.executable, "-c", code, str(tmp_path)],

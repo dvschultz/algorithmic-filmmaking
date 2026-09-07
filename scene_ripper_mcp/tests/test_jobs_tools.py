@@ -611,3 +611,18 @@ async def test_clip_tools_expose_agent_context_parity(tmp_path):
         )
     )
     assert filtered["filtered_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_download_submission_freezes_url_list(tmp_path, monkeypatch):
+    from scene_ripper_mcp.tools import jobs
+    captured = {}
+    monkeypatch.setattr(jobs, '_start_job', lambda ctx, **kwargs: captured.update(kwargs) or 'queued')
+    urls = ['https://youtube.com/original']
+    assert await jobs.start_download_videos(urls, str(tmp_path)) == 'queued'
+    urls[0] = 'https://youtube.com/replaced'
+    seen = []
+    monkeypatch.setattr('core.spine.downloads.download_videos', lambda items, *a, **k: seen.extend(items))
+    captured['run'](None, threading.Event())
+    assert seen == ['https://youtube.com/original']
+    assert captured['args']['urls'] == seen

@@ -37,8 +37,9 @@ downloaded sources. Session changes discard deferred responses.
 
 This is an incremental U7 migration. Folder imports still probe synchronously in
 their existing tool adapter. Intention downloads use their supplied metadata.
-Download submission/session guards, shared durable download orchestration, ordered
-intention plans, and the remaining analysis families are outstanding.
+Download-worker submission/session guards are described in `u7-downloads.md`.
+Shared durable download orchestration, ordered intention plans, and the remaining
+analysis families are outstanding.
 
 Regression coverage checks alias retries, preserved edits, unavailable old paths,
 all four desktop admission routes, folder retries, metadata fallback, and stale

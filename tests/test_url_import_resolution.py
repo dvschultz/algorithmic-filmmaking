@@ -96,7 +96,10 @@ def test_import_url_click_forwards_selected_resolution(monkeypatch):
 
 
 def test_download_video_passes_resolution_to_single_worker(monkeypatch):
+    from unittest.mock import Mock
+
     captured = {}
+    bind_worker = Mock()
 
     class _Signal:
         def connect(self, _callback):
@@ -124,6 +127,7 @@ def test_download_video_passes_resolution_to_single_worker(monkeypatch):
         progress_bar=SimpleNamespace(setVisible=lambda *_args: None, setRange=lambda *_args: None),
         _gui_state=SimpleNamespace(set_processing=lambda *_args: None),
         _ensure_video_download_available=lambda: True,
+        _bind_download_worker=bind_worker,
         _on_download_progress=lambda *_args: None,
         _on_download_finished=lambda *_args: None,
         _on_download_error=lambda *_args: None,
@@ -137,3 +141,7 @@ def test_download_video_passes_resolution_to_single_worker(monkeypatch):
         "resolution": "720p",
         "started": True,
     }
+    bind_worker.assert_called_once()
+    attribute, connections = bind_worker.call_args.args
+    assert attribute == "download_worker"
+    assert connections["download_completed"] == ("result", harness._on_download_finished)
