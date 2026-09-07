@@ -43,7 +43,29 @@ include cancelled items with `success: false` and `cancelled: true`. Existing
 success and failure fields and per-item signals remain. The headless spine retains
 its separate succeeded/failed/cancelled lists.
 
-Durable per-download results, shared ordered intention plans,
+MCP `start_download_videos` now records verified file receipts in the additive
+`download_receipts` job-store table. Receipts survive job-row retries and purges.
+The request identity includes the URL, canonical directory, policy, and version;
+the receipt contains result metadata plus the output's size and SHA-256 digest.
+Successful new outputs are flushed and recorded before progress is delivered or
+the next item starts. A receipt-write failure stops the batch, retaining receipts
+already committed for earlier items.
+
+Retries verify file content before reusing it. Missing outputs are downloaded
+again and their receipts replaced. Changed outputs are reported as
+`download_output_changed` without accepting or overwriting the changed file.
+Use another output directory, or intentionally remove the changed file, to request
+a fresh download. Receipt corruption stops the job. This is verified local-file
+reuse, not a check that the remote URL still serves the same media.
+
+A cancellable OS lock serializes durable batches sharing a physical output
+directory across processes. Submission also captures directory identity; replacing
+or retargeting it while queued rejects execution. Hashing existing files incurs
+local I/O, and native calls retain their existing cancellation/timeouts. A crash
+before the receipt is committed can still require another downloader invocation;
+missing files after restart are verified as missing and downloaded again.
+
+Desktop/CLI/synchronous-tool receipt integration, shared ordered intention plans,
 and the remaining analysis workflows are outstanding U7 work. A direct chat
 download notification is still associated with the chat worker rather than these
 download-worker relays and needs its own submission/session guard.
@@ -54,3 +76,5 @@ download results, and real queued Qt delivery after reset and worker replacement
 Scheduler tests also cover bounded parallelism, callback thread ownership,
 ordered outcomes, cancelled pending work, per-item failure isolation, and callback
 failure. Adapter tests exercise input snapshots and existing result envelopes.
+Recovery tests reopen the store, remove or edit outputs, fail receipt writes and
+progress callbacks, cancel lock waiters, and upgrade a database with existing jobs.

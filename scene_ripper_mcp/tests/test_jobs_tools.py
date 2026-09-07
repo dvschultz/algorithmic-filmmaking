@@ -614,15 +614,29 @@ async def test_clip_tools_expose_agent_context_parity(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_download_submission_freezes_url_list(tmp_path, monkeypatch):
+async def test_download_submission_freezes_url_list(tmp_path, monkeypatch, lifespan_ctx):
     from scene_ripper_mcp.tools import jobs
     captured = {}
     monkeypatch.setattr(jobs, '_start_job', lambda ctx, **kwargs: captured.update(kwargs) or 'queued')
     urls = ['https://youtube.com/original']
-    assert await jobs.start_download_videos(urls, str(tmp_path)) == 'queued'
+    assert await jobs.start_download_videos(urls, str(tmp_path), ctx=lifespan_ctx[0]) == 'queued'
     urls[0] = 'https://youtube.com/replaced'
     seen = []
-    monkeypatch.setattr('core.spine.downloads.download_videos', lambda items, *a, **k: seen.extend(items))
+    monkeypatch.setattr('core.jobs.downloads.run_saved_downloads', lambda store, items, *a, **k: seen.extend(items))
     captured['run'](None, threading.Event())
     assert seen == ['https://youtube.com/original']
     assert captured['args']['urls'] == seen
+
+
+@pytest.mark.asyncio
+async def test_download_submission_rejects_replaced_directory(tmp_path, monkeypatch, lifespan_ctx):
+    from scene_ripper_mcp.tools import jobs
+    target = tmp_path / 'downloads'
+    target.mkdir()
+    captured = {}
+    monkeypatch.setattr(jobs, '_start_job', lambda ctx, **kwargs: captured.update(kwargs) or 'queued')
+    await jobs.start_download_videos(['https://youtube.com/a'], str(target), ctx=lifespan_ctx[0])
+    target.rename(tmp_path / 'old-downloads')
+    target.mkdir()
+    with pytest.raises(RuntimeError, match='directory changed'):
+        captured['run'](None, threading.Event())

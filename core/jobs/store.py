@@ -253,12 +253,13 @@ class JobStore:
             conn.close()
 
     def _init_schema(self) -> None:
-        from core.jobs.schema import INITIAL_SCHEMA, RESULT_SCHEMA
+        from core.jobs.schema import INITIAL_SCHEMA, RESULT_SCHEMA, DOWNLOAD_SCHEMA
 
         sql = INITIAL_SCHEMA
         with self._connect() as conn:
             conn.executescript(sql)
             conn.executescript(RESULT_SCHEMA)
+            conn.executescript(DOWNLOAD_SCHEMA)
             with conn:
                 conn.execute("BEGIN IMMEDIATE")
                 columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
@@ -434,6 +435,28 @@ class JobStore:
                 "SELECT * FROM job_results WHERE result_id = ?", (result_id,)
             ).fetchone()
         return dict(row) if row is not None else None
+
+    def get_download_receipt(self, request_id: str) -> dict | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM download_receipts WHERE request_id = ?", (request_id,)
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def record_download_receipt(
+        self, request_id: str, spec_json: str, payload_json: str, digest: str
+    ) -> None:
+        """Replace a verified file receipt after downloading a missing output."""
+        with self._connect() as conn:
+            conn.execute("PRAGMA synchronous=FULL")
+            conn.execute(
+                "INSERT INTO download_receipts "
+                "(request_id,spec_json,payload_json,payload_digest,updated_at) VALUES (?,?,?,?,?) "
+                "ON CONFLICT(request_id) DO UPDATE SET spec_json=excluded.spec_json, "
+                "payload_json=excluded.payload_json, payload_digest=excluded.payload_digest, "
+                "updated_at=excluded.updated_at",
+                (request_id, spec_json, payload_json, digest, time.time()),
+            )
 
     def record_result(
         self, result_id: str, spec_json: str, payload_json: str, digest: str

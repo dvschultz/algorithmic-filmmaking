@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from pathlib import Path
 from core.jobs.spec import OperationSpec
 from typing import Annotated, Optional
 
@@ -1070,7 +1071,7 @@ async def start_download_videos(
     ] = None,
     ctx: Context = None,
 ) -> str:
-    """Start a job that downloads each URL in ``urls`` to ``output_dir``.
+    """Download URLs to ``output_dir``, recording verified receipts for retries.
 
     Per-URL granularity: cancellation observed between URLs. Per-URL
     failures (geo-block, DRM, deleted) are aggregated into the result;
@@ -1110,13 +1111,30 @@ async def start_download_videos(
 
         target = load_settings().download_dir
 
+    target = Path(target).expanduser().resolve()
     canonical_target = str(target)
     download_urls = tuple(urls)
+    store = _lifespan(ctx)["job_store"]
+    target_identity = (target.stat().st_dev, target.stat().st_ino) if target.exists() else None
+    operation = OperationSpec.build(
+        kind="download_videos", version=1,
+        arguments={"urls": list(download_urls), "output_dir": canonical_target},
+        inputs={"output_directory_identity": target_identity},
+        persistence="job_history",
+    )
 
     def run(progress_callback, cancel_event):
-        from core.spine.downloads import download_videos
+        from core.jobs.downloads import run_saved_downloads
 
-        return download_videos(
+        if target.resolve() != target or (
+            target_identity is not None and (
+                not target.exists() or (target.stat().st_dev, target.stat().st_ino) != target_identity
+            )
+        ):
+            raise RuntimeError("Download directory changed before execution")
+
+        return run_saved_downloads(
+            store,
             list(download_urls),
             target,
             progress_callback=progress_callback,
@@ -1133,6 +1151,7 @@ async def start_download_videos(
         project_mtime_at_start=None,
         idempotency_key=idempotency_key,
         run=run,
+        operation=operation,
     )
 
 

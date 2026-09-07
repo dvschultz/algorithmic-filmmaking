@@ -53,3 +53,13 @@ CREATE TABLE IF NOT EXISTS job_results (
     created_at REAL NOT NULL
 );
 """
+
+DOWNLOAD_SCHEMA = """
+CREATE TABLE IF NOT EXISTS download_receipts (
+    request_id TEXT PRIMARY KEY,
+    spec_json TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    payload_digest TEXT NOT NULL,
+    updated_at REAL NOT NULL
+);
+"""

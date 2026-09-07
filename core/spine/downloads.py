@@ -56,10 +56,6 @@ def download_videos(
     target = Path(target_dir).expanduser()
     target.mkdir(parents=True, exist_ok=True)
 
-    succeeded: list[dict] = []
-    failed: list[dict] = []
-    cancelled: list[str] = []
-
     try:
         downloader = VideoDownloader(download_dir=target)
     except RuntimeError as exc:
@@ -88,6 +84,24 @@ def download_videos(
         cancel_event=cancel_event,
         item_callback=on_item,
     )
+    output = format_download_results(outcomes, target)
+    if progress_callback is not None:
+        payload = output["result"]
+        progress_callback(
+            1.0,
+            f"Downloads complete: {len(payload['succeeded'])} ok, {len(payload['failed'])} failed, "
+            f"{len(payload['cancelled'])} cancelled",
+        )
+    return output
+
+
+def format_download_results(
+    outcomes: tuple[DownloadOutcome, ...], target: Path
+) -> dict:
+    """Keep the established headless envelope across volatile and durable runs."""
+    succeeded: list[dict] = []
+    failed: list[dict] = []
+    cancelled: list[str] = []
     for outcome in outcomes:
         url = outcome.request.url
         result = outcome.result
@@ -110,13 +124,6 @@ def download_videos(
                     "error_message": outcome.error_message,
                 }
             )
-
-    if progress_callback is not None:
-        progress_callback(
-            1.0,
-            f"Downloads complete: {len(succeeded)} ok, {len(failed)} failed, "
-            f"{len(cancelled)} cancelled",
-        )
 
     return {
         "success": True,

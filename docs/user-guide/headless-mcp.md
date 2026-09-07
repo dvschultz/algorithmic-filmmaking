@@ -158,6 +158,14 @@ scene-ripper-mcp --transport http --port 8765
 | `start_custom_query` | Run a yes/no visual query against clips |
 | `start_download_videos` | Bulk video downloads (YouTube / Vimeo / Internet Archive) |
 
+`start_download_videos` saves a verified file receipt after each successful item.
+Retries reuse unchanged local files and download missing files again. Modified
+files appear in `failed` with code `download_output_changed`; use another output
+directory or intentionally remove the modified file before requesting a fresh
+download. Earlier receipts survive a later failure or cancellation. This checks
+local file integrity, not whether the remote video has changed. Other download
+entry points do not yet use these receipts.
+
 `start_analyze_clips` accepts the same operation keys used by the GUI
 Analyze tab: `colors`, `shots`, `classify`, `detect_objects`,
 `extract_text`, `transcribe`, `describe`, `cinematography`,

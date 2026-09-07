@@ -133,6 +133,7 @@ def run_download_batch(
     cancel_event: Event | None = None,
     item_callback: Callable[[DownloadOutcome], None] | None = None,
     downloader: VideoDownloader | None = None,
+    cached_outcomes: dict[int, DownloadOutcome] | None = None,
 ) -> tuple[DownloadOutcome, ...]:
     """Run a bounded batch and return one outcome per input in input order.
 
@@ -148,6 +149,14 @@ def run_download_batch(
     if downloader is not None and max_workers != 1:
         raise ValueError("A shared downloader requires serial execution")
     pending_requests = tuple(requests)
+    cached = dict(cached_outcomes or {})
+    for index, outcome in cached.items():
+        if (
+            not 0 <= index < len(pending_requests)
+            or outcome.index != index
+            or outcome.request != pending_requests[index]
+        ):
+            raise ValueError("Cached download outcome does not match its request")
     cancel = cancel_event if cancel_event is not None else Event()
     results: dict[int, DownloadOutcome] = {}
 
@@ -160,6 +169,8 @@ def run_download_batch(
             return DownloadOutcome(
                 index, request, "failed", error_code="invalid_url", error_message=error
             )
+        if index in cached:
+            return cached[index]
         try:
             result = run_download(request, downloader=downloader, cancel_event=cancel)
             if result.success:
