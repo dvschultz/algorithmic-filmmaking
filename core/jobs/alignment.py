@@ -5,7 +5,7 @@ from hashlib import sha256
 import json
 from pathlib import Path
 from threading import Event
-from typing import Callable
+from typing import Callable, Literal
 
 from core.jobs.commits import ResultSpec, StaleJobResult, result_batch
 from core.jobs.media import FingerprintCancelled, MediaFingerprints, media_stamp
@@ -13,6 +13,7 @@ from core.jobs.spec import OperationSpec
 from core.jobs.store import JobStore
 from core.operations.alignment import (
     AlignmentOutcome,
+    AlignmentTask,
     aligned_segments,
     needs_alignment,
     run_alignment,
@@ -35,7 +36,7 @@ def _ids(project: Project, clip_ids: list[str] | None) -> list[str]:
     return ids
 
 
-def _task_data(task) -> dict:
+def _task_data(task: AlignmentTask) -> dict:
     value = asdict(task)
     value["target"]["source_path"] = (
         str(task.target.source_path) if task.target.source_path else None
@@ -51,6 +52,27 @@ def alignment_job_spec(
         project.sources_by_id,
         skip_existing=False,
     )
+    revision = project.session.file_revision
+    return alignment_operation_spec(
+        tasks,
+        force=force,
+        arguments=arguments,
+        persistence="job_history",
+        session_id=project.session.session_id,
+        input_revision=revision.digest if revision else None,
+    )
+
+
+def alignment_operation_spec(
+    tasks: tuple[AlignmentTask, ...],
+    *,
+    force: bool,
+    arguments: dict,
+    persistence: Literal["job_history", "session_only"],
+    session_id: str | None,
+    input_revision: str | None,
+) -> OperationSpec:
+    """Describe detached alignment inputs for either runtime surface."""
     targets = [
         {
             **_task_data(task),
@@ -60,15 +82,14 @@ def alignment_job_spec(
         }
         for task in tasks
     ]
-    revision = project.session.file_revision
     return OperationSpec.build(
         kind="align_words",
         version=1,
         arguments=arguments,
         inputs={"targets": targets, "force": force},
-        persistence="job_history",
-        session_id=project.session.session_id,
-        input_revision=revision.digest if revision else None,
+        persistence=persistence,
+        session_id=session_id,
+        input_revision=input_revision,
     )
 
 

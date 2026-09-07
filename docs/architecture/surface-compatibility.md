@@ -284,3 +284,12 @@ and transcript inputs guard reuse; forced refreshes advance only after a saved
 receipt. Matching identical refresh receipts are all reconciled on retry.
 GUI alignment and direct spine calls do not yet use durable receipts. Durable GUI
 publication and the explicit capability-install workflow remain outstanding.
+
+The GUI alignment worker now submits immutable alignment metadata to the shared
+session job runtime, records a task ID and terminal status, and closes the runtime
+before emitting completion. Dependency preparation runs inside the job; cancellation
+before or during preparation prevents inference. The Qt adapter drains progress
+and detached word results before completion, while `AlignmentDelivery` still
+publishes only on the project owner thread for the current run. Like GUI
+transcription, these jobs are `session_only` even for saved projects; saving the
+project remains required to persist their results.

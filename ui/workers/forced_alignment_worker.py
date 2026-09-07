@@ -2,14 +2,24 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
+from queue import Empty, Queue
+from typing import TYPE_CHECKING
+
 from PySide6.QtCore import Signal, Slot
 
+from core.jobs import JobRuntime
+from core.jobs.alignment import alignment_operation_spec
+from core.transcription_models import WordTimestamp
 from core.operations.alignment import (
     AlignmentOutcome,
     run_alignment,
     snapshot_alignment_tasks,
 )
 from ui.workers.base import CancellableWorker, summarize_clip_errors
+
+if TYPE_CHECKING:
+    from core.project import Project
 
 
 class ForcedAlignmentWorker(CancellableWorker):
@@ -20,7 +30,13 @@ class ForcedAlignmentWorker(CancellableWorker):
     alignment_completed = Signal()
 
     def __init__(
-        self, clips: list, sources_by_id: dict, skip_existing: bool = True, parent=None
+        self,
+        clips: list,
+        sources_by_id: dict,
+        skip_existing: bool = True,
+        parent=None,
+        *,
+        project: Project | None = None,
     ) -> None:
         super().__init__(parent)
         self.tasks = tuple(
@@ -31,44 +47,128 @@ class ForcedAlignmentWorker(CancellableWorker):
             if task.skip_reason is None and task.target.source_path is not None
         )
         self.result: tuple[AlignmentOutcome, ...] = ()
+        self.operation = alignment_operation_spec(
+            self.tasks,
+            force=not skip_existing,
+            arguments={
+                "clip_ids": [task.clip_id for task in self.tasks],
+                "force": not skip_existing,
+            },
+            persistence="session_only",
+            session_id=project.session.session_id if project is not None else None,
+            input_revision=str(project.mutation_generation)
+            if project is not None
+            else None,
+        )
+        self.task_id: str | None = None
+        self.job_status: str | None = None
+        self._runtime: JobRuntime | None = None
+
+    def cancel(self) -> None:
+        super().cancel()
+        runtime = self._runtime
+        if runtime is not None and self.task_id is not None:
+            runtime.cancel(self.task_id)
+
+    def _prepare(self) -> bool:
+        if self.is_cancelled() or not self.tasks:
+            return False
+        # Preserve the existing GUI install flow until explicit capability jobs.
+        from core import feature_registry
+
+        ready, _ = feature_registry.check_feature_ready("word_alignment")
+        if self.is_cancelled():
+            return False
+        if not ready and not feature_registry.install_for_feature("word_alignment"):
+            raise RuntimeError(
+                "Could not install word-level alignment dependencies. Check Settings > Dependencies and try again."
+            )
+        return not self.is_cancelled()
 
     @Slot()
     def run(self) -> None:
         self._log_start()
-        try:
-            if not self.tasks:
-                return
-            if self.is_cancelled():
-                self.result = run_alignment(self.tasks, cancel_event=self._cancel_event)
-                return
-            # Preserve the existing GUI feature-install flow during this
-            # computation cutover; explicit capability jobs remain U14 work.
-            from core import feature_registry
+        runtime = None
+        events: Queue[tuple[str, tuple]] = Queue()
 
+        def emit_event(event: tuple[str, tuple]) -> None:
+            kind, args = event
+            if kind == "progress":
+                self.progress.emit(*args)
+            elif kind == "aligned":
+                self.clip_aligned.emit(*args)
+
+        def compute(progress, cancel):
             try:
-                ready, _ = feature_registry.check_feature_ready("word_alignment")
-                if not ready:
-                    if self.is_cancelled():
-                        return
-                    if not feature_registry.install_for_feature("word_alignment"):
-                        self.error.emit(
-                            "Could not install word-level alignment dependencies. Check Settings > Dependencies and try again."
+                if not self._prepare():
+                    outcomes = tuple(
+                        AlignmentOutcome(task.clip_id, "unprocessed", code="cancelled")
+                        for task in self.tasks
+                    )
+                else:
+
+                    def deliver(outcome: AlignmentOutcome) -> None:
+                        if outcome.status == "succeeded":
+                            events.put(
+                                ("aligned", (outcome.clip_id, list(outcome.words)))
+                            )
+
+                    def report(current: int, total: int) -> None:
+                        progress(
+                            current / total if total else 1.0,
+                            f"Aligning words ({current}/{total})",
                         )
-                        return
+                        events.put(("progress", (current, total)))
+
+                    outcomes = run_alignment(
+                        self.tasks,
+                        cancel_event=cancel,
+                        on_outcome=deliver,
+                        progress=report,
+                    )
+                return {"outcomes": [asdict(outcome) for outcome in outcomes]}
             except Exception as exc:
-                self.error.emit(f"Word alignment dependencies unavailable: {exc}")
-                return
+                return {"success": False, "error": str(exc)}
 
-            def deliver(outcome: AlignmentOutcome) -> None:
-                if outcome.status == "succeeded":
-                    self.clip_aligned.emit(outcome.clip_id, list(outcome.words))
-
-            self.result = run_alignment(
-                self.tasks,
-                cancel_event=self._cancel_event,
-                on_outcome=deliver,
-                progress=self.progress.emit,
+        try:
+            runtime = JobRuntime.for_session(max_workers=1)
+            self._runtime = runtime
+            submission = runtime.submit(
+                kind="align_words",
+                args=self.operation.arguments,
+                operation=self.operation,
+                run=compute,
+                cancellation_event=self._cancel_event,
             )
+            self.task_id = submission["task_id"]
+            while runtime.is_handle_live(self.task_id):
+                try:
+                    emit_event(events.get(timeout=0.05))
+                except Empty:
+                    pass
+            runtime.shutdown()
+            while not events.empty():
+                emit_event(events.get_nowait())
+            row = runtime.store.get(self.task_id)
+            self.job_status = row.status
+            self.result = tuple(
+                AlignmentOutcome(
+                    **{
+                        **item,
+                        "words": tuple(
+                            WordTimestamp.from_dict(word) for word in item["words"]
+                        ),
+                    }
+                )
+                for item in (row.result or {}).get("outcomes", [])
+            )
+            if row.status == "cancelled" and not self.result:
+                self.result = tuple(
+                    AlignmentOutcome(task.clip_id, "unprocessed", code="cancelled")
+                    for task in self.tasks
+                )
+            if row.status == "failed":
+                raise RuntimeError(row.error or "Word alignment failed")
             errors = [
                 (o.clip_id, o.message or o.code or "Alignment failed")
                 for o in self.result
@@ -82,8 +182,13 @@ class ForcedAlignmentWorker(CancellableWorker):
             self._log_error(str(exc))
             self.error.emit(str(exc))
         finally:
-            self.alignment_completed.emit()
-            self._log_complete()
+            try:
+                if runtime is not None:
+                    runtime.close_session()
+            finally:
+                self._runtime = None
+                self.alignment_completed.emit()
+                self._log_complete()
 
 
 __all__ = ["ForcedAlignmentWorker"]

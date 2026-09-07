@@ -362,6 +362,7 @@ class AnalyzeTab(BaseTab):
         worker = ForcedAlignmentWorker(
             clips=clips,
             sources_by_id=self._sources_by_id,
+            project=project,
         )
         self._forced_alignment_worker = worker
         from ui.workers.alignment_delivery import AlignmentDelivery
