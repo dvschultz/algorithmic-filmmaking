@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import Signal
 from core.jobs import JobRuntime
 from core.jobs.transcription import transcription_operation_spec
+from core.jobs.gui_transcription import GuiTranscriptionCache
+from core.jobs.media import media_stamp
 from core.transcription_models import TranscriptSegment
 
 from ui.workers.base import CancellableWorker, summarize_clip_errors
@@ -117,6 +119,28 @@ class TranscriptionWorker(CancellableWorker):
         self.job_status: str | None = None
         self.result: tuple[TranscriptionOutcome, ...] = ()
         self._runtime: JobRuntime | None = None
+        self.cache = (
+            GuiTranscriptionCache(
+                project.path,
+                project.metadata.id,
+                {clip.id: clip.source_id for clip in clips},
+                project.metadata.job_results,
+                options=self._options,
+                previous_transcripts={
+                    clip.id: [segment.to_dict() for segment in clip.transcript]
+                    if clip.transcript is not None
+                    else None
+                    for clip in clips
+                },
+                media_stamps={
+                    task.source_path: media_stamp(task.source_path)
+                    for task in self._tasks
+                    if task.source_path is not None
+                },
+            )
+            if project is not None and project.path is not None
+            else None
+        )
 
     def cancel(self) -> None:
         super().cancel()
@@ -232,7 +256,29 @@ class TranscriptionWorker(CancellableWorker):
 
         def compute(progress, cancel):
             try:
-                if not self._prepare(events):
+
+                def deliver(outcome):
+                    if outcome.status == "succeeded":
+                        events.put(
+                            ("transcript", (outcome.clip_id, list(outcome.segments)))
+                        )
+
+                def report(current, total):
+                    progress(
+                        current / total if total else 1.0,
+                        f"Transcribing ({current}/{total})",
+                    )
+                    events.put(("progress", (current, total)))
+
+                if self.cache is not None:
+                    outcomes = self.cache.run(
+                        self._tasks,
+                        cancel,
+                        lambda: self._prepare(events),
+                        deliver,
+                        report,
+                    )
+                elif not self._prepare(events):
                     outcomes = tuple(
                         TranscriptionOutcome(
                             task.clip_id, "unprocessed", code="cancelled"
@@ -240,23 +286,6 @@ class TranscriptionWorker(CancellableWorker):
                         for task in self._tasks
                     )
                 else:
-
-                    def deliver(outcome):
-                        if outcome.status == "succeeded":
-                            events.put(
-                                (
-                                    "transcript",
-                                    (outcome.clip_id, list(outcome.segments)),
-                                )
-                            )
-
-                    def report(current, total):
-                        progress(
-                            current / total if total else 1.0,
-                            f"Transcribing ({current}/{total})",
-                        )
-                        events.put(("progress", (current, total)))
-
                     outcomes = run_transcription(
                         self._tasks,
                         self._options,

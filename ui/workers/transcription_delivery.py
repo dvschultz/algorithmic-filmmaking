@@ -76,14 +76,28 @@ class TranscriptionDelivery(QObject):
             return
         self._delivered_targets.add(clip_id)
         try:
+            cache = getattr(self.worker, "cache", None)
+            project = self.window.project
+            if cache is not None and (
+                project.path is None or project.path.resolve() != cache.path
+            ):
+                raise ValueError("Project save location changed during transcription")
+            receipt = cache.results[clip_id] if cache is not None else None
+            outcome = TranscriptionOutcome(clip_id, "succeeded", tuple(segments))
+            if receipt is not None and not receipt.matches(outcome):
+                raise ValueError("Queued transcript differs from its recorded result")
             applied = self.application.apply(
-                self.window.project,
-                TranscriptionOutcome(clip_id, "succeeded", tuple(segments)),
+                project,
+                outcome,
             )
+            if applied and receipt is not None:
+                project.record_job_result(receipt.result_id, receipt.digest)
         except Exception as exc:
             self.error(f"Could not apply transcription: {exc}")
             return
         if applied and self._current():
             self.window._on_transcript_ready(clip_id, segments)
         elif not applied:
-            self.error(f"Transcription result discarded for changed clip {clip_id}. Run transcription again.")
+            self.error(
+                f"Transcription result discarded for changed clip {clip_id}. Run transcription again."
+            )

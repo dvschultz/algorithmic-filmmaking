@@ -529,3 +529,11 @@ normally to persist its words and receipts; alignment does not automatically sav
 your other edits. Projects without a save location remain memory-only. GUI and
 headless alignment currently keep separate computation identities, and GUI job
 history itself does not survive restart.
+
+GUI transcription follows the same save rule. For an already saved project,
+matching completed transcripts, including silence, can be reused after a crash
+or failed save without loading the transcription model again. Only missing
+results are sent to inference. Model, language, segmentation, prior transcript,
+and media changes produce different inputs; an explicit new refresh after a
+saved result computes again. Keep the shared job cache for recovery. GUI and
+headless transcription currently keep separate computation identities.

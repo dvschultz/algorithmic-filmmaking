@@ -254,8 +254,9 @@ Job-start notices use the same current-worker/request/session guard as transcrip
 
 These GUI jobs are explicitly session-only, including when the editor has a
 saved project path: results become unsaved model changes until the user saves.
-Their temporary job store closes after delivery; they do not yet provide durable
-receipt recovery. Durable GUI publication remains outstanding U7 work.
+Their temporary job store closes after delivery. For saved projects, computed
+outcomes are retained separately in the shared journal described below; durable
+GUI job history and save/checkpoint integration remain outstanding U7 work.
 
 ### Word alignment computation and application
 
@@ -306,5 +307,16 @@ project saves include words and receipts together; inference never saves unrelat
 edits automatically. Unsaved projects remain memory-only. GUI alignment uses a
 separate result identity from headless alignment because it records word outcomes
 before segment publication; it does not reuse headless segment-result entries.
-Durable GUI job history, save/checkpoint integration, and GUI transcription
-computation recovery remain outstanding.
+Durable GUI job history and save/checkpoint integration remain outstanding.
+
+Saved GUI transcription now uses the same `core/jobs/gui_results.py` journal.
+Its adapter includes the resolved transcription options and prior transcript in
+the input identity, publishes matching cache hits without model preparation, and
+sends only cache misses through the existing bounded parallel runner. Silent
+transcripts are recorded too. Receipts are attached only after the owner-thread
+guard accepts an unchanged queued payload and save destination; normal saves
+persist the transcript and receipt together. Changed media is rejected before
+preparation, after preparation, and before recording or delivering results.
+GUI transcription uses its own outcome-cache identity; it does not reuse
+headless transcript-result entries. Neither GUI adapter saves unrelated edits
+automatically, and projects without a save location remain memory-only.

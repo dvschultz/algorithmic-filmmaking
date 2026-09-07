@@ -91,7 +91,8 @@ def test_preflight_failure_is_failed_job_with_one_completion(worker, monkeypatch
     assert worker._runtime is None
 
 
-def test_real_job_delivers_on_project_owner_thread():
+@pytest.mark.parametrize("saved", [False, True])
+def test_real_job_delivers_on_project_owner_thread(saved):
     import os
     import subprocess
     import sys
@@ -99,9 +100,11 @@ def test_real_job_delivers_on_project_owner_thread():
     code = r"""
 import tempfile, threading
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from PySide6.QtCore import QCoreApplication, QObject
 from tests.test_spine_analyze import _build_project
+from core.project import Project
 from ui.workers.transcription_worker import TranscriptionWorker
 from ui.workers.transcription_delivery import TranscriptionDelivery
 app = QCoreApplication([])
@@ -114,10 +117,12 @@ window._on_transcription_error = Mock()
 window._on_transcript_ready = lambda *args: calls.append(threading.get_ident())
 with tempfile.TemporaryDirectory() as directory:
     window.project = _build_project(Path(directory), 1)
+    if SAVED:
+        assert window.project.save(Path(directory) / 'project.json')
     worker = TranscriptionWorker(window.project.clips, window.project.sources[0], backend='faster-whisper', project=window.project)
     window.transcription_worker = worker
     delivery = TranscriptionDelivery(window, worker)
-    with patch.object(worker, '_prepare', return_value=True), patch('core.transcription.transcribe_clip', return_value=[]):
+    with patch.object(worker, '_prepare', return_value=True), patch('core.transcription.transcribe_clip', return_value=[]), patch('core.settings.load_settings', return_value=SimpleNamespace(cache_dir=Path(directory))):
         worker.start()
         assert worker.wait(5000)
     assert worker.task_id and worker.job_status == 'completed'
@@ -128,9 +133,14 @@ with tempfile.TemporaryDirectory() as directory:
     assert window.project.clips[0].transcript == []
     window._on_transcription_error.assert_not_called()
     assert any('unsaved' in call.args[0] for call in window.status_bar.showMessage.call_args_list)
+    if SAVED:
+        assert len(window.project.metadata.job_results) == 1
+        assert Project.load(window.project.path).clips[0].transcript is None
+        assert window.project.save()
+        assert Project.load(window.project.path).clips[0].transcript == []
 """
     result = subprocess.run(
-        [sys.executable, "-c", code],
+        [sys.executable, "-c", f"SAVED={saved!r}\n" + code],
         env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},
         capture_output=True,
         text=True,

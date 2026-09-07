@@ -467,7 +467,9 @@ for transcripts created with another model. It saves between operations and relo
 the project for following steps, so a later failure does not lose a completed
 transcript or its receipts. Other operations in that list retain their existing
 computation behavior; the full list is not an atomic transaction. GUI
-transcription does not yet use durable receipts.
+transcription now caches computations for projects that already have a save
+location and includes receipts in normal project saves. GUI and headless
+transcription currently use separate computation identities.
 
 `start_align_words` and CLI `analyze align` also cache computed word timestamps
 before saving project receipts. Matching retries recover failed saves and

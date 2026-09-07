@@ -14,6 +14,7 @@ from unittest.mock import Mock
 from PySide6.QtCore import QCoreApplication, QObject, QThread, Signal
 from tests.test_spine_analyze import _build_project
 from core.operations.transcription import snapshot_tasks
+from core.jobs.gui_results import GuiResultReceipt
 from ui.workers.transcription_delivery import TranscriptionDelivery
 from ui.workers.gui_tool_reply import GuiToolReply
 app = QCoreApplication([])
@@ -33,7 +34,7 @@ class Worker(QThread):
         self.transcript_ready.emit('c-0', [])
 window = QObject()
 with tempfile.TemporaryDirectory() as directory:
-    for mode in ('current', 'worker', 'project', 'edit', 'expired'):
+    for mode in ('current', 'worker', 'project', 'edit', 'expired', 'location', 'payload'):
         window.project = _build_project(Path(directory), 1)
         original = window.project.clips[0]
         window._chat_worker = SimpleNamespace(_stop_requested=False, is_gui_tool_pending=lambda *_: True)
@@ -44,12 +45,16 @@ with tempfile.TemporaryDirectory() as directory:
         window._on_transcription_error = Mock()
         window.status_bar = Mock()
         worker = Worker(snapshot_tasks(window.project.clips, window.project.sources_by_id))
+        if mode in ('location', 'payload'):
+            window.project.path = Path(directory) / 'original.json'
+            worker.cache = SimpleNamespace(path=window.project.path.resolve(), results={'c-0': GuiResultReceipt('0' * 64, '0' * 64, '{}')})
         window.transcription_worker = worker
         delivery = TranscriptionDelivery(window, worker, reply=reply)
         if mode == 'worker': window.transcription_worker = object()
         if mode == 'project': window.project.clear()
         if mode == 'edit': original.start_frame += 1
         if mode == 'expired': window._chat_worker.is_gui_tool_pending = lambda *_: False
+        if mode == 'location': window.project.path = Path(directory) / 'new.json'
         worker.start(); assert worker.wait(5000)
         app.processEvents()
         if mode == 'current':
@@ -61,6 +66,9 @@ with tempfile.TemporaryDirectory() as directory:
         if mode == 'edit':
             assert window._on_transcription_error.call_count == 2
             assert 'discarded' in window._on_transcription_error.call_args.args[0]
+        if mode in ('location', 'payload'):
+            assert window._on_transcription_error.call_count == 2
+            assert not window.project.metadata.job_results
         if mode in ('worker', 'project', 'expired'):
             window._on_transcription_progress.assert_not_called()
             window._on_transcription_error.assert_not_called()
