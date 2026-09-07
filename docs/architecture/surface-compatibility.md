@@ -738,3 +738,16 @@ The MCP analysis adapter translates shared operation kinds to their existing
 public job names at submission. Gaze, faces, objects, classification, and
 cinematography are covered by tests that submit to the real job runtime and
 verify completed jobs and saved receipts, with provider inference mocked.
+### Sequencer thumbnail embedding prerequisites
+
+Similarity-chain and Staccato thumbnail prerequisites delegate to the shared
+embedding operation, including bounded batches, vector validation, cancellation,
+and model ownership. Sequencing uses detached clip snapshots: prerequisite
+embeddings are inputs to the proposed sequence and do not silently update the
+project's analysis fields. Use explicit embedding analysis to persist those fields.
+Staccato requires an embedding for every clip, including when no thumbnail can be
+computed; similarity-chain retains its existing fallback for missing embeddings.
+
+This U7 migration does not yet provide durable sequencer prerequisite jobs.
+Boundary embeddings, the full sequencing operation/recipe migration, and remaining
+analysis workflow migrations are still outstanding.

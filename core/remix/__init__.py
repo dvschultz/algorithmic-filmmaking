@@ -1,6 +1,8 @@
 """Algorithmic remix algorithms for video clip sequencing."""
 
 import logging
+from copy import deepcopy
+from threading import Event
 import random
 from typing import List, Tuple, Any, Optional
 from core.remix.shuffle import constrained_shuffle
@@ -91,6 +93,8 @@ def generate_sequence(
     direction: Optional[str] = None,
     seed: Optional[int] = None,
     no_color_handling: Optional[str] = None,
+    *,
+    cancel_event: Event | None = None,
 ) -> List[Tuple[Any, Any]]:
     """
     Generate a sequence of clips using the specified algorithm.
@@ -107,10 +111,15 @@ def generate_sequence(
                    "append_end" (default): append after sorted clips
                    "exclude": drop clips without color data
                    "sort_inline": treat as hue 0 and sort normally
+        cancel_event: Stops pending thumbnail embedding batches and discards a
+                   cancelled similarity-chain result. Other algorithms currently
+                   check only before dispatch.
 
     Returns:
         Ordered list of (Clip, Source) tuples ready for timeline
     """
+    if cancel_event is not None and cancel_event.is_set():
+        return []
     clips_to_use = clips[:clip_count]
 
     if algorithm == "shuffle":
@@ -310,7 +319,9 @@ def generate_sequence(
     elif algorithm == "similarity_chain":
         from core.remix.similarity_chain import similarity_chain
         # Auto-compute embeddings for clips that don't have them
-        _auto_compute_embeddings(clips_to_use)
+        clips_to_use = _auto_compute_embeddings(clips_to_use, cancel_event=cancel_event)
+        if cancel_event is not None and cancel_event.is_set():
+            return []
         return similarity_chain(clips_to_use, start_clip_id=None)
 
     elif algorithm == "match_cut":
@@ -489,35 +500,15 @@ def _auto_compute_volume(clips: List[Tuple[Any, Any]]) -> None:
                 logger.warning(f"Failed to compute volume for clip {clip.id}: {e}")
 
 
-def _auto_compute_embeddings(clips: List[Tuple[Any, Any]]) -> None:
-    """Compute DINOv2 embeddings for clips that don't have them."""
-    needs_embedding = [
-        (clip, source) for clip, source in clips
-        if clip.embedding is None and clip.thumbnail_path
-    ]
-    if not needs_embedding:
-        return
+def _auto_compute_embeddings(
+    clips: List[Tuple[Any, Any]], *, cancel_event: Event | None = None
+) -> List[Tuple[Any, Any]]:
+    """Compute shared embedding prerequisites on detached sequencing inputs."""
+    from core.remix.embedding_inputs import populate_embeddings
 
-    from core.feature_registry import check_feature
-
-    available, missing = check_feature("embeddings")
-    if not available:
-        raise RuntimeError(
-            "DINOv2 embeddings require torch and transformers. "
-            f"Missing: {', '.join(missing)}. "
-            "Run embedding analysis first or install dependencies via Settings."
-        )
-
-    from core.analysis.embeddings import extract_clip_embeddings_batch, _EMBEDDING_MODEL_TAG
-
-    thumbnail_paths = [clip.thumbnail_path for clip, _ in needs_embedding]
-    try:
-        embeddings = extract_clip_embeddings_batch(thumbnail_paths)
-        for (clip, _), emb in zip(needs_embedding, embeddings):
-            clip.embedding = emb
-            clip.embedding_model = _EMBEDDING_MODEL_TAG
-    except Exception as e:
-        logger.warning(f"Failed to compute embeddings: {e}")
+    snapshots = deepcopy(clips)
+    populate_embeddings(snapshots, cancel_event=cancel_event)
+    return snapshots
 
 
 def _auto_compute_boundary_embeddings(clips: List[Tuple[Any, Any]]) -> None:

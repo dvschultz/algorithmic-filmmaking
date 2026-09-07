@@ -6,6 +6,7 @@ between consecutive clips via DINOv2 embedding distance.
 """
 
 import logging
+from copy import deepcopy
 from pathlib import Path
 
 import numpy as np
@@ -182,7 +183,7 @@ class StaccatoGenerateWorker(CancellableWorker):
         parent=None,
     ):
         super().__init__(parent)
-        self._clips = clips
+        self._clips = deepcopy(clips)
         self._audio_analysis = audio_analysis
         self._strategy = strategy
         self._cut_times = cut_times
@@ -219,49 +220,13 @@ class StaccatoGenerateWorker(CancellableWorker):
                 self.error.emit(str(e))
         self._log_complete()
 
-    def _auto_compute_embeddings(self):
-        """Compute DINOv2 embeddings for clips that don't have them."""
-        needs_embedding = [
-            (clip, source) for clip, source in self._clips
-            if clip.embedding is None and clip.thumbnail_path
-        ]
-        if not needs_embedding:
-            return
+    def _auto_compute_embeddings(self) -> None:
+        """Resolve prerequisites on the worker's private clip snapshot."""
+        from core.remix.embedding_inputs import populate_embeddings
 
-        from core.feature_registry import check_feature
-
-        available, missing = check_feature("embeddings")
-        if not available:
-            raise RuntimeError(
-                "DINOv2 embeddings require torch and transformers. "
-                f"Missing: {', '.join(missing)}. "
-                "Run embedding analysis first or install dependencies via Settings."
-            )
-
-        from core.analysis.embeddings import extract_clip_embeddings_batch, _EMBEDDING_MODEL_TAG
-
-        self.progress_message.emit(
-            f"Computing embeddings for {len(needs_embedding)} clips..."
+        populate_embeddings(
+            self._clips, cancel_event=self._cancel_event, require_all=True
         )
-        thumbnail_paths = [clip.thumbnail_path for clip, _ in needs_embedding]
-        try:
-            embeddings = extract_clip_embeddings_batch(thumbnail_paths)
-            for (clip, _), emb in zip(needs_embedding, embeddings):
-                clip.embedding = emb
-                clip.embedding_model = _EMBEDDING_MODEL_TAG
-        except Exception as e:
-            raise RuntimeError(f"Failed to compute clip embeddings: {e}") from e
-
-        still_missing = []
-        for clip, _source in self._clips:
-            if getattr(clip, "embedding", None) is None:
-                still_missing.append(getattr(clip, "id", "<unknown>"))
-        if still_missing:
-            raise RuntimeError(
-                "Missing DINOv2 embeddings for "
-                f"{len(still_missing)} clips. Run embedding analysis first or "
-                "ensure thumbnails exist before generating Staccato."
-            )
 
     def _on_progress(self, current: int, total: int):
         self.progress_update.emit(current, total)

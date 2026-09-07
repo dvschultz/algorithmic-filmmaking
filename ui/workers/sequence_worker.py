@@ -5,6 +5,7 @@ embeddings) in a background thread so the UI stays responsive.
 """
 
 import logging
+from copy import deepcopy
 from typing import Any, List, Optional, Tuple
 
 from PySide6.QtCore import Signal
@@ -40,7 +41,7 @@ class SequenceWorker(CancellableWorker):
     ):
         super().__init__(parent)
         self._algorithm = algorithm
-        self._clips = clips
+        self._clips = deepcopy(clips)
         self._direction = direction
         self._no_color_handling = no_color_handling
 
@@ -57,6 +58,7 @@ class SequenceWorker(CancellableWorker):
                 clip_count=len(self._clips),
                 direction=self._direction,
                 no_color_handling=self._no_color_handling,
+                cancel_event=self._cancel_event,
             )
 
             if not self.is_cancelled():
