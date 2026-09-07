@@ -119,6 +119,18 @@ class JobRuntime:
         self._handles: dict[str, _JobHandle] = {}
         self._handles_lock = threading.Lock()
 
+    @classmethod
+    def for_session(cls, *, max_workers: int = DEFAULT_MAX_WORKERS) -> JobRuntime:
+        """Create an isolated runtime for one unsaved project session."""
+        return cls(JobStore.in_memory(), max_workers=max_workers)
+
+    def close_session(self) -> None:
+        """Wait for session workers and discard their history; call off the UI thread."""
+        if self.store.persistence != "session_only":
+            raise ValueError("Only session-only runtimes can discard session history")
+        self.shutdown()
+        self.store.close()
+
     # --- Lifecycle ---
 
     def shutdown(self, *, wait: bool = True) -> None:
@@ -152,6 +164,15 @@ class JobRuntime:
         ``status="completed"`` is returned synchronously when an idempotency
         key matches an already-completed row — no worker is spawned.
         """
+        if self.store.persistence == "session_only" and project_path is not None:
+            raise ValueError(
+                "A session-only runtime cannot accept a saved project path"
+            )
+        persistence = (
+            {"persistence": "session_only"}
+            if self.store.persistence == "session_only"
+            else {}
+        )
         if idempotency_key is not None:
             if len(idempotency_key) > IDEMPOTENCY_KEY_MAX_LENGTH:
                 raise InvalidIdempotencyKeyError(
@@ -173,6 +194,7 @@ class JobRuntime:
                         "task_id": existing.id,
                         "status": existing.status,
                         "poll_interval": DEFAULT_POLL_INTERVAL_SECONDS,
+                        **persistence,
                     }
                 if existing.status in TERMINAL_ERROR_STATUSES:
                     # Replace the terminal-error row so the same key can be
@@ -185,6 +207,7 @@ class JobRuntime:
                         "task_id": existing.id,
                         "status": existing.status,
                         "poll_interval": DEFAULT_POLL_INTERVAL_SECONDS,
+                        **persistence,
                     }
 
         # Compute queue state. If another job currently holds this project's
@@ -238,6 +261,7 @@ class JobRuntime:
             "task_id": row.id,
             "status": STATUS_QUEUED,
             "poll_interval": DEFAULT_POLL_INTERVAL_SECONDS,
+            **persistence,
         }
 
     # --- Cancellation ---

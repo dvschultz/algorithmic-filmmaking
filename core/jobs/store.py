@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import threading
 import time
 import traceback as _traceback
 import uuid
@@ -86,6 +87,7 @@ class JobRow:
     queue_position: Optional[int] = None
     blocking_job_id: Optional[str] = None
     finished_at: Optional[float] = None
+    persistence: str = "job_history"
 
     # Convenience: parsed args / result.
     @property
@@ -101,7 +103,7 @@ class JobRow:
 
         Excludes ``args_json``, ``result_json``, and ``error`` payload (R28).
         """
-        return {
+        projection = {
             "task_id": self.id,
             "kind": self.kind,
             "status": self.status,
@@ -114,6 +116,9 @@ class JobRow:
             "queue_position": self.queue_position,
             "blocking_job_id": self.blocking_job_id,
         }
+        if self.persistence == "session_only":
+            projection["persistence"] = self.persistence
+        return projection
 
 
 def sanitize_traceback(exc: BaseException) -> str:
@@ -142,7 +147,7 @@ def sanitize_traceback(exc: BaseException) -> str:
     return text
 
 
-def _row_to_jobrow(row: sqlite3.Row) -> JobRow:
+def _row_to_jobrow(row: sqlite3.Row, persistence: str = "job_history") -> JobRow:
     return JobRow(
         id=row["id"],
         kind=row["kind"],
@@ -160,6 +165,7 @@ def _row_to_jobrow(row: sqlite3.Row) -> JobRow:
         queue_position=row["queue_position"],
         blocking_job_id=row["blocking_job_id"],
         finished_at=row["finished_at"],
+        persistence=persistence,
     )
 
 
@@ -167,9 +173,34 @@ class JobStore:
     """SQLite-backed job persistence layer."""
 
     def __init__(self, db_path: Path | str) -> None:
+        self.persistence = "job_history"
+        self._memory_connection: sqlite3.Connection | None = None
+        self._memory_lock = threading.RLock()
         self.db_path = Path(db_path)
         self._ensure_db_file()
         self._init_schema()
+
+    @classmethod
+    def in_memory(cls) -> JobStore:
+        """Isolated session-only history, never written to a SQLite file."""
+        store = cls.__new__(cls)
+        store.persistence = "session_only"
+        store.db_path = Path(":memory:")
+        store._memory_lock = threading.RLock()
+        store._memory_connection = sqlite3.connect(
+            ":memory:", isolation_level=None, check_same_thread=False
+        )
+        store._memory_connection.row_factory = sqlite3.Row
+        store._memory_connection.execute("PRAGMA temp_store=MEMORY")
+        store._init_schema()
+        return store
+
+    def close(self) -> None:
+        """Discard session history after its runtime workers have stopped."""
+        with self._memory_lock:
+            if self._memory_connection is not None:
+                self._memory_connection.close()
+                self._memory_connection = None
 
     def _ensure_db_file(self) -> None:
         """Touch the DB file with mode 0o600 if it does not exist (R29)."""
@@ -193,6 +224,12 @@ class JobStore:
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
+        if self.persistence == "session_only":
+            with self._memory_lock:
+                if self._memory_connection is None:
+                    raise RuntimeError("Session job store is closed")
+                yield self._memory_connection
+            return
         conn = sqlite3.connect(
             str(self.db_path),
             timeout=10.0,
@@ -249,6 +286,7 @@ class JobStore:
             project_mtime_at_start=project_mtime_at_start,
             queue_position=queue_position,
             blocking_job_id=blocking_job_id,
+            persistence=self.persistence,
         )
         with self._connect() as conn:
             conn.execute(
@@ -416,7 +454,7 @@ class JobStore:
             row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
         if row is None:
             raise JobNotFoundError(job_id)
-        return _row_to_jobrow(row)
+        return _row_to_jobrow(row, self.persistence)
 
     def find_by_idempotency(
         self,
@@ -434,7 +472,7 @@ class JobStore:
                 """,
                 (kind, idempotency_key, project_path, project_path),
             ).fetchone()
-        return _row_to_jobrow(row) if row else None
+        return _row_to_jobrow(row, self.persistence) if row else None
 
     def list(
         self,
@@ -461,7 +499,7 @@ class JobStore:
         sql += " ORDER BY created_at DESC"
         with self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
-        return [_row_to_jobrow(r) for r in rows]
+        return [_row_to_jobrow(r, self.persistence) for r in rows]
 
     # --- Boot sweep + pruning ---
 

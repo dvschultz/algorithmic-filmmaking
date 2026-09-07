@@ -50,10 +50,32 @@ verified on retry; changed media gets a new result identity. Media fingerprints
 use mtime/size, not full content hashes. Missing cached receipt data blocks this
 pilot because it cannot safely establish which palettes it owns.
 
+## Unsaved project sessions
+
+`JobRuntime.for_session()` creates an isolated in-memory SQLite store for one
+unsaved project. It uses the same executor, terminal transitions, cancellation,
+and idempotency behavior. Submission and status projections explicitly include
+`persistence: session_only`. Completed means computation completed; it does not
+mean the project was saved. Existing durable MCP response shapes are unchanged.
+
+The Qt adapter emits `started(task_id, persistence)` on its owner thread before
+terminal delivery, so migrated workflows can label unsaved work. It remains the
+workflow's responsibility to apply computed data on the project owner thread and
+save it through the project model. Saving does not retroactively turn session
+history into durable receipts. New disk-backed operations use a regular runtime.
+
+`shutdown()` stops workers but retains history for final UI polling.
+`close_session()` waits for workers and discards the in-memory store; call it off
+the UI thread after final polling. Closing is idempotent. No job or cache history
+is available to a newly created session, even with the same idempotency key.
+Session runtimes reject saved project paths, and the durable result commit path
+rejects an in-memory store. Production desktop workflows still need migration to
+this adapter; these APIs alone do not change their current UI.
+
 This is a partial U6 implementation. Recovery covers recorded results; a crash
 after a provider response but before recording it cannot guarantee avoiding a
-repeat call. Paid workflows, other analysis runners, GUI workflow migration, and
-explicit session-only jobs remain outstanding. Per-clip project saves favor
+repeat call. Paid workflows, other analysis runners, and GUI workflow migration
+remain outstanding. Per-clip project saves favor
 recovery over throughput. The legacy boot sweep/idempotency behavior is preserved;
 sharing a jobs database across independent live processes requires further
 ownership work.

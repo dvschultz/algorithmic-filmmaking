@@ -12,6 +12,7 @@ class JobAdapter(QObject):
     """One active job per adapter; all signals identify their originating task."""
 
     progress = Signal(str, float, str)
+    started = Signal(str, str)
     completed = Signal(str, dict)
     failed = Signal(str, str)
     cancelled = Signal(str)
@@ -40,6 +41,7 @@ class JobAdapter(QObject):
         self._terminal = False
         self._last_progress = None
         self._timer.start()
+        self.started.emit(self.task_id, self.runtime.store.persistence)
         return result
 
     def cancel(self) -> bool:

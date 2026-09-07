@@ -71,6 +71,8 @@ def commit_result(
     Only saved projects participate. A failed save discards the detached model;
     recovery reloads disk and uses its receipt to avoid applying twice.
     """
+    if store.persistence != "job_history":
+        raise ValueError("Project result commits require a durable job store")
     if spec.project_path.resolve() != spec.project_path:
         raise StaleJobResult("Project path was retargeted")
     with project_writer(spec.project_path):
