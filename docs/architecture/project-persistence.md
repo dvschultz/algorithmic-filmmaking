@@ -29,8 +29,8 @@ the matching `.bak` file. Keep the backup until the restored file has been
 verified with the previous application. A backup contains the JSON document;
 it does not duplicate referenced media.
 
-This implements part of U5. Elimination of the legacy read-modify-merge writer
-and full UI read-only affordances remain separate work.
+This implements part of U5. Full UI read-only affordances and retained-session
+external-revision handling remain separate work.
 
 Offline source files remain declared sources on load, so their clips and edits
 survive in every sequence. A relink callback can supply an existing replacement;
@@ -38,6 +38,31 @@ returning `None` or an unavailable replacement keeps the original path. Callback
 exceptions still cancel loading. Stills and audio references are retained too.
 Media-dependent operations must check file availability and report missing input
 instead of treating successful document loading as proof that media is online.
+
+## Complete-state saves
+
+`Project.save()` serializes a detached snapshot containing every sequence,
+still, audio source, and UI field. CLI mutators load the complete `Project`
+instead of unpacking the legacy tuple. Bundle export also saves a complete
+snapshot and reports a refused write as an error. Synchronous progress callbacks
+cannot change the snapshot; later edits stay dirty after saving.
+
+The writer does not merge editorial data from an existing destination.
+`sequences` and `active_sequence_index` come from the supplied state; the legacy
+`sequence` key is a derived active-sequence projection for compatibility.
+The standalone `save_project()` API treats its supplied data as complete: without
+`_all_sequences`, it writes only the supplied single sequence (or an empty list).
+Callers editing an existing multi-sequence document must use `Project.load()`
+and `Project.save()`, within the appropriate ownership lifetime.
+
+Prerenders from every sequence are localized before serialization, with original
+model paths preserved. Filename collisions compare content rather than assuming
+equal byte lengths identify equal media. Publication retries a competing filename
+and uses exclusive creation for copy fallback, so it cannot overwrite a winner.
+Missing sequence music stays referenced on load so a subsequent save cannot
+silently delete it. Bundles copy music referenced only by alternate sequences
+too, rewrite those paths, and strip machine-local fallbacks before the single
+atomic project-file publication.
 
 ## Writer ownership
 

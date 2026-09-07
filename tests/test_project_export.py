@@ -6,10 +6,9 @@ from unittest.mock import Mock, patch, MagicMock
 
 import pytest
 
-from core.project import Project, ProjectMetadata, load_project
+from core.project import Project, ProjectMetadata, load_project, _strip_absolute_paths
 from core.project_export import (
     _build_filename_map,
-    _strip_absolute_paths,
     export_project_bundle,
 )
 from models.audio_source import AudioSource
@@ -140,38 +139,32 @@ class TestStripAbsolutePaths:
     """Tests for _absolute_path removal from exported JSON."""
 
     def test_strips_source_absolute_paths(self, tmp_path):
-        json_file = tmp_path / "test.json"
         data = {
             "sources": [
                 {"file_path": "sources/video.mp4", "_absolute_path": "/original/video.mp4"},
             ],
             "clips": [],
         }
-        json_file.write_text(json.dumps(data))
-        _strip_absolute_paths(json_file)
-        result = json.loads(json_file.read_text())
+        _strip_absolute_paths(data)
+        result = data
         assert "_absolute_path" not in result["sources"][0]
         assert result["sources"][0]["file_path"] == "sources/video.mp4"
 
     def test_strips_frame_absolute_paths(self, tmp_path):
-        json_file = tmp_path / "test.json"
         data = {
             "sources": [],
             "frames": [
                 {"file_path": "frames/f.png", "_absolute_path": "/original/f.png"},
             ],
         }
-        json_file.write_text(json.dumps(data))
-        _strip_absolute_paths(json_file)
-        result = json.loads(json_file.read_text())
+        _strip_absolute_paths(data)
+        result = data
         assert "_absolute_path" not in result["frames"][0]
 
     def test_no_absolute_paths_is_noop(self, tmp_path):
-        json_file = tmp_path / "test.json"
         data = {"sources": [{"file_path": "sources/video.mp4"}]}
-        json_file.write_text(json.dumps(data))
-        _strip_absolute_paths(json_file)
-        result = json.loads(json_file.read_text())
+        _strip_absolute_paths(data)
+        result = data
         assert result == data
 
 

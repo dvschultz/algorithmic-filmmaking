@@ -97,7 +97,7 @@ def transcribe(
             transcribe_clip,
             is_faster_whisper_available,
         )
-        from core.project import load_project, save_project, ProjectLoadError
+        from core.project import Project, ProjectLoadError
     except ImportError as e:
         exit_with(ExitCode.DEPENDENCY_MISSING, f"Missing dependency: {e}")
 
@@ -117,10 +117,10 @@ def transcribe(
 
     # Load project
     try:
-        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(
-            filepath=project_file,
-            missing_source_callback=lambda path, sid: None,
+        project = Project.load(
+            project_file, missing_source_callback=lambda path, sid: None,
         )
+        sources, clips = project.sources, project.clips
     except ProjectLoadError as e:
         exit_with(ExitCode.GENERAL_ERROR, f"Failed to load project: {e}")
     except FileNotFoundError:
@@ -187,15 +187,7 @@ def transcribe(
         progress.update(1.0, "Complete")
 
     # Save updated project
-    success = save_project(
-        filepath=project_file,
-        sources=sources,
-        clips=clips,
-        sequence=sequence,
-        ui_state=ui_state,
-        metadata=metadata,
-        audio_sources=audio_sources,
-    )
+    success = project.save()
 
     if not success:
         exit_with(ExitCode.GENERAL_ERROR, "Failed to save project")

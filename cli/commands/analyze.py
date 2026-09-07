@@ -70,7 +70,7 @@ def describe(
     """
     project_file = own_project(ctx, project_file)
     try:
-        from core.project import load_project, save_project, ProjectLoadError
+        from core.project import Project, ProjectLoadError
         from core.thumbnail import ThumbnailGenerator
         from core.analysis.description import describe_frame
     except ImportError as e:
@@ -79,10 +79,10 @@ def describe(
     config = CLIConfig.load()
 
     try:
-        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(
-            filepath=project_file,
-            missing_source_callback=lambda path, sid: None,
+        project = Project.load(
+            project_file, missing_source_callback=lambda path, sid: None,
         )
+        sources, clips = project.sources, project.clips
     except ProjectLoadError as e:
         exit_with(ExitCode.GENERAL_ERROR, f"Failed to load project: {e}")
     except FileNotFoundError:
@@ -173,15 +173,7 @@ def describe(
         progress.update(1.0, "Complete")
 
     # Save updated project
-    success = save_project(
-        filepath=project_file,
-        sources=sources,
-        clips=clips,
-        sequence=sequence,
-        ui_state=ui_state,
-        metadata=metadata,
-        audio_sources=audio_sources,
-    )
+    success = project.save()
 
     if not success:
         exit_with(ExitCode.GENERAL_ERROR, "Failed to save project")
@@ -361,7 +353,7 @@ def shots(
     """
     project_file = own_project(ctx, project_file)
     try:
-        from core.project import load_project, save_project, ProjectLoadError
+        from core.project import Project, ProjectLoadError
         from core.thumbnail import ThumbnailGenerator
         from core.analysis.shots import classify_shot_type
     except ImportError as e:
@@ -370,10 +362,10 @@ def shots(
     config = CLIConfig.load()
 
     try:
-        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(
-            filepath=project_file,
-            missing_source_callback=lambda path, sid: None,
+        project = Project.load(
+            project_file, missing_source_callback=lambda path, sid: None,
         )
+        sources, clips = project.sources, project.clips
     except ProjectLoadError as e:
         exit_with(ExitCode.GENERAL_ERROR, f"Failed to load project: {e}")
     except FileNotFoundError:
@@ -449,15 +441,7 @@ def shots(
         progress.update(1.0, "Complete")
 
     # Save updated project
-    success = save_project(
-        filepath=project_file,
-        sources=sources,
-        clips=clips,
-        sequence=sequence,
-        ui_state=ui_state,
-        metadata=metadata,
-        audio_sources=audio_sources,
-    )
+    success = project.save()
 
     if not success:
         exit_with(ExitCode.GENERAL_ERROR, "Failed to save project")
@@ -539,7 +523,7 @@ def classify(
     """
     project_file = own_project(ctx, project_file)
     try:
-        from core.project import load_project, save_project, ProjectLoadError
+        from core.project import Project, ProjectLoadError
         from core.thumbnail import ThumbnailGenerator
         from core.analysis.classification import classify_frame
     except ImportError as e:
@@ -548,10 +532,10 @@ def classify(
     config = CLIConfig.load()
 
     try:
-        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(
-            filepath=project_file,
-            missing_source_callback=lambda path, sid: None,
+        project = Project.load(
+            project_file, missing_source_callback=lambda path, sid: None,
         )
+        sources, clips = project.sources, project.clips
     except ProjectLoadError as e:
         exit_with(ExitCode.GENERAL_ERROR, f"Failed to load project: {e}")
     except FileNotFoundError:
@@ -633,15 +617,7 @@ def classify(
         progress.update(1.0, "Complete")
 
     # Save updated project
-    success = save_project(
-        filepath=project_file,
-        sources=sources,
-        clips=clips,
-        sequence=sequence,
-        ui_state=ui_state,
-        metadata=metadata,
-        audio_sources=audio_sources,
-    )
+    success = project.save()
 
     if not success:
         exit_with(ExitCode.GENERAL_ERROR, "Failed to save project")
@@ -715,7 +691,7 @@ def objects(
     """
     project_file = own_project(ctx, project_file)
     try:
-        from core.project import load_project, save_project, ProjectLoadError
+        from core.project import Project, ProjectLoadError
         from core.thumbnail import ThumbnailGenerator
         from core.analysis.detection import detect_objects
     except ImportError as e:
@@ -724,10 +700,10 @@ def objects(
     config = CLIConfig.load()
 
     try:
-        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(
-            filepath=project_file,
-            missing_source_callback=lambda path, sid: None,
+        project = Project.load(
+            project_file, missing_source_callback=lambda path, sid: None,
         )
+        sources, clips = project.sources, project.clips
     except ProjectLoadError as e:
         exit_with(ExitCode.GENERAL_ERROR, f"Failed to load project: {e}")
     except FileNotFoundError:
@@ -811,15 +787,7 @@ def objects(
         progress.update(1.0, "Complete")
 
     # Save updated project
-    success = save_project(
-        filepath=project_file,
-        sources=sources,
-        clips=clips,
-        sequence=sequence,
-        ui_state=ui_state,
-        metadata=metadata,
-        audio_sources=audio_sources,
-    )
+    success = project.save()
 
     if not success:
         exit_with(ExitCode.GENERAL_ERROR, "Failed to save project")
@@ -895,7 +863,7 @@ def people(
     """
     project_file = own_project(ctx, project_file)
     try:
-        from core.project import load_project, save_project, ProjectLoadError
+        from core.project import Project, ProjectLoadError
         from core.thumbnail import ThumbnailGenerator
         from core.analysis.detection import count_people
     except ImportError as e:
@@ -904,10 +872,10 @@ def people(
     config = CLIConfig.load()
 
     try:
-        sources, clips, sequence, metadata, ui_state, _, audio_sources = load_project(
-            filepath=project_file,
-            missing_source_callback=lambda path, sid: None,
+        project = Project.load(
+            project_file, missing_source_callback=lambda path, sid: None,
         )
+        sources, clips = project.sources, project.clips
     except ProjectLoadError as e:
         exit_with(ExitCode.GENERAL_ERROR, f"Failed to load project: {e}")
     except FileNotFoundError:
@@ -988,15 +956,7 @@ def people(
         progress.update(1.0, "Complete")
 
     # Save updated project
-    success = save_project(
-        filepath=project_file,
-        sources=sources,
-        clips=clips,
-        sequence=sequence,
-        ui_state=ui_state,
-        metadata=metadata,
-        audio_sources=audio_sources,
-    )
+    success = project.save()
 
     if not success:
         exit_with(ExitCode.GENERAL_ERROR, "Failed to save project")

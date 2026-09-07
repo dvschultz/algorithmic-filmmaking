@@ -275,10 +275,10 @@ class Sequence:
             p = Path(music_path)
             if not p.is_absolute():
                 resolved = (base_path / p).resolve()
-                music_path = str(resolved) if resolved.exists() else None
-                if not music_path:
+                music_path = str(resolved)
+                if not resolved.exists():
                     logger.warning(
-                        "Music file not found: %s", base_path / p
+                        "Keeping offline music reference: %s", base_path / p
                     )
 
         seq = cls(

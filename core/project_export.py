@@ -5,7 +5,6 @@ Creates a folder containing the project file and all referenced assets
 for portability.
 """
 
-import json
 import logging
 import re
 import shutil
@@ -13,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
-from core.project import save_project, Project
+from core.project import save_project, Project, ProjectSaveError
 from models.audio_source import AudioSource
 
 logger = logging.getLogger(__name__)
@@ -88,31 +87,6 @@ def _build_filename_map(
     return result
 
 
-def _strip_absolute_paths(project_json_path: Path) -> None:
-    """Remove _absolute_path fields from an exported project JSON file.
-
-    This ensures the bundle is truly portable — without these fields,
-    the loader won't fall back to original machine paths.
-    """
-    with open(project_json_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    def _remove_absolute_paths(obj):
-        if isinstance(obj, dict):
-            obj.pop("_absolute_path", None)
-            obj.pop("_thumbnail_absolute_path", None)
-            for value in obj.values():
-                _remove_absolute_paths(value)
-        elif isinstance(obj, list):
-            for item in obj:
-                _remove_absolute_paths(item)
-
-    _remove_absolute_paths(data)
-
-    with open(project_json_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-
-
 def export_project_bundle(
     project: Project,
     dest_dir: Path,
@@ -168,13 +142,16 @@ def export_project_bundle(
         source_paths = [s.file_path for s in project.sources]
         frame_paths = [f.file_path for f in project.frames]
         audio_paths = [a.file_path for a in project.audio_sources]
+        for sequence in project.sequences:
+            if sequence.music_path and Path(sequence.music_path) not in audio_paths:
+                audio_paths.append(Path(sequence.music_path))
 
         source_name_map = _build_filename_map(source_paths, "sources")
         frame_name_map = _build_filename_map(frame_paths, "frames")
         audio_name_map = _build_filename_map(audio_paths, "audio")
 
         # Count total files to process for progress
-        total_files = len(project.frames) + len(project.audio_sources)
+        total_files = len(project.frames) + len(audio_paths)
         if include_clips:
             total_files += len(project.clips)
         if include_videos:
@@ -205,27 +182,27 @@ def export_project_bundle(
                 progress_callback(current_file, total_files, frame.file_path.name)
 
         # Copy audio source files
-        for audio in project.audio_sources:
+        for audio_path in audio_paths:
             if cancel_check and cancel_check():
                 _cleanup_partial_bundle(dest_dir)
                 return result
 
-            bundle_rel = audio_name_map.get(audio.file_path)
+            bundle_rel = audio_name_map.get(audio_path)
             if bundle_rel is None:
                 continue
 
             dest_path = dest_dir / bundle_rel
-            if audio.file_path.exists():
-                shutil.copy2(audio.file_path, dest_path)
+            if audio_path.exists():
+                shutil.copy2(audio_path, dest_path)
                 result.audio_sources_copied += 1
-                result.total_bytes += audio.file_path.stat().st_size
+                result.total_bytes += audio_path.stat().st_size
             else:
-                result.audio_sources_skipped.append(str(audio.file_path))
-                logger.warning(f"Audio file missing, skipped: {audio.file_path}")
+                result.audio_sources_skipped.append(str(audio_path))
+                logger.warning(f"Audio file missing, skipped: {audio_path}")
 
             current_file += 1
             if progress_callback:
-                progress_callback(current_file, total_files, audio.file_path.name)
+                progress_callback(current_file, total_files, audio_path.name)
 
         # Export trimmed clips using FFmpeg
         if include_clips and project.clips:
@@ -329,10 +306,7 @@ def export_project_bundle(
         project_filename = f"{project_name}.sceneripper"
         project_path = dest_dir / project_filename
 
-        # save_project uses base_path = filepath.parent for relative paths.
-        # Since our rewritten sources already have paths like "sources/video.mp4",
-        # we pass base_path=None via to_dict to avoid double-relativizing.
-        # We write the JSON directly instead.
+        # Publish the complete portable document through the shared writer.
         _write_bundle_project_file(
             project_path,
             project,
@@ -340,10 +314,8 @@ def export_project_bundle(
             rewritten_frames,
             rewritten_audio_sources,
             rewritten_clips,
+            music_paths=audio_name_map,
         )
-
-        # Strip _absolute_path fields from the exported JSON
-        _strip_absolute_paths(project_path)
 
         if progress_callback:
             progress_callback(total_files, total_files, "Done")
@@ -436,6 +408,7 @@ def _write_bundle_project_file(
     rewritten_frames,
     rewritten_audio_sources,
     rewritten_clips,
+    music_paths: Optional[dict[Path, str]] = None,
 ) -> None:
     """Write the project JSON with rewritten paths.
 
@@ -443,16 +416,17 @@ def _write_bundle_project_file(
     function uses filepath.parent as base_path, so our rewritten paths
     (already relative like "sources/video.mp4") get stored correctly.
     """
-    save_project(
-        filepath=filepath,
-        sources=rewritten_sources,
-        clips=rewritten_clips,
-        sequence=project.sequence,
-        ui_state=project.ui_state,
-        metadata=project.metadata,
-        frames=rewritten_frames,
-        audio_sources=rewritten_audio_sources,
+    snapshot = project.snapshot_for_save()
+    for sequence in snapshot["extra_data"]["_all_sequences"]:
+        if sequence.music_path and music_paths:
+            sequence.music_path = music_paths.get(Path(sequence.music_path), sequence.music_path)
+    snapshot["extra_data"]["_portable"] = True
+    snapshot.update(
+        sources=rewritten_sources, clips=rewritten_clips,
+        frames=rewritten_frames, audio_sources=rewritten_audio_sources,
     )
+    if not save_project(filepath=filepath, **snapshot):
+        raise ProjectSaveError(f"Failed to save bundle project: {filepath}")
 
 
 def _cleanup_partial_bundle(dest_dir: Path) -> None:

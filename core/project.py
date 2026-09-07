@@ -88,7 +88,7 @@ def _prepare_prerendered_clips(
     only during serialization so in-memory state is never changed by save.
 
     Hard links are preferred (near-instant, no extra disk space).  Falls back to
-    shutil.copy2 when a hard link fails (e.g. cross-device).
+    an exclusive byte copy when a hard link fails (e.g. cross-device).
 
     If a destination filename already exists with different content, a numeric
     suffix is appended to avoid silent overwrites (e.g. ``name_2.mp4``).
@@ -124,20 +124,57 @@ def _prepare_prerendered_clips(
 
         # Handle filename collisions: if dest exists with different content,
         # pick a unique name by appending a numeric suffix.
-        dest = _unique_dest(src, dest)
-
         dest_dir.mkdir(parents=True, exist_ok=True)
 
-        # Skip if dest already has the right content (previous save / hard link)
-        if not dest.exists():
+        while True:
+            dest = _unique_dest(src, dest)
+            if dest.exists():
+                break  # Existing content was verified by _unique_dest.
             try:
                 os.link(src, dest)
+            except FileExistsError:
+                continue  # A competing publication won; choose again.
             except OSError:
-                shutil.copy2(src, dest)
+                try:
+                    output = dest.open("xb")
+                except FileExistsError:
+                    continue
+                try:
+                    with output, src.open("rb") as input_stream:
+                        shutil.copyfileobj(input_stream, output)
+                except BaseException:
+                    dest.unlink(missing_ok=True)
+                    raise
+            break
 
         mapping[clip.prerendered_path] = str(dest)
 
     return mapping
+
+
+def _strip_absolute_paths(data: Any) -> None:
+    """Remove machine-local fallbacks before publishing a portable document."""
+    if isinstance(data, dict):
+        data.pop("_absolute_path", None)
+        data.pop("_thumbnail_absolute_path", None)
+        for value in data.values():
+            _strip_absolute_paths(value)
+    elif isinstance(data, list):
+        for value in data:
+            _strip_absolute_paths(value)
+
+
+def _same_content(src: Path, dest: Path) -> bool:
+    """Compare media bytes without relying on file size as an identity."""
+    if src.samefile(dest):
+        return True
+    if src.stat().st_size != dest.stat().st_size:
+        return False
+    with src.open("rb") as left, dest.open("rb") as right:
+        while chunk := left.read(1024 * 1024):
+            if chunk != right.read(len(chunk)):
+                return False
+        return not right.read(1)
 
 
 def _unique_dest(src: Path, dest: Path) -> Path:
@@ -149,10 +186,7 @@ def _unique_dest(src: Path, dest: Path) -> Path:
     if not dest.exists():
         return dest
 
-    # Same size is a strong-enough proxy — these are FFmpeg outputs keyed by
-    # clip_id + transform flags so true collisions with identical size are
-    # virtually impossible.
-    if dest.stat().st_size == src.stat().st_size:
+    if _same_content(src, dest):
         return dest
 
     stem = dest.stem
@@ -161,7 +195,7 @@ def _unique_dest(src: Path, dest: Path) -> Path:
     counter = 2
     while True:
         candidate = parent / f"{stem}_{counter}{suffix}"
-        if not candidate.exists() or candidate.stat().st_size == src.stat().st_size:
+        if not candidate.exists() or _same_content(src, candidate):
             return candidate
         counter += 1
 
@@ -262,36 +296,45 @@ def _save_project_owned(
     if progress_callback:
         progress_callback(0.5, "Copying pre-rendered clips...")
 
-    prerender_map: dict[str, str] = {}
-    if sequence:
-        # When called from Project.save(), extra_data may contain Sequence objects
-        # for non-active sequences that also need prerendered clips processed.
-        additional_seqs = extra_data.get("_additional_sequences") if extra_data else None
-        prerender_map = _prepare_prerendered_clips(
-            sequence, base_path, additional_sequences=additional_seqs
-        )
-
-    # Serialize sequence — temporarily swap prerendered paths to project-local
-    # copies so that to_dict() writes the correct relative paths, then restore
-    # the originals so in-memory state is never permanently changed by save.
-    if progress_callback:
-        progress_callback(0.6, "Serializing sequence...")
-
-    if sequence:
-        originals: list[tuple["SequenceClip", Optional[str]]] = []  # noqa: F821
-        if prerender_map:
-            for clip in sequence.get_all_clips():
-                if clip.prerendered_path in prerender_map:
-                    originals.append((clip, clip.prerendered_path))
-                    clip.prerendered_path = prerender_map[clip.prerendered_path]
-        try:
-            project_data["sequence"] = sequence.to_dict(base_path=base_path)
-        finally:
-            # Restore original in-memory paths
-            for clip, original_path in originals:
-                clip.prerendered_path = original_path
+    all_sequences = extra_data.get("_all_sequences") if extra_data else None
+    if all_sequences is None:
+        all_sequences = [sequence] if sequence is not None else []
+        active_idx = 0
     else:
-        project_data["sequence"] = None
+        active_idx = (extra_data or {}).get("active_sequence_index", 0)
+    if all_sequences and not 0 <= active_idx < len(all_sequences):
+        logger.error("Cannot save project: invalid active sequence index")
+        return False
+
+    present_sequences = [item for item in all_sequences if item is not None]
+    prerender_map = (
+        _prepare_prerendered_clips(
+            present_sequences[0], base_path, additional_sequences=present_sequences[1:],
+        ) if present_sequences else {}
+    )
+
+    def serialize_sequence(item: Optional[Sequence]) -> Optional[dict]:
+        if item is None:
+            return None
+        originals = []
+        for clip in item.get_all_clips():
+            if clip.prerendered_path in prerender_map:
+                originals.append((clip, clip.prerendered_path))
+                clip.prerendered_path = prerender_map[clip.prerendered_path]
+        try:
+            return item.to_dict(base_path=base_path)
+        finally:
+            for clip, original in originals:
+                clip.prerendered_path = original
+
+    if progress_callback:
+        progress_callback(0.6, "Serializing sequences...")
+    project_data["sequences"] = [serialize_sequence(item) for item in all_sequences]
+    project_data["active_sequence_index"] = active_idx
+    # A derived compatibility projection, never merged with the destination.
+    project_data["sequence"] = (
+        project_data["sequences"][active_idx] if all_sequences else None
+    )
 
     # Serialize frames
     if frames:
@@ -311,47 +354,16 @@ def _save_project_owned(
     if ui_state:
         project_data["ui_state"] = ui_state
 
-    # Multi-sequence persistence
     if extra_data:
-        # Project.save() passes raw Sequence objects via _all_sequences.
-        # Serialize them HERE (after the prerender swap) so all sequences
-        # get correct project-relative prerendered_path values.
-        all_seqs = extra_data.get("_all_sequences")
-        active_idx = extra_data.get("active_sequence_index", 0)
-        if all_seqs is not None:
-            sequences_data = []
-            for i, s in enumerate(all_seqs):
-                if i == active_idx:
-                    # Use the already-serialized active sequence (has correct prerender paths)
-                    sequences_data.append(project_data.get("sequence"))
-                elif s:
-                    sequences_data.append(s.to_dict(base_path=base_path))
-                else:
-                    sequences_data.append(None)
-            project_data["sequences"] = sequences_data
-            project_data["active_sequence_index"] = active_idx
-        else:
-            # Fallback: strip internal keys and merge directly
-            write_data = {k: v for k, v in extra_data.items() if not k.startswith("_")}
-            project_data.update(write_data)
-    elif filepath.exists():
-        # MCP/CLI path: caller didn't pass extra_data but the file already has
-        # a "sequences" key. Read-modify-write: replace only the active entry
-        # so non-active sequences are preserved.
-        try:
-            with open(filepath, "r", encoding="utf-8") as f:
-                existing = json.load(f)
-            if isinstance(existing.get("sequences"), list):
-                active_idx = existing.get("active_sequence_index", 0)
-                seq_list = existing["sequences"]
-                if 0 <= active_idx < len(seq_list):
-                    seq_list[active_idx] = project_data.get("sequence")
-                    project_data["sequences"] = seq_list
-                    project_data["active_sequence_index"] = active_idx
-        except (json.JSONDecodeError, OSError, IOError):
-            pass  # Can't read existing file — just write what we have
+        project_data.update({
+            key: value for key, value in extra_data.items()
+            if not key.startswith("_") and key != "active_sequence_index"
+        })
 
     # Write to file atomically (write temp, then rename)
+    if extra_data and extra_data.get("_portable"):
+        _strip_absolute_paths(project_data)
+
     if progress_callback:
         progress_callback(0.8, "Writing file...")
 
@@ -1423,14 +1435,9 @@ class Project:
         """
         import copy
 
-        non_active = [
-            s for i, s in enumerate(self.sequences)
-            if i != self.active_sequence_index and s
-        ]
         extra_data = {
             "_all_sequences": list(self.sequences),
             "active_sequence_index": self.active_sequence_index,
-            "_additional_sequences": non_active,
         }
         return {
             "sources": copy.deepcopy(self._sources),
@@ -1465,17 +1472,8 @@ class Project:
         if save_path is None:
             raise ValueError("No path specified for save")
 
-        # Pass raw Sequence objects so save_project() can serialize them AFTER
-        # the prerender-path swap (ensures project-relative paths in all sequences).
-        non_active = [
-            s for i, s in enumerate(self.sequences)
-            if i != self.active_sequence_index and s
-        ]
-        extra_data = {
-            "_all_sequences": list(self.sequences),  # raw objects, serialized post-swap
-            "active_sequence_index": self.active_sequence_index,
-            "_additional_sequences": non_active,  # consumed by _prepare_prerendered_clips
-        }
+        generation = self.mutation_generation
+        snapshot = self.snapshot_for_save()
 
         from contextlib import nullcontext
 
@@ -1484,24 +1482,18 @@ class Project:
         try:
             with writer.activate() if writer else nullcontext():
                 success = save_project(
-                    filepath=save_path,
-                    sources=self._sources,
-                    clips=self._clips,
-                    sequence=self.sequence,
-                    ui_state=self.ui_state,
-                    metadata=self.metadata,
-                    progress_callback=progress_callback,
-                    frames=self._frames,
-                    extra_data=extra_data,
-                    audio_sources=self._audio_sources,
+                    filepath=save_path, progress_callback=progress_callback, **snapshot,
                 )
         finally:
             self.finish_save(writer, success)
 
         if success:
             self.path = writer.path if writer is not None else save_path
-            self.mark_clean()
-            self._notify_observers("project_saved", save_path)
+            self.metadata.version = snapshot["metadata"].version
+            self.metadata.modified_at = snapshot["metadata"].modified_at
+            if self.mutation_generation == generation:
+                self.mark_clean()
+            self._notify_observers("project_saved", self.path)
 
         return success
 

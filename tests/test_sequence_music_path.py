@@ -61,13 +61,13 @@ def test_music_path_resolved_from_base():
         assert seq.music_path == str(music.resolve())
 
 
-def test_music_path_missing_file_cleared():
-    """music_path is set to None if the file doesn't exist on load."""
+def test_music_path_missing_file_preserved():
+    """Offline music remains declared project data."""
     with tempfile.TemporaryDirectory() as tmpdir:
         base = Path(tmpdir)
         data = {"music_path": "audio/missing.mp3"}
         seq = Sequence.from_dict(data, base_path=base)
-        assert seq.music_path is None
+        assert seq.music_path == str((base / "audio/missing.mp3").resolve())
 
 
 def test_backward_compatible_load():

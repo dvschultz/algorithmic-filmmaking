@@ -435,7 +435,7 @@ class TestCLIAudioSourceProjectContract:
         return None
 
     def test_project_load_call_sites_unpack_audio_sources(self):
-        for filename in ("analyze.py", "export.py", "transcribe.py"):
+        for filename in ("export.py",):
             tree = self._parse_command_module(filename)
             load_assignments = [
                 node
@@ -450,24 +450,6 @@ class TestCLIAudioSourceProjectContract:
                 target = assignment.targets[0]
                 assert isinstance(target, ast.Tuple), f"{filename} load_project target must be tuple"
                 assert len(target.elts) == 7, f"{filename} must unpack audio_sources"
-
-    def test_mutating_cli_save_call_sites_preserve_audio_sources(self):
-        for filename in ("analyze.py", "transcribe.py"):
-            tree = self._parse_command_module(filename)
-            save_calls = [
-                node
-                for node in ast.walk(tree)
-                if isinstance(node, ast.Call)
-                and self._call_name(node) == "save_project"
-            ]
-
-            assert save_calls, f"{filename} should save project files"
-            for call in save_calls:
-                keyword_names = {keyword.arg for keyword in call.keywords}
-                assert "audio_sources" in keyword_names, (
-                    f"{filename} save_project must preserve audio_sources"
-                )
-
 
 class TestYouTubeCommands:
     """Tests for YouTube search and download commands."""

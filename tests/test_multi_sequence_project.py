@@ -468,28 +468,16 @@ class TestValidateProjectStructure:
         assert any("sequences[0]" in e for e in errors)
 
 
-class TestMCPReadModifyWrite:
-    """MCP/CLI callers using save_project() directly preserve non-active sequences."""
+class TestCompleteModelWrites:
+    """Mutators save the complete model, including non-active sequences."""
 
     def test_mcp_save_preserves_other_sequences(self, saved_project_with_sequences):
-        """When save_project() is called without extra_data on a v1.4 file,
-        it reads existing sequences and only replaces the active one."""
+        """Project.save preserves alternate sequences from the loaded model."""
         project_path, original = saved_project_with_sequences
 
-        # Simulate MCP: load with load_project(), modify the active sequence,
-        # then save back with save_project() (no extra_data)
-        sources, clips, sequence, metadata, ui_state, frames, _audio = load_project(project_path)
-
-        # MCP modifies the active sequence (clears it)
-        sequence.tracks[0].clips.clear()
-
-        save_project(
-            filepath=project_path,
-            sources=sources,
-            clips=clips,
-            sequence=sequence,
-            metadata=metadata,
-        )
+        project = Project.load(project_path)
+        project.clear_sequence()
+        assert project.save()
 
         # Reload and verify all 3 sequences are still there
         with open(project_path, "r") as f:
@@ -504,8 +492,7 @@ class TestMCPReadModifyWrite:
         assert len(data["sequences"][2]["tracks"][0]["clips"]) == 1
 
     def test_mcp_save_on_old_format_no_sequences_key(self, tmp_path):
-        """save_project() without extra_data on a file with no 'sequences' key
-        doesn't add one — preserves old format."""
+        """Standalone writes normalize legacy input to the current format."""
         project_path = tmp_path / "old.json"
         data = {
             "version": "1.3",
@@ -529,7 +516,7 @@ class TestMCPReadModifyWrite:
 
         with open(project_path, "r") as f:
             result = json.load(f)
-        assert "sequences" not in result
+        assert result["sequences"] == []
 
 class TestSourceInSequences:
     """Project.source_in_sequences() guards source deletion."""
