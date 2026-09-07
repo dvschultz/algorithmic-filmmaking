@@ -103,9 +103,22 @@ changing the provider conversation format.
 Shared ordered intention plans and the remaining analysis workflows are outstanding
 U7 work. This relay protects incoming chat signals; per-operation ownership of
 asynchronous GUI tool replies and worker-side project access still need migration.
-In particular, legacy completion handlers can still construct replies from shared
-pending fields; mailbox validation cannot distinguish a stale result relabeled
-with the current request token. Those senders need captured operation ownership.
+Standalone color, shot-type, description, classification, and object-detection
+completion handlers now capture a `GuiToolReply` when their worker is started.
+It retains the requesting chat, session, tool name, and transport token; completion
+does not read or clear another operation's pending fields. An owner-thread relay
+also verifies the analysis worker channel and session, ignores duplicate completion,
+and prevents old-thread cleanup from clearing a replacement worker. Direct GUI
+responses, plan display acknowledgments, and failed starts use captured replies.
+Dispatch stops follow-up work after a nested GUI event replaces the conversation;
+the five analysis starters recheck ownership after dependency availability gates.
+
+Transcription, detection/thumbnails, download batches, exports, and combined
+analysis completion still need this sender migration. Their legacy completion
+handlers can construct replies from shared pending fields; mailbox validation
+cannot distinguish a stale result relabeled with the current request token.
+Per-item analysis mutation delivery and full computation migration remain separate
+U7 work; this completion relay does not replace those operation implementations.
 
 Tests cover timeout/resolution forwarding, cancellation at each stage, invalid
 URLs, failure aggregation, frozen MCP submission arguments, actual intention

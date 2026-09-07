@@ -84,6 +84,9 @@ from ui.tabs import CollectTab, CutTab, AnalyzeTab, FramesTab, SequenceTab, Rend
 from ui.theme import theme, Spacing
 from ui.chat_panel import ChatPanel
 from ui.workers.chat_delivery import ChatDelivery, stop_chat_workers
+from ui.workers.gui_tool_reply import (
+    AgentAnalysisCompletion, GuiToolReply, gui_reply_scope,
+)
 from ui.chat_worker import ChatAgentWorker
 from ui.clip_browser import VIRTUALIZATION_THRESHOLD, clear_thumbnail_pixmap_cache
 from ui.clip_details_sidebar import ClipDetailsSidebar
@@ -2197,6 +2200,7 @@ class MainWindow(QMainWindow):
         import inspect
 
         logger.info(f"Executing GUI tool on main thread: {tool_name}")
+        reply = GuiToolReply.capture(self, tool_name, tool_call_id)
 
         tool = tool_registry.get(tool_name)
         if not tool or not tool.modifies_gui_state:
@@ -2229,18 +2233,26 @@ class MainWindow(QMainWindow):
                 if "main_window" in params:
                     args["main_window"] = self
 
-                tool_result = tool.func(**args)
+                with gui_reply_scope(self, reply):
+                    tool_result = tool.func(**args)
+                if not reply.is_current(self):
+                    return
 
                 # Check if tool needs to wait for async worker completion
                 if isinstance(tool_result, dict) and tool_result.get("_wait_for_worker"):
                     wait_type = tool_result["_wait_for_worker"]
                     logger.info(f"GUI tool {tool_name} waiting for worker: {wait_type}")
                     # Store tool_call_id for when worker completes
-                    self._pending_agent_tool_call_id = tool_call_id
-                    self._pending_agent_tool_name = tool_name
+                    if wait_type not in {
+                        "color_analysis", "shot_analysis", "description",
+                        "classification", "object_detection", "person_detection",
+                    }:
+                        self._pending_agent_tool_call_id = tool_call_id
+                        self._pending_agent_tool_name = tool_name
 
                     # Start the appropriate worker based on wait_type
-                    started = self._start_worker_for_tool(wait_type, tool_result)
+                    with gui_reply_scope(self, reply):
+                        started = self._start_worker_for_tool(wait_type, tool_result)
                     if not started:
                         # Worker couldn't start - likely already running
                         is_running = False
@@ -2271,17 +2283,17 @@ class MainWindow(QMainWindow):
                             "success": False,
                             "error": error_msg
                         }
-                        self._pending_agent_tool_call_id = None
-                        self._pending_agent_tool_name = None
-                        if self._chat_worker:
-                            self._chat_worker.set_gui_tool_result(result)
+                        if getattr(self, "_pending_agent_tool_call_id", None) == tool_call_id:
+                            self._pending_agent_tool_call_id = None
+                            self._pending_agent_tool_name = None
+                        reply.send(self, result)
                     # Don't call set_gui_tool_result yet - worker handler will do it
                     return
 
                 # Check if tool wants to display a plan widget
                 if isinstance(tool_result, dict) and tool_result.get("_display_plan"):
                     logger.info(f"GUI tool {tool_name} displaying plan widget")
-                    self._handle_display_plan(tool_result, tool_call_id)
+                    self._handle_display_plan(tool_result, tool_call_id, reply=reply)
                     return
 
                 # Handle special GUI actions based on tool results
@@ -2304,8 +2316,7 @@ class MainWindow(QMainWindow):
                 }
 
         # Send result back to worker thread
-        if self._chat_worker:
-            self._chat_worker.set_gui_tool_result(result)
+        reply.send(self, result)
 
     def _apply_gui_tool_side_effects(self, tool_name: str, args: dict, result: dict):
         """Apply GUI side effects after tool execution.
@@ -2462,7 +2473,9 @@ class MainWindow(QMainWindow):
     # Plan Execution Flow
     # =========================================================================
 
-    def _handle_display_plan(self, tool_result: dict, tool_call_id: str):
+    def _handle_display_plan(
+        self, tool_result: dict, tool_call_id: str, *, reply: GuiToolReply
+    ) -> None:
         """Handle the present_plan tool result by showing the plan widget.
 
         Args:
@@ -2499,7 +2512,7 @@ class MainWindow(QMainWindow):
                     "message": "Plan displayed. Waiting for user to confirm or edit."
                 }
             }
-            self._chat_worker.set_gui_tool_result(result)
+            reply.send(self, result)
 
     def _is_plan_confirmation(self, message: str) -> bool:
         """Check if a message is a plan confirmation.
@@ -4798,7 +4811,7 @@ class MainWindow(QMainWindow):
     # These are separate from manual handlers to allow independent tracking
 
     @Slot()
-    def _on_agent_color_analysis_finished(self):
+    def _on_agent_color_analysis_finished(self, *, reply: GuiToolReply | None = None) -> None:
         """Handle color analysis completion when triggered by agent."""
         logger.info("=== AGENT COLOR ANALYSIS FINISHED ===")
 
@@ -4821,7 +4834,7 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage(f"Color extraction complete - {clip_count} clips")
 
         # Send result back to agent
-        if self._pending_agent_color_analysis and self._chat_worker:
+        if self._pending_agent_color_analysis:
             self._pending_agent_color_analysis = False
             agent_result = self._build_agent_analysis_result(
                 clips,
@@ -4829,19 +4842,16 @@ class MainWindow(QMainWindow):
                 f"Extracted colors from {clip_count} clips",
             )
             result = {
-                "tool_call_id": self._pending_agent_tool_call_id,
-                "name": self._pending_agent_tool_name,
                 "success": True,
                 "result": agent_result,
             }
-            self._pending_agent_tool_call_id = None
-            self._pending_agent_tool_name = None
             self._agent_color_clips = []
-            self._chat_worker.set_gui_tool_result(result)
+            if reply is not None:
+                reply.send(self, result)
             logger.info(f"Sent color analysis result to agent: {clip_count} clips")
 
     @Slot()
-    def _on_agent_shot_analysis_finished(self):
+    def _on_agent_shot_analysis_finished(self, *, reply: GuiToolReply | None = None) -> None:
         """Handle shot type classification completion when triggered by agent."""
         logger.info("=== AGENT SHOT ANALYSIS FINISHED ===")
 
@@ -4872,7 +4882,7 @@ class MainWindow(QMainWindow):
             shot_types[st] = shot_types.get(st, 0) + 1
 
         # Send result back to agent
-        if self._pending_agent_shot_analysis and self._chat_worker:
+        if self._pending_agent_shot_analysis:
             self._pending_agent_shot_analysis = False
             agent_result = self._build_agent_analysis_result(
                 clips,
@@ -4881,15 +4891,12 @@ class MainWindow(QMainWindow):
                 {"shot_type_summary": shot_types},
             )
             result = {
-                "tool_call_id": self._pending_agent_tool_call_id,
-                "name": self._pending_agent_tool_name,
                 "success": True,
                 "result": agent_result,
             }
-            self._pending_agent_tool_call_id = None
-            self._pending_agent_tool_name = None
             self._agent_shot_clips = []
-            self._chat_worker.set_gui_tool_result(result)
+            if reply is not None:
+                reply.send(self, result)
             logger.info(f"Sent shot analysis result to agent: {clip_count} clips")
 
         # Update chat panel with project state
@@ -7639,6 +7646,10 @@ class MainWindow(QMainWindow):
         if self.color_worker and self.color_worker.isRunning():
             return False
 
+        request = getattr(self, "_dispatch_gui_reply", None)
+        if request is not None and not request.is_current(self):
+            return False
+
         # Reset guard
         self._color_analysis_finished_handled = False
 
@@ -7664,10 +7675,10 @@ class MainWindow(QMainWindow):
         self.color_worker.result_ready.connect(self._on_color_result)
         self.color_worker.job_started.connect(self._on_color_job_started)
         self.color_worker.error.connect(self._on_color_error)
-        self.color_worker.analysis_completed.connect(self._on_agent_color_analysis_finished, Qt.UniqueConnection)
-        # Clean up thread safely after it finishes
-        self.color_worker.finished.connect(self.color_worker.deleteLater)
-        self.color_worker.finished.connect(lambda: setattr(self, 'color_worker', None))
+        completion = AgentAnalysisCompletion(
+            self, self.color_worker, "color_worker", self._on_agent_color_analysis_finished
+        )
+        self.color_worker.analysis_completed.connect(completion.completed, Qt.UniqueConnection)
         self.color_worker.start()
 
         return True
@@ -7695,6 +7706,10 @@ class MainWindow(QMainWindow):
         if self.shot_type_worker and self.shot_type_worker.isRunning():
             return False
 
+        request = getattr(self, "_dispatch_gui_reply", None)
+        if request is not None and not request.is_current(self):
+            return False
+
         # Reset guard
         self._shot_type_finished_handled = False
         self._shot_type_run_error = None
@@ -7719,10 +7734,10 @@ class MainWindow(QMainWindow):
         self.shot_type_worker.progress.connect(self._on_shot_type_progress)
         self.shot_type_worker.shot_type_ready.connect(self._on_shot_type_ready)
         self.shot_type_worker.error.connect(self._on_shot_type_error)
-        self.shot_type_worker.analysis_completed.connect(self._on_agent_shot_analysis_finished, Qt.UniqueConnection)
-        # Clean up thread safely after it finishes
-        self.shot_type_worker.finished.connect(self.shot_type_worker.deleteLater)
-        self.shot_type_worker.finished.connect(lambda: setattr(self, 'shot_type_worker', None))
+        completion = AgentAnalysisCompletion(
+            self, self.shot_type_worker, "shot_type_worker", self._on_agent_shot_analysis_finished
+        )
+        self.shot_type_worker.analysis_completed.connect(completion.completed, Qt.UniqueConnection)
         self.shot_type_worker.start()
 
         return True
@@ -7821,6 +7836,10 @@ class MainWindow(QMainWindow):
         if self.classification_worker and self.classification_worker.isRunning():
             return False
 
+        request = getattr(self, "_dispatch_gui_reply", None)
+        if request is not None and not request.is_current(self):
+            return False
+
         # Reset guard
         self._classification_finished_handled = False
         self._reset_analysis_run_error("classify")
@@ -7845,10 +7864,10 @@ class MainWindow(QMainWindow):
         self.classification_worker.progress.connect(self._on_classification_progress)
         self.classification_worker.labels_ready.connect(self._on_classification_ready)
         self.classification_worker.error.connect(self._on_classification_error)
-        self.classification_worker.classification_completed.connect(self._on_agent_classification_finished, Qt.UniqueConnection)
-        # Clean up thread safely after it finishes
-        self.classification_worker.finished.connect(self.classification_worker.deleteLater)
-        self.classification_worker.finished.connect(lambda: setattr(self, 'classification_worker', None))
+        completion = AgentAnalysisCompletion(
+            self, self.classification_worker, "classification_worker", self._on_agent_classification_finished
+        )
+        self.classification_worker.classification_completed.connect(completion.completed, Qt.UniqueConnection)
         self.classification_worker.start()
 
         return True
@@ -7878,6 +7897,10 @@ class MainWindow(QMainWindow):
         if self.detection_worker_yolo and self.detection_worker_yolo.isRunning():
             return False
 
+        request = getattr(self, "_dispatch_gui_reply", None)
+        if request is not None and not request.is_current(self):
+            return False
+
         # Reset guard
         self._object_detection_finished_handled = False
         self._reset_analysis_run_error("detect_objects")
@@ -7905,10 +7928,10 @@ class MainWindow(QMainWindow):
         self.detection_worker_yolo.progress.connect(self._on_object_detection_progress)
         self.detection_worker_yolo.objects_ready.connect(self._on_objects_ready)
         self.detection_worker_yolo.error.connect(self._on_object_detection_error)
-        self.detection_worker_yolo.detection_completed.connect(self._on_agent_object_detection_finished, Qt.UniqueConnection)
-        # Clean up thread safely after it finishes
-        self.detection_worker_yolo.finished.connect(self.detection_worker_yolo.deleteLater)
-        self.detection_worker_yolo.finished.connect(lambda: setattr(self, 'detection_worker_yolo', None))
+        completion = AgentAnalysisCompletion(
+            self, self.detection_worker_yolo, "detection_worker_yolo", self._on_agent_object_detection_finished
+        )
+        self.detection_worker_yolo.detection_completed.connect(completion.completed, Qt.UniqueConnection)
         self.detection_worker_yolo.start()
 
         return True
@@ -7936,6 +7959,10 @@ class MainWindow(QMainWindow):
 
         # Check if worker already running
         if self.description_worker and self.description_worker.isRunning():
+            return False
+
+        request = getattr(self, "_dispatch_gui_reply", None)
+        if request is not None and not request.is_current(self):
             return False
 
         # Reset guard
@@ -7966,10 +7993,10 @@ class MainWindow(QMainWindow):
         self.description_worker.progress.connect(self._on_description_progress)
         self.description_worker.description_ready.connect(self._on_description_ready)
         self.description_worker.error.connect(self._on_description_error)
-        self.description_worker.description_completed.connect(self._on_agent_description_finished, Qt.UniqueConnection)
-        # Clean up thread safely after it finishes
-        self.description_worker.finished.connect(self.description_worker.deleteLater)
-        self.description_worker.finished.connect(lambda: setattr(self, 'description_worker', None))
+        completion = AgentAnalysisCompletion(
+            self, self.description_worker, "description_worker", self._on_agent_description_finished
+        )
+        self.description_worker.description_completed.connect(completion.completed, Qt.UniqueConnection)
         self.description_worker.start()
 
         return True
@@ -8007,7 +8034,7 @@ class MainWindow(QMainWindow):
             logger.debug(f"Description for frame {clip_id}: {description[:50]}...")
 
     @Slot()
-    def _on_agent_description_finished(self):
+    def _on_agent_description_finished(self, *, reply: GuiToolReply | None = None) -> None:
         """Handle description completion when triggered by agent."""
         logger.info("=== AGENT DESCRIPTION FINISHED ===")
 
@@ -8076,16 +8103,12 @@ class MainWindow(QMainWindow):
                         "description": clip.description,
                     })
 
-            if self._chat_worker:
+            if reply is not None:
                 result = {
-                    "tool_call_id": self._pending_agent_tool_call_id,
-                    "name": self._pending_agent_tool_name,
                     "success": result["success"],
                     "result": result
                 }
-                self._pending_agent_tool_call_id = None
-                self._pending_agent_tool_name = None
-                self._chat_worker.set_gui_tool_result(result)
+                reply.send(self, result)
                 logger.info(f"Sent description result to agent: {described_count}/{len(clips)} clips, {error_count} errors")
 
     @Slot(int, int)
@@ -8127,7 +8150,7 @@ class MainWindow(QMainWindow):
             )
 
     @Slot()
-    def _on_agent_classification_finished(self):
+    def _on_agent_classification_finished(self, *, reply: GuiToolReply | None = None) -> None:
         """Handle classification completion when triggered by agent."""
         logger.info("=== AGENT CLASSIFICATION FINISHED ===")
 
@@ -8175,16 +8198,12 @@ class MainWindow(QMainWindow):
                         "labels": clip.object_labels[:5],
                     })
 
-            if self._chat_worker:
+            if reply is not None:
                 result = {
-                    "tool_call_id": self._pending_agent_tool_call_id,
-                    "name": self._pending_agent_tool_name,
                     "success": True,
                     "result": result
                 }
-                self._pending_agent_tool_call_id = None
-                self._pending_agent_tool_name = None
-                self._chat_worker.set_gui_tool_result(result)
+                reply.send(self, result)
                 logger.info(f"Sent classification result to agent: {classified_count}/{len(clips)} clips")
 
     @Slot(int, int)
@@ -8289,7 +8308,7 @@ class MainWindow(QMainWindow):
             logger.debug(f"Detection for frame {clip_id}: {len(detections)} objects, {person_count} people")
 
     @Slot()
-    def _on_agent_object_detection_finished(self):
+    def _on_agent_object_detection_finished(self, *, reply: GuiToolReply | None = None) -> None:
         """Handle object detection completion when triggered by agent."""
         logger.info("=== AGENT OBJECT DETECTION FINISHED ===")
 
@@ -8343,16 +8362,12 @@ class MainWindow(QMainWindow):
                 result,
             )
 
-            if self._chat_worker:
+            if reply is not None:
                 result = {
-                    "tool_call_id": self._pending_agent_tool_call_id,
-                    "name": self._pending_agent_tool_name,
                     "success": True,
                     "result": result
                 }
-                self._pending_agent_tool_call_id = None
-                self._pending_agent_tool_name = None
-                self._chat_worker.set_gui_tool_result(result)
+                reply.send(self, result)
                 logger.info(f"Sent object detection result to agent: {detected_count}/{len(clips)} clips")
 
     # ==================== Intention-First Workflow ====================
