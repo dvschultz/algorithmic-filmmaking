@@ -16,6 +16,7 @@ from models.audio_source import AudioSource
 from models.clip import Source, Clip
 from models.frame import Frame
 from models.sequence import Sequence, SequenceClip
+from core.project_lock import ProjectWriter
 from core.project_migrations import (
     SCHEMA_VERSION, is_future_schema, migrate_project_data, prepare_project_write,
 )
@@ -690,6 +691,9 @@ class Project:
             active_sequence_index: Index of the active sequence in the list
             audio_sources: List of imported audio files (not cut into clips)
         """
+        self._retain_writer = False
+        self._writer: Optional[ProjectWriter] = None
+        self._pending_writer: Optional[ProjectWriter] = None
         self.path = path
         self.metadata = metadata or ProjectMetadata()
         self._sources = sources or []
@@ -1363,6 +1367,52 @@ class Project:
 
     # --- Persistence ---
 
+    @property
+    def save_in_progress(self) -> bool:
+        return self._pending_writer is not None
+
+    def prepare_save(self, path: Path) -> Optional[ProjectWriter]:
+        """Acquire a destination while retaining the current session lease."""
+        from core.project_lock import ProjectWriter
+
+        if self._retain_writer:
+            self.session.assert_owner()
+        if self._pending_writer is not None:
+            raise RuntimeError("Project save already in progress")
+        if not self._retain_writer:
+            return None
+        canonical = Path(path).expanduser().resolve()
+        writer = self._writer
+        if writer is None or writer.path != canonical:
+            writer = ProjectWriter(canonical).acquire()
+        self._pending_writer = writer
+        return writer
+
+    def finish_save(self, writer: Optional[ProjectWriter], success: bool) -> None:
+        """Commit or discard the destination lease after a save operation."""
+        if writer is None:
+            return
+        self.session.assert_owner()
+        if writer is not self._pending_writer:
+            raise RuntimeError("Save does not belong to this project")
+        if success:
+            if self._writer is not None and self._writer is not writer:
+                self._writer.close()
+            self._writer = writer
+        elif writer is not self._writer:
+            writer.close()
+        self._pending_writer = None
+
+    def close_writer(self) -> None:
+        """Release session ownership only after pending saves have settled."""
+        if self._retain_writer:
+            self.session.assert_owner()
+        if self._pending_writer is not None:
+            raise RuntimeError("Project save already in progress")
+        if self._writer is not None:
+            self._writer.close()
+            self._writer = None
+
     def snapshot_for_save(self) -> dict:
         """Return a deep-copied snapshot of all save-relevant project state.
 
@@ -1409,6 +1459,7 @@ class Project:
 
         Raises:
             ValueError: If no path specified and project has no path
+            ProjectBusyError: If a retained session cannot acquire its destination
         """
         save_path = path or self.path
         if save_path is None:
@@ -1426,21 +1477,29 @@ class Project:
             "_additional_sequences": non_active,  # consumed by _prepare_prerendered_clips
         }
 
-        success = save_project(
-            filepath=save_path,
-            sources=self._sources,
-            clips=self._clips,
-            sequence=self.sequence,
-            ui_state=self.ui_state,
-            metadata=self.metadata,
-            progress_callback=progress_callback,
-            frames=self._frames,
-            extra_data=extra_data,
-            audio_sources=self._audio_sources,
-        )
+        from contextlib import nullcontext
+
+        writer = self.prepare_save(save_path)
+        success = False
+        try:
+            with writer.activate() if writer else nullcontext():
+                success = save_project(
+                    filepath=save_path,
+                    sources=self._sources,
+                    clips=self._clips,
+                    sequence=self.sequence,
+                    ui_state=self.ui_state,
+                    metadata=self.metadata,
+                    progress_callback=progress_callback,
+                    frames=self._frames,
+                    extra_data=extra_data,
+                    audio_sources=self._audio_sources,
+                )
+        finally:
+            self.finish_save(writer, success)
 
         if success:
-            self.path = save_path
+            self.path = writer.path if writer is not None else save_path
             self.mark_clean()
             self._notify_observers("project_saved", save_path)
 
@@ -1452,6 +1511,8 @@ class Project:
         path: Path,
         missing_source_callback: Optional[Callable[[Path, str], Optional[Path]]] = None,
         progress_callback: Optional[Callable[[float, str], None]] = None,
+        *,
+        retain_writer: bool = False,
     ) -> "Project":
         """Load project from file.
 
@@ -1459,6 +1520,7 @@ class Project:
             path: Path to the project file
             missing_source_callback: Callback when source video is missing
             progress_callback: Optional progress callback
+            retain_writer: Acquire before loading and retain ownership for editing
 
         Returns:
             Loaded Project instance
@@ -1466,6 +1528,19 @@ class Project:
         Raises:
             ProjectLoadError: If the project file cannot be loaded
         """
+        if retain_writer:
+            from core.project_lock import ProjectWriter
+
+            writer = ProjectWriter(path).acquire()
+            try:
+                project = cls.load(writer.path, missing_source_callback, progress_callback)
+                project._retain_writer = True
+                project._writer = writer
+                return project
+            except BaseException:
+                writer.close()
+                raise
+
         # First, read the raw JSON to extract multi-sequence data (if present)
         # before load_project() processes it into the standard 6-tuple.
         sequences_list = None
@@ -1547,20 +1622,24 @@ class Project:
         return project
 
     @classmethod
-    def new(cls, name: str = "Untitled Project") -> "Project":
+    def new(cls, name: str = "Untitled Project", *, retain_writer: bool = False) -> "Project":
         """Create a new empty project.
 
         Args:
             name: Project name
+            retain_writer: Keep ownership after the first successful save
 
         Returns:
             New empty Project instance
         """
-        return cls(metadata=ProjectMetadata(name=name), sequences=[Sequence()])
+        project = cls(metadata=ProjectMetadata(name=name), sequences=[Sequence()])
+        project._retain_writer = retain_writer
+        return project
 
     def clear(self) -> None:
         """Clear all project data (for 'New Project')."""
         self.session.assert_owner()
+        self.close_writer()
         self._sources = []
         self._clips = []
         self._frames = []

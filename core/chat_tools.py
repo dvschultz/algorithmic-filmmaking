@@ -2122,15 +2122,25 @@ def load_project(path: str, main_window=None) -> dict:
     if main_window is None:
         return {"success": False, "error": "Cannot load project: main window not available"}
 
+    if main_window.project.save_in_progress:
+        return {"success": False, "error": "Project save already in progress"}
+    if main_window.project.path and main_window.project.path.resolve() == validated_path.resolve():
+        return {"success": True, "path": str(validated_path), "message": "Project is already open"}
+
     try:
         # Load the project
-        new_project = Project.load(validated_path)
+        new_project = Project.load(validated_path, retain_writer=True)
 
         if not new_project.sources:
+            new_project.close_writer()
             return {"success": False, "error": "No valid sources found in project"}
 
         # Clear existing UI state
-        main_window._clear_project_state()
+        try:
+            main_window._clear_project_state()
+        except BaseException:
+            new_project.close_writer()
+            raise
 
         # Rebind history as well as the model projection on the agent path.
         main_window.project.session.close()
@@ -2155,7 +2165,8 @@ def load_project(path: str, main_window=None) -> dict:
         return {"success": False, "error": f"Missing source video: {e.source_path}"}
     except Exception as e:
         logger.exception("Failed to load project")
-        return {"success": False, "error": str(e)}
+        from core.spine.project_io import project_error
+        return {"success": False, "error": project_error(e)}
 
 
 @tools.register(
@@ -2167,6 +2178,9 @@ def new_project(name: str = "Untitled Project", main_window=None) -> dict:
     """Create a new empty project."""
     if main_window is None:
         return {"success": False, "error": "Cannot create project: main window not available"}
+
+    if main_window.project.save_in_progress:
+        return {"success": False, "error": "Project save already in progress"}
 
     # Clear all existing project state
     main_window._clear_project_state()

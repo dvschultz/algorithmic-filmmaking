@@ -841,7 +841,7 @@ class MainWindow(QMainWindow):
         theme().set_preference(self.settings.theme_preference)
 
         # Project state - single source of truth
-        self.project = Project.new()
+        self.project = Project.new(retain_writer=True)
         self._project_adapter = ProjectSignalAdapter(self.project, self)
 
         # Connect project adapter signals for view synchronization
@@ -10243,7 +10243,12 @@ class MainWindow(QMainWindow):
 
         if not asynchronous:
             started = time.perf_counter()
-            success = self.project.save(filepath)
+            try:
+                success = self.project.save(filepath)
+            except (OSError, RuntimeError) as exc:
+                QMessageBox.warning(self, "Save Project", str(exc))
+                self.status_bar.showMessage("Save failed")
+                return
             logger.info(
                 "Saved project to %s in %.2fs",
                 filepath,
@@ -10262,15 +10267,33 @@ class MainWindow(QMainWindow):
         self.save_project_as_action.setEnabled(False)
         # Snapshot project state at dispatch time so main-thread mutations
         # while the worker runs cannot corrupt the on-disk file.
-        snapshot = self.project.snapshot_for_save()
+        try:
+            snapshot = self.project.snapshot_for_save()
+            writer = self.project.prepare_save(filepath)
+        except Exception as exc:
+            self.save_project_action.setEnabled(True)
+            self.save_project_as_action.setEnabled(True)
+            QMessageBox.warning(self, "Save Project", str(exc))
+            self.status_bar.showMessage("Save failed")
+            return
         self._save_project_context = {
             "project": self.project,
             "mutation_generation": self.project.mutation_generation,
             "filepath": filepath,
+            "writer": writer,
         }
-        self.save_worker = SaveProjectWorker(snapshot, filepath)
-        self.save_worker.save_finished.connect(self._on_project_save_finished)
-        self.save_worker.start()
+        try:
+            self.save_worker = SaveProjectWorker(snapshot, filepath, writer=writer)
+            self.save_worker.save_finished.connect(self._on_project_save_finished)
+            self.save_worker.start()
+        except Exception as exc:
+            self.project.finish_save(writer, False)
+            self._save_project_context = None
+            self.save_worker = None
+            self.save_project_action.setEnabled(True)
+            self.save_project_as_action.setEnabled(True)
+            QMessageBox.warning(self, "Save Project", str(exc))
+            self.status_bar.showMessage("Save failed")
 
     def _on_project_save_finished(self, success: bool, filepath_str: str, error: str):
         """Handle completion of a background project save."""
@@ -10279,8 +10302,18 @@ class MainWindow(QMainWindow):
         self.save_project_as_action.setEnabled(True)
         save_context = self._save_project_context
         self._save_project_context = None
+        if self.save_worker and self.save_worker.isRunning():
+            # Completion is emitted after saving and returning the borrowed
+            # lease. Retain the QThread until its run method has returned.
+            self.save_worker.wait()
         self.save_worker = None
         stale_save = False
+        if save_context:
+            saved_project = save_context["project"]
+            writer = save_context.get("writer")
+            saved_project.finish_save(writer, success and saved_project is self.project)
+            if success and writer is not None and saved_project is self.project:
+                self.project.path = writer.path
         if success:
             # The worker only writes the snapshot to disk; the live Project
             # bookkeeping (path + dirty flag + project_saved notification)
@@ -10298,7 +10331,8 @@ class MainWindow(QMainWindow):
                     filepath,
                 )
             else:
-                self.project.path = filepath
+                writer = save_context.get("writer")
+                self.project.path = writer.path if writer is not None else filepath
                 self.project.mark_clean()
                 try:
                     self.project._notify_observers("project_saved", filepath)
@@ -10321,6 +10355,12 @@ class MainWindow(QMainWindow):
 
     def _load_project_file(self, filepath: Path):
         """Load project from the specified file."""
+        if self.project.save_in_progress:
+            self.status_bar.showMessage("Wait for the current save to finish")
+            return
+        if self.project.path and self.project.path.resolve() == filepath.expanduser().resolve():
+            self.status_bar.showMessage("Project is already open")
+            return
         self.status_bar.showMessage("Loading project...")
 
         def handle_missing_source(missing_path: Path, source_id: str) -> Optional[Path]:
@@ -10351,13 +10391,15 @@ class MainWindow(QMainWindow):
             loaded_project = Project.load(
                 filepath,
                 missing_source_callback=handle_missing_source,
+                retain_writer=True,
             )
-        except ProjectLoadError as e:
+        except (ProjectLoadError, OSError) as e:
             QMessageBox.warning(self, "Load Project", f"Failed to load project:\n{e}")
             self.status_bar.showMessage("Load failed")
             return
 
         if not loaded_project.sources:
+            loaded_project.close_writer()
             QMessageBox.warning(
                 self,
                 "Load Project",
@@ -10367,7 +10409,11 @@ class MainWindow(QMainWindow):
             return
 
         # Clear existing UI state
-        self._clear_project_state()
+        try:
+            self._clear_project_state()
+        except BaseException:
+            loaded_project.close_writer()
+            raise
 
         # Set the new project
         self.project.session.close()
@@ -10764,6 +10810,9 @@ class MainWindow(QMainWindow):
         Returns:
             True if safe to proceed, False if user cancelled.
         """
+        if self.project.save_in_progress or self._save_project_context is not None:
+            self.status_bar.showMessage("Wait for the current save to finish")
+            return False
         if not self._is_dirty:
             return True
 
@@ -10798,6 +10847,7 @@ class MainWindow(QMainWindow):
 
         if os.environ.get("SCENE_RIPPER_STARTUP_SMOKE_TEST") == "1":
             logger.info("Skipping native shutdown during startup smoke test")
+            self.project.close_writer()
             event.accept()
             return
 
@@ -10850,4 +10900,5 @@ class MainWindow(QMainWindow):
 
             shutdown_windows_updater()
 
+        self.project.close_writer()
         event.accept()

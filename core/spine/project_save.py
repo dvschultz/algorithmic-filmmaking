@@ -56,7 +56,8 @@ def save_project(project, path: Optional[str] = None) -> dict:
     try:
         success = project.save(path=save_path)
     except Exception as e:  # pragma: no cover - defensive
-        return {"success": False, "error": str(e)}
+        from core.spine.project_io import project_error
+        return {"success": False, "error": project_error(e)}
 
     if success:
         return {

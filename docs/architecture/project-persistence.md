@@ -62,9 +62,8 @@ Borrow permission expires when the operation exits, including in copied
 contexts. Concurrent borrowing and closing an active lease fail immediately.
 `SaveProjectWorker` accepts an optional writer and verifies that it owns the
 destination. Success and failure release the borrow before emitting completion,
-while the original session lease remains held. Desktop lifecycle wiring must
-pass this lease and close it only after worker completion; that wiring remains
-outstanding below.
+while the original session lease remains held. The desktop passes this lease
+and settles ownership only after worker completion.
 
 Every shared project save holds ownership while serializing and replacing the
 file. MCP mutations additionally acquire it before loading and retain it through
@@ -82,9 +81,19 @@ and returns a structured `project_busy` detection error. Other mutating CLI
 commands exit with status 1 on contention and return the structured error in
 JSON mode. Read-only project inspection and export do not acquire ownership.
 
-Desktop ownership for an entire open editing session remains to be implemented.
-Save-only locking cannot detect
-a stale document loaded before another writer completed. Keep the desktop
-project closed while MCP edits it. The mtime check remains a supplementary
+Desktop projects use `Project.new(retain_writer=True)` and
+`Project.load(..., retain_writer=True)`. Loading acquires before reading; new
+projects acquire before their first save. Closing or clearing releases the
+session lease. Save As holds the original and destination until the write
+finishes: failure releases only the destination, while success transfers
+ownership. Newer edits during an asynchronous save stay dirty and retain the
+successful Save As destination. Pending saves block New, Open, and Close,
+including agent project replacement. Opening the already-open canonical path
+returns without reloading. Agent saves use the same model ownership path.
+
+Plain `Project.load()` remains a non-owning inspection API; callers intending
+to mutate must use a retained session or a surrounding headless writer scope.
+Save-only locking cannot detect a stale document loaded before another writer
+completed. The mtime check remains a supplementary
 diagnostic with a one-second tolerance; it does not replace lifetime ownership
 and does not prevent writes by applications that ignore these locks.

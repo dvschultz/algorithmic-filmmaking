@@ -3,8 +3,8 @@
 Mutation callers hold ``project_writer`` from before loading through saving.
 The shared save helper reuses that scope. Its short save-only scope does not
 protect a document loaded earlier by a caller without lifetime ownership.
-MCP and CLI mutations hold that lifetime scope. Desktop open-session ownership
-remains separate work; keep the GUI closed when MCP drives its project.
+MCP and CLI mutations hold that lifetime scope. Desktop projects retain a
+session lease from load or first save through project replacement or close.
 """
 
 from __future__ import annotations

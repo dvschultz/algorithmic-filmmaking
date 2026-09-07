@@ -56,7 +56,7 @@ class _SaveCompletionWindowStub:
     def __init__(self, project: Project, context: dict | None):
         self.project = project
         self._save_project_context = context
-        self.save_worker = SimpleNamespace()
+        self.save_worker = SimpleNamespace(isRunning=lambda: False)
         self.save_project_action = _ActionStub()
         self.save_project_as_action = _ActionStub()
         self.status_bar = _StatusBarStub()
@@ -330,3 +330,77 @@ def test_save_worker_rejects_writer_for_another_destination(qapp, tmp_path):
         worker.run()
         assert received and not received[0][0]
         assert not target.exists()
+
+
+def test_owned_async_save_as_keeps_new_path_and_newer_edits(
+    qapp, tmp_path, monkeypatch
+):
+    from core.project_lock import ProjectBusyError, ProjectWriter
+    from ui.main_window import MainWindow, SaveProjectWorker
+
+    project = _make_project_with_clip(tmp_path)
+    project._retain_writer = True
+    old, target = tmp_path / "old.sceneripper", tmp_path / "new.sceneripper"
+    assert project.save(old)
+    window = _SaveCompletionWindowStub(project, None)
+    window.save_worker = None
+    window.sequence_tab = SimpleNamespace(_persist_current_sequence=lambda: None)
+    window.analyze_tab = SimpleNamespace(get_clip_ids=lambda: [])
+    window._on_project_save_finished = (
+        lambda *args: MainWindow._on_project_save_finished(window, *args)
+    )
+
+    def start(worker):
+        for path in (old, target):
+            with pytest.raises(ProjectBusyError):
+                with ProjectWriter(path):
+                    pass
+        project.rename("Newer edit")
+        worker.run()
+
+    monkeypatch.setattr(SaveProjectWorker, "start", start)
+    try:
+        MainWindow._save_project_to_file(window, target)
+        assert project.path == target
+        assert project.is_dirty
+        assert not project.save_in_progress
+        with ProjectWriter(old):
+            pass
+        with pytest.raises(ProjectBusyError):
+            with ProjectWriter(target):
+                pass
+    finally:
+        project.close_writer()
+
+
+def test_owned_worker_start_failure_preserves_old_project(qapp, tmp_path, monkeypatch):
+    from core.project_lock import ProjectBusyError, ProjectWriter
+    from ui.main_window import MainWindow, SaveProjectWorker, QMessageBox
+
+    project = _make_project_with_clip(tmp_path)
+    project._retain_writer = True
+    old, target = tmp_path / "old.sceneripper", tmp_path / "new.sceneripper"
+    assert project.save(old)
+    window = _SaveCompletionWindowStub(project, None)
+    window.save_worker = None
+    window.sequence_tab = SimpleNamespace(_persist_current_sequence=lambda: None)
+    window.analyze_tab = SimpleNamespace(get_clip_ids=lambda: [])
+    window._on_project_save_finished = lambda *args: None
+
+    def fail(worker):
+        raise RuntimeError("cannot start worker")
+
+    monkeypatch.setattr(SaveProjectWorker, "start", fail)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: None)
+    try:
+        MainWindow._save_project_to_file(window, target)
+        assert project.path == old
+        assert not project.save_in_progress
+        assert window._save_project_context is None
+        with ProjectWriter(target):
+            pass
+        with pytest.raises(ProjectBusyError):
+            with ProjectWriter(old):
+                pass
+    finally:
+        project.close_writer()
