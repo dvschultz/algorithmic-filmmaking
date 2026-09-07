@@ -81,7 +81,7 @@ class DescriptionWorker(CancellableWorker):
         self._parallelism = 1 if self._tier == "local" else requested_parallelism
         self.error_count = 0
         self.success_count = 0
-        self.last_error = None
+        self.last_error: Optional[str] = None
         if analysis_targets:
             self._tasks = self._build_tasks_from_targets(
                 analysis_targets, skip_existing
@@ -195,15 +195,23 @@ class DescriptionWorker(CancellableWorker):
 
         return task.clip_id, None, None, last_error
 
-    def run(self):
+    def run(self) -> None:
         """Execute description generation on all clips."""
         self._log_start()
+        try:
+            self._run_descriptions()
+        finally:
+            self.description_completed.emit()
+            self._log_complete()
+
+    def _run_descriptions(self) -> None:
+        if self.is_cancelled():
+            self._log_cancelled()
+            return
 
         total = len(self._tasks)
         if total == 0:
             logger.info("No clips to process for descriptions")
-            self.description_completed.emit()
-            self._log_complete()
             return
 
         logger.info(
@@ -212,8 +220,7 @@ class DescriptionWorker(CancellableWorker):
         )
 
         # Pre-load local VLM model so user sees download status
-        settings = load_settings()
-        if settings.description_model_tier == "local":
+        if self._tier == "local":
             try:
                 from core.analysis.description import is_model_loaded, _load_local_model
 
@@ -221,8 +228,15 @@ class DescriptionWorker(CancellableWorker):
                     self.progress.emit(0, total)
                     _load_local_model()
             except Exception as e:
-                self.error.emit(f"Failed to load local VLM: {e}")
-                self._log_complete()
+                if self.is_cancelled():
+                    self._log_cancelled()
+                    return
+                message = f"Failed to load local VLM: {e}"
+                self.last_error = message
+                for task in self._tasks:
+                    self.error_count += 1
+                    self._log_error(message, task.clip_id)
+                    self.error.emit(task.clip_id, message)
                 return
 
         if self.is_cancelled():
@@ -271,5 +285,3 @@ class DescriptionWorker(CancellableWorker):
             f"DescriptionWorker.run() completed: "
             f"{self.success_count} success, {self.error_count} errors"
         )
-        self.description_completed.emit()
-        self._log_complete()

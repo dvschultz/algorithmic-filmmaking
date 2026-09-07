@@ -785,6 +785,117 @@ class TestDescriptionWorkerTaskBuilding:
         assert len(worker._tasks) == 0
 
 
+class TestDescriptionWorkerLifecycle:
+    @pytest.mark.parametrize("tier", ["local", "cpu", "gpu"])
+    def test_preload_failure_reports_each_target_and_completes(
+        self, monkeypatch, thumbnail_path, tier
+    ):
+        from ui.workers.description_worker import DescriptionWorker
+
+        worker = DescriptionWorker(
+            [_make_clip_with_thumb(cid, thumbnail_path) for cid in ("clip-1", "clip-2")],
+            tier=tier,
+        )
+        monkeypatch.setattr("core.analysis.description.is_model_loaded", lambda: False)
+
+        def fail():
+            raise RuntimeError("model unavailable")
+
+        monkeypatch.setattr("core.analysis.description._load_local_model", fail)
+        errors, completed = [], []
+        worker.error.connect(lambda cid, message: errors.append((cid, message)))
+        worker.description_completed.connect(lambda: completed.append(True))
+        worker.run()
+        assert errors == [
+            (cid, "Failed to load local VLM: model unavailable")
+            for cid in ("clip-1", "clip-2")
+        ]
+        assert worker.error_count == 2
+        assert worker.last_error == errors[0][1]
+        assert completed == [True]
+
+    @pytest.mark.parametrize("cancel_during_load", [False, True])
+    def test_cancel_completes_without_inference(
+        self, monkeypatch, thumbnail_path, cancel_during_load
+    ):
+        from ui.workers.description_worker import DescriptionWorker
+
+        worker = DescriptionWorker(
+            [_make_clip_with_thumb("clip-1", thumbnail_path)], tier="local"
+        )
+        loaded, completed = [], []
+
+        def load():
+            loaded.append(True)
+            worker.cancel()
+
+        monkeypatch.setattr("core.analysis.description.is_model_loaded", lambda: False)
+        monkeypatch.setattr("core.analysis.description._load_local_model", load)
+        monkeypatch.setattr(worker, "_process_task", lambda _: pytest.fail("inference"))
+        worker.description_completed.connect(lambda: completed.append(True))
+        if not cancel_during_load:
+            worker.cancel()
+        worker.run()
+        assert loaded == ([True] if cancel_during_load else [])
+        assert completed == [True]
+
+    def test_cloud_override_does_not_preload_local_settings(
+        self, monkeypatch, thumbnail_path
+    ):
+        from types import SimpleNamespace
+        from ui.workers.description_worker import DescriptionWorker
+
+        monkeypatch.setattr(
+            "ui.workers.description_worker.load_settings",
+            lambda: SimpleNamespace(description_model_tier="local"),
+        )
+        worker = DescriptionWorker(
+            [_make_clip_with_thumb("clip-1", thumbnail_path)], tier="cloud"
+        )
+        monkeypatch.setattr("core.analysis.description.is_model_loaded", lambda: False)
+        monkeypatch.setattr(
+            "core.analysis.description._load_local_model",
+            lambda: pytest.fail("cloud must not load local model"),
+        )
+        monkeypatch.setattr(
+            worker, "_process_task", lambda task: (task.clip_id, "A frame", "cloud", None)
+        )
+        worker.run()
+        assert worker.success_count == 1
+
+    def test_empty_batch_completes_once(self):
+        from ui.workers.description_worker import DescriptionWorker
+
+        worker = DescriptionWorker([], tier="local")
+        completed = []
+        worker.description_completed.connect(lambda: completed.append(True))
+        worker.run()
+        assert completed == [True]
+
+    def test_cancel_during_failed_preload_does_not_report_errors(
+        self, monkeypatch, thumbnail_path
+    ):
+        from ui.workers.description_worker import DescriptionWorker
+
+        worker = DescriptionWorker(
+            [_make_clip_with_thumb("clip-1", thumbnail_path)], tier="local"
+        )
+
+        def load():
+            worker.cancel()
+            raise RuntimeError("interrupted")
+
+        monkeypatch.setattr("core.analysis.description.is_model_loaded", lambda: False)
+        monkeypatch.setattr("core.analysis.description._load_local_model", load)
+        errors, completed = [], []
+        worker.error.connect(lambda *args: errors.append(args))
+        worker.description_completed.connect(lambda: completed.append(True))
+        worker.run()
+        assert errors == []
+        assert worker.error_count == 0
+        assert completed == [True]
+
+
 class TestDescriptionWorkerRetries:
     def test_retries_transient_provider_500(
         self,
