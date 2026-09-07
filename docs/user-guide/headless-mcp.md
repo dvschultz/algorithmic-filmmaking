@@ -156,6 +156,7 @@ scene-ripper-mcp --transport http --port 8765
 | `start_detect_faces` | Extract face embeddings |
 | `start_analyze_gaze` | Estimate gaze direction |
 | `start_generate_embeddings` | Extract DINOv2 visual embeddings |
+| `start_generate_boundary_embeddings` | Extract resumable first/last-frame DINOv2 pairs for Match Cut; optional `force` refresh |
 | `start_custom_query` | Run a yes/no visual query against clips |
 | `start_download_videos` | Bulk video downloads (YouTube / Vimeo / Internet Archive) |
 

@@ -24,8 +24,38 @@ def analyze() -> None:
         faces     Extract face embeddings with resumable results
         gaze      Estimate gaze direction with resumable results
         embeddings Extract thumbnail embeddings with resumable results
+        boundary-embeddings Extract first/last-frame embeddings with resumable results
     """
     pass
+
+
+@analyze.command("boundary-embeddings")
+@click.argument("project_file", type=click.Path(exists=True, path_type=Path))
+@click.option("--clip-id", "-c", "clip_ids", multiple=True, help="Exact clip ID (default: all clips)")
+@click.option("--force", "-f", is_flag=True, help="Recompute existing boundary pairs")
+@click.pass_context
+def boundary_embeddings(ctx: click.Context, project_file: Path, clip_ids: tuple[str, ...], force: bool) -> None:
+    """Extract first/last-frame DINOv2 vectors with durable recovery."""
+    from threading import Event
+    from core.jobs.boundary_embeddings import run_boundary_embedding_job
+    from core.jobs.store import JobStore
+
+    project_file = own_project(ctx, project_file)
+    try:
+        store = JobStore(CLIConfig.load().cache_dir / "jobs.db")
+        try:
+            with ProgressContext("Extracting boundary embeddings") as progress:
+                result = run_boundary_embedding_job(
+                    store, project_file, list(clip_ids) if clip_ids else None,
+                    progress.update, Event(), force=force,
+                )
+        finally:
+            store.close()
+    except ValueError as exc:
+        exit_with(ExitCode.VALIDATION_ERROR, str(exc))
+    except Exception as exc:
+        exit_with(ExitCode.GENERAL_ERROR, f"Boundary embedding analysis failed: {exc}")
+    output_result(result, as_json=ctx.obj.get("json", False))
 
 
 @analyze.command("embeddings")

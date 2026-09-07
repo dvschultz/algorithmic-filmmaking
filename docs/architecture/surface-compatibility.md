@@ -765,3 +765,18 @@ Existing complete boundary pairs retain the skip policy. Failed prerequisites
 retain Match Cut's missing-data fallback. Computed pairs remain local to the
 sequence proposal; durable boundary analysis jobs and sequencer prerequisites
 remain part of the unfinished migration.
+
+### Durable boundary analysis
+
+Saved-project boundary analysis is available through
+`scene_ripper analyze boundary-embeddings PROJECT` and the MCP
+`start_generate_boundary_embeddings` job tool. Both use the same result journal,
+private project writer, source fingerprints, captured runtime identity, and
+full-precision pair reconciliation. `--force` / `force=true` refreshes an existing
+pair; interrupted saves reuse that refresh generation. Missing or corrupt
+committed receipts fail instead of silently recomputing.
+
+The CLI accepts exact `--clip-id` values; MCP accepts an optional exact `clip_ids`
+list. Existing complete pairs are preserved unless forced. These entry points do
+not install the embedding runtime. Automatic durable sequencing prerequisites
+and generic GUI analysis-picker integration remain outstanding.

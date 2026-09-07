@@ -213,6 +213,31 @@ def _make_project_file(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_boundary_embedding_submission_recovers_with_public_job_kind(lifespan_ctx, tmp_path, monkeypatch):
+    from core.project import Project
+    from core.jobs.spec import OperationSpec
+    from scene_ripper_mcp.tools.jobs import start_generate_boundary_embeddings
+
+    ctx, store, _ = lifespan_ctx
+    path = _make_project_file(tmp_path)
+    compute = Mock(return_value=([.123456789] * 768, [.987654321] * 768))
+    monkeypatch.setattr("core.analysis.embeddings.extract_boundary_embeddings", compute)
+    monkeypatch.setattr("core.analysis.embeddings.unload_model", Mock())
+    for _ in range(2):
+        response = json.loads(await start_generate_boundary_embeddings(str(path), ctx=ctx))
+        assert response["success"], response
+        _wait_for_status(store, response["task_id"], STATUS_COMPLETED)
+        row = store.get(response["task_id"])
+        assert row.kind == "generate_boundary_embeddings"
+        assert OperationSpec.from_json(row.operation_json).kind == row.kind
+    saved = Project.load(path)
+    assert saved.clips[0].first_frame_embedding == [.123456789] * 768
+    assert saved.clips[0].last_frame_embedding == [.987654321] * 768
+    assert all(store.get_result(rid)["committed"] for rid in saved.metadata.job_results)
+    compute.assert_called_once()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("change", ["media", "project", "caller_arguments"])
 async def test_detection_job_binds_snapshot_and_reuses_results(lifespan_ctx, tmp_path, monkeypatch, change):
     from unittest.mock import Mock

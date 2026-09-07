@@ -542,6 +542,20 @@ async def _start_spine_analyze_job(
 
         def run(progress_callback, cancel_event):
             return run_analysis_job(store, path, operation, progress_callback, cancel_event)
+    elif spine_fn_name == "boundary_embeddings":
+        from core.jobs.boundary_embeddings import boundary_embedding_job_spec, run_boundary_embedding_job
+
+        try:
+            operation = boundary_embedding_job_spec(_project, clip_ids, arguments=payload)
+        except ValueError as exc:
+            return json.dumps(_wrap_error(exc))
+        store = _lifespan(ctx)["job_store"]
+
+        def run(progress_callback, cancel_event):
+            return run_boundary_embedding_job(
+                store, path, operation.arguments["clip_ids"],
+                progress_callback, cancel_event, operation=operation,
+            )
     elif spine_fn_name == "describe":
         from core.jobs.description import description_job_spec, run_description_job
         from core.operations.description import resolve_options
@@ -1213,6 +1227,26 @@ async def start_analyze_gaze(
         idempotency_key=idempotency_key,
         args={"sample_interval": sample_interval},
         op_kwargs={"sample_interval": sample_interval},
+    )
+
+
+@mcp.tool()
+async def start_generate_boundary_embeddings(
+    project_path: Annotated[str, "Absolute path to saved project file"],
+    clip_ids: Annotated[Optional[list[str]], "Exact clip IDs (default: all)"] = None,
+    force: Annotated[bool, "Replace existing boundary pairs"] = False,
+    idempotency_key: Annotated[Optional[str], "Optional idempotency key (max 255 chars)"] = None,
+    ctx: Context = None,
+) -> str:
+    """Extract first/last-frame DINOv2 pairs with durable recovery.
+
+    Requires an installed embedding runtime; does not install dependencies.
+    Use the standard job status/result/cancel tools after submission.
+    """
+    return await _start_spine_analyze_job(
+        ctx=ctx, project_path=project_path, kind="generate_boundary_embeddings",
+        spine_fn_name="boundary_embeddings", clip_ids=clip_ids,
+        idempotency_key=idempotency_key, args={"force": force},
     )
 
 

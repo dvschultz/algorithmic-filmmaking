@@ -1,12 +1,17 @@
 """Detached first/last-frame embeddings with shared DINOv2 model ownership."""
 
 from dataclasses import dataclass
+from contextlib import nullcontext
 from math import isfinite
 from pathlib import Path
 from threading import Event
 
 from core.operations.contracts import OutcomeStatus
-from core.operations.embeddings import EmbeddingOutcome, embedding_model_session
+from core.operations.embeddings import (
+    EmbeddingOutcome,
+    _EmbeddingModelSession,
+    embedding_model_session,
+)
 
 
 @dataclass(frozen=True)
@@ -31,7 +36,10 @@ class BoundaryEmbeddingOutcome:
 
 
 def run_boundary_embeddings(
-    tasks: tuple[BoundaryEmbeddingTask, ...], *, cancel_event: Event | None = None
+    tasks: tuple[BoundaryEmbeddingTask, ...],
+    *,
+    cancel_event: Event | None = None,
+    model_session: _EmbeddingModelSession | None = None,
 ) -> tuple[BoundaryEmbeddingOutcome, ...]:
     """Validate each pair atomically and reject changed media or late cancellation."""
     from core.errors import ModelDownloadError
@@ -42,7 +50,11 @@ def run_boundary_embeddings(
         media_stamp(task.source_path) if not task.skip else None for task in tasks
     ]
     outcomes: list[BoundaryEmbeddingOutcome] = []
-    with embedding_model_session() as session:
+    with (
+        nullcontext(model_session)
+        if model_session is not None
+        else embedding_model_session()
+    ) as session:
         for task, stamp in zip(tasks, stamps):
             if cancel.is_set() or session.failed:
                 break
