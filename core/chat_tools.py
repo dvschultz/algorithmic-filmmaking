@@ -3485,7 +3485,8 @@ def list_sorting_algorithms(project) -> dict:
                 "exquisite_corpus, storyteller, gaze_sort, gaze_consistency. "
                 "Use list_sorting_algorithms to check availability.",
     requires_project=True,
-    modifies_gui_state=True
+    modifies_gui_state=True,
+    modifies_project_state=True
 )
 def generate_remix(
     project,
@@ -3589,7 +3590,8 @@ def generate_remix(
                 "'gaze_rotation' (arrange clips in monotonic angle progression). "
                 "Requires gaze analysis. Use analyze_clips with 'gaze' first.",
     requires_project=True,
-    modifies_gui_state=True
+    modifies_gui_state=True,
+    modifies_project_state=True
 )
 def generate_eyes_without_a_face(
     project,
@@ -3672,13 +3674,8 @@ def generate_eyes_without_a_face(
                 range_end=range_end, ascending=ascending,
             )
 
-        seq_tab.timeline.clear_timeline()
-        current_frame = 0
-        for clip, source in sorted_clips:
-            seq_tab.timeline.add_clip(clip, source, track_index=0, start_frame=current_frame)
-            current_frame += clip.duration_frames
-        seq_tab.timeline._on_zoom_fit()
-        seq_tab._set_state(seq_tab.STATE_TIMELINE)
+        from core.spine.sequences import apply_generated_order
+        apply_generated_order(project, sorted_clips, "gaze_sort", "Eyes Without a Face")
 
         return _add_sequence_summary_for_agent(project, {
             "success": True,
@@ -3726,7 +3723,8 @@ def get_available_dimensions(project, main_window) -> dict:
                 "Requires text extraction analysis. The LLM arranges on-screen text fragments "
                 "into a poem following the specified mood, length, and form.",
     requires_project=True,
-    modifies_gui_state=True
+    modifies_gui_state=True,
+    modifies_project_state=True
 )
 def generate_exquisite_corpus(
     project,
@@ -3770,21 +3768,16 @@ def generate_exquisite_corpus(
             return {"success": False, "error": "LLM could not generate a poem from the available text."}
 
         # Apply poem order to timeline
-        seq_tab = main_window.sequence_tab
-        seq_tab.timeline.clear_timeline()
-        current_frame = 0
         applied = 0
         applied_entries = []
         for line in poem_lines:
             clip = line.clip
             source = project.sources_by_id.get(clip.source_id)
             if source:
-                seq_tab.timeline.add_clip(clip, source, track_index=0, start_frame=current_frame)
-                current_frame += clip.duration_frames
                 applied += 1
                 applied_entries.append((clip, source))
-        seq_tab.timeline._on_zoom_fit()
-        seq_tab._set_state(seq_tab.STATE_TIMELINE)
+        from core.spine.sequences import apply_generated_order
+        apply_generated_order(project, applied_entries, "exquisite_corpus", "Exquisite Corpus")
 
         return _add_sequence_summary_for_agent(project, {
             "success": True,
@@ -3803,7 +3796,8 @@ def generate_exquisite_corpus(
                 "Requires description analysis. The LLM selects and orders clips to create "
                 "a coherent story following the specified narrative structure.",
     requires_project=True,
-    modifies_gui_state=True
+    modifies_gui_state=True,
+    modifies_project_state=True
 )
 def generate_storyteller(
     project,
@@ -3862,16 +3856,9 @@ def generate_storyteller(
             return {"success": False, "error": "Could not resolve generated narrative to project clips."}
 
         # Apply narrative order to timeline
-        seq_tab = main_window.sequence_tab
-        seq_tab.timeline.clear_timeline()
-        current_frame = 0
-        applied = 0
-        for clip, source in sequence:
-            seq_tab.timeline.add_clip(clip, source, track_index=0, start_frame=current_frame)
-            current_frame += clip.duration_frames
-            applied += 1
-        seq_tab.timeline._on_zoom_fit()
-        seq_tab._set_state(seq_tab.STATE_TIMELINE)
+        from core.spine.sequences import apply_generated_order
+        apply_generated_order(project, sequence, "storyteller", "Storyteller")
+        applied = len(sequence)
 
         return _add_sequence_summary_for_agent(project, {
             "success": True,
@@ -3891,7 +3878,8 @@ def generate_storyteller(
                 "to just the matched lines. Requires transcribe analysis. Phrases is a list "
                 "of {phrase: str, count: int} where count is 1-5 matches per phrase.",
     requires_project=True,
-    modifies_gui_state=True
+    modifies_gui_state=True,
+    modifies_project_state=True
 )
 def generate_cassette_tape(
     project,
@@ -3966,7 +3954,8 @@ def generate_cassette_tape(
             return {"success": False, "error": "Could not resolve matches to project clips."}
 
         seq_tab = main_window.sequence_tab
-        seq_tab._apply_cassette_tape_sequence(sequence_data)
+        if not seq_tab._apply_cassette_tape_sequence(sequence_data):
+            return {"success": False, "error": "Could not commit the generated Cassette Tape sequence"}
 
         return _add_sequence_summary_for_agent(project, {
             "success": True,
@@ -3989,7 +3978,8 @@ def generate_cassette_tape(
                 "In parametric mode, samples the image directly. In VLM mode, uses a "
                 "vision model to interpret the image's style.",
     requires_project=True,
-    modifies_gui_state=True
+    modifies_gui_state=True,
+    modifies_project_state=True
 )
 def generate_signature_style(
     project,
@@ -4051,14 +4041,12 @@ def generate_signature_style(
         sequence = build_sequence_from_matches(matches)
 
         # Apply to timeline
-        seq_tab = main_window.sequence_tab
-        seq_tab.timeline.clear_timeline()
-        current_frame = 0
-        for clip, source, in_pt, out_pt in sequence:
-            seq_tab.timeline.add_clip(clip, source, track_index=0, start_frame=current_frame)
-            current_frame += (out_pt - in_pt)
-        seq_tab.timeline._on_zoom_fit()
-        seq_tab._set_state(seq_tab.STATE_TIMELINE)
+        from core.spine.sequences import apply_generated_order
+        apply_generated_order(
+            project, [(clip, source) for clip, source, _, _ in sequence],
+            "signature_style", "Signature Style",
+            relative_ranges=[(start, end) for _, _, start, end in sequence],
+        )
 
         return _add_sequence_summary_for_agent(project, {
             "success": True,
@@ -4078,7 +4066,8 @@ def generate_signature_style(
                 "get_available_dimensions first to check which dimensions have data. "
                 "Use list_sources to find source IDs.",
     requires_project=True,
-    modifies_gui_state=True
+    modifies_gui_state=True,
+    modifies_project_state=True
 )
 def generate_reference_guided(
     project,
@@ -4164,7 +4153,8 @@ def generate_reference_guided(
                 "Requires a reference image path. Use list_sorting_algorithms to check if "
                 "face_embeddings are available.",
     requires_project=True,
-    modifies_gui_state=True
+    modifies_gui_state=True,
+    modifies_project_state=True
 )
 def generate_rose_hobart(
     project,
@@ -4259,9 +4249,10 @@ def generate_rose_hobart(
     sequence_clips = order_matched_clips(matched, ordering)
 
     if main_window and hasattr(main_window, 'sequence_tab'):
-        main_window.sequence_tab._apply_dialog_sequence(
-            sequence_clips, "rose_hobart", "Rose Hobart"
-        )
+        if not main_window.sequence_tab._apply_dialog_sequence(
+            [(clip, source) for clip, source, _confidence in sequence_clips], "rose_hobart", "Rose Hobart"
+        ):
+            return {"success": False, "error": "Could not commit the generated Rose Hobart sequence"}
 
     return _add_sequence_summary_for_agent(project, {
         "success": True,
@@ -4656,9 +4647,10 @@ def generate_staccato(
 
     # Apply to the sequence tab
     sequence_clips = list(result)
-    main_window.sequence_tab._apply_staccato_sequence(
+    if not main_window.sequence_tab._apply_staccato_sequence(
         sequence_clips, str(validated_path)
-    )
+    ):
+        return {"success": False, "error": "Could not commit the generated Staccato sequence"}
 
     response = {
         "success": True,

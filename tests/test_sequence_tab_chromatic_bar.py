@@ -76,6 +76,8 @@ def test_generation_preserves_color_bar_across_activation(qapp, enabled, populat
 
     sequence = tab._create_and_activate_sequence("color")
     tab._apply_chromatic_bar_to_sequence("color")
+    tab._commit_generated_sequence(sequence)
+    tab._end_sequence_generation(sequence)
 
     assert project.sequence is sequence
     assert sequence.show_chromatic_color_bar is enabled

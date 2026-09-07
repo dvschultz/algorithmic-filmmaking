@@ -893,21 +893,55 @@ class SequenceTab(BaseTab):
         # Store algorithm for the completion slot
         worker._pending_algorithm = algorithm
         worker._pending_direction = direction
-        worker.sequence_ready.connect(self._on_sequence_ready)
-        worker.error.connect(self._on_sequence_error)
+        from copy import deepcopy
+        worker._pending_draft = self._prepare_sequence_draft(algo_lower) if self._project else None
+        worker._pending_inputs = [
+            (clip, source, clip.start_frame, clip.end_frame, source.file_path, source.fps,
+             deepcopy(clip.to_dict())) for clip, source in clips
+        ]
+        worker.sequence_ready.connect(lambda result, owner=worker: self._on_sequence_ready(result, owner))
+        worker.error.connect(lambda error, owner=worker: self._on_sequence_error(error, owner))
+        worker.finished.connect(lambda owner=worker: self._on_sequence_worker_finished(owner))
         self._sequence_worker = worker
         worker.start()
 
-    def _on_sequence_ready(self, sorted_clips: list):
+    def _on_sequence_worker_finished(self, worker):
+        """Release draft snapshots even when cancellation emits no result."""
+        worker._pending_draft = None
+        worker._pending_inputs = []
+        if self._sequence_worker is worker:
+            self._sequence_worker = None
+            self._apply_in_progress = False
+
+    def _on_sequence_ready(self, sorted_clips: list, worker=None):
         """Handle completed sequence generation (runs on main thread)."""
-        worker = self._sequence_worker
+        if worker is not None and worker is not self._sequence_worker:
+            return
+        worker = worker or self._sequence_worker
         algorithm = getattr(worker, "_pending_algorithm", "") if worker else ""
         direction = getattr(worker, "_pending_direction", None) if worker else None
         algo_lower = algorithm.lower()
+        proposal = getattr(worker, "_pending_draft", None)
+        if proposal is not None and (
+            self._project is not proposal.project
+            or self._project.session.session_id != proposal.session_id
+        ):
+            self._sequence_worker = None
+            self._apply_in_progress = False
+            return
 
+        generated_sequence = None
         try:
             # Create a new sequence for this algorithm run
-            self._create_and_activate_sequence(algo_lower)
+            inputs = getattr(worker, "_pending_inputs", [])
+            for clip, source, start, end, path, fps, _ in inputs:
+                if self._project and (
+                    self._project.clips_by_id.get(clip.id) is not clip
+                    or self._project.sources_by_id.get(source.id) is not source
+                    or (clip.start_frame, clip.end_frame, source.file_path, source.fps) != (start, end, path, fps)
+                ):
+                    raise ValueError("Sequence inputs changed while generation was running")
+            generated_sequence = self._create_and_activate_sequence(algo_lower, proposal=proposal)
             self.timeline.clear_timeline()
 
             current_frame = 0
@@ -940,23 +974,16 @@ class SequenceTab(BaseTab):
             self._emit_chromatic_bar_setting_changed()
 
             # Transition to timeline state
+            self._commit_generated_sequence(generated_sequence)
             self._set_state(self.STATE_TIMELINE)
 
             logger.info(f"Applied {len(sorted_clips)} clips with {algorithm} algorithm")
 
             # Notify that clip metadata may have been mutated by auto-compute
-            self.clips_data_changed.emit([clip for clip, _ in sorted_clips])
-
-            # If this was a Replace operation, remove the old sequence now that the new one succeeded
-            replace_idx = getattr(self, "_replace_sequence_index", None)
-            if replace_idx is not None and self._project:
-                # The old sequence's index may have shifted because we appended a new one.
-                # The new sequence is at the end; the old one is still at replace_idx
-                # (if it wasn't reused by the empty-sequence optimization).
-                if replace_idx < len(self._project.sequences) and replace_idx != self._project.active_sequence_index:
-                    self._project.remove_sequence(replace_idx)
-                    self._sync_sequence_dropdown()
-                self._replace_sequence_index = None
+            changed = [clip for clip, _source, _start, _end, _path, _fps, before in inputs
+                       if clip.to_dict() != before]
+            if changed:
+                self.clips_data_changed.emit(changed)
 
         except Exception as e:
             self._replace_sequence_index = None
@@ -964,12 +991,23 @@ class SequenceTab(BaseTab):
             QMessageBox.critical(self, "Error", f"Failed to generate sequence: {e}")
 
         finally:
+            self._end_sequence_generation(generated_sequence)
             self._algorithm_running = False
             self._apply_in_progress = False
             self._sequence_worker = None
 
-    def _on_sequence_error(self, error_msg: str):
+    def _on_sequence_error(self, error_msg: str, worker=None):
         """Handle sequence generation failure."""
+        if worker is not None and worker is not self._sequence_worker:
+            return
+        proposal = getattr(worker, "_pending_draft", None)
+        self._replace_sequence_index = None
+        if proposal is not None and (
+            self._project is not proposal.project or self._project.session.session_id != proposal.session_id
+        ):
+            self._apply_in_progress = False
+            self._sequence_worker = None
+            return
         logger.error(f"Sequence worker error: {error_msg}")
         QMessageBox.critical(self, "Error", f"Failed to generate sequence: {error_msg}")
         self._apply_in_progress = False
@@ -1004,7 +1042,8 @@ class SequenceTab(BaseTab):
         algorithm_key: str,
         display_label: str,
         sequence_metadata: Optional[dict] = None,
-    ):
+        transition_rationales: list[str | None] | None = None,
+    ) -> bool:
         """Apply a sequence from any dialog-based algorithm.
 
         Shared implementation for Exquisite Corpus, Storyteller, and Reference Guide.
@@ -1018,11 +1057,12 @@ class SequenceTab(BaseTab):
         """
         if not sequence_clips:
             logger.warning(f"No clips in {display_label} sequence")
-            return
+            return False
 
+        generated_sequence = None
         try:
             # Create a new sequence for this dialog algorithm
-            self._create_and_activate_sequence(algorithm_key)
+            generated_sequence = self._create_and_activate_sequence(algorithm_key)
             self.timeline.clear_timeline()
 
             first_clip, first_source = sequence_clips[0]
@@ -1056,16 +1096,27 @@ class SequenceTab(BaseTab):
                 for key, value in sequence_metadata.items():
                     if hasattr(sequence, key):
                         setattr(sequence, key, value)
+            if transition_rationales is not None:
+                if len(transition_rationales) != len(sequence.tracks[0].clips):
+                    raise ValueError("Provide one rationale per generated clip")
+                for entry, rationale in zip(sequence.tracks[0].clips, transition_rationales):
+                    entry.rationale = rationale
 
+            self._commit_generated_sequence(generated_sequence)
             self._set_state(self.STATE_TIMELINE)
 
             logger.info(f"Applied {len(sequence_clips)} clips from {display_label}")
+
+            return True
 
         except Exception as e:
             logger.error(f"Error applying {display_label} sequence: {e}")
             QMessageBox.critical(self, "Error", f"Failed to apply sequence: {e}")
 
+            return False
+
         finally:
+            self._end_sequence_generation(generated_sequence)
             self._algorithm_running = False
 
     @Slot(list)
@@ -1195,61 +1246,11 @@ class SequenceTab(BaseTab):
 
     @Slot(list)
     def _apply_free_association_sequence(self, payload: list):
-        """Apply the sequence from the Free Association dialog.
-
-        The payload is a list of (Clip, Source, Optional[str]) triples — the
-        third element is the LLM-generated rationale for that transition
-        (None for the user-selected first clip). This differs from the
-        generic _apply_dialog_sequence path because that path's timeline
-        pipeline reconstructs SequenceClip internally with no mechanism
-        to thread a rationale parameter through.
-
-        Args:
-            payload: List of (Clip, Source, Optional[str]) tuples in order.
-        """
-        if not payload:
-            logger.warning("No clips in Free Association sequence")
-            return
-
-        # Strip rationales to feed the standard apply path that already
-        # handles timeline clearing, clip addition, fps/video setup, etc.
-        sequence_clips = [(clip, source) for clip, source, _ in payload]
-        try:
-            self._apply_dialog_sequence(
-                sequence_clips, "free_association", "Free Association"
-            )
-        except Exception:
-            logger.exception("Failed to apply Free Association sequence")
-            return
-
-        # Now thread rationales onto the SequenceClips the timeline just
-        # created. Match by (source_clip_id, start_frame) which is unique
-        # for the clips we just placed sequentially in this apply call.
-        sequence = self.timeline.get_sequence()
-        existing_clips = {
-            (sc.source_clip_id, sc.start_frame): sc for sc in sequence.get_all_clips()
-        }
-
-        current_frame = 0
-        attached = 0
-        for clip, _source, rationale in payload:
-            if rationale is not None:
-                key = (clip.id, current_frame)
-                seq_clip = existing_clips.get(key)
-                if seq_clip is not None:
-                    seq_clip.rationale = rationale
-                    attached += 1
-                else:
-                    logger.warning(
-                        "Could not find SequenceClip for (%s, %s) to attach rationale",
-                        clip.id,
-                        current_frame,
-                    )
-            current_frame += clip.duration_frames
-
-        logger.info(
-            "Attached %d rationale(s) to Free Association sequence",
-            attached,
+        """Commit Free Association clips and transition rationales together."""
+        return self._apply_dialog_sequence(
+            [(clip, source) for clip, source, _ in payload],
+            "free_association", "Free Association",
+            transition_rationales=[rationale for _, _, rationale in payload],
         )
 
     def _show_reference_guide_dialog(self, clips: list):
@@ -1312,7 +1313,7 @@ class SequenceTab(BaseTab):
         algorithm_key: str,
         display_label: str,
         allow_repeats: bool,
-    ):
+    ) -> bool:
         """Apply a dialog sequence emitted as ``(Clip, Source, in_point, out_point)`` tuples.
 
         Shared by Signature Style and Cassette Tape — both dialogs trim sub-clips
@@ -1322,12 +1323,13 @@ class SequenceTab(BaseTab):
         """
         if not sequence_data:
             logger.warning("No clips in %s sequence", display_label)
-            return
+            return False
 
+        generated_sequence = None
         try:
             from core.remix.cassette_tape import safe_fps
 
-            self._create_and_activate_sequence(algorithm_key)
+            generated_sequence = self._create_and_activate_sequence(algorithm_key)
             self.timeline.clear_timeline()
 
             first_clip, first_source, _, _ = sequence_data[0]
@@ -1367,15 +1369,21 @@ class SequenceTab(BaseTab):
             self._update_chromatic_bar_controls(algorithm_key)
             self._emit_chromatic_bar_setting_changed()
 
+            self._commit_generated_sequence(generated_sequence)
             self._set_state(self.STATE_TIMELINE)
 
             logger.info("Applied %d clips from %s", len(sequence_data), display_label)
+
+            return True
 
         except Exception as e:
             logger.error("Error applying %s sequence: %s", display_label, e)
             QMessageBox.critical(self, "Error", f"Failed to apply sequence: {e}")
 
+            return False
+
         finally:
+            self._end_sequence_generation(generated_sequence)
             self._algorithm_running = False
 
     def _show_cassette_tape_dialog(self, clips: list):
@@ -1400,7 +1408,7 @@ class SequenceTab(BaseTab):
     @Slot(list)
     def _apply_cassette_tape_sequence(self, sequence_data: list):
         """Apply the sequence from the Cassette Tape dialog."""
-        self._apply_dialog_sequence_trimmed(
+        return self._apply_dialog_sequence_trimmed(
             sequence_data,
             algorithm_key="cassette_tape",
             display_label="Cassette Tape",
@@ -1446,7 +1454,7 @@ class SequenceTab(BaseTab):
         )
         dialog.exec()
 
-    def _apply_staccato_sequence(self, sequence_clips: list, music_path=None):
+    def _apply_staccato_sequence(self, sequence_clips: list, music_path=None) -> bool:
         """Apply the sequence from Staccato dialog.
 
         Staccato emits (Clip, Source, slot_duration_seconds) tuples.
@@ -1454,12 +1462,13 @@ class SequenceTab(BaseTab):
         beat slot is filled, so the total sequence matches the music track length.
         """
         if not sequence_clips:
-            return
+            return False
 
+        generated_sequence = None
         try:
             from core.remix.staccato import expand_staccato_slot_segments
 
-            self._create_and_activate_sequence("staccato")
+            generated_sequence = self._create_and_activate_sequence("staccato")
             self.timeline.clear_timeline()
 
             first_source = sequence_clips[0][1]
@@ -1518,14 +1527,20 @@ class SequenceTab(BaseTab):
             self._apply_chromatic_bar_to_sequence("staccato")
             self._update_chromatic_bar_controls("staccato")
 
+            self._commit_generated_sequence(generated_sequence)
             self._set_state(self.STATE_TIMELINE)
             self._emit_chromatic_bar_setting_changed()
+
+            return True
 
         except Exception as e:
             logger.error(f"Failed to apply Staccato sequence: {e}")
             QMessageBox.critical(self, "Error", f"Failed to apply sequence:\n{e}")
 
+            return False
+
         finally:
+            self._end_sequence_generation(generated_sequence)
             self._algorithm_running = False
 
     def _show_word_sequencer_dialog(self, clips: list):
@@ -1578,12 +1593,13 @@ class SequenceTab(BaseTab):
             logger.warning("No clips in %s sequence", display_label)
             return
 
+        generated_sequence = None
         try:
             sources_by_clip_id = {
                 getattr(clip, "id", ""): source for clip, source in clips
             }
 
-            self._create_and_activate_sequence(algorithm_key)
+            generated_sequence = self._create_and_activate_sequence(algorithm_key)
             self.timeline.clear_timeline()
 
             # Pick the fps from the first source so the timeline has a
@@ -1643,6 +1659,7 @@ class SequenceTab(BaseTab):
             self._update_chromatic_bar_controls(algorithm_key)
             self._emit_chromatic_bar_setting_changed()
 
+            self._commit_generated_sequence(generated_sequence)
             self._set_state(self.STATE_TIMELINE)
 
             logger.info(
@@ -1654,6 +1671,7 @@ class SequenceTab(BaseTab):
                 self, "Error", f"Failed to apply sequence:\n{exc}",
             )
         finally:
+            self._end_sequence_generation(generated_sequence)
             self._algorithm_running = False
 
     def _show_eyes_without_a_face_dialog(self, clips: list):
@@ -1697,8 +1715,9 @@ class SequenceTab(BaseTab):
             logger.warning("No clips in Dice Roll sequence")
             return
 
+        generated_sequence = None
         try:
-            self._create_and_activate_sequence("shuffle")
+            generated_sequence = self._create_and_activate_sequence("shuffle")
             self.timeline.clear_timeline()
 
             first_clip, first_source, _ = sequence_data[0]
@@ -1738,6 +1757,7 @@ class SequenceTab(BaseTab):
             self._update_chromatic_bar_controls("shuffle")
             self._emit_chromatic_bar_setting_changed()
 
+            self._commit_generated_sequence(generated_sequence)
             self._set_state(self.STATE_TIMELINE)
 
             logger.info(f"Applied {len(sequence_data)} clips from Dice Roll")
@@ -1750,6 +1770,7 @@ class SequenceTab(BaseTab):
             QMessageBox.critical(self, "Error", f"Failed to apply sequence: {e}")
 
         finally:
+            self._end_sequence_generation(generated_sequence)
             self._algorithm_running = False
 
     # Direction options per algorithm: list of (display_label, internal_key).
@@ -1909,6 +1930,9 @@ class SequenceTab(BaseTab):
 
     def clear(self):
         """Clear all state including available clips (called on new project)."""
+        self._end_sequence_generation(force=True)
+        self._replace_sequence_index = None
+        self._apply_in_progress = False
         self._clips = []
         self._available_clips = []
         self._sources = {}
@@ -1964,72 +1988,67 @@ class SequenceTab(BaseTab):
             return display_label
         return f"{display_label} #{max(max_n + 1, 2)}"
 
-    def _create_and_activate_sequence(
-        self, algorithm_key: str, display_label: Optional[str] = None
-    ) -> "Sequence":
-        """Create a new sequence, append it to the project, activate it, and update the dropdown.
+    def _prepare_sequence_draft(self, algorithm_key: str, display_label: str | None = None):
+        from core.spine.sequences import SequenceDraft
 
-        This is the shared entry point for all apply handlers. After this call,
-        the timeline is cleared and ready for the handler to populate with clips.
-
-        Args:
-            algorithm_key: Internal algorithm key (e.g., "color", "storyteller")
-            display_label: Optional custom name. If None, auto-generated.
-
-        Returns:
-            The new Sequence (already set as active on the project).
-        """
-        from models.sequence import Sequence as SeqModel
-
-        if not self._project:
-            return SeqModel()
-
-        # Activation refreshes controls from the model, so initialize the pending
-        # generation preference before publishing the new active sequence.
-        show_chromatic_color_bar = (
-            self._show_chromatic_color_bar and self._is_chromatic_flow_algorithm(algorithm_key)
+        replace_index = getattr(self, "_replace_sequence_index", None)
+        replace_id = None
+        if replace_index is not None:
+            replace_id = self._project.sequences[replace_index].id
+        return SequenceDraft.prepare(
+            self._project, algorithm_key, display_label or self._generate_sequence_name(algorithm_key),
+            replace_sequence_id=replace_id,
+            show_chromatic_color_bar=self._show_chromatic_color_bar,
         )
 
-        # Persist the departing sequence (no dirty prompt — callers handle that)
-        self._persist_current_sequence()
+    def _create_and_activate_sequence(
+        self, algorithm_key: str, display_label: Optional[str] = None, *, proposal=None,
+    ) -> "Sequence":
+        """Bind detached output for population; publish only after it is complete."""
+        from models.sequence import Sequence
 
-        # Generate name
-        if display_label is None:
-            name = self._generate_sequence_name(algorithm_key)
-        else:
-            name = display_label
+        if self._project is None:
+            self._algorithm_running = True
+            return Sequence()
+        if getattr(self, "_pending_sequence_draft", None) is not None:
+            raise RuntimeError("A sequence is already being prepared")
+        proposal = proposal or self._prepare_sequence_draft(algorithm_key, display_label)
+        proposal.validate_session(self._project)
+        self._pending_sequence_draft = proposal
+        self._generation_previous_signal_state = self.timeline.blockSignals(True)
+        self._generation_was_enabled = self.isEnabled()
+        self.setEnabled(False)
+        self._algorithm_running = True
+        self.timeline.scene.set_sequence(proposal.sequence)
+        self.set_chromatic_color_bar_enabled(proposal.sequence.show_chromatic_color_bar, emit_signal=False)
+        self._sequence_dirty = False
+        return proposal.sequence
 
-        # If the current sequence is empty (0 clips), reuse it instead of
-        # creating a new one alongside it — avoids orphan "Untitled Sequence"
-        current_seq = self._project.sequence
-        if current_seq and len(current_seq.get_all_clips()) == 0:
-            current_seq.name = name
-            current_seq.algorithm = algorithm_key
-            current_seq.show_chromatic_color_bar = show_chromatic_color_bar
-            new_seq = current_seq
-        else:
-            # Create and add a new sequence
-            new_seq = SeqModel(
-                name=name,
-                algorithm=algorithm_key,
-                show_chromatic_color_bar=show_chromatic_color_bar,
-            )
-            self._project.add_sequence(new_seq, activate=True)
-
-        # Sync the timeline's scene to point at the new active sequence.
-        # Without this, timeline.get_sequence() keeps returning the previous
-        # sequence object, and the next _persist_current_sequence() call
-        # overwrites the new slot with the old object (duplicate reference).
-        self.timeline.scene.set_sequence(new_seq)
-
-        # Update dropdown
+    def _commit_generated_sequence(self, expected_sequence):
+        proposal = getattr(self, "_pending_sequence_draft", None)
+        if proposal is None:
+            if self._project is None:
+                return
+            raise ValueError("Sequence generation was cancelled")
+        if proposal.sequence is not expected_sequence or self.timeline.get_sequence() is not proposal.sequence:
+            raise ValueError("Timeline changed while sequence output was being prepared")
+        proposal.commit(self._project)
+        self._replace_sequence_index = None
         self._sync_sequence_dropdown()
 
-        # Set guard flag so timeline changes don't trigger dirty
-        self._algorithm_running = True
-        self._sequence_dirty = False
-
-        return new_seq
+    def _end_sequence_generation(self, expected_sequence=None, *, force=False):
+        proposal = getattr(self, "_pending_sequence_draft", None)
+        if proposal is None:
+            return
+        if not force and proposal.sequence is not expected_sequence:
+            return
+        self._pending_sequence_draft = None
+        self.timeline.blockSignals(self._generation_previous_signal_state)
+        self.setEnabled(self._generation_was_enabled)
+        if not proposal.committed:
+            self._replace_sequence_index = None
+            self._load_active_sequence()
+        self.timeline.sequence_refreshed.emit()
 
     def _sync_sequence_dropdown(self):
         """Rebuild both dropdown widgets from project.sequences. Blocks signals."""
@@ -2082,7 +2101,7 @@ class SequenceTab(BaseTab):
 
     def _persist_current_sequence(self):
         """Sync timeline state back to the project's active sequence."""
-        if not self._project:
+        if not self._project or getattr(self, "_pending_sequence_draft", None) is not None:
             return
         timeline_seq = self.timeline.get_sequence()
         self._project.sequences[self._project.active_sequence_index] = timeline_seq
@@ -2580,7 +2599,11 @@ class SequenceTab(BaseTab):
         if not clips:
             return {"success": False, "error": "Selected clips not available for sequencing"}
 
+        from copy import deepcopy
+        metadata_before = {clip.id: deepcopy(clip.to_dict()) for clip, _ in clips}
+        generated_sequence = None
         try:
+            proposal = self._prepare_sequence_draft(algorithm.lower()) if self._project else None
             # Generate sequence
             sorted_clips = generate_sequence(
                 algorithm=algorithm.lower(),
@@ -2592,7 +2615,7 @@ class SequenceTab(BaseTab):
             )
 
             # Create new sequence and apply to timeline
-            self._create_and_activate_sequence(algorithm.lower())
+            generated_sequence = self._create_and_activate_sequence(algorithm.lower(), proposal=proposal)
             self.timeline.clear_timeline()
 
             current_frame = 0
@@ -2656,10 +2679,13 @@ class SequenceTab(BaseTab):
             self.timeline._on_zoom_fit()
 
             # Ensure timeline state
+            self._commit_generated_sequence(generated_sequence)
             self._set_state(self.STATE_TIMELINE)
 
             # Notify that clip metadata may have been mutated by auto-compute
-            self.clips_data_changed.emit([clip for clip, _ in sorted_clips])
+            changed = [clip for clip, _ in clips if clip.to_dict() != metadata_before[clip.id]]
+            if changed:
+                self.clips_data_changed.emit(changed)
 
             return {
                 "success": True,
@@ -2680,6 +2706,7 @@ class SequenceTab(BaseTab):
             return {"success": False, "error": str(e)}
 
         finally:
+            self._end_sequence_generation(generated_sequence)
             self._algorithm_running = False
 
     def generate_reference_guided(
@@ -2724,6 +2751,7 @@ class SequenceTab(BaseTab):
                 "error": "No user clips available (all clips belong to reference source)"
             }
 
+        generated_sequence = None
         try:
             matched = reference_guided_match(
                 reference_clips=reference_clips,
@@ -2739,7 +2767,7 @@ class SequenceTab(BaseTab):
                 }
 
             # Create new sequence and apply to timeline
-            self._create_and_activate_sequence("reference_guided")
+            generated_sequence = self._create_and_activate_sequence("reference_guided")
             self.timeline.clear_timeline()
 
             first_clip, first_source = matched[0]
@@ -2773,6 +2801,7 @@ class SequenceTab(BaseTab):
             self._update_chromatic_bar_controls("reference_guided")
             self._emit_chromatic_bar_setting_changed()
 
+            self._commit_generated_sequence(generated_sequence)
             self._set_state(self.STATE_TIMELINE)
 
             return {
@@ -2796,6 +2825,7 @@ class SequenceTab(BaseTab):
             return {"success": False, "error": str(e)}
 
         finally:
+            self._end_sequence_generation(generated_sequence)
             self._algorithm_running = False
 
     def clear_sequence(self) -> dict:
@@ -2840,6 +2870,7 @@ class SequenceTab(BaseTab):
             if source:
                 self._sources[source.id] = source
 
+        generated_sequence = None
         try:
             # Generate sorted sequence
             sorted_clips = generate_sequence(
@@ -2851,7 +2882,7 @@ class SequenceTab(BaseTab):
             )
 
             # Create new sequence and populate timeline
-            self._create_and_activate_sequence(algorithm.lower())
+            generated_sequence = self._create_and_activate_sequence(algorithm.lower())
             self.timeline.clear_timeline()
 
             # Set FPS from first source
@@ -2886,6 +2917,7 @@ class SequenceTab(BaseTab):
             self._emit_chromatic_bar_setting_changed()
 
             # Transition to timeline state
+            self._commit_generated_sequence(generated_sequence)
             self._set_state(self.STATE_TIMELINE)
 
             # Update card availability for future use
@@ -2907,6 +2939,7 @@ class SequenceTab(BaseTab):
             return {"success": False, "error": str(e)}
 
         finally:
+            self._end_sequence_generation(generated_sequence)
             self._algorithm_running = False
 
     def on_tab_activated(self):

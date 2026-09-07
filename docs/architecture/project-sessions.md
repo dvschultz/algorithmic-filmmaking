@@ -67,8 +67,19 @@ before restoring earlier edits. The `sources_changed` event refreshes library
 views after commit, alongside legacy per-source notifications. Chat and MCP
 delegate through `core.spine.sources`; MCP retains its response and save contract.
 
-This is an incremental U4 migration. Generated sequence population/grouping,
-and other metadata commands still need migration. Legacy direct model mutations are tracked as
+`core.spine.sequences.SequenceDraft` keeps generated output detached until one
+`Generate sequence` command publishes it. Empty-sequence reuse and replacement
+restore the original sequence on Undo; Redo restores realized output without
+calling algorithms or providers. Desktop callback families share this draft
+lifecycle. Agent ordering paths use `apply_generated_order`, with explicit source
+ranges for trimmed results. Failed population discards the draft; saved project
+data never includes that partial output. Draft view updates do not mark the
+project dirty. Actual analysis updates remain outside editorial history.
+Worker delivery checks session identity and clip/source input ranges before
+applying output. A changed replacement target is rejected without overwriting it.
+
+This is an incremental U4 migration. Other metadata commands still need migration.
+Legacy direct model mutations are tracked as
 external changes; they are not yet undoable or comprehensively thread-guarded.
 MCP and CLI do not yet expose history tools; the shared spine history functions
 are available to retained headless sessions. Cross-process locks, durable history,

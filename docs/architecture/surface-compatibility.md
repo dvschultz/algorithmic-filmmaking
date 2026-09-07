@@ -158,6 +158,11 @@ desktop, chat, and MCP. Desktop batch deletion is one edit; Undo restores object
 and refreshes library views without importing media again. The desktop retains its
 live-sequence deletion guard. MCP response keys and load/save behavior are preserved.
 
+Generated desktop and agent sequences now publish completed drafts as one undo
+action, including replacement and empty-sequence reuse. Redo reuses realized
+output; it does not repeat inference or pre-rendering. Remaining headless algorithm
+registry and recipe parity belongs to U11-U12, rather than being claimed here.
+
 Checkpoint validation:
 
 - `python -m pytest tests/ scene_ripper_mcp/tests/ -q`: 2,832 passed, 2 skipped.

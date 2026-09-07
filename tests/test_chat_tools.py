@@ -1989,12 +1989,14 @@ class TestStorytellerTool:
         assert result["success"] is True
         assert result["clip_count"] == 2
 
-        add_calls = main_window.sequence_tab.timeline.add_clip.call_args_list
-        assert [call.args[0].id for call in add_calls] == ["clip-2", "clip-1"]
-        assert [call.args[1].id for call in add_calls] == ["src-2", "src-1"]
-        main_window.sequence_tab.timeline.clear_timeline.assert_called_once()
-        main_window.sequence_tab.timeline._on_zoom_fit.assert_called_once()
-        main_window.sequence_tab._set_state.assert_called_once_with("timeline")
+        entries = project.sequence.get_all_clips()
+        assert [entry.source_clip_id for entry in entries] == ["clip-2", "clip-1"]
+        assert [entry.source_id for entry in entries] == ["src-2", "src-1"]
+        assert project.session.undo_text == "Generate sequence"
+        project.session.undo()
+        assert not project.sequence.get_all_clips()
+        project.session.redo()
+        assert project.sequence.get_all_clips() == entries
         assert result["sequence_summary"]["ordered_clip_count"] == 2
         assert [row["clip_id"] for row in result["sequence_summary"]["clips"]] == [
             "clip-2",

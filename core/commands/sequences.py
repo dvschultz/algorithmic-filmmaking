@@ -45,6 +45,31 @@ class EditSequences:
         )
 
     @classmethod
+    def generated(
+        cls,
+        project: Project,
+        sequence: Sequence,
+        *,
+        replace: Sequence | None = None,
+        reuse: bool = False,
+    ) -> EditSequences:
+        before = tuple(project.sequences)
+        if replace is not None and not any(s is replace for s in before):
+            raise ValueError("Generation target no longer belongs to this project")
+        if any(s.id == sequence.id and s is not replace for s in before):
+            raise ValueError("Sequence ID already exists")
+        if reuse:
+            after = tuple(sequence if s is replace else s for s in before)
+        else:
+            after = tuple(s for s in before if s is not replace) + (sequence,)
+        active = project.sequence
+        if active is None:
+            raise ValueError("Project has no active sequence")
+        return cls(
+            project.sequences, before, after, active, sequence, "Generate sequence"
+        )
+
+    @classmethod
     def remove(cls, project: Project, index: int) -> EditSequences:
         before = tuple(project.sequences)
         after = before[:index] + before[index + 1 :]
