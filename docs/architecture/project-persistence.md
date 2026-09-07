@@ -29,8 +29,8 @@ the matching `.bak` file. Keep the backup until the restored file has been
 verified with the previous application. A backup contains the JSON document;
 it does not duplicate referenced media.
 
-This implements part of U5. Retained-session external-revision handling remains
-separate work.
+This implements part of U5. The MCP retained-session API remains separate work;
+shared headless models now check external revisions before offering history.
 
 Offline source files remain declared sources on load, so their clips and edits
 survive in every sequence. A relink callback can supply an existing replacement;
@@ -129,3 +129,14 @@ handlers cannot re-enable them. Delete, drag, and context-menu editing gestures
 are guarded too. Browsing, playback, filters, and inspection exports remain
 available. Agent dispatch rejects project mutations and project-file writes
 before starting workers. Opening a supported project restores editing controls.
+
+`load_with_mtime` binds a SHA-256 content revision to its headless model session
+and verifies it after loading. `save_with_mtime_check` verifies this revision
+under writer ownership, then refreshes it after a successful save. The legacy
+mtime check remains for compatibility, but a same-timestamp edit or deletion
+now fails closed. Session history availability, undo/redo, and command execution
+check the bound revision. Once a conflict is observed, the session requires a
+reload; restoring old bytes does not reactivate stale history. Clearing a
+project discards the revision. Plain `Project.load` does not opt into these
+headless checks. These checks detect observed changes; they cannot make an
+uncooperative external writer participate in the application lock protocol.

@@ -1,4 +1,4 @@
-"""Project I/O with writer ownership and supplementary mtime diagnostics.
+"""Project I/O with writer ownership, content revisions, and mtime diagnostics.
 
 Mutation callers hold ``project_writer`` from before loading through saving.
 The shared save helper reuses that scope. Its short save-only scope does not
@@ -14,11 +14,12 @@ from typing import Tuple
 
 from core.project import Project, ProjectSaveError
 from core.project_lock import ProjectBusyError, project_writer
+from core.project_revision import ProjectFileRevision, ProjectRevisionConflict
 
 
 def project_error(error: Exception) -> str | dict[str, str]:
     """Keep existing error strings while exposing writer conflicts structurally."""
-    return error.to_dict() if isinstance(error, ProjectBusyError) else str(error)
+    return error.to_dict() if isinstance(error, (ProjectBusyError, ProjectRevisionConflict)) else str(error)
 
 # Mtime-comparison tolerance in seconds. Filesystem caches and network mounts
 # can report sub-second drift on otherwise-untouched files. This legacy 1s
@@ -52,6 +53,7 @@ class ProjectModifiedExternally(Exception):
 def load_with_mtime(path: Path | str) -> Tuple[Project, float]:
     """Load a project and capture its file mtime at load time.
 
+    Binds a content revision to the session and rejects changes during loading.
     Returns ``(project, mtime)``. Caller must hold onto ``mtime`` and pass it
     to ``save_with_mtime_check`` to detect external modifications between
     load and save.
@@ -60,8 +62,11 @@ def load_with_mtime(path: Path | str) -> Tuple[Project, float]:
     are preserved by the model loader.
     """
     p = Path(path)
+    revision = ProjectFileRevision.capture(p)
     mtime = p.stat().st_mtime
     project = Project.load(p)
+    revision.verify()
+    project.session.bind_file_revision(revision)
     return project, mtime
 
 
@@ -72,6 +77,8 @@ def save_with_mtime_check(
 ) -> None:
     """Save a project, aborting if its file mtime drifted from ``expected_mtime``.
 
+    Sessions from ``load_with_mtime`` also verify exact file content, including
+    deletion, before saving. After success they retain the new content revision.
     Drift is measured with ``MTIME_TOLERANCE_SECONDS`` slack — within tolerance
     counts as unchanged. If the file does not exist (e.g. new-project save
     against a fresh path), the check is skipped — drift is meaningless when
@@ -82,6 +89,7 @@ def save_with_mtime_check(
     """
     with project_writer(path) as writer:
         p = writer.path
+        project.session.verify_file_revision()
         if p.exists():
             current = p.stat().st_mtime
             if abs(current - expected_mtime) > MTIME_TOLERANCE_SECONDS:
@@ -89,6 +97,7 @@ def save_with_mtime_check(
 
         if not project.save(p):
             raise ProjectSaveError(f"Failed to save project: {p}")
+        project.session.bind_file_revision(ProjectFileRevision.capture(p))
 
 
 def save_path_resolved(path: Path | str) -> Path:

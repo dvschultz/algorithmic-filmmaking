@@ -13,6 +13,8 @@ from threading import get_ident
 from typing import TYPE_CHECKING, Any, Callable, Protocol, TypeVar
 from uuid import uuid4
 
+from core.project_revision import ProjectFileRevision, ProjectRevisionConflict
+
 if TYPE_CHECKING:
     from core.project import Project
     from models.sequence import Sequence
@@ -48,6 +50,7 @@ class ProjectSession:
 
     def __init__(self, project: Project) -> None:
         self.project = project
+        self.file_revision: ProjectFileRevision | None = None
         self.session_id = uuid4().hex
         self._owner_thread = get_ident()
         self._busy = False
@@ -62,11 +65,11 @@ class ProjectSession:
 
     @property
     def can_undo(self) -> bool:
-        return bool(self._undo) and not self._closed
+        return bool(self._undo) and not self._closed and self._revision_is_current()
 
     @property
     def can_redo(self) -> bool:
-        return bool(self._redo) and not self._closed
+        return bool(self._redo) and not self._closed and self._revision_is_current()
 
     @property
     def undo_text(self) -> str:
@@ -75,6 +78,23 @@ class ProjectSession:
     @property
     def redo_text(self) -> str:
         return self._redo[-1].command.label if self.can_redo else ""
+
+    def bind_file_revision(self, revision: ProjectFileRevision) -> None:
+        """Publish the disk revision accepted by a successful load or save."""
+        self.assert_owner()
+        self.file_revision = revision
+        self._notify()
+
+    def verify_file_revision(self) -> None:
+        if self.file_revision is not None:
+            self.file_revision.verify()
+
+    def _revision_is_current(self) -> bool:
+        try:
+            self.verify_file_revision()
+        except ProjectRevisionConflict:
+            return False
+        return True
 
     def assert_owner(self) -> None:
         if self._closed:
@@ -141,6 +161,7 @@ class ProjectSession:
     def execute(self, command: EditCommand[T]) -> list[T]:
         self.assert_owner()
         self.project._assert_writable()
+        self.verify_file_revision()
         self._busy = True
         try:
             clips = command.apply(self.project)
@@ -164,6 +185,7 @@ class ProjectSession:
         """
         self.assert_owner()
         self.project._assert_writable()
+        self.verify_file_revision()
         self._busy = True
         try:
             return apply()
@@ -178,6 +200,8 @@ class ProjectSession:
 
     def _move_history(self, *, undo: bool) -> str | None:
         self.assert_owner()
+        self.project._assert_writable()
+        self.verify_file_revision()
         source, destination = (self._undo, self._redo) if undo else (self._redo, self._undo)
         if not source:
             return None
@@ -197,6 +221,7 @@ class ProjectSession:
         """Invalidate pending results and history when New Project reuses a model."""
         self.assert_owner()
         self.session_id = uuid4().hex
+        self.file_revision = None
         self._undo.clear()
         self._redo.clear()
         self._position = 0
