@@ -8,6 +8,7 @@ from cli.utils.config import CLIConfig
 from cli.utils.errors import ExitCode, exit_with
 from cli.utils.output import output_result, output_success, output_info
 from cli.utils.progress import ProgressContext
+from cli.utils.project_writer import own_project
 
 
 # Available models with descriptions
@@ -87,6 +88,8 @@ def transcribe(
 
     if not project_file.exists():
         exit_with(ExitCode.FILE_NOT_FOUND, f"Project file not found: {project_file}")
+
+    project_file = own_project(ctx, project_file)
 
     # Check for faster-whisper
     try:

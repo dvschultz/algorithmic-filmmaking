@@ -5,6 +5,8 @@ from typing import Optional
 
 import click
 
+from core.project_lock import ProjectBusyError
+
 from cli.utils.config import CLIConfig
 from cli.utils.errors import ExitCode, exit_with
 from cli.utils.output import output_result, output_table, output_success, output_info
@@ -358,41 +360,46 @@ def download(
             from core.scene_detect import SceneDetector, DetectionConfig
             from core.project import save_project
 
-            # Use default or specified sensitivity
-            if sensitivity is None:
-                sensitivity = config.default_sensitivity
+            from core.project_lock import project_writer
 
-            detection_config = DetectionConfig(
-                threshold=sensitivity,
-                min_scene_length=int(0.5 * 30),  # Will be updated
-                use_adaptive=True,
-            )
-
-            detector = SceneDetector(config=detection_config)
-            detect_progress = create_progress_callback("Detecting scenes")
-
-            source, clips = detector.detect_scenes_with_progress(
-                video_path=result.file_path,
-                progress_callback=detect_progress,
-            )
-
-            # Save project
             project_path = result.file_path.with_suffix(".sceneripper")
-            saved = save_project(
-                filepath=project_path,
-                sources=[source],
-                clips=clips,
-                sequence=None,
-            )
-            if not saved:
-                raise RuntimeError(f"Failed to save project: {project_path}")
+            with project_writer(project_path) as writer:
+                # Use default or specified sensitivity
+                if sensitivity is None:
+                    sensitivity = config.default_sensitivity
 
-            output_data["detected_clips"] = len(clips)
-            output_data["project_file"] = str(project_path)
+                detection_config = DetectionConfig(
+                    threshold=sensitivity,
+                    min_scene_length=int(0.5 * 30),  # Will be updated
+                    use_adaptive=True,
+                )
+
+                detector = SceneDetector(config=detection_config)
+                detect_progress = create_progress_callback("Detecting scenes")
+
+                source, clips = detector.detect_scenes_with_progress(
+                    video_path=result.file_path,
+                    progress_callback=detect_progress,
+                )
+
+                # Save project
+                saved = save_project(
+                    filepath=writer.path,
+                    sources=[source],
+                    clips=clips,
+                    sequence=None,
+                )
+                if not saved:
+                    raise RuntimeError(f"Failed to save project: {project_path}")
+
+                output_data["detected_clips"] = len(clips)
+                output_data["project_file"] = str(project_path)
 
         except Exception as e:
             output_info(f"Scene detection failed: {e}")
-            output_data["detection_error"] = str(e)
+            output_data["detection_error"] = (
+                e.to_dict() if isinstance(e, ProjectBusyError) else str(e)
+            )
 
     as_json = ctx.obj.get("json", False)
     if as_json:

@@ -62,8 +62,17 @@ saving; project-scoped jobs hold it throughout execution. Contention returns
 `False`, preserving the unsaved state. A failed download-and-detect project save
 reports a detection error instead of claiming a saved project filename.
 
-Desktop ownership for an entire open editing session and legacy CLI ownership
-from load through save remain to be implemented. Save-only locking cannot detect
+CLI analysis, transcription, and sequence mutations acquire ownership before
+loading and release it when the Click command context closes, including early
+returns and errors. Detection owns its destination before checking overwrite
+policy and computing scenes. Download-and-detect acquires the destination after
+the downloaded media path is known; contention preserves the successful download
+and returns a structured `project_busy` detection error. Other mutating CLI
+commands exit with status 1 on contention and return the structured error in
+JSON mode. Read-only project inspection and export do not acquire ownership.
+
+Desktop ownership for an entire open editing session remains to be implemented.
+Save-only locking cannot detect
 a stale document loaded before another writer completed. Keep the desktop
 project closed while MCP edits it. The mtime check remains a supplementary
 diagnostic with a one-second tolerance; it does not replace lifetime ownership

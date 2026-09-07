@@ -9,6 +9,7 @@ from cli.utils.config import CLIConfig
 from cli.utils.errors import ExitCode, exit_with
 from cli.utils.output import output_result, output_success, output_info
 from cli.utils.progress import ProgressContext
+from cli.utils.project_writer import own_project
 
 
 @click.group()
@@ -67,6 +68,7 @@ def describe(
         scene_ripper analyze describe project.json --tier cloud
         scene_ripper analyze describe project.json --prompt "Describe the lighting"
     """
+    project_file = own_project(ctx, project_file)
     try:
         from core.project import load_project, save_project, ProjectLoadError
         from core.thumbnail import ThumbnailGenerator
@@ -245,6 +247,7 @@ def colors(
         scene_ripper analyze colors project.json --num-colors 3
         scene_ripper analyze colors project.json -c clip1 -c clip2
     """
+    project_file = own_project(ctx, project_file)
     try:
         from core.project import Project, ProjectLoadError
         from core.operations.colors import (
@@ -356,6 +359,7 @@ def shots(
         scene_ripper analyze shots project.json --force
         scene_ripper analyze shots project.json -c clip1 -c clip2
     """
+    project_file = own_project(ctx, project_file)
     try:
         from core.project import load_project, save_project, ProjectLoadError
         from core.thumbnail import ThumbnailGenerator
@@ -533,6 +537,7 @@ def classify(
         scene_ripper analyze classify project.json --top-k 3
         scene_ripper analyze classify project.json -c clip1 -c clip2 --force
     """
+    project_file = own_project(ctx, project_file)
     try:
         from core.project import load_project, save_project, ProjectLoadError
         from core.thumbnail import ThumbnailGenerator
@@ -708,6 +713,7 @@ def objects(
         scene_ripper analyze objects project.json --confidence 0.3
         scene_ripper analyze objects project.json -c clip1 --force
     """
+    project_file = own_project(ctx, project_file)
     try:
         from core.project import load_project, save_project, ProjectLoadError
         from core.thumbnail import ThumbnailGenerator
@@ -887,6 +893,7 @@ def people(
         scene_ripper analyze people project.json --confidence 0.3
         scene_ripper analyze people project.json -c clip1 --force
     """
+    project_file = own_project(ctx, project_file)
     try:
         from core.project import load_project, save_project, ProjectLoadError
         from core.thumbnail import ThumbnailGenerator

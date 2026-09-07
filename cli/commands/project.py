@@ -7,6 +7,7 @@ import click
 
 from cli.utils.errors import ExitCode, exit_with
 from cli.utils.output import output_result, output_table, output_success
+from cli.utils.project_writer import own_project
 
 
 @click.group()
@@ -284,6 +285,8 @@ def add_to_sequence(
             ExitCode.USAGE_ERROR,
             "Specify clip IDs, --all, or --filter to select clips",
         )
+
+    project_file = own_project(ctx, project_file)
 
     try:
         from core.project import Project, ProjectLoadError

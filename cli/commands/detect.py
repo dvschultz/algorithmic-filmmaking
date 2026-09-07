@@ -8,6 +8,7 @@ from cli.utils.config import CLIConfig
 from cli.utils.errors import ExitCode, exit_with
 from cli.utils.output import output_result, output_success
 from cli.utils.progress import create_progress_callback
+from cli.utils.project_writer import own_project
 from cli.utils.signals import (
     setup_signal_handlers,
     restore_default_handlers,
@@ -87,6 +88,8 @@ def detect(
     # Determine output path
     if output is None:
         output = video.with_suffix(".sceneripper")
+
+    output = own_project(ctx, output)
 
     # Check for existing file
     if output.exists() and not force:
