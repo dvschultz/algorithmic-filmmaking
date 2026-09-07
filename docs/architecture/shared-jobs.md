@@ -27,6 +27,30 @@ surface treats a partial payload as overall job success.
 
 ## Saved-result recovery
 
+`core/jobs/spec.py` defines immutable `OperationSpec` metadata: operation kind and
+version, canonical arguments and input snapshot, originating session/revision,
+and cancellation/persistence capabilities. JSON encoding detaches nested values
+and rejects non-string keys, nonfinite numbers, and arbitrary Python objects.
+The runtime rejects mismatched kind/arguments or store persistence before
+inserting work. Noncancellable operations reject caller cancellation; they cannot
+borrow an external cancellation event.
+
+Both color adapters supply specs. Desktop specs include normalized color policy,
+parallelism, originating session and mutation generation. MCP specs include the
+accepted project content revision and target snapshot; the runner verifies them
+after acquiring the writer lease and before extraction. Changed queued inputs
+fail instead of silently using a newer snapshot. Parameters are read from the
+detached spec, so caller list mutation cannot alter queued work.
+
+The nullable `operation_json` job column preserves old rows. Status projections
+expose only the operation ID, kind/version and capabilities, never arguments or
+input details. `job_history` describes the store, not a guarantee that project
+changes were committed. Legacy submissions remain supported during migration;
+explicit idempotency keys retain their existing first-submission behavior and
+return the original job and its original metadata. Metadata does not serialize
+or dynamically resolve executable callables. Per-item `ResultSpec` identities
+remain separate from batch job identity; color uses one version constant for both.
+
 `core/jobs/commits.py` identifies an operation by canonical project path, operation
 kind/version, target, normalized arguments, and input snapshot. The serialized
 identity is detached from mutable caller data and hashed into a result ID.

@@ -47,6 +47,7 @@ from core.project_lock import ProjectBusyError, project_writer
 
 from core.jobs.lock import ProjectLockRegistry
 from core.jobs.ownership import acquire_owner
+from core.jobs.spec import OperationSpec, encode_object
 from core.jobs.store import (
     JobStore,
     STATUS_CANCELLED,
@@ -100,6 +101,7 @@ class _JobHandle:
     task_id: str
     cancel_event: threading.Event
     future: Future | None
+    cancellable: bool = True
     last_progress_write: float = 0.0
     last_progress: float = 0.0
     last_status_message: str = ""
@@ -125,9 +127,7 @@ class JobRuntime:
         self._owner_id = (
             str(uuid.uuid4()) if store.persistence == "job_history" else None
         )
-        self._owner_lease = (
-            acquire_owner(self._owner_id) if self._owner_id else None
-        )
+        self._owner_lease = acquire_owner(self._owner_id) if self._owner_id else None
 
     @classmethod
     def for_session(cls, *, max_workers: int = DEFAULT_MAX_WORKERS) -> JobRuntime:
@@ -172,6 +172,7 @@ class JobRuntime:
         project_mtime_at_start: Optional[float] = None,
         idempotency_key: Optional[str] = None,
         cancellation_event: threading.Event | None = None,
+        operation: OperationSpec | None = None,
     ) -> dict:
         """Submit work while its runtime lease is held; reject closed runtimes."""
         with self._submission_lock:
@@ -185,6 +186,7 @@ class JobRuntime:
                 project_mtime_at_start=project_mtime_at_start,
                 idempotency_key=idempotency_key,
                 cancellation_event=cancellation_event,
+                operation=operation,
             )
 
     def _submit(
@@ -197,6 +199,7 @@ class JobRuntime:
         project_mtime_at_start: Optional[float] = None,
         idempotency_key: Optional[str] = None,
         cancellation_event: threading.Event | None = None,
+        operation: OperationSpec | None = None,
     ) -> dict:
         """Submit a job. Returns a result dict suitable for the MCP
         ``start_*`` tool response.
@@ -212,6 +215,17 @@ class JobRuntime:
         ``status="completed"`` is returned synchronously when an idempotency
         key matches an already-completed row — no worker is spawned.
         """
+        if operation is not None:
+            if operation.kind != kind or operation.arguments_json != encode_object(
+                args
+            ):
+                raise ValueError("Operation metadata does not match submission")
+            if operation.persistence != self.store.persistence:
+                raise ValueError("Operation persistence does not match job store")
+            if not operation.cancellable and cancellation_event is not None:
+                raise ValueError(
+                    "Noncancellable operations cannot borrow a cancellation event"
+                )
         if self.store.persistence == "session_only" and project_path is not None:
             raise ValueError(
                 "A session-only runtime cannot accept a saved project path"
@@ -284,12 +298,18 @@ class JobRuntime:
             queue_position=queue_position,
             blocking_job_id=blocking_job_id,
             owner_id=self._owner_id,
+            operation=operation,
         )
 
         cancel_event = (
             cancellation_event if cancellation_event is not None else threading.Event()
         )
-        handle = _JobHandle(task_id=row.id, cancel_event=cancel_event, future=None)
+        handle = _JobHandle(
+            task_id=row.id,
+            cancel_event=cancel_event,
+            future=None,
+            cancellable=operation.cancellable if operation else True,
+        )
         with self._handles_lock:
             self._handles[row.id] = handle
         try:
@@ -324,7 +344,7 @@ class JobRuntime:
         """
         with self._handles_lock:
             handle = self._handles.get(task_id)
-        if handle is None:
+        if handle is None or not handle.cancellable:
             return False
 
         # Publish cancellation before the worker can leave the queue.

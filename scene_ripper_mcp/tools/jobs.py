@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from core.jobs.spec import OperationSpec
 from typing import Annotated, Optional
 
 from mcp.server.fastmcp import Context
@@ -318,6 +319,7 @@ def _start_job(
     project_mtime_at_start: Optional[float],
     idempotency_key: Optional[str],
     run,
+    operation: OperationSpec | None = None,
 ) -> str:
     """Common path for start_* tools: validate, submit, wrap errors."""
     from scene_ripper_mcp.jobs.runtime import InvalidIdempotencyKeyError
@@ -332,6 +334,7 @@ def _start_job(
                 project_path=project_path,
                 project_mtime_at_start=project_mtime_at_start,
                 idempotency_key=idempotency_key,
+                operation=operation,
             )
         except InvalidIdempotencyKeyError as exc:
             return json.dumps(
@@ -595,24 +598,47 @@ async def start_analyze_colors(
             }
         )
 
-    from core.jobs.colors import run_colors
+    from core.jobs.colors import color_job_spec, run_colors
+    from core.jobs.commits import StaleJobResult
+    from core.operations.colors import color_request
+    from core.project_revision import ProjectFileRevision
+
     store = _lifespan(ctx)["job_store"]
+    arguments = {"project_path": canonical, "clip_ids": clip_ids, "num_colors": num_colors}
+    revision = _project.session.file_revision
+    try:
+        operation = color_job_spec(
+            color_request(_project, clip_ids, num_colors, skip_existing=False),
+            arguments=arguments, persistence="job_history",
+            session_id=_project.session.session_id,
+            input_revision=revision.digest if revision is not None else None,
+        )
+    except ValueError as exc:
+        return json.dumps(_wrap_error(exc))
 
     def run(progress_callback, cancel_event):
-        return run_colors(store, path, clip_ids, num_colors, progress_callback, cancel_event)
+        frozen = operation.arguments
+        if operation.input_revision is not None:
+            ProjectFileRevision(path, operation.input_revision).verify()
+        current, _ = load_with_mtime(path)
+        live = color_job_spec(
+            color_request(current, frozen["clip_ids"], frozen["num_colors"], skip_existing=False),
+            arguments=frozen, persistence="job_history", session_id=operation.session_id,
+            input_revision=operation.input_revision,
+        )
+        if live.inputs_json != operation.inputs_json:
+            raise StaleJobResult("Color inputs changed while the job was queued")
+        return run_colors(store, path, frozen["clip_ids"], frozen["num_colors"], progress_callback, cancel_event)
 
     return _start_job(
         ctx,
         kind="analyze_colors",
-        args={
-            "project_path": canonical,
-            "clip_ids": clip_ids,
-            "num_colors": num_colors,
-        },
+        args=operation.arguments,
         project_path=canonical,
         project_mtime_at_start=mtime,
         idempotency_key=idempotency_key,
         run=run,
+        operation=operation,
     )
 
 

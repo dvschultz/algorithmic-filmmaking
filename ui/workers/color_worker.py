@@ -8,6 +8,7 @@ from PySide6.QtCore import Signal
 
 from core.analysis_target import AnalysisTarget
 from core.jobs import JobRuntime
+from core.jobs.colors import color_job_spec
 from core.operations.colors import (
     ColorApplication,
     compute_colors,
@@ -60,6 +61,20 @@ class ColorAnalysisWorker(CancellableWorker):
         self.application = (
             ColorApplication(project, self.request) if project is not None else None
         )
+        self.operation = color_job_spec(
+            self.request,
+            arguments={
+                "num_colors": self.request.num_colors,
+                "skip_existing": self.request.skip_existing,
+                "skip_empty": self.request.skip_empty,
+                "parallelism": self._parallelism,
+            },
+            persistence="session_only",
+            session_id=project.session.session_id if project is not None else None,
+            input_revision=str(project.mutation_generation)
+            if project is not None
+            else None,
+        )
         self.result: Optional[ColorResult] = None
         self.task_id: str | None = None
         self.job_status: str | None = None
@@ -100,7 +115,8 @@ class ColorAnalysisWorker(CancellableWorker):
             self._runtime = runtime
             submission = runtime.submit(
                 kind="analyze_colors",
-                args={"request_id": self.request.request_id},
+                args=self.operation.arguments,
+                operation=self.operation,
                 run=compute,
                 cancellation_event=self._cancel_event,
             )

@@ -185,6 +185,13 @@ before cancellation or failure. An absent `result` means no output was recorded.
 Status and list endpoints continue to omit payloads, and nonterminal jobs do not
 expose their unfinished output through `get_job_result`.
 
+Migrated color jobs also expose an `operation` summary in status/list responses:
+its ID, kind, version, `cancellable`, and persistence mode. Input details remain
+private. A queued color job fails if its project revision or media snapshot
+changes before execution. Submit it again against the current inputs to retry.
+An explicit idempotency key still refers to the original job; use a new key when
+requesting different work.
+
 ### Synchronous tools (unchanged from v0)
 
 The original synchronous catalog (project / clip / sequence / export

@@ -12,12 +12,11 @@ This records evidence and remaining work; it does not mark the larger plan done.
 | Unsaved work visibly session-only | In-memory store and runtime; desktop color status message; `tests/test_session_jobs.py` and `tests/test_color_worker_delivery.py` | Implemented |
 | Old history/task IDs remain readable | Additive store migration; `test_legacy_migration_rows_and_import_aliases_survive`; MCP store tests | Implemented |
 | Safe runtime restart ownership | `tests/test_job_ownership.py` covers live processes, killed owner with queued/running work, nonblocking shutdown and insertion/shutdown race | Implemented for owner-aware runtimes; legacy limitations documented |
-| Operation identity and immutable normalized arguments | Frozen `ColorRequest` and deterministic per-target `ResultSpec` exist; generic runtime still accepts arbitrary `kind`, `args` and a closure | Partial |
-| Session/input revisions and execution capabilities | Color application verifies originating session and target snapshot; disk commits verify content revision. Generic submissions have no unified operation revision/capability contract | Partial |
+| Operation identity and immutable normalized arguments | `OperationSpec` stores canonical detached JSON and a deterministic ID; runtime verifies kind/arguments against the spec. Both color adapters supply normalized parameters and input snapshots | Implemented for the pilot; legacy submissions remain during U7 migration |
+| Session/input revisions and execution capabilities | Specs record session/input revision; runtime enforces persistence and cancellation capabilities. MCP color verifies queued project revision and target snapshot before extraction; desktop application retains its owner/session/target guards | Implemented for the pilot |
 | Batched result commits and serialization cost | Saved color pilot records and saves one target at a time. It preserves commit order but does not batch project serialization | Not implemented |
 
-Next, define and consume immutable operation metadata in the shared runtime and
-both color adapters, including explicit cancellation/persistence capabilities and
-session/input identity. Preserve legacy submissions during migration. Then batch
-saved-result publication while retaining failure-injection coverage at both
-commit boundaries. U6 remains open until these approach requirements are checked.
+Next, batch saved-result publication while retaining failure-injection coverage
+at both commit boundaries. U6 remains open until this approach requirement is
+implemented and checked. Adopting the same operation metadata for remaining
+analysis families belongs to their U7 migrations.

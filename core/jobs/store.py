@@ -37,6 +37,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Optional, Sequence
+from core.jobs.spec import OperationSpec
 
 # Status sentinel values.
 STATUS_QUEUED = "queued"
@@ -88,6 +89,7 @@ class JobRow:
     blocking_job_id: Optional[str] = None
     finished_at: Optional[float] = None
     persistence: str = "job_history"
+    operation_json: str | None = None
 
     # Convenience: parsed args / result.
     @property
@@ -118,6 +120,10 @@ class JobRow:
         }
         if self.persistence == "session_only":
             projection["persistence"] = self.persistence
+        if self.operation_json is not None:
+            projection["operation"] = OperationSpec.from_json(
+                self.operation_json
+            ).safe_projection()
         return projection
 
 
@@ -166,6 +172,7 @@ def _row_to_jobrow(row: sqlite3.Row, persistence: str = "job_history") -> JobRow
         blocking_job_id=row["blocking_job_id"],
         finished_at=row["finished_at"],
         persistence=persistence,
+        operation_json=row["operation_json"],
     )
 
 
@@ -257,6 +264,8 @@ class JobStore:
                 columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
                 if "owner_id" not in columns:
                     conn.execute("ALTER TABLE jobs ADD COLUMN owner_id TEXT")
+                if "operation_json" not in columns:
+                    conn.execute("ALTER TABLE jobs ADD COLUMN operation_json TEXT")
 
     # --- Mutations ---
 
@@ -272,6 +281,7 @@ class JobStore:
         queue_position: Optional[int] = None,
         blocking_job_id: Optional[str] = None,
         owner_id: str | None = None,
+        operation: OperationSpec | None = None,
     ) -> JobRow:
         """Insert a new job row and return it.
 
@@ -293,6 +303,7 @@ class JobStore:
             queue_position=queue_position,
             blocking_job_id=blocking_job_id,
             persistence=self.persistence,
+            operation_json=operation.to_json() if operation is not None else None,
         )
         with self._connect() as conn:
             conn.execute(
@@ -301,9 +312,9 @@ class JobStore:
                     id, kind, status, idempotency_key, args_json,
                     project_path, project_mtime_at_start, progress,
                     status_message, queue_position, blocking_job_id,
-                    created_at, updated_at, owner_id
+                    created_at, updated_at, owner_id, operation_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     row.id,
@@ -320,6 +331,7 @@ class JobStore:
                     row.created_at,
                     row.updated_at,
                     owner_id,
+                    row.operation_json,
                 ),
             )
         return row

@@ -51,6 +51,9 @@ class Receiver(QObject):
 
 receiver = Receiver()
 worker = ColorAnalysisWorker(project.clips, sources_by_id=project.sources_by_id, project=project)
+assert worker.operation.session_id == project.session.session_id
+assert worker.operation.input_revision == str(project.mutation_generation)
+assert worker.operation.arguments['num_colors'] == 5
 started = []
 worker.job_started.connect(lambda task, persistence: started.append((task, persistence)))
 worker.result_ready.connect(receiver.apply)

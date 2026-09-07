@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 from pathlib import Path
+from dataclasses import asdict
 from threading import Event
-from typing import Callable
+from typing import Callable, Literal
 import json
 
 from core.jobs.commits import ResultSpec, StaleJobResult, commit_result
 from core.jobs.store import JobStore
+from core.jobs.spec import OperationSpec
 from core.operations.colors import (
     ColorApplication,
+    ColorRequest,
     ColorTarget,
     color_request,
     compute_colors,
@@ -18,6 +21,40 @@ from core.operations.colors import (
 from core.operations.contracts import ColorOutcome, ColorResult
 from core.project import Project
 from core.spine.project_io import load_with_mtime
+
+COLOR_OPERATION_VERSION = 1
+
+
+def color_job_spec(
+    request: ColorRequest,
+    *,
+    arguments: dict,
+    persistence: Literal["job_history", "session_only"],
+    session_id: str | None,
+    input_revision: str | None,
+) -> OperationSpec:
+    """Describe the exact color snapshot and policy accepted at submission."""
+    targets = []
+    for target in request.targets:
+        snapshot = asdict(target)
+        for key in ("video_path", "image_path"):
+            snapshot[key] = str(snapshot[key]) if snapshot[key] is not None else None
+        targets.append(snapshot)
+    return OperationSpec.build(
+        kind="analyze_colors",
+        version=COLOR_OPERATION_VERSION,
+        arguments=arguments,
+        inputs={
+            "targets": targets,
+            "num_colors": request.num_colors,
+            "skip_existing": request.skip_existing,
+            "skip_empty": request.skip_empty,
+        },
+        persistence=persistence,
+        cancellable=True,
+        session_id=session_id,
+        input_revision=input_revision,
+    )
 
 
 class _OutcomeError(Exception):
@@ -87,7 +124,7 @@ def run_colors(
         spec = ResultSpec.build(
             path,
             kind="analyze_colors",
-            version=1,
+            version=COLOR_OPERATION_VERSION,
             target_id=clip_id,
             arguments={"num_colors": num_colors},
             inputs=inputs,

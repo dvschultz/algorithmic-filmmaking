@@ -92,6 +92,51 @@ async def test_terminal_error_exposes_available_output_only_through_result(lifes
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["media", "project", "caller_arguments"])
+async def test_color_job_binds_submitted_snapshot(lifespan_ctx, tmp_path, monkeypatch, change):
+    from unittest.mock import Mock
+    from core.jobs.spec import OperationSpec
+    from tests.test_spine_analyze import _build_project
+
+    ctx, store, runtime = lifespan_ctx
+    project = _build_project(tmp_path, 2)
+    path = tmp_path / "colors.sceneripper"
+    assert project.save(path)
+    release = threading.Event()
+    entered = [threading.Event() for _ in range(4)]
+    extract = Mock(return_value=[(1, 2, 3)])
+    monkeypatch.setattr("core.analysis.color.extract_dominant_colors", extract)
+    try:
+        for event in entered:
+            def block(progress, cancel, event=event):
+                event.set()
+                assert release.wait(10)
+                return {}
+            runtime.submit(kind="blocker", args={}, run=block)
+        assert all(event.wait(5) for event in entered)
+        ids = ["c-0"]
+        started = json.loads(await start_analyze_colors(str(path), clip_ids=ids, ctx=ctx))
+        assert started["success"], started
+        task = started["task_id"]
+        operation = OperationSpec.from_json(store.get(task).operation_json)
+        assert operation.arguments["clip_ids"] == ["c-0"]
+        assert operation.input_revision
+        if change == "media":
+            (tmp_path / "video.mp4").write_bytes(b"changed media")
+        elif change == "project":
+            project.metadata.name = "changed project"
+            assert project.save(path)
+        else:
+            ids.append("c-1")
+        release.set()
+        expected = STATUS_COMPLETED if change == "caller_arguments" else STATUS_FAILED
+        _wait_for_status(store, task, expected)
+        assert extract.call_count == (1 if change == "caller_arguments" else 0)
+    finally:
+        release.set()
+
+
+@pytest.mark.asyncio
 async def test_color_job_persists_success_and_reports_each_failed_target(lifespan_ctx, tmp_path):
     from unittest.mock import patch
 
