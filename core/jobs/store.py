@@ -457,14 +457,25 @@ class JobStore:
 
     def checkpoint_result(self, result_id: str, digest: str) -> None:
         """Acknowledge an already-durable project receipt; never apply work here."""
+        self.checkpoint_results([(result_id, digest)])
+
+    def checkpoint_results(self, receipts: Sequence[tuple[str, str]]) -> None:
+        """Atomically acknowledge a saved group; a missing receipt rolls it back."""
+        if not receipts:
+            return
         with self._connect() as conn:
             conn.execute("PRAGMA synchronous=FULL")
-            changed = conn.execute(
-                "UPDATE job_results SET committed=1 WHERE result_id=? AND payload_digest=?",
-                (result_id, digest),
-            ).rowcount
-            if not changed:
-                raise ValueError("Computed result is missing or has a different digest")
+            with conn:
+                conn.execute("BEGIN IMMEDIATE")
+                for result_id, digest in receipts:
+                    changed = conn.execute(
+                        "UPDATE job_results SET committed=1 WHERE result_id=? AND payload_digest=?",
+                        (result_id, digest),
+                    ).rowcount
+                    if not changed:
+                        raise ValueError(
+                            "Computed result is missing or has a different digest"
+                        )
 
     # --- Reads ---
 

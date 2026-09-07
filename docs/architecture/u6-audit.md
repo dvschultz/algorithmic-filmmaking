@@ -14,9 +14,10 @@ This records evidence and remaining work; it does not mark the larger plan done.
 | Safe runtime restart ownership | `tests/test_job_ownership.py` covers live processes, killed owner with queued/running work, nonblocking shutdown and insertion/shutdown race | Implemented for owner-aware runtimes; legacy limitations documented |
 | Operation identity and immutable normalized arguments | `OperationSpec` stores canonical detached JSON and a deterministic ID; runtime verifies kind/arguments against the spec. Both color adapters supply normalized parameters and input snapshots | Implemented for the pilot; legacy submissions remain during U7 migration |
 | Session/input revisions and execution capabilities | Specs record session/input revision; runtime enforces persistence and cancellation capabilities. MCP color verifies queued project revision and target snapshot before extraction; desktop application retains its owner/session/target guards | Implemented for the pilot |
-| Batched result commits and serialization cost | Saved color pilot records and saves one target at a time. It preserves commit order but does not batch project serialization | Not implemented |
+| Batched result commits and serialization cost | `result_batch()` stages at most 16 results, revalidates all targets, saves once, and checkpoints atomically. `tests/test_job_batches.py` covers both crash seams, cancellation, stale earlier inputs, and failed application; the local 256-target diagnostic reduces saves from 256 to 16 | Implemented for the pilot |
 
-Next, batch saved-result publication while retaining failure-injection coverage
-at both commit boundaries. U6 remains open until this approach requirement is
-implemented and checked. Adopting the same operation metadata for remaining
-analysis families belongs to their U7 migrations.
+The U6 pilot gate is implemented and verified by lifecycle, ownership, metadata,
+recovery, batching and adapter tests. Its compatibility wrappers and legacy
+submission support remain intentional until the corresponding U7 migrations.
+This does not certify the remaining U7-U17 work: next is source import/download,
+detection and thumbnail workflow migration under the same operation/job contract.

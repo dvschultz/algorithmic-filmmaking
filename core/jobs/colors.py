@@ -8,7 +8,7 @@ from threading import Event
 from typing import Callable, Literal
 import json
 
-from core.jobs.commits import ResultSpec, StaleJobResult, commit_result
+from core.jobs.commits import ResultBatch, ResultSpec, StaleJobResult, result_batch
 from core.jobs.store import JobStore
 from core.jobs.spec import OperationSpec
 from core.operations.colors import (
@@ -20,7 +20,6 @@ from core.operations.colors import (
 )
 from core.operations.contracts import ColorOutcome, ColorResult
 from core.project import Project
-from core.spine.project_io import load_with_mtime
 
 COLOR_OPERATION_VERSION = 1
 
@@ -90,7 +89,19 @@ def run_colors(
     if not valid:
         raise ValueError(error)
     path = resolved
-    project, _ = load_with_mtime(path)
+    with result_batch(store, path) as batch:
+        return _run_color_batch(store, batch, clip_ids, num_colors, progress, cancel)
+
+
+def _run_color_batch(
+    store: JobStore,
+    batch: ResultBatch,
+    clip_ids: list[str] | None,
+    num_colors: int,
+    progress: Callable[[float, str], None],
+    cancel: Event,
+) -> dict:
+    project, path = batch.project, batch.path
     ids = (
         list(dict.fromkeys(clip_ids))
         if clip_ids is not None
@@ -117,7 +128,6 @@ def run_colors(
                 {"clip_id": cid, "reason": "cancelled"} for cid in ids[index:]
             )
             break
-        project, _ = load_with_mtime(path)
         request = color_request(project, [clip_id], num_colors, skip_existing=False)
         target = request.targets[0]
         inputs = _inputs(project, target)
@@ -151,7 +161,7 @@ def run_colors(
                 raise _OutcomeError(outcome)
             return {"colors": [list(color) for color in outcome.colors]}
 
-        def validate(current):
+        def validate(current, clip_id=clip_id, inputs=inputs):
             live = color_request(
                 current, [clip_id], num_colors, skip_existing=False
             ).targets[0]
@@ -170,15 +180,14 @@ def run_colors(
             if result.outcomes[0].status != "succeeded":
                 raise StaleJobResult("Color inputs changed during application")
 
-        def is_applied(current, payload):
+        def is_applied(current, payload, clip_id=clip_id):
             clip = current.clips_by_id.get(clip_id)
             return clip is not None and clip.dominant_colors == [
                 tuple(c) for c in payload["colors"]
             ]
 
         try:
-            receipt = commit_result(
-                store,
+            receipt = batch.commit(
                 spec,
                 compute=compute,
                 validate_input=validate,
@@ -208,8 +217,9 @@ def run_colors(
                     failure["message"] = outcome.message
                 output["failed"].append(failure)
         progress(
-            (index + 1) / len(ids),
-            f"Color analysis ({index + 1}/{len(ids)}): {clip_id}",
+            0.95 * (index + 1) / len(ids),
+            f"Color computation ({index + 1}/{len(ids)}): {clip_id}",
         )
+    batch.flush()
     progress(1.0, "Color analysis finished")
     return {"success": True, "result": output}

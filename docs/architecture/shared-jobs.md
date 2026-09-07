@@ -57,15 +57,33 @@ identity is detached from mutable caller data and hashed into a result ID.
 
 Publication has three steps under the project writer lease:
 
-1. Store the computed JSON payload and digest in SQLite with synchronous FULL.
-2. Validate inputs and disk revision, apply to a freshly loaded project, and save
-   both the output and its result-ID/digest receipt in one atomic project file.
-3. Mark the stored result committed only after the project save succeeds.
+1. Store each computed JSON payload and digest immediately in SQLite with
+   synchronous FULL, before computing the next item.
+2. Stage accepted output and receipts on one private project model. Revalidate
+   every staged input, payload digest, output and receipt before publishing a
+   group of up to 16 results in one atomic project save.
+3. Mark the group's results committed in one SQLite transaction only after the
+   project save succeeds. A missing result or digest mismatch rolls back the
+   entire checkpoint transaction.
 
 A retry after a failed project save reuses the stored computation in a fresh
 model. A retry after a checkpoint failure verifies the project receipt and output
 and acknowledges it without applying twice. Missing or corrupt results, changed
 inputs, removed receipts, and edited committed outputs fail closed.
+
+`result_batch()` owns the private model and writer lease. Normal exit flushes a
+partial group; exceptional exit discards unsaved changes. Failed application or
+publication makes the batch unusable, even if a caller catches the exception;
+retry requires a fresh model. Cancellation flushes already-computed successes.
+`commit_result()` retains its single-result API through a one-item batch. Color
+serialization runs in the MCP job executor; GUI color application remains
+session-only and uses the existing separate project-save flow.
+
+A local diagnostic with 256 targets, mocked extraction and a 93,850-byte project
+compared the same engine with one-item and 16-item groups. Project saves fell
+from 256 to 16; time inside project save fell from 0.901s to 0.058s, and total run
+time from 1.602s to 0.527s. These measurements isolate grouping cost; they do not
+predict media extraction latency.
 
 Project schema 1.5 adds `job_results` receipts. Earlier files migrate with the
 existing exact-byte backup policy. Schema-aware 1.4 clients open 1.5 read-only,
@@ -75,7 +93,8 @@ Deleting or purging job history retains computed results for recovery; automatic
 result-cache cleanup is not implemented yet.
 
 `core/jobs/colors.py` is the first production caller, through MCP
-`start_analyze_colors`. Each clip is committed separately. Media path, frame range,
+`start_analyze_colors`. Each clip retains its own result ID within a commit group.
+Media path, frame range,
 mtime/size, project/source IDs, and color count determine reuse. Legacy palettes
 without managed receipts keep their skip-existing behavior. Managed palettes are
 verified on retry; changed media gets a new result identity. Media fingerprints
@@ -122,7 +141,8 @@ task-aware start, wait and cleanup instead of the legacy worker API.
 This is a partial U6 implementation. Recovery covers recorded results; a crash
 after a provider response but before recording it cannot guarantee avoiding a
 repeat call. Paid workflows, other analysis runners, and GUI workflow migration
-remain outstanding. Per-clip project saves favor recovery over throughput.
+remain outstanding. The color pilot now batches project saves while preserving
+per-item recovery identities.
 
 ## Runtime ownership and restart recovery
 

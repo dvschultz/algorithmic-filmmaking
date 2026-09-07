@@ -47,10 +47,10 @@ def setup(tmp_path):
 
 def test_crash_after_project_save_reconciles_without_double_apply(setup, monkeypatch):
     path, store, spec, counts, kwargs = setup
-    original = store.checkpoint_result
+    original = store.checkpoint_results
     monkeypatch.setattr(
         store,
-        "checkpoint_result",
+        "checkpoint_results",
         lambda *a: (_ for _ in ()).throw(RuntimeError("checkpoint crash")),
     )
     with pytest.raises(RuntimeError, match="checkpoint crash"):
@@ -58,7 +58,7 @@ def test_crash_after_project_save_reconciles_without_double_apply(setup, monkeyp
     assert Project.load(path).metadata.name == "1"
     assert spec.result_id in Project.load(path).metadata.job_results
     assert not store.get_result(spec.result_id)["committed"]
-    monkeypatch.setattr(store, "checkpoint_result", original)
+    monkeypatch.setattr(store, "checkpoint_results", original)
     result = commit_result(store, spec, **kwargs)
     assert not result["applied"]
     assert counts == {"compute": 1, "apply": 1}
@@ -125,15 +125,15 @@ def test_color_result_recovery_does_not_repeat_extraction(tmp_path, monkeypatch)
     store = JobStore(tmp_path / "jobs.db")
     extract = Mock(return_value=[(1, 2, 3)])
     monkeypatch.setattr("core.analysis.color.extract_dominant_colors", extract)
-    original = store.checkpoint_result
+    original = store.checkpoint_results
     monkeypatch.setattr(
         store,
-        "checkpoint_result",
+        "checkpoint_results",
         lambda *a: (_ for _ in ()).throw(RuntimeError("checkpoint crash")),
     )
     with pytest.raises(RuntimeError, match="checkpoint crash"):
         run_colors(store, path, ["c-0"], 5, lambda *a: None, Event())
-    monkeypatch.setattr(store, "checkpoint_result", original)
+    monkeypatch.setattr(store, "checkpoint_results", original)
     result = run_colors(store, path, ["c-0"], 5, lambda *a: None, Event())
     assert result["result"]["skipped"][0]["reason"] == "already_committed"
     assert extract.call_count == 1
