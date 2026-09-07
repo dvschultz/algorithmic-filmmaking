@@ -452,8 +452,8 @@ def extract_gaze_from_clip(
 
     cap = cv2.VideoCapture(source_path)
     if not cap.isOpened():
-        logger.warning("Could not open video: %s", source_path)
-        return None
+        cap.release()
+        raise ValueError(f"Could not open video: {source_path}")
 
     # Collect per-frame gaze results
     frame_results: list[tuple[float, float, str]] = []
@@ -462,16 +462,14 @@ def extract_gaze_from_clip(
         img_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         img_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-        if img_w == 0 or img_h == 0:
-            logger.warning("Video reports zero dimensions (%dx%d): %s", img_w, img_h, source_path)
-            cap.release()
-            return None
+        if img_w <= 0 or img_h <= 0:
+            raise ValueError(f"Video reports invalid dimensions ({img_w}x{img_h}): {source_path}")
 
         for frame_pos in sample_positions:
             cap.set(cv2.CAP_PROP_POS_FRAMES, frame_pos)
             ret, frame = cap.read()
             if not ret:
-                continue
+                raise ValueError(f"Could not read sampled frame {frame_pos}: {source_path}")
 
             result = extract_gaze_from_frame(face_mesh, frame, img_w, img_h)
             if result is not None:

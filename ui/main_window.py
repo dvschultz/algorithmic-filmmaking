@@ -618,6 +618,7 @@ class MainWindow(QMainWindow):
         self._text_extraction_finished_handled = False
         self._cinematography_finished_handled = False
         self._gaze_finished_handled = False
+        self._reset_analysis_run_error("gaze")
 
         # Suppression flag: prevents _on_clips_added from starting its own ThumbnailWorker
         # when _on_detection_finished is managing the full detection→thumbnail pipeline
@@ -3620,13 +3621,15 @@ class MainWindow(QMainWindow):
     def _launch_gaze_worker(self, clips: list):
         """Launch gaze direction analysis worker."""
         self._gaze_finished_handled = False
+        self._reset_analysis_run_error("gaze")
         sources_by_id = {s.id: s for s in self.sources}
         logger.info(f"Creating GazeAnalysisWorker (pipeline) for {len(clips)} clips...")
         self._gaze_worker = GazeAnalysisWorker(
             clips, sources_by_id=sources_by_id,
         )
         self._gaze_worker.progress.connect(self._on_gaze_progress)
-        self._gaze_worker.gaze_ready.connect(self._on_gaze_ready)
+        from ui.workers.gaze_delivery import GazeDelivery
+        GazeDelivery(self, self._gaze_worker, pipeline=True)
         bind_pipeline_completion(
             self, self._gaze_worker, "_gaze_worker",
             self._gaze_worker.detection_completed, self._on_pipeline_gaze_finished,
@@ -3952,7 +3955,7 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def _on_gaze_error(self, msg):
         """Handle gaze analysis errors — log and ensure pipeline advances."""
-        logger.error("Gaze analysis error: %s", msg)
+        self._record_analysis_run_error("_gaze_run_error", "Gaze analysis", msg)
         self.statusBar().showMessage(f"Gaze analysis failed: {msg}", 5000)
 
     @Slot()
@@ -4590,6 +4593,7 @@ class MainWindow(QMainWindow):
             "classify": "_classification_run_error",
             "detect_objects": "_object_detection_run_error",
             "face_embeddings": "_face_detection_run_error",
+            "gaze": "_gaze_run_error",
             "extract_text": "_text_extraction_run_error",
             "cinematography": "_cinematography_run_error",
         }
@@ -4633,6 +4637,7 @@ class MainWindow(QMainWindow):
             ("classify", self._classification_run_error, "classification"),
             ("detect_objects", self._object_detection_run_error, "object detection"),
             ("face_embeddings", getattr(self, "_face_detection_run_error", None), "face detection"),
+            ("gaze", getattr(self, "_gaze_run_error", None), "gaze analysis"),
             ("extract_text", self._text_extraction_run_error, "text extraction"),
             ("transcribe", self._transcription_run_error, "transcription"),
             ("describe", self._description_run_error, "description"),
@@ -8199,7 +8204,6 @@ class MainWindow(QMainWindow):
             # Refresh sidebar if it's showing this clip
             if hasattr(self, 'clip_details_sidebar'):
                 self.clip_details_sidebar.refresh_gaze_if_showing(clip_id)
-            self._mark_dirty()
             logger.debug(f"Clip {clip_id}: gaze={category} (yaw={yaw:.1f}, pitch={pitch:.1f})")
 
     @Slot(int, int)

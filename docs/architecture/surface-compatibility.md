@@ -612,3 +612,20 @@ one model session; cache-only recovery does not initialize it.
 
 Gaze, embeddings, OCR, remaining analysis routes, and workflow orchestration are
 still pending in U7. This face cutover does not complete U7.
+
+### Shared gaze computation and guarded publication
+
+GUI and spine/MCP gaze analysis use `core/operations/gaze.py` with immutable source
+and clip snapshots. Workers no longer mutate clips. Owner-thread delivery rejects
+changed targets, source media, sessions, pipeline runs, and agent replies, and
+deduplicates queued results before refreshing the existing gaze UI.
+
+Shared gaze batches serialize model use and unloading, avoid loading for cancelled
+or skipped work, and discard inference returned after cancellation. Per-item
+failures remain visible without losing successful siblings. Invalid angles and
+unreadable video samples are failures. The legacy `no_gaze_detected` outcome and
+GUI signal signature remain compatible; GUI progress now counts every requested
+item, including skips. Pipeline summaries retain gaze errors.
+
+Durable gaze job recovery remains the next U7 step. This cutover does not complete
+U7 or add native-process isolation.

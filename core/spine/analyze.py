@@ -650,51 +650,41 @@ def gaze(
     cancel_event: Optional[threading.Event] = None,
 ) -> dict:
     """Estimate gaze direction for clips."""
-    from core.analysis.gaze import extract_gaze_from_clip, unload_model
+    from core.operations.gaze import GazeTask, GazeOptions, GazeApplication, run_gaze
 
     clips = _resolve_clip_ids(project, clip_ids)
-    sources_by_id = project.sources_by_id
-    succeeded: list[dict] = []
-    failed: list[dict] = []
-    skipped: list[dict] = []
-    updated = []
-    total = len(clips)
+    sources = project.sources_by_id
+    tasks = tuple(
+        GazeTask(c.id, c.source_id,
+                 sources[c.source_id].file_path if c.source_id in sources else None,
+                 c.start_frame, c.end_frame,
+                 sources[c.source_id].fps if c.source_id in sources else 0.0,
+                 skip=skip_existing and c.gaze_category is not None)
+        for c in clips
+    )
+    application = GazeApplication(project, tasks)
+    result = {"succeeded": [], "failed": [], "skipped": [], "unprocessed": [], "total_clips": len(tasks)}
 
-    try:
-        for i, clip in enumerate(clips):
-            if _check_cancel(cancel_event):
-                break
-            if progress_callback is not None and total:
-                progress_callback(i / total, f"Gaze analysis ({i + 1}/{total}): {clip.id}")
-            if skip_existing and clip.gaze_category is not None:
-                skipped.append({"clip_id": clip.id, "reason": "already_populated"})
-                continue
-            source = sources_by_id.get(clip.source_id)
-            if source is None or not source.file_path.exists():
-                failed.append({"clip_id": clip.id, "code": "source_file_missing"})
-                continue
-            try:
-                result = extract_gaze_from_clip(str(source.file_path), clip.start_frame, clip.end_frame, source.fps, sample_interval)
-            except Exception as exc:  # noqa: BLE001
-                failed.append({"clip_id": clip.id, "code": "gaze_failed", "message": str(exc)})
-                continue
-            if result is None:
-                failed.append({"clip_id": clip.id, "code": "no_gaze_detected"})
-                continue
-            clip.gaze_yaw = result["gaze_yaw"]
-            clip.gaze_pitch = result["gaze_pitch"]
-            clip.gaze_category = result["gaze_category"]
-            updated.append(clip)
-            succeeded.append({"clip_id": clip.id, "gaze_category": clip.gaze_category})
+    def deliver(outcome):
+        if outcome.status == "succeeded":
+            if application.apply(project, outcome):
+                result["succeeded"].append({"clip_id": outcome.clip_id, "gaze_category": outcome.category})
+            else:
+                result["failed"].append({"clip_id": outcome.clip_id, "code": "stale_input"})
+        elif outcome.status == "skipped":
+            result["skipped"].append({"clip_id": outcome.clip_id, "reason": outcome.code})
+        elif outcome.status == "failed":
+            result["failed"].append({"clip_id": outcome.clip_id, "code": outcome.code, "message": outcome.message})
 
-        if updated:
-            project.update_clips(updated)
-        if progress_callback is not None:
-            progress_callback(1.0, f"Done: {len(succeeded)} ok, {len(failed)} failed, {len(skipped)} skipped")
-        return {"success": True, "result": {"succeeded": succeeded, "failed": failed, "skipped": skipped, "total_clips": total}}
-    finally:
-        # Long-lived MCP servers must not retain MediaPipe state across jobs.
-        unload_model()
+    outcomes = run_gaze(
+        tasks, GazeOptions(sample_interval), cancel_event=cancel_event,
+        on_outcome=deliver,
+        progress=(lambda current, total: progress_callback(current / total if total else 1.0, f"Gaze analysis ({current}/{total})")) if progress_callback else None,
+    )
+    result["unprocessed"] = [{"clip_id": o.clip_id, "code": o.code} for o in outcomes if o.status == "unprocessed"]
+    if progress_callback is not None:
+        progress_callback(1.0, f"Done: {len(result['succeeded'])} ok, {len(result['failed'])} failed, {len(result['skipped'])} skipped")
+    return {"success": True, "result": result}
 
 
 def embeddings(

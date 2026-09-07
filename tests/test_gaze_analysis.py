@@ -435,15 +435,16 @@ class TestExtractGazeFromClip:
 
     @patch("core.analysis.gaze.load_face_mesh")
     @patch("core.analysis.gaze.cv2")
-    def test_invalid_video_returns_none(self, mock_cv2, mock_load):
+    def test_invalid_video_raises(self, mock_cv2, mock_load):
         from core.analysis.gaze import extract_gaze_from_clip
 
         mock_cap = MagicMock()
         mock_cap.isOpened.return_value = False
         mock_cv2.VideoCapture.return_value = mock_cap
 
-        result = extract_gaze_from_clip("/nonexistent.mp4", 0, 90, 30.0)
-        assert result is None
+        with pytest.raises(ValueError, match="Could not open video"):
+            extract_gaze_from_clip("/nonexistent.mp4", 0, 90, 30.0)
+        mock_cap.release.assert_called_once()
 
     @patch("core.analysis.gaze.load_face_mesh")
     @patch("core.analysis.gaze.cv2")
@@ -577,10 +578,10 @@ class TestExtractGazeFromClip:
     @patch("core.analysis.gaze.extract_gaze_from_frame")
     @patch("core.analysis.gaze.load_face_mesh")
     @patch("core.analysis.gaze.cv2")
-    def test_read_failure_frames_skipped(
+    def test_read_failure_rejects_incomplete_sampling(
         self, mock_cv2, mock_load, mock_extract_frame
     ):
-        """When cv2.read() fails for some frames, those are skipped."""
+        """A failed sample must not produce a misleading successful estimate."""
         from core.analysis.gaze import extract_gaze_from_clip
 
         mock_cap = MagicMock()
@@ -600,11 +601,10 @@ class TestExtractGazeFromClip:
         mock_extract_frame.return_value = (0.0, 0.0, "at_camera")
 
         # 3 seconds at 30fps = 90 frames, sampled at 1fps = 3 samples
-        result = extract_gaze_from_clip("/video.mp4", 0, 90, 30.0, 1.0)
-
-        assert result is not None
-        # extract_gaze_from_frame called twice (2 successful reads)
-        assert mock_extract_frame.call_count == 2
+        with pytest.raises(ValueError, match="Could not read sampled frame"):
+            extract_gaze_from_clip("/video.mp4", 0, 90, 30.0, 1.0)
+        assert mock_extract_frame.call_count == 1
+        mock_cap.release.assert_called_once()
 
     @patch("core.analysis.gaze.extract_gaze_from_frame")
     @patch("core.analysis.gaze.load_face_mesh")

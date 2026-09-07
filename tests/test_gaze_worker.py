@@ -63,10 +63,10 @@ class TestGazeWorkerProcessing:
 
             worker.run()
 
-        # Clip fields mutated in-place
-        assert clip.gaze_yaw == 5.2
-        assert clip.gaze_pitch == -3.1
-        assert clip.gaze_category == "at_camera"
+        # Publication belongs to the project owner, not the worker.
+        assert clip.gaze_yaw is None
+        assert clip.gaze_pitch is None
+        assert clip.gaze_category is None
 
         # Signal emitted
         assert len(gaze_results) == 1
@@ -137,7 +137,7 @@ class TestGazeWorkerProgress:
 
             worker.run()
 
-        assert progress_updates == [(1, 3), (2, 3), (3, 3)]
+        assert progress_updates == [(0, 3), (1, 3), (2, 3), (3, 3)]
 
 
 class TestGazeWorkerSkipExisting:
@@ -227,8 +227,8 @@ class TestGazeWorkerAllAlreadyAnalyzed:
         worker.run()
 
         assert completed == [True]
-        # No progress emitted since nothing was processed
-        assert progress_updates == []
+        # Skipped outcomes count toward the shared batch's progress.
+        assert progress_updates == [(0, 2), (1, 2), (2, 2)]
 
 
 class TestGazeWorkerMissingSource:
@@ -340,11 +340,11 @@ class TestGazeWorkerExceptionHandling:
         # First clip failed, second succeeded
         assert gaze_results == ["c2"]
         # Progress emitted for both
-        assert progress_updates == [(1, 2), (2, 2)]
+        assert progress_updates == [(0, 2), (1, 2), (2, 2)]
         # First clip fields unchanged
         assert clip1.gaze_category is None
-        # Second clip fields set
-        assert clip2.gaze_category == "looking_right"
+        # Second clip result is detached until the owner applies it.
+        assert clip2.gaze_category is None
 
     def test_model_load_failure_emits_error(self, source, sources_by_id):
         from ui.workers.gaze_worker import GazeAnalysisWorker

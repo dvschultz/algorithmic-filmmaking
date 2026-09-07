@@ -321,10 +321,13 @@ def test_precancelled_face_embeddings_does_not_unload_another_job_model(tmp_path
 
 def test_gaze_unloads_model_on_success(tmp_path):
     project = _build_project(tmp_path, n_clips=2)
-    fake_result = {"gaze_yaw": 0.0, "gaze_pitch": 0.0, "gaze_category": "center"}
-    with patch("core.analysis.gaze.extract_gaze_from_clip", return_value=fake_result), \
+    fake_result = {"gaze_yaw": 0.0, "gaze_pitch": 0.0, "gaze_category": "at_camera"}
+    with patch("core.analysis.gaze.load_face_mesh"), \
+         patch("core.analysis.gaze.extract_gaze_from_clip", return_value=fake_result), \
          patch("core.analysis.gaze.unload_model") as mock_unload:
-        gaze(project)
+        result = gaze(project)["result"]
+    assert len(result["succeeded"]) == 2
+    assert not result["failed"]
     assert mock_unload.call_count == 1
 
 
@@ -333,7 +336,7 @@ def test_gaze_unloads_model_on_exception(tmp_path):
     with patch(
         "core.analysis.gaze.extract_gaze_from_clip",
         side_effect=RuntimeError("boom"),
-    ), patch("core.analysis.gaze.unload_model") as mock_unload:
+    ), patch("core.analysis.gaze.load_face_mesh"), patch("core.analysis.gaze.unload_model") as mock_unload:
         gaze(project)
     assert mock_unload.call_count == 1
 
@@ -346,7 +349,7 @@ def test_gaze_unloads_model_on_cancel(tmp_path):
     with patch("core.analysis.gaze.extract_gaze_from_clip", return_value=fake_result), \
          patch("core.analysis.gaze.unload_model") as mock_unload:
         gaze(project, cancel_event=cancel)
-    assert mock_unload.call_count == 1
+    assert mock_unload.call_count == 0
 
 
 def test_analyze_clips_maps_operation_progress_into_parent_range(tmp_path):
