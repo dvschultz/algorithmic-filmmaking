@@ -840,6 +840,8 @@ class MainWindow(QMainWindow):
 
         # Connect project adapter signals for view synchronization
         self._project_adapter.clips_updated.connect(self._on_clips_updated)
+        self._project_adapter.frames_updated.connect(self._on_frames_updated)
+        self._project_adapter.project_metadata_changed.connect(self._update_window_title)
         self._project_adapter.clips_added.connect(self._on_clips_added)
         self._project_adapter.clips_removed.connect(self._on_clips_removed)
         self._project_adapter.source_added.connect(self._on_source_added)
@@ -1906,6 +1908,7 @@ class MainWindow(QMainWindow):
 
         # Connect clip edited signal to update project
         self.clip_details_sidebar.clip_edited.connect(self._on_clip_edited)
+        self.clip_details_sidebar.metadata_editor = self._edit_clip_metadata
 
         # Add toggle action to View menu
         self.clip_details_toggle = self.clip_details_sidebar.toggleViewAction()
@@ -1944,6 +1947,12 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'clip_details_sidebar'):
             self.clip_details_sidebar.show_clip(clip, source)
 
+    @Slot(object, dict)
+    def _edit_clip_metadata(self, clip: Clip, changes: dict) -> None:
+        if self.project.clips_by_id.get(clip.id) is not clip:
+            raise ValueError("The displayed clip is no longer in this project")
+        self.project.update_clip_metadata(clip.id, **changes)
+
     @Slot(object)
     def _on_clip_edited(self, clip: Clip):
         """Handle clip edited from sidebar.
@@ -1976,6 +1985,9 @@ class MainWindow(QMainWindow):
             clips: List of updated clips
         """
         updated_ids = {clip.id for clip in clips}
+        if hasattr(self, "clip_details_sidebar"):
+            for clip in clips:
+                self.clip_details_sidebar.refresh_editor_fields(clip)
         preserve_ids = self._preserve_clip_update_layout_ids
         preserve_layout = bool(updated_ids and updated_ids.issubset(preserve_ids))
         if preserve_layout:
@@ -2245,6 +2257,11 @@ class MainWindow(QMainWindow):
         """Handle frames removed signal from project."""
         logger.info(f"Project frames_removed event: {len(frames)} frames")
         if hasattr(self, 'frames_tab'):
+            self.frames_tab.update_frame_browser()
+
+    @Slot(list)
+    def _on_frames_updated(self, frames: list) -> None:
+        if hasattr(self, "frames_tab"):
             self.frames_tab.update_frame_browser()
 
     @Slot(object)

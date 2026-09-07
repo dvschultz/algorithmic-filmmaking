@@ -78,7 +78,18 @@ project dirty. Actual analysis updates remain outside editorial history.
 Worker delivery checks session identity and clip/source input ranges before
 applying output. A changed replacement target is rejected without overwriting it.
 
-This is an incremental U4 migration. Other metadata commands still need migration.
+`edit_metadata()` captures only the requested editorial fields, validates the
+whole batch, and deep-copies both sides for Undo/Redo. Use `update_clip_metadata()`,
+`update_frame_metadata()`, `update_source_metadata()`, and `rename()` for manual
+corrections. The sidebar submits detached values through the current project;
+chat and MCP metadata adapters use the same command. Batch tags are one edit.
+The Qt adapter refreshes metadata and project names after Undo without reloading
+playback or resetting unchanged fields that the user is still editing.
+Automatic analysis continues to use `update_clips()`, `update_frame()`, and
+`update_source()` outside history. Undo preserves unrelated analysis fields and
+rejects conflicts on the fields it would restore.
+
+This is an incremental U4 migration.
 Legacy direct model mutations are tracked as
 external changes; they are not yet undoable or comprehensively thread-guarded.
 MCP and CLI do not yet expose history tools; the shared spine history functions

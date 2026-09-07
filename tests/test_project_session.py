@@ -142,15 +142,14 @@ def test_legacy_gui_edit_while_dirty_survives_undo():
     assert project.is_dirty
 
 
-def test_frame_metadata_edit_survives_undo():
-    from core.spine.frames import update_frame
+def test_frame_analysis_update_survives_undo():
     from models.frame import Frame
 
     project = _make_project_with_clips()
     project.add_frames([Frame(id="f0")])
     project.mark_clean()
     project.toggle_clips_disabled(["c0"])
-    assert update_frame(project, "f0", notes="Keep this note")["success"]
+    project.update_frame("f0", description="Keep this analysis")
     project.session.undo()
-    assert project.frames_by_id["f0"].notes == "Keep this note"
+    assert project.frames_by_id["f0"].description == "Keep this analysis"
     assert project.is_dirty

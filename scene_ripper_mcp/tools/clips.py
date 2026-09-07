@@ -454,8 +454,7 @@ async def add_clip_tags(
         # Add new tags (avoid duplicates)
         existing_tags = set(clip.tags or [])
         new_tags = [t.strip() for t in tags if t.strip() and t.strip() not in existing_tags]
-        clip.tags = list(existing_tags) + new_tags
-        project.update_clips([clip])
+        project.update_clip_metadata(clip_id, tags=list(dict.fromkeys((clip.tags or []) + new_tags)))
 
         try:
             save_with_mtime_check(project, path, mtime)
@@ -527,9 +526,8 @@ async def remove_clip_tags(
         # Remove tags
         tags_to_remove = set(t.strip() for t in tags)
         original_count = len(clip.tags or [])
-        clip.tags = [t for t in (clip.tags or []) if t not in tags_to_remove]
+        project.update_clip_metadata(clip_id, tags=[t for t in (clip.tags or []) if t not in tags_to_remove])
         removed_count = original_count - len(clip.tags)
-        project.update_clips([clip])
 
         try:
             save_with_mtime_check(project, path, mtime)
@@ -598,8 +596,7 @@ async def add_clip_note(
         if not clip:
             return json.dumps({"success": False, "error": f"Clip not found: {clip_id}"})
 
-        clip.notes = note.strip()
-        project.update_clips([clip])
+        project.update_clip_metadata(clip_id, notes=note.strip())
 
         try:
             save_with_mtime_check(project, path, mtime)

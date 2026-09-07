@@ -1865,9 +1865,10 @@ def update_source(
     if not kwargs:
         return {"success": False, "error": "No fields provided to update"}
 
-    updated = project.update_source(source_id, **kwargs)
-    if updated is None:
-        return {"success": False, "error": "Failed to update source"}
+    try:
+        project.update_source_metadata(source_id, **kwargs)
+    except (ValueError, RuntimeError) as exc:
+        return {"success": False, "error": str(exc)}
 
     return {
         "success": True,
@@ -2079,8 +2080,7 @@ def set_project_name(main_window, project, name: str) -> dict:
         }
 
     old_name = project.metadata.name
-    project.metadata.name = clean_name
-    project.mark_dirty()
+    project.rename(clean_name)
 
     # Refresh the window title to reflect the new project name
     if hasattr(main_window, '_update_window_title'):
@@ -2192,36 +2192,9 @@ def new_project(name: str = "Untitled Project", main_window=None) -> dict:
 )
 def add_tags(project, clip_ids: list[str], tags: list[str]) -> dict:
     """Add tags to specified clips."""
-    if not clip_ids:
-        return {"success": False, "error": "No clip IDs provided"}
-    if not tags:
-        return {"success": False, "error": "No tags provided"}
 
-    updated = []
-    not_found = []
-
-    for clip_id in clip_ids:
-        clip = project.clips_by_id.get(clip_id)
-        if clip is None:
-            not_found.append(clip_id)
-            continue
-
-        # Add new tags (avoid duplicates)
-        for tag in tags:
-            if tag not in clip.tags:
-                clip.tags.append(tag)
-        updated.append(clip_id)
-
-    if updated:
-        project.update_clips([project.clips_by_id[cid] for cid in updated])
-
-    return {
-        "success": len(updated) > 0,
-        "updated": updated,
-        "not_found": not_found,
-        "tags_added": tags,
-        "message": f"Added {len(tags)} tag(s) to {len(updated)} clip(s)"
-    }
+    from core.spine.metadata import edit_tags
+    return edit_tags(project, clip_ids, tags, remove=False)
 
 
 @tools.register(
@@ -2232,40 +2205,9 @@ def add_tags(project, clip_ids: list[str], tags: list[str]) -> dict:
 )
 def remove_tags(project, clip_ids: list[str], tags: list[str]) -> dict:
     """Remove tags from specified clips."""
-    if not clip_ids:
-        return {"success": False, "error": "No clip IDs provided"}
-    if not tags:
-        return {"success": False, "error": "No tags provided"}
 
-    updated = []
-    not_found = []
-
-    for clip_id in clip_ids:
-        clip = project.clips_by_id.get(clip_id)
-        if clip is None:
-            not_found.append(clip_id)
-            continue
-
-        # Remove tags
-        removed_any = False
-        for tag in tags:
-            if tag in clip.tags:
-                clip.tags.remove(tag)
-                removed_any = True
-
-        if removed_any:
-            updated.append(clip_id)
-
-    if updated:
-        project.update_clips([project.clips_by_id[cid] for cid in updated])
-
-    return {
-        "success": len(updated) > 0,
-        "updated": updated,
-        "not_found": not_found,
-        "tags_removed": tags,
-        "message": f"Removed tag(s) from {len(updated)} clip(s)"
-    }
+    from core.spine.metadata import edit_tags
+    return edit_tags(project, clip_ids, tags, remove=True)
 
 
 @tools.register(
@@ -2280,8 +2222,7 @@ def add_note(project, clip_id: str, note: str) -> dict:
     if clip is None:
         return {"success": False, "error": f"Clip not found: {clip_id}"}
 
-    clip.notes = note
-    project.update_clips([clip])
+    project.update_clip_metadata(clip_id, notes=note)
 
     return {
         "success": True,
@@ -2318,51 +2259,9 @@ def update_clip(
     Returns:
         Dict with success status and updated fields
     """
-    clip = project.clips_by_id.get(clip_id)
-    if clip is None:
-        return {"success": False, "error": f"Clip not found: {clip_id}"}
 
-    updated_fields = []
-
-    # Update name if provided
-    if name is not None:
-        clip.name = name
-        updated_fields.append("name")
-
-    # Validate and update shot_type if provided
-    if shot_type is not None:
-        if shot_type == "":
-            # Empty string clears the shot type
-            clip.shot_type = None
-            updated_fields.append("shot_type")
-        elif shot_type in VALID_SHOT_TYPES:
-            clip.shot_type = shot_type
-            updated_fields.append("shot_type")
-        else:
-            return {
-                "success": False,
-                "error": f"Invalid shot type: '{shot_type}'. Must be one of: {', '.join(sorted(VALID_SHOT_TYPES))} or empty string to clear."
-            }
-
-    # Update notes if provided
-    if notes is not None:
-        clip.notes = notes
-        updated_fields.append("notes")
-
-    # Update tags if provided (replaces all existing tags)
-    if tags is not None:
-        clip.tags = list(tags)
-        updated_fields.append("tags")
-
-    if updated_fields:
-        project.update_clips([clip])
-
-    return {
-        "success": True,
-        "clip_id": clip_id,
-        "updated_fields": updated_fields,
-        "message": f"Updated {', '.join(updated_fields)}" if updated_fields else "No fields updated"
-    }
+    from core.spine.metadata import update_clip as update_clip_impl
+    return update_clip_impl(project, clip_id, name=name, shot_type=shot_type, notes=notes, tags=tags)
 
 
 @tools.register(
@@ -2406,16 +2305,17 @@ def update_clip_transcript(
 
     segment = clip.transcript[segment_index]
     old_text = segment.text
-    segment.text = text.strip()
-
-    project.update_clips([clip])
+    from copy import deepcopy
+    transcript = deepcopy(clip.transcript)
+    transcript[segment_index].text = text.strip()
+    project.update_clip_metadata(clip_id, transcript=transcript)
 
     return {
         "success": True,
         "clip_id": clip_id,
         "segment_index": segment_index,
         "old_text": old_text,
-        "new_text": segment.text,
+        "new_text": text.strip(),
         "message": f"Updated transcript segment {segment_index}"
     }
 
@@ -5824,19 +5724,19 @@ def update_clip_cinematography(
                 "error": f"Invalid {field_name} '{value}'. Valid values: {', '.join(valid_list)}"
             }
 
-    # Create cinematography object if it doesn't exist
-    if clip.cinematography is None:
-        clip.cinematography = CinematographyAnalysis()
+    from copy import deepcopy
+
+    cinematography = deepcopy(clip.cinematography) or CinematographyAnalysis()
 
     # Apply updates
     updated_fields = []
     for field_name, (value, _) in validations.items():
         if value is not None:
-            setattr(clip.cinematography, field_name, value)
+            setattr(cinematography, field_name, value)
             updated_fields.append(field_name)
 
     if updated_fields:
-        project.update_clips([clip])
+        project.update_clip_metadata(clip_id, cinematography=cinematography)
 
     return {
         "success": True,
@@ -5880,13 +5780,11 @@ def clear_clip_cinematography(
         if clip.cinematography is None:
             already_clear.append(clip_id)
             continue
-        clip.cinematography = None
         cleared.append(clip_id)
 
     # Update all modified clips at once
     if cleared:
-        modified_clips = [project.clips_by_id[cid] for cid in cleared]
-        project.update_clips(modified_clips)
+        project.edit_metadata("clip", {cid: {"cinematography": None} for cid in cleared})
 
     result = {
         "success": True,

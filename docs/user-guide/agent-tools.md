@@ -84,7 +84,13 @@ See [Audio Sources](audio-sources.md) for the full audio import / transcription 
 Clip enable/disable and sequence insertion, removal, reordering, trimming, and
 track/transform changes share undo history with the desktop's Edit menu.
 Sequence creation, deletion, renaming, and settings changes also support Undo/Redo.
-History lasts until the project is cleared or replaced. Clearing and grouping a whole generation run into one edit are not yet included. Undo preserves analysis results and unrelated metadata edits.
+Source removal, sequence clearing, and generated sequences also support Undo/Redo.
+Manual metadata edits—including clip names, tags, notes, transcripts, frame metadata,
+source corrections, and project names—share this history. A batch tag edit is one
+undo step. Automatic analysis results stay outside history; undoing an unrelated
+edit preserves them. If analysis replaces the same field an edit changed, Undo
+rejects that conflicting edit rather than overwriting the newer result.
+History lasts until the project is cleared or replaced and is not saved in the project file.
 
 ---
 

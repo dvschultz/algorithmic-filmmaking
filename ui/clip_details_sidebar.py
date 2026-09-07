@@ -11,7 +11,8 @@ Provides a dismissable sidebar displaying detailed clip information:
 """
 
 import logging
-from typing import Optional
+from copy import deepcopy
+from typing import Any, Callable, Optional
 
 from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtWidgets import (
@@ -80,6 +81,7 @@ class ClipDetailsSidebar(QDockWidget):
         self.setMaximumWidth(550)
 
         # State references (not copies - per documented learnings)
+        self.metadata_editor: Optional[Callable[[Clip, dict[str, Any]], None]] = None
         self._clip_ref: Optional[Clip] = None
         self._source_ref: Optional[Source] = None
         self._loading = False  # Guard flag for duplicate signals
@@ -373,6 +375,41 @@ class ClipDetailsSidebar(QDockWidget):
             self.video_player.set_clip_range(start_time, end_time)
             self._pending_clip_range = None
 
+    def _apply_metadata_edit(self, changes: dict[str, Any]) -> None:
+        """Submit detached values before changing the project's live clip."""
+        try:
+            if self.metadata_editor is not None:
+                self.metadata_editor(self._clip_ref, changes)
+            else:
+                for field, value in changes.items():
+                    setattr(self._clip_ref, field, deepcopy(value))
+                self._emit_clip_edit()
+        finally:
+            self._change_in_progress = False
+
+    def refresh_editor_fields(self, clip: Clip) -> None:
+        """Refresh metadata after history changes without reloading playback."""
+        if self._clip_ref is not clip or self._change_in_progress or self._loading:
+            return
+        self._block_editable_signals(True)
+        try:
+            if self.name_edit.text() != clip.name:
+                self.name_edit.setText(clip.name)
+            if self.shot_type_dropdown.value() != clip.shot_type:
+                self.shot_type_dropdown.setValue(clip.shot_type)
+            if self.transcript_edit.segments() != (clip.transcript or []):
+                self.transcript_edit.setSegments(deepcopy(clip.transcript))
+            labels = ", ".join(clip.object_labels or [])
+            if self.object_labels_edit.text() != labels:
+                self.object_labels_edit.setText(labels)
+            if self.description_edit.text() != (clip.description or ""):
+                self.description_edit.setText(clip.description or "")
+            if self._displayed_custom_queries != clip.custom_queries:
+                self._update_custom_queries(clip.custom_queries)
+            self._update_cinematography(clip.cinematography)
+        finally:
+            self._block_editable_signals(False)
+
     def _emit_clip_edit(self):
         """Emit clip_edited signal with guard protection."""
         if self._clip_ref:
@@ -384,8 +421,7 @@ class ClipDetailsSidebar(QDockWidget):
         if self._change_in_progress or self._loading or not self._clip_ref:
             return
         self._change_in_progress = True
-        self._clip_ref.name = new_name
-        self._emit_clip_edit()
+        self._apply_metadata_edit({"name": new_name})
         self._change_in_progress = False
 
     @Slot(str)
@@ -394,8 +430,7 @@ class ClipDetailsSidebar(QDockWidget):
         if self._change_in_progress or self._loading or not self._clip_ref:
             return
         self._change_in_progress = True
-        self._clip_ref.shot_type = new_shot_type if new_shot_type else None
-        self._emit_clip_edit()
+        self._apply_metadata_edit({"shot_type": new_shot_type or None})
         self._change_in_progress = False
 
     @Slot(list)
@@ -404,8 +439,7 @@ class ClipDetailsSidebar(QDockWidget):
         if self._change_in_progress or self._loading or not self._clip_ref:
             return
         self._change_in_progress = True
-        self._clip_ref.transcript = segments if segments else None
-        self._emit_clip_edit()
+        self._apply_metadata_edit({"transcript": segments or None})
         self._change_in_progress = False
 
     @Slot(int, float)
@@ -422,12 +456,8 @@ class ClipDetailsSidebar(QDockWidget):
         if self._change_in_progress or self._loading or not self._clip_ref:
             return
         self._change_in_progress = True
-        if new_value.strip():
-            labels = [label.strip() for label in new_value.split(",") if label.strip()]
-            self._clip_ref.object_labels = labels if labels else None
-        else:
-            self._clip_ref.object_labels = None
-        self._emit_clip_edit()
+        labels = [label.strip() for label in new_value.split(",") if label.strip()]
+        self._apply_metadata_edit({"object_labels": labels or None})
         self._change_in_progress = False
 
     @Slot(str)
@@ -436,11 +466,11 @@ class ClipDetailsSidebar(QDockWidget):
         if self._change_in_progress or self._loading or not self._clip_ref:
             return
         self._change_in_progress = True
-        self._clip_ref.description = new_value.strip() if new_value.strip() else None
-        # Clear model metadata on manual edit
-        self._clip_ref.description_model = None
-        self._clip_ref.description_frames = None
-        self._emit_clip_edit()
+        self._apply_metadata_edit({
+            "description": new_value.strip() or None,
+            "description_model": None,
+            "description_frames": None,
+        })
         self._change_in_progress = False
 
     def show_clip(self, clip: Clip, source: Source):
@@ -496,7 +526,7 @@ class ClipDetailsSidebar(QDockWidget):
         self._update_colors(clip.dominant_colors)
 
         # Transcript (editable)
-        self.transcript_edit.setSegments(clip.transcript)
+        self.transcript_edit.setSegments(deepcopy(clip.transcript))
 
         # Object Labels (editable)
         if clip.object_labels:
@@ -798,6 +828,7 @@ class ClipDetailsSidebar(QDockWidget):
 
     def _update_custom_queries(self, custom_queries: Optional[list[dict]]):
         """Update the custom query section."""
+        self._displayed_custom_queries = deepcopy(custom_queries)
         while self.custom_queries_layout.count():
             item = self.custom_queries_layout.takeAt(0)
             widget = item.widget()
@@ -905,9 +936,8 @@ class ClipDetailsSidebar(QDockWidget):
             normalized_queries[row_index]["query"] = new_query
         else:
             normalized_queries.pop(row_index)
-        self._clip_ref.custom_queries = normalized_queries or None
+        self._apply_metadata_edit({"custom_queries": normalized_queries or None})
         self._update_custom_queries(self._clip_ref.custom_queries)
-        self._emit_clip_edit()
         self._change_in_progress = False
 
     def _on_custom_query_removed(self, row_index: int):
@@ -921,9 +951,8 @@ class ClipDetailsSidebar(QDockWidget):
 
         self._change_in_progress = True
         normalized_queries.pop(row_index)
-        self._clip_ref.custom_queries = normalized_queries or None
+        self._apply_metadata_edit({"custom_queries": normalized_queries or None})
         self._update_custom_queries(self._clip_ref.custom_queries)
-        self._emit_clip_edit()
         self._change_in_progress = False
 
     def _on_custom_query_match_changed(self, row_index: int, new_value: str):
@@ -937,9 +966,8 @@ class ClipDetailsSidebar(QDockWidget):
 
         self._change_in_progress = True
         normalized_queries[row_index]["match"] = new_value == "Match"
-        self._clip_ref.custom_queries = normalized_queries or None
+        self._apply_metadata_edit({"custom_queries": normalized_queries or None})
         self._update_custom_queries(self._clip_ref.custom_queries)
-        self._emit_clip_edit()
         self._change_in_progress = False
 
     def _set_extracted_text_placeholder(self, text: str):

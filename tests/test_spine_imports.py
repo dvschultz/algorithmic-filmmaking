@@ -34,6 +34,8 @@ SPINE_MODULES: tuple[str, ...] = (
     "core.commands.sequence_clips",
     "core.commands.sequences",
     "core.commands.sources",
+    "core.commands.metadata",
+    "core.spine.metadata",
     "core.spine.sequences",
     "core.spine.history",
     "core.operations.contracts",

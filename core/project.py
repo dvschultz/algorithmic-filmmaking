@@ -989,6 +989,25 @@ class Project:
         self.mark_dirty()
         self._notify_observers("clips_updated", clips)
 
+    def edit_metadata(self, kind: str, updates: dict[str, dict[str, Any]]) -> list[Any]:
+        """Apply explicit editorial fields as one edit; analysis uses update methods."""
+        from core.commands.metadata import EditMetadata
+
+        self.session.assert_owner()
+        return self.session.execute(EditMetadata.capture(self, kind, updates))
+
+    def update_clip_metadata(self, clip_id: str, **changes: Any) -> None:
+        self.edit_metadata("clip", {clip_id: changes})
+
+    def update_frame_metadata(self, frame_id: str, **changes: Any) -> None:
+        self.edit_metadata("frame", {frame_id: changes})
+
+    def update_source_metadata(self, source_id: str, **changes: Any) -> None:
+        self.edit_metadata("source", {source_id: changes})
+
+    def rename(self, name: str) -> None:
+        self.edit_metadata("project", {self.metadata.id: {"name": name}})
+
     def remove_clips(self, clip_ids: list[str]) -> list[Clip]:
         """Remove clips by ID.
 

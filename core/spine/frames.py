@@ -38,20 +38,18 @@ def update_frame(
                 ),
             }
 
-    if kwargs:
-        project.update_frame(frame_id, **kwargs)
-
     if tags is not None:
-        frame.tags = list(tags)
+        kwargs["tags"] = list(tags)
         updated_fields.append("tags")
 
     if notes is not None:
-        frame.notes = notes
+        kwargs["notes"] = notes
         updated_fields.append("notes")
 
-    if tags is not None or notes is not None:
-        project.mark_dirty()
-        project._notify_observers("frames_updated", [frame])
+    try:
+        project.update_frame_metadata(frame_id, **kwargs)
+    except (ValueError, RuntimeError) as exc:
+        return {"success": False, "error": str(exc)}
 
     return {
         "success": True,
