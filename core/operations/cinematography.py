@@ -5,11 +5,16 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 from threading import Event
-from typing import Callable, Literal
+from typing import Callable, Literal, TYPE_CHECKING
 
 from core.operations.contracts import OutcomeStatus
 from core.provider_errors import is_transient_provider_error
 from models.cinematography import CinematographyAnalysis
+
+if TYPE_CHECKING:
+    from core.project import Project
+    from models.clip import Clip
+    from models.frame import Frame
 
 
 @dataclass(frozen=True)
@@ -175,3 +180,123 @@ def run_cinematography(
         )
         for i, task in enumerate(tasks)
     )
+
+
+class CinematographyApplication:
+    """Apply analysis and derived shot type once to unchanged clip/frame inputs."""
+
+    def __init__(
+        self, project: "Project", tasks: tuple[CinematographyTask, ...]
+    ) -> None:
+        project.session.assert_owner()
+        self.project = project
+        self.session_id = project.session.session_id
+        self.tasks = {task.clip_id: task for task in tasks}
+        self.bindings = {task.clip_id: self._binding(project, task) for task in tasks}
+        self.consumed: set[str] = set()
+
+    @staticmethod
+    def _binding(project: "Project", task: CinematographyTask) -> tuple | None:
+        from core.jobs.media import media_stamp
+
+        source = None
+        source_path = None
+        target: Clip | Frame | None
+        identity: tuple
+        if task.target_type == "frame":
+            target = project.frames_by_id.get(task.clip_id)
+            if target is None or target.file_path != task.thumbnail_path:
+                return None
+            identity = (target.source_id, target.clip_id, target.frame_number)
+        else:
+            target = project.clips_by_id.get(task.clip_id)
+            if target is None:
+                return None
+            source = project.sources_by_id.get(target.source_id)
+            source_path = source.file_path if source else None
+            if (
+                target.thumbnail_path != task.thumbnail_path
+                or (target.start_frame, target.end_frame)
+                != (task.start_frame, task.end_frame)
+                or (source_path if source_path and source_path.exists() else None)
+                != task.source_path
+                or (source.fps if source else None) != task.fps
+            ):
+                return None
+            identity = (
+                target.source_id,
+                target.start_frame,
+                target.end_frame,
+                source_path,
+            )
+        image_stamp = media_stamp(task.thumbnail_path) if task.thumbnail_path else None
+        if image_stamp is None:
+            return None
+        return (
+            target,
+            source,
+            (
+                identity,
+                image_stamp,
+                media_stamp(source_path) if source_path else None,
+                target.cinematography.to_dict()
+                if target.cinematography is not None
+                else None,
+                target.shot_type,
+            ),
+        )
+
+    def apply(self, project: "Project", outcome: CinematographyOutcome) -> bool:
+        return self.apply_batch(project, (outcome,))[0]
+
+    def apply_batch(
+        self, project: "Project", outcomes: tuple[CinematographyOutcome, ...]
+    ) -> tuple[bool, ...]:
+        if (
+            project is not self.project
+            or project.session.session_id != self.session_id
+            or not any(o.status == "succeeded" for o in outcomes)
+        ):
+            return tuple(False for _ in outcomes)
+
+        def publish() -> tuple[bool, ...]:
+            accepted = []
+            clips = []
+            for outcome in outcomes:
+                valid = False
+                task = self.tasks.get(outcome.clip_id)
+                expected = self.bindings.get(outcome.clip_id)
+                if (
+                    outcome.status == "succeeded"
+                    and outcome.clip_id not in self.consumed
+                ):
+                    self.consumed.add(outcome.clip_id)
+                    current = self._binding(project, task) if task else None
+                    if (
+                        task is not None
+                        and expected is not None
+                        and current is not None
+                        and current[0] is expected[0]
+                        and current[1] is expected[1]
+                        and current[2] == expected[2]
+                    ):
+                        analysis = outcome.analysis
+                        if analysis is not None:
+                            shot_type = analysis.get_simple_shot_type()
+                            if task.target_type == "frame":
+                                project.update_frame(
+                                    outcome.clip_id,
+                                    cinematography=analysis,
+                                    shot_type=shot_type,
+                                )
+                            else:
+                                current[0].cinematography = analysis
+                                current[0].shot_type = shot_type
+                                clips.append(current[0])
+                            valid = True
+                accepted.append(valid)
+            if clips:
+                project.update_clips(clips)
+            return tuple(accepted)
+
+        return project.session.apply_external(publish)

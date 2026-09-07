@@ -168,3 +168,23 @@ untouched. Concurrent old binaries that perform the unconditional legacy sweep
 are not supported. Session-only stores need neither leases nor restart recovery.
 This does not add cross-process cancellation or a distributed queue: a runtime
 can cancel its own handles, and project writer leases still guard file mutation.
+
+## Cinematography publication
+
+GUI clip and frame analysis and headless clip analysis share detached computation
+in `core/operations/cinematography.py`. `CinematographyApplication` captures the
+originating project session, target identity, media stamps, clip range and source
+FPS, and existing cinematography and shot type. It applies a successful result
+once, on the project owner thread, only while those inputs remain unchanged.
+Unrelated edits such as notes do not invalidate the result.
+
+The GUI delivery object also checks the current worker, request, pipeline run,
+and cancellation state before publication. Frame targets remain explicit even
+when a frame and clip share an ID. Model notifications update frame views; the
+clip callback only refreshes views after the shared application publishes.
+Headless callers receive `stale_result` for a rejected successful computation.
+
+This completes the guarded-publication portion of the cinematography migration.
+Cinematography does not yet record durable result receipts or recover completed
+inference after a restart. Those changes and other U7 workflow families remain
+outstanding.

@@ -114,6 +114,8 @@ def test_cinematography_ready_refreshes_sidebar_rich_analysis():
     clip = make_test_clip("c1")
     analysis = _rich_analysis()
     sidebar_calls = []
+    clip.cinematography = analysis
+    clip.shot_type = analysis.get_simple_shot_type()
     shot_calls = []
     dirty_calls = []
 
@@ -140,4 +142,4 @@ def test_cinematography_ready_refreshes_sidebar_rich_analysis():
     assert clip.shot_type == "close-up"
     assert shot_calls == [(clip.id, "close-up")]
     assert sidebar_calls == [(clip.id, analysis)]
-    assert dirty_calls == [True]
+    assert dirty_calls == []

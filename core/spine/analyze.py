@@ -558,14 +558,13 @@ def cinematography(
     cancel_event: Optional[threading.Event] = None,
 ) -> dict:
     """Run rich cinematography analysis for clips."""
-    from core.operations.cinematography import CinematographyTask, resolve_options, run_cinematography
+    from core.operations.cinematography import CinematographyApplication, CinematographyTask, resolve_options, run_cinematography
 
     clips = _resolve_clip_ids(project, clip_ids)
     sources_by_id = project.sources_by_id
     succeeded: list[dict] = []
     failed: list[dict] = []
     skipped: list[dict] = []
-    updated = []
     total = len(clips)
 
     tasks = []
@@ -582,8 +581,10 @@ def cinematography(
         if progress_callback is not None:
             progress_callback(current / count if count else 1.0, f"Cinematography ({current}/{count}): {cid}")
 
+    application = CinematographyApplication(project, tuple(tasks))
     outcomes = run_cinematography(tuple(tasks), resolve_options(mode, model), cancel_event=cancel_event, progress=report)
-    for clip, outcome in zip(clips, outcomes):
+    accepted = application.apply_batch(project, outcomes)
+    for clip, outcome, applied in zip(clips, outcomes, accepted):
         if outcome.status == "skipped":
             skipped.append({"clip_id": clip.id, "reason": outcome.code})
             continue
@@ -595,14 +596,11 @@ def cinematography(
                 failed.append(failure)
             continue
         analysis = outcome.analysis
-        clip.cinematography = analysis
-        if hasattr(analysis, "get_simple_shot_type"):
-            clip.shot_type = analysis.get_simple_shot_type()
-        updated.append(clip)
+        if not applied:
+            failed.append({"clip_id": clip.id, "code": "stale_result"})
+            continue
         succeeded.append({"clip_id": clip.id, "shot_size": getattr(analysis, "shot_size", None)})
 
-    if updated:
-        project.update_clips(updated)
     if progress_callback is not None:
         progress_callback(1.0, f"Done: {len(succeeded)} ok, {len(failed)} failed, {len(skipped)} skipped")
     return {"success": True, "result": {"succeeded": succeeded, "failed": failed, "skipped": skipped, "total_clips": total}}

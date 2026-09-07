@@ -3902,7 +3902,8 @@ class MainWindow(QMainWindow):
             skip_existing=True,
         )
         self.cinematography_worker.progress.connect(self._on_cinematography_progress)
-        self.cinematography_worker.clip_completed.connect(self._on_cinematography_clip_ready)
+        from ui.workers.cinematography_delivery import CinematographyDelivery
+        CinematographyDelivery(self, self.cinematography_worker, pipeline=True)
         bind_pipeline_completion(
             self, self.cinematography_worker, "cinematography_worker",
             self.cinematography_worker.analysis_completed, self._on_pipeline_cinematography_finished,
@@ -4744,12 +4745,9 @@ class MainWindow(QMainWindow):
 
     @Slot(str, object)
     def _on_cinematography_clip_ready(self, clip_id: str, cinematography):
-        """Handle cinematography analyzed for single clip or frame."""
+        """Refresh views after guarded cinematography publication."""
         clip = self.clips_by_id.get(clip_id)
         if clip:
-            clip.cinematography = cinematography
-            # Also update shot_type for compatibility with existing filtering
-            clip.shot_type = cinematography.get_simple_shot_type()
             self.analyze_tab.update_clip_cinematography(clip_id, cinematography)
             self.analyze_tab.update_clip_shot_type(clip_id, clip.shot_type)
             # Refresh sidebar if it's showing this clip
@@ -4759,18 +4757,6 @@ class MainWindow(QMainWindow):
                     clip_id,
                     cinematography,
                 )
-            self._mark_dirty()
-            return
-        # Try frame
-        frame = self.project.frames_by_id.get(clip_id)
-        if frame:
-            shot_type = cinematography.get_simple_shot_type()
-            self.project.update_frame(
-                clip_id,
-                cinematography=cinematography,
-                shot_type=shot_type,
-            )
-            self._mark_dirty()
 
     @Slot(str)
     def _on_cinematography_error(self, error_msg: str):
@@ -6823,7 +6809,8 @@ class MainWindow(QMainWindow):
                 parallelism=min(self.settings.description_parallelism, 2),
             )
             worker.progress.connect(self._on_cinematography_progress)
-            worker.clip_completed.connect(self._on_cinematography_clip_ready)
+            from ui.workers.cinematography_delivery import CinematographyDelivery
+            CinematographyDelivery(self, worker, worker_attribute="_frame_cine_worker")
             worker.error.connect(self._on_cinematography_error)
             worker.analysis_completed.connect(
                 lambda _: self._on_frame_analysis_op_finished("cinematography")
