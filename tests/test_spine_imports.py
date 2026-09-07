@@ -32,6 +32,7 @@ SPINE_MODULES: tuple[str, ...] = (
     "core.operations.shots",
     "core.operations.frame_analysis",
     "core.operations.intention",
+    "core.operations.thumbnails",
     "core.jobs.shots",
     "core.jobs.gui_shots",
     "core.operations.audio_import",

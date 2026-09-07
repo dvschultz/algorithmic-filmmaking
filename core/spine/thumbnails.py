@@ -1,186 +1,141 @@
-"""Thumbnail generation spine.
+"""Headless adapters for the shared detached thumbnail operation."""
 
-Provides headless thumbnail backfill for clips. The implementation keeps
-FFmpeg/settings imports inside functions so the spine remains cheap and
-GUI-free at import time.
-"""
-
-from __future__ import annotations
-
-import logging
-import threading
+from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Optional
+from threading import Event
+from typing import Callable, TYPE_CHECKING
+
+from core.operations.thumbnails import (
+    ThumbnailApplication,
+    ThumbnailOptions,
+    ThumbnailTask,
+    run_thumbnails,
+    thumbnail_payload,
+)
 
 if TYPE_CHECKING:
+    from core.project import Project
     from models.clip import Clip, Source
 
-logger = logging.getLogger(__name__)
 
+def _prepare(
+    pairs,
+    *,
+    force,
+    width,
+    height,
+    progress_callback,
+    progress_start,
+    progress_end,
+):
+    from core.settings import load_settings
 
-def _check_cancel(cancel_event: Optional[threading.Event]) -> bool:
-    return cancel_event is not None and cancel_event.is_set()
+    tasks = tuple(ThumbnailTask.capture(clip, source) for clip, source in pairs)
+    options = ThumbnailOptions(
+        load_settings().thumbnail_cache_dir, width, height, force
+    )
 
+    def progress(current, total, outcome):
+        if progress_callback is not None:
+            progress_callback(
+                progress_start
+                + max(0.0, progress_end - progress_start) * current / total,
+                f"Generating thumbnails ({current}/{total})",
+            )
 
-def _resolve_clip_ids(project, clip_ids: Optional[list[str]]):
-    if clip_ids is None:
-        return list(project.clips)
-    out = []
-    for clip_id in clip_ids:
-        clip = project.clips_by_id.get(clip_id)
-        if clip is not None:
-            out.append(clip)
-    return out
+    return tasks, options, progress
 
 
 def generate_clip_thumbnails(
-    clip_source_pairs: list[tuple["Clip", "Source"]],
+    clip_source_pairs: list[tuple["Clip", "Source | None"]],
     *,
     force: bool = False,
     width: int = 320,
     height: int = 180,
-    progress_callback: Optional[Callable[[float, str], None]] = None,
+    progress_callback: Callable[[float, str], None] | None = None,
     progress_start: float = 0.0,
     progress_end: float = 1.0,
-    cancel_event: Optional[threading.Event] = None,
+    cancel_event: Event | None = None,
 ) -> dict:
-    """Generate thumbnails for explicit ``(clip, source)`` pairs.
-
-    Returns a per-clip result payload and mutates each successful clip's
-    ``thumbnail_path``. Existing thumbnails are skipped unless ``force`` is
-    true. Missing source files and thumbnail failures are reported per clip.
-    """
-    if not clip_source_pairs:
-        return {"succeeded": [], "failed": [], "skipped": [], "total_clips": 0}
-
-    succeeded: list[dict] = []
-    failed: list[dict] = []
-    skipped: list[dict] = []
-
-    pending: list[tuple["Clip", "Source"]] = []
-    for clip, source in clip_source_pairs:
-        thumbnail_path = getattr(clip, "thumbnail_path", None)
-        if not force and thumbnail_path and Path(thumbnail_path).exists():
-            skipped.append({"clip_id": clip.id, "reason": "already_exists"})
-            continue
-        pending.append((clip, source))
-
-    if not pending:
-        return {
-            "succeeded": succeeded,
-            "failed": failed,
-            "skipped": skipped,
-            "total_clips": len(clip_source_pairs),
-        }
-
-    try:
-        from core.settings import load_settings
-        from core.thumbnail import ThumbnailGenerator
-
-        settings = load_settings()
-        generator = ThumbnailGenerator(cache_dir=settings.thumbnail_cache_dir)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Thumbnail generation unavailable: %s", exc)
-        failed.extend(
-            {
-                "clip_id": clip.id,
-                "code": "thumbnail_generation_unavailable",
-                "message": str(exc),
-            }
-            for clip, _source in pending
-        )
-        return {
-            "succeeded": succeeded,
-            "failed": failed,
-            "skipped": skipped,
-            "total_clips": len(clip_source_pairs),
-        }
-
-    total = len(pending)
-    progress_span = max(0.0, progress_end - progress_start)
-    for i, (clip, source) in enumerate(pending):
-        if _check_cancel(cancel_event):
-            failed.extend({"clip_id": c.id, "code": "cancelled"} for c, _s in pending[i:])
-            break
-
-        if progress_callback is not None:
-            progress = progress_start + (progress_span * (i / total))
-            progress_callback(progress, f"Generating thumbnails ({i + 1}/{total})")
-
-        if source is None or not source.file_path.exists():
-            failed.append({"clip_id": clip.id, "code": "source_file_missing"})
-            continue
-
-        try:
-            output_path = generator.cache_dir / f"clip_{clip.id}.jpg"
-            thumbnail_path = generator.generate_clip_thumbnail(
-                video_path=source.file_path,
-                start_seconds=clip.start_time(source.fps),
-                end_seconds=clip.end_time(source.fps),
-                output_path=output_path,
-                width=width,
-                height=height,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Failed to generate thumbnail for clip %s: %s", clip.id, exc)
-            failed.append(
-                {
-                    "clip_id": clip.id,
-                    "code": "thumbnail_generation_failed",
-                    "message": str(exc),
-                }
-            )
-            continue
-
-        clip.thumbnail_path = Path(thumbnail_path)
-        succeeded.append({"clip_id": clip.id, "path": str(clip.thumbnail_path)})
-
-    return {
-        "succeeded": succeeded,
-        "failed": failed,
-        "skipped": skipped,
-        "total_clips": len(clip_source_pairs),
-    }
+    """Compute thumbnails and update caller-owned detached detection clips."""
+    tasks, options, progress = _prepare(
+        clip_source_pairs,
+        force=force,
+        width=width,
+        height=height,
+        progress_callback=progress_callback,
+        progress_start=progress_start,
+        progress_end=progress_end,
+    )
+    cancel = cancel_event if cancel_event is not None else Event()
+    outcomes = run_thumbnails(tasks, options, cancel, progress)
+    accepted = []
+    for (clip, source), task, outcome in zip(clip_source_pairs, tasks, outcomes):
+        if outcome.status == "succeeded":
+            if cancel.is_set() or ThumbnailTask.capture(clip, source) != task:
+                outcome = replace(
+                    outcome,
+                    status="failed",
+                    code="cancelled" if cancel.is_set() else "stale_input",
+                    path=None,
+                )
+            else:
+                assert outcome.path is not None
+                clip.thumbnail_path = Path(outcome.path)
+        accepted.append(outcome)
+    return thumbnail_payload(tuple(accepted))
 
 
 def generate_thumbnails(
-    project,
-    clip_ids: Optional[list[str]] = None,
+    project: "Project",
+    clip_ids: list[str] | None = None,
     *,
     force: bool = False,
     width: int = 320,
     height: int = 180,
-    progress_callback: Optional[Callable[[float, str], None]] = None,
-    cancel_event: Optional[threading.Event] = None,
+    progress_callback: Callable[[float, str], None] | None = None,
+    cancel_event: Event | None = None,
 ) -> dict:
-    """Generate or backfill thumbnails for project clips."""
-    clips = _resolve_clip_ids(project, clip_ids)
+    """Generate project thumbnails and publish on the calling owner thread."""
+    project.session.assert_owner()
+    clips = (
+        list(project.clips)
+        if clip_ids is None
+        else [
+            project.clips_by_id[cid]
+            for cid in dict.fromkeys(clip_ids)
+            if cid in project.clips_by_id
+        ]
+    )
     pairs = [(clip, project.sources_by_id.get(clip.source_id)) for clip in clips]
-
-    result = generate_clip_thumbnails(
+    tasks, options, progress = _prepare(
         pairs,
         force=force,
         width=width,
         height=height,
         progress_callback=progress_callback,
-        cancel_event=cancel_event,
+        progress_start=0.0,
+        progress_end=1.0,
     )
-
-    updated = [
-        project.clips_by_id[item["clip_id"]]
-        for item in result["succeeded"]
-        if item["clip_id"] in project.clips_by_id
-    ]
-    if updated:
-        project.update_clips(updated)
-
+    application = ThumbnailApplication(project, tasks)
+    cancel = cancel_event if cancel_event is not None else Event()
+    outcomes = run_thumbnails(tasks, options, cancel, progress)
+    accepted = []
+    for outcome in outcomes:
+        if outcome.status == "succeeded" and (
+            cancel.is_set() or not application.apply(outcome)
+        ):
+            outcome = replace(
+                outcome,
+                status="failed",
+                code="cancelled" if cancel.is_set() else "stale_input",
+                path=None,
+            )
+        accepted.append(outcome)
+    result = thumbnail_payload(tuple(accepted))
     if progress_callback is not None:
         progress_callback(
             1.0,
-            (
-                f"Done: {len(result['succeeded'])} generated, "
-                f"{len(result['failed'])} failed, {len(result['skipped'])} skipped"
-            ),
+            f"Done: {len(result['succeeded'])} generated, {len(result['failed'])} failed, {len(result['skipped'])} skipped",
         )
-
     return {"success": True, "result": result}

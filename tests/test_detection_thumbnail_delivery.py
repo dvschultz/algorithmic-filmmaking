@@ -9,17 +9,23 @@ import sys
 def test_thumbnail_delivery_rejects_replaced_detection_and_old_session():
     code = """
 import threading
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
 from types import SimpleNamespace
-from PySide6.QtCore import QCoreApplication, QObject, QThread, Signal
+from PySide6.QtCore import QCoreApplication, QObject
 from core.project import Project
+from models.clip import Clip, Source
+from ui.workers.thumbnail_worker import ThumbnailWorker
 from ui.workers.detection_thumbnail_delivery import DetectionThumbnailDelivery
 app = QCoreApplication([])
-class Worker(QThread):
-    progress = Signal(int, int)
-    thumbnail_ready = Signal(str, str)
-    def run(self):
-        self.progress.emit(1, 1)
-        self.thumbnail_ready.emit('clip', 'thumb.jpg')
+temporary = tempfile.TemporaryDirectory()
+directory = Path(temporary.name)
+video = directory / 'video.mp4'; video.write_bytes(b'video')
+def generate(self, **kwargs):
+    path = kwargs['output_path']; path.write_bytes(b'thumbnail'); return path
+patcher = patch('core.thumbnail.ThumbnailGenerator.generate_clip_thumbnail', generate)
+patcher.start()
 window = QObject()
 window.project = Project.new()
 received = []
@@ -27,9 +33,13 @@ owner = threading.get_ident()
 window._on_thumbnail_progress = lambda *args: received.append(('progress', threading.get_ident()))
 window._on_thumbnail_ready = lambda *args: received.append(('thumb', threading.get_ident()))
 def bind():
+    if not window.project.sources:
+        window.project.add_source(Source(id='source', file_path=video, fps=30))
+        window.project.add_clips([Clip(id='clip', source_id='source', start_frame=0, end_frame=30)])
     guard = SimpleNamespace(session_id=window.project.session.session_id)
     window._active_detection_guard = guard
-    window.thumbnail_worker = worker = Worker()
+    window.thumbnail_worker = worker = ThumbnailWorker(window.project.sources[0], window.project.clips,
+        directory, project=window.project)
     DetectionThumbnailDelivery(window, worker, guard, lambda: received.append(('done', threading.get_ident())))
     worker.start()
     assert worker.wait(3000)

@@ -38,7 +38,8 @@ from core.scene_detect import DetectionConfig, KaraokeDetectionConfig
 from core.operations.detection import StaleDetectionResult
 from ui.workers.detection_worker import DetectionWorker
 from ui.workers.download_workers import DownloadWorker, URLBulkDownloadWorker, BulkDownloadWorker
-from core.thumbnail import ThumbnailGenerator
+from ui.workers.thumbnail_worker import ThumbnailWorker
+from ui.workers.thumbnail_delivery import ThumbnailDelivery
 from core.downloader import (
     YTDLP_COOKIE_HELP_URL,
     DOWNLOAD_ERROR_COOKIES_REQUIRED,
@@ -180,65 +181,6 @@ def _source_ms_to_timeline_seconds(
     max_frame = max(seq_clip.start_frame, seq_clip.end_frame() - 1)
     timeline_frame = max(min_frame, min(timeline_frame, max_frame))
     return timeline_frame / timeline_fps
-
-
-class ThumbnailWorker(QThread):
-    """Background worker for thumbnail generation."""
-
-    progress = Signal(int, int)  # current, total
-    thumbnail_ready = Signal(str, str)  # clip_id, thumbnail_path
-    # Note: Don't override QThread.finished - use the built-in signal instead
-
-    def __init__(
-        self,
-        source: Source,
-        clips: list[Clip],
-        cache_dir: Path = None,
-        sources_by_id: dict[str, Source] = None,
-    ):
-        super().__init__()
-        self.source = source
-        self.clips = clips
-        self.cache_dir = cache_dir
-        self.sources_by_id = sources_by_id or {}
-        logger.debug("ThumbnailWorker created")
-
-    def run(self):
-        logger.info("ThumbnailWorker.run() STARTING")
-        logger.info(f"ThumbnailWorker: {len(self.clips)} clips to process")
-        logger.info(f"ThumbnailWorker: sources_by_id has {len(self.sources_by_id)} entries: {list(self.sources_by_id.keys())}")
-        logger.info(f"ThumbnailWorker: default source: {self.source.id if self.source else None}")
-        generator = ThumbnailGenerator(cache_dir=self.cache_dir)
-        total = len(self.clips)
-
-        for i, clip in enumerate(self.clips):
-            try:
-                # Use clip's source if available, fall back to default source
-                source = self.sources_by_id.get(clip.source_id, self.source)
-                if i == 0 or (i + 1) % 100 == 0:
-                    logger.info("ThumbnailWorker: processing %s/%s thumbnails", i + 1, total)
-                logger.debug(f"ThumbnailWorker: clip {clip.id[:8]} source_id={clip.source_id}, found source: {source.id if source else None}")
-                if not source:
-                    logger.warning(f"No source found for clip {clip.id} (source_id={clip.source_id})")
-                    continue
-
-                logger.debug(f"ThumbnailWorker: generating thumbnail for clip {clip.id}, video: {source.file_path}")
-                thumb_path = generator.generate_clip_thumbnail(
-                    video_path=source.file_path,
-                    start_seconds=clip.start_time(source.fps),
-                    end_seconds=clip.end_time(source.fps),
-                )
-                clip.thumbnail_path = thumb_path
-                logger.debug(f"ThumbnailWorker: emitting thumbnail_ready for clip {clip.id}, path={thumb_path}")
-                self.thumbnail_ready.emit(clip.id, str(thumb_path))
-            except Exception as e:
-                logger.warning(f"Failed to generate thumbnail for clip {clip.id}: {e}")
-
-            self.progress.emit(i + 1, total)
-
-        logger.info("ThumbnailWorker.run() COMPLETED")
-        # QThread's built-in finished signal will be emitted after run() returns
-
 
 class SaveProjectWorker(QThread):
     """Background worker for saving a project without blocking the UI.
@@ -891,6 +833,10 @@ class MainWindow(QMainWindow):
         self._deferred_agent_download_results = None
         self._cancel_download_workers()
         self._active_detection_reply = None
+        self._pending_thumbnail_clips = []
+
+        for worker in tuple(getattr(self, "_active_thumbnail_workers", ())):
+            worker.cancel()
 
         for controller in tuple(getattr(self, "_active_frame_analyses", ())):
             controller.cancel()
@@ -900,7 +846,6 @@ class MainWindow(QMainWindow):
 
         # Stop all analysis workers
         workers_to_stop = [
-            (getattr(self, 'thumbnail_worker', None), "Thumbnail"),
             (getattr(self, 'detection_worker', None), "Detection"),
             (getattr(self, 'color_worker', None), "Color"),
             (getattr(self, 'shot_type_worker', None), "ShotType"),
@@ -1795,17 +1740,15 @@ class MainWindow(QMainWindow):
                     default_source = self.sources_by_id.get(first_clip.source_id)
 
                 if default_source:
-                    # Safely stop any running worker (shouldn't happen due to check above, but defensive)
-                    self._stop_worker_safely(self.thumbnail_worker, "thumbnail")
                     self.thumbnail_worker = ThumbnailWorker(
                         default_source,
                         clips_needing_thumbnails,
                         self.settings.thumbnail_cache_dir,
-                        sources_by_id=self.sources_by_id,
+                        project=self.project, sources_by_id=self.sources_by_id,
                     )
                     # Connect to _on_thumbnail_ready - this adds clips to Cut tab!
-                    self.thumbnail_worker.thumbnail_ready.connect(self._on_thumbnail_ready)
-                    self.thumbnail_worker.finished.connect(self._on_agent_thumbnails_finished, Qt.UniqueConnection)
+                    ThumbnailDelivery(self, self.thumbnail_worker, ready=self._on_thumbnail_ready,
+                                      completed=self._on_agent_thumbnails_finished)
                     logger.info("Starting ThumbnailWorker for agent-added clips...")
                     self.thumbnail_worker.start()
 
@@ -1819,21 +1762,23 @@ class MainWindow(QMainWindow):
             pending = self._pending_thumbnail_clips
             self._pending_thumbnail_clips = []
             logger.info(f"Processing {len(pending)} pending thumbnail clips")
-            clips_still_needing = [c for c in pending if not c.thumbnail_path or not c.thumbnail_path.exists()]
+            clips_still_needing = [
+                c for c in pending
+                if self.clips_by_id.get(c.id) is c
+                and (not c.thumbnail_path or not c.thumbnail_path.exists())
+            ]
             if clips_still_needing:
                 default_source = self.sources_by_id.get(clips_still_needing[0].source_id)
                 if default_source:
-                    # Safely stop worker (should be done already since we're in finished handler)
-                    self._stop_worker_safely(self.thumbnail_worker, "thumbnail")
                     self.thumbnail_worker = ThumbnailWorker(
                         default_source,
                         clips_still_needing,
                         self.settings.thumbnail_cache_dir,
-                        sources_by_id=self.sources_by_id,
+                        project=self.project, sources_by_id=self.sources_by_id,
                     )
                     # Connect to _on_thumbnail_ready - this adds clips to Cut tab!
-                    self.thumbnail_worker.thumbnail_ready.connect(self._on_thumbnail_ready)
-                    self.thumbnail_worker.finished.connect(self._on_agent_thumbnails_finished, Qt.UniqueConnection)
+                    ThumbnailDelivery(self, self.thumbnail_worker, ready=self._on_thumbnail_ready,
+                                      completed=self._on_agent_thumbnails_finished)
                     self.thumbnail_worker.start()
 
     @Slot(object)
@@ -5566,14 +5511,13 @@ class MainWindow(QMainWindow):
 
         self.status_bar.showMessage(f"Found {len(clips)} scenes. Generating thumbnails...")
 
-        # Start thumbnail generation - safely stop any running worker first
-        self._stop_worker_safely(self.thumbnail_worker, "thumbnail")
+        # Delivery cancels and retains any previous thumbnail worker.
         logger.info("Creating ThumbnailWorker...")
         self.thumbnail_worker = ThumbnailWorker(
             target_source,
             clips,
             cache_dir=self.settings.thumbnail_cache_dir,
-            sources_by_id=self.sources_by_id,
+            project=self.project, sources_by_id=self.sources_by_id,
         )
         DetectionThumbnailDelivery(
             self, self.thumbnail_worker, self._active_detection_guard,
@@ -5614,7 +5558,6 @@ class MainWindow(QMainWindow):
         clip = self.clips_by_id.get(clip_id)
         if clip:
             thumb_path_obj = Path(thumb_path)
-            clip.thumbnail_path = thumb_path_obj
             # Look up the clip's actual source, not current_source which may have changed
             clip_source = self.sources_by_id.get(clip.source_id)
             if clip_source:
@@ -8914,17 +8857,6 @@ class MainWindow(QMainWindow):
         self._thumbnail_generation += 1
         current_gen = self._thumbnail_generation
 
-        # Clean up any existing thumbnail worker (non-blocking, no terminate)
-        if hasattr(self, 'thumbnail_worker') and self.thumbnail_worker is not None:
-            self._cleanup_worker(
-                self.thumbnail_worker,
-                "thumbnail",
-                ["progress", "thumbnail_ready", "finished"],
-                wait_timeout=2000,
-                allow_terminate=False,
-            )
-            self.thumbnail_worker = None
-
         # Build sources_by_id dict
         sources_by_id = {s.id: s for s in all_sources}
         default_source = all_sources[0] if all_sources else None
@@ -8933,19 +8865,20 @@ class MainWindow(QMainWindow):
             source=default_source,
             clips=all_clips,
             cache_dir=self.settings.thumbnail_cache_dir,
-            sources_by_id=sources_by_id,
+            project=self.project, sources_by_id=sources_by_id,
         )
 
         # Capture generation for lambda closures
         gen = current_gen
 
-        self.thumbnail_worker.progress.connect(
-            self.intention_workflow.on_thumbnail_progress
-        )
-        self.thumbnail_worker.thumbnail_ready.connect(self._on_thumbnail_ready)
-        # Use generation check for finished handler
-        self.thumbnail_worker.finished.connect(
-            lambda g=gen: self._on_intention_thumbnails_finished(g)
+        workflow = self.intention_workflow
+        plan = workflow.plan
+        ThumbnailDelivery(
+            self, self.thumbnail_worker, ready=self._on_thumbnail_ready,
+            completed=lambda g=gen: self._on_intention_thumbnails_finished(g),
+            progress=workflow.on_thumbnail_progress,
+            valid=lambda: self.intention_workflow is workflow and workflow.plan is plan
+                and workflow.state == WorkflowState.THUMBNAILS,
         )
 
         self._thumbnails_finished_handled = False
@@ -10417,20 +10350,17 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(f"Regenerating {len(clips_needing_thumbnails)} thumbnails...")
 
         try:
-            # Safely stop any running thumbnail worker first
-            self._stop_worker_safely(self.thumbnail_worker, "thumbnail")
-
             # Use existing ThumbnailWorker with project-load-specific handlers
             # Pass sources_by_id so each clip uses its correct source
             self.thumbnail_worker = ThumbnailWorker(
                 self.current_source,
                 clips_needing_thumbnails,
                 self.settings.thumbnail_cache_dir,
-                sources_by_id=self.sources_by_id,
+                project=self.project, sources_by_id=self.sources_by_id,
             )
             # Use handlers that update existing clips instead of adding new ones
-            self.thumbnail_worker.thumbnail_ready.connect(self._on_project_thumbnail_ready)
-            self.thumbnail_worker.finished.connect(self._on_project_thumbnails_finished, Qt.UniqueConnection)
+            ThumbnailDelivery(self, self.thumbnail_worker, ready=self._on_project_thumbnail_ready,
+                              completed=self._on_project_thumbnails_finished)
             logger.info("Starting ThumbnailWorker for project load...")
             self.thumbnail_worker.start()
             logger.info(f"ThumbnailWorker started, isRunning: {self.thumbnail_worker.isRunning()}")
@@ -10444,7 +10374,6 @@ class MainWindow(QMainWindow):
         if clip:
             thumb_path_obj = Path(thumb_path)
             logger.debug(f"  thumbnail exists: {thumb_path_obj.exists()}")
-            clip.thumbnail_path = thumb_path_obj
             self.cut_tab.update_clip_thumbnail(clip_id, thumb_path_obj)
             self.analyze_tab.update_clip_thumbnail(clip_id, thumb_path_obj)
         else:
@@ -10509,7 +10438,7 @@ class MainWindow(QMainWindow):
         analysis_workers = tuple(controller.worker for controller in frame_analyses if controller.worker is not None)
         frame_worker = getattr(self, "_frame_extraction_worker", None)
         image_worker = getattr(self, "_image_import_worker", None)
-        active_workers = audio_workers + analysis_workers + tuple(getattr(self, "_active_shot_workers", ())) + tuple(worker for worker in (frame_worker, image_worker) if worker is not None)
+        active_workers = audio_workers + analysis_workers + tuple(getattr(self, "_active_thumbnail_workers", ())) + tuple(getattr(self, "_active_shot_workers", ())) + tuple(worker for worker in (frame_worker, image_worker) if worker is not None)
         for worker in active_workers:
             worker.cancel()
         if any(worker.isRunning() for worker in active_workers):

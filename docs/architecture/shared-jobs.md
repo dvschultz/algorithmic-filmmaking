@@ -303,7 +303,31 @@ This is the phase-plan portion of the intention migration. Worker dispatch,
 native-thread advancement, and run ownership across the remaining intention
 adapters still need to leave `MainWindow`. U7 remains incomplete.
 
-The route audit also found that `ThumbnailWorker` in `ui/main_window.py` still
-mutates live clips off-thread and duplicates the loop in
-`core/spine/thumbnails.py`. Consolidating thumbnail computation and owner-thread
-publication is part of the remaining worker extraction, not completed U7 work.
+The route audit identified an off-thread mutation and duplicated loop in the
+former main-window thumbnail worker. The thumbnail cutover below resolves that
+portion of worker extraction.
+
+## Shared thumbnail computation
+
+`core/operations/thumbnails.py` owns detached tasks, per-clip outcomes, generation,
+and guarded owner-thread publication. Headless backfill and detection use it
+through `core/spine/thumbnails.py`. All five desktop thumbnail entry points use
+`ui/workers/thumbnail_worker.py` and the shared session job runtime. The main
+window no longer defines a thumbnail worker or assigns returned paths to models.
+
+The GUI preserves its 160x90 default; headless calls preserve their 320x180
+default and explicit dimensions. Existing thumbnails are skipped unless forced.
+Generated cache identities include media identity, range, FPS, and dimensions.
+Forced refresh creates a new file instead of overwriting a referenced artifact.
+Generation writes a temporary file and publishes it atomically only after
+checking cancellation and source identity.
+
+Delivery validates the project/session/save location, clip/source objects,
+range/FPS, source media, prior thumbnail, and request ownership. Replaced and
+cancelled workers remain retained until native thread completion. Reset cancels
+all retained thumbnail workers; closing waits for them through the existing
+close preflight. Model changes use `Project.update_clips()` on the owner thread;
+saving remains explicit. Intention thumbnails also check their originating plan.
+
+Remaining intention detection/download/analysis worker ownership and the broader
+U7 route audit are still required.
