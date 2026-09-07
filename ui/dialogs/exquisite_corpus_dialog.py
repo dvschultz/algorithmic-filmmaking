@@ -8,6 +8,10 @@ This dialog guides the user through:
 """
 
 import logging
+from copy import deepcopy
+from typing import Callable
+
+from core.operations.ocr import OcrApplication, OcrTask
 
 from PySide6.QtWidgets import (
     QDialog,
@@ -49,7 +53,7 @@ class ExquisiteCorpusDialog(QDialog):
     PAGE_PROGRESS = 1
     PAGE_PREVIEW = 2
 
-    def __init__(self, clips, sources_by_id, project, parent=None, initial_poem_length: str = None, initial_form: str = None):
+    def __init__(self, clips, sources_by_id, project, parent=None, initial_poem_length: str = None, initial_form: str = None, *, is_current: Callable[[], bool] | None = None):
         """Initialize the dialog.
 
         Args:
@@ -59,11 +63,19 @@ class ExquisiteCorpusDialog(QDialog):
             parent: Parent widget
             initial_poem_length: Optional pre-selected poem length ("short", "medium", "long")
             initial_form: Optional pre-selected poetic form key (e.g. "haiku", "limerick")
+            is_current: Whether the launching project/workflow is still active.
         """
         super().__init__(parent)
-        self.clips = clips
-        self.sources_by_id = sources_by_id
+        self._input_guard = OcrApplication(project, tuple(
+            OcrTask.from_clip(clip, sources_by_id.get(clip.source_id)) for clip in clips
+        ))
+        self.clips = deepcopy(clips)
+        self.sources_by_id = deepcopy(sources_by_id)
         self._project = project
+        self._context_current = is_current
+        self._project_path = project.path.resolve() if project.path else None
+        self._closed = False
+        self._completed_worker = None
         self.extraction_results = {}
         self.poem_lines = []
         self.worker = None
@@ -395,7 +407,9 @@ class ExquisiteCorpusDialog(QDialog):
     def _go_back(self):
         """Navigate to previous page."""
         current = self.stack.currentIndex()
-        if current == self.PAGE_PREVIEW:
+        if current == self.PAGE_PREVIEW or (
+            current == self.PAGE_PROGRESS and not (self.worker and self.worker.isRunning())
+        ):
             # Can go back to mood page
             self.stack.setCurrentIndex(self.PAGE_MOOD)
             self._update_nav_buttons()
@@ -422,6 +436,8 @@ class ExquisiteCorpusDialog(QDialog):
         elif current == self.PAGE_PREVIEW:
             # Finish and create sequence
             self._finish()
+        elif current == self.PAGE_PROGRESS:
+            self._go_back()
 
     def _update_nav_buttons(self):
         """Update navigation button states based on current page."""
@@ -446,6 +462,8 @@ class ExquisiteCorpusDialog(QDialog):
         from core.settings import load_settings
         from core.feature_registry import check_feature_ready, install_for_feature
 
+        if not self._inputs_current() or (self.worker and self.worker.isRunning()):
+            return
         settings = load_settings()
 
         # Determine extraction parameters from settings
@@ -457,7 +475,7 @@ class ExquisiteCorpusDialog(QDialog):
             available, _missing = check_feature_ready("ocr")
             if not available:
                 if not install_for_feature("ocr"):
-                    self._info_label.setText("OCR dependencies (PaddleOCR) could not be installed.")
+                    self._on_extraction_error("OCR dependencies (PaddleOCR) could not be installed.")
                     return
         use_vlm = (method in ("vlm", "hybrid"))
         vlm_model = settings.text_extraction_vlm_model if use_vlm else None
@@ -467,6 +485,8 @@ class ExquisiteCorpusDialog(QDialog):
             f"(method={method}, vlm_only={vlm_only})"
         )
 
+        if not self._inputs_current():
+            return
         self.worker = TextExtractionWorker(
             clips=self.clips,
             sources_by_id=self.sources_by_id,
@@ -489,7 +509,25 @@ class ExquisiteCorpusDialog(QDialog):
 
     def _on_extraction_finished(self, results: dict):
         """Handle extraction completion."""
+        if (
+            not self._inputs_current()
+            or self.worker is None or self.worker.is_cancelled()
+            or (self.sender() is not None and self.sender() is not self.worker)
+            or self._completed_worker is self.worker
+        ):
+            return
+        self._completed_worker = self.worker
+        results = {
+            outcome.clip_id: outcome.to_models()
+            for outcome in self.worker.result if outcome.status == "succeeded"
+        }
         self.extraction_results = results
+
+        # Enrich only the proposal's private clips, including valid empty results.
+        clips_by_id = {c.id: c for c in self.clips}
+        for clip_id, texts in results.items():
+            if clip_id in clips_by_id:
+                clips_by_id[clip_id].extracted_texts = texts
 
         # Count clips with text
         clips_with_text = sum(1 for texts in results.values() if texts)
@@ -509,15 +547,7 @@ class ExquisiteCorpusDialog(QDialog):
             self.back_btn.setVisible(True)
             self.next_btn.setText("Back to Start")
             self.next_btn.setEnabled(True)
-            self.next_btn.clicked.disconnect()
-            self.next_btn.clicked.connect(lambda: self.stack.setCurrentIndex(self.PAGE_MOOD))
             return
-
-        # Store extracted text in clip objects for persistence
-        clips_by_id = {c.id: c for c in self.clips}
-        for clip_id, texts in results.items():
-            if clip_id in clips_by_id:
-                clips_by_id[clip_id].extracted_texts = texts
 
         # Generate poem
         self._generate_poem()
@@ -530,6 +560,9 @@ class ExquisiteCorpusDialog(QDialog):
     def _generate_poem(self):
         """Generate poem from extracted text."""
         from core.remix.exquisite_corpus import generate_poem
+
+        if not self._inputs_current():
+            return
 
         self.progress_label.setText("Generating poem...")
         self.progress_bar.setValue(95)
@@ -595,6 +628,9 @@ class ExquisiteCorpusDialog(QDialog):
         """Finish the workflow and create the sequence."""
         from core.remix.exquisite_corpus import PoemLine, sequence_by_poem
 
+        if not self._inputs_current():
+            return
+
         # Get reordered poem from list widget
         reordered_lines = []
         for i in range(self.poem_list.count()):
@@ -620,16 +656,32 @@ class ExquisiteCorpusDialog(QDialog):
         self.sequence_ready.emit(sequence)
         self.accept()
 
-    def _on_cancel(self):
-        """Handle cancel button click."""
+    def _inputs_current(self) -> bool:
+        if self._closed:
+            return False
+        path = self._project.path.resolve() if self._project.path else None
+        if (
+            (self._context_current is not None and not self._context_current())
+            or path != self._project_path
+            or not self._input_guard.inputs_current(self._project)
+        ):
+            self._on_extraction_error("Project inputs changed. Reopen Exquisite Corpus to try again.")
+            return False
+        return True
+
+    def done(self, result: int) -> None:
+        """Retire queued results for every exit path, including Escape."""
+        self._closed = True
         if self.worker and self.worker.isRunning():
             self.worker.cancel()
             self.worker.wait()
+        super().done(result)
+
+    def _on_cancel(self):
+        """Handle cancel button click."""
         self.reject()
 
     def closeEvent(self, event):
         """Handle dialog close (X button)."""
-        if self.worker and self.worker.isRunning():
-            self.worker.cancel()
-            self.worker.wait()
+        self.reject()
         event.accept()

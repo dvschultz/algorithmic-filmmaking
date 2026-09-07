@@ -1029,14 +1029,24 @@ class SequenceTab(BaseTab):
         # Extract just the clip objects
         clip_objects = [clip for clip, source in clips]
 
+        owner_project = self._project
+        owner_session = owner_project.session.session_id
         dialog = ExquisiteCorpusDialog(
             clips=clip_objects,
             sources_by_id=sources_by_id,
+            project=owner_project,
             parent=self,
+            is_current=lambda: self._project is owner_project and owner_project.session.session_id == owner_session,
         )
 
         # Connect to sequence_ready signal
-        dialog.sequence_ready.connect(self._apply_exquisite_corpus_sequence)
+        consumed = False
+        def accept_proposal(sequence: list) -> None:
+            nonlocal consumed
+            if not consumed and self._project is owner_project and owner_project.session.session_id == owner_session:
+                consumed = True
+                self._apply_exquisite_corpus_sequence(sequence)
+        dialog.sequence_ready.connect(accept_proposal)
 
         dialog.exec()
 

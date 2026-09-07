@@ -101,6 +101,7 @@ class Corpus(QObject):
     @Slot(dict)
     def _on_extraction_finished(self, results): self.results.append(results)
 corpus = Corpus(); corpus.clips = []; corpus.sources_by_id = {}; corpus.results = []
+corpus.worker = None; corpus._inputs_current = lambda: True
 with patch('core.settings.load_settings', return_value=SimpleNamespace(
         text_extraction_method='vlm', text_extraction_vlm_model='test')):
     with patch.object(TextExtractionWorker, 'start', lambda worker: worker.extraction_completed.emit({})):

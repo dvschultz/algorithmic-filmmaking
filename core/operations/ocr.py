@@ -260,6 +260,24 @@ class OcrApplication:
         self.bindings = {task.key: self._binding(project, task) for task in tasks}
         self.consumed: set[tuple[str, str]] = set()
 
+    def inputs_current(self, project: "Project") -> bool:
+        """Validate an uncommitted proposal without publishing analysis."""
+        project.session.assert_owner()
+        if project is not self.project or project.session.session_id != self.session_id:
+            return False
+        for key, task in self.tasks.items():
+            expected = self.bindings[key]
+            current = self._binding(project, task)
+            if (
+                expected is None
+                or current is None
+                or current[0] is not expected[0]
+                or current[1] is not expected[1]
+                or current[2] != expected[2]
+            ):
+                return False
+        return True
+
     @staticmethod
     def _binding(project: "Project", task: OcrTask) -> tuple | None:
         source = None

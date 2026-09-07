@@ -821,5 +821,12 @@ are discarded. Frame OCR uses the same configured method/model as clip OCR, and
 empty frame observations survive project save/load. Frame OCR completion advances
 only its original analysis run and is accepted once.
 
-Durable OCR recovery and Exquisite Corpus proposal/publication integration remain
-under U7; this does not complete the full OCR migration.
+Exquisite Corpus enriches private proposal copies with OCR instead of mutating
+live clips. Its input guard checks the project session/save path, original target
+objects, ranges, source media, and previous text before extraction, poem generation,
+and sequence handoff. Both the Sequence tab and intention workflow bind the dialog
+to their original project/run and accept the proposal once. Closing the dialog
+retires queued OCR, and an empty extraction can return to the prompt and retry.
+
+Durable OCR recovery remains under U7. Poem generation still uses the dialog's
+existing synchronous path; its shared algorithm adapter remains U12 work.

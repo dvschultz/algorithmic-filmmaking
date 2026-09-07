@@ -9300,24 +9300,42 @@ class MainWindow(QMainWindow):
         poem_length = getattr(self, '_intention_pending_poem_length', None)
         poem_form = getattr(self, '_intention_pending_poem_form', None)
 
+        owner_project = self.project
+        owner_session = owner_project.session.session_id
+        owner_workflow = self.intention_workflow
+        def is_current() -> bool:
+            from core.intention_workflow import WorkflowState
+            return (
+                self.project is owner_project
+                and owner_project.session.session_id == owner_session
+                and self.intention_workflow is owner_workflow
+                and owner_workflow is not None
+                and owner_workflow.state == WorkflowState.BUILDING
+            )
+
         dialog = ExquisiteCorpusDialog(
             clips=clips,
             sources_by_id=sources_by_id,
-            project=self.project,
+            project=owner_project,
             parent=self,
             initial_poem_length=poem_length,
             initial_form=poem_form,
+            is_current=is_current,
         )
 
-        # Connect to sequence_ready signal - this is how the dialog returns results
-        dialog.sequence_ready.connect(self._on_exquisite_corpus_sequence_ready)
+        consumed = False
+        def accept_proposal(sequence: list) -> None:
+            nonlocal consumed
+            if not consumed and is_current():
+                consumed = True
+                self._on_exquisite_corpus_sequence_ready(sequence)
+        dialog.sequence_ready.connect(accept_proposal)
 
         result = dialog.exec()
 
-        if result != QDialog.Accepted:
+        if result != QDialog.Accepted and is_current() and owner_workflow is not None:
             # User cancelled - cancel the workflow
-            if self.intention_workflow:
-                self.intention_workflow.cancel()
+            owner_workflow.cancel()
 
     @Slot(list)
     def _on_exquisite_corpus_sequence_ready(self, sequence_clips: list):
