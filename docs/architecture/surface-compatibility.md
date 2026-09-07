@@ -298,6 +298,23 @@ result as before. Manual edits become inputs to the next append. Missing committ
 payloads fail without repeating paid computation. Later analysis steps reload the
 saved model so they cannot overwrite custom-query receipts with older state.
 
+## Cinematography computation cutover
+
+GUI clip/frame analysis and spine/MCP cinematography share
+`core/operations/cinematography.py`. Tasks retain target identity, image/video paths,
+and frame ranges; options snapshot tier, input mode, cloud model, and local model
+before dispatch. The local provider now loads the configured cinematography model
+explicitly. Local inference is serial on the calling worker thread; cloud admission
+is bounded to the configured concurrency, capped at five.
+
+Transient failures use the shared retry classification and cancellable waits.
+Cancellation stops admission, suppresses in-flight results, drains active calls,
+and still emits GUI completion. Outcomes serialize analysis data so provider,
+incremental GUI signals, and final results do not share mutable analysis objects.
+Frame targets force frame mode. Existing video extraction fallback and headless
+shot-type projection remain. Guarded publication and durable cinematography
+recovery are subsequent U7 steps.
+
 ## Transcription batch cutover
 
 GUI clip transcription, spine (including MCP jobs), CLI transcription, and

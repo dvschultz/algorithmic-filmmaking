@@ -5,14 +5,17 @@ emitting progress signals to keep the UI responsive.
 """
 
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import Signal
 
-from core.analysis.cinematography import analyze_cinematography
+from core.operations.cinematography import (
+    CinematographyTask as ClipAnalysisTask,
+    CinematographyOutcome,
+    compute_cinematography,
+    resolve_options,
+    run_cinematography,
+)
 from models.cinematography import CinematographyAnalysis
 from ui.workers.base import CancellableWorker, summarize_clip_errors
 
@@ -22,22 +25,6 @@ logger = logging.getLogger(__name__)
 def _summarize_errors(errors: list[tuple[str, str]]) -> str:
     """Return a compact user-facing summary for a batch failure."""
     return summarize_clip_errors(errors, operation_label="Cinematography analysis")
-
-
-@dataclass(frozen=True)
-class ClipAnalysisTask:
-    """Immutable task data for thread pool execution.
-
-    Using frozen dataclass ensures thread safety - no shared mutable state
-    is passed into the thread pool.
-    """
-
-    clip_id: str
-    thumbnail_path: Path
-    source_path: Optional[Path]
-    start_frame: int
-    end_frame: int
-    fps: float
 
 
 class CinematographyWorker(CancellableWorker):
@@ -70,7 +57,7 @@ class CinematographyWorker(CancellableWorker):
         skip_existing: bool = True,
         analysis_targets: Optional[list] = None,
         parent=None,
-    ):
+    ) -> None:
         """Initialize the cinematography analysis worker.
 
         Args:
@@ -86,7 +73,11 @@ class CinematographyWorker(CancellableWorker):
         super().__init__(parent)
         self._mode = mode
         self._model = model
-        self._parallelism = min(max(1, parallelism), 5)
+        self.options = resolve_options(mode, model, parallelism)
+        self._parallelism = (
+            1 if self.options.tier == "local" else min(max(1, parallelism), 5)
+        )
+        self.result: tuple[CinematographyOutcome, ...] = ()
 
         # Build immutable task list upfront - no mutable state in thread pool
         if analysis_targets:
@@ -148,9 +139,7 @@ class CinematographyWorker(CancellableWorker):
 
             image_path = target.image_path
             if not image_path or not image_path.exists():
-                logger.warning(
-                    f"Skipping target {target.id}: image not found"
-                )
+                logger.warning(f"Skipping target {target.id}: image not found")
                 continue
 
             # For frame targets, use "frame" mode since there's no video
@@ -166,6 +155,7 @@ class CinematographyWorker(CancellableWorker):
                     start_frame=target.start_frame or 0,
                     end_frame=target.end_frame or 0,
                     fps=target.fps or 30.0,
+                    target_type=target.target_type,
                 )
             )
 
@@ -182,94 +172,50 @@ class CinematographyWorker(CancellableWorker):
         Returns:
             Tuple of (clip_id, analysis_result, error_message)
         """
-        # Check cancellation before expensive work
-        if self.is_cancelled():
-            return task.clip_id, None, "Cancelled"
-
-        try:
-            analysis = analyze_cinematography(
-                thumbnail_path=task.thumbnail_path,
-                source_path=task.source_path,
-                start_frame=task.start_frame,
-                end_frame=task.end_frame,
-                fps=task.fps,
-                mode=self._mode,
-                model=self._model,
-            )
-            return task.clip_id, analysis, None
-        except Exception as e:
-            return task.clip_id, None, str(e)
-
-    def run(self):
-        """Execute cinematography analysis on all clips.
-
-        Uses ThreadPoolExecutor for parallelism. All signal emissions
-        happen here on the QThread, not from pool worker threads.
-        """
-        self._log_start()
-
-        total = len(self._tasks)
-        if total == 0:
-            logger.info("No clips to process for cinematography analysis")
-            self.analysis_completed.emit({})
-            self._log_complete()
-            return
-
-        logger.info(
-            f"Starting cinematography analysis: {total} clips, "
-            f"parallelism={self._parallelism}"
+        outcome = compute_cinematography(task, self.options, self._cancel_event)
+        error = (
+            "Cancelled"
+            if outcome.status == "unprocessed"
+            else outcome.message or outcome.code
         )
+        return task.clip_id, outcome.analysis, error
 
+    @property
+    def tasks(self) -> tuple[ClipAnalysisTask, ...]:
+        return tuple(self._tasks)
+
+    def run(self) -> None:
+        """Run shared computation and settle completion even after cancellation."""
+        self._log_start()
         results: dict[str, CinematographyAnalysis] = {}
-        completed = 0
         errors: list[tuple[str, str]] = []
+        try:
 
-        with ThreadPoolExecutor(max_workers=self._parallelism) as executor:
-            # Submit all tasks
-            future_to_task = {
-                executor.submit(self._analyze_task, task): task
-                for task in self._tasks
-            }
-
-            # Process results as they complete (on QThread, not pool threads)
-            for future in as_completed(future_to_task):
-                if self.is_cancelled():
-                    self._log_cancelled()
-                    # Cancel pending futures (won't stop running tasks)
-                    for f in future_to_task:
-                        f.cancel()
-                    break
-
-                task = future_to_task[future]
-                completed += 1
-
-                try:
-                    clip_id, analysis, error_msg = future.result()
-
-                    if error_msg and error_msg != "Cancelled":
-                        self._log_error(error_msg, clip_id)
-                        errors.append((clip_id, error_msg))
-                    elif analysis:
-                        results[clip_id] = analysis
-                        # Emit on QThread (this is safe)
-                        self.clip_completed.emit(clip_id, analysis)
-                        logger.debug(
-                            f"Cinematography: {clip_id} -> "
-                            f"{analysis.shot_size}, {analysis.camera_angle}"
+            def deliver(outcome: CinematographyOutcome) -> None:
+                if outcome.status == "succeeded":
+                    analysis = outcome.analysis
+                    if analysis is not None:
+                        results[outcome.clip_id] = analysis
+                        self.clip_completed.emit(outcome.clip_id, outcome.analysis)
+                elif outcome.status == "failed":
+                    errors.append(
+                        (
+                            outcome.clip_id,
+                            outcome.message or outcome.code or "Analysis failed",
                         )
+                    )
 
-                except Exception as e:
-                    self._log_error(str(e), task.clip_id)
-                    errors.append((task.clip_id, str(e)))
-
-                self.progress.emit(completed, total, task.clip_id)
-
-        if not self.is_cancelled():
-            logger.info(
-                f"Cinematography analysis complete: "
-                f"{len(results)}/{total} clips processed"
+            self.result = run_cinematography(
+                self.tasks,
+                self.options,
+                cancel_event=self._cancel_event,
+                on_outcome=deliver,
+                progress=self.progress.emit,
             )
-            if errors:
+            if errors and not self.is_cancelled():
                 self.error.emit(_summarize_errors(errors))
+        except Exception as exc:
+            self.error.emit(str(exc))
+        finally:
             self.analysis_completed.emit(results)
             self._log_complete()

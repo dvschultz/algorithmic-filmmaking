@@ -48,6 +48,8 @@ def bind_pipeline_completion(
     run = getattr(window, "_analysis_run", None)
 
     def deliver(**_: Any) -> None:
+        if getattr(worker, "is_cancelled", lambda: False)():
+            return
         if getattr(window, "_analysis_run", None) is run and pipeline_can_continue(window):
             handler()
 

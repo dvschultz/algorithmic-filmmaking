@@ -525,8 +525,7 @@ def analyze_cinematography_frame(
         ValueError: If API key is not configured
         RuntimeError: If analysis fails
     """
-    settings = load_settings()
-    model = model or settings.cinematography_model
+    model = model or load_settings().cinematography_model
 
     api_key = get_gemini_api_key()
     if not api_key:
@@ -643,8 +642,7 @@ def analyze_cinematography_video(
     if fps <= 0:
         raise ValueError(f"fps ({fps}) must be positive")
 
-    settings = load_settings()
-    model = model or settings.cinematography_model
+    model = model or load_settings().cinematography_model
 
     api_key = get_gemini_api_key()
     if not api_key:
@@ -751,6 +749,7 @@ def analyze_cinematography_video(
 
 def analyze_cinematography_local(
     image_path: Path,
+    *, model: Optional[str] = None,
 ) -> CinematographyAnalysis:
     """Analyze cinematography using a local VLM (mlx-vlm).
 
@@ -774,15 +773,14 @@ def analyze_cinematography_local(
             "Install mlx-vlm or switch to cloud tier."
         )
 
-    settings = load_settings()
-    local_model = settings.cinematography_local_model
+    local_model = model or load_settings().cinematography_local_model
 
     logger.info(f"Analyzing cinematography (local mode) with {local_model}")
 
     prompt = CINEMATOGRAPHY_PROMPT_FRAME + "\n\nRespond with ONLY a JSON object, no other text."
 
     try:
-        response_text = describe_frame_local(image_path, prompt)
+        response_text = describe_frame_local(image_path, prompt, model_name=local_model)
 
         # Parse and validate response
         raw_data = _parse_json_response(response_text)
@@ -832,6 +830,8 @@ def analyze_cinematography(
     fps: Optional[float] = None,
     mode: Optional[str] = None,
     model: Optional[str] = None,
+    *, tier: Optional[str] = None,
+    local_model: Optional[str] = None,
 ) -> CinematographyAnalysis:
     """Analyze cinematography for a clip.
 
@@ -854,14 +854,16 @@ def analyze_cinematography(
         ValueError: If API key is not configured
         RuntimeError: If analysis fails
     """
-    settings = load_settings()
-    tier = settings.cinematography_tier
-    mode = mode or settings.cinematography_input_mode
-    model = model or settings.cinematography_model
+    if tier is None or mode is None or model is None or local_model is None:
+        settings = load_settings()
+        tier = tier or settings.cinematography_tier
+        mode = mode or settings.cinematography_input_mode
+        model = model or settings.cinematography_model
+        local_model = local_model or settings.cinematography_local_model
 
     # Local tier: use mlx-vlm for frame-only analysis
     if tier == "local":
-        return analyze_cinematography_local(thumbnail_path)
+        return analyze_cinematography_local(thumbnail_path, model=local_model)
 
     # Cloud tier: check if video mode is possible
     can_use_video = (

@@ -558,7 +558,7 @@ def cinematography(
     cancel_event: Optional[threading.Event] = None,
 ) -> dict:
     """Run rich cinematography analysis for clips."""
-    from core.analysis.cinematography import analyze_cinematography
+    from core.operations.cinematography import CinematographyTask, resolve_options, run_cinematography
 
     clips = _resolve_clip_ids(project, clip_ids)
     sources_by_id = project.sources_by_id
@@ -568,32 +568,33 @@ def cinematography(
     updated = []
     total = len(clips)
 
-    for i, clip in enumerate(clips):
-        if _check_cancel(cancel_event):
-            break
-        if progress_callback is not None and total:
-            progress_callback(i / total, f"Cinematography ({i + 1}/{total}): {clip.id}")
-        if skip_existing and clip.cinematography is not None:
-            skipped.append({"clip_id": clip.id, "reason": "already_populated"})
-            continue
-        thumbnail_path = _thumbnail_for_clip(clip)
-        if thumbnail_path is None:
-            failed.append({"clip_id": clip.id, "code": "thumbnail_missing"})
-            continue
+    tasks = []
+    for clip in clips:
         source = sources_by_id.get(clip.source_id)
-        try:
-            analysis = analyze_cinematography(
-                thumbnail_path=thumbnail_path,
-                source_path=source.file_path if source and source.file_path.exists() else None,
-                start_frame=clip.start_frame,
-                end_frame=clip.end_frame,
-                fps=source.fps if source else None,
-                mode=mode,
-                model=model,
-            )
-        except Exception as exc:  # noqa: BLE001
-            failed.append({"clip_id": clip.id, "code": "cinematography_failed", "message": str(exc)})
+        tasks.append(CinematographyTask(
+            clip.id, _thumbnail_for_clip(clip),
+            source.file_path if source and source.file_path.exists() else None,
+            clip.start_frame, clip.end_frame, source.fps if source else None,
+            skip=skip_existing and clip.cinematography is not None,
+        ))
+
+    def report(current: int, count: int, cid: str) -> None:
+        if progress_callback is not None:
+            progress_callback(current / count if count else 1.0, f"Cinematography ({current}/{count}): {cid}")
+
+    outcomes = run_cinematography(tuple(tasks), resolve_options(mode, model), cancel_event=cancel_event, progress=report)
+    for clip, outcome in zip(clips, outcomes):
+        if outcome.status == "skipped":
+            skipped.append({"clip_id": clip.id, "reason": outcome.code})
             continue
+        if outcome.status != "succeeded":
+            if outcome.status == "failed":
+                failure = {"clip_id": clip.id, "code": outcome.code}
+                if outcome.message:
+                    failure["message"] = outcome.message
+                failed.append(failure)
+            continue
+        analysis = outcome.analysis
         clip.cinematography = analysis
         if hasattr(analysis, "get_simple_shot_type"):
             clip.shot_type = analysis.get_simple_shot_type()
