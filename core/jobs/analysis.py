@@ -17,6 +17,14 @@ from core.spine.project_io import load_with_mtime, project_writer, save_with_mti
 
 def analysis_job_spec(project: Project, *, arguments: dict) -> OperationSpec:
     inputs = {}
+    if "detect_objects" in (arguments.get("operations") or []):
+        from core.jobs.object_detection import object_detection_job_spec
+        from core.operations.object_detection import ObjectDetectionOptions
+
+        object_detection = object_detection_job_spec(
+            project, arguments.get("clip_ids"), ObjectDetectionOptions(), arguments={},
+        )
+        inputs["object_detection"] = json.loads(object_detection.inputs_json)
     if "classify" in (arguments.get("operations") or []):
         from core.jobs.classification import classification_job_spec
         from core.operations.classification import ClassificationOptions
@@ -97,6 +105,7 @@ def run_analysis_job(
         custom_query = captured.get("custom_query")
         cinematography = captured.get("cinematography")
         classification = captured.get("classification")
+        object_detection = captured.get("object_detection")
         options = (
             TranscriptionOptions(**transcription["options"]) if transcription else None
         )
@@ -106,6 +115,21 @@ def run_analysis_job(
                 raise StaleJobResult("Analysis inputs changed while the job was queued")
 
         def execute(op: str, report: Progress | None) -> dict:
+            if op == "detect_objects":
+                from core.jobs.object_detection import object_detection_job_spec, run_object_detection_job
+                from core.operations.object_detection import ObjectDetectionOptions
+
+                if object_detection is None:
+                    raise StaleJobResult("Analysis job has no captured object_detection options")
+                current, _ = load_with_mtime(path)
+                step = object_detection_job_spec(
+                    current, ids, ObjectDetectionOptions(**object_detection["options"]), arguments={},
+                )
+                if json.loads(step.inputs_json) != object_detection:
+                    raise StaleJobResult("ObjectDetection inputs changed before analysis")
+                return run_object_detection_job(
+                    store, path, ids, report or (lambda *_: None), cancel, operation=step,
+                )
             if op == "classify":
                 from core.jobs.classification import classification_job_spec, run_classification_job
                 from core.operations.classification import ClassificationOptions

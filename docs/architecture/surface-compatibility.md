@@ -533,3 +533,19 @@ updates only that field. Full object analysis updates both detections and count.
 Frames persist person counts, including zero; both clips and frames preserve a
 valid empty detections list across save/load. Missing analysis remains `None`.
 Durable object-detection result recovery remains the next U7 step.
+
+### Durable headless object detection
+
+CLI object/people commands, the dedicated MCP job, and object detection within
+generic analysis plans now use `core/jobs/object_detection.py`. Saved result
+identity includes source/image fingerprints, source range, display and analysis
+image paths, confidence, detection mode, and the named YOLO weights release and
+runtime package versions. Force requests create a new result generation.
+
+Computation is recorded before project save; the project is saved before result
+checkpointing. Explicit retries reuse recorded computation after failed saves
+and reconcile completed project saves after checkpoint failures. CLI retries
+retain their 320x180 analysis-image identity without replacing display images.
+People-only output validation checks count without overwriting object detections.
+Legacy populated results retain the existing explicit-force reuse policy.
+GUI object-detection job history and recovery remain the next migration step.

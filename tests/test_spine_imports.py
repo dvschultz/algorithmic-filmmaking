@@ -47,6 +47,7 @@ SPINE_MODULES: tuple[str, ...] = (
     "core.jobs.custom_query",
     "core.jobs.cinematography",
     "core.jobs.classification",
+    "core.jobs.object_detection",
     "core.jobs.gui_cinematography",
     "core.jobs.gui_classification",
     "core.jobs.analysis",

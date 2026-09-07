@@ -620,6 +620,86 @@ def classify(
                 output_info(f"  ... and {len(errors) - 5} more errors")
 
 
+def _run_object_detection_cli(
+    project_file: Path,
+    clips: list,
+    sources_by_id: dict,
+    cache_dir: Path,
+    *,
+    confidence: float,
+    force: bool,
+    detect_all: bool,
+) -> tuple[dict, list[str]]:
+    """Prepare CLI-sized images, then delegate execution and saving to the job."""
+    from threading import Event
+    from core.jobs.object_detection import run_object_detection_job
+    from core.jobs.store import JobStore
+    from core.operations.object_detection import ObjectDetectionOptions
+    from core.project import Project
+    from core.thumbnail import ThumbnailGenerator
+
+    errors = []
+    ready = []
+    prepared = {}
+    generator = None
+    for clip in clips:
+        existing = clip.detected_objects if detect_all else clip.person_count
+        if existing is not None and not force:
+            ready.append(clip.id)
+            continue
+        source = sources_by_id.get(clip.source_id)
+        if source is None or not source.file_path.exists():
+            errors.append(f"Clip {clip.id[:8]}: source not found")
+            continue
+        if generator is None:
+            try:
+                generator = ThumbnailGenerator(cache_dir=cache_dir / "thumbnails")
+            except RuntimeError as exc:
+                exit_with(ExitCode.DEPENDENCY_MISSING, str(exc))
+        try:
+            prepared[clip.id] = generator.generate_clip_thumbnail(
+                video_path=source.file_path,
+                start_seconds=clip.start_time(source.fps),
+                end_seconds=clip.end_time(source.fps),
+                width=320, height=180,
+            )
+            ready.append(clip.id)
+        except Exception as exc:
+            errors.append(f"Clip {clip.id[:8]}: {exc}")
+    store = JobStore(cache_dir / "jobs.db")
+    try:
+        with ProgressContext("Detecting objects" if detect_all else "Counting people") as progress:
+            batch = run_object_detection_job(
+                store, project_file, ready, progress.update, Event(),
+                options=ObjectDetectionOptions(confidence, detect_all),
+                force=force, thumbnail_paths=prepared,
+            )["result"]
+    finally:
+        store.close()
+    errors.extend(
+        f"Clip {item['clip_id'][:8]}: {item.get('message') or item['code']}"
+        for item in batch["failed"] + batch["unprocessed"]
+    )
+    saved = Project.load(project_file)
+    objects: dict[str, int] = {}
+    distribution: dict[int, int] = {}
+    total_people = 0
+    for item in batch["succeeded"]:
+        count = item["person_count"]
+        total_people += count
+        distribution[count] = distribution.get(count, 0) + 1
+        if detect_all:
+            for detection in saved.clips_by_id[item["clip_id"]].detected_objects or []:
+                label = detection["label"]
+                objects[label] = objects.get(label, 0) + 1
+    return {
+        "analyzed_clips": len(batch["succeeded"]),
+        "total_people": total_people,
+        "object_counts": objects,
+        "distribution": distribution,
+    }, errors
+
+
 @analyze.command("objects")
 @click.argument("project_file", type=click.Path(exists=True, path_type=Path))
 @click.option(
@@ -665,8 +745,6 @@ def objects(
     project_file = own_project(ctx, project_file)
     try:
         from core.project import Project, ProjectLoadError
-        from core.thumbnail import ThumbnailGenerator
-        from core.operations.object_detection import ObjectDetectionApplication, ObjectDetectionOptions, ObjectDetectionTask, run_object_detection
     except ImportError as e:
         exit_with(ExitCode.DEPENDENCY_MISSING, f"Missing dependency: {e}")
 
@@ -694,81 +772,16 @@ def objects(
         if not clips_to_analyze:
             exit_with(ExitCode.VALIDATION_ERROR, "No matching clips found")
 
-    # Filter out already-analyzed clips unless force
-    if not force:
-        clips_to_analyze = [c for c in clips_to_analyze if c.detected_objects is None]
-
-    if not clips_to_analyze:
-        output_info("All clips already have detection data. Use --force to re-analyze.")
-        return
-
-    # Initialize thumbnail generator
     try:
-        thumb_gen = ThumbnailGenerator(cache_dir=config.cache_dir / "thumbnails")
-    except RuntimeError as e:
-        exit_with(ExitCode.DEPENDENCY_MISSING, str(e))
-
-    analyzed_count = 0
-    errors = []
-    object_counts: dict[str, int] = {}
-    total_people = 0
-
-    output_info("Loading YOLO model (this may take a moment on first run)...")
-
-    with ProgressContext("Detecting objects") as progress:
-        total = len(clips_to_analyze)
-        for i, clip in enumerate(clips_to_analyze):
-            progress.update(i / total, f"Clip {i + 1}/{total}")
-
-            source = sources_by_id.get(clip.source_id)
-            if not source or not source.file_path.exists():
-                errors.append(f"Clip {clip.id[:8]}: source not found")
-                continue
-
-            try:
-                # Generate thumbnail for analysis
-                fps = source.fps
-                start_time = clip.start_time(fps)
-                end_time = clip.end_time(fps)
-
-                thumb_path = thumb_gen.generate_clip_thumbnail(
-                    video_path=source.file_path,
-                    start_seconds=start_time,
-                    end_seconds=end_time,
-                    width=320,
-                    height=180,
-                )
-
-                # Detect objects
-                tasks = (ObjectDetectionTask(clip.id, thumb_path),)
-                options = ObjectDetectionOptions(confidence=confidence)
-                application = ObjectDetectionApplication(project, tasks, options)
-                outcome = run_object_detection(
-                    tasks, options,
-                )[0]
-                if outcome.status != "succeeded" or outcome.person_count is None:
-                    raise RuntimeError(outcome.message or outcome.code or "Object detection failed")
-                detections = outcome.detection_dicts()
-                if not application.apply(project, outcome):
-                    raise RuntimeError("Object detection target changed during analysis")
-                total_people += clip.person_count
-                analyzed_count += 1
-
-                # Track object counts
-                for det in detections:
-                    label = det["label"]
-                    object_counts[label] = object_counts.get(label, 0) + 1
-
-            except Exception as e:
-                errors.append(f"Clip {clip.id[:8]}: {e}")
-
-        progress.update(1.0, "Complete")
-
-    # Save updated project
-    success = project.save()
-
-    if not success:
-        exit_with(ExitCode.GENERAL_ERROR, "Failed to save project")
+        summary, errors = _run_object_detection_cli(
+            project_file, clips_to_analyze, sources_by_id, config.cache_dir,
+            confidence=confidence, force=force, detect_all=True,
+        )
+    except Exception as exc:
+        exit_with(ExitCode.GENERAL_ERROR, f"Object detection failed: {exc}")
+    analyzed_count = summary["analyzed_clips"]
+    total_people = summary["total_people"]
+    object_counts = summary["object_counts"]
 
     result = {
         "analyzed_clips": analyzed_count,
@@ -842,8 +855,6 @@ def people(
     project_file = own_project(ctx, project_file)
     try:
         from core.project import Project, ProjectLoadError
-        from core.thumbnail import ThumbnailGenerator
-        from core.operations.object_detection import ObjectDetectionApplication, ObjectDetectionOptions, ObjectDetectionTask, run_object_detection
     except ImportError as e:
         exit_with(ExitCode.DEPENDENCY_MISSING, f"Missing dependency: {e}")
 
@@ -871,79 +882,16 @@ def people(
         if not clips_to_analyze:
             exit_with(ExitCode.VALIDATION_ERROR, "No matching clips found")
 
-    # Filter out already-analyzed clips unless force
-    if not force:
-        clips_to_analyze = [c for c in clips_to_analyze if c.person_count is None]
-
-    if not clips_to_analyze:
-        output_info("All clips already have person count data. Use --force to re-analyze.")
-        return
-
-    # Initialize thumbnail generator
     try:
-        thumb_gen = ThumbnailGenerator(cache_dir=config.cache_dir / "thumbnails")
-    except RuntimeError as e:
-        exit_with(ExitCode.DEPENDENCY_MISSING, str(e))
-
-    analyzed_count = 0
-    errors = []
-    total_people = 0
-    person_distribution: dict[int, int] = {}  # count -> number of clips
-
-    output_info("Loading YOLO model (this may take a moment on first run)...")
-
-    with ProgressContext("Counting people") as progress:
-        total = len(clips_to_analyze)
-        for i, clip in enumerate(clips_to_analyze):
-            progress.update(i / total, f"Clip {i + 1}/{total}")
-
-            source = sources_by_id.get(clip.source_id)
-            if not source or not source.file_path.exists():
-                errors.append(f"Clip {clip.id[:8]}: source not found")
-                continue
-
-            try:
-                # Generate thumbnail for analysis
-                fps = source.fps
-                start_time = clip.start_time(fps)
-                end_time = clip.end_time(fps)
-
-                thumb_path = thumb_gen.generate_clip_thumbnail(
-                    video_path=source.file_path,
-                    start_seconds=start_time,
-                    end_seconds=end_time,
-                    width=320,
-                    height=180,
-                )
-
-                # Count people
-                tasks = (ObjectDetectionTask(clip.id, thumb_path),)
-                options = ObjectDetectionOptions(confidence=confidence, detect_all=False)
-                application = ObjectDetectionApplication(project, tasks, options)
-                outcome = run_object_detection(
-                    tasks, options,
-                )[0]
-                if outcome.status != "succeeded" or outcome.person_count is None:
-                    raise RuntimeError(outcome.message or outcome.code or "People counting failed")
-                person_count = outcome.person_count
-                if not application.apply(project, outcome):
-                    raise RuntimeError("People counting target changed during analysis")
-                total_people += person_count
-                analyzed_count += 1
-
-                # Track distribution
-                person_distribution[person_count] = person_distribution.get(person_count, 0) + 1
-
-            except Exception as e:
-                errors.append(f"Clip {clip.id[:8]}: {e}")
-
-        progress.update(1.0, "Complete")
-
-    # Save updated project
-    success = project.save()
-
-    if not success:
-        exit_with(ExitCode.GENERAL_ERROR, "Failed to save project")
+        summary, errors = _run_object_detection_cli(
+            project_file, clips_to_analyze, sources_by_id, config.cache_dir,
+            confidence=confidence, force=force, detect_all=False,
+        )
+    except Exception as exc:
+        exit_with(ExitCode.GENERAL_ERROR, f"Object detection failed: {exc}")
+    analyzed_count = summary["analyzed_clips"]
+    total_people = summary["total_people"]
+    person_distribution = summary["distribution"]
 
     result = {
         "analyzed_clips": analyzed_count,

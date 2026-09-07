@@ -562,6 +562,24 @@ async def _start_spine_analyze_job(
                 progress_callback, cancel_event, operation=operation,
                 force=operation.arguments.get("force", False),
             )
+    elif spine_fn_name == "detect_objects":
+        from core.jobs.object_detection import object_detection_job_spec, run_object_detection_job
+        from core.operations.object_detection import ObjectDetectionOptions
+
+        try:
+            operation = object_detection_job_spec(
+                _project, clip_ids, ObjectDetectionOptions(payload["confidence"], payload["detect_all"]),
+                arguments=payload,
+            )
+        except ValueError as exc:
+            return json.dumps(_wrap_error(exc))
+        store = _lifespan(ctx)["job_store"]
+
+        def run(progress_callback, cancel_event):
+            return run_object_detection_job(
+                store, path, operation.arguments["clip_ids"],
+                progress_callback, cancel_event, operation=operation,
+            )
     elif spine_fn_name == "classify_content":
         from core.jobs.classification import classification_job_spec, run_classification_job
         from core.operations.classification import ClassificationOptions
