@@ -150,6 +150,7 @@ scene-ripper-mcp --transport http --port 8765
 | `start_detect_objects` | Detect objects and person counts |
 | `start_extract_text` | Extract visible text with resumable OCR/VLM results; optional `force` refresh |
 | `start_transcribe` | Whisper transcription per clip |
+| `start_transcribe_audio` | Standalone imported audio transcription by exact audio-source ID; preserves existing results unless `force=true` |
 | `start_align_words` | Add word timestamps to existing transcripts; requires installed alignment runtime |
 | `start_describe` | Generate VLM descriptions |
 | `start_analyze_cinematography` | Generate rich film-language analysis |

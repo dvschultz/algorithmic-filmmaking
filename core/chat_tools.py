@@ -66,6 +66,7 @@ TOOL_TIMEOUTS = {
     "search_youtube": 30,      # 30 seconds
     "describe_content_live": 600,   # 10 minutes for descriptions
     "transcribe_clips": 1200,       # 20 minutes
+    "transcribe_audio_source": 1200,
     "export_sequence": 600,    # 10 minutes
     "export_bundle": 1800,     # 30 minutes (copies video files)
 }
@@ -413,6 +414,27 @@ def get_audio_source(project, audio_source_id: str) -> dict:
     """
     from core.spine.audio_sources import get_audio_source as _impl
     return _impl(project, audio_source_id)
+
+
+@tools.register(
+    description="Transcribe an imported audio source by exact ID using the current transcription settings. Returns after completion; save the project to persist the transcript.",
+    requires_project=True,
+    modifies_gui_state=True,
+    modifies_project_state=True,
+)
+def transcribe_audio_source(main_window, audio_source_id: str) -> dict:
+    """Start transcription in the existing Collect worker and await its result."""
+    audio = main_window.project.get_audio_source(audio_source_id)
+    if audio is None:
+        return {"success": False, "error": f"Unknown audio source: {audio_source_id}"}
+    if audio.transcript is not None:
+        return {"success": True, "result": {"audio_source_id": audio_source_id,
+                "status": "skipped", "segment_count": len(audio.transcript)}}
+    if any(worker.session_id == main_window.project.session.session_id
+           and worker.task.audio_source_id == audio_source_id
+           for worker in main_window._active_audio_transcribes):
+        return {"success": False, "error": "Audio transcription is already running"}
+    return {"_wait_for_worker": "audio_transcription", "audio_source_id": audio_source_id}
 
 
 @tools.register(

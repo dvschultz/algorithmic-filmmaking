@@ -1125,3 +1125,34 @@ async def test_alignment_job_freezes_ids_and_rejects_queued_media_change(lifespa
     project.sources[0].file_path.write_bytes(b'changed')
     with pytest.raises(StaleJobResult, match='queued'):
         captured['run'](lambda *_: None, threading.Event())
+
+
+@pytest.mark.asyncio
+async def test_standalone_audio_job_saves_and_preserves_silence(lifespan_ctx, tmp_path, monkeypatch):
+    from scene_ripper_mcp.tools.jobs import start_transcribe_audio
+    from core.project import Project
+    from models.audio_source import AudioSource
+    from unittest.mock import Mock
+
+    ctx, store, _ = lifespan_ctx
+    media = tmp_path / "audio.wav"
+    media.write_bytes(b"audio")
+    project = Project.new()
+    project.add_audio_source(AudioSource(id="audio", file_path=media))
+    path = tmp_path / "audio.sceneripper"
+    project.save(path)
+    project.close_writer()
+    provider = Mock(return_value=[])
+    monkeypatch.setattr("core.transcription.transcribe_video", provider)
+    for status in ("succeeded", "skipped"):
+        out = json.loads(await start_transcribe_audio(str(path), "audio", backend="faster-whisper", ctx=ctx))
+        assert out["success"], out
+        _wait_for_status(store, out["task_id"], STATUS_COMPLETED)
+        result = json.loads(await get_job_result(out["task_id"], ctx=ctx))
+        assert result["result"]["result"]["status"] == status
+    assert provider.call_count == 1
+    saved = json.loads(path.read_text())
+    assert saved["audio_sources"][0]["transcript"] == []
+    assert all(store.get_result(rid)["committed"] for rid in saved["job_results"])
+    invalid = json.loads(await start_transcribe_audio(str(path), "missing", ctx=ctx))
+    assert invalid["success"] is False

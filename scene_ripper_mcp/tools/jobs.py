@@ -1003,6 +1003,52 @@ async def start_generate_thumbnails(
 
 
 @mcp.tool()
+async def start_transcribe_audio(
+    project_path: Annotated[str, "Absolute path to a saved project"],
+    audio_source_id: Annotated[str, "Exact imported audio-source ID from list_audio_sources"],
+    model: str = "small.en",
+    language: str = "en",
+    backend: str = "auto",
+    force: bool = False,
+    segmentation_mode: str = "backend",
+    segment_max_seconds: float = 12.0,
+    idempotency_key: Optional[str] = None,
+    ctx: Context = None,
+) -> str:
+    """Start standalone audio transcription; poll job status/result for completion.
+
+    Saves the transcript. Existing transcripts, including silence, are preserved
+    unless force is true. Interrupted saves reuse recorded computation.
+    """
+    from scene_ripper_mcp.security import validate_project_path
+    from core.spine.project_io import load_with_mtime
+    from core.jobs.audio_transcription import audio_transcription_job_spec, run_audio_transcription_job
+    from core.operations.transcription import TranscriptionOptions
+
+    valid, error, path = validate_project_path(project_path)
+    if not valid:
+        return json.dumps({"success": False, "error": error})
+    try:
+        project, mtime = load_with_mtime(path)
+        operation = audio_transcription_job_spec(project, audio_source_id,
+            TranscriptionOptions(model=model, language=language, backend=backend,
+                segmentation_mode=segmentation_mode, segment_max_seconds=segment_max_seconds), force=force)
+        store = _lifespan(ctx)["job_store"]
+
+        def run(progress, cancel):
+            args = operation.arguments
+            return run_audio_transcription_job(store, path, args["audio_source_id"],
+                TranscriptionOptions(**args["options"]), progress, cancel,
+                force=args["force"], operation=operation)
+
+        return _start_job(ctx, kind=operation.kind, args=operation.arguments,
+            project_path=str(path), project_mtime_at_start=mtime,
+            idempotency_key=idempotency_key, run=run, operation=operation)
+    except Exception as exc:
+        return json.dumps(_wrap_error(exc))
+
+
+@mcp.tool()
 async def start_transcribe(
     project_path: Annotated[str, "Absolute path to .sceneripper project file"],
     clip_ids: Annotated[

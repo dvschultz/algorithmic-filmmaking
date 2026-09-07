@@ -3179,7 +3179,7 @@ class MainWindow(QMainWindow):
         """Refresh the Collect tab's audio library when project state changes."""
         self.collect_tab.set_audio_sources(audio_sources)
 
-    def _on_audio_transcribe_requested(self, audio_source_id: str):
+    def _on_audio_transcribe_requested(self, audio_source_id: str) -> bool:
         """Run Whisper transcription on the selected audio source."""
         from ui.workers.audio_transcribe_worker import AudioTranscribeWorker
         from ui.workers.audio_transcription_delivery import AudioTranscriptionDelivery
@@ -3187,10 +3187,10 @@ class MainWindow(QMainWindow):
         audio = self.project.get_audio_source(audio_source_id)
         if audio is None:
             self.status_bar.showMessage(f"Audio source not found: {audio_source_id}")
-            return
+            return False
         if audio.transcript is not None:
             self.status_bar.showMessage(f"Already transcribed: {audio.filename}")
-            return
+            return False
 
         if any(
             worker.session_id == self.project.session.session_id
@@ -3198,7 +3198,7 @@ class MainWindow(QMainWindow):
             for worker in self._active_audio_transcribes
         ):
             self.status_bar.showMessage(f"Already transcribing: {audio.filename}")
-            return
+            return False
 
         worker = AudioTranscribeWorker(
             audio,
@@ -3215,6 +3215,7 @@ class MainWindow(QMainWindow):
         AudioTranscriptionDelivery(self, worker)
         self.status_bar.showMessage(f"Transcribing {audio.filename}…")
         worker.start()
+        return True
 
     def _on_audio_transcript_ready(self, audio_source_id: str, segments: list):
         """Report a transcript already applied by the owner-bound delivery."""
@@ -7569,6 +7570,9 @@ class MainWindow(QMainWindow):
         elif wait_type == "transcription":
             clip_ids = tool_result.get("clip_ids", [])
             return self.start_agent_transcription(clip_ids)
+
+        elif wait_type == "audio_transcription":
+            return self._on_audio_transcribe_requested(tool_result["audio_source_id"])
 
         elif wait_type == "export":
             # Export worker is started by the tool itself via start_agent_export

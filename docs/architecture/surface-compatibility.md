@@ -930,3 +930,21 @@ fail closed. Failed or cancelled computation does not become a silent result.
 
 Audio transcription dispatch for CLI/MCP/GUI-agent callers is still pending in
 U7, as are the remaining frame-analysis routes and intention-workflow migration.
+
+### Audio transcription across entry points
+
+`scene_ripper transcribe-audio` and MCP `start_transcribe_audio` execute the shared
+audio operation through `core/jobs/audio_transcription.py`. They target one exact
+audio-source ID, preserve populated transcripts by default, and support explicit
+refresh. Queued jobs freeze project revision, audio metadata, media stamp,
+options, and runtime. Successful computation is recorded before atomic project
+publication. A failed save reuses inference; a failed checkpoint reconciles the
+saved transcript, including optional word/language fields, before a new forced
+generation. Clip transcription contracts remain unchanged.
+
+The GUI agent's `transcribe_audio_source` uses the Collect launcher and current
+settings. Delivery and final replies bind to the original chat request and
+project session. A replaced requester cannot receive results or publish a late
+transcript. Desktop saves remain explicit. Audio metadata tools now return
+available word timestamps and language. GUI/headless journals remain separate;
+remaining U7 work includes other audio/frame routes and intention orchestration.

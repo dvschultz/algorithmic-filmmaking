@@ -1,14 +1,17 @@
 """Record standalone-audio inference before owner delivery and explicit save."""
 
-from dataclasses import asdict, replace
-from importlib.metadata import PackageNotFoundError, version
+from dataclasses import asdict
 import json
 from threading import Event
 from typing import Callable
 
 from core.jobs.commits import StaleJobResult, canonical_json
 from core.jobs.gui_results import GuiResultJournal, GuiResultRequest
-from core.jobs.media import FingerprintCancelled, media_stamp
+from core.jobs.media import FingerprintCancelled
+from core.jobs.audio_transcription import (
+    audio_transcription_runtime,
+    resolve_audio_options as resolve_audio_options,
+)
 from core.operations.audio_transcription import (
     AudioTranscriptionTask,
     AudioTranscriptionOutcome,
@@ -16,40 +19,6 @@ from core.operations.audio_transcription import (
 )
 from core.operations.transcription import TranscriptionOptions
 from core.project import Project
-
-
-def resolve_audio_options(options: TranscriptionOptions) -> TranscriptionOptions:
-    from core.transcription import _resolve_backend
-
-    return replace(options, backend=_resolve_backend(options.backend))
-
-
-def audio_transcription_runtime() -> dict:
-    """Runtime identity excludes secrets and preserves explicit model selection."""
-    from core.binary_resolver import find_binary
-    from pathlib import Path
-
-    packages: dict[str, str | None] = {}
-    for package in (
-        "faster-whisper",
-        "ctranslate2",
-        "lightning-whisper-mlx",
-        "mlx-whisper",
-        "mlx",
-        "groq",
-        "numpy",
-    ):
-        try:
-            packages[package] = version(package)
-        except PackageNotFoundError:
-            packages[package] = None
-    binary = find_binary("ffmpeg")
-    return {
-        "algorithm": "audio-transcription/v1",
-        "packages": packages,
-        "ffmpeg": str(binary) if binary else None,
-        "ffmpeg_stamp": list(media_stamp(Path(binary)) or ()) if binary else None,
-    }
 
 
 class GuiAudioTranscriptionCache(GuiResultJournal):

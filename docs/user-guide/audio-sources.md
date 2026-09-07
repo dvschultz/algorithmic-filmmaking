@@ -37,6 +37,26 @@ Click the **Transcribe** button on any audio library row to run Whisper on the f
 
 Transcribing an audio source does **not** transcribe its clips, since audio sources have none. The transcript belongs to the audio source itself.
 
+A successful transcription with no speech is still complete and shows zero
+segments. Save the project to persist desktop results. For projects already saved
+to disk, completed inference can be recovered after reopening; unsaved projects
+use session-only jobs. Changed audio, settings, or previous transcripts invalidate
+reuse. Native transcription finishes its current call before cancellation settles.
+
+### Command line
+
+Transcribe one imported audio source using its exact ID:
+
+```bash
+scene_ripper transcribe-audio /path/to/project.sceneripper AUDIO_ID --model small.en
+```
+
+This command saves the result. Existing transcripts, including silent results,
+are preserved unless `--force` is supplied. Options include `--language`,
+`--backend`, `--segmentation-mode`, and `--segment-max-seconds`. Interrupted saves
+reuse completed inference; retrying a failed checkpoint acknowledges the saved
+result before another forced refresh is started.
+
 ## Persistence
 
 Audio sources are saved as part of the project file (`.sceneripper`). They round-trip cleanly through save/load and survive across sessions. Older project files that predate audio sources continue to load — they just have an empty audio library.
@@ -47,9 +67,15 @@ The chat agent and external MCP clients can interact with audio sources via:
 
 - `list_audio_sources` — list all audio sources in the project
 - `get_audio_source(audio_source_id)` — full record including transcript segments
+- `transcribe_audio_source(audio_source_id)` — chat agent: transcribe using current Settings and return after owner-thread delivery; save explicitly afterward
+- `start_transcribe_audio(project_path, audio_source_id, ...)` — MCP: start a saved-project transcription job; poll `get_job_status` and `get_job_result`
 - `import_audio_source(file_path)` — synchronously import an audio file (chat tool only)
 
 See [Agent Tools Reference](agent-tools.md) for the full list.
+
+Audio transcript details include available word timestamps and detected language.
+The MCP job accepts model, language, backend, segmentation, and `force` options.
+GUI and headless computation journals currently have separate identities.
 
 ## What's not yet supported
 

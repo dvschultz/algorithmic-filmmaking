@@ -46,15 +46,7 @@ def get_audio_source(project, audio_source_id: str) -> dict:
 
     transcript_payload = None
     if audio.transcript is not None:
-        transcript_payload = [
-            {
-                "start_time": seg.start_time,
-                "end_time": seg.end_time,
-                "text": seg.text,
-                "confidence": seg.confidence,
-            }
-            for seg in audio.transcript
-        ]
+        transcript_payload = [seg.to_dict() for seg in audio.transcript]
 
     return {
         "success": True,
