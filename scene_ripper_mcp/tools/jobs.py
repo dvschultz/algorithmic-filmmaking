@@ -1003,6 +1003,46 @@ async def start_generate_thumbnails(
 
 
 @mcp.tool()
+async def start_extract_frames(
+    project_path: Annotated[str, "Absolute path to a saved .sceneripper project"],
+    source_id: Annotated[str, "Exact video source ID"],
+    mode: str = "interval",
+    interval: int = 10,
+    clip_id: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
+    ctx: Context = None,
+) -> str:
+    """Append extracted frames and save; poll job status/result for completion.
+
+    Modes are interval, all, and smart. clip_id restricts the source range.
+    Interrupted saves reuse artifacts. A fresh invocation adds a new batch;
+    use an idempotency key to retry the same job submission.
+    """
+    from scene_ripper_mcp.security import validate_project_path
+    from core.spine.project_io import load_with_mtime
+    from core.jobs.frame_extraction import frame_extraction_job_spec, run_frame_extraction_job
+
+    valid, error, path = validate_project_path(project_path)
+    if not valid:
+        return json.dumps({"success": False, "error": error})
+    try:
+        project, mtime = load_with_mtime(path)
+        operation = frame_extraction_job_spec(project, source_id, mode=mode, interval=interval, clip_id=clip_id)
+        store = _lifespan(ctx)["job_store"]
+
+        def run(progress, cancel):
+            args = operation.arguments
+            return run_frame_extraction_job(store, path, args["source_id"], progress, cancel,
+                mode=args["mode"], interval=args["interval"], clip_id=args["clip_id"], operation=operation)
+
+        return _start_job(ctx, kind=operation.kind, args=operation.arguments,
+            project_path=str(path), project_mtime_at_start=mtime,
+            idempotency_key=idempotency_key, run=run, operation=operation)
+    except Exception as exc:
+        return json.dumps(_wrap_error(exc))
+
+
+@mcp.tool()
 async def start_transcribe_audio(
     project_path: Annotated[str, "Absolute path to a saved project"],
     audio_source_id: Annotated[str, "Exact imported audio-source ID from list_audio_sources"],

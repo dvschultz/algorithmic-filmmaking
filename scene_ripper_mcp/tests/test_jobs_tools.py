@@ -1156,3 +1156,40 @@ async def test_standalone_audio_job_saves_and_preserves_silence(lifespan_ctx, tm
     assert all(store.get_result(rid)["committed"] for rid in saved["job_results"])
     invalid = json.loads(await start_transcribe_audio(str(path), "missing", ctx=ctx))
     assert invalid["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_frame_extraction_job_saves_and_deduplicates_submission(lifespan_ctx, tmp_path, monkeypatch):
+    from scene_ripper_mcp.tools.jobs import start_extract_frames
+    from core.project import Project
+    from models.clip import Source, Clip
+    from tests.test_frame_extraction_operations import extract
+
+    ctx, store, _ = lifespan_ctx
+    media = tmp_path / "video.mp4"
+    media.write_bytes(b"video")
+    project = Project.new()
+    project.add_source(Source(id="source", file_path=media))
+    project.add_clips([Clip(id="clip", source_id="source", start_frame=0, end_frame=15)])
+    path = tmp_path / "frames.sceneripper"
+    project.save(path)
+    project.close_writer()
+    provider = Mock(side_effect=extract)
+    monkeypatch.setattr("core.ffmpeg.extract_frames_batch", provider)
+    out = json.loads(await start_extract_frames(str(path), "source", interval=5,
+        clip_id="clip", idempotency_key="one-batch", ctx=ctx))
+    assert out["success"], out
+    _wait_for_status(store, out["task_id"], STATUS_COMPLETED)
+    result = json.loads(await get_job_result(out["task_id"], ctx=ctx))
+    assert result["result"]["result"]["frame_count"] == 3
+    assert [f["frame_number"] for f in json.loads(path.read_text())["frames"]] == [0, 5, 10]
+    assert provider.call_args.kwargs["end_frame"] == 15
+    repeated = json.loads(await start_extract_frames(str(path), "source", interval=5,
+        clip_id="clip", idempotency_key="one-batch", ctx=ctx))
+    assert repeated["task_id"] == out["task_id"]
+    assert provider.call_count == 1
+    for options in ({"interval": 0}, {"mode": "bad"}, {"clip_id": "missing"}):
+        invalid = json.loads(await start_extract_frames(str(path), "source", ctx=ctx, **options))
+        assert invalid["success"] is False
+    saved = json.loads(path.read_text())
+    assert all(store.get_result(rid)["committed"] for rid in saved["job_results"])

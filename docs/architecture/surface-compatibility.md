@@ -993,3 +993,21 @@ launcher uses the same operation and journal without implicitly saving.
 CLI/MCP extraction, image/audio import, remaining frame-analysis orchestration,
 and intention workflows remain U7 work. Headless extraction must reuse this
 computation and artifact contract; it must not implement another FFmpeg loop.
+
+### Frame extraction across entry points
+
+CLI `extract-frames` and MCP `start_extract_frames` now use
+`core/jobs/frame_extraction.py` and the same detached extraction operation as
+the desktop. The shared module also owns artifact records, task input
+normalization, and runtime identity; the desktop cache retains compatibility
+exports. Saved headless execution holds the project writer, journals the
+complete artifact batch, validates it, and atomically saves frame models plus
+their receipt before checkpointing. A failed save reuses files and IDs; a failed
+checkpoint reconciles the saved output without creating a duplicate batch.
+
+Each fresh invocation creates a new generation. MCP submission idempotency is
+available for retries of the same request. Queued project revision, source media,
+clip range, options, and runtime are frozen. Cancellation cannot publish a partial
+batch. Results expose source ID, frame IDs, count, and publication status. GUI
+and headless receipt identities remain separate. U7 still includes image/audio
+import, remaining frame-analysis orchestration, and intention workflows.

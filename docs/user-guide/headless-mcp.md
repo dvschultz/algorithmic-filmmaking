@@ -151,6 +151,7 @@ scene-ripper-mcp --transport http --port 8765
 | `start_extract_text` | Extract visible text with resumable OCR/VLM results; optional `force` refresh |
 | `start_transcribe` | Whisper transcription per clip |
 | `start_transcribe_audio` | Standalone imported audio transcription by exact audio-source ID; preserves existing results unless `force=true` |
+| `start_extract_frames` | Extract a video source into saved frame items; supports `interval`, `all`, and `smart` modes and an optional `clip_id` |
 | `start_align_words` | Add word timestamps to existing transcripts; requires installed alignment runtime |
 | `start_describe` | Generate VLM descriptions |
 | `start_analyze_cinematography` | Generate rich film-language analysis |
@@ -160,6 +161,17 @@ scene-ripper-mcp --transport http --port 8765
 | `start_generate_boundary_embeddings` | Extract resumable first/last-frame DINOv2 pairs for Match Cut; optional `force` refresh |
 | `start_custom_query` | Run a yes/no visual query against clips |
 | `start_download_videos` | Bulk video downloads (YouTube / Vimeo / Internet Archive) |
+
+Frame extraction is also available as
+`scene_ripper extract-frames project.sceneripper SOURCE_ID --interval 10`.
+Add `--clip-id CLIP_ID` to limit the range, or `--mode all` / `--mode smart`.
+Each new invocation appends a new batch. MCP callers can retry the same
+submission with an `idempotency_key` to avoid creating another job. Poll
+`get_job_status`, then `get_job_result` for `frame_ids` and `frame_count`.
+Interrupted saves reuse the original generated files; an interrupted checkpoint
+acknowledges the saved batch before a later invocation starts another batch.
+Changed source media, options, runtime, or generated artifacts prevent stale
+recovery. GUI and headless journals are separate; desktop saves remain explicit.
 
 OCR jobs retain successful inference for retries after a failed project save.
 This applies to `start_extract_text` and the `extract_text` operation in

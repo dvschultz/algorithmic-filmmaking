@@ -98,12 +98,14 @@ def register_commands() -> None:
     # Using lazy imports to keep CLI startup fast
     from cli.commands import detect, project, analyze, transcribe, export, youtube
     from cli.commands.transcribe_audio import transcribe_audio
+    from cli.commands.extract_frames import extract_frames
 
     cli.add_command(detect.detect)
     cli.add_command(project.project)
     cli.add_command(analyze.analyze)
     cli.add_command(transcribe.transcribe)
     cli.add_command(transcribe_audio)
+    cli.add_command(extract_frames)
     cli.add_command(export.export)
     cli.add_command(youtube.test_youtube_key, name="test-youtube-key")
     cli.add_command(youtube.search)

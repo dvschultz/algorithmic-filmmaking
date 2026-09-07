@@ -1,67 +1,24 @@
 """Recover extracted artifacts before owner delivery and explicit project save."""
 
-from dataclasses import dataclass, replace
+from dataclasses import replace
 import json
-from pathlib import Path
 from threading import Event
 from typing import Callable
 
 from core.jobs.commits import StaleJobResult, canonical_json
 from core.jobs.gui_results import GuiResultJournal, GuiResultRequest
-from core.jobs.media import FingerprintCancelled, media_stamp
+from core.jobs.media import FingerprintCancelled
+from core.jobs.frame_extraction import (
+    FrameExtractionRecord as FrameExtractionRecord,
+    frame_extraction_runtime as frame_extraction_runtime,
+    frame_extraction_task_inputs,
+)
 from core.operations.frame_extraction import (
     FrameExtractionTask,
     FrameExtractionOutcome,
     run_frame_extraction,
-    validate_frame_artifacts,
 )
 from core.project import Project
-
-
-def frame_extraction_runtime() -> dict:
-    from importlib.metadata import version
-    from core.binary_resolver import find_binary
-
-    binaries = {}
-    for name in ("ffmpeg", "ffprobe"):
-        binary = find_binary(name)
-        binaries[name] = {
-            "path": str(binary) if binary else None,
-            "stamp": list(media_stamp(Path(binary)) or ()) if binary else None,
-        }
-    return {"algorithm": "frame-extraction/v1", "pillow": version("Pillow"), **binaries}
-
-
-@dataclass(frozen=True)
-class FrameExtractionRecord:
-    source_id: str
-    status: str
-    task: dict
-    outcome: dict
-
-    @classmethod
-    def build(
-        cls, task: FrameExtractionTask, outcome: FrameExtractionOutcome
-    ) -> "FrameExtractionRecord":
-        return cls.from_dict(
-            {
-                "source_id": task.source_id,
-                "status": outcome.status,
-                "task": task.to_dict(),
-                "outcome": outcome.to_dict(),
-            }
-        )
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "FrameExtractionRecord":
-        # Detach JSON containers from the producer, then validate typed values.
-        values = json.loads(canonical_json(data))
-        task = FrameExtractionTask.from_dict(values["task"])
-        outcome = FrameExtractionOutcome.from_dict(values["outcome"])
-        if values["source_id"] != task.source_id or values["status"] != "succeeded":
-            raise ValueError("Extraction receipt does not match its source")
-        validate_frame_artifacts(task, outcome)
-        return cls(task.source_id, "succeeded", task.to_dict(), outcome.to_dict())
 
 
 class GuiFrameExtractionCache(GuiResultJournal):
@@ -85,9 +42,7 @@ class GuiFrameExtractionCache(GuiResultJournal):
             media_stamps={task.path: task.media_stamp},
             target_id_field="source_id",
         )
-        inputs = task.to_dict()
-        inputs.pop("request_id")
-        inputs["artifact_dir"] = str(task.artifact_dir.parent)
+        inputs = frame_extraction_task_inputs(task)
         self.inputs_json = canonical_json({"task": inputs, "runtime": runtime})
         self.runtime_json = canonical_json(runtime)
         self.recorded: FrameExtractionRecord | None = None
