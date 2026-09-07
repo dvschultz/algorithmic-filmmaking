@@ -105,10 +105,6 @@ class IntentionWorkflowCoordinator(QObject):
         self._all_clips: list["Clip"] = []
         self._current_source_index = 0
 
-        # Worker references (set by MainWindow when connecting)
-        self._thumbnail_worker = None
-        self._color_worker = None
-
         logger.info("IntentionWorkflowCoordinator initialized")
 
     @property
@@ -188,10 +184,6 @@ class IntentionWorkflowCoordinator(QObject):
         if self.plan is not None:
             self.plan.cancelled = True
         self._state = WorkflowState.CANCELLED
-
-        # Cancel any running workers
-        if self._color_worker and hasattr(self._color_worker, "cancel"):
-            self._color_worker.cancel()
 
         self.workflow_cancelled.emit()
 

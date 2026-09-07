@@ -840,6 +840,9 @@ class MainWindow(QMainWindow):
         for controller in tuple(getattr(self, "_active_intention_detections", ())):
             controller.cancel()
 
+        for controller in tuple(getattr(self, "_active_intention_analyses", ())):
+            controller.cancel()
+
         for worker in tuple(getattr(self, "_active_thumbnail_workers", ())):
             worker.cancel()
 
@@ -8676,178 +8679,56 @@ class MainWindow(QMainWindow):
             self.intention_workflow.on_thumbnails_finished()
 
     def _start_intention_analysis(self):
-        """Start analysis for the intention workflow (if needed)."""
+        """Gate analysis in the UI, then transfer execution to its run owner."""
+        from copy import deepcopy
+        from ui.workers.intention_analysis import IntentionAnalysisController, clip_input
+        from ui.workers.intention_run import IntentionRun
+
         if not self.intention_workflow:
             return
-
-        workflow = self.intention_workflow
-        plan = workflow.plan
-        project = self.project
-        session_id = project.session.session_id
-
-        all_clips = self.intention_workflow.get_all_clips()
-        algorithm, _ = self.intention_workflow.get_algorithm_with_direction()
-
-        if algorithm == "color":
-            # Start color analysis
-            clips_needing_colors = [c for c in all_clips if not c.dominant_colors]
-
-            if not clips_needing_colors:
-                # All clips already have colors - skip
-                self.intention_workflow.on_analysis_finished()
-                return
-
-            self._reset_analysis_run_error("colors")
-            self.color_worker = ColorAnalysisWorker(clips_needing_colors, parallelism=self.settings.color_analysis_parallelism, sources_by_id=self.project.sources_by_id, project=self.project)
-            self.color_worker.progress.connect(
-                self.intention_workflow.on_analysis_progress
-            )
-            self.color_worker.result_ready.connect(self._on_color_result)
-            self.color_worker.job_started.connect(self._on_color_job_started)
-            self.color_worker.error.connect(self._on_color_error)
-            self.color_worker.analysis_completed.connect(
-                self._on_intention_analysis_finished
-            )
-            # Clean up
-            self.color_worker.finished.connect(self.color_worker.deleteLater)
-            self.color_worker.finished.connect(
-                lambda: setattr(self, 'color_worker', None)
-            )
-
-            self._color_analysis_finished_handled = False
-            self.color_worker.start()
-
-        elif algorithm == "shot_type":
-            # Start shot type analysis
-            clips_needing_shots = [c for c in all_clips if not c.shot_type]
-
-            if not clips_needing_shots:
-                # All clips already have shot types - skip
-                self.intention_workflow.on_analysis_finished()
-                return
-
+        run = IntentionRun.capture(self)
+        if not run.is_current(self, WorkflowState.ANALYZING):
+            return
+        previous = getattr(self, "_intention_analysis", None)
+        if (
+            previous is not None
+            and previous.run_identity.workflow is run.workflow
+            and previous.run_identity.plan is run.plan
+            and not previous.cancelled
+        ):
+            return
+        clips = run.workflow.get_all_clips()
+        sources = tuple(run.project.sources_by_id.get(c.source_id) for c in clips)
+        inputs = [clip_input(run.project, clip) for clip in clips]
+        settings = deepcopy(self.settings)
+        algorithm, _ = run.workflow.get_algorithm_with_direction()
+        available = True
+        missing = run.plan.missing_analysis(clips) if run.plan is not None else {}
+        if missing and algorithm == "shot_type":
             available = self._ensure_analysis_operation_available("shots")
-            if (
-                self.intention_workflow is not workflow or workflow.plan is not plan
-                or self.project is not project or project.session.session_id != session_id
-                or workflow.state != WorkflowState.ANALYZING
-            ):
-                return
-            if not available:
-                workflow.on_analysis_failed("Shot analysis is unavailable")
-                return
-
-            self._shot_type_finished_handled = False
-            self._shot_type_run_error = None
-            self.shot_type_worker = ShotTypeWorker(clips_needing_shots, self.project.sources_by_id, parallelism=self.settings.local_model_parallelism, project=self.project)
-            self.shot_type_worker.progress.connect(
-                self.intention_workflow.on_analysis_progress
+        elif missing and algorithm == "storyteller":
+            available = self._ensure_analysis_operation_available(
+                "describe", description_tier=settings.description_model_tier
             )
-            from ui.workers.shot_type_delivery import ShotTypeDelivery
-            ShotTypeDelivery(
-                self, self.shot_type_worker, intention=True,
-                on_complete=self._on_intention_shot_analysis_finished,
-            )
-            self.shot_type_worker.error.connect(self._on_shot_type_error)
-
-            self.shot_type_worker.start()
-
-        elif algorithm == "storyteller":
-            # Start description analysis - Storyteller needs clip descriptions
-            clips_needing_descriptions = [c for c in all_clips if not c.description]
-
-            if not clips_needing_descriptions:
-                # All clips already have descriptions - skip
-                self.intention_workflow.on_analysis_finished()
-                return
-
-            # Get description settings
-            tier = self.settings.description_model_tier
-            sources = self.project.sources_by_id
-
-            available = self._ensure_analysis_operation_available("describe", description_tier=tier)
-            if (
-                self.intention_workflow is not workflow or workflow.plan is not plan
-                or self.project is not project or project.session.session_id != session_id
-                or workflow.state != WorkflowState.ANALYZING
-            ):
-                return
-            if not available:
-                workflow.on_analysis_failed("Description analysis is unavailable")
-                return
-
-            self._description_finished_handled = False
-            self._reset_description_run_errors()
-            logger.info(f"Creating DescriptionWorker (intention) for {len(clips_needing_descriptions)} clips with tier={tier}")
-            self.description_worker = DescriptionWorker(clips_needing_descriptions, tier=tier, sources=sources, parallelism=self.settings.description_parallelism, project=self.project)
-            self.description_worker.progress.connect(
-                self.intention_workflow.on_analysis_progress
-            )
-            from ui.workers.description_delivery import DescriptionDelivery
-            DescriptionDelivery(self, self.description_worker)
-            self.description_worker.error.connect(self._on_description_error)
-            self.description_worker.description_completed.connect(
-                self._on_intention_description_analysis_finished, Qt.UniqueConnection
-            )
-            # Clean up
-            self.description_worker.finished.connect(self.description_worker.deleteLater)
-            self.description_worker.finished.connect(
-                lambda: setattr(self, 'description_worker', None)
-            )
-
-            self.description_worker.start()
-
-        else:
-            # No analysis needed for this algorithm
-            self.intention_workflow.on_analysis_finished()
-
-    def _on_intention_analysis_finished(self):
-        """Handle analysis completion during intention workflow."""
-        if self._color_analysis_finished_handled:
+        if not run.is_current(self, WorkflowState.ANALYZING):
             return
-        self._color_analysis_finished_handled = True
-
-        logger.info("Intention analysis finished")
-        if self._color_run_error:
-            self.status_bar.showMessage(
-                "Color extraction finished with errors",
-                5000,
-            )
-
-        if self.intention_workflow:
-            self.intention_workflow.on_analysis_finished()
-
-    def _on_intention_shot_analysis_finished(self):
-        """Handle shot type analysis completion during intention workflow."""
-        if self._shot_type_finished_handled:
+        if getattr(self, "_intention_analysis", None) is not previous:
             return
-        self._shot_type_finished_handled = True
-
-        logger.info("Intention shot type analysis finished")
-        if self._shot_type_run_error:
-            self.status_bar.showMessage(
-                "Shot type classification finished with errors",
-                5000,
-            )
-
-        if self.intention_workflow:
-            self.intention_workflow.on_analysis_finished()
-
-    def _on_intention_description_analysis_finished(self):
-        """Handle description analysis completion during intention workflow (for Storyteller)."""
-        if self._description_finished_handled:
+        if not available:
+            label = "Shot" if algorithm == "shot_type" else "Description"
+            run.workflow.on_analysis_failed(f"{label} analysis is unavailable")
             return
-        self._description_finished_handled = True
-
-        logger.info("Intention description analysis finished")
-        if self._description_run_error:
-            self.status_bar.showMessage(
-                "Description generation finished with errors",
-                5000,
-            )
-
-        if self.intention_workflow:
-            self.intention_workflow.on_analysis_finished()
+        if (
+            any(run.project.clips_by_id.get(c.id) is not c for c in clips)
+            or any(run.project.sources_by_id.get(c.source_id) is not s for c, s in zip(clips, sources))
+            or inputs != [clip_input(run.project, c) for c in clips]
+        ):
+            run.workflow.on_analysis_failed("Analysis inputs changed; start the workflow again")
+            return
+        if previous is not None:
+            previous.cancel()
+        if run.is_current(self, WorkflowState.ANALYZING):
+            IntentionAnalysisController(self, run, clips, settings).start()
 
     def _start_intention_building(self):
         """Start building the sequence for the intention workflow."""
@@ -10175,11 +10056,14 @@ class MainWindow(QMainWindow):
         frame_analyses = tuple(getattr(self, "_active_frame_analyses", ()))
         intention_detections = tuple(getattr(self, "_active_intention_detections", ()))
         intention_downloads = tuple(getattr(self, "_active_intention_downloads", ()))
+        intention_analyses = tuple(getattr(self, "_active_intention_analyses", ()))
+        for controller in intention_analyses:
+            controller.cancel()
         for delivery in intention_downloads:
             delivery.cancel()
         for controller in intention_detections:
             controller.cancel()
-        intention_workers = tuple(controller.worker for controller in intention_detections if controller.worker is not None) + tuple(delivery.worker for delivery in intention_downloads)
+        intention_workers = tuple(controller.worker for controller in intention_detections + intention_analyses if controller.worker is not None) + tuple(delivery.worker for delivery in intention_downloads)
         for controller in frame_analyses:
             controller.cancel()
         analysis_workers = tuple(controller.worker for controller in frame_analyses if controller.worker is not None)
