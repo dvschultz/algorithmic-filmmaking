@@ -41,6 +41,18 @@ assert [m['tool_call_id'] for m in history if m['role'] == 'tool'] == ['reused-p
 assert not worker.set_gui_tool_result(replies[-1])
 worker.stop()
 assert not worker.set_gui_tool_result(replies[-1])
+# Timeout cancellation carries the transport token, never a reused provider ID.
+timed = ChatAgentWorker(ProviderConfig(ProviderType.OPENAI, 'test'), [])
+timed._stream_response = AsyncMock(side_effect=[('', [call]), ('done', [])])
+timed._build_system_prompt = lambda: 'test'
+requested, cancelled = [], []
+timed.gui_tool_requested.connect(lambda name, args, token: requested.append((name, token)))
+timed.gui_tool_cancelled.connect(lambda name, token: cancelled.append((name, token)))
+with patch('ui.chat_worker.LLMClient'), patch('ui.chat_worker.get_tool_timeout', return_value=0):
+    asyncio.run(timed._async_run())
+assert cancelled == requested and len(cancelled) == 1
+assert cancelled[0][1] != 'reused-provider-id'
+
 """
     result = subprocess.run(
         [sys.executable, "-c", code],

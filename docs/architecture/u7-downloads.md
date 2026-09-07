@@ -166,8 +166,12 @@ completion. Frame-analysis and Exquisite Corpus consumers use the renamed signal
 Per-item analysis mutation delivery and full computation migration remain separate
 U7 work; these completion relays do not replace those operation implementations.
 Already running native operations retain their existing cancellation behavior.
-Legacy pending reply fields remain only as cancellation bookkeeping, pending
-replacement with mailbox state; combined completion no longer reads them.
+Cancellation now carries the mailbox transport token through chat delivery.
+Native download and detection workers capture their requesting reply; cancellation
+matches conversation, project session, tool name, and token. Conversation retirement
+cancels its owned native work even when timeout has already closed the mailbox and
+the queued cancellation signal has not arrived. Manual/replacement work is excluded.
+The shared pending tool-name/call-ID fields have been removed.
 
 Tests cover timeout/resolution forwarding, cancellation at each stage, invalid
 URLs, failure aggregation, frozen MCP submission arguments, actual intention

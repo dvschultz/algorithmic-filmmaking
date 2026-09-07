@@ -5,14 +5,14 @@ from typing import Any
 
 from PySide6.QtCore import QObject, QThread, Slot
 
+from ui.workers.gui_tool_cancellation import cancel_gui_tool_work
+
 
 def stop_chat_workers(window: Any, *, wait: bool = False) -> None:
     """Invalidate delivery immediately; retain threads until cooperative completion."""
-    # Consume cancellation while the pending operation still belongs to this
-    # conversation. Its queued cancellation signal will be stale after reset.
-    pending = getattr(window, "_pending_agent_tool_name", None)
-    if window._chat_worker is not None and pending:
-        window._on_gui_tool_cancelled(pending)
+    # A timeout may already have closed the mailbox while its queued signal
+    # is still waiting. Retire captured native work before detaching the chat.
+    cancel_gui_tool_work(window)
     window._chat_worker = None
     workers = tuple(getattr(window, "_active_chat_workers", ()))
     for worker in workers:
@@ -74,9 +74,9 @@ class ChatDelivery(QObject):
         if not getattr(self.worker, "_stop_requested", False):
             self._deliver("gui_tool_requested", name, args, call_id)
 
-    @Slot(str)
-    def gui_tool_cancelled(self, name: str) -> None:
-        self._deliver("gui_tool_cancelled", name)
+    @Slot(str, str)
+    def gui_tool_cancelled(self, name: str, token: str) -> None:
+        self._deliver("gui_tool_cancelled", name, token)
 
     @Slot(str, list)
     def complete(self, response: str, history: list) -> None:

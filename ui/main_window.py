@@ -84,6 +84,7 @@ from ui.tabs import CollectTab, CutTab, AnalyzeTab, FramesTab, SequenceTab, Rend
 from ui.theme import theme, Spacing
 from ui.chat_panel import ChatPanel
 from ui.workers.chat_delivery import ChatDelivery, stop_chat_workers
+from ui.workers.gui_tool_cancellation import cancel_gui_tool_work
 from ui.workers.detection_thumbnail_delivery import DetectionThumbnailDelivery
 from ui.workers.export_delivery import ExportDelivery
 from ui.workers.analysis_pipeline_delivery import (
@@ -650,8 +651,6 @@ class MainWindow(QMainWindow):
         self._agent_classification_clips: list = []
         self._agent_object_detection_clips: list = []
         self._agent_description_clips: list = []
-        self._pending_agent_tool_call_id: Optional[str] = None
-        self._pending_agent_tool_name: Optional[str] = None
 
         # Plan execution state
         self._pending_plan_tool_call_id: Optional[str] = None
@@ -2137,35 +2136,10 @@ class MainWindow(QMainWindow):
             logger.error(f"Auto-save failed: {e}")
             # Keep project dirty so user can manually save
 
-    @Slot(str)
-    def _on_gui_tool_cancelled(self, tool_name: str):
-        """Cancel any running worker when agent tool times out.
-
-        This prevents orphaned background threads from continuing to run
-        after the agent has given up waiting for them.
-
-        Args:
-            tool_name: Name of the tool that timed out
-        """
-        logger.warning(f"Agent tool '{tool_name}' timed out. Attempting to cancel worker.")
-
-        # Map tool names to their worker attributes
-        worker_map = {
-            "detect_scenes_live": "detection_worker",
-            "download_video": "download_worker",
-        }
-
-        worker_attr = worker_map.get(tool_name)
-        if worker_attr:
-            worker = getattr(self, worker_attr, None)
-            if worker and worker.isRunning() and hasattr(worker, "cancel"):
-                logger.info(f"Cancelling {worker_attr} due to timeout")
-                worker.cancel()
-
-        # Clear pending tool state
-        if self._pending_agent_tool_name == tool_name:
-            self._pending_agent_tool_call_id = None
-            self._pending_agent_tool_name = None
+    @Slot(str, str)
+    def _on_gui_tool_cancelled(self, tool_name: str, token: str) -> None:
+        """Cancel only native work belonging to the expired GUI request."""
+        cancel_gui_tool_work(self, name=tool_name, token=token)
 
     @Slot(str, int, int)
     def _on_workflow_progress(self, step_name: str, current: int, total: int):
@@ -2242,15 +2216,6 @@ class MainWindow(QMainWindow):
                 if isinstance(tool_result, dict) and tool_result.get("_wait_for_worker"):
                     wait_type = tool_result["_wait_for_worker"]
                     logger.info(f"GUI tool {tool_name} waiting for worker: {wait_type}")
-                    # Store tool_call_id for when worker completes
-                    if wait_type not in {
-                        "color_analysis", "shot_analysis", "description", "transcription", "detection",
-                        "classification", "object_detection", "person_detection", "download",
-                        "export", "export_bundle",
-                    }:
-                        self._pending_agent_tool_call_id = tool_call_id
-                        self._pending_agent_tool_name = tool_name
-
                     # Start the appropriate worker based on wait_type
                     with gui_reply_scope(self, reply):
                         started = self._start_worker_for_tool(wait_type, tool_result)
@@ -2284,9 +2249,6 @@ class MainWindow(QMainWindow):
                             "success": False,
                             "error": error_msg
                         }
-                        if getattr(self, "_pending_agent_tool_call_id", None) == tool_call_id:
-                            self._pending_agent_tool_call_id = None
-                            self._pending_agent_tool_name = None
                         reply.send(self, result)
                     # Don't call set_gui_tool_result yet - worker handler will do it
                     return
@@ -5451,6 +5413,7 @@ class MainWindow(QMainWindow):
         )
         self._active_detection_guard = self.detection_worker.guard
         self._active_detection_reply = reply
+        self.detection_worker.gui_tool_reply = reply
         self.detection_worker.job_started.connect(
             lambda task, persistence, guard=self.detection_worker.guard: self._on_detection_job_started(guard, task, persistence)
         )
@@ -10447,8 +10410,6 @@ class MainWindow(QMainWindow):
         self._pending_agent_classification = False
         self._pending_agent_object_detection = False
         self._pending_agent_description = False
-        self._pending_agent_tool_call_id = None
-        self._pending_agent_tool_name = None
 
         # Clear agent clip tracking lists
         self._agent_color_clips = []

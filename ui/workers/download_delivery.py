@@ -13,6 +13,7 @@ class DownloadDelivery(QObject):
         self.window = window
         self.attribute = attribute
         self.worker = worker
+        worker.gui_tool_reply = getattr(window, "_dispatch_gui_reply", None)
         self.session_id = window.project.session.session_id
         self.handlers = handlers
         previous = window._download_deliveries.get(attribute)

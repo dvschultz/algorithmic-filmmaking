@@ -17,7 +17,7 @@ class Worker(QThread):
     text_chunk = Signal(str)
     video_download_completed = Signal(str, dict)
     gui_tool_requested = Signal(str, dict, str)
-    gui_tool_cancelled = Signal(str)
+    gui_tool_cancelled = Signal(str, str)
     def __init__(self):
         super().__init__()
         self.release = threading.Event()
@@ -30,12 +30,11 @@ class Worker(QThread):
         self.text_chunk.emit('text')
         self.video_download_completed.emit('url', {'file_path': 'old.mp4'})
         self.gui_tool_requested.emit('edit', {}, 'call-id')
-        self.gui_tool_cancelled.emit('edit')
+        self.gui_tool_cancelled.emit('edit', 'call-id')
 window = QObject()
 window.project = Project.new(name='test')
 window._active_chat_workers = set()
 window._chat_worker = None
-window._pending_agent_tool_name = None
 cancelled = []
 window._on_gui_tool_cancelled = cancelled.append
 received = []
@@ -47,7 +46,7 @@ def bind(worker):
         'text_chunk': lambda value: received.append((value, threading.get_ident())),
         'video_download_completed': lambda *args: received.append(args),
         'gui_tool_requested': lambda *args: received.append(args),
-        'gui_tool_cancelled': cancelled.append,
+        'gui_tool_cancelled': lambda *args: cancelled.append(args),
     })
     worker.text_chunk.connect(relay.text_chunk)
     worker.video_download_completed.connect(relay.video_download_completed)
@@ -73,17 +72,22 @@ current = Worker()
 bind(current); drain(current)
 assert received == [('text', owner), ('url', {'file_path': 'old.mp4'}),
                     ('edit', {}, 'call-id')]
-assert cancelled == ['edit']
+assert cancelled == [('edit', 'call-id')]
 received.clear()
 cleared = Worker()
 bind(cleared)
-window._pending_agent_tool_name = 'download_video'
+from unittest.mock import Mock
+from ui.workers.gui_tool_reply import GuiToolReply
+native = Mock(gui_tool_reply=GuiToolReply.capture(window, 'download_video', 'native-token'))
+window._active_download_workers = {native}
 stop_chat_workers(window)
-assert cancelled == ['edit', 'download_video']
+assert cancelled == [('edit', 'call-id')]
+native.cancel.assert_called_once()
 assert window._chat_worker is None and cleared in window._active_chat_workers
 drain(cleared)
 assert not received
-assert cancelled == ['edit', 'download_video']
+assert cancelled == [('edit', 'call-id')]
+native.cancel.assert_called_once()
 closing = Worker()
 bind(closing)
 closing.release.set()

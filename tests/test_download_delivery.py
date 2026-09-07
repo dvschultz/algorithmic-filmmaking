@@ -40,8 +40,17 @@ def spin(predicate):
     while not predicate() and time.monotonic() < end:
         app.processEvents(); time.sleep(.001)
     assert predicate()
+from ui.workers.gui_tool_reply import GuiToolReply
+window._chat_worker = object()
+request = GuiToolReply.capture(window, 'download_videos', 'captured')
+window._dispatch_gui_reply = request
 old, new = Worker(), Worker()
-bind(old); bind(new)
+bind(old)
+assert old.gui_tool_reply is request
+window._dispatch_gui_reply = None
+bind(new)
+assert new.gui_tool_reply is None
+assert old.gui_tool_reply is request
 assert old.is_cancelled()
 old.release.set()
 spin(lambda: old not in window._active_download_workers)
