@@ -853,6 +853,15 @@ now skips persisted empty observations. Explicit frame extraction continues to
 refresh selected targets. Legacy signals remain available, while typed outcomes
 retain distinct identities when clip and frame IDs coincide.
 
-Exquisite Corpus durable proposal recovery remains under U7. Poem generation
-still uses the dialog's existing synchronous path; its shared algorithm adapter
-remains U12 work. Runtime identity does not independently hash model weights.
+Exquisite Corpus also supplies its originating project to the OCR worker.
+Saved-project proposals reuse completed inference after reopening or retrying,
+including empty observations. Results enrich only detached proposal clips:
+the dialog does not publish project receipts or save project data. Its existing
+project/session, input, save-path and workflow guards still govern completion and
+handoff. Matching desktop OCR can reuse the same unpublished computation.
+Unsaved proposals use session-only jobs.
+
+Poem generation still uses the dialog's existing synchronous path; its shared
+algorithm adapter remains U12 work. Runtime identity does not independently hash
+model weights. Remaining U7 work includes boundary-analysis picker integration,
+audio/frame analysis routes and explicit intention-workflow orchestration.

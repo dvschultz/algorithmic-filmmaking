@@ -30,6 +30,69 @@ def test_proposal_clips_are_detached(dialog):
     assert window.sources_by_id[project.sources[0].id] is not project.sources[0]
 
 
+@pytest.mark.parametrize("empty", [False, True])
+@pytest.mark.parametrize("reopen", [False, True])
+def test_saved_proposal_recovers_without_publishing(
+    tmp_path, monkeypatch, empty, reopen
+):
+    from PySide6.QtWidgets import QApplication
+    from core.project import Project
+    from models.clip import ExtractedText
+    from ui.dialogs.exquisite_corpus_dialog import ExquisiteCorpusDialog
+
+    app = QApplication.instance() or QApplication([])
+    project = project_with_thumbnails(tmp_path, 2)
+    project.save(tmp_path / "project.json")
+    original = project.path.read_bytes()
+    monkeypatch.setattr(
+        "core.settings.load_settings",
+        lambda: SimpleNamespace(
+            cache_dir=tmp_path,
+            text_extraction_method="vlm",
+            text_extraction_vlm_model="test",
+        ),
+    )
+    provider = Mock(
+        side_effect=lambda **kw: []
+        if empty
+        else [ExtractedText(kw["clip"].start_frame, "SIGN", 0.87654321, "vlm")]
+    )
+    monkeypatch.setattr("core.analysis.ocr.extract_text_from_clip", provider)
+    windows = []
+
+    def open_dialog(current):
+        window = ExquisiteCorpusDialog(current.clips, current.sources_by_id, current)
+        window._generate_poem = Mock()
+        windows.append(window)
+        return window
+
+    window = open_dialog(project)
+    try:
+        for attempt in range(2):
+            if attempt and reopen:
+                window.reject()
+                project = Project.load(project.path)
+                window = open_dialog(project)
+            window._start_extraction()
+            assert window.worker.wait(10000)
+            app.processEvents()
+            assert window.worker.job_status == "completed"
+            assert window.worker.cache is not None
+            assert not project.metadata.job_results
+            assert all(c.extracted_texts is None for c in project.clips)
+            assert project.path.read_bytes() == original
+            assert all(
+                c.extracted_texts == []
+                if empty
+                else c.extracted_texts[0].confidence == 0.87654321
+                for c in window.clips
+            )
+        assert provider.call_count == 2
+    finally:
+        for window in windows:
+            window.reject()
+
+
 def test_completed_ocr_enriches_only_proposal(dialog, monkeypatch):
     from core.operations.ocr import OcrOutcome, OcrText
 

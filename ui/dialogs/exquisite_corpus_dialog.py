@@ -490,6 +490,7 @@ class ExquisiteCorpusDialog(QDialog):
         self.worker = TextExtractionWorker(
             clips=self.clips,
             sources_by_id=self.sources_by_id,
+            project=self._project,
             num_keyframes=3,
             use_vlm_fallback=use_vlm,
             vlm_model=vlm_model,
