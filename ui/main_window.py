@@ -3571,7 +3571,7 @@ class MainWindow(QMainWindow):
         self._classification_finished_handled = False
         self._reset_analysis_run_error("classify")
         logger.info(f"Creating ClassificationWorker (pipeline) for {len(clips)} clips...")
-        self.classification_worker = ClassificationWorker(clips, parallelism=self.settings.local_model_parallelism)
+        self.classification_worker = ClassificationWorker(clips, parallelism=self.settings.local_model_parallelism, project=self.project)
         self.classification_worker.progress.connect(self._on_classification_progress)
         from ui.workers.classification_delivery import ClassificationDelivery
         ClassificationDelivery(self, self.classification_worker, pipeline=True)
@@ -6739,6 +6739,7 @@ class MainWindow(QMainWindow):
                 clips=[],
                 analysis_targets=targets,
                 parallelism=self.settings.local_model_parallelism,
+                project=self.project,
             )
             worker.progress.connect(self._on_classification_progress)
             from ui.workers.classification_delivery import ClassificationDelivery
@@ -7841,7 +7842,7 @@ class MainWindow(QMainWindow):
 
         # Start worker
         from PySide6.QtCore import Qt
-        self.classification_worker = ClassificationWorker(clips, top_k=top_k, parallelism=self.settings.local_model_parallelism)
+        self.classification_worker = ClassificationWorker(clips, top_k=top_k, parallelism=self.settings.local_model_parallelism, project=self.project)
         self.classification_worker.progress.connect(self._on_classification_progress)
         from ui.workers.classification_delivery import ClassificationDelivery
         ClassificationDelivery(self, self.classification_worker)

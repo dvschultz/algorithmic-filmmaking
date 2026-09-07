@@ -48,6 +48,7 @@ SPINE_MODULES: tuple[str, ...] = (
     "core.jobs.cinematography",
     "core.jobs.classification",
     "core.jobs.gui_cinematography",
+    "core.jobs.gui_classification",
     "core.jobs.analysis",
     "core.operations.analysis_plan",
     "core.project_migrations",

@@ -58,7 +58,24 @@ class ClassificationDelivery(QObject):
                 "succeeded",
                 tuple((label, float(confidence)) for label, confidence in labels),
             )
+            receipt = None
+            cache = getattr(self.worker, "cache", None)
+            if cache is not None:
+                if (
+                    window.project.path is None
+                    or window.project.path.resolve() != cache.path
+                ):
+                    raise ValueError(
+                        "Project save location changed during classification"
+                    )
+                receipt = cache.results[target_id]
+                if not receipt.matches(outcome):
+                    raise ValueError(
+                        "Queued classification differs from its recorded result"
+                    )
             accepted = self.application.apply(window.project, outcome)
+            if accepted and receipt is not None:
+                window.project.record_job_result(receipt.result_id, receipt.digest)
         except Exception as exc:
             window._on_classification_error(f"Could not apply classification: {exc}")
             return

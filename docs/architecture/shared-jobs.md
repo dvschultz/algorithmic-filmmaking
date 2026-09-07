@@ -242,5 +242,18 @@ Failed saves reuse recorded computation. Failed checkpoints reconcile exact save
 labels, including CLI results made with a separate analysis image. Existing user
 labels remain intact. CLI `--force` starts a new result generation after a
 successful checkpoint; an interrupted refresh reuses its recorded results.
-Missing or corrupt committed receipts reject replay. GUI classification recovery
-and the other remaining workflow families are still outstanding in U7.
+Missing or corrupt committed receipts reject replay.
+
+GUI classification now runs through the shared runtime for clip and frame
+targets. Saved projects record immutable outcomes before queued delivery; matching
+results can be reused after reopening without preparing the model. Unsaved
+projects retain session-only job history. Cache identity includes target type,
+prior labels, frame association or clip range, source identity/FPS, media
+fingerprints, and model runtime. Unrelated notes do not invalidate reuse.
+
+Delivery verifies the recorded payload and original save location before applying
+labels and recording the receipt on the project owner thread. An explicit save
+acknowledges only the matching labels, including an empty successful result.
+Save As and manually changed labels do not acknowledge old results. A refresh
+after save starts a new generation. The other remaining workflow families are
+still outstanding in U7.

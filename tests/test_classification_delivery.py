@@ -28,7 +28,7 @@ class Worker(QThread):
 window = QObject()
 with TemporaryDirectory() as directory:
     for target_type in ('clip', 'frame'):
-        for mode in ('current', 'worker', 'session', 'project', 'edit', 'cancel', 'pipeline', 'reply'):
+        for mode in ('current', 'worker', 'session', 'project', 'edit', 'cancel', 'pipeline', 'reply', 'receipt', 'payload', 'save_as'):
             window._analysis_run = None
             window.project = project_with_thumbnails(Path(directory), 1)
             clip = window.project.clips[0]
@@ -40,6 +40,17 @@ with TemporaryDirectory() as directory:
             task = ClassificationTask(clip.id, clip.thumbnail_path,
                 target_type=target_type)
             worker = Worker(task)
+            if mode in ('receipt', 'payload', 'save_as'):
+                from dataclasses import asdict
+                import json
+                from core.jobs.gui_results import GuiResultReceipt
+                from core.operations.classification import ClassificationOutcome
+                window.project.save(Path(directory) / 'project.json')
+                result = ClassificationOutcome(clip.id, 'succeeded', (('person', .9),))
+                payload = json.dumps(asdict(result))
+                if mode == 'payload': payload = payload.replace('person', 'car')
+                worker.cache = SimpleNamespace(path=window.project.path.resolve(), results={clip.id: GuiResultReceipt('a'*64, 'b'*64, payload)})
+                if mode == 'save_as': window.project.save(Path(directory) / 'copy.json')
             window.classification_worker = worker
             window._on_classification_error = Mock()
             reply = SimpleNamespace(is_current=lambda _: True)
@@ -54,12 +65,13 @@ with TemporaryDirectory() as directory:
             if mode == 'reply': reply.is_current = lambda _: False
             worker.start(); assert worker.wait(5000)
             app.processEvents()
-            if mode == 'current':
+            if mode in ('current', 'receipt'):
                 assert target.object_labels == ['person']
+                assert bool(window.project.metadata.job_results) == (mode == 'receipt')
                 if target_type == 'frame': assert clip.object_labels is None
             else:
                 assert target.object_labels == (['user edit'] if mode == 'edit' else None)
-            if mode == 'edit': window._on_classification_error.assert_called_once()
+            if mode in ('edit', 'payload', 'save_as'): window._on_classification_error.assert_called_once()
             else: window._on_classification_error.assert_not_called()
 """
     result = subprocess.run(

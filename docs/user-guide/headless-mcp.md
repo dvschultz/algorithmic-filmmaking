@@ -195,6 +195,9 @@ recorded classification results across failed saves and checkpoint failures.
 Retries with matching media, model runtime, and options reuse computation and
 preserve existing or manually edited labels. CLI `analyze classify` uses the same
 recovery path; `--force` requests a fresh generation after a completed run.
+Desktop classification also retains clip and frame computation for saved
+projects. Results remain unsaved until the project is saved; unsaved projects
+keep only session history.
 
 `start_analyze_cinematography` and cinematography steps in `start_analyze_clips`
 also retain completed inference before saving the project. Retry after a failed

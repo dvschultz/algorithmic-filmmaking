@@ -40,6 +40,7 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
                 "gui_describe",
                 "gui_custom_query",
                 "gui_cinematography",
+                "gui_classification",
             )
             or identity["version"] != 1
         ):
@@ -55,7 +56,8 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
         ] != snapshot.get("id"):
             continue
         is_frame = (
-            identity["kind"] in ("gui_describe", "gui_cinematography")
+            identity["kind"]
+            in ("gui_describe", "gui_cinematography", "gui_classification")
             and identity["inputs"]["task"]["target_type"] == "frame"
         )
         clip = (frames if is_frame else clips).get(identity["target_id"])
@@ -67,6 +69,10 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
         payload = json.loads(row["payload_json"])
         if payload["clip_id"] != clip["id"] or payload["status"] != "succeeded":
             raise StaleJobResult("Saved GUI result does not match its target")
+        if identity["kind"] == "gui_classification":
+            if clip.get("object_labels") == [label for label, _ in payload["labels"]]:
+                pending.append((result_id, receipt_digest))
+            continue
         if identity["kind"] == "gui_cinematography":
             from core.operations.cinematography import CinematographyOutcome
 

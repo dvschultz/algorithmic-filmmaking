@@ -39,6 +39,18 @@ class ClassificationOutcome:
     code: str | None = None
     message: str | None = None
 
+    @classmethod
+    def from_dict(cls, data: dict) -> "ClassificationOutcome":
+        """Detach JSON label arrays when loading a recorded outcome."""
+        return cls(
+            **{
+                **data,
+                "labels": tuple(
+                    (label, confidence) for label, confidence in data.get("labels", ())
+                ),
+            }
+        )
+
 
 def compute_classification(
     task: ClassificationTask, options: ClassificationOptions, cancel: Event

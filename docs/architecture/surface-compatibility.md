@@ -475,3 +475,30 @@ operation families still need their history migrations.
 Short durable job-store connection scopes are serialized within the process to
 avoid the SQLite connection open/close deadlock observed on macOS. Inference and
 project-file writes stay outside these scopes and retain their concurrency.
+
+### Content classification cutover
+
+All classification surfaces use `core/operations/classification.py` for immutable
+tasks and outcomes, validated labels, and serial MobileNet inference. Cancellation
+while waiting for the model or during inference suppresses late results. The
+vocabulary comes from the selected weights. Empty labels mean completed analysis.
+
+| Surface | Existing-data policy | Publication and recovery |
+| --- | --- | --- |
+| GUI pipeline and chat | Skip non-None labels | Shared job runtime; guarded owner-thread publication; saved-project journal |
+| GUI Frames | Same policy, explicit frame identity | Same journal; frame labels remain separate from object detections |
+| CLI `analyze classify` | Skip existing; `--force` refreshes | Durable runner saves project before checkpoint; retains 320x180 analysis images without replacing display thumbnails |
+| Dedicated and generic MCP jobs | Skip existing | Same durable runner; frozen submitted options and input revision |
+| Direct spine | Skip existing by default | Shared guarded application; caller owns saving |
+
+GUI computation is recorded before delivery but does not save unrelated project
+edits. Explicit saves acknowledge exact labels and receipts; failed checkpoints
+can be acknowledged by a later save. Reopening after a failed save reuses matching
+computation. Unsaved GUI projects retain session-only history. Save As, modified
+queued payloads, edited labels, and target/media changes cannot acknowledge or
+apply stale output. Unrelated notes preserve reuse.
+
+The existing QThread API remains a compatibility shell for start/cancel/wait and
+completion callers. Its removal condition is migrating those callers to the
+task-aware adapter. Object detection and the remaining U7 families still await
+their own cutovers; this does not mark U7 complete.
