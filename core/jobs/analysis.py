@@ -17,6 +17,14 @@ from core.spine.project_io import load_with_mtime, project_writer, save_with_mti
 
 def analysis_job_spec(project: Project, *, arguments: dict) -> OperationSpec:
     inputs = {}
+    if "classify" in (arguments.get("operations") or []):
+        from core.jobs.classification import classification_job_spec
+        from core.operations.classification import ClassificationOptions
+
+        classification = classification_job_spec(
+            project, arguments.get("clip_ids"), ClassificationOptions(), arguments={},
+        )
+        inputs["classification"] = json.loads(classification.inputs_json)
     if "cinematography" in (arguments.get("operations") or []):
         from core.jobs.cinematography import cinematography_job_spec
         from core.operations.cinematography import resolve_options as resolve_cinematography
@@ -88,6 +96,7 @@ def run_analysis_job(
         description = captured.get("description")
         custom_query = captured.get("custom_query")
         cinematography = captured.get("cinematography")
+        classification = captured.get("classification")
         options = (
             TranscriptionOptions(**transcription["options"]) if transcription else None
         )
@@ -97,6 +106,21 @@ def run_analysis_job(
                 raise StaleJobResult("Analysis inputs changed while the job was queued")
 
         def execute(op: str, report: Progress | None) -> dict:
+            if op == "classify":
+                from core.jobs.classification import classification_job_spec, run_classification_job
+                from core.operations.classification import ClassificationOptions
+
+                if classification is None:
+                    raise StaleJobResult("Analysis job has no captured classification options")
+                current, _ = load_with_mtime(path)
+                step = classification_job_spec(
+                    current, ids, ClassificationOptions(**classification["options"]), arguments={},
+                )
+                if json.loads(step.inputs_json) != classification:
+                    raise StaleJobResult("Classification inputs changed before analysis")
+                return run_classification_job(
+                    store, path, ids, report or (lambda *_: None), cancel, operation=step,
+                )
             if op == "cinematography":
                 from core.jobs.cinematography import cinematography_job_spec, run_cinematography_job
                 from core.operations.cinematography import CinematographyOptions

@@ -562,6 +562,24 @@ async def _start_spine_analyze_job(
                 progress_callback, cancel_event, operation=operation,
                 force=operation.arguments.get("force", False),
             )
+    elif spine_fn_name == "classify_content":
+        from core.jobs.classification import classification_job_spec, run_classification_job
+        from core.operations.classification import ClassificationOptions
+
+        try:
+            operation = classification_job_spec(
+                _project, clip_ids, ClassificationOptions(payload["top_k"], payload["threshold"]),
+                arguments=payload,
+            )
+        except ValueError as exc:
+            return json.dumps(_wrap_error(exc))
+        store = _lifespan(ctx)["job_store"]
+
+        def run(progress_callback, cancel_event):
+            return run_classification_job(
+                store, path, operation.arguments["clip_ids"],
+                progress_callback, cancel_event, operation=operation,
+            )
     elif spine_fn_name == "cinematography":
         from core.jobs.cinematography import cinematography_job_spec, run_cinematography_job
         from core.operations.cinematography import resolve_options

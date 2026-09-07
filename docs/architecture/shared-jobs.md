@@ -230,5 +230,17 @@ pipeline. Model notifications refresh views after publication.
 Frames persist ImageNet labels in `object_labels`, separate from object detection.
 An empty list means classification completed without matching labels; `None`
 means no classification. Older frame files retain their existing detection data
-and load with no classification. Durable classification receipts remain follow-up
-work in U7.
+and load with no classification. Clip serialization also preserves empty labels.
+
+Saved-project CLI classification and both dedicated and multi-step MCP jobs now
+record results through `core/jobs/classification.py`. Receipts include source and
+image fingerprints, range/FPS, options, display-image identity, and the selected
+MobileNet weights and installed runtime versions. Inference uses the vocabulary
+from those weights rather than a separately downloaded label file.
+
+Failed saves reuse recorded computation. Failed checkpoints reconcile exact saved
+labels, including CLI results made with a separate analysis image. Existing user
+labels remain intact. CLI `--force` starts a new result generation after a
+successful checkpoint; an interrupted refresh reuses its recorded results.
+Missing or corrupt committed receipts reject replay. GUI classification recovery
+and the other remaining workflow families are still outstanding in U7.

@@ -190,6 +190,12 @@ CLI `analyze describe` shares these receipts when options, media, and the config
 cache directory match. Missing committed cache payloads produce an error rather
 than an automatic paid recomputation.
 
+`start_analyze_classify` and `classify` steps in `start_analyze_clips` retain
+recorded classification results across failed saves and checkpoint failures.
+Retries with matching media, model runtime, and options reuse computation and
+preserve existing or manually edited labels. CLI `analyze classify` uses the same
+recovery path; `--force` requests a fresh generation after a completed run.
+
 `start_analyze_cinematography` and cinematography steps in `start_analyze_clips`
 also retain completed inference before saving the project. Retry after a failed
 save or cache checkpoint reuses matching results. Submission captures the cloud

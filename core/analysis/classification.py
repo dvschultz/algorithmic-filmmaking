@@ -11,9 +11,6 @@ from PIL import Image
 
 logger = logging.getLogger(__name__)
 
-# PINNED: Raw GitHub URL, unversioned; consider vendoring the file if URL breaks
-IMAGENET_LABELS_URL = "https://raw.githubusercontent.com/pytorch/hub/master/imagenet_classes.txt"
-
 # Lazy load model and labels
 _model = None
 _model_lock = threading.Lock()
@@ -27,7 +24,7 @@ def load_imagenet_class_list() -> list[str]:
     Reads `<model_cache_dir>/imagenet_classes.txt` if it exists; otherwise
     returns an empty list (caller can fall back gracefully — the filter
     sidebar disables its typeahead when the vocab is empty). Does not
-    trigger a download; that happens lazily on first classification run.
+    load the model; the cache is refreshed from weight metadata on first inference.
     """
     cache_dir = _get_model_cache_dir()
     labels_path = cache_dir / "imagenet_classes.txt"
@@ -55,6 +52,7 @@ def _get_model_cache_dir() -> Path:
     """Get the model cache directory from settings."""
     try:
         from core.settings import load_settings
+
         settings = load_settings()
         cache_dir = settings.model_cache_dir
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -63,6 +61,7 @@ def _get_model_cache_dir() -> Path:
         # Fallback to platform-appropriate default
         if sys.platform == "win32":
             import os as _os
+
             base = Path(_os.environ.get("LOCALAPPDATA", str(Path.home())))
             default = base / "scene-ripper" / "cache" / "models"
         else:
@@ -92,62 +91,61 @@ def _load_model():
             # Point SSL libraries to certifi's CA bundle so HTTPS downloads work.
             try:
                 import certifi
+
                 os.environ.setdefault("SSL_CERT_FILE", certifi.where())
                 os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
             except ImportError:
                 pass
 
-
             models, transforms = ensure_image_classification_runtime_available()
 
             # Use MobileNetV3-Small with ImageNet weights
             try:
-                _model = models.mobilenet_v3_small(weights="IMAGENET1K_V1")
+                weights = models.MobileNet_V3_Small_Weights.IMAGENET1K_V1
+                model = models.mobilenet_v3_small(weights=weights)
             except Exception as e:
                 from core.errors import ModelDownloadError
 
                 raise ModelDownloadError(
                     f"Failed to load MobileNetV3 model: {e}"
                 ) from e
-            _model.eval()
+            model.eval()
 
             # Create preprocessing pipeline
-            _preprocess = transforms.Compose([
-                transforms.Resize(256),
-                transforms.CenterCrop(224),
-                transforms.ToTensor(),
-                transforms.Normalize(
-                    mean=[0.485, 0.456, 0.406],
-                    std=[0.229, 0.224, 0.225]
-                ),
-            ])
+            preprocess = transforms.Compose(
+                [
+                    transforms.Resize(256),
+                    transforms.CenterCrop(224),
+                    transforms.ToTensor(),
+                    transforms.Normalize(
+                        mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+                    ),
+                ]
+            )
 
-            # Load ImageNet labels
-            labels_path = cache_dir / "imagenet_classes.txt"
-            if labels_path.exists():
-                with open(labels_path, "r") as f:
-                    _labels = [line.strip() for line in f.readlines()]
-            else:
-                # Download labels
-                import ssl
-                import urllib.request
-                logger.info("Downloading ImageNet class labels...")
-                try:
+            # The vocabulary is part of the selected weights, not a mutable download.
+            labels = list(weights.meta["categories"])
+            # Keep the lightweight UI vocabulary cache without making it authoritative.
+            import tempfile
+
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8", dir=cache_dir, delete=False
+                ) as stream:
+                    temporary = Path(stream.name)
+                    stream.write("\n".join(labels) + "\n")
+                temporary.replace(cache_dir / "imagenet_classes.txt")
+            except OSError as exc:
+                logger.warning("Could not cache ImageNet labels: %s", exc)
+            finally:
+                if temporary is not None:
                     try:
-                        import certifi
-                        _ssl_ctx = ssl.create_default_context(cafile=certifi.where())
-                    except ImportError:
-                        _ssl_ctx = ssl.create_default_context()
-                    with urllib.request.urlopen(IMAGENET_LABELS_URL, timeout=30, context=_ssl_ctx) as response:
-                        content = response.read().decode("utf-8")
-                        _labels = [line.strip() for line in content.strip().split("\n")]
-                        # Cache locally
-                        with open(labels_path, "w") as f:
-                            f.write(content)
-                except Exception as e:
-                    logger.warning(f"Could not download ImageNet labels: {e}")
-                    # Use numeric labels as fallback
-                    _labels = [f"class_{i}" for i in range(1000)]
+                        temporary.unlink(missing_ok=True)
+                    except OSError as exc:
+                        logger.warning("Could not remove temporary labels: %s", exc)
+            # Publish the fully initialized singleton only after all setup succeeds.
+            _labels, _preprocess, _model = labels, preprocess, model
 
             logger.info("MobileNetV3-Small model loaded")
 
@@ -191,7 +189,11 @@ def classify_frame(
         for prob, idx in zip(top_probs, top_indices):
             confidence = prob.item()
             if confidence >= threshold:
-                label = labels[idx.item()] if idx.item() < len(labels) else f"class_{idx.item()}"
+                label = (
+                    labels[idx.item()]
+                    if idx.item() < len(labels)
+                    else f"class_{idx.item()}"
+                )
                 results.append((label, round(confidence, 4)))
 
         logger.debug(f"Classification for {image_path.name}: {results[:3]}")

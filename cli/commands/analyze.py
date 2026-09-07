@@ -515,7 +515,10 @@ def classify(
     try:
         from core.project import Project, ProjectLoadError
         from core.thumbnail import ThumbnailGenerator
-        from core.operations.classification import ClassificationApplication, ClassificationTask, ClassificationOptions, run_classification
+        from core.operations.classification import ClassificationOptions
+        from core.jobs.classification import run_classification_job
+        from core.jobs.store import JobStore
+        from threading import Event
     except ImportError as e:
         exit_with(ExitCode.DEPENDENCY_MISSING, f"Missing dependency: {e}")
 
@@ -543,79 +546,54 @@ def classify(
         if not clips_to_analyze:
             exit_with(ExitCode.VALIDATION_ERROR, "No matching clips found")
 
-    # Filter out already-analyzed clips unless force
-    if not force:
-        clips_to_analyze = [c for c in clips_to_analyze if c.object_labels is None]
-
-    if not clips_to_analyze:
-        output_info("All clips already have classification data. Use --force to re-analyze.")
-        return
-
-    # Initialize thumbnail generator
-    try:
-        thumb_gen = ThumbnailGenerator(cache_dir=config.cache_dir / "thumbnails")
-    except RuntimeError as e:
-        exit_with(ExitCode.DEPENDENCY_MISSING, str(e))
-
-    analyzed_count = 0
     errors = []
-    label_counts: dict[str, int] = {}
-
-    output_info("Loading MobileNet model (this may take a moment on first run)...")
-
-    with ProgressContext("Classifying content") as progress:
-        total = len(clips_to_analyze)
-        for i, clip in enumerate(clips_to_analyze):
-            progress.update(i / total, f"Clip {i + 1}/{total}")
-
-            source = sources_by_id.get(clip.source_id)
-            if not source or not source.file_path.exists():
-                errors.append(f"Clip {clip.id[:8]}: source not found")
-                continue
-
+    ready = []
+    prepared = {}
+    thumb_gen = None
+    for clip in clips_to_analyze:
+        if clip.object_labels is not None and not force:
+            ready.append(clip.id)
+            continue
+        source = sources_by_id.get(clip.source_id)
+        if source is None or not source.file_path.exists():
+            errors.append(f"Clip {clip.id[:8]}: source not found")
+            continue
+        if thumb_gen is None:
             try:
-                # Generate thumbnail for analysis
-                fps = source.fps
-                start_time = clip.start_time(fps)
-                end_time = clip.end_time(fps)
+                thumb_gen = ThumbnailGenerator(cache_dir=config.cache_dir / "thumbnails")
+            except RuntimeError as exc:
+                exit_with(ExitCode.DEPENDENCY_MISSING, str(exc))
+        try:
+            prepared[clip.id] = thumb_gen.generate_clip_thumbnail(
+                video_path=source.file_path,
+                start_seconds=clip.start_time(source.fps), end_seconds=clip.end_time(source.fps),
+                width=320, height=180,
+            )
+            ready.append(clip.id)
+        except Exception as exc:
+            errors.append(f"Clip {clip.id[:8]}: {exc}")
 
-                thumb_path = thumb_gen.generate_clip_thumbnail(
-                    video_path=source.file_path,
-                    start_seconds=start_time,
-                    end_seconds=end_time,
-                    width=320,
-                    height=180,
-                )
-
-                # Classify content
-                tasks = (ClassificationTask(clip.id, thumb_path),)
-                application = ClassificationApplication(project, tasks)
-                outcome = run_classification(
-                    tasks,
-                    ClassificationOptions(top_k, threshold),
-                )[0]
-                if outcome.status != "succeeded":
-                    raise RuntimeError(outcome.message or outcome.code or "Classification failed")
-                if not application.apply(project, outcome):
-                    raise RuntimeError("Classification target changed during analysis")
-                results = outcome.labels
-                analyzed_count += 1
-
-                # Track top label counts
-                if results:
-                    top_label = results[0][0]
-                    label_counts[top_label] = label_counts.get(top_label, 0) + 1
-
-            except Exception as e:
-                errors.append(f"Clip {clip.id[:8]}: {e}")
-
-        progress.update(1.0, "Complete")
-
-    # Save updated project
-    success = project.save()
-
-    if not success:
-        exit_with(ExitCode.GENERAL_ERROR, "Failed to save project")
+    try:
+        store = JobStore(config.cache_dir / "jobs.db")
+        try:
+            with ProgressContext("Classifying content") as progress:
+                batch = run_classification_job(
+                    store, project_file, ready,
+                    progress.update, Event(), options=ClassificationOptions(top_k, threshold),
+                    force=force, thumbnail_paths=prepared,
+                )["result"]
+        finally:
+            store.close()
+        analyzed_count = len(batch["succeeded"])
+        errors.extend(f"Clip {item['clip_id'][:8]}: {item.get('message') or item['code']}" for item in batch["failed"])
+        saved = Project.load(project_file)
+        label_counts: dict[str, int] = {}
+        for item in batch["succeeded"]:
+            labels = saved.clips_by_id[item["clip_id"]].object_labels
+            if labels:
+                label_counts[labels[0]] = label_counts.get(labels[0], 0) + 1
+    except Exception as exc:
+        exit_with(ExitCode.GENERAL_ERROR, f"Classification failed: {exc}")
 
     result = {
         "analyzed_clips": analyzed_count,

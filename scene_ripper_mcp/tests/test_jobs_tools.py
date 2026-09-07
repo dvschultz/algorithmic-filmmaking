@@ -605,6 +605,39 @@ async def test_cinematography_submission_pins_options_and_records_results(lifesp
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("generic", [False, True])
+async def test_classification_submission_records_durable_results(lifespan_ctx, tmp_path, monkeypatch, generic):
+    from core.project import Project
+    from scene_ripper_mcp.tools import jobs
+
+    ctx, store, _runtime = lifespan_ctx
+    path = _make_project_file(tmp_path)
+    project = Project.load(path)
+    thumbnail = tmp_path / "thumb.jpg"
+    thumbnail.write_bytes(b"image")
+    project.clips[0].thumbnail_path = thumbnail
+    assert project.save()
+    captured = {}
+    monkeypatch.setattr(jobs, "_start_job", lambda ctx, **kwargs: captured.update(kwargs) or "queued")
+    compute = Mock(return_value=[("person", 0.9)])
+    monkeypatch.setattr("core.analysis.classification.classify_frame", compute)
+    ids = ["clip-1"]
+    if generic:
+        response = await jobs.start_analyze_clips(str(path), clip_ids=ids, operations=["classify"], ctx=ctx)
+    else:
+        response = await jobs.start_analyze_classify(str(path), clip_ids=ids, top_k=3, threshold=0.4, ctx=ctx)
+    assert response == "queued"
+    ids.clear()
+    result = captured["run"](lambda *_: None, threading.Event())
+    assert result["success"]
+    assert compute.call_args.kwargs == {"top_k": 5 if generic else 3, "threshold": 0.1 if generic else 0.4}
+    saved = Project.load(path)
+    assert saved.clips[0].object_labels == ["person"]
+    assert len(saved.metadata.job_results) == 1
+    assert all(store.get_result(rid)["committed"] for rid in saved.metadata.job_results)
+
+
+@pytest.mark.asyncio
 async def test_start_analyze_clips_uses_durable_custom_query(
     lifespan_ctx, tmp_path, monkeypatch
 ):
