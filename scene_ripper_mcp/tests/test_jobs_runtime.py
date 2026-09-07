@@ -64,6 +64,44 @@ def test_submit_runs_to_completion(runtime):
     assert row.progress == 1.0
 
 
+def test_external_project_owner_blocks_job_before_runner(runtime, tmp_path, monkeypatch):
+    import asyncio
+    import json
+    from scene_ripper_mcp.tools import jobs
+    from core.project_lock import ProjectWriter
+
+    path = tmp_path / "owned.sceneripper"
+    calls = []
+    with ProjectWriter(path):
+        result = runtime.submit(kind="test", args={}, project_path=str(path),
+                                run=lambda *_: calls.append(True))
+        _wait_for_status(runtime, result["task_id"], STATUS_FAILED)
+    row = runtime.store.get(result["task_id"])
+    assert calls == []
+    assert row.result["error"]["code"] == "project_busy"
+    monkeypatch.setattr(jobs, "_lifespan", lambda ctx: {"job_store": runtime.store})
+    response = json.loads(asyncio.run(jobs.get_job_result(result["task_id"])))
+    assert response["error"]["code"] == "project_busy"
+
+
+def test_job_holds_project_ownership_for_runner(runtime, tmp_path):
+    from core.project_lock import ProjectBusyError, ProjectWriter
+
+    path = tmp_path / "owned.sceneripper"
+
+    def run(*_):
+        with pytest.raises(ProjectBusyError):
+            with ProjectWriter(path):
+                pass
+        return {"guarded": True}
+
+    result = runtime.submit(kind="test", args={}, project_path=str(path), run=run)
+    _wait_for_status(runtime, result["task_id"], STATUS_COMPLETED)
+    assert runtime.store.get(result["task_id"]).result == {"guarded": True}
+    with ProjectWriter(path):
+        pass
+
+
 def test_submit_records_failed_with_sanitized_traceback(runtime):
     def run(progress, cancel):
         raise ValueError("boom")

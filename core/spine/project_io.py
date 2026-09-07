@@ -1,14 +1,10 @@
-"""Project file I/O helpers with mtime-based collision detection.
+"""Project I/O with writer ownership and supplementary mtime diagnostics.
 
-Used by MCP tool wrappers and the jobs framework to defend against the
-GUI-vs-MCP same-project hazard described in plan R19. Best-effort, not a
-guarantee — the per-project mutex (lock.py in the jobs framework) handles
-intra-process races, the mtime guard catches most external collisions, and
-last-writer-wins remains possible under the read-modify-write window in
-``core/project.py:save_project``.
-
-The MCP server's ``v1`` scope assumes the GUI is closed when MCP drives the
-project. This guard is the safety net for the cases where it isn't.
+Mutation callers hold ``project_writer`` from before loading through saving.
+The shared save helper reuses that scope. Its short save-only scope does not
+protect a document loaded earlier by a caller without lifetime ownership.
+Desktop open-session ownership and legacy CLI load-through-save ownership
+remain separate work; keep the GUI closed when MCP drives its project.
 """
 
 from __future__ import annotations
@@ -17,10 +13,16 @@ from pathlib import Path
 from typing import Tuple
 
 from core.project import Project, ProjectSaveError
+from core.project_lock import ProjectBusyError, project_writer
+
+
+def project_error(error: Exception) -> str | dict[str, str]:
+    """Keep existing error strings while exposing writer conflicts structurally."""
+    return error.to_dict() if isinstance(error, ProjectBusyError) else str(error)
 
 # Mtime-comparison tolerance in seconds. Filesystem caches and network mounts
-# can report sub-second drift on otherwise-untouched files; 1s is conservative
-# enough to avoid false positives without missing real external writes.
+# can report sub-second drift on otherwise-untouched files. This legacy 1s
+# tolerance can miss rapid external writes; it is not a locking mechanism.
 MTIME_TOLERANCE_SECONDS: float = 1.0
 
 
@@ -78,14 +80,15 @@ def save_with_mtime_check(
     Raises ``ProjectModifiedExternally`` when the mtime drifted; the project
     is **not** written in that case.
     """
-    p = Path(path)
-    if p.exists():
-        current = p.stat().st_mtime
-        if abs(current - expected_mtime) > MTIME_TOLERANCE_SECONDS:
-            raise ProjectModifiedExternally(p, expected_mtime, current)
+    with project_writer(path) as writer:
+        p = writer.path
+        if p.exists():
+            current = p.stat().st_mtime
+            if abs(current - expected_mtime) > MTIME_TOLERANCE_SECONDS:
+                raise ProjectModifiedExternally(p, expected_mtime, current)
 
-    if not project.save(p):
-        raise ProjectSaveError(f"Failed to save project: {p}")
+        if not project.save(p):
+            raise ProjectSaveError(f"Failed to save project: {p}")
 
 
 def save_path_resolved(path: Path | str) -> Path:

@@ -40,6 +40,9 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
+from contextlib import nullcontext
+
+from core.project_lock import ProjectBusyError, project_writer
 
 from scene_ripper_mcp.jobs.lock import ProjectLockRegistry
 from scene_ripper_mcp.jobs.store import (
@@ -315,7 +318,8 @@ class JobRuntime:
 
         # Execute.
         try:
-            result = run(progress_callback, cancel_event)
+            with project_writer(canonical_path) if canonical_path else nullcontext():
+                result = run(progress_callback, cancel_event)
             if cancel_event.is_set():
                 self.store.update_status(
                     task_id,
@@ -340,6 +344,7 @@ class JobRuntime:
                     task_id,
                     STATUS_FAILED,
                     error=sanitized,
+                    result={"success": False, "error": exc.to_dict()} if isinstance(exc, ProjectBusyError) else None,
                     progress=handle.last_progress,
                     status_message=handle.last_status_message or "failed",
                     terminal=True,

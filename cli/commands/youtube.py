@@ -378,12 +378,14 @@ def download(
 
             # Save project
             project_path = result.file_path.with_suffix(".sceneripper")
-            save_project(
+            saved = save_project(
                 filepath=project_path,
                 sources=[source],
                 clips=clips,
                 sequence=None,
             )
+            if not saved:
+                raise RuntimeError(f"Failed to save project: {project_path}")
 
             output_data["detected_clips"] = len(clips)
             output_data["project_file"] = str(project_path)

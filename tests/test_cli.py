@@ -506,6 +506,26 @@ class TestYouTubeCommands:
         assert "--output-dir" in result.output or "-o" in result.output
         assert "--detect" in result.output
 
+    def test_download_does_not_report_project_after_refused_save(self, runner, tmp_path):
+        from types import SimpleNamespace
+
+        result = SimpleNamespace(success=True, title="Video", file_path=tmp_path / "video.mp4", duration=1)
+        with (
+            patch("core.downloader.VideoDownloader") as downloader,
+            patch("core.scene_detect.SceneDetector") as detector,
+            patch("core.project.save_project", return_value=False),
+            patch("cli.commands.youtube.output_info"),
+        ):
+            downloader.return_value.is_valid_url.return_value = (True, "")
+            downloader.return_value.get_video_info.return_value = {"title": "Video", "duration": 1}
+            downloader.return_value.download.return_value = result
+            detector.return_value.detect_scenes_with_progress.return_value = (object(), [])
+            response = runner.invoke(cli, ["--json", "download", "https://youtube.com/watch?v=test", "-o", str(tmp_path), "--detect"])
+        assert response.exit_code == 0, response.output
+        data = json.loads(response.stdout)
+        assert "project_file" not in data
+        assert "Failed to save project" in data["detection_error"]
+
 
 class TestIntegration:
     """Integration tests for CLI pipeline."""

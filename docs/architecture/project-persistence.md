@@ -29,10 +29,8 @@ the matching `.bak` file. Keep the backup until the restored file has been
 verified with the previous application. A backup contains the JSON document;
 it does not duplicate referenced media.
 
-This is the schema portion of U5. Cross-process writer ownership, elimination
-of the legacy read-modify-merge writer, and full UI read-only affordances remain
-separate work. Schema checks and mtime diagnostics do not close concurrent-write
-races; they do not constitute a project lock.
+This implements part of U5. Elimination of the legacy read-modify-merge writer
+and full UI read-only affordances remain separate work.
 
 Offline source files remain declared sources on load, so their clips and edits
 survive in every sequence. A relink callback can supply an existing replacement;
@@ -40,3 +38,33 @@ returning `None` or an unavailable replacement keeps the original path. Callback
 exceptions still cancel loading. Stills and audio references are retained too.
 Media-dependent operations must check file availability and report missing input
 instead of treating successful document loading as proof that media is online.
+
+## Writer ownership
+
+`core/project_lock.py` provides nonblocking ownership for cooperating processes
+using the same user's app-support directory. Permanent hashed lock records live
+under `project-locks`; never delete them while clients may be running. Records
+use [POSIX flock](https://docs.python.org/3/library/fcntl.html) or
+[Windows byte-range locking](https://docs.python.org/3/library/msvcrt.html).
+These are local coordination records, not distributed or multi-user locks.
+
+Ownership covers the resolved destination path and the existing file's device
+and inode identity. This handles symlink and hard-link aliases. Replacement
+acquires the new file's identity before publishing it and retains the path lock.
+On macOS, case and Unicode normalization conservatively serialize path aliases;
+distinct case variants on case-sensitive volumes can therefore conflict too.
+Nested scopes reuse ownership only in the same process, thread, and async task.
+
+Every shared project save holds ownership while serializing and replacing the
+file. MCP mutations additionally acquire it before loading and retain it through
+saving; project-scoped jobs hold it throughout execution. Contention returns
+`project_busy` from MCP tools and job results. The legacy Boolean save API returns
+`False`, preserving the unsaved state. A failed download-and-detect project save
+reports a detection error instead of claiming a saved project filename.
+
+Desktop ownership for an entire open editing session and legacy CLI ownership
+from load through save remain to be implemented. Save-only locking cannot detect
+a stale document loaded before another writer completed. Keep the desktop
+project closed while MCP edits it. The mtime check remains a supplementary
+diagnostic with a one-second tolerance; it does not replace lifetime ownership
+and does not prevent writes by applications that ignore these locks.

@@ -177,6 +177,32 @@ def save_project(
     extra_data: Optional[dict] = None,
     audio_sources: Optional[list[AudioSource]] = None,
 ) -> bool:
+    """Save under cross-process ownership, preserving the public bool contract."""
+    from core.project_lock import project_writer
+
+    try:
+        with project_writer(filepath) as writer:
+            return _save_project_owned(
+                writer.path, sources, clips, sequence, ui_state, metadata,
+                progress_callback, frames, extra_data, audio_sources,
+            )
+    except OSError as exc:
+        logger.error("Cannot acquire project writer: %s", exc)
+        return False
+
+
+def _save_project_owned(
+    filepath: Path,
+    sources: list[Source],
+    clips: list[Clip],
+    sequence: Optional[Sequence],
+    ui_state: Optional[dict] = None,
+    metadata: Optional[ProjectMetadata] = None,
+    progress_callback: Optional[Callable[[float, str], None]] = None,
+    frames: Optional[list[Frame]] = None,
+    extra_data: Optional[dict] = None,
+    audio_sources: Optional[list[AudioSource]] = None,
+) -> bool:
     """Save project to JSON file with relative paths.
 
     Args:
@@ -345,7 +371,9 @@ def save_project(
                 os.fsync(f.fileno())
 
             # Atomic rename (POSIX guarantees this is atomic)
-            os.replace(temp_path, filepath)
+            from core.project_lock import replace_project_file
+
+            replace_project_file(temp_path, filepath)
         except Exception:
             # Clean up temp file on failure
             try:

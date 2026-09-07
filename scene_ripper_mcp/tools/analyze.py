@@ -11,6 +11,8 @@ from mcp.server.fastmcp import Context
 from scene_ripper_mcp.server import mcp
 from scene_ripper_mcp.security import validate_project_path
 
+from core.spine.project_io import project_error, project_writer
+
 logger = logging.getLogger(__name__)
 
 
@@ -42,56 +44,57 @@ async def analyze_colors(
 def _analyze_colors_sync(path, num_colors):
     """Synchronous body for ``analyze_colors`` (offloaded via ``asyncio.to_thread``)."""
     try:
-        from core.spine.analyze import analyze_colors as run_colors
-        from core.project import MissingSourceError
-        from core.spine.project_io import (
-            ProjectModifiedExternally,
-            load_with_mtime,
-            save_with_mtime_check,
-        )
+        with project_writer(path):
+            from core.spine.analyze import analyze_colors as run_colors
+            from core.project import MissingSourceError
+            from core.spine.project_io import (
+                ProjectModifiedExternally,
+                load_with_mtime,
+                save_with_mtime_check,
+            )
 
-        try:
-            project, mtime = load_with_mtime(path)
-        except MissingSourceError as e:
-            return json.dumps({
-                "success": False,
-                "error": {"code": "source_files_missing", "message": str(e)},
-            })
+            try:
+                project, mtime = load_with_mtime(path)
+            except MissingSourceError as e:
+                return json.dumps({
+                    "success": False,
+                    "error": {"code": "source_files_missing", "message": str(e)},
+                })
 
-        clips = project.clips
-        if not clips:
-            return json.dumps({"success": False, "error": "No clips in project"})
+            clips = project.clips
+            if not clips:
+                return json.dumps({"success": False, "error": "No clips in project"})
 
-        outcomes = run_colors(project, num_colors=num_colors, skip_existing=False)["result"]
-        analyzed_count = len(outcomes["succeeded"])
-        # Preserve the legacy skipped counter while also exposing actual errors.
-        skipped_count = len(outcomes["skipped"]) + len(outcomes["failed"])
+            outcomes = run_colors(project, num_colors=num_colors, skip_existing=False)["result"]
+            analyzed_count = len(outcomes["succeeded"])
+            # Preserve the legacy skipped counter while also exposing actual errors.
+            skipped_count = len(outcomes["skipped"]) + len(outcomes["failed"])
 
-        try:
-            save_with_mtime_check(project, path, mtime)
-        except ProjectModifiedExternally as exc:
-            return json.dumps({
-                "success": False,
-                "error": {
-                    "code": "project_modified_externally",
-                    "path": str(exc.path),
-                    "expected_mtime": exc.expected_mtime,
-                    "current_mtime": exc.current_mtime,
-                },
-            })
+            try:
+                save_with_mtime_check(project, path, mtime)
+            except ProjectModifiedExternally as exc:
+                return json.dumps({
+                    "success": False,
+                    "error": {
+                        "code": "project_modified_externally",
+                        "path": str(exc.path),
+                        "expected_mtime": exc.expected_mtime,
+                        "current_mtime": exc.current_mtime,
+                    },
+                })
 
-        result = {
-            "success": True,
-            "analyzed_clips": analyzed_count,
-            "skipped_clips": skipped_count,
-            "total_clips": len(clips),
-        }
-        if outcomes["failed"]:
-            result["error_details"] = outcomes["failed"]
-        return json.dumps(result)
+            result = {
+                "success": True,
+                "analyzed_clips": analyzed_count,
+                "skipped_clips": skipped_count,
+                "total_clips": len(clips),
+            }
+            if outcomes["failed"]:
+                result["error_details"] = outcomes["failed"]
+            return json.dumps(result)
     except Exception as e:
         logger.exception("Color analysis failed")
-        return json.dumps({"success": False, "error": str(e)})
+        return json.dumps({"success": False, "error": project_error(e)})
 
 
 @mcp.tool()
@@ -120,85 +123,86 @@ async def analyze_shots(
 def _analyze_shots_sync(path):
     """Synchronous body for ``analyze_shots`` (offloaded via ``asyncio.to_thread``)."""
     try:
-        from core.analysis.shots import classify_shot_type
-        from core.project import MissingSourceError
-        from core.spine.project_io import (
-            ProjectModifiedExternally,
-            load_with_mtime,
-            save_with_mtime_check,
-        )
-        from core.thumbnail import get_thumbnail_path
+        with project_writer(path):
+            from core.analysis.shots import classify_shot_type
+            from core.project import MissingSourceError
+            from core.spine.project_io import (
+                ProjectModifiedExternally,
+                load_with_mtime,
+                save_with_mtime_check,
+            )
+            from core.thumbnail import get_thumbnail_path
 
-        try:
-            project, mtime = load_with_mtime(path)
-        except MissingSourceError as e:
-            return json.dumps({
-                "success": False,
-                "error": {"code": "source_files_missing", "message": str(e)},
-            })
+            try:
+                project, mtime = load_with_mtime(path)
+            except MissingSourceError as e:
+                return json.dumps({
+                    "success": False,
+                    "error": {"code": "source_files_missing", "message": str(e)},
+                })
 
-        clips = project.clips
-        if not clips:
-            return json.dumps({"success": False, "error": "No clips in project"})
+            clips = project.clips
+            if not clips:
+                return json.dumps({"success": False, "error": "No clips in project"})
 
-        sources_by_id = project.sources_by_id
+            sources_by_id = project.sources_by_id
 
-        analyzed_count = 0
-        skipped_count = 0
-        shot_type_counts: dict = {}
-        updated: list = []
+            analyzed_count = 0
+            skipped_count = 0
+            shot_type_counts: dict = {}
+            updated: list = []
 
-        for clip in clips:
-            source = sources_by_id.get(clip.source_id)
-            if not source:
-                skipped_count += 1
-                continue
-
-            thumb_path = get_thumbnail_path(source.file_path, clip.start_frame)
-            if not thumb_path or not thumb_path.exists():
-                if clip.thumbnail_path and Path(clip.thumbnail_path).exists():
-                    thumb_path = Path(clip.thumbnail_path)
-                else:
+            for clip in clips:
+                source = sources_by_id.get(clip.source_id)
+                if not source:
                     skipped_count += 1
                     continue
 
-            shot_type, _confidence = classify_shot_type(thumb_path)
-            if shot_type != "unknown":
-                clip.shot_type = shot_type
-                analyzed_count += 1
-                shot_type_counts[shot_type] = shot_type_counts.get(shot_type, 0) + 1
-                updated.append(clip)
-            else:
-                skipped_count += 1
+                thumb_path = get_thumbnail_path(source.file_path, clip.start_frame)
+                if not thumb_path or not thumb_path.exists():
+                    if clip.thumbnail_path and Path(clip.thumbnail_path).exists():
+                        thumb_path = Path(clip.thumbnail_path)
+                    else:
+                        skipped_count += 1
+                        continue
 
-        if updated:
-            project.update_clips(updated)
+                shot_type, _confidence = classify_shot_type(thumb_path)
+                if shot_type != "unknown":
+                    clip.shot_type = shot_type
+                    analyzed_count += 1
+                    shot_type_counts[shot_type] = shot_type_counts.get(shot_type, 0) + 1
+                    updated.append(clip)
+                else:
+                    skipped_count += 1
 
-        try:
-            save_with_mtime_check(project, path, mtime)
-        except ProjectModifiedExternally as exc:
-            return json.dumps({
-                "success": False,
-                "error": {
-                    "code": "project_modified_externally",
-                    "path": str(exc.path),
-                    "expected_mtime": exc.expected_mtime,
-                    "current_mtime": exc.current_mtime,
-                },
-            })
+            if updated:
+                project.update_clips(updated)
 
-        return json.dumps(
-            {
-                "success": True,
-                "analyzed_clips": analyzed_count,
-                "skipped_clips": skipped_count,
-                "total_clips": len(clips),
-                "shot_type_distribution": shot_type_counts,
-            }
-        )
+            try:
+                save_with_mtime_check(project, path, mtime)
+            except ProjectModifiedExternally as exc:
+                return json.dumps({
+                    "success": False,
+                    "error": {
+                        "code": "project_modified_externally",
+                        "path": str(exc.path),
+                        "expected_mtime": exc.expected_mtime,
+                        "current_mtime": exc.current_mtime,
+                    },
+                })
+
+            return json.dumps(
+                {
+                    "success": True,
+                    "analyzed_clips": analyzed_count,
+                    "skipped_clips": skipped_count,
+                    "total_clips": len(clips),
+                    "shot_type_distribution": shot_type_counts,
+                }
+            )
     except Exception as e:
         logger.exception("Shot classification failed")
-        return json.dumps({"success": False, "error": str(e)})
+        return json.dumps({"success": False, "error": project_error(e)})
 
 
 @mcp.tool()
@@ -231,98 +235,99 @@ async def transcribe(
 def _transcribe_sync(path, model, language):
     """Synchronous body for ``transcribe`` (offloaded via ``asyncio.to_thread``)."""
     try:
-        from core.transcription import is_faster_whisper_available
+        with project_writer(path):
+            from core.transcription import is_faster_whisper_available
 
-        if not is_faster_whisper_available():
-            return json.dumps(
-                {
-                    "success": False,
-                    "error": "faster-whisper not installed. Run: pip install faster-whisper",
-                }
-            )
-
-        from core.project import MissingSourceError
-        from core.spine.project_io import (
-            ProjectModifiedExternally,
-            load_with_mtime,
-            save_with_mtime_check,
-        )
-        from core.transcription import transcribe_clip
-
-        try:
-            project, mtime = load_with_mtime(path)
-        except MissingSourceError as e:
-            return json.dumps({
-                "success": False,
-                "error": {"code": "source_files_missing", "message": str(e)},
-            })
-
-        clips = project.clips
-        if not clips:
-            return json.dumps({"success": False, "error": "No clips in project"})
-
-        sources_by_id = project.sources_by_id
-
-        transcribed_count = 0
-        skipped_count = 0
-        total_segments = 0
-        updated: list = []
-
-        for clip in clips:
-            source = sources_by_id.get(clip.source_id)
-            if not source or not source.file_path.exists():
-                skipped_count += 1
-                continue
-
-            try:
-                segments = transcribe_clip(
-                    source_path=source.file_path,
-                    start_time=clip.start_time(source.fps),
-                    end_time=clip.end_time(source.fps),
-                    model_name=model,
-                    language=language,
+            if not is_faster_whisper_available():
+                return json.dumps(
+                    {
+                        "success": False,
+                        "error": "faster-whisper not installed. Run: pip install faster-whisper",
+                    }
                 )
 
-                if segments:
-                    clip.transcript = segments
-                    transcribed_count += 1
-                    total_segments += len(segments)
-                    updated.append(clip)
-                else:
+            from core.project import MissingSourceError
+            from core.spine.project_io import (
+                ProjectModifiedExternally,
+                load_with_mtime,
+                save_with_mtime_check,
+            )
+            from core.transcription import transcribe_clip
+
+            try:
+                project, mtime = load_with_mtime(path)
+            except MissingSourceError as e:
+                return json.dumps({
+                    "success": False,
+                    "error": {"code": "source_files_missing", "message": str(e)},
+                })
+
+            clips = project.clips
+            if not clips:
+                return json.dumps({"success": False, "error": "No clips in project"})
+
+            sources_by_id = project.sources_by_id
+
+            transcribed_count = 0
+            skipped_count = 0
+            total_segments = 0
+            updated: list = []
+
+            for clip in clips:
+                source = sources_by_id.get(clip.source_id)
+                if not source or not source.file_path.exists():
                     skipped_count += 1
-            except Exception as e:
-                logger.warning(f"Failed to transcribe clip {clip.id}: {e}")
-                skipped_count += 1
+                    continue
 
-        if updated:
-            project.update_clips(updated)
+                try:
+                    segments = transcribe_clip(
+                        source_path=source.file_path,
+                        start_time=clip.start_time(source.fps),
+                        end_time=clip.end_time(source.fps),
+                        model_name=model,
+                        language=language,
+                    )
 
-        try:
-            save_with_mtime_check(project, path, mtime)
-        except ProjectModifiedExternally as exc:
-            return json.dumps({
-                "success": False,
-                "error": {
-                    "code": "project_modified_externally",
-                    "path": str(exc.path),
-                    "expected_mtime": exc.expected_mtime,
-                    "current_mtime": exc.current_mtime,
-                },
-            })
+                    if segments:
+                        clip.transcript = segments
+                        transcribed_count += 1
+                        total_segments += len(segments)
+                        updated.append(clip)
+                    else:
+                        skipped_count += 1
+                except Exception as e:
+                    logger.warning(f"Failed to transcribe clip {clip.id}: {e}")
+                    skipped_count += 1
 
-        return json.dumps(
-            {
-                "success": True,
-                "transcribed_clips": transcribed_count,
-                "skipped_clips": skipped_count,
-                "total_clips": len(clips),
-                "total_segments": total_segments,
-                "model_used": model,
-            }
-        )
+            if updated:
+                project.update_clips(updated)
+
+            try:
+                save_with_mtime_check(project, path, mtime)
+            except ProjectModifiedExternally as exc:
+                return json.dumps({
+                    "success": False,
+                    "error": {
+                        "code": "project_modified_externally",
+                        "path": str(exc.path),
+                        "expected_mtime": exc.expected_mtime,
+                        "current_mtime": exc.current_mtime,
+                    },
+                })
+
+            return json.dumps(
+                {
+                    "success": True,
+                    "transcribed_clips": transcribed_count,
+                    "skipped_clips": skipped_count,
+                    "total_clips": len(clips),
+                    "total_segments": total_segments,
+                    "model_used": model,
+                }
+            )
     except Exception as e:
         logger.exception("Transcription failed")
-        return json.dumps({"success": False, "error": str(e)})
+        return json.dumps({"success": False, "error": project_error(e)})
 
 
 @mcp.tool()

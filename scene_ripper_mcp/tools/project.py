@@ -10,6 +10,8 @@ from mcp.server.fastmcp import Context
 from scene_ripper_mcp.server import mcp
 from scene_ripper_mcp.security import validate_path, validate_project_path, validate_video_path
 
+from core.spine.project_io import project_error, project_writer
+
 logger = logging.getLogger(__name__)
 
 
@@ -164,27 +166,28 @@ async def create_project(
         return json.dumps({"success": False, "error": error})
 
     try:
-        from core.project import Project, ProjectMetadata
+        with project_writer(path):
+            from core.project import Project, ProjectMetadata
 
-        project = Project.new(name=name)
-        project.metadata = ProjectMetadata(name=name)
+            project = Project.new(name=name)
+            project.metadata = ProjectMetadata(name=name)
 
-        path.parent.mkdir(parents=True, exist_ok=True)
-        success = project.save(path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            success = project.save(path)
 
-        if success:
-            return json.dumps(
-                {
-                    "success": True,
-                    "project_path": str(path),
-                    "name": name,
-                }
-            )
-        else:
-            return json.dumps({"success": False, "error": "Failed to save project"})
+            if success:
+                return json.dumps(
+                    {
+                        "success": True,
+                        "project_path": str(path),
+                        "name": name,
+                    }
+                )
+            else:
+                return json.dumps({"success": False, "error": "Failed to save project"})
     except Exception as e:
         logger.exception("Failed to create project")
-        return json.dumps({"success": False, "error": str(e)})
+        return json.dumps({"success": False, "error": project_error(e)})
 
 
 @mcp.tool()
@@ -280,76 +283,77 @@ async def import_video(
 def _import_video_sync(proj_path, vid_path, detect_scenes_flag, sensitivity):
     """Synchronous body for ``import_video`` (offloaded via ``asyncio.to_thread``)."""
     try:
-        from core.project import MissingSourceError
-        from core.scene_detect import DetectionConfig, SceneDetector
-        from core.spine.project_io import (
-            ProjectModifiedExternally,
-            load_with_mtime,
-            save_with_mtime_check,
-        )
-        from models.clip import Source
-
-        try:
-            project, mtime = load_with_mtime(proj_path)
-        except MissingSourceError as e:
-            return json.dumps({
-                "success": False,
-                "error": {"code": "source_files_missing", "message": str(e)},
-            })
-
-        # Create source and optionally detect scenes
-        if detect_scenes_flag:
-            config = DetectionConfig(
-                threshold=sensitivity,
-                min_scene_length=15,
-                use_adaptive=True,
+        with project_writer(proj_path):
+            from core.project import MissingSourceError
+            from core.scene_detect import DetectionConfig, SceneDetector
+            from core.spine.project_io import (
+                ProjectModifiedExternally,
+                load_with_mtime,
+                save_with_mtime_check,
             )
-            detector = SceneDetector(config)
-            source, new_clips = detector.detect_scenes(vid_path)
-        else:
-            # Create source without scene detection
-            from scenedetect.backends.opencv import VideoStreamCv2
+            from models.clip import Source
 
-            video = VideoStreamCv2(str(vid_path))
-            source = Source(
-                file_path=vid_path,
-                duration_seconds=video.duration.get_seconds(),
-                fps=video.frame_rate,
-                width=video.frame_size[0],
-                height=video.frame_size[1],
+            try:
+                project, mtime = load_with_mtime(proj_path)
+            except MissingSourceError as e:
+                return json.dumps({
+                    "success": False,
+                    "error": {"code": "source_files_missing", "message": str(e)},
+                })
+
+            # Create source and optionally detect scenes
+            if detect_scenes_flag:
+                config = DetectionConfig(
+                    threshold=sensitivity,
+                    min_scene_length=15,
+                    use_adaptive=True,
+                )
+                detector = SceneDetector(config)
+                source, new_clips = detector.detect_scenes(vid_path)
+            else:
+                # Create source without scene detection
+                from scenedetect.backends.opencv import VideoStreamCv2
+
+                video = VideoStreamCv2(str(vid_path))
+                source = Source(
+                    file_path=vid_path,
+                    duration_seconds=video.duration.get_seconds(),
+                    fps=video.frame_rate,
+                    width=video.frame_size[0],
+                    height=video.frame_size[1],
+                )
+                new_clips = []
+
+            project.add_source(source)
+            if new_clips:
+                project.add_clips(new_clips)
+
+            try:
+                save_with_mtime_check(project, proj_path, mtime)
+            except ProjectModifiedExternally as exc:
+                return json.dumps({
+                    "success": False,
+                    "error": {
+                        "code": "project_modified_externally",
+                        "path": str(exc.path),
+                        "expected_mtime": exc.expected_mtime,
+                        "current_mtime": exc.current_mtime,
+                    },
+                })
+
+            return json.dumps(
+                {
+                    "success": True,
+                    "source_id": source.id,
+                    "source_path": str(vid_path),
+                    "clips_created": len(new_clips),
+                    "total_sources": len(project.sources),
+                    "total_clips": len(project.clips),
+                }
             )
-            new_clips = []
-
-        project.add_source(source)
-        if new_clips:
-            project.add_clips(new_clips)
-
-        try:
-            save_with_mtime_check(project, proj_path, mtime)
-        except ProjectModifiedExternally as exc:
-            return json.dumps({
-                "success": False,
-                "error": {
-                    "code": "project_modified_externally",
-                    "path": str(exc.path),
-                    "expected_mtime": exc.expected_mtime,
-                    "current_mtime": exc.current_mtime,
-                },
-            })
-
-        return json.dumps(
-            {
-                "success": True,
-                "source_id": source.id,
-                "source_path": str(vid_path),
-                "clips_created": len(new_clips),
-                "total_sources": len(project.sources),
-                "total_clips": len(project.clips),
-            }
-        )
     except Exception as e:
         logger.exception("Failed to import video")
-        return json.dumps({"success": False, "error": str(e)})
+        return json.dumps({"success": False, "error": project_error(e)})
 
 
 @mcp.tool()
@@ -433,61 +437,62 @@ async def remove_source(
         return json.dumps({"success": False, "error": error})
 
     try:
-        from core.project import MissingSourceError
-        from core.spine.project_io import (
-            ProjectModifiedExternally,
-            load_with_mtime,
-            save_with_mtime_check,
-        )
+        with project_writer(path):
+            from core.project import MissingSourceError
+            from core.spine.project_io import (
+                ProjectModifiedExternally,
+                load_with_mtime,
+                save_with_mtime_check,
+            )
 
-        try:
-            project, mtime = load_with_mtime(path)
-        except MissingSourceError as e:
-            return json.dumps({
-                "success": False,
-                "error": {"code": "source_files_missing", "message": str(e)},
-            })
+            try:
+                project, mtime = load_with_mtime(path)
+            except MissingSourceError as e:
+                return json.dumps({
+                    "success": False,
+                    "error": {"code": "source_files_missing", "message": str(e)},
+                })
 
-        source_to_remove = project.sources_by_id.get(source_id)
-        if source_to_remove is None:
-            return json.dumps({"success": False, "error": f"Source not found: {source_id}"})
+            source_to_remove = project.sources_by_id.get(source_id)
+            if source_to_remove is None:
+                return json.dumps({"success": False, "error": f"Source not found: {source_id}"})
 
-        original_clip_count = len(project.clips)
+            original_clip_count = len(project.clips)
 
-        # Remove the source (also drops associated clips and frames).
-        from core.spine.sources import remove_source as remove_source_impl
+            # Remove the source (also drops associated clips and frames).
+            from core.spine.sources import remove_source as remove_source_impl
 
-        result = remove_source_impl(project, source_id)
-        if not result["success"]:
-            return json.dumps(result)
+            result = remove_source_impl(project, source_id)
+            if not result["success"]:
+                return json.dumps(result)
 
-        removed_clips = original_clip_count - len(project.clips)
+            removed_clips = original_clip_count - len(project.clips)
 
-        try:
-            save_with_mtime_check(project, path, mtime)
-        except ProjectModifiedExternally as exc:
-            return json.dumps({
-                "success": False,
-                "error": {
-                    "code": "project_modified_externally",
-                    "path": str(exc.path),
-                    "expected_mtime": exc.expected_mtime,
-                    "current_mtime": exc.current_mtime,
-                },
-            })
+            try:
+                save_with_mtime_check(project, path, mtime)
+            except ProjectModifiedExternally as exc:
+                return json.dumps({
+                    "success": False,
+                    "error": {
+                        "code": "project_modified_externally",
+                        "path": str(exc.path),
+                        "expected_mtime": exc.expected_mtime,
+                        "current_mtime": exc.current_mtime,
+                    },
+                })
 
-        return json.dumps(
-            {
-                "success": True,
-                "removed_source": source_to_remove.filename,
-                "removed_clips": removed_clips,
-                "remaining_sources": len(project.sources),
-                "remaining_clips": len(project.clips),
-            }
-        )
+            return json.dumps(
+                {
+                    "success": True,
+                    "removed_source": source_to_remove.filename,
+                    "removed_clips": removed_clips,
+                    "remaining_sources": len(project.sources),
+                    "remaining_clips": len(project.clips),
+                }
+            )
     except Exception as e:
         logger.exception("Failed to remove source")
-        return json.dumps({"success": False, "error": str(e)})
+        return json.dumps({"success": False, "error": project_error(e)})
 
 
 @mcp.tool()

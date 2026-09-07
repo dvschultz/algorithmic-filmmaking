@@ -153,15 +153,17 @@ async def get_job_result(
             STATUS_CANCELLED: "job_cancelled",
             STATUS_CRASHED: "job_crashed",
         }
+        error = {"code": code_map[row.status], "message": row.error or row.status}
+        if row.status == STATUS_FAILED and isinstance(row.result, dict):
+            conflict = row.result.get("error")
+            if isinstance(conflict, dict) and conflict.get("code") == "project_busy":
+                error = conflict
         return json.dumps(
             {
                 "success": False,
                 "task_id": row.id,
                 "status": row.status,
-                "error": {
-                    "code": code_map[row.status],
-                    "message": row.error or row.status,
-                },
+                "error": error,
             }
         )
     except BaseException as exc:  # noqa: BLE001
@@ -380,8 +382,7 @@ async def start_detect_scenes_bulk(
 
     canonical = str(path)
 
-    # Load project once at submit time so the closure captures it (the worker
-    # mutates project.sources clips, then save_with_mtime_check writes).
+    # Validate at submission; the worker reloads under writer ownership.
     try:
         project, mtime = load_with_mtime(path)
     except MissingSourceError as exc:
@@ -399,6 +400,7 @@ async def start_detect_scenes_bulk(
             save_with_mtime_check,
         )
 
+        project, captured_mtime = load_with_mtime(path)
         result = detect_scenes_bulk(
             project,
             source_ids,
@@ -407,7 +409,7 @@ async def start_detect_scenes_bulk(
             cancel_event=cancel_event,
         )
         try:
-            save_with_mtime_check(project, path, mtime)
+            save_with_mtime_check(project, path, captured_mtime)
         except ProjectModifiedExternally as exc:
             return {
                 "success": False,

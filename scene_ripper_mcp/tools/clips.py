@@ -9,6 +9,8 @@ from mcp.server.fastmcp import Context
 from scene_ripper_mcp.server import mcp
 from scene_ripper_mcp.security import validate_project_path
 
+from core.spine.project_io import project_error, project_writer
+
 logger = logging.getLogger(__name__)
 
 
@@ -432,54 +434,55 @@ async def add_clip_tags(
         return json.dumps({"success": False, "error": error})
 
     try:
-        from core.project import MissingSourceError
-        from core.spine.project_io import (
-            ProjectModifiedExternally,
-            load_with_mtime,
-            save_with_mtime_check,
-        )
+        with project_writer(path):
+            from core.project import MissingSourceError
+            from core.spine.project_io import (
+                ProjectModifiedExternally,
+                load_with_mtime,
+                save_with_mtime_check,
+            )
 
-        try:
-            project, mtime = load_with_mtime(path)
-        except MissingSourceError as e:
-            return json.dumps({
-                "success": False,
-                "error": {"code": "source_files_missing", "message": str(e)},
-            })
+            try:
+                project, mtime = load_with_mtime(path)
+            except MissingSourceError as e:
+                return json.dumps({
+                    "success": False,
+                    "error": {"code": "source_files_missing", "message": str(e)},
+                })
 
-        clip = project.clips_by_id.get(clip_id)
-        if not clip:
-            return json.dumps({"success": False, "error": f"Clip not found: {clip_id}"})
+            clip = project.clips_by_id.get(clip_id)
+            if not clip:
+                return json.dumps({"success": False, "error": f"Clip not found: {clip_id}"})
 
-        # Add new tags (avoid duplicates)
-        existing_tags = set(clip.tags or [])
-        new_tags = [t.strip() for t in tags if t.strip() and t.strip() not in existing_tags]
-        project.update_clip_metadata(clip_id, tags=list(dict.fromkeys((clip.tags or []) + new_tags)))
+            # Add new tags (avoid duplicates)
+            existing_tags = set(clip.tags or [])
+            new_tags = [t.strip() for t in tags if t.strip() and t.strip() not in existing_tags]
+            project.update_clip_metadata(clip_id, tags=list(dict.fromkeys((clip.tags or []) + new_tags)))
 
-        try:
-            save_with_mtime_check(project, path, mtime)
-        except ProjectModifiedExternally as exc:
-            return json.dumps({
-                "success": False,
-                "error": {
-                    "code": "project_modified_externally",
-                    "path": str(exc.path),
-                    "expected_mtime": exc.expected_mtime,
-                    "current_mtime": exc.current_mtime,
-                },
-            })
+            try:
+                save_with_mtime_check(project, path, mtime)
+            except ProjectModifiedExternally as exc:
+                return json.dumps({
+                    "success": False,
+                    "error": {
+                        "code": "project_modified_externally",
+                        "path": str(exc.path),
+                        "expected_mtime": exc.expected_mtime,
+                        "current_mtime": exc.current_mtime,
+                    },
+                })
 
-        return json.dumps(
-            {
-                "success": True,
-                "clip_id": clip_id,
-                "tags_added": new_tags,
-                "all_tags": clip.tags,
-            }
-        )
+            return json.dumps(
+                {
+                    "success": True,
+                    "clip_id": clip_id,
+                    "tags_added": new_tags,
+                    "all_tags": clip.tags,
+                }
+            )
     except Exception as e:
         logger.exception("Failed to add tags")
-        return json.dumps({"success": False, "error": str(e)})
+        return json.dumps({"success": False, "error": project_error(e)})
 
 
 @mcp.tool()
@@ -504,55 +507,56 @@ async def remove_clip_tags(
         return json.dumps({"success": False, "error": error})
 
     try:
-        from core.project import MissingSourceError
-        from core.spine.project_io import (
-            ProjectModifiedExternally,
-            load_with_mtime,
-            save_with_mtime_check,
-        )
+        with project_writer(path):
+            from core.project import MissingSourceError
+            from core.spine.project_io import (
+                ProjectModifiedExternally,
+                load_with_mtime,
+                save_with_mtime_check,
+            )
 
-        try:
-            project, mtime = load_with_mtime(path)
-        except MissingSourceError as e:
-            return json.dumps({
-                "success": False,
-                "error": {"code": "source_files_missing", "message": str(e)},
-            })
+            try:
+                project, mtime = load_with_mtime(path)
+            except MissingSourceError as e:
+                return json.dumps({
+                    "success": False,
+                    "error": {"code": "source_files_missing", "message": str(e)},
+                })
 
-        clip = project.clips_by_id.get(clip_id)
-        if not clip:
-            return json.dumps({"success": False, "error": f"Clip not found: {clip_id}"})
+            clip = project.clips_by_id.get(clip_id)
+            if not clip:
+                return json.dumps({"success": False, "error": f"Clip not found: {clip_id}"})
 
-        # Remove tags
-        tags_to_remove = set(t.strip() for t in tags)
-        original_count = len(clip.tags or [])
-        project.update_clip_metadata(clip_id, tags=[t for t in (clip.tags or []) if t not in tags_to_remove])
-        removed_count = original_count - len(clip.tags)
+            # Remove tags
+            tags_to_remove = set(t.strip() for t in tags)
+            original_count = len(clip.tags or [])
+            project.update_clip_metadata(clip_id, tags=[t for t in (clip.tags or []) if t not in tags_to_remove])
+            removed_count = original_count - len(clip.tags)
 
-        try:
-            save_with_mtime_check(project, path, mtime)
-        except ProjectModifiedExternally as exc:
-            return json.dumps({
-                "success": False,
-                "error": {
-                    "code": "project_modified_externally",
-                    "path": str(exc.path),
-                    "expected_mtime": exc.expected_mtime,
-                    "current_mtime": exc.current_mtime,
-                },
-            })
+            try:
+                save_with_mtime_check(project, path, mtime)
+            except ProjectModifiedExternally as exc:
+                return json.dumps({
+                    "success": False,
+                    "error": {
+                        "code": "project_modified_externally",
+                        "path": str(exc.path),
+                        "expected_mtime": exc.expected_mtime,
+                        "current_mtime": exc.current_mtime,
+                    },
+                })
 
-        return json.dumps(
-            {
-                "success": True,
-                "clip_id": clip_id,
-                "tags_removed": removed_count,
-                "all_tags": clip.tags,
-            }
-        )
+            return json.dumps(
+                {
+                    "success": True,
+                    "clip_id": clip_id,
+                    "tags_removed": removed_count,
+                    "all_tags": clip.tags,
+                }
+            )
     except Exception as e:
         logger.exception("Failed to remove tags")
-        return json.dumps({"success": False, "error": str(e)})
+        return json.dumps({"success": False, "error": project_error(e)})
 
 
 @mcp.tool()
@@ -577,50 +581,51 @@ async def add_clip_note(
         return json.dumps({"success": False, "error": error})
 
     try:
-        from core.project import MissingSourceError
-        from core.spine.project_io import (
-            ProjectModifiedExternally,
-            load_with_mtime,
-            save_with_mtime_check,
-        )
+        with project_writer(path):
+            from core.project import MissingSourceError
+            from core.spine.project_io import (
+                ProjectModifiedExternally,
+                load_with_mtime,
+                save_with_mtime_check,
+            )
 
-        try:
-            project, mtime = load_with_mtime(path)
-        except MissingSourceError as e:
-            return json.dumps({
-                "success": False,
-                "error": {"code": "source_files_missing", "message": str(e)},
-            })
+            try:
+                project, mtime = load_with_mtime(path)
+            except MissingSourceError as e:
+                return json.dumps({
+                    "success": False,
+                    "error": {"code": "source_files_missing", "message": str(e)},
+                })
 
-        clip = project.clips_by_id.get(clip_id)
-        if not clip:
-            return json.dumps({"success": False, "error": f"Clip not found: {clip_id}"})
+            clip = project.clips_by_id.get(clip_id)
+            if not clip:
+                return json.dumps({"success": False, "error": f"Clip not found: {clip_id}"})
 
-        project.update_clip_metadata(clip_id, notes=note.strip())
+            project.update_clip_metadata(clip_id, notes=note.strip())
 
-        try:
-            save_with_mtime_check(project, path, mtime)
-        except ProjectModifiedExternally as exc:
-            return json.dumps({
-                "success": False,
-                "error": {
-                    "code": "project_modified_externally",
-                    "path": str(exc.path),
-                    "expected_mtime": exc.expected_mtime,
-                    "current_mtime": exc.current_mtime,
-                },
-            })
+            try:
+                save_with_mtime_check(project, path, mtime)
+            except ProjectModifiedExternally as exc:
+                return json.dumps({
+                    "success": False,
+                    "error": {
+                        "code": "project_modified_externally",
+                        "path": str(exc.path),
+                        "expected_mtime": exc.expected_mtime,
+                        "current_mtime": exc.current_mtime,
+                    },
+                })
 
-        return json.dumps(
-            {
-                "success": True,
-                "clip_id": clip_id,
-                "note": clip.notes,
-            }
-        )
+            return json.dumps(
+                {
+                    "success": True,
+                    "clip_id": clip_id,
+                    "note": clip.notes,
+                }
+            )
     except Exception as e:
         logger.exception("Failed to add note")
-        return json.dumps({"success": False, "error": str(e)})
+        return json.dumps({"success": False, "error": project_error(e)})
 
 
 @mcp.tool()
