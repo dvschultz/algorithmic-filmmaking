@@ -250,8 +250,11 @@ options, and model runtime; changed inputs prevent publication. Existing shot
 labels are preserved. CLI `analyze shots` uses the same recovery journal and
 supports `--force` for a fresh generation after successful completion. Missing
 or corrupt recorded results produce an error rather than automatic recomputation.
-This recovery does not yet cover desktop shot jobs or the legacy synchronous
-`analyze_shots` MCP tool.
+Desktop shot jobs also journal computation for saved projects. Their clip/frame
+receipts are separate from headless receipts; publication applies only to the
+launching editor session, and the journal itself never saves the project.
+Unsaved projects keep session history only. The legacy synchronous
+`analyze_shots` MCP tool does not yet use durable recovery.
 
 `start_analyze_classify` and `classify` steps in `start_analyze_clips` retain
 recorded classification results across failed saves and checkpoint failures.

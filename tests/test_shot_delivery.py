@@ -5,6 +5,68 @@ import subprocess
 import sys
 
 
+def test_saved_shot_worker_publishes_recorded_outcome_on_owner_thread(tmp_path):
+    code = r"""
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
+from dataclasses import replace
+from PySide6.QtCore import QCoreApplication, QObject
+from core.project import Project
+from core.analysis_target import AnalysisTarget
+from core.jobs.store import JobStore
+from models.frame import Frame
+from ui.workers.shot_type_worker import ShotTypeWorker
+from ui.workers.shot_type_delivery import ShotTypeDelivery
+import sys
+app = QCoreApplication([])
+directory = Path(sys.argv[1])
+image = directory / 'frame.png'; image.write_bytes(b'image')
+class Window(QObject): pass
+window = Window(); window.project = Project.new()
+window.project.add_frames([Frame(id='frame', file_path=image)])
+assert window.project.save(directory / 'project.json')
+before = window.project.path.read_bytes()
+window._on_shot_type_ready = Mock(); window._on_shot_type_error = Mock()
+settings = SimpleNamespace(cache_dir=directory, shot_classifier_tier='cpu', shot_classifier_cloud_model=None)
+with patch('core.settings.load_settings', lambda: settings), patch('core.analysis.shots.classify_shot_type', return_value=('wide', .9)):
+    worker = ShotTypeWorker([], {}, project=window.project,
+        analysis_targets=[AnalysisTarget.from_frame(window.project.frames[0])])
+    window.shot_type_worker = worker
+    delivery = ShotTypeDelivery(window, worker)
+    worker.start()
+    assert worker.wait(10000)
+    assert window.project.frames[0].shot_type is None, 'worker published off the owner thread'
+    outcome = worker.result[0]
+    # A valid but altered queued result must not bypass the journal match.
+    fake = SimpleNamespace(tasks=worker.tasks, cache=worker.cache, is_cancelled=lambda: False)
+    original_worker = delivery.worker
+    delivery.worker = fake; window.shot_type_worker = fake
+    delivery.result(replace(outcome, confidence=.5))
+    assert window.project.frames[0].shot_type is None
+    assert not window.project.metadata.job_results
+    delivery.worker = original_worker; window.shot_type_worker = original_worker
+    delivery.delivered.clear()
+    app.processEvents()
+    assert window.project.frames[0].shot_type == 'wide'
+    assert len(window.project.metadata.job_results) == 1
+    assert window.project.path.read_bytes() == before
+    store = JobStore(directory / 'jobs.db')
+    assert not any(store.get_result(rid)['committed'] for rid in window.project.metadata.job_results)
+    assert window.project.save()
+    assert all(store.get_result(rid)['committed'] for rid in window.project.metadata.job_results)
+    store.close()
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code, str(tmp_path)],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_frame_shot_result_rejects_replaced_project(tmp_path):
     code = r"""
 from types import SimpleNamespace

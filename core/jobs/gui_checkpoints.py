@@ -27,6 +27,7 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
     canonical = str(path.expanduser().resolve())
     clips = {clip["id"]: clip for clip in snapshot.get("clips", [])}
     frames = {frame["id"]: frame for frame in snapshot.get("frames", [])}
+    sources = {source["id"]: source for source in snapshot.get("sources", [])}
     audio_sources = {audio["id"]: audio for audio in snapshot.get("audio_sources", [])}
     pending = []
     for row in store.get_pending_results(list(receipts)):
@@ -46,6 +47,8 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
                 "gui_custom_query",
                 "gui_cinematography",
                 "gui_classification",
+                "gui_shots_clip",
+                "gui_shots_frame",
                 "gui_object_detection",
                 "gui_faces",
                 "gui_gaze",
@@ -66,6 +69,13 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
         if identity["project_path"] != canonical or identity["inputs"][
             "project_id"
         ] != snapshot.get("id"):
+            continue
+        if identity["kind"] in ("gui_shots_clip", "gui_shots_frame"):
+            from core.jobs.gui_shots import saved_shot_matches
+
+            targets = frames if identity["kind"] == "gui_shots_frame" else clips
+            if saved_shot_matches(identity, json.loads(row["payload_json"]), targets, sources, path):
+                pending.append((result_id, receipt_digest))
             continue
         if identity["kind"] == "gui_import_images":
             from core.jobs.image_import import ImageImportRecord

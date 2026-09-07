@@ -3562,7 +3562,7 @@ class MainWindow(QMainWindow):
         self._shot_type_finished_handled = False
         self._shot_type_run_error = None
         logger.info(f"Creating ShotTypeWorker (pipeline) for {len(clips)} clips...")
-        self.shot_type_worker = ShotTypeWorker(clips, self.project.sources_by_id, parallelism=self.settings.local_model_parallelism)
+        self.shot_type_worker = ShotTypeWorker(clips, self.project.sources_by_id, parallelism=self.settings.local_model_parallelism, project=self.project)
         self.shot_type_worker.progress.connect(self._on_shot_type_progress)
         from ui.workers.shot_type_delivery import ShotTypeDelivery
         ShotTypeDelivery(self, self.shot_type_worker, pipeline=True)
@@ -6744,6 +6744,7 @@ class MainWindow(QMainWindow):
                 sources_by_id={},
                 analysis_targets=targets,
                 parallelism=self.settings.local_model_parallelism,
+                project=self.project,
             )
             worker.progress.connect(self._on_shot_type_progress)
             from ui.workers.shot_type_delivery import ShotTypeDelivery
@@ -7751,7 +7752,7 @@ class MainWindow(QMainWindow):
 
         # Start worker
         from PySide6.QtCore import Qt
-        self.shot_type_worker = ShotTypeWorker(clips, self.project.sources_by_id, parallelism=self.settings.local_model_parallelism)
+        self.shot_type_worker = ShotTypeWorker(clips, self.project.sources_by_id, parallelism=self.settings.local_model_parallelism, project=self.project)
         self.shot_type_worker.progress.connect(self._on_shot_type_progress)
         from ui.workers.shot_type_delivery import ShotTypeDelivery
         ShotTypeDelivery(self, self.shot_type_worker)
@@ -9200,7 +9201,7 @@ class MainWindow(QMainWindow):
 
             self._shot_type_finished_handled = False
             self._shot_type_run_error = None
-            self.shot_type_worker = ShotTypeWorker(clips_needing_shots, self.project.sources_by_id, parallelism=self.settings.local_model_parallelism)
+            self.shot_type_worker = ShotTypeWorker(clips_needing_shots, self.project.sources_by_id, parallelism=self.settings.local_model_parallelism, project=self.project)
             self.shot_type_worker.progress.connect(
                 self.intention_workflow.on_analysis_progress
             )

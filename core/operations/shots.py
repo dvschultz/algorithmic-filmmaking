@@ -75,6 +75,21 @@ class ShotTypeOutcome:
     message: str | None = None
     target_type: Literal["clip", "frame"] = "clip"
 
+    @classmethod
+    def from_dict(cls, data: dict) -> "ShotTypeOutcome":
+        if set(data) != set(cls.__dataclass_fields__):
+            raise ValueError("Invalid recorded shot outcome fields")
+        outcome = cls(**data)
+        if (
+            not isinstance(outcome.clip_id, str)
+            or not outcome.clip_id
+            or outcome.target_type not in ("clip", "frame")
+            or outcome.status not in ("succeeded", "failed", "skipped", "unprocessed")
+            or (outcome.status == "succeeded" and not outcome.valid_result())
+        ):
+            raise ValueError("Invalid recorded shot outcome")
+        return outcome
+
     def valid_result(self) -> bool:
         return (
             isinstance(self.shot_type, str)

@@ -94,7 +94,22 @@ class ShotTypeDelivery(QObject):
             if key in self.delivered or outcome.status != "succeeded":
                 return
             self.delivered.add(key)
+            cache = getattr(self.worker, "cache", None)
+            receipt = None
+            if cache is not None:
+                if (
+                    window.project.path is None
+                    or window.project.path.resolve() != cache.path
+                ):
+                    raise ValueError("Shot project save location changed")
+                receipt = cache.receipt(outcome)
+                if not receipt.matches(outcome):
+                    raise ValueError(
+                        "Queued shot outcome differs from its recorded result"
+                    )
             accepted = self.application.apply(window.project, outcome)
+            if accepted and receipt is not None:
+                window.project.record_job_result(receipt.result_id, receipt.digest)
         except Exception as exc:
             window._on_shot_type_error(f"Could not apply shot classification: {exc}")
             return

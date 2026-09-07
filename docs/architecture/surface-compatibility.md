@@ -1136,6 +1136,23 @@ options, and model runtime. Receipt reuse additionally fingerprints media conten
 Missing or corrupt receipts fail closed. Public MCP job kind remains
 `analyze_shots`; its internal result kind is `shots`.
 
-Desktop shot recovery, the legacy synchronous MCP persistence adapter, combined
-frame-analysis orchestration, and the ordered intention workflow remain
-outstanding; this cutover does not complete U7.
+### Desktop shot recovery
+
+All four desktop shot entry points (clip pipeline, frame analysis, GUI agent,
+and intention prerequisite) pass their project context to `ShotTypeWorker`.
+The worker runs through the shared job lifecycle and journals successful inference
+before queued publication. Saved projects retain job history and matching
+computation across restarts; unsaved projects use session-only history.
+
+Clip and frame results use distinct `gui_shots_clip` and `gui_shots_frame`
+receipt kinds so identical IDs cannot collide. Recovery validates the full
+outcome, media fingerprints, runtime, options, and prior target state. Owner-thread
+delivery checks the queued outcome against its receipt before model mutation.
+The journal never saves the project. A saved snapshot acknowledges receipts only
+when its target identity, source/range, image path, and shot label match. Manual
+edits, Save As, failed saves, and failed checkpoints do not acknowledge unrelated
+outputs; a later matching save can complete the checkpoint.
+
+The legacy synchronous MCP persistence adapter, combined frame-analysis
+orchestration (including its existing automatic save), and the ordered intention
+workflow remain outstanding; this cutover does not complete U7.
