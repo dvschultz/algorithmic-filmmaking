@@ -515,6 +515,10 @@ return exit code 4 when no clip succeeds.
 
 MCP clients can call `start_align_words(project_path, clip_ids=None, force=False)`
 and use the standard `get_job_status`, `get_job_result`, and `cancel_job` tools.
-These headless paths do not install packages automatically. Completed results
-are saved to the project, but failed saves do not yet have computed-result
-recovery for alignment.
+These headless paths do not install packages automatically. Computed results are
+cached before saving the project. Retry the same request after a failed save to
+reuse matching results, including a pending forced refresh. After a successful
+save, another `--force` request computes a new result. A default retry reconciles
+failed checkpoints while preserving completed word data, including empty word
+lists. Keep the shared job cache for recovery. GUI alignment does not yet use
+these durable receipts.

@@ -542,6 +542,21 @@ async def _start_spine_analyze_job(
 
         def run(progress_callback, cancel_event):
             return run_analysis_job(store, path, operation, progress_callback, cancel_event)
+    elif spine_fn_name == "align_words":
+        from core.jobs.alignment import alignment_job_spec, run_alignment_job
+
+        try:
+            operation = alignment_job_spec(_project, clip_ids, force=payload["force"], arguments=payload)
+        except ValueError as exc:
+            return json.dumps(_wrap_error(exc))
+        store = _lifespan(ctx)["job_store"]
+
+        def run(progress_callback, cancel_event):
+            frozen = operation.arguments
+            return run_alignment_job(
+                store, path, frozen["clip_ids"], progress_callback, cancel_event,
+                force=frozen["force"], operation=operation,
+            )
     else:
         runner_factory = _make_analyze_runner(spine_fn_name, **op_kwargs)
         run = runner_factory(path, mtime, clip_ids)

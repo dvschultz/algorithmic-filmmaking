@@ -147,6 +147,19 @@ def run_alignment(
     return tuple(outcomes)
 
 
+def aligned_segments(
+    task: AlignmentTask, words: tuple[WordTimestamp, ...]
+) -> tuple[TranscriptSegment, ...]:
+    """Distribute words onto a detached copy of the submitted transcript."""
+    from core.analysis.alignment import distribute_words_to_segments
+
+    segments = [
+        TranscriptSegment.from_dict(value) for value in json.loads(task.transcript_json)
+    ]
+    distribute_words_to_segments(segments, list(deepcopy(words)))
+    return tuple(segments)
+
+
 class AlignmentApplication:
     """Distribute words onto a detached transcript before guarded publication."""
 
@@ -158,7 +171,11 @@ class AlignmentApplication:
 
     def apply(self, project: Project, outcome: AlignmentOutcome) -> bool:
         task = self.tasks.get(outcome.clip_id)
-        if task is None or task.skip_reason is not None or outcome.status != "succeeded":
+        if (
+            task is None
+            or task.skip_reason is not None
+            or outcome.status != "succeeded"
+        ):
             return False
         clip = project.clips_by_id.get(outcome.clip_id)
         if (
@@ -171,14 +188,9 @@ class AlignmentApplication:
             != task.transcript_json
         ):
             return False
-        from core.analysis.alignment import distribute_words_to_segments
-
-        segments = [
-            TranscriptSegment.from_dict(value)
-            for value in json.loads(task.transcript_json)
-        ]
-        distribute_words_to_segments(segments, list(deepcopy(outcome.words)))
         return self.application.apply(
             project,
-            TranscriptionOutcome(outcome.clip_id, "succeeded", tuple(segments)),
+            TranscriptionOutcome(
+                outcome.clip_id, "succeeded", aligned_segments(task, outcome.words)
+            ),
         )

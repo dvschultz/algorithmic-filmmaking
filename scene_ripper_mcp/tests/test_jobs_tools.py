@@ -736,3 +736,29 @@ async def test_alignment_job_saves_word_timestamps(lifespan_ctx, tmp_path, monke
     assert result['result']['result']['succeeded'] == [{'clip_id': 'clip-1', 'word_count': 1}]
     assert Project.load(path).clips[0].transcript[0].words[0].text == 'hello'
     assert not wav.exists()
+    saved = Project.load(path)
+    assert len(saved.metadata.job_results) == 1
+    assert all(store.get_result(rid)['committed'] for rid in saved.metadata.job_results)
+
+
+@pytest.mark.asyncio
+async def test_alignment_job_freezes_ids_and_rejects_queued_media_change(lifespan_ctx, tmp_path, monkeypatch):
+    from scene_ripper_mcp.tools import jobs
+    from core.jobs.commits import StaleJobResult
+    from core.project import Project
+    from core.transcription_models import TranscriptSegment
+
+    ctx, store, _ = lifespan_ctx
+    path = _make_project_file(tmp_path)
+    project = Project.load(path)
+    project.clips[0].transcript = [TranscriptSegment(0, 1, 'hello', language='en')]
+    assert project.save()
+    captured = {}
+    monkeypatch.setattr(jobs, '_start_job', lambda ctx, **kwargs: captured.update(kwargs) or 'queued')
+    ids = ['clip-1']
+    assert await jobs.start_align_words(str(path), ids, ctx=ctx) == 'queued'
+    ids.clear()
+    assert captured['operation'].arguments['clip_ids'] == ['clip-1']
+    project.sources[0].file_path.write_bytes(b'changed')
+    with pytest.raises(StaleJobResult, match='queued'):
+        captured['run'](lambda *_: None, threading.Event())

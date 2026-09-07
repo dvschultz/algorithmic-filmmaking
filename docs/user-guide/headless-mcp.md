@@ -469,6 +469,15 @@ transcript or its receipts. Other operations in that list retain their existing
 computation behavior; the full list is not an atomic transaction. GUI
 transcription does not yet use durable receipts.
 
+`start_align_words` and CLI `analyze align` also cache computed word timestamps
+before saving project receipts. Matching retries recover failed saves and
+reconcile failed checkpoints, including repeated forced runs with identical
+output. Transcript text, timing, language, and media fingerprints guard reuse.
+Completed word data is preserved by default; `force=True` requests a refresh.
+A failed refresh save can reuse its pending computation, while a saved refresh
+allows the next forced request to compute again. Cached recovery does not require
+loading the alignment runtime. GUI alignment does not yet use durable receipts.
+
 `start_detect_scenes_bulk` also records computed scenes, saving one source and
 its receipt at a time. Retrying identical inputs reuses the recorded clip IDs;
 a failed save retries publication, and a failed checkpoint reconciles the saved
@@ -480,5 +489,5 @@ to bulk detection on existing projects, not new-project detection.
 Projects save in schema 1.5 to retain these receipts; schema-aware 1.4 clients can
 inspect them read-only. Job-history cleanup retains the computed-result cache.
 Keep that cache when moving projects between installations if you need to retry
-managed color analysis, transcription jobs, or bulk detection; missing cached results are reported instead of silently
+managed color analysis, transcription, alignment, or bulk detection; missing cached results are reported instead of silently
 recomputing them.

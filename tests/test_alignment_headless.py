@@ -27,6 +27,12 @@ def runner():
 
 @pytest.fixture
 def project(tmp_path, monkeypatch):
+    register_commands()
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        "core.settings.load_settings", lambda: SimpleNamespace(cache_dir=tmp_path)
+    )
     project = _build_project(tmp_path, 2)
     for clip in project.clips:
         clip.transcript = [TranscriptSegment(0, 1, "hello", language="en")]

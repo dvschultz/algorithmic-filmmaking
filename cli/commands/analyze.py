@@ -35,20 +35,20 @@ def align(ctx: click.Context, project_file: Path, clip_ids: tuple[str, ...], for
 
     Requires the optional word-alignment runtime to be installed beforehand.
     """
-    from core.spine.analyze import align_words
-    from core.spine.project_io import load_with_mtime, save_with_mtime_check
+    from threading import Event
+    from core.jobs.alignment import run_alignment_job
+    from core.jobs.store import JobStore
+    from core.settings import load_settings
 
     path = own_project(ctx, project_file)
     try:
-        project, mtime = load_with_mtime(path)
         with ProgressContext("Aligning words") as progress:
-            result = align_words(
-                project, list(clip_ids) if clip_ids else None,
-                skip_existing=not force, progress_callback=progress.update,
+            result = run_alignment_job(
+                JobStore(load_settings().cache_dir / "jobs.db"),
+                path, list(clip_ids) if clip_ids else None,
+                progress.update, Event(), force=force,
             )
         batch = result["result"]
-        if batch["succeeded"]:
-            save_with_mtime_check(project, path, mtime)
     except ValueError as exc:
         exit_with(ExitCode.VALIDATION_ERROR, str(exc))
     except Exception as exc:

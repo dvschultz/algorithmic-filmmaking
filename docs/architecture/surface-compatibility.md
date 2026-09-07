@@ -272,12 +272,15 @@ text, timing/media changes, cleared tabs, replaced projects, and duplicate
 signals cannot overwrite current transcripts. The tab refreshes accepted model
 updates only.
 
-`core.spine.analyze.align_words` now backs `scene_ripper analyze align` and the
-MCP `start_align_words` job. Both accept exact clip IDs, skip completed word data
+`scene_ripper analyze align` and the MCP `start_align_words` job use
+`core/jobs/alignment.py` with the shared alignment operation. Both accept exact clip IDs, skip completed word data
 by default, and support explicit forced alignment. The shared application guard
 publishes results; the adapters save under the project writer lease. Missing
 dependencies produce per-target `dependency_missing` results and CLI exit code
 4 when no clip succeeds; headless calls never install them implicitly. The MCP
-job uses standard progress/result/cancellation tools. These entry points do not
-yet cache computed alignment results for restart recovery; durable publication
-and the later explicit capability-install workflow remain outstanding.
+job uses standard progress/result/cancellation tools. Computed results and project
+receipts support retries after failed saves or checkpoints. Media content hashes
+and transcript inputs guard reuse; forced refreshes advance only after a saved
+receipt. Matching identical refresh receipts are all reconciled on retry.
+GUI alignment and direct spine calls do not yet use durable receipts. Durable GUI
+publication and the explicit capability-install workflow remain outstanding.

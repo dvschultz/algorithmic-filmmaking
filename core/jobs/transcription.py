@@ -10,6 +10,11 @@ from typing import Callable, Literal
 from core.jobs.commits import ResultSpec, StaleJobResult, result_batch
 from core.jobs.spec import OperationSpec
 from core.jobs.store import JobStore
+from core.jobs.media import (
+    MediaFingerprints,
+    FingerprintCancelled as _Cancelled,
+    media_stamp as _stamp,
+)
 from core.operations.transcription import (
     TranscriptionApplication,
     TranscriptionOptions,
@@ -20,20 +25,6 @@ from core.operations.transcription import (
 )
 from core.project import Project
 from core.transcription_models import TranscriptSegment
-
-
-def _stamp(path: Path) -> tuple[int, ...] | None:
-    try:
-        stat = path.stat()
-        return (
-            stat.st_dev,
-            stat.st_ino,
-            stat.st_size,
-            stat.st_mtime_ns,
-            stat.st_ctime_ns,
-        )
-    except OSError:
-        return None
 
 
 def transcription_job_spec(
@@ -104,10 +95,6 @@ class _OutcomeError(Exception):
         self.outcome = outcome
 
 
-class _Cancelled(Exception):
-    pass
-
-
 def run_transcription_job(
     store: JobStore,
     path: Path,
@@ -128,25 +115,7 @@ def run_transcription_job(
     from core.transcription import _resolve_backend
 
     options = replace(options, backend=_resolve_backend(options.backend))
-    fingerprints: dict[Path, tuple[tuple[int, ...], dict]] = {}
-
-    def fingerprint(media: Path | None) -> dict | None:
-        if media is None or (stamp := _stamp(media)) is None:
-            return None
-        cached = fingerprints.get(media)
-        if cached is not None and cached[0] == stamp:
-            return cached[1]
-        digest = sha256()
-        with media.open("rb") as stream:
-            while block := stream.read(1024 * 1024):
-                if cancel.is_set():
-                    raise _Cancelled()
-                digest.update(block)
-        if _stamp(media) != stamp:
-            raise StaleJobResult("Transcription media changed during fingerprinting")
-        value = {"stamp": list(stamp), "sha256": digest.hexdigest()}
-        fingerprints[media] = (stamp, value)
-        return value
+    fingerprint = MediaFingerprints(cancel).get
 
     with result_batch(store, path) as batch:
         project = batch.project
