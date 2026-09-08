@@ -43,10 +43,13 @@ def test_quick_run_disables_completed_operation_items(analyze_tab, source, tmp_p
         make_test_clip("c1", dominant_colors=[(1, 2, 3)]),
         make_test_clip("c2", dominant_colors=[(4, 5, 6)]),
     ]
+    sources_by_id = {}
     for clip in clips:
-        verify_clip_analysis(clip, tmp_path)
+        clip.source_id = f"source-{clip.id}"
+        verified_source = verify_clip_analysis(clip, tmp_path)
+        sources_by_id[verified_source.id] = verified_source
     clips_by_id = {c.id: c for c in clips}
-    analyze_tab.set_lookups(clips_by_id, {source.id: source})
+    analyze_tab.set_lookups(clips_by_id, sources_by_id)
     analyze_tab.add_clips([c.id for c in clips])
 
     colors_idx = analyze_tab.quick_run_combo.findData("colors")

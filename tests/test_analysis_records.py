@@ -232,13 +232,13 @@ def test_color_reuse_tracks_content_range_parameters_and_projection(tmp_path, mo
     assert run().status == "succeeded"  # Legacy values are not proof of reuse.
     record = project.clips[0].analysis_records["colors"]
     assert record.provenance == "verified"
-    assert operation_is_complete_for_clip("colors", project.clips[0])
+    assert operation_is_complete_for_clip("colors", project.clips[0], source=project.sources[0])
     assert run().status == "skipped" and extract.call_count == 1
     media = project.sources[0].file_path
     previous = media.stat()
     media.write_bytes(b"new!")  # Same size and restored mtime still invalidate.
     os.utime(media, ns=(previous.st_atime_ns, previous.st_mtime_ns))
-    assert not operation_is_complete_for_clip("colors", project.clips[0])
+    assert not operation_is_complete_for_clip("colors", project.clips[0], source=project.sources[0])
     assert run().status == "succeeded" and extract.call_count == 2
     assert project.clips[0].analysis_records["colors"].identity != record.identity
     project.clips[0].start_frame += 1
@@ -265,11 +265,11 @@ def test_revalidation_refreshes_stamps_without_repeating_color_inference(tmp_pat
 
     run()
     project.sources[0].file_path.touch()
-    assert not operation_is_complete_for_clip("colors", project.clips[0])
+    assert not operation_is_complete_for_clip("colors", project.clips[0], source=project.sources[0])
     assert run().status == "skipped" and extract.call_count == 1
-    assert operation_is_complete_for_clip("colors", project.clips[0])
+    assert operation_is_complete_for_clip("colors", project.clips[0], source=project.sources[0])
     project.clips[0].source_id = "relinked"
-    assert not operation_is_complete_for_clip("colors", project.clips[0])
+    assert not operation_is_complete_for_clip("colors", project.clips[0], source=project.sources[0])
 
 
 def test_saved_color_jobs_record_provenance_and_recover_over_legacy_values(tmp_path, monkeypatch):
@@ -310,10 +310,10 @@ def test_embedding_completion_checks_current_thumbnail_path(tmp_path, monkeypatc
     monkeypatch.setattr("core.analysis.embeddings.unload_model", Mock())
     embeddings(project)
     clip = project.clips[0]
-    assert operation_is_complete_for_clip("embeddings", clip)
+    assert operation_is_complete_for_clip("embeddings", clip, source=project.sources[0])
     original = clip.thumbnail_path
     replacement = tmp_path / "replacement.jpg"
     replacement.write_bytes(b"new thumbnail")
     clip.thumbnail_path = replacement
     assert original.exists()
-    assert not operation_is_complete_for_clip("embeddings", clip)
+    assert not operation_is_complete_for_clip("embeddings", clip, source=project.sources[0])

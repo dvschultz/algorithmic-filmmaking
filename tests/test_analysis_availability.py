@@ -15,13 +15,13 @@ def test_shot_completion_requires_the_recorded_prompt(tmp_path):
     from tests.analysis_fixtures import verify_clip_analysis
 
     clip = make_test_clip("shot")
-    verify_clip_analysis(clip, tmp_path, shots=True)
-    assert "shots" in compute_disabled_operations([clip], {"shots"})
+    source = verify_clip_analysis(clip, tmp_path, shots=True)
+    assert "shots" in compute_disabled_operations([clip], {"shots"}, sources_by_id={source.id: source})
     record = clip.analysis_records["shots"]
     identity = record.identity.to_dict()
     identity["prompt_sha256"] = "0" * 64
     clip.analysis_records["shots"] = replace(record, identity=AnalysisIdentity(json.dumps(identity)))
-    assert "shots" not in compute_disabled_operations([clip], {"shots"})
+    assert "shots" not in compute_disabled_operations([clip], {"shots"}, sources_by_id={source.id: source})
 
 
 def test_legacy_colors_remain_available_for_verified_recomputation():
@@ -67,8 +67,8 @@ def test_verified_empty_ocr_is_complete(tmp_path):
     from tests.analysis_fixtures import verify_clip_analysis
 
     clip = make_test_clip("clip-1")
-    verify_clip_analysis(clip, tmp_path, ocr=True)
-    assert compute_disabled_operations([clip], ["extract_text"]) == {"extract_text"}
+    source = verify_clip_analysis(clip, tmp_path, ocr=True)
+    assert compute_disabled_operations([clip], ["extract_text"], sources_by_id={source.id: source}) == {"extract_text"}
 
 
 def test_classification_needs_provenance_even_for_empty_labels(tmp_path):
@@ -76,8 +76,8 @@ def test_classification_needs_provenance_even_for_empty_labels(tmp_path):
 
     clip = make_test_clip("clip-1", object_labels=[])
     assert compute_disabled_operations([clip], ["classify"]) == set()
-    verify_clip_analysis(clip, tmp_path, classify=True)
-    assert compute_disabled_operations([clip], ["classify"]) == {"classify"}
+    source = verify_clip_analysis(clip, tmp_path, classify=True)
+    assert compute_disabled_operations([clip], ["classify"], sources_by_id={source.id: source}) == {"classify"}
 
 
 def test_embedding_projection_alone_does_not_establish_completion():

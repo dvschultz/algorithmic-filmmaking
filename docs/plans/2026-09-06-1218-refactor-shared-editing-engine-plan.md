@@ -553,8 +553,13 @@ remove estimated work. Defaults read current settings, and an explicit different
 tier requires its own result. Empty OCR/gaze/transcription, cloud description/rich
 analysis, stale ranges, and legacy projections have focused coverage. Twelve cases
 failed before this migration; 128 regression tests pass, with scoped cost-module
-typing and changed-file Ruff clean. Same-tier unsaved model-setting overrides and
-the remaining cross-consumer source/option audit still need verification.
+typing and changed-file Ruff clean. Same-tier unsaved model-setting overrides still need verification. Shared completion
+now verifies current source IDs and resolved video paths for all migrated records,
+plus FPS whenever it was captured as an input. Missing sources require revalidation.
+Twelve stale-source cases reproduced for gaze, boundary embeddings, and OCR;
+191 tests across all eleven direct completion-consumer test files pass. Older
+fixtures were corrected to use their analyzed sources, including bundle relocation
+and Analyze-tab lookups. Scoped availability typing and changed-file Ruff pass.
 
 Brightness/volume provider preparation: failed decode/probe/FFmpeg operations now
 raise instead of becoming neutral brightness or missing-audio measurements.

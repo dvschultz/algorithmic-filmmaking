@@ -780,6 +780,14 @@ ranges require work. Twelve cases reproduced before migration; the regression
 run passed 128 tests with scoped typing and changed-file Ruff clean. Same-tier
 unsaved model-setting overrides remain part of the cross-consumer option audit.
 
+Shared completion now checks the current source ID and resolved video path before
+accepting any migrated analysis record. When FPS is part of the captured input,
+it must still match. Missing sources cannot establish video-analysis completion.
+Twelve stale-source cases reproduced for gaze, boundary embeddings, and OCR;
+191 tests across all eleven direct completion-consumer test files pass. Older
+fixtures now supply their actual source bindings, including relocated project
+bundles and the Analyze tab. Scoped availability typing and changed-file Ruff pass.
+
 ## Remaining U10 work
 
 - Migrate the other U7 analysis families to

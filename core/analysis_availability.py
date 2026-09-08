@@ -253,6 +253,28 @@ def scalar_analysis_is_complete(
 
 def operation_is_complete_for_clip(op_key: str, clip, *, runtime: dict | None = None, source=None) -> bool:
     """Report reusable completion; existing fields alone do not prove provenance."""
+    if op_key in VERIFIED_ANALYSIS_OPERATIONS:
+        import json
+        from pathlib import Path
+        from core.analysis_records import AnalysisInput, current_record
+
+        record = current_record(clip, op_key)
+        if record is None:
+            return False
+        try:
+            inputs = AnalysisInput.from_dict(json.loads(record.input_json or "null"))
+            files = {role: path for role, path, _ in inputs.files}
+            region = json.loads(inputs.range_json)
+            if source is not None and source.id != clip.source_id:
+                return False
+            if "video" in files and (
+                source is None
+                or Path(source.file_path).resolve() != files["video"].resolve()
+                or ("fps" in region and source.fps != region["fps"])
+            ):
+                return False
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            return False
     if op_key in ("brightness", "volume"):
         return scalar_analysis_is_complete(clip, source, op_key, runtime=runtime)
     if op_key == "face_embeddings":

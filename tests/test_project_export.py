@@ -32,14 +32,14 @@ def test_portable_analysis_revalidates_bundle_media_instead_of_originals(tmp_pat
     restored = Project.load(next(destination.glob("*.sceneripper")))
     try:
         assert restored.clips[0].analysis_records["colors"].identity == original_record.identity
-        assert not operation_is_complete_for_clip("colors", restored.clips[0])
+        assert not operation_is_complete_for_clip("colors", restored.clips[0], source=restored.sources[0])
         with patch("core.analysis.color.extract_dominant_colors") as extract:
             analyze_colors(restored)
         extract.assert_not_called()  # Same content can be rebound without inference.
-        assert operation_is_complete_for_clip("colors", restored.clips[0])
+        assert operation_is_complete_for_clip("colors", restored.clips[0], source=restored.sources[0])
         restored.sources[0].file_path.write_bytes(b"different bundled video")
         assert project.sources[0].file_path.exists()
-        assert not operation_is_complete_for_clip("colors", restored.clips[0])
+        assert not operation_is_complete_for_clip("colors", restored.clips[0], source=restored.sources[0])
         assert project.clips[0].analysis_records["colors"] == original_record
     finally:
         restored.close_writer()
@@ -62,14 +62,14 @@ def test_portable_boundary_pair_reuses_in_a_fresh_artifact_store(tmp_path, monke
     monkeypatch.setattr("core.paths.get_artifact_store_dir", lambda: tmp_path / "second-cache")
     restored = Project.load(next(destination.glob("*.sceneripper")))
     try:
-        assert not operation_is_complete_for_clip("boundary_embeddings", restored.clips[0])
+        assert not operation_is_complete_for_clip("boundary_embeddings", restored.clips[0], source=restored.sources[0])
         provider.reset_mock()
         result = boundary_embeddings(restored)
         assert len(result["result"]["skipped"]) == 1
         provider.assert_not_called()
         record = restored.clips[0].analysis_records["boundary_embeddings"]
         assert record.identity == original.identity and record.input_json != original.input_json
-        assert operation_is_complete_for_clip("boundary_embeddings", restored.clips[0])
+        assert operation_is_complete_for_clip("boundary_embeddings", restored.clips[0], source=restored.sources[0])
     finally:
         restored.close_writer()
 

@@ -142,17 +142,17 @@ def test_availability_distinguishes_missing_empty_and_complete_pairs(setup):
     project, _ = setup
     clip = project.clips[0]
     clip.extracted_texts = []
-    assert not operation_is_complete_for_clip("extract_text", clip)
+    assert not operation_is_complete_for_clip("extract_text", clip, source=project.sources[0])
     clip.first_frame_embedding = [1.0] * 768
-    assert not operation_is_complete_for_clip("boundary_embeddings", clip)
+    assert not operation_is_complete_for_clip("boundary_embeddings", clip, source=project.sources[0])
     clip.last_frame_embedding = [2.0] * 768
     clip.embedding = [3.0] * 768
     clip.embedding_model = "dinov2-vit-b-14"
-    assert not operation_is_complete_for_clip("boundary_embeddings", clip)
+    assert not operation_is_complete_for_clip("boundary_embeddings", clip, source=project.sources[0])
     from core.spine.analyze import boundary_embeddings
 
     boundary_embeddings(project, [clip.id])
-    assert operation_is_complete_for_clip("boundary_embeddings", clip)
+    assert operation_is_complete_for_clip("boundary_embeddings", clip, source=project.sources[0])
     assert clear_operation_result(clip, "boundary_embeddings")
     assert clip.first_frame_embedding is None and clip.last_frame_embedding is None
     assert clip.embedding == [3.0] * 768
