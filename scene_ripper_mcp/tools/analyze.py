@@ -330,7 +330,10 @@ async def get_analysis_status(
             operation_is_complete_for_clip("cinematography", c, source=project.sources_by_id.get(c.source_id))
             for c in clips
         )
-        has_faces = sum(1 for c in clips if c.face_embeddings is not None)
+        from core.operations.face_records import face_target_runtime
+        face_runtime = face_target_runtime()
+        has_faces = sum(operation_is_complete_for_clip("face_embeddings", c,
+            source=project.sources_by_id.get(c.source_id), runtime=face_runtime) for c in clips)
         has_gaze = sum(1 for c in clips if c.gaze_category is not None)
         has_embeddings = sum(1 for c in clips if c.embedding is not None)
         has_custom_queries = sum(1 for c in clips if c.custom_queries)

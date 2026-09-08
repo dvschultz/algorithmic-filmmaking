@@ -117,6 +117,14 @@ def test_dialog_run_disabled_when_every_operation_complete(qapp, tmp_path, monke
     model_settings = Settings(description_model_tier="cloud", description_model_cloud="gpt-test", description_input_mode="frame", cinematography_tier="cloud", cinematography_model="gpt-test", cinematography_input_mode="frame")
     monkeypatch.setattr("core.settings.load_settings", lambda: model_settings)
     source = verify_clip_analysis(clip, tmp_path, embeddings=True, objects=True, ocr=True, classify=True, shots=True, gaze=True, boundary=True, descriptions=True, cinematography=True, transcriptions=True)
+    from unittest.mock import Mock
+    from core.project import Project
+    from core.spine.analyze import face_embeddings
+    from tests.analysis_fixtures import mock_face_execution
+    mock_face_execution(monkeypatch, tmp_path, Mock(return_value=clip.face_embeddings))
+    monkeypatch.setattr("core.analysis.faces._load_insightface", Mock())
+    monkeypatch.setattr("core.analysis.faces.unload_model", Mock())
+    assert face_embeddings(Project(sources=[source], clips=[clip]))["result"]["succeeded"]
 
     settings = _Settings(selected=["colors", "shots", "transcribe"])
     dialog = AnalysisPickerDialog(

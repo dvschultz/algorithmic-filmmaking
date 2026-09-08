@@ -503,7 +503,16 @@ require force for edited managed output. Initial model downloads and failed
 saves/checkpoints recover without repeated inference. Cancellation retains computed
 receipts without publishing cancelled targets. The combined regression run passed
 329 tests, with scoped typing for three changed modules and changed-file Ruff
-clean. Face completion checks and managed embedding storage remain pending.
+clean. Shared face completion and MCP status counts now verify current records,
+including empty results, without file hashing or inference-runtime imports. The
+combined completion regression run passed 362 tests with scoped typing and Ruff
+clean. Controller follow-up exposed an intermittent baseline timeout caused by
+description worker construction importing the inference backend on the UI thread.
+Construction now defers that probe to worker execution; a failing import-boundary
+regression passed after the fix, along with all 139 controller and description
+tests. Rose Hobart still uses field-only face reuse and worker-side mutation, and
+its cost gate needs migration. These consumers and managed embedding storage
+remain pending.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain

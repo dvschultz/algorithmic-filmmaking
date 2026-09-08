@@ -637,8 +637,18 @@ without publishing it; already accepted prefixes remain saveable. Legacy raw GUI
 task serialization remains unchanged. The shared reuse verifier now serves both
 normal operations and durable jobs. The combined regression run passed 329 tests,
 including CLI and MCP, with three changed modules passing scoped typing and
-changed-file Ruff clean. Face completion checks and managed embedding storage
-remain unfinished.
+changed-file Ruff clean.
+
+Shared availability and MCP face-status counts now require current verified
+records, including verified empty face sets. They check the source identity/path,
+FPS/range, model-pack files, package versions, sampling policy, and current face
+projection without hashing files or importing InsightFace/ONNX Runtime. Operation
+pickers compute model metadata once per scope; the general analysis controller
+dispatches verified face work instead of skipping populated legacy fields. The
+combined regression run passed 362 tests, with scoped availability typing and
+changed-file Ruff clean. The Rose Hobart worker still bypasses these shared
+operations and mutates face fields directly; its cost gate also uses field-only
+checks. Those consumers and managed embedding storage remain to migrate.
 
 ## Remaining U10 work
 

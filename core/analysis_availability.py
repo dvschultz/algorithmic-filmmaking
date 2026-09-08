@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from models.clip import Clip, Source
 
 # These operations verify complete input identities on the worker path.
-VERIFIED_ANALYSIS_OPERATIONS = frozenset({"colors", "embeddings", "boundary_embeddings", "detect_objects", "extract_text", "classify", "shots", "gaze", "describe", "cinematography", "transcribe"})
+VERIFIED_ANALYSIS_OPERATIONS = frozenset({"colors", "embeddings", "boundary_embeddings", "detect_objects", "extract_text", "classify", "shots", "gaze", "describe", "cinematography", "transcribe", "face_embeddings"})
 
 
 _ANALYSIS_RESULT_FIELDS: dict[str, tuple[str, ...]] = {
@@ -150,8 +150,52 @@ def word_timing_is_complete(clip: Clip, source: Source | None) -> bool:
     return alignment_is_complete(clip, source) or operation_is_complete_for_clip("transcribe", clip, source=source)
 
 
+def face_analysis_is_complete(clip: Clip, source: Source | None, *, sample_interval: float = 1.0, runtime: dict | None = None) -> bool:
+    """Check face provenance without hashing files or importing inference runtimes."""
+    from dataclasses import replace
+    import json
+    from pathlib import Path
+    from core.analysis_records import AnalysisInput, current_record
+    from core.operations.face_records import (
+        FACE_SAMPLING, face_snapshot, face_parameters,
+        face_target_runtime, face_runtime, saved_execution, execution_inputs,
+        validate_face_frames,
+    )
+
+    record = current_record(clip, "face_embeddings")
+    if record is None or record.identity is None or source is None or source.id != clip.source_id:
+        return False
+    try:
+        target = runtime if runtime is not None else face_target_runtime()
+        snapshot = face_snapshot(clip, source)
+        inputs = AnalysisInput.from_dict(json.loads(record.input_json or "null"))
+        media = replace(inputs, files=tuple(f for f in inputs.files if not f[0].startswith("model:")))
+        data = record.identity.to_dict()
+        execution = saved_execution(record)
+        model = data["model"]
+        value = json.loads(snapshot.value_json)
+        validate_face_frames(value, clip.start_frame, clip.end_frame, source.fps, sample_interval)
+        return bool(
+            media == snapshot.inputs
+            and data["operation_version"] == 2 and data["schema_version"] == 1
+            and data["parameters"] == face_parameters(sample_interval)
+            and data["sampling"] == FACE_SAMPLING
+            and data["source_range"] == json.loads(inputs.range_json)
+            and data["prompt_sha256"] is None
+            and set(data["sources"]) == {role for role, _, _ in inputs.files}
+            and all(Path(item["path"]).parent == Path(target["directory"]) for item in execution["weight_files"])
+            and face_runtime(execution, {"packages": target["packages"], "available_providers": model["available_providers"]}) == model
+            and execution_inputs(snapshot, execution) == inputs
+            and record.value == value
+        )
+    except (ValueError, TypeError, KeyError, AttributeError, OSError):
+        return False
+
+
 def operation_is_complete_for_clip(op_key: str, clip, *, runtime: dict | None = None, source=None) -> bool:
     """Report reusable completion; existing fields alone do not prove provenance."""
+    if op_key == "face_embeddings":
+        return face_analysis_is_complete(clip, source, runtime=runtime)
     if op_key == "align_words":
         return alignment_is_complete(clip, source)
     if op_key == "transcribe":
@@ -420,7 +464,11 @@ def compute_operation_need_counts(clips: Iterable, op_keys: Iterable[str], *, so
     counts: dict[str, int] = {}
     for op_key in op_keys:
         runtime = None
-        if op_key == "boundary_embeddings":
+        if op_key == "face_embeddings":
+            from core.operations.face_records import face_target_runtime
+
+            runtime = face_target_runtime()
+        elif op_key == "boundary_embeddings":
             from core.analysis_model_identity import boundary_embedding_runtime
 
             runtime = boundary_embedding_runtime()
