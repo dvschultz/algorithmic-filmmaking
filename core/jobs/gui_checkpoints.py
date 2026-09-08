@@ -79,6 +79,8 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
                 "gui_shots_frame",
                 "gui_object_detection",
                 "gui_faces",
+                "gui_brightness",
+                "gui_volume",
                 "gui_gaze",
                 "gui_embeddings",
                 "gui_boundary_embeddings",
@@ -97,6 +99,12 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
         if identity["project_path"] != canonical or identity["inputs"][
             "project_id"
         ] != snapshot.get("id"):
+            continue
+        if identity["kind"] in ("gui_brightness", "gui_volume"):
+            from core.jobs.gui_scalars import saved_scalar_matches
+
+            if saved_scalar_matches(identity, json.loads(row["payload_json"]), clips, sources, path):
+                pending.append((result_id, receipt_digest))
             continue
         if identity["kind"] in ("gui_shots_clip", "gui_shots_frame"):
             from core.jobs.gui_shots import saved_shot_matches

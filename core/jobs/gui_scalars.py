@@ -24,6 +24,44 @@ from core.operations.scalars import (
 from models.analysis_record import AnalysisRecord
 
 
+def saved_scalar_matches(
+    identity: dict, payload: dict, clips: dict, sources: dict, path: Path,
+) -> bool:
+    """Authenticate a scalar receipt against the exact snapshot written to disk."""
+    from core.analysis_availability import scalar_analysis_is_complete
+    from models.clip import Clip, Source
+
+    try:
+        task = ScalarTask(**identity["inputs"]["task"]["task"])
+        snapshot = AnalysisSnapshot.from_json(task.snapshot_json)
+        binding = json.loads(snapshot.inputs.binding_json)
+        clip_data = clips.get(binding["target_id"])
+        source_data = sources.get(binding["source_id"])
+        if clip_data is None or source_data is None:
+            return False
+        if (
+            identity["kind"] != f"gui_{task.operation}"
+            or payload["operation"] != task.operation
+            or payload["status"] != "succeeded"
+            or payload["clip_id"] != task.clip_id
+            or identity["target_id"] != task.clip_id
+            or identity["inputs"]["source_id"] != binding["source_id"]
+        ):
+            raise StaleJobResult("Saved scalar receipt does not match its target")
+        record = AnalysisRecord.from_dict(json.loads(payload["record_json"]))
+        clip = Clip.from_dict(clip_data, path.parent)
+        source = Source.from_dict(source_data, path.parent)
+        return bool(
+            clip.analysis_records.get(task.operation) == record
+            and json.loads(record.input_json or "null") == snapshot.inputs.to_dict()
+            and scalar_analysis_is_complete(
+                clip, source, task.operation, num_samples=task.num_samples,
+            )
+        )
+    except (KeyError, ValueError, TypeError, AttributeError, OSError):
+        return False
+
+
 class GuiScalarCache(GuiResultJournal):
     """Journal successful work; authenticate records before accepting recovery."""
 

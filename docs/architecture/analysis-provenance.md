@@ -740,8 +740,14 @@ occurrences use separate delivery IDs. Existing pure sorting policy is shared
 between direct sequencing and the background worker. The regression run passed
 239 tests plus 28 embedding regressions; the final focused recovery run passed 36
 tests. Five changed modules pass scoped typing and changed-file Ruff is clean.
-Owner publication and explicit-save checkpointing of scalar records, standalone
-durable scalar jobs, and registered CLI/MCP/agent scalar routes remain pending.
+Explicit-save checkpointing now acknowledges scalar receipts only when the exact
+saved record, value, source, range, FPS, and sampling still match. Occurrence
+delivery IDs resolve through their captured clip binding; verified black/no-audio
+results can checkpoint. Two positive checkpoint cases failed before this change;
+160 scalar, face-journal, and sequence-recovery tests now pass. The new helper
+passes scoped typing and changed-file Ruff is clean. GUI sequencing owner
+publication, standalone durable scalar jobs, and registered CLI/MCP/agent scalar
+routes remain pending.
 
 ## Remaining U10 work
 

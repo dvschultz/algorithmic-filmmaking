@@ -64,6 +64,72 @@ def test_recovery_without_project_publication(saved):
     assert not Project.load(project.path).clips[0].analysis_records
 
 
+@pytest.mark.parametrize("change", ["none", "value", "record", "range", "fps"])
+def test_explicit_save_checkpoints_only_matching_scalars(saved, change):
+    from dataclasses import replace
+    from core.jobs.store import JobStore
+
+    project, operation, _ = saved
+    cache, _ = run(saved, apply=True)
+    clip = project.clips[0]
+    if change == "value":
+        setattr(clip, test_scalar_records.FIELDS[operation], 0.1)
+    elif change == "record":
+        clip.analysis_records[operation] = replace(clip.analysis_records[operation], state="failed")
+    elif change == "range":
+        clip.end_frame += 1
+    elif change == "fps":
+        project.sources[0].fps = 24
+    result_id = next(iter(cache.results.values())).result_id
+    store = JobStore(project.path.parent / "jobs.db")
+    try:
+        assert not store.get_result(result_id)["committed"]
+        project.save()
+        assert bool(store.get_result(result_id)["committed"]) == (change == "none")
+    finally:
+        store.close()
+
+
+def test_scalar_save_checkpoints_valid_empty_results(saved):
+    from core.jobs.store import JobStore
+
+    project, operation, provider = saved
+    provider.return_value = None if operation == "volume" else 0.0
+    cache, _ = run(saved, apply=True)
+    project.save()
+    store = JobStore(project.path.parent / "jobs.db")
+    try:
+        assert all(store.get_result(receipt.result_id)["committed"] for receipt in cache.results.values())
+    finally:
+        store.close()
+
+
+def test_scalar_save_checkpoints_occurrence_delivery_ids(saved):
+    from copy import deepcopy
+    from dataclasses import replace
+    from core.jobs.sequence_scalars import SequenceScalarJob
+    from core.jobs.store import JobStore
+
+    project, operation, _ = saved
+    clip, source = project.clips[0], project.sources[0]
+    job = SequenceScalarJob([(clip, source)], operation=operation, project=project)
+    task = scalar_task(clip, source, operation)
+    application = ScalarApplication(project, task)
+    job.populate(deepcopy([(clip, source)]), Event())
+    original = job.outcomes[0]
+    assert original.clip_id == "0" and original.clip_id != clip.id
+    assert application.apply(project, replace(original, clip_id=clip.id))
+    receipt = job.cache.results["0"]
+    assert receipt.matches(original)
+    project.record_job_result(receipt.result_id, receipt.digest)
+    project.save()
+    store = JobStore(project.path.parent / "jobs.db")
+    try:
+        assert store.get_result(receipt.result_id)["committed"]
+    finally:
+        store.close()
+
+
 @pytest.mark.parametrize("change", ["media", "range", "value", "runtime"])
 def test_changed_inputs_do_not_recover_old_scalar(saved, change, tmp_path, monkeypatch):
     project, operation, provider = saved

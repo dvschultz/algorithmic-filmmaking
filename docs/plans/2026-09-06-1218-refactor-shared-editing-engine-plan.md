@@ -582,8 +582,12 @@ media, projections, original target objects, session, and save path before deliv
 Repeated clip occurrences retain separate delivery IDs. The regression run passed
 239 tests plus 28 embedding regressions; the final focused recovery run passed 36
 tests. Five changed modules pass scoped typing and changed-file Ruff is clean.
-Owner publication/save checkpointing, standalone durable scalar jobs, and registered
-CLI/MCP/agent scalar surfaces remain pending.
+Scalar receipts now checkpoint on explicit save only when the exact saved
+record/value and current source/range/FPS/sampling match, including valid empty
+results and occurrence delivery IDs. Both positive cases failed before the change;
+160 scalar, face-journal, and sequence-recovery tests pass, with scoped helper
+typing and changed-file Ruff clean. GUI sequencing owner publication, standalone
+durable scalar jobs, and registered CLI/MCP/agent scalar surfaces remain pending.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain
