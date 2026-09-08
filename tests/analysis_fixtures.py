@@ -7,6 +7,29 @@ from core.project import Project
 from models.clip import Clip, Source
 
 
+def verify_word_alignment(clip: Clip, source: Source, directory: Path) -> None:
+    """Give dialog fixtures real media and a record for their supplied word data."""
+    from core.analysis.alignment import ALIGNMENT_MODEL
+    from core.operations.alignment import AlignmentApplication, run_alignment, snapshot_alignment_tasks
+
+    source.file_path = directory / f"{source.id}.mp4"
+    if not source.file_path.exists():
+        source.file_path.write_bytes(b"word fixture media")
+    words = [word for segment in (clip.transcript or []) for word in (segment.words or [])]
+    project = Project(sources=[source], clips=[clip])
+    tasks = snapshot_alignment_tasks([clip], project.sources_by_id, verified=True, skip_existing=False)
+    wav = directory / "alignment-fixture.wav"
+    wav.write_bytes(b"audio")
+
+    def align(*a, **kwargs):
+        kwargs["on_execution"]({"backend": "ctc", "model": ALIGNMENT_MODEL, "revision": "fixture-r1"})
+        return words
+
+    with patch("core.operations.alignment_records.alignment_model_revision", return_value="fixture-r1"), patch("core.analysis.alignment.extract_audio_to_wav", return_value=wav), patch("core.analysis.alignment.align_words", side_effect=align):
+        outcome = run_alignment(tasks)[0]
+        assert AlignmentApplication(project, tasks).apply(project, outcome), outcome
+
+
 def verify_clip_analysis(clip: Clip, directory: Path, *, embeddings: bool = False, objects: bool = False, ocr: bool = False, classify: bool = False, shots: bool = False, gaze: bool = False, boundary: bool = False, descriptions: bool = False, cinematography: bool = False, transcriptions: bool = False) -> Source:
     from core.spine.analyze import analyze_colors, embeddings as analyze_embeddings, detect_objects, extract_text, classify_content, analyze_shots, gaze as analyze_gaze, boundary_embeddings
 

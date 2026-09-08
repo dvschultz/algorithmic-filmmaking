@@ -24,6 +24,20 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def verified_word_fixtures(tmp_path, monkeypatch):
+    from tests.analysis_fixtures import verify_word_alignment
+    original = _make_aligned_clip
+
+    def verified(*args, **kwargs):
+        clip, source = original(*args, **kwargs)
+        verify_word_alignment(clip, source, tmp_path)
+        return clip, source
+
+    monkeypatch.setattr("core.operations.alignment_records.alignment_model_revision", lambda: "fixture-r1")
+    monkeypatch.setitem(globals(), "_make_aligned_clip", verified)
+
+
 @pytest.fixture
 def qapp():
     from PySide6.QtWidgets import QApplication

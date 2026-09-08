@@ -483,24 +483,9 @@ async def list_audio_sources(
                 "error": {"code": "source_files_missing", "message": str(e)},
             })
 
-        payload = []
-        for a in project.audio_sources:
-            payload.append({
-                "id": a.id,
-                "filename": a.filename,
-                "duration": a.duration_seconds,
-                "duration_str": a.duration_str,
-                "sample_rate": a.sample_rate,
-                "channels": a.channels,
-                "transcribed": bool(a.transcript),
-                "transcript_segment_count": len(a.transcript) if a.transcript else 0,
-            })
+        from core.spine.audio_sources import list_audio_sources as list_impl
 
-        return json.dumps({
-            "success": True,
-            "audio_sources": payload,
-            "count": len(payload),
-        })
+        return json.dumps(list_impl(project))
     except Exception as e:
         logger.exception("Failed to list audio sources")
         return json.dumps({"success": False, "error": str(e)})

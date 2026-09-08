@@ -469,9 +469,13 @@ records, authenticates saved transcript/record pairs, preserves words on failure
 and requires force for edited managed output. First model loading and interrupted
 save/checkpoint recovery avoid repeated inference; cancellation retains computed
 receipts without publishing cancelled targets. Its regression run passed 280
-tests, with clean scoped typing and changed-file Ruff. Project-free compatibility
-callers and completion checks remain to audit or migrate, along with the broader
-U10 audit.
+tests, with clean scoped typing and changed-file Ruff. Word-picker completion now
+verifies alignment records or native transcription words, accepts verified silence,
+and rejects stale or legacy fields without hashing media or running inference.
+MCP audio listing delegates to the shared spine completion check. The combined
+alignment, dialog, completion, and MCP regression run passed 300 tests.
+Project-free compatibility callers remain to audit or migrate, along with the
+broader U10 audit.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain

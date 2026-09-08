@@ -52,6 +52,27 @@ def test_verified_silence_is_complete_without_probe_or_inference(analyzed, monke
     provider.assert_not_called()
 
 
+@pytest.mark.parametrize("legacy", [False, True])
+def test_mcp_audio_status_uses_verified_completion(analyzed, tmp_path, legacy):
+    import asyncio
+    import json
+    from scene_ripper_mcp.tools.project import list_audio_sources as mcp_list
+    from core.transcription_models import TranscriptSegment
+
+    project, _ = analyzed
+    if legacy:
+        project.audio_sources[0].analysis_records.clear()
+        project.audio_sources[0].transcript = [TranscriptSegment(start_time=0, end_time=1, text="legacy")]
+    path = tmp_path / "project.sceneripper"
+    project.save(path)
+    project.close_writer()
+    result = json.loads(asyncio.run(mcp_list(str(path))))
+    assert result["success"], result
+    assert result["count"] == 1
+    assert result["audio_sources"][0]["transcribed"] is (not legacy)
+    assert result["audio_sources"][0]["transcript_segment_count"] == int(legacy)
+
+
 @pytest.mark.parametrize(
     "change",
     ["legacy", "failure", "model", "language", "media", "path", "metadata", "value"],

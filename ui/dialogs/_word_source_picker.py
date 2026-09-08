@@ -91,35 +91,38 @@ def classify_source_alignment(
 
         - ``BADGE_MISSING_FPS`` — the source has no ``fps`` (we can't convert
           word boundaries to frames; the source is hard-unavailable).
-        - ``BADGE_NEEDS_TRANSCRIPTION`` — at least one clip has no transcript.
+        - ``BADGE_NEEDS_TRANSCRIPTION`` — at least one clip has no transcript
+          or has an empty transcript without current verification.
         - ``BADGE_UNSUPPORTED_LANGUAGE`` — the alignment model rejects the
           detected language; source is unavailable for word sequencing.
-        - ``BADGE_NEEDS_ALIGNMENT`` — at least one segment has
-          ``words is None`` (i.e. needs alignment before sequencing).
-        - ``BADGE_ALIGNED`` — every segment already has word data.
+        - ``BADGE_NEEDS_ALIGNMENT`` — at least one clip lacks verified word
+          timings for its current inputs.
+        - ``BADGE_ALIGNED`` — every clip has verified word timings or silence.
     """
     language: Optional[str] = None
+    from core.analysis_availability import word_timing_is_complete
     needs_transcription = False
     needs_alignment = False
     for clip, source in clips_for_source:
         if getattr(source, "fps", None) in (None, 0):
             return BADGE_MISSING_FPS, language
         transcript = getattr(clip, "transcript", None)
-        if transcript is None:
+        complete = word_timing_is_complete(clip, source)
+        if transcript is None or (not transcript and not complete):
             needs_transcription = True
             continue
         transcript = transcript or []
+        if not complete:
+            needs_alignment = True
         for seg in transcript:
             seg_lang = getattr(seg, "language", None)
             if seg_lang and language is None:
                 language = seg_lang
-            if getattr(seg, "words", None) is None:
-                needs_alignment = True
 
     if needs_transcription:
         return BADGE_NEEDS_TRANSCRIPTION, language
 
-    if language:
+    if language and needs_alignment:
         try:
             if not _language_is_supported(language):
                 return BADGE_UNSUPPORTED_LANGUAGE, language
@@ -165,19 +168,19 @@ def format_source_row(
 
 
 def alignable_pending_clips(checked_clips: list[tuple[Any, Any]]) -> list:
-    """Return checked ``Clip`` objects missing word-level data."""
+    """Return checked clips whose word timings require verification."""
+    from core.analysis_availability import word_timing_is_complete
     pending: list = []
-    for clip, _source in checked_clips:
+    for clip, source in checked_clips:
         transcript = getattr(clip, "transcript", None) or []
-        if any(getattr(seg, "words", None) is None for seg in transcript):
+        if transcript and not word_timing_is_complete(clip, source):
             pending.append(clip)
     return pending
 
 
-def _clip_is_word_aligned(clip: Any) -> bool:
-    """Return True if every transcript segment has populated word data."""
-    transcript = getattr(clip, "transcript", None) or []
-    return all(getattr(seg, "words", None) is not None for seg in transcript)
+def _clip_is_word_aligned(clip: Any, source: Any) -> bool:
+    from core.analysis_availability import word_timing_is_complete
+    return word_timing_is_complete(clip, source)
 
 
 def partition_clips_for_sequencing(
@@ -202,10 +205,10 @@ def partition_clips_for_sequencing(
         ``(ready_clip_pairs, needs_alignment_clips, skipped_clip_ids)``.
 
         - ``ready_clip_pairs`` is the subset of ``checked_clips`` whose
-          transcripts are fully word-aligned and can be fed straight into
+          transcripts have current verified word timings and can be fed into
           ``generate_word_sequence``.
-        - ``needs_alignment_clips`` is the ``Clip`` objects that still have
-          ``words is None`` somewhere AND have not been attempted yet — the
+        - ``needs_alignment_clips`` is the ``Clip`` objects that lack verified
+          word timings AND have not been attempted yet — the
           dialog should run alignment on these.
         - ``skipped_clip_ids`` is the ids of clips that were attempted but
           remain unaligned (alignment failed for them — typically Whisper
@@ -218,7 +221,7 @@ def partition_clips_for_sequencing(
     for pair in checked_clips:
         clip = pair[0]
         clip_id = getattr(clip, "id", "")
-        if _clip_is_word_aligned(clip):
+        if _clip_is_word_aligned(clip, pair[1]):
             ready.append(pair)
         elif clip_id in attempted_clip_ids:
             skipped.append(clip_id)

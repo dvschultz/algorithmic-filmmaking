@@ -547,8 +547,20 @@ runtime are verified against the current runtime. Cancellation after computation
 is recorded but before publication retains the receipt without changing the
 project; already published prefixes remain saveable. The regression run passed
 280 tests, including CLI, GUI, word dialogs, and MCP. Scoped job typing and
-changed-file Ruff passed. Alignment completion badges, project-free compatibility
-callers, and the broader U10 audit remain unfinished.
+changed-file Ruff passed.
+
+Word-source picker completion now checks current alignment records or verified
+native transcription word timings. Verified silence is complete; legacy fields,
+failed records, changed transcript/words, source identity, media, FPS, or model
+revision require verification. Completion does not hash media, extract audio, or
+run inference. Native transcription words do not require the CTC language gate.
+The MCP audio list now delegates to the shared spine so verified silence and
+unverified legacy text receive the same status as the GUI and agent. The combined
+alignment, dialog, completion, and MCP regression run passed 300 tests; native-word
+and transcription completion follow-ups passed 33 tests. Changed-file Ruff and
+scoped completion/controller typing passed. The default type check follows
+imports and reported 697 errors in 107 other files; it is not a clean global gate.
+Project-free compatibility callers and the broader U10 audit remain unfinished.
 
 ## Remaining U10 work
 

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from core.settings import Settings
     from models.audio_source import AudioSource
+    from models.clip import Clip, Source
 
 # These operations verify complete input identities on the worker path.
 VERIFIED_ANALYSIS_OPERATIONS = frozenset({"colors", "embeddings", "boundary_embeddings", "detect_objects", "extract_text", "classify", "shots", "gaze", "describe", "cinematography", "transcribe"})
@@ -111,8 +112,48 @@ def audio_transcription_is_complete(audio: AudioSource, *, settings: Settings | 
         return False
 
 
+def alignment_is_complete(clip: Clip, source: Source | None) -> bool:
+    """Check forced-alignment provenance without hashing media or running models."""
+    import json
+    from core.analysis_records import current_record
+    from core.operations.alignment_records import (
+        alignment_snapshot, alignment_runtime, alignment_parameters, execution_is_current,
+    )
+    from core.operations.transcription_records import transcription_value
+
+    record = current_record(clip, "align_words")
+    if record is None or record.identity is None or source is None or source.id != clip.source_id:
+        return False
+    try:
+        snapshot = alignment_snapshot(clip, source)
+        identity = record.identity.to_dict()
+        runtime = identity["model"]
+        return bool(
+            json.loads(record.input_json or "null") == snapshot.inputs.to_dict()
+            and identity["operation_version"] == 2 and identity["schema_version"] == 1
+            and identity["source_range"] == json.loads(snapshot.inputs.range_json)
+            and identity["parameters"] == alignment_parameters(json.dumps(transcription_value(clip)["transcript"], sort_keys=True))
+            and identity["sampling"] == {"policy": "half-open-clip-audio/v1"}
+            and identity["prompt_sha256"] is None
+            and execution_is_current(runtime)
+            and runtime == alignment_runtime(execution=runtime["execution"])
+            and record.value == transcription_value(clip)
+        )
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return False
+
+
+def word_timing_is_complete(clip: Clip, source: Source | None) -> bool:
+    """Recognize verified native transcription words or forced-alignment words."""
+    if clip.transcript is None or any(segment.words is None for segment in clip.transcript):
+        return False
+    return alignment_is_complete(clip, source) or operation_is_complete_for_clip("transcribe", clip, source=source)
+
+
 def operation_is_complete_for_clip(op_key: str, clip, *, runtime: dict | None = None, source=None) -> bool:
     """Report reusable completion; existing fields alone do not prove provenance."""
+    if op_key == "align_words":
+        return alignment_is_complete(clip, source)
     if op_key == "transcribe":
         import json
         from core.analysis_records import AnalysisSnapshot, current_record
