@@ -36,6 +36,22 @@ def tasks(project):
     )
 
 
+@pytest.mark.parametrize("coordinate", [0.0, 0.000001])
+def test_face_projection_rejects_vectors_with_no_stored_direction(coordinate):
+    from core.operations.face_records import face_result_value
+
+    face = {"bbox": [0.1, 0.1, 0.2, 0.2], "embedding": [coordinate] * 512, "confidence": 0.9, "frame_number": 0}
+    with pytest.raises(ValueError, match="face"):
+        face_result_value([face])
+
+
+def test_face_outcome_rejects_zero_vector():
+    from core.operations.faces import FaceOutcome
+
+    with pytest.raises(ValueError, match="face"):
+        FaceOutcome.from_dict({"clip_id": "c", "status": "succeeded", "faces": [{"bbox": [0.1, 0.1, 0.2, 0.2], "embedding": [0.0] * 512, "confidence": 0.9}]})
+
+
 def test_worker_failure_preserves_missing_analysis_and_completes(setup):
     project, provider = setup
     provider.side_effect = ValueError("bad video")

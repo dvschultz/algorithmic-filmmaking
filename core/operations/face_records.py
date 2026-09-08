@@ -34,6 +34,8 @@ def face_result_value(faces: list[dict] | None) -> dict:
     validated = [Face.from_dict(face).to_dict() for face in faces]
     for face in validated:
         face["embedding"] = [round(v, 5) for v in face["embedding"]]
+        if not any(v != 0 for v in face["embedding"]):
+            raise ValueError("Invalid face result: stored embedding has no direction")
     return {"face_embeddings": validated}
 
 

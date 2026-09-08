@@ -92,6 +92,7 @@ class Face:
                 or not isfinite(v)
                 for v in (*bbox, *embedding)
             )
+            or not any(v != 0 for v in embedding)
             or bbox[2] < 0
             or bbox[3] < 0
             or not isfinite(confidence)

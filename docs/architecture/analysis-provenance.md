@@ -1054,6 +1054,15 @@ tracked, inactive historical owners as described above.
   publication. Five scoped modules pass typing and scoped lint is clean.
   Transcription/alignment, faces, custom-query acceptance, and the final audit
   remain open.
+- Face-vector validation now rejects zero vectors both when reading operation
+  outcomes and after rounding to the stored five-decimal representation. Three
+  regression cases failed before the fix. The 222-test face operation, record,
+  delivery, recovery, artifact, portability, completion, and face-sequencing group
+  passes afterward; scoped typing and lint are clean. The acceptance audit also
+  confirms that current verified face identities require model-pack hashes and
+  execution providers, which legacy vector fields do not retain. Face legacy
+  acceptance remains unresolved; vector dimensions alone cannot establish model
+  compatibility.
 - Finish the remaining cross-consumer reuse/projection audit.
   Receipt pruning retains legacy rows rather than guessing absent ownership;
   existing rows are not migrated eagerly.
