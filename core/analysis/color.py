@@ -442,11 +442,14 @@ def get_average_brightness(
 
     Returns:
         Average brightness value from 0.0 (black) to 1.0 (white).
-        Returns 0.5 if the source video cannot be read.
+        Raises ValueError for invalid sampling and RuntimeError for unreadable frames.
     """
+    if (type(start_frame) is not int or type(end_frame) is not int
+            or start_frame < 0 or end_frame <= start_frame
+            or type(num_samples) is not int or num_samples < 1
+            or isinstance(fps, bool) or not np.isfinite(fps) or fps <= 0):
+        raise ValueError("Brightness requires a valid frame range, frame rate, and sample count")
     duration_frames = end_frame - start_frame
-    if duration_frames <= 0:
-        return 0.5
 
     # Calculate evenly-spaced sample positions within the clip
     if num_samples >= duration_frames:
@@ -460,22 +463,18 @@ def get_average_brightness(
     cap = cv2.VideoCapture(str(source_path))
     try:
         if not cap.isOpened():
-            logger.warning(f"Cannot open video for brightness: {source_path}")
-            return 0.5
+            raise RuntimeError(f"Cannot open video for brightness: {source_path}")
 
         luminance_values: list[float] = []
         for pos in sample_positions:
             cap.set(cv2.CAP_PROP_POS_FRAMES, pos)
             ret, frame = cap.read()
             if not ret or frame is None:
-                continue
+                raise RuntimeError(f"Cannot decode brightness sample at frame {pos}")
 
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             mean_val = float(gray.mean())
             luminance_values.append(mean_val / 255.0)
-
-        if not luminance_values:
-            return 0.5
 
         return float(np.mean(luminance_values))
     finally:

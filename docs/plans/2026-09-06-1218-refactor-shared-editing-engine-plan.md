@@ -549,6 +549,15 @@ The relocation regression run passed 203 tests plus 20 follow-ups, with both
 provider and record modules passing scoped typing and changed-file Ruff clean.
 Cost-check migration for the other analysis families remains pending.
 
+Brightness/volume provider preparation: failed decode/probe/FFmpeg operations now
+raise instead of becoming neutral brightness or missing-audio measurements.
+Partial brightness decoding and nonfinite volume values also fail; valid no-audio
+media remains distinct. Sequencing propagates these errors without caching
+fallback values. Eight failure cases reproduced before the fix; 66 provider,
+runtime, and platform tests pass with changed-file Ruff clean. Six unrelated
+provider typing errors are confirmed baseline findings. Scalar provenance and
+its operation/delivery/recovery/completion migration remain pending.
+
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain
 readable. Safe receipt pruning and abandoned-publication pin reconciliation remain.

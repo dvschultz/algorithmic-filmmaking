@@ -702,6 +702,17 @@ rejects changes during initialization. The relocation regression run passed 203
 tests plus 20 focused follow-ups; both provider and record modules pass scoped
 typing, and changed-file Ruff is clean.
 
+Brightness and volume provider failures no longer masquerade as successful scalar
+measurements. Brightness rejects invalid ranges and unreadable/partially decoded
+samples instead of returning 0.5. Volume uses strict stream probing and rejects
+FFmpeg errors, timeouts, missing measurements, and nonfinite values; valid media
+without audio still returns None. Sequencing propagates those failures instead of
+caching defaults or silently continuing. Eight failure cases reproduced before
+the changes; the resulting provider/runtime/platform run passed 66 tests and
+changed-file Ruff. Six provider typing findings are unchanged from the verified
+baseline. Scalar provenance, failure records, detached execution, owner delivery,
+recovery, and completion/cost checks are still pending.
+
 ## Remaining U10 work
 
 - Migrate the other U7 analysis families to

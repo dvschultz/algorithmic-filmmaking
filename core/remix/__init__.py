@@ -470,7 +470,7 @@ def _auto_compute_brightness(clips: List[Tuple[Any, Any]]) -> None:
                 clip.average_brightness = brightness
             except Exception as e:
                 logger.warning(f"Failed to compute brightness for clip {clip.id}: {e}")
-                clip.average_brightness = 0.5
+                raise RuntimeError(f"Brightness analysis failed for clip {clip.id}") from e
 
 
 def _auto_compute_volume(clips: List[Tuple[Any, Any]]) -> None:
@@ -484,7 +484,7 @@ def _auto_compute_volume(clips: List[Tuple[Any, Any]]) -> None:
         if clip.rms_volume is None:
             # Check audio track cache before spawning ffmpeg
             if source.id not in audio_cache:
-                audio_cache[source.id] = has_audio_track(source.file_path)
+                audio_cache[source.id] = has_audio_track(source.file_path, strict=True)
             if not audio_cache[source.id]:
                 continue
 
@@ -500,6 +500,7 @@ def _auto_compute_volume(clips: List[Tuple[Any, Any]]) -> None:
                 clip.rms_volume = volume
             except Exception as e:
                 logger.warning(f"Failed to compute volume for clip {clip.id}: {e}")
+                raise RuntimeError(f"Volume analysis failed for clip {clip.id}") from e
 
 
 def _auto_compute_embeddings(

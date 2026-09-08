@@ -236,16 +236,13 @@ class TestGetAverageBrightness:
             f"expected black < gray < white, got {black} / {gray} / {white}"
         )
 
-    def test_zero_length_clip_returns_default(self, tmp_path):
-        """A clip with no frames returns the 0.5 sentinel, not a crash."""
-        video_path = tmp_path / "black.mp4"
-        _write_video(video_path, [_gray_bgr_frame(0) for _ in range(30)])
-        # end_frame <= start_frame -> duration_frames <= 0 -> 0.5 sentinel
-        assert get_average_brightness(video_path, 10, 10, fps=30.0) == 0.5
+    def test_zero_length_clip_is_invalid(self, tmp_path):
+        with pytest.raises(ValueError):
+            get_average_brightness(tmp_path / "video.mp4", 10, 10, fps=30.0)
 
-    def test_missing_video_returns_default(self, tmp_path):
-        """An unreadable source returns the 0.5 sentinel."""
-        assert get_average_brightness(tmp_path / "nope.mp4", 0, 30, fps=30.0) == 0.5
+    def test_missing_video_is_a_failure(self, tmp_path):
+        with pytest.raises(RuntimeError):
+            get_average_brightness(tmp_path / "nope.mp4", 0, 30, fps=30.0)
 
     def test_mutation_ordering_would_be_caught(self, tmp_path):
         """Guard: a brightness function that returned a constant (ignoring pixel

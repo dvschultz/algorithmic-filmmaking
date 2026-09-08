@@ -324,11 +324,12 @@ def _find_nearest(sorted_times: list[float], time: float) -> float:
     return before if (time - before) <= (after - time) else after
 
 
-def has_audio_track(file_path: Path) -> bool:
+def has_audio_track(file_path: Path, *, strict: bool = False) -> bool:
     """Check if a file has an audio stream.
 
     Args:
         file_path: Path to video or audio file
+        strict: Raise on probe failure instead of treating it as no audio.
 
     Returns:
         True if file has at least one audio stream
@@ -346,10 +347,14 @@ def has_audio_track(file_path: Path) -> bool:
                                 **get_subprocess_kwargs())
         # Check return code - ffprobe returns non-zero for errors
         if result.returncode != 0:
+            if strict:
+                raise RuntimeError(f"Audio stream probe failed: {result.stderr.strip()}")
             logger.warning(f"ffprobe returned non-zero: {result.stderr.strip()}")
             return False
         return bool(result.stdout.strip())
     except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        if strict:
+            raise
         logger.warning(f"ffprobe check failed: {e}")
         return False
 
@@ -597,8 +602,12 @@ def extract_clip_volume(
         Mean volume in dB (typically -60 to 0, higher = louder),
         or None if the source has no audio track.
     """
+    if (isinstance(start_seconds, bool) or isinstance(duration_seconds, bool)
+            or not np.isfinite(start_seconds) or not np.isfinite(duration_seconds)
+            or start_seconds < 0 or duration_seconds <= 0):
+        raise ValueError("Volume analysis requires a finite, positive duration and nonnegative start")
     if _has_audio is None:
-        _has_audio = has_audio_track(source_path)
+        _has_audio = has_audio_track(source_path, strict=True)
     if not _has_audio:
         return None
 
@@ -624,6 +633,8 @@ def extract_clip_volume(
             **get_subprocess_kwargs(),
         )
 
+        if result.returncode != 0:
+            raise RuntimeError(f"FFmpeg volume analysis failed: {result.stderr.strip()}")
         # Parse mean_volume from stderr
         for line in result.stderr.splitlines():
             if "mean_volume:" in line:
@@ -631,17 +642,19 @@ def extract_clip_volume(
                 parts = line.split("mean_volume:")
                 if len(parts) >= 2:
                     vol_str = parts[1].strip().replace("dB", "").strip()
-                    return float(vol_str)
+                    volume = float(vol_str)
+                    if not np.isfinite(volume):
+                        raise ValueError("Volume measurement must be finite")
+                    return volume
 
-        logger.warning(f"No volume data found for {source_path} at {start_seconds}s")
-        return None
+        raise RuntimeError(f"No volume measurement produced for {source_path}")
 
     except subprocess.TimeoutExpired:
         logger.warning(f"Volume extraction timed out for {source_path}")
-        return None
+        raise
     except (ValueError, IndexError) as e:
         logger.warning(f"Failed to parse volume data: {e}")
-        return None
+        raise
 
 
 def analyze_music_file(
