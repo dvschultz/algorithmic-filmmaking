@@ -574,8 +574,16 @@ hashing media or importing inference runtimes. Valid black/no-audio measurements
 count as complete; legacy and failed records require analysis. Clearing a scalar
 result removes its record too. Twenty pre-fix completion/cost cases failed; the
 resulting regression run passed 213 tests, with both changed core modules passing
-scoped typing and changed-file Ruff clean. GUI publication, durable recovery, and
-registered CLI/MCP/agent surfaces remain pending.
+scoped typing and changed-file Ruff clean. Saved GUI scalar sequencing now journals
+verified computations before publication and recovers them without rerunning the
+provider. Recovery authenticates record identity and actual input content; failures
+remain transient. SequenceWorker uses that journal on detached inputs and checks
+media, projections, original target objects, session, and save path before delivery.
+Repeated clip occurrences retain separate delivery IDs. The regression run passed
+239 tests plus 28 embedding regressions; the final focused recovery run passed 36
+tests. Five changed modules pass scoped typing and changed-file Ruff is clean.
+Owner publication/save checkpointing, standalone durable scalar jobs, and registered
+CLI/MCP/agent scalar surfaces remain pending.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain

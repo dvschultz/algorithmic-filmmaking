@@ -10,6 +10,8 @@ from typing import Any, List, Optional, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from core.project import Project
+    from core.jobs.sequence_scalars import SequenceScalarJob
+    from core.jobs.sequence_embeddings import SequenceEmbeddingJob
 
 from PySide6.QtCore import Signal
 
@@ -49,7 +51,14 @@ class SequenceWorker(CancellableWorker):
         self._clips = deepcopy(clips)
         self._direction = direction
         self._no_color_handling = no_color_handling
-        self.prerequisite_job = None
+        self.prerequisite_job: "SequenceScalarJob | SequenceEmbeddingJob | None" = None
+        if algorithm in ("brightness", "volume"):
+            from core.jobs.sequence_scalars import SequenceScalarJob
+
+            self.prerequisite_job = SequenceScalarJob(
+                clips, operation="brightness" if algorithm == "brightness" else "volume",
+                project=project,
+            )
         if algorithm in ("similarity_chain", "match_cut"):
             from core.jobs.sequence_embeddings import SequenceEmbeddingJob
 
@@ -72,7 +81,15 @@ class SequenceWorker(CancellableWorker):
                     return
                 # Prerequisites were resolved once, including per-clip failures.
                 # Invoke the pure sorter so missing results are not recomputed.
-                if self._algorithm == "match_cut":
+                if self._algorithm in ("brightness", "volume"):
+                    from core.remix.scalar_inputs import sort_scalar_inputs
+
+                    sorted_clips = sort_scalar_inputs(
+                        self._clips,
+                        "brightness" if self._algorithm == "brightness" else "volume",
+                        direction=self._direction,
+                    )
+                elif self._algorithm == "match_cut":
                     from core.remix.match_cut import match_cut_chain
 
                     sorted_clips = match_cut_chain(self._clips)

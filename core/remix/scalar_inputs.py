@@ -17,6 +17,25 @@ from models.analysis_record import AnalysisRecord
 from models.clip import Clip, Source
 
 
+def sort_scalar_inputs(
+    clips: list[tuple[Clip, Source]], operation: ScalarOperation,
+    *, direction: str | None = None,
+) -> list[tuple[Clip, Source]]:
+    """Apply the established ordering policy to already verified prerequisites."""
+    if operation == "brightness":
+        return sorted(
+            clips, key=lambda item: item[0].average_brightness if item[0].average_brightness is not None else 0.5,
+            reverse=(direction or "bright_to_dark") == "bright_to_dark",
+        )
+    with_volume = [(clip, source) for clip, source in clips if clip.rms_volume is not None]
+    if not with_volume:
+        return clips
+    return sorted(
+        with_volume, key=lambda item: item[0].rms_volume if item[0].rms_volume is not None else -60.0,
+        reverse=(direction or "quiet_to_loud") != "quiet_to_loud",
+    )
+
+
 def scalar_inputs(
     clips: list[tuple[Clip, Source]],
     operation: ScalarOperation,

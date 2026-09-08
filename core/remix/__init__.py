@@ -258,48 +258,16 @@ def generate_sequence(
                 return clip.duration_seconds(source.fps)
             return sorted(clips_to_use, key=get_duration)
 
-    elif algorithm == "brightness":
-        # Sort by average brightness (luminance)
-        brightness_direction = direction or "bright_to_dark"
+    elif algorithm in ("brightness", "volume"):
+        from core.remix.scalar_inputs import sort_scalar_inputs
 
-        clips_to_use = _auto_compute_brightness(clips_to_use, cancel_event=cancel_event)
+        if algorithm == "brightness":
+            clips_to_use = _auto_compute_brightness(clips_to_use, cancel_event=cancel_event)
+        else:
+            clips_to_use = _auto_compute_volume(clips_to_use, cancel_event=cancel_event)
         if cancel_event is not None and cancel_event.is_set():
             return []
-
-        def get_brightness(item: Tuple[Any, Any]) -> float:
-            clip, _ = item
-            val = clip.average_brightness if clip.average_brightness is not None else 0.5
-            return -val if brightness_direction == "bright_to_dark" else val
-
-        return sorted(clips_to_use, key=get_brightness)
-
-    elif algorithm == "volume":
-        # Sort by audio volume (RMS level in dB)
-        volume_direction = direction or "quiet_to_loud"
-
-        clips_to_use = _auto_compute_volume(clips_to_use, cancel_event=cancel_event)
-        if cancel_event is not None and cancel_event.is_set():
-            return []
-
-        # Filter out clips without volume data (no audio track)
-        clips_with_volume = [
-            (clip, source) for clip, source in clips_to_use
-            if clip.rms_volume is not None
-        ]
-        excluded = len(clips_to_use) - len(clips_with_volume)
-        if excluded > 0:
-            logger.info(f"Volume sort: excluded {excluded} clips (no audio)")
-
-        if not clips_with_volume:
-            logger.warning("No clips with audio data for volume sort")
-            return clips_to_use
-
-        def get_volume(item: Tuple[Any, Any]) -> float:
-            clip, _ = item
-            val = clip.rms_volume if clip.rms_volume is not None else -60.0
-            return val if volume_direction == "quiet_to_loud" else -val
-
-        return sorted(clips_with_volume, key=get_volume)
+        return sort_scalar_inputs(clips_to_use, algorithm, direction=direction)
 
     elif algorithm == "proximity":
         # Sort by camera-to-subject distance (proximity score)

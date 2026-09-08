@@ -731,8 +731,17 @@ including source/binary stamps, sampling, runtime, and projections, without medi
 hashing or inference. Verified black/no-audio results count as complete; failed,
 legacy, or stale results do not. Clearing results removes their records. The
 completion/cost regression run passed 213 tests, and both changed core modules
-pass scoped typing with changed-file Ruff clean. GUI publication, durable recovery,
-and registered CLI/MCP/agent surfaces remain pending.
+pass scoped typing with changed-file Ruff clean. Saved GUI scalar sequencing uses
+`GuiScalarCache` to journal successful records before publication. Recovery verifies
+record identity and full input content, and failed outcomes remain transient.
+`SequenceScalarJob` supplies detached inputs and guards final delivery against
+changed media, projections, target objects, sessions, and save paths. Repeated
+occurrences use separate delivery IDs. Existing pure sorting policy is shared
+between direct sequencing and the background worker. The regression run passed
+239 tests plus 28 embedding regressions; the final focused recovery run passed 36
+tests. Five changed modules pass scoped typing and changed-file Ruff is clean.
+Owner publication and explicit-save checkpointing of scalar records, standalone
+durable scalar jobs, and registered CLI/MCP/agent scalar routes remain pending.
 
 ## Remaining U10 work
 

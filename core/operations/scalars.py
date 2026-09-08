@@ -240,9 +240,10 @@ def run_scalars(
     *,
     cancel_event: Event | None = None,
     on_outcome: Callable[[ScalarOutcome], None] | None = None,
+    fingerprints: AnalysisFingerprints | None = None,
 ) -> tuple[ScalarOutcome, ...]:
     cancel = cancel_event or Event()
-    fingerprints = AnalysisFingerprints(cancel)
+    fingerprints = fingerprints or AnalysisFingerprints(cancel)
     results = []
     for task in tasks:
         outcome = _compute(task, fingerprints, cancel)
