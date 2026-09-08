@@ -108,12 +108,14 @@ class TestSigLIP2Classification:
 
         class _FakeProcessor:
             @staticmethod
-            def from_pretrained(_name):
+            def from_pretrained(_name, *, revision):
+                assert revision == shots.SIGLIP_REVISION
                 return "processor"
 
         class _FakeModel:
             @staticmethod
-            def from_pretrained(_name):
+            def from_pretrained(_name, *, revision):
+                assert revision == shots.SIGLIP_REVISION
                 return "model"
 
         monkeypatch.setattr(

@@ -219,7 +219,9 @@ def test_pending_result_lookup_batches_ids_with_one_connection(tmp_path, monkeyp
     ids = [f"{i:064x}" for i in range(502)]
     with store._connect() as connection:
         connection.executemany(
-            "INSERT INTO job_results VALUES (?, '{}', '{}', ?, ?, 0)",
+            "INSERT INTO job_results "
+            "(result_id,spec_json,payload_json,payload_digest,committed,created_at) "
+            "VALUES (?, '{}', '{}', ?, ?, 0)",
             [(rid, "0" * 64, int(index == 0)) for index, rid in enumerate(ids)],
         )
     connect = Mock(wraps=store._connect)
