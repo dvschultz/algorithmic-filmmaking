@@ -893,7 +893,9 @@ or reuse an earlier forced-run identity. Pruning must preserve these contracts
 independent project-writer ownership before reconciling saved references. Active
 queued jobs and legacy rows without runtime ownership also need protection.
 Reader leases and abandoned-save reconciliation are prerequisites already in
-place, not evidence that receipt pruning is implemented.
+place. The implemented policy addresses these constraints by retaining every
+named receipt and uncommitted result, and deleting only released receipts with
+tracked, inactive historical owners as described above.
 
 - Migrate the other U7 analysis families to
   semantic reuse. Extend operation-owned failure records beyond object detection,
