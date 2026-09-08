@@ -1304,6 +1304,10 @@ class MainWindow(QMainWindow):
         deselect_all_action.triggered.connect(self._on_deselect_all)
         edit_menu.addAction(deselect_all_action)
 
+        reuse_legacy_action = QAction("Reuse Legacy Analysis…", self)
+        reuse_legacy_action.triggered.connect(self._on_reuse_legacy_analysis)
+        edit_menu.addAction(reuse_legacy_action)
+
         # View menu with tab shortcuts
         view_menu = menu_bar.addMenu("&View")
 
@@ -2768,6 +2772,17 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'sequence_tab') and hasattr(self.sequence_tab, 'video_player'):
             return self.sequence_tab.video_player
         return None
+
+    def _on_reuse_legacy_analysis(self) -> None:
+        from ui.dialogs.legacy_reuse_dialog import LegacyReuseDialog
+
+        clips = self.get_selected_clips()
+        if not clips:
+            QMessageBox.information(self, "Reuse Legacy Analysis", "Select clips in Cut or Analyze first.")
+            return
+        dialog = LegacyReuseDialog(self, [clip.id for clip in clips])
+        dialog.exec()
+        self._update_window_title()
 
     def get_selected_clips(self):
         """Get selected clips from the active tab's clip browser.

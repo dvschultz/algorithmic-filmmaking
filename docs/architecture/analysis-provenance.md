@@ -955,8 +955,15 @@ tracked, inactive historical owners as described above.
   runtime. Submission captures a project content revision and selected-media
   stamps; queued changes reject the decision. Hashing and guarded saving run
   under the job's project writer, with cancellation and ordinary job polling.
-  The 99-test MCP jobs/legacy/import group passed. Desktop controls, the built-in
-  desktop agent, and remaining analysis families still need this flow; the
+  The 99-test MCP jobs/legacy/import group passed. Desktop Edit → Reuse Legacy
+  Analysis now exposes colors/DINO reuse for the current clip selection. The
+  dialog snapshots on the owner thread, hashes in a cancellable worker, and
+  publishes through the existing operation applications. Native Qt tests verify
+  owner-thread publication and rejection after trim edits, project replacement,
+  and cancellation; the dialog remains alive until its worker finishes. The 11
+  focused desktop/shared tests and scoped worker/dialog typing and lint pass;
+  an offscreen rendered layout was inspected. The built-in desktop agent and
+  remaining analysis families still need this flow; the
   existing two-operation path is not completion of U10.
 - Finish the remaining cross-consumer reuse/projection audit.
   Receipt pruning retains legacy rows rather than guessing absent ownership;

@@ -31,6 +31,12 @@ media off the server event loop, supports cancellation, and rejects project or
 selected-media changes while queued. Accepted decisions are saved under the
 project writer lock.
 
-Desktop controls, the built-in desktop agent route, and acceptance for other
-analysis operations are not available yet. Recompute those results through
-their usual analysis commands.
+In the desktop app, select clips in Cut or Analyze and choose **Edit → Reuse
+Legacy Analysis…**. Choose colors or thumbnail embeddings, review the explanation,
+and click **Reuse selected values**. Media checks run in the background. Cancel
+discards pending decisions; changed clips or a replaced project reject late
+results. Save the project to keep accepted decisions.
+
+The built-in desktop agent route and acceptance for other analysis operations
+are not available yet. Recompute those results through their usual analysis
+commands.
