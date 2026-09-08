@@ -7,8 +7,8 @@ from core.project import Project
 from models.clip import Clip, Source
 
 
-def verify_clip_analysis(clip: Clip, directory: Path, *, embeddings: bool = False) -> None:
-    from core.spine.analyze import analyze_colors, embeddings as analyze_embeddings
+def verify_clip_analysis(clip: Clip, directory: Path, *, embeddings: bool = False, objects: bool = False) -> None:
+    from core.spine.analyze import analyze_colors, embeddings as analyze_embeddings, detect_objects
 
     media = directory / f"{clip.id}.mp4"
     media.write_bytes(b"source fixture")
@@ -22,3 +22,6 @@ def verify_clip_analysis(clip: Clip, directory: Path, *, embeddings: bool = Fals
     if embeddings:
         with patch("core.analysis.embeddings.extract_clip_embeddings_batch", return_value=[[0.1] * 768]), patch("core.analysis.embeddings.unload_model"):
             analyze_embeddings(project)
+    if objects:
+        with patch("core.analysis.detection.detect_objects", return_value=[]):
+            detect_objects(project)

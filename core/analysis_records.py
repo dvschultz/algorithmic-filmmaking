@@ -1,6 +1,6 @@
 """Detached analysis inputs and worker-side content verification."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from importlib.metadata import PackageNotFoundError, version
 import json
 from pathlib import Path
@@ -113,6 +113,48 @@ class AnalysisInput:
         )
 
 
+@dataclass(frozen=True)
+class AnalysisSnapshot:
+    """JSON-safe computation inputs, prior record, and detached read projection."""
+
+    inputs: AnalysisInput
+    record: AnalysisRecord | None
+    value_json: str
+
+    @classmethod
+    def capture(cls, target: Any, operation: str, files: dict[str, Path], source_range: dict, value: dict) -> "AnalysisSnapshot":
+        record = getattr(target, "analysis_records", {}).get(operation)
+        return cls(
+            AnalysisInput.capture(files, source_range, binding={"target_id": target.id, "source_id": getattr(target, "source_id", None)}),
+            record if isinstance(record, AnalysisRecord) else None,
+            json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False),
+        )
+
+    def to_json(self) -> str:
+        return json.dumps({"inputs": self.inputs.to_dict(), "record": self.record.to_dict() if self.record else None, "value_json": self.value_json}, sort_keys=True, allow_nan=False)
+
+    @classmethod
+    def from_json(cls, document: str) -> "AnalysisSnapshot":
+        value = json.loads(document)
+        return cls(AnalysisInput.from_dict(value["inputs"]), AnalysisRecord.from_dict(value["record"]) if value["record"] is not None else None, value["value_json"])
+
+    def reusable_record(self, identity: AnalysisIdentity) -> AnalysisRecord | None:
+        """Worker-side verification; owner delivery receives an inline payload."""
+        from core.artifacts import ArtifactStore, ArtifactUnavailable
+
+        record = self.record
+        if record is None or not record.reusable(identity, artifact_available=lambda _: True):
+            return None
+        try:
+            value = json.loads(ArtifactStore().read_bytes(record.artifact)) if record.artifact else record.value
+            encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        except (ArtifactUnavailable, OSError, ValueError):
+            return None
+        if encoded != self.value_json:
+            return None
+        return replace(record, artifact=None, value_json=self.value_json, input_json=json.dumps(self.inputs.to_dict(), sort_keys=True))
+
+
 def current_record(target: Any, operation: str) -> AnalysisRecord | None:
     """Check the cheap owner-thread part of validity; workers verify full hashes.
 
@@ -143,6 +185,30 @@ def current_record(target: Any, operation: str) -> AnalysisRecord | None:
         if not inputs.unchanged():
             return None
         return record
+    except (ValueError, TypeError, KeyError, OSError):
+        return None
+
+
+def recorded_image_path(target: Any, source: Any, operation: str) -> Path | None:
+    """Locate a prior CLI analysis image only while its source binding is current.
+
+    This selects an input image, not a reusable result. The operation must still
+    verify content, parameters, and model identity on the worker path.
+    """
+    record = getattr(target, "analysis_records", {}).get(operation)
+    if not isinstance(record, AnalysisRecord) or record.input_json is None or source is None:
+        return None
+    try:
+        inputs = AnalysisInput.from_dict(json.loads(record.input_json))
+        binding = json.loads(inputs.binding_json)
+        if binding != {"target_id": target.id, "source_id": target.source_id}:
+            return None
+        if json.loads(inputs.range_json) != {"start_frame": target.start_frame, "end_frame": target.end_frame}:
+            return None
+        files = {role: path for role, path, _ in inputs.files}
+        if files.get("video") != source.file_path or not inputs.unchanged():
+            return None
+        return files.get("image")
     except (ValueError, TypeError, KeyError, OSError):
         return None
 

@@ -18,27 +18,19 @@ from core.operations.object_detection import (
     ObjectDetectionTask,
     DetectedObject,
     run_object_detection,
+    object_detection_task,
+    object_detection_identity,
 )
+from core.analysis_records import AnalysisFingerprints, AnalysisSnapshot, recorded_image_path
+from models.analysis_record import AnalysisRecord
 from core.project import Project
 from core.project_revision import ProjectRevisionConflict
 
 
 def _runtime() -> dict:
-    from importlib.metadata import PackageNotFoundError, version
+    from core.analysis_model_identity import object_detection_runtime
 
-    packages: dict[str, str | None] = {}
-    for package in ("torch", "ultralytics"):
-        try:
-            packages[package] = version(package)
-        except PackageNotFoundError:
-            packages[package] = None
-    return {
-        "model": "yolo26n",
-        "weights": "yolo26n.pt",
-        "weights_release": "ultralytics/assets/v8.4.0",
-        "vocabulary": "COCO-80",
-        "packages": packages,
-    }
+    return object_detection_runtime()
 
 
 def _ids(project: Project, clip_ids: list[str] | None) -> list[str]:
@@ -53,14 +45,19 @@ def _ids(project: Project, clip_ids: list[str] | None) -> list[str]:
 
 
 def _task(
-    project: Project, cid: str, thumbnails: dict[str, Path] | None = None
+    project: Project, cid: str, thumbnails: dict[str, Path] | None = None, *, options: ObjectDetectionOptions = ObjectDetectionOptions(), force: bool = False,
 ) -> ObjectDetectionTask:
     clip = project.clips_by_id[cid]
-    return ObjectDetectionTask(cid, (thumbnails or {}).get(cid, clip.thumbnail_path))
+    source = project.sources_by_id.get(clip.source_id)
+    image = (thumbnails or {}).get(cid) or (recorded_image_path(clip, source, "detect_objects") if not force else None) or clip.thumbnail_path
+    return object_detection_task(clip, source, image_path=image, skip_existing=not force, detect_all=options.detect_all)
 
 
 def _task_data(task: ObjectDetectionTask) -> dict:
     data = asdict(task)
+    data.pop("analysis_json", None)
+    data["skip"] = False  # Retry inputs exclude the reuse policy and prior outputs.
+    data["analysis_version"] = 2 if task.analysis_json else 1
     data["thumbnail_path"] = str(task.thumbnail_path) if task.thumbnail_path else None
     return data
 
@@ -86,7 +83,7 @@ def object_detection_job_spec(
 ) -> OperationSpec:
     targets = []
     for cid in _ids(project, clip_ids):
-        task = _task(project, cid)
+        task = _task(project, cid, options=options, force=bool(arguments.get("force", False)))
         source = _source_data(project, cid)
         source_path = source["actual_source_path"]
         targets.append(
@@ -102,7 +99,7 @@ def object_detection_job_spec(
     revision = project.session.file_revision
     return OperationSpec.build(
         kind="object_detection",
-        version=1,
+        version=2,
         arguments=arguments,
         inputs={
             "targets": targets,
@@ -144,7 +141,9 @@ def run_object_detection_job(
         force = bool(operation.arguments.get("force", False))
     thumbnails = dict(thumbnail_paths or {})
     runtime = _runtime()
-    fingerprint = MediaFingerprints(cancel).get
+    media_fingerprints = MediaFingerprints(cancel)
+    fingerprint = media_fingerprints.get
+    fingerprints = AnalysisFingerprints(cancel, media_fingerprints=media_fingerprints)
     with result_batch(store, path) as batch:
         project = batch.project
         if operation is not None:
@@ -167,7 +166,7 @@ def run_object_detection_job(
         for rid, digest in project.metadata.job_results.items():
             row = store.get_result(rid)
             if row is None:
-                raise StaleJobResult("Committed result payload is missing")
+                continue  # Verified project records can outlive the job cache.
             if sha256(row["spec_json"].encode()).hexdigest() != rid:
                 raise StaleJobResult("Committed result identity is corrupt")
             identity = json.loads(row["spec_json"])
@@ -185,7 +184,7 @@ def run_object_detection_job(
         def inputs(
             current: Project, cid: str, task: ObjectDetectionTask | None = None
         ) -> dict:
-            task = task or _task(current, cid, thumbnails)
+            task = task or _task(current, cid, thumbnails, options=options, force=force)
             display = current.clips_by_id[cid].thumbnail_path
             source = _source_data(current, cid)
             source_path = source["actual_source_path"]
@@ -201,9 +200,22 @@ def run_object_detection_job(
 
         def is_output(current: Project, cid: str, payload: dict) -> bool:
             clip = current.clips_by_id[cid]
-            return clip.person_count == payload["person_count"] and (
+            record = clip.analysis_records.get("detect_objects")
+            return isinstance(record, AnalysisRecord) and record.to_dict() == json.loads(payload.get("record_json") or "null") and clip.person_count == payload["person_count"] and (
                 not options.detect_all or clip.detected_objects == payload["detections"]
             )
+
+        def stage_record(cid: str, record: AnalysisRecord, basis: dict) -> None:
+            def apply(current: Project) -> None:
+                current.record_analysis("clip", cid, "detect_objects", record)
+
+            def validate(current: Project) -> bool:
+                return inputs(current, cid) == basis
+
+            def matches(current: Project) -> bool:
+                return current.clips_by_id[cid].analysis_records.get("detect_objects") == record
+
+            batch.stage_analysis(apply=apply, validate_input=validate, is_applied=matches)
 
         result: dict = {
             "succeeded": [],
@@ -222,56 +234,24 @@ def run_object_detection_job(
             existing = (
                 clip.detected_objects if options.detect_all else clip.person_count
             ) is not None
-            if existing and not force and cid not in known:
-                result["skipped"].append(
-                    {"clip_id": cid, "reason": "already_populated"}
-                )
-                continue
             try:
-                # CLI retries do not regenerate images for populated targets. Recover
-                # the original analysis image only when its complete receipt still
-                # matches the current target, media, options, and saved output.
-                if (
-                    existing
-                    and not force
-                    and cid not in thumbnails
-                    and operation is None
-                ):
-                    for _, identity, payload in known.get(cid, []):
-                        if (
-                            identity["project_path"] != str(path)
-                            or identity["arguments"] != asdict(options)
-                            or not is_output(project, cid, payload)
-                        ):
-                            continue
-                        image = identity["inputs"]["basis"]["task"]["thumbnail_path"]
-                        if image is None:
-                            continue
-                        candidate_task = ObjectDetectionTask(cid, Path(image))
-                        if (
-                            inputs(project, cid, candidate_task)
-                            == identity["inputs"]["basis"]
-                        ):
-                            thumbnails[cid] = Path(image)
-                            break
                 basis = inputs(project, cid)
                 if basis["runtime"] != runtime:
                     raise StaleJobResult("Object detection runtime changed")
-                task = _task(project, cid, thumbnails)
-                identity_inputs: dict = {"basis": basis}
+                task = _task(project, cid, thumbnails, options=options, force=force)
+                assert task.analysis_json is not None
+                snapshot = AnalysisSnapshot.from_json(task.analysis_json)
+                semantic = object_detection_identity(snapshot, options, fingerprints, runtime) if snapshot.inputs.unchanged() else None
+                reused = snapshot.reusable_record(semantic) if semantic is not None and not force else None
+                prior_record = clip.analysis_records.get("detect_objects")
+                identity_inputs: dict = {"basis": basis, "previous_record": prior_record.to_dict() if prior_record else None, "previous_outputs": {"person_count": clip.person_count, "detections": clip.detected_objects if options.detect_all else None}}
                 if force:
                     identity_inputs["generation"] = len(known.get(cid, []))
-                    identity_inputs["previous_outputs"] = {
-                        "person_count": clip.person_count,
-                        "detections": clip.detected_objects
-                        if options.detect_all
-                        else None,
-                    }
                 arguments = asdict(options)
                 spec = ResultSpec.build(
                     path,
                     kind="object_detection",
-                    version=1,
+                    version=2,
                     target_id=cid,
                     arguments=arguments,
                     inputs=identity_inputs,
@@ -291,30 +271,32 @@ def run_object_detection_job(
                 if existing and not force:
                     matches = [
                         row
-                        for row, identity, payload in known[cid]
+                        for row, identity, payload in known.get(cid, [])
                         if identity["project_path"] == str(path)
                         and identity["inputs"]["basis"] == basis
                         and identity["arguments"] == arguments
                         and is_output(project, cid, payload)
                     ]
-                    if not matches:
-                        result["skipped"].append(
-                            {"clip_id": cid, "reason": "already_populated"}
-                        )
+                    if matches:
+                        specs = [ResultSpec(path, row["spec_json"]) for row in matches]
+                    elif reused is not None:
+                        if reused != prior_record:
+                            stage_record(cid, reused, basis)
+                        result["skipped"].append({"clip_id": cid, "reason": "valid_analysis"})
                         continue
-                    specs = [ResultSpec(path, row["spec_json"]) for row in matches]
 
                 application = ObjectDetectionApplication(project, (task,), options)
 
                 def compute(task=task):
                     outcome = run_object_detection(
-                        (task,), options, cancel_event=cancel
+                        (task,), options, cancel_event=cancel, fingerprints=fingerprints, runtime=runtime,
                     )[0]
-                    if outcome.status != "succeeded":
+                    if not outcome.has_result:
                         raise _OutcomeError(outcome)
                     return {
                         "detections": outcome.detection_dicts(),
                         "person_count": outcome.person_count,
+                        "record_json": outcome.record_json,
                     }
 
                 def apply(current, payload, cid=cid, application=application):
@@ -326,6 +308,7 @@ def run_object_detection_job(
                             for value in payload["detections"]
                         ),
                         payload["person_count"],
+                        record_json=payload.get("record_json"),
                     )
                     if not application.apply(current, outcome):
                         raise StaleJobResult(
@@ -365,6 +348,11 @@ def run_object_detection_job(
                 break
             except _OutcomeError as exc:
                 outcome = exc.outcome
+                if inputs(project, cid) != basis:
+                    raise StaleJobResult("Object detection inputs changed during computation")
+                if outcome.can_apply and outcome.record_json is not None:
+                    failed_record = AnalysisRecord.from_dict(json.loads(outcome.record_json))
+                    stage_record(cid, failed_record, basis)
                 result[outcome.status].append(
                     {"clip_id": cid, "code": outcome.code, "message": outcome.message}
                 )

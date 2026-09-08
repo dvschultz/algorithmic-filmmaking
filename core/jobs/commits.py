@@ -134,6 +134,7 @@ class ResultBatch:
         self.mtime = mtime
         self.max_items = max_items
         self._pending: dict[str, _PendingResult] = {}
+        self._analysis_updates: list[Callable[[Project], bool]] = []
         self._dirty = False
         self._active = True
         self._failed = False
@@ -224,11 +225,34 @@ class ResultBatch:
             self._failed = True
             raise
 
+    def stage_analysis(
+        self, *, apply: Callable[[Project], None],
+        validate_input: Callable[[Project], bool],
+        is_applied: Callable[[Project], bool],
+    ) -> None:
+        """Save a verified reuse binding or failed attempt without a success receipt."""
+        self._assert_active()
+        if not validate_input(self.project):
+            raise StaleJobResult("Analysis inputs changed before publication")
+        try:
+            apply(self.project)
+            if not is_applied(self.project):
+                raise StaleJobResult("Analysis record was not applied")
+        except BaseException:
+            self._failed = True
+            raise
+        self._analysis_updates.append(lambda project: validate_input(project) and is_applied(project))
+        self._dirty = True
+        if len(self._analysis_updates) + len(self._pending) >= self.max_items:
+            self.flush()
+
     def _flush(self) -> None:
-        if not self._pending:
+        if not self._pending and not self._analysis_updates:
             return
         if self.path.resolve() != self.path:
             raise StaleJobResult("Project path was retargeted")
+        if not all(validate(self.project) for validate in self._analysis_updates):
+            raise StaleJobResult("Analysis inputs or record changed before publication")
         for pending in self._pending.values():
             if (
                 sha256(canonical_json(pending.payload).encode()).hexdigest()
@@ -247,11 +271,10 @@ class ResultBatch:
         if self._dirty:
             save_with_mtime_check(self.project, self.path, self.mtime)
             self.mtime = self.path.stat().st_mtime
-        self.store.checkpoint_results(
-            [
-                (pending.spec.result_id, pending.digest)
-                for pending in self._pending.values()
-            ]
-        )
+        if self._pending:
+            self.store.checkpoint_results(
+                [(pending.spec.result_id, pending.digest) for pending in self._pending.values()]
+            )
         self._pending.clear()
+        self._analysis_updates.clear()
         self._dirty = False

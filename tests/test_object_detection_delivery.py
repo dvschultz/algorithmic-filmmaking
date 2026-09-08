@@ -5,6 +5,42 @@ import subprocess
 import sys
 
 
+def test_worker_delivers_verified_empty_and_failed_records(tmp_path, monkeypatch):
+    from unittest.mock import Mock
+    from PySide6.QtCore import QObject
+    from PySide6.QtWidgets import QApplication
+    from core.settings import Settings
+    from tests.test_description_operations import project_with_thumbnails
+    from ui.workers.object_detection_worker import ObjectDetectionWorker
+    from ui.workers.object_detection_delivery import ObjectDetectionDelivery
+
+    app = QApplication.instance() or QApplication([])
+    window = QObject()
+    assert window.thread() == app.thread()
+    window.project = project_with_thumbnails(tmp_path, 1)
+    assert window.project.save(tmp_path / "project.json")
+    window._on_object_detection_error = Mock()
+    monkeypatch.setattr("core.settings.load_settings", lambda: Settings(cache_dir=tmp_path / "cache"))
+    provider = Mock(return_value=[])
+    monkeypatch.setattr("core.analysis.detection.detect_objects", provider)
+    deliveries = []
+    try:
+        for attempt in ("compute", "reuse", "fail"):
+            if attempt == "fail":
+                provider.side_effect = RuntimeError("provider failed")
+            worker = ObjectDetectionWorker(window.project.clips, project=window.project, skip_existing=attempt != "fail")
+            window.detection_worker_yolo = worker
+            deliveries.append(ObjectDetectionDelivery(window, worker))
+            worker.run()
+            assert window.project.clips[0].analysis_records["detect_objects"].state == ("failed" if attempt == "fail" else "succeeded")
+        assert provider.call_count == 2
+        assert window.project.clips[0].detected_objects == []
+        assert window.project.clips[0].person_count == 0
+        window._on_object_detection_error.assert_not_called()
+    finally:
+        window.project.close_writer()
+
+
 def test_queued_object_detection_delivery_guards():
     code = r"""
 from pathlib import Path

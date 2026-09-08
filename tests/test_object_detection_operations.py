@@ -14,6 +14,58 @@ from tests.test_description_operations import project_with_thumbnails
 from ui.workers.object_detection_worker import ObjectDetectionWorker
 
 
+def test_empty_detection_requires_provenance_and_reuses_verified_result(tmp_path, monkeypatch):
+    from core.spine.analyze import detect_objects
+
+    project = project_with_thumbnails(tmp_path, 1)
+    clip = project.clips[0]
+    clip.detected_objects, clip.person_count = [], 0
+    provider = Mock(return_value=[])
+    monkeypatch.setattr("core.analysis.detection.detect_objects", provider)
+    assert len(detect_objects(project)["result"]["succeeded"]) == 1
+    assert clip.analysis_records["detect_objects"].provenance == "verified"
+    assert len(detect_objects(project)["result"]["skipped"]) == 1
+    assert provider.call_count == 1
+    assert len(detect_objects(project, confidence=0.7)["result"]["succeeded"]) == 1
+    assert provider.call_count == 2
+    clip.end_frame += 1
+    assert len(detect_objects(project, confidence=0.7)["result"]["succeeded"]) == 1
+    assert provider.call_count == 3
+
+
+def test_failed_detection_is_recorded_but_never_reused(tmp_path, monkeypatch):
+    from core.spine.analyze import detect_objects
+
+    project = project_with_thumbnails(tmp_path, 1)
+    provider = Mock(side_effect=RuntimeError("provider failed"))
+    monkeypatch.setattr("core.analysis.detection.detect_objects", provider)
+    assert len(detect_objects(project)["result"]["failed"]) == 1
+    record = project.clips[0].analysis_records["detect_objects"]
+    assert record.state == "failed"
+    assert record.identity.operation == "detect_objects"
+    provider.side_effect = None
+    provider.return_value = []
+    assert len(detect_objects(project)["result"]["succeeded"]) == 1
+    assert provider.call_count == 2
+
+
+@pytest.mark.parametrize("change", ["source", "image", "runtime"])
+def test_detection_reuse_checks_content_and_runtime(tmp_path, monkeypatch, change):
+    from core.spine.analyze import detect_objects
+
+    project = project_with_thumbnails(tmp_path, 1)
+    provider = Mock(return_value=[])
+    monkeypatch.setattr("core.analysis.detection.detect_objects", provider)
+    detect_objects(project)
+    if change == "runtime":
+        monkeypatch.setattr("core.operations.object_detection.object_detection_runtime", lambda: {"model": "different"})
+    else:
+        path = project.sources[0].file_path if change == "source" else project.clips[0].thumbnail_path
+        path.write_bytes(b"changed content")
+    assert len(detect_objects(project)["result"]["succeeded"]) == 1
+    assert provider.call_count == 2
+
+
 def test_pre_cancelled_worker_does_not_prepare_model(tmp_path, monkeypatch):
     project = project_with_thumbnails(tmp_path, 1)
     prepare = Mock()

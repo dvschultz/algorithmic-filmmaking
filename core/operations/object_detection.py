@@ -1,13 +1,17 @@
 """Detached object detection and people counting shared by all adapters."""
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
+import json
 from math import isfinite
 from pathlib import Path
 from threading import Event, Lock
-from typing import Callable, Literal, TYPE_CHECKING
+from typing import Any, Callable, Literal, TYPE_CHECKING, cast
 
 from core.operations.contracts import OutcomeStatus
+from core.analysis_records import AnalysisFingerprints, AnalysisSnapshot
+from core.analysis_model_identity import object_detection_runtime
+from models.analysis_record import AnalysisIdentity, AnalysisRecord
 
 if TYPE_CHECKING:
     from core.project import Project
@@ -23,12 +27,39 @@ class ObjectDetectionTask:
     thumbnail_path: Path | None
     skip: bool = False
     target_type: Literal["clip", "frame"] = "clip"
+    analysis_json: str | None = None
+
+
+def object_detection_task(target: Any, source: Any = None, *, image_path: Path | None = None, skip_existing: bool = True, detect_all: bool = True) -> ObjectDetectionTask:
+    target_type = cast(Literal["clip", "frame"], getattr(target, "target_type", None) or ("frame" if hasattr(target, "frame_number") else "clip"))
+    image = image_path or getattr(target, "image_path", None) or (target.file_path if target_type == "frame" else target.thumbnail_path)
+    files = {"image": image} if image is not None else {}
+    source_path = source.file_path if source is not None else getattr(target, "video_path", None)
+    if source_path is not None:
+        files["video"] = source_path
+    source_range = {"frame_number": target.frame_number} if target_type == "frame" else {"start_frame": target.start_frame, "end_frame": target.end_frame}
+    value = {"person_count": target.person_count}
+    if detect_all:
+        value["detected_objects"] = target.detected_objects
+    snapshot = AnalysisSnapshot.capture(target, "detect_objects", files, source_range, value)
+    return ObjectDetectionTask(target.id, image, skip_existing, target_type, snapshot.to_json())
 
 
 @dataclass(frozen=True)
 class ObjectDetectionOptions:
     confidence: float = 0.5
     detect_all: bool = True
+
+    def __post_init__(self) -> None:
+        if isinstance(self.confidence, bool) or not isinstance(self.confidence, (int, float)) or not isfinite(self.confidence) or not 0 <= self.confidence <= 1:
+            raise ValueError("Detection confidence must be between zero and one")
+        if type(self.detect_all) is not bool:
+            raise ValueError("detect_all must be a boolean")
+        object.__setattr__(self, "confidence", float(self.confidence))
+
+
+def object_detection_identity(snapshot: AnalysisSnapshot, options: ObjectDetectionOptions, fingerprints: AnalysisFingerprints, runtime: dict) -> AnalysisIdentity:
+    return fingerprints.identity(snapshot.inputs, operation="detect_objects", operation_version=2, model=runtime, parameters=asdict(options), sampling={"policy": "single-image/v1"})
 
 
 @dataclass(frozen=True)
@@ -76,6 +107,15 @@ class ObjectDetectionOutcome:
     person_count: int | None = None
     code: str | None = None
     message: str | None = None
+    record_json: str | None = None
+
+    @property
+    def has_result(self) -> bool:
+        return self.status == "succeeded" or (self.status == "skipped" and self.record_json is not None)
+
+    @property
+    def can_apply(self) -> bool:
+        return self.has_result or (self.status == "failed" and self.record_json is not None)
 
     def detection_dicts(self) -> list[dict]:
         """Return fresh containers for legacy model and signal consumers."""
@@ -99,16 +139,35 @@ def compute_object_detection(
     task: ObjectDetectionTask,
     options: ObjectDetectionOptions,
     cancel: Event,
+    *, fingerprints: AnalysisFingerprints | None = None, runtime: dict | None = None,
 ) -> ObjectDetectionOutcome:
     def outcome(status: OutcomeStatus, **kwargs) -> ObjectDetectionOutcome:
         return ObjectDetectionOutcome(task.clip_id, status, **kwargs)
 
     if cancel.is_set():
         return outcome("unprocessed", code="cancelled")
-    if task.skip:
+    if task.skip and task.analysis_json is None:
         return outcome("skipped", code="already_populated")
-    if task.thumbnail_path is None or not task.thumbnail_path.exists():
+    if task.thumbnail_path is None or not task.thumbnail_path.is_file():
         return outcome("failed", code="thumbnail_missing")
+    snapshot = AnalysisSnapshot.from_json(task.analysis_json) if task.analysis_json else None
+    identity = None
+    if snapshot is not None:
+        from core.jobs.media import FingerprintCancelled
+        from core.jobs.commits import StaleJobResult
+
+        try:
+            identity = object_detection_identity(snapshot, options, fingerprints or AnalysisFingerprints(cancel), runtime if runtime is not None else object_detection_runtime())
+        except FingerprintCancelled:
+            return outcome("unprocessed", code="cancelled")
+        except (ValueError, StaleJobResult) as exc:
+            return outcome("failed", code="stale_input", message=str(exc))
+        except OSError as exc:
+            return outcome("failed", code="input_unavailable", message=str(exc))
+        reused = snapshot.reusable_record(identity) if task.skip else None
+        if reused is not None:
+            value = reused.value
+            return outcome("skipped", detections=tuple(DetectedObject.from_dict(v) for v in value.get("detected_objects", [])), person_count=value["person_count"], code="valid_analysis", record_json=json.dumps(reused.to_dict(), sort_keys=True))
     # GUI jobs, CLI, and headless callers share the same mutable YOLO singleton.
     while not _inference_lock.acquire(timeout=0.05):
         if cancel.is_set():
@@ -133,7 +192,15 @@ def compute_object_detection(
                 raise ValueError("Invalid person count")
         if cancel.is_set():
             return outcome("unprocessed", code="cancelled")
-        return outcome("succeeded", detections=detections, person_count=person_count)
+        record = None
+        if snapshot is not None and identity is not None:
+            if not snapshot.inputs.unchanged():
+                return outcome("failed", code="stale_input")
+            value = {"person_count": person_count}
+            if options.detect_all:
+                value["detected_objects"] = [d.to_dict() for d in detections]
+            record = AnalysisRecord.success(identity, value, input_snapshot=snapshot.inputs.to_dict())
+        return outcome("succeeded", detections=detections, person_count=person_count, record_json=json.dumps(record.to_dict(), sort_keys=True) if record else None)
     except Exception as exc:
         if cancel.is_set():
             return outcome("unprocessed", code="cancelled")
@@ -145,6 +212,7 @@ def compute_object_detection(
             if isinstance(exc, ModelDownloadError)
             else "detection_failed",
             message=str(exc),
+            record_json=json.dumps(replace(AnalysisRecord.failure(identity, str(exc)), input_json=json.dumps(snapshot.inputs.to_dict(), sort_keys=True)).to_dict(), sort_keys=True) if identity is not None and snapshot is not None and snapshot.inputs.unchanged() else None,
         )
     finally:
         _inference_lock.release()
@@ -157,12 +225,16 @@ def run_object_detection(
     cancel_event: Event | None = None,
     on_outcome: Callable[[ObjectDetectionOutcome], None] | None = None,
     progress: Callable[[int, int], None] | None = None,
+    fingerprints: AnalysisFingerprints | None = None,
+    runtime: dict | None = None,
 ) -> tuple[ObjectDetectionOutcome, ...]:
     """Run serial inference; cancellation suppresses late provider replies."""
     cancel = cancel_event or Event()
     outcomes = []
+    fingerprints = fingerprints or AnalysisFingerprints(cancel)
+    runtime = runtime if runtime is not None else object_detection_runtime()
     for index, task in enumerate(tasks):
-        result = compute_object_detection(task, options, cancel)
+        result = compute_object_detection(task, options, cancel, fingerprints=fingerprints, runtime=runtime)
         outcomes.append(result)
         if not cancel.is_set():
             if on_outcome:
@@ -238,6 +310,7 @@ class ObjectDetectionApplication:
                 image,
                 deepcopy(target.detected_objects) if self.options.detect_all else None,
                 target.person_count,
+                target.analysis_records.get("detect_objects"),
             ),
         )
 
@@ -250,7 +323,7 @@ class ObjectDetectionApplication:
         if (
             project is not self.project
             or project.session.session_id != self.session_id
-            or not any(outcome.status == "succeeded" for outcome in outcomes)
+            or not any(outcome.can_apply for outcome in outcomes)
         ):
             return tuple(False for _ in outcomes)
 
@@ -261,7 +334,7 @@ class ObjectDetectionApplication:
                 valid = False
                 task = self.tasks.get(outcome.clip_id)
                 if (
-                    outcome.status == "succeeded"
+                    outcome.can_apply
                     and outcome.clip_id not in self.consumed
                 ):
                     self.consumed.add(outcome.clip_id)
@@ -278,6 +351,24 @@ class ObjectDetectionApplication:
                         updates: dict = {"person_count": outcome.person_count}
                         if self.options.detect_all:
                             updates["detected_objects"] = outcome.detection_dicts()
+                        record = AnalysisRecord.from_dict(json.loads(outcome.record_json)) if outcome.record_json else AnalysisRecord.legacy(updates)
+                        if outcome.record_json is not None:
+                            snapshot = AnalysisSnapshot.from_json(task.analysis_json) if task.analysis_json else None
+                            if (
+                                snapshot is None or record.identity is None
+                                or record.identity.operation != "detect_objects"
+                                or record.identity.to_dict()["parameters"] != asdict(self.options)
+                                or json.loads(record.input_json or "null") != snapshot.inputs.to_dict()
+                                or (outcome.has_result and (record.state != "succeeded" or record.value != updates))
+                                or (outcome.status == "failed" and record.state != "failed")
+                            ):
+                                accepted.append(False)
+                                continue
+                        if outcome.status == "failed":
+                            project.record_analysis(task.target_type, outcome.clip_id, "detect_objects", record)
+                            accepted.append(True)
+                            continue
+                        project.record_analysis(task.target_type, outcome.clip_id, "detect_objects", record)
                         if task.target_type == "frame":
                             project.update_frame(outcome.clip_id, **updates)
                         else:

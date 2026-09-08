@@ -25,6 +25,27 @@ def run(store, path, cancel=None):
     return run_colors(store, path, None, 5, lambda *a: None, cancel or Event())
 
 
+def test_staged_analysis_rechecks_inputs_before_saving(tmp_path, monkeypatch):
+    from models.analysis_record import AnalysisRecord
+
+    path, store, _ = setup_colors(tmp_path, monkeypatch, 1)
+    original = path.read_bytes()
+    record = AnalysisRecord.legacy({"dominant_colors": []})
+    valid = True
+    try:
+        with pytest.raises(StaleJobResult, match="Analysis inputs"):
+            with result_batch(store, path) as batch:
+                batch.stage_analysis(
+                    apply=lambda project: project.record_analysis("clip", "c-0", "colors", record),
+                    validate_input=lambda project: valid,
+                    is_applied=lambda project: project.clips[0].analysis_records.get("colors") == record,
+                )
+                valid = False
+        assert path.read_bytes() == original
+    finally:
+        store.close()
+
+
 def test_color_project_serialization_is_batched(tmp_path, monkeypatch):
     path, store, extract = setup_colors(tmp_path, monkeypatch, 33)
     original = Project.save

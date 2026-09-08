@@ -38,7 +38,7 @@ def test_people_only_spine_preserves_objects(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("kind", ["clip", "frame"])
-def test_people_only_worker_skips_known_zero(tmp_path, kind):
+def test_people_only_worker_revalidates_legacy_zero(tmp_path, kind):
     from ui.workers.object_detection_worker import ObjectDetectionWorker
 
     project = project_with_thumbnails(tmp_path, 1)
@@ -55,7 +55,8 @@ def test_people_only_worker_skips_known_zero(tmp_path, kind):
             [], detect_all=False, analysis_targets=[AnalysisTarget.from_frame(target)]
         )
     )
-    assert worker.tasks == ()
+    assert len(worker.tasks) == 1
+    assert worker.tasks[0].analysis_json is not None
 
 
 @pytest.mark.parametrize("kind", ["clip", "frame"])

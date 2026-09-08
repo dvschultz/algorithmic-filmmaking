@@ -1,6 +1,7 @@
 """Owner-thread object_detection publication bound to its launch context."""
 
 from typing import Any
+from dataclasses import asdict
 
 from PySide6.QtCore import Slot
 
@@ -35,10 +36,18 @@ class ObjectDetectionDelivery(RetiringQObject):
         self.reply = getattr(window, "_dispatch_gui_reply", None)
         self.delivered: set[str] = set()
         worker.finished.connect(self.retire)
-        worker.objects_ready.connect(self.result)
+        if hasattr(worker, "outcome_ready"):
+            worker.outcome_ready.connect(self.receive)
+        else:
+            worker.objects_ready.connect(self.result)
 
     @Slot(str, list, int)
     def result(self, target_id: str, detections: list, person_count: int) -> None:
+        self.receive(ObjectDetectionOutcome(target_id, "succeeded", tuple(DetectedObject.from_dict(value) for value in detections), person_count))
+
+    @Slot(object)
+    def receive(self, outcome: ObjectDetectionOutcome) -> None:
+        target_id = outcome.clip_id
         window = self.window
         if (
             getattr(window, self.worker_attribute, None) is not self.worker
@@ -58,12 +67,6 @@ class ObjectDetectionDelivery(RetiringQObject):
             return
         self.delivered.add(target_id)
         try:
-            outcome = ObjectDetectionOutcome(
-                target_id,
-                "succeeded",
-                tuple(DetectedObject.from_dict(value) for value in detections),
-                person_count,
-            )
             receipt = None
             cache = getattr(self.worker, "cache", None)
             if cache is not None:
@@ -74,8 +77,12 @@ class ObjectDetectionDelivery(RetiringQObject):
                     raise ValueError(
                         "Project save location changed during object detection"
                     )
-                receipt = cache.results[target_id]
-                if not receipt.matches(outcome):
+                receipt = cache.results.get(target_id)
+                if receipt is not None:
+                    matches = receipt.matches(outcome)
+                else:
+                    matches = getattr(cache, "transient_outcomes", {}).get(target_id) == asdict(outcome)
+                if not matches:
                     raise ValueError(
                         "Queued object detection differs from its recorded result"
                     )

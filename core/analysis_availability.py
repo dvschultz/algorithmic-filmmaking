@@ -60,6 +60,21 @@ def operation_has_result(op_key: str, clip) -> bool:
 
 def operation_is_complete_for_clip(op_key: str, clip, *, runtime: dict | None = None) -> bool:
     """Report reusable completion; existing fields alone do not prove provenance."""
+    if op_key == "detect_objects":
+        from core.analysis_records import current_record
+        from core.analysis_model_identity import object_detection_runtime
+
+        record = current_record(clip, op_key)
+        if record is None or record.identity is None:
+            return False
+        data = record.identity.to_dict()
+        return bool(
+            data["operation_version"] == 2 and data["schema_version"] == 1
+            and data["model"] == (runtime if runtime is not None else object_detection_runtime())
+            and data["parameters"] == {"confidence": 0.5, "detect_all": True}
+            and data["sampling"] == {"policy": "single-image/v1"}
+            and record.value == {"detected_objects": clip.detected_objects, "person_count": clip.person_count}
+        )
     if op_key == "colors":
         from core.analysis_records import current_record, model_runtime
 
@@ -106,7 +121,11 @@ def compute_operation_need_counts(clips: Iterable, op_keys: Iterable[str]) -> di
     counts: dict[str, int] = {}
     for op_key in op_keys:
         runtime = None
-        if op_key == "colors":
+        if op_key == "detect_objects":
+            from core.analysis_model_identity import object_detection_runtime
+
+            runtime = object_detection_runtime()
+        elif op_key == "colors":
             from core.analysis_records import model_runtime
 
             runtime = model_runtime("kmeans-rgb", ("numpy", "scikit-learn", "opencv-python"))

@@ -37,6 +37,18 @@ def run(setup, **kwargs):
     )["result"]
 
 
+def test_failed_attempts_are_saved_without_success_receipts(setup):
+    path, _, compute = setup
+    compute.side_effect = RuntimeError("provider failed")
+    assert len(run(setup)["failed"]) == 2
+    loaded = Project.load(path)
+    assert not loaded.metadata.job_results
+    assert all(clip.analysis_records["detect_objects"].state == "failed" for clip in loaded.clips)
+    compute.side_effect = None
+    assert len(run(setup)["succeeded"]) == 2
+    assert compute.call_count == 4
+
+
 @pytest.mark.parametrize("force", [False, True])
 def test_failed_save_reuses_computation_after_reopening_store(setup, force):
     path, store, compute = setup
@@ -90,7 +102,7 @@ def test_external_analysis_thumbnail_checkpoint_retry_preserves_display_image(se
     assert compute.call_count == 2
 
 
-def test_existing_user_objects_are_preserved(setup):
+def test_edited_projection_requires_recomputation(setup):
     path, _, compute = setup
     run(setup)
     saved = Project.load(path)
@@ -98,8 +110,8 @@ def test_existing_user_objects_are_preserved(setup):
     saved.update_clips([saved.clips[0]])
     assert saved.save()
     run(setup)
-    assert Project.load(path).clips[0].detected_objects == ["manual"]
-    assert compute.call_count == 2
+    assert Project.load(path).clips[0].detected_objects == compute.return_value
+    assert compute.call_count == 3
 
 
 @pytest.mark.parametrize("media", ["image", "source"])
@@ -199,13 +211,12 @@ def test_corrupt_receipt_refuses_recomputation(setup, column):
     assert compute.call_count == 2
 
 
-def test_missing_receipt_refuses_recomputation(setup):
+def test_verified_record_outlives_job_receipts(setup):
     path, _, compute = setup
     run(setup)
     empty = JobStore(path.parent / "empty.db")
     try:
-        with pytest.raises(StaleJobResult, match="missing"):
-            run((path, empty, compute))
+        assert len(run((path, empty, compute))["skipped"]) == 2
     finally:
         empty.close()
     assert compute.call_count == 2

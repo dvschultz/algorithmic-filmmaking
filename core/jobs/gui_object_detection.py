@@ -10,6 +10,7 @@ from core.jobs.object_detection import _runtime, _task_data
 from core.jobs.commits import StaleJobResult
 from core.jobs.gui_results import GuiResultJournal, GuiResultRequest
 from core.jobs.media import FingerprintCancelled, media_stamp
+from core.analysis_records import AnalysisFingerprints
 from core.operations.object_detection import (
     ObjectDetectionOptions,
     ObjectDetectionOutcome,
@@ -44,6 +45,7 @@ class GuiObjectDetectionCache(GuiResultJournal):
         self.previous_json = json.dumps(
             previous_results, sort_keys=True, allow_nan=False
         )
+        self.transient_outcomes: dict[str, dict] = {}
 
     def validate_media(self, request: GuiResultRequest) -> None:
         super().validate_media(request)
@@ -77,7 +79,7 @@ class GuiObjectDetectionCache(GuiResultJournal):
             progress(len(outcomes), len(tasks))
 
         try:
-            self.start(cancel)
+            self.start(cancel, allow_missing_receipts=True)
             for task in tasks:
                 if cancel.is_set():
                     break
@@ -107,6 +109,8 @@ class GuiObjectDetectionCache(GuiResultJournal):
                     def record(outcome: ObjectDetectionOutcome) -> None:
                         if outcome.status == "succeeded":
                             self.record(requests[outcome.clip_id], outcome)
+                        elif outcome.can_apply:
+                            self.transient_outcomes[outcome.clip_id] = asdict(outcome)
                         publish(outcome)
 
                     computed = run_object_detection(
@@ -114,6 +118,8 @@ class GuiObjectDetectionCache(GuiResultJournal):
                         self.options,
                         cancel_event=cancel,
                         on_outcome=record,
+                        fingerprints=AnalysisFingerprints(cancel, media_fingerprints=self.fingerprints),
+                        runtime=self.runtime,
                     )
                     for outcome in computed:
                         outcomes.setdefault(outcome.clip_id, outcome)

@@ -1,7 +1,7 @@
 # Analysis provenance and derived artifacts
 
-The first U10 implementation covers color palettes and thumbnail DINOv2
-embeddings across the desktop, shared spine, CLI, MCP jobs, and embedding
+The U10 implementation covers color palettes, thumbnail DINOv2 embeddings,
+and object detection across the desktop, shared spine, CLI, MCP jobs, and embedding
 prerequisites used by sequencing. This document describes that bounded scope.
 The complete U10 contract remains in the shared editing engine plan.
 
@@ -34,6 +34,16 @@ one-use delivery guards. An artifact-backed embedding can be reused after the
 old job cache is removed. Ordinary projects without artifacts or job receipts
 do not initialize either cache during save.
 
+Object detection records both successful empty observations and failed attempts.
+Its identity distinguishes confidence thresholds and full detection from
+people-only counting. Changing those options, the source range, image, or model
+requires revalidation. Failed attempts are persisted without successful job
+receipts and never satisfy completion checks. A verified result remains reusable
+after its old job cache is removed. CLI analysis-image selection validates the
+record's source binding before handing the image to worker-side content checks.
+GUI delivery carries the entire immutable outcome, including the record, and
+checks it against the computation journal or the worker's exact transient result.
+
 ## Storage and ownership
 
 The configured cache directory contains `artifacts/`, with a SQLite reference
@@ -65,7 +75,7 @@ without stopping analysis of valid neighboring clips.
 ## Remaining U10 work
 
 - Migrate the other U7 analysis families, including boundary embeddings, to
-  semantic reuse and operation-owned failure records.
+  semantic reuse. Extend operation-owned failure records beyond object detection.
 - Expose the explicit legacy-reuse decision through user and agent flows; the
   current record model supports the decision but the flows are not wired.
 - Move preview/prerender media and durable job array payloads into managed

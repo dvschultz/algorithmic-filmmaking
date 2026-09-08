@@ -644,7 +644,7 @@ class TestClassificationWorkerTaskBuilding:
 # --- ObjectDetectionWorker ---
 
 class TestObjectDetectionWorkerTaskBuilding:
-    def test_skip_existing_skips_clips_with_detections(self, thumbnail_path):
+    def test_legacy_detections_require_revalidation(self, thumbnail_path):
         from ui.workers.object_detection_worker import ObjectDetectionWorker
 
         clip_with = _make_clip_with_thumb(
@@ -655,8 +655,7 @@ class TestObjectDetectionWorkerTaskBuilding:
         clip_without = _make_clip_with_thumb("c2", thumbnail_path)
 
         worker = ObjectDetectionWorker([clip_with, clip_without])
-        assert len(worker._tasks) == 1
-        assert worker._tasks[0].clip_id == "c2"
+        assert [task.clip_id for task in worker.tasks] == ["c1", "c2"]
 
     def test_skip_existing_false_includes_all(self, thumbnail_path):
         from ui.workers.object_detection_worker import ObjectDetectionWorker

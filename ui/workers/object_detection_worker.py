@@ -31,6 +31,7 @@ from core.operations.object_detection import (
     ObjectDetectionOutcome,
     compute_object_detection,
     run_object_detection,
+    object_detection_task,
 )
 
 from ui.workers.base import CancellableWorker, summarize_clip_errors
@@ -60,6 +61,7 @@ class ObjectDetectionWorker(CancellableWorker):
 
     progress = Signal(int, int)  # current, total
     objects_ready = Signal(str, list, int)  # target_id, detections, person_count
+    outcome_ready = Signal(object)
     detection_completed = Signal()
 
     def __init__(
@@ -79,6 +81,7 @@ class ObjectDetectionWorker(CancellableWorker):
         self._detect_all = detect_all
         self._parallelism = 1
         self.options = ObjectDetectionOptions(confidence, detect_all)
+        self._project = project
         self.result: tuple[ObjectDetectionOutcome, ...] = ()
         if analysis_targets:
             self._tasks = self._build_tasks_from_targets(
@@ -163,19 +166,11 @@ class ObjectDetectionWorker(CancellableWorker):
         """Build immutable task list from clips."""
         tasks = []
         for clip in clips:
-            existing = (
-                clip.detected_objects if self.options.detect_all else clip.person_count
-            )
-            if skip_existing and existing is not None:
-                continue
             if not clip.thumbnail_path or not clip.thumbnail_path.exists():
                 logger.warning(f"Skipping clip {clip.id}: thumbnail not found")
                 continue
             tasks.append(
-                ObjectDetectionTask(
-                    clip_id=clip.id,
-                    thumbnail_path=clip.thumbnail_path,
-                )
+                object_detection_task(clip, self._project.sources_by_id.get(clip.source_id) if self._project else None, skip_existing=skip_existing, detect_all=self.options.detect_all)
             )
         return tasks
 
@@ -185,23 +180,12 @@ class ObjectDetectionWorker(CancellableWorker):
         """Build immutable task list from AnalysisTarget objects."""
         tasks = []
         for target in targets:
-            existing = (
-                target.detected_objects
-                if self.options.detect_all
-                else target.person_count
-            )
-            if skip_existing and existing is not None:
-                continue
             image_path = target.image_path
             if not image_path or not image_path.exists():
                 logger.warning(f"Skipping target {target.id}: image not found")
                 continue
             tasks.append(
-                ObjectDetectionTask(
-                    clip_id=target.id,
-                    thumbnail_path=image_path,
-                    target_type=target.target_type,
-                )
+                object_detection_task(target, image_path=image_path, skip_existing=skip_existing, detect_all=self.options.detect_all)
             )
         return tasks
 
@@ -250,11 +234,14 @@ class ObjectDetectionWorker(CancellableWorker):
             kind, value = event
             if kind == "progress":
                 self.progress.emit(*value)
-            elif value.status == "succeeded":
+            elif value.has_result:
+                self.outcome_ready.emit(value)
                 self.objects_ready.emit(
                     value.clip_id, value.detection_dicts(), value.person_count
                 )
             elif value.status == "failed":
+                if value.can_apply:
+                    self.outcome_ready.emit(value)
                 errors.append(
                     (value.clip_id, value.message or value.code or "Analysis failed")
                 )

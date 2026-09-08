@@ -2,7 +2,6 @@
 
 import json
 from threading import Event
-from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -10,6 +9,7 @@ import pytest
 from core.jobs.audio_import import audio_import_job_spec, run_audio_import_job
 from core.jobs.store import JobStore
 from core.project import Project
+from core.settings import Settings
 
 
 @pytest.fixture
@@ -23,9 +23,11 @@ def setup(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "core.jobs.audio_import.audio_import_runtime", lambda: {"runtime": 1}
     )
-    monkeypatch.setattr(
-        "core.settings.load_settings", lambda: SimpleNamespace(cache_dir=tmp_path)
-    )
+    settings = Settings(cache_dir=tmp_path)
+    # Import the compatibility module before patching its source module so its
+    # copied function binding cannot retain another test's temporary loader.
+    monkeypatch.setattr("cli.utils.config.load_settings", lambda: settings)
+    monkeypatch.setattr("core.settings.load_settings", lambda: settings)
     processor = Mock(ffprobe_available=True)
     processor.get_audio_info.return_value = dict(
         duration=1.23456789, sample_rate=48000, channels=2

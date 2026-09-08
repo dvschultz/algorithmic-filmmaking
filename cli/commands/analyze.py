@@ -800,11 +800,14 @@ def _run_object_detection_cli(
     prepared = {}
     generator = None
     for clip in clips:
-        existing = clip.detected_objects if detect_all else clip.person_count
-        if existing is not None and not force:
+        from core.analysis_records import recorded_image_path
+
+        source = sources_by_id.get(clip.source_id)
+        prior_image = recorded_image_path(clip, source, "detect_objects") if not force else None
+        if prior_image is not None:
+            prepared[clip.id] = prior_image
             ready.append(clip.id)
             continue
-        source = sources_by_id.get(clip.source_id)
         if source is None or not source.file_path.exists():
             errors.append(f"Clip {clip.id[:8]}: source not found")
             continue
