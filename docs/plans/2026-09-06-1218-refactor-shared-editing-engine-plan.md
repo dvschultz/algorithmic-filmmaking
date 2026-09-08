@@ -563,8 +563,13 @@ projections. Volume uses the actual captured FFmpeg/FFprobe paths. The shared
 headless `analyze_scalars` entry point is wired to these operations. The regression
 run passed 100 tests; scoped operation typing and changed-file Ruff pass. The three
 color-provider typing errors were also removed by correcting a float initialization.
-Sequencing/GUI, durable recovery, registered CLI/MCP/agent surfaces, and
-completion/cost integration remain pending.
+Brightness and volume sequencing now use these operations on detached inputs,
+verify cached values before sorting, retain successful no-audio results, reject
+failed prerequisites, and discard cancelled batches. A final batch check rejects
+media changed after an earlier clip finished. Six pre-fix regression cases failed;
+the resulting regression run passed 172 tests, with scoped helper typing and
+changed-file Ruff clean. GUI publication, durable recovery, registered CLI/MCP/agent
+surfaces, and completion/cost integration remain pending.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain

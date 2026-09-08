@@ -111,8 +111,8 @@ def generate_sequence(
                    "append_end" (default): append after sorted clips
                    "exclude": drop clips without color data
                    "sort_inline": treat as hue 0 and sort normally
-        cancel_event: Stops pending thumbnail embedding batches and discards a
-                   cancelled similarity-chain or Match Cut result. Other algorithms currently
+        cancel_event: Stops pending scalar and embedding batches and discards a
+                   cancelled brightness, volume, similarity-chain, or Match Cut result. Other algorithms currently
                    check only before dispatch.
 
     Returns:
@@ -262,8 +262,9 @@ def generate_sequence(
         # Sort by average brightness (luminance)
         brightness_direction = direction or "bright_to_dark"
 
-        # Auto-compute brightness for clips that don't have it cached
-        _auto_compute_brightness(clips_to_use)
+        clips_to_use = _auto_compute_brightness(clips_to_use, cancel_event=cancel_event)
+        if cancel_event is not None and cancel_event.is_set():
+            return []
 
         def get_brightness(item: Tuple[Any, Any]) -> float:
             clip, _ = item
@@ -276,8 +277,9 @@ def generate_sequence(
         # Sort by audio volume (RMS level in dB)
         volume_direction = direction or "quiet_to_loud"
 
-        # Auto-compute volume for clips that don't have it cached
-        _auto_compute_volume(clips_to_use)
+        clips_to_use = _auto_compute_volume(clips_to_use, cancel_event=cancel_event)
+        if cancel_event is not None and cancel_event.is_set():
+            return []
 
         # Filter out clips without volume data (no audio track)
         clips_with_volume = [
@@ -454,53 +456,22 @@ def _is_dialog_only_algorithm(algorithm: str) -> bool:
     return bool(config and config.get("is_dialog"))
 
 
-def _auto_compute_brightness(clips: List[Tuple[Any, Any]]) -> None:
-    """Compute brightness for clips that don't have it cached."""
-    from core.analysis.color import get_average_brightness
+def _auto_compute_brightness(
+    clips: List[Tuple[Any, Any]], *, cancel_event: Event | None = None
+) -> List[Tuple[Any, Any]]:
+    """Verify brightness on detached sequencing inputs."""
+    from core.remix.scalar_inputs import scalar_inputs
 
-    for clip, source in clips:
-        if clip.average_brightness is None:
-            try:
-                brightness = get_average_brightness(
-                    source_path=source.file_path,
-                    start_frame=clip.start_frame,
-                    end_frame=clip.end_frame,
-                    fps=source.fps,
-                )
-                clip.average_brightness = brightness
-            except Exception as e:
-                logger.warning(f"Failed to compute brightness for clip {clip.id}: {e}")
-                raise RuntimeError(f"Brightness analysis failed for clip {clip.id}") from e
+    return scalar_inputs(clips, "brightness", cancel_event=cancel_event)
 
 
-def _auto_compute_volume(clips: List[Tuple[Any, Any]]) -> None:
-    """Compute volume for clips that don't have it cached."""
-    from core.analysis.audio import extract_clip_volume, has_audio_track
+def _auto_compute_volume(
+    clips: List[Tuple[Any, Any]], *, cancel_event: Event | None = None
+) -> List[Tuple[Any, Any]]:
+    """Verify volume, including no-audio results, on detached inputs."""
+    from core.remix.scalar_inputs import scalar_inputs
 
-    # Cache has_audio_track per source to avoid repeated ffprobe calls
-    audio_cache: dict[str, bool] = {}
-
-    for clip, source in clips:
-        if clip.rms_volume is None:
-            # Check audio track cache before spawning ffmpeg
-            if source.id not in audio_cache:
-                audio_cache[source.id] = has_audio_track(source.file_path, strict=True)
-            if not audio_cache[source.id]:
-                continue
-
-            try:
-                start_seconds = clip.start_frame / source.fps
-                duration_seconds = clip.duration_seconds(source.fps)
-                volume = extract_clip_volume(
-                    source_path=source.file_path,
-                    start_seconds=start_seconds,
-                    duration_seconds=duration_seconds,
-                    _has_audio=True,
-                )
-                clip.rms_volume = volume
-            except Exception as e:
-                logger.warning(f"Failed to compute volume for clip {clip.id}: {e}")
-                raise RuntimeError(f"Volume analysis failed for clip {clip.id}") from e
+    return scalar_inputs(clips, "volume", cancel_event=cancel_event)
 
 
 def _auto_compute_embeddings(

@@ -19,6 +19,18 @@ from models.clip import Clip, Source
 from models.cinematography import CinematographyAnalysis
 
 
+@pytest.fixture
+def scalar_sort_inputs(monkeypatch):
+    """Isolate sorting policy; verified prerequisite coverage is in test_scalar_records."""
+    from copy import deepcopy
+
+    for operation in ("brightness", "volume"):
+        monkeypatch.setattr(
+            f"core.remix._auto_compute_{operation}",
+            lambda clips, **kwargs: deepcopy(clips),
+        )
+
+
 # -- Helpers ------------------------------------------------------------------
 
 def _make_source(source_id: str = "src1", fps: float = 30.0) -> Source:
@@ -95,7 +107,7 @@ class TestClipModelFields:
 class TestBrightnessAlgorithm:
     """Brightness gradient sorting."""
 
-    def test_bright_to_dark_order(self):
+    def test_bright_to_dark_order(self, scalar_sort_inputs):
         from core.remix import generate_sequence
         source = _make_source()
         clips = [
@@ -107,7 +119,7 @@ class TestBrightnessAlgorithm:
         ids = [c.id for c, _ in result]
         assert ids == ["bright", "mid", "dark"]
 
-    def test_dark_to_bright_order(self):
+    def test_dark_to_bright_order(self, scalar_sort_inputs):
         from core.remix import generate_sequence
         source = _make_source()
         clips = [
@@ -119,18 +131,15 @@ class TestBrightnessAlgorithm:
         ids = [c.id for c, _ in result]
         assert ids == ["dark", "mid", "bright"]
 
-    def test_default_brightness_for_missing(self):
-        """Clips without brightness get 0.5 default (sorted to middle)."""
+    def test_midpoint_brightness_order(self, scalar_sort_inputs):
+        """A measured midpoint brightness sorts between dark and bright."""
         from core.remix import generate_sequence
         source = _make_source()
         clips = [
             (_make_clip("dark", average_brightness=0.1), source),
-            (_make_clip("unknown", average_brightness=None), source),
+            (_make_clip("unknown", average_brightness=0.5), source),
             (_make_clip("bright", average_brightness=0.9), source),
         ]
-        # Need to mock auto-compute since there's no real video
-        # Set the value manually to simulate auto-compute fallback
-        clips[1][0].average_brightness = 0.5
         result = generate_sequence("brightness", clips, 3, direction="bright_to_dark")
         ids = [c.id for c, _ in result]
         assert ids == ["bright", "unknown", "dark"]
@@ -141,7 +150,7 @@ class TestBrightnessAlgorithm:
 class TestVolumeAlgorithm:
     """Volume gradient sorting with clip exclusion."""
 
-    def test_quiet_to_loud_order(self):
+    def test_quiet_to_loud_order(self, scalar_sort_inputs):
         from core.remix import generate_sequence
         source = _make_source()
         clips = [
@@ -153,7 +162,7 @@ class TestVolumeAlgorithm:
         ids = [c.id for c, _ in result]
         assert ids == ["quiet", "mid", "loud"]
 
-    def test_loud_to_quiet_order(self):
+    def test_loud_to_quiet_order(self, scalar_sort_inputs):
         from core.remix import generate_sequence
         source = _make_source()
         clips = [
@@ -164,7 +173,7 @@ class TestVolumeAlgorithm:
         ids = [c.id for c, _ in result]
         assert ids == ["loud", "quiet"]
 
-    def test_clips_without_volume_excluded(self):
+    def test_clips_without_volume_excluded(self, scalar_sort_inputs):
         """Clips with rms_volume=None are excluded from the result."""
         from core.remix import generate_sequence
         source = _make_source()
@@ -531,7 +540,7 @@ class TestMatchCut:
 class TestGenerateSequenceIntegration:
     """Test generate_sequence() with all new algorithm keys."""
 
-    def test_brightness_algorithm_key(self):
+    def test_brightness_algorithm_key(self, scalar_sort_inputs):
         from core.remix import generate_sequence
         source = _make_source()
         clips = [
@@ -541,7 +550,7 @@ class TestGenerateSequenceIntegration:
         result = generate_sequence("brightness", clips, 2)
         assert len(result) == 2
 
-    def test_volume_algorithm_key(self):
+    def test_volume_algorithm_key(self, scalar_sort_inputs):
         from core.remix import generate_sequence
         source = _make_source()
         clips = [

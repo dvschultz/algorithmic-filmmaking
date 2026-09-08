@@ -58,6 +58,87 @@ def test_verified_scalar_reuses_after_save(setup, tmp_path):
         assert provider.call_args.kwargs["_ffprobe_path"] == tmp_path / "ffprobe"
 
 
+def test_sequencing_verifies_legacy_values_on_detached_clips(setup):
+    from core.remix import generate_sequence
+
+    project, operation, provider = setup
+    clip, source = project.clips[0], project.sources[0]
+    setattr(clip, FIELDS[operation], 0.1)
+    before = clip.to_dict()
+    result = generate_sequence(operation, [(clip, source)], 1)
+    assert provider.call_count == 1
+    assert clip.to_dict() == before
+    assert result[0][0] is not clip
+    assert operation in result[0][0].analysis_records
+    assert getattr(result[0][0], FIELDS[operation]) == provider.return_value
+    generate_sequence(operation, result, 1)
+    assert provider.call_count == 1
+    source.file_path.write_bytes(b"changed media")
+    generate_sequence(operation, result, 1)
+    assert provider.call_count == 2
+
+
+def test_sequencing_cancel_discards_scalar_results(setup):
+    from core.remix import generate_sequence
+
+    project, operation, provider = setup
+    cancel = Event()
+    provider.side_effect = lambda *args, **kwargs: (cancel.set(), 0.5)[1]
+    clip, source = project.clips[0], project.sources[0]
+    before = clip.to_dict()
+    assert generate_sequence(operation, [(clip, source)], 1, cancel_event=cancel) == []
+    assert clip.to_dict() == before
+
+
+def test_sequencing_does_not_sort_stale_values_after_failure(setup):
+    from core.remix import generate_sequence
+
+    project, operation, provider = setup
+    clip, source = project.clips[0], project.sources[0]
+    setattr(clip, FIELDS[operation], 0.1)
+    provider.side_effect = RuntimeError("decode failed")
+    before = clip.to_dict()
+    with pytest.raises(RuntimeError, match="analysis failed"):
+        generate_sequence(operation, [(clip, source)], 1)
+    assert clip.to_dict() == before
+
+
+def test_sequencing_rechecks_earlier_media_after_batch(setup, tmp_path):
+    from core.remix import generate_sequence
+
+    project, operation, provider = setup
+    first, source = project.clips[0], project.sources[0]
+    second_source = Source(file_path=tmp_path / "second.mp4", fps=30)
+    second_source.file_path.write_bytes(b"second video")
+    second = Clip(source_id=second_source.id, start_frame=0, end_frame=30)
+
+    def compute(*args, **kwargs):
+        if provider.call_count == 2:
+            source.file_path.write_bytes(b"changed during later task")
+        return 0.5
+
+    provider.side_effect = compute
+    with pytest.raises(RuntimeError, match="inputs changed"):
+        generate_sequence(operation, [(first, source), (second, second_source)], 2)
+    assert not first.analysis_records and not second.analysis_records
+
+
+def test_sequencing_verified_no_audio_reuses(setup):
+    from core.remix import generate_sequence
+
+    project, operation, provider = setup
+    if operation != "volume":
+        return
+    provider.return_value = None
+    inputs = [(project.clips[0], project.sources[0])]
+    first = generate_sequence(operation, inputs, 1)
+    assert len(first) == 1  # Preserve the existing all-silent sequence policy.
+    assert first[0][0].rms_volume is None
+    assert first[0][0].analysis_records[operation].state == "succeeded"
+    generate_sequence(operation, first, 1)
+    assert provider.call_count == 1
+
+
 @pytest.mark.parametrize("change", ["media", "range", "fps", "value", "legacy"])
 def test_changed_inputs_recompute(setup, change):
     project, operation, provider = setup

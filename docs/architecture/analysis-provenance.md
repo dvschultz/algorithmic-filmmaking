@@ -720,8 +720,14 @@ The shared headless `analyze_scalars` entry point publishes through those guards
 The regression run passed 100 tests, including provider execution-path and import
 boundary checks; the new operation module passes scoped typing and changed-file
 Ruff is clean. A float initialization also removes the prior color-provider typing
-errors. Sequencing/GUI integration, durable recovery, registered CLI/MCP/agent
-surfaces, and completion/cost checks remain pending.
+errors. Brightness and volume sequencing now verify prerequisites through shared
+operations on detached clip/source snapshots. Legacy values recompute; verified
+results (including no audio) reuse. Failure aborts sorting, cancellation discards
+the batch, and a final check rejects media changed after an earlier task finished.
+Project models remain untouched. Existing ordering/exclusion policies are preserved.
+The sequencing regression run passed 172 tests; scoped helper typing and changed-file
+Ruff pass. GUI publication, durable recovery, registered CLI/MCP/agent surfaces,
+and completion/cost checks remain pending.
 
 ## Remaining U10 work
 
