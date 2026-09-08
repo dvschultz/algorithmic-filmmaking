@@ -153,7 +153,7 @@ class ArtifactLease:
 
 def _array_records(document: dict) -> Iterator[tuple[dict, str, AnalysisRecord]]:
     for target in document.get("clips", []):
-        for operation in ("embeddings", "boundary_embeddings"):
+        for operation in ("embeddings", "boundary_embeddings", "face_embeddings"):
             data = target.get("analysis_records", {}).get(operation)
             if data is None:
                 fields = ANALYSIS_FIELDS[operation]

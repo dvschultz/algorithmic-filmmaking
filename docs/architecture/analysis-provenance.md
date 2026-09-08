@@ -683,8 +683,18 @@ startup failures retire the dialog. Exact requested sampling survives UI display
 rounding. The regression run passed 108 tests with two modules passing scoped
 typing and agent/dialog/tool Ruff clean. MainWindow still has the same six
 pre-existing unused-import Ruff findings, verified against the committed baseline.
-Managed face
-embedding storage also remains pending.
+Face arrays now use the same managed manifest storage as other embeddings,
+including verified empty results and legacy/failed display projections. Load
+validates payloads, marks only damaged face results missing, and restores payloads
+from portable bundles in a fresh store. Completion and worker reuse understand
+managed values; GUI checkpoints and durable retry comparisons authenticate the
+same records across inline and artifact storage. Missing face payloads can be
+recomputed without treating the loss as a manual edit. Source-removal undo keeps
+artifact references alive. The regression run passed 207 tests, followed by 27
+damage/retry and 44 retention/checkpoint checks; four modules passed scoped typing
+and changed-file Ruff is clean. Portable face identity rebinding after relocation
+still needs verification and implementation; restored projections alone do not
+prove reusable computation.
 
 ## Remaining U10 work
 

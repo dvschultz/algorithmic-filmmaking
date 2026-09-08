@@ -220,7 +220,7 @@ def test_revoked_producer_cannot_publish_after_finishing_copy(tmp_path):
     assert not list(store.objects.iterdir())
 
 
-@pytest.mark.parametrize("operation", ["embeddings", "boundary_embeddings"])
+@pytest.mark.parametrize("operation", ["embeddings", "boundary_embeddings", "face_embeddings"])
 def test_project_save_and_source_undo_retain_real_references(tmp_path, monkeypatch, operation):
     from core.project import Project
     from models.clip import Clip, Source

@@ -24,6 +24,11 @@ def _saved_array_matches(clip: dict, operation: str, expected: dict, record_json
         value = json.loads(ArtifactStore().read_bytes(record.artifact)) if record.artifact is not None else record.value
         if record_json is not None:
             original = AnalysisRecord.from_dict(json.loads(record_json))
+            if operation == "face_embeddings":
+                from dataclasses import replace
+
+                if replace(record, artifact=original.artifact, value_json=original.value_json) != original:
+                    return False
             if (record.identity != original.identity or original.state != "succeeded"
                 or record.provenance != original.provenance or record.input_json != original.input_json):
                 return False
@@ -242,10 +247,8 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
             from core.jobs.faces import _saved_faces
             from core.operations.faces import FaceOutcome
 
-            if payload.get("record_json") is not None and clip.get("analysis_records", {}).get("face_embeddings") != json.loads(payload["record_json"]):
-                continue
             expected = _saved_faces(FaceOutcome.from_dict(payload).face_dicts())
-            if clip.get("face_embeddings") == expected:
+            if _saved_array_matches(clip, "face_embeddings", {"face_embeddings": expected}, payload.get("record_json")):
                 pending.append((result_id, receipt_digest))
             continue
         if identity["kind"] == "gui_object_detection":

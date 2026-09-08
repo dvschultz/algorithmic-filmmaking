@@ -205,8 +205,18 @@ def run_face_job(
             }
 
         def current_output(current: Project, cid: str) -> dict:
+            from dataclasses import replace
+            from core.artifacts import ArtifactStore, ArtifactUnavailable
+
             clip = current.clips_by_id[cid]
             record = clip.analysis_records.get("face_embeddings")
+            if isinstance(record, AnalysisRecord) and record.artifact is not None:
+                try:
+                    value = json.loads(ArtifactStore().read_bytes(record.artifact))
+                    if value == face_value(clip):
+                        record = replace(record, artifact=None, value_json=json.dumps(value, sort_keys=True))
+                except (ArtifactUnavailable, OSError, ValueError):
+                    pass  # A missing payload cannot prove prior publication.
             return {
                 "faces": face_value(clip)["face_embeddings"],
                 "record": record.to_dict() if record else None,
@@ -286,8 +296,17 @@ def run_face_job(
                     {"clip_id": rest, "code": "cancelled"} for rest in ids[index:]
                 )
                 break
+            current_clip = project.clips_by_id[cid]
+            current_record = current_clip.analysis_records.get("face_embeddings")
+            missing_payload = (
+                current_clip.face_embeddings is None
+                and isinstance(current_record, AnalysisRecord)
+                and current_record.artifact is not None
+                and current_record.state == "missing"
+            )
             if (
                 not force
+                and not missing_payload
                 and cid in known
                 and not any(
                     current_output(project, cid)["faces"]

@@ -535,8 +535,14 @@ clip/source pair contract and captured reply ownership; cancellation, expired
 replies, project/sequence changes, and startup failures are covered. The regression
 run passed 108 tests with two modules passing scoped typing and changed-module
 Ruff clean outside MainWindow's six verified baseline unused imports.
-Remaining work includes managed face embedding storage
-and cost-check migration for the other analysis families.
+Face arrays now use managed manifest storage, preserving verified empty and
+legacy/failed projections. Completion, GUI checkpoints, and durable retries
+understand artifact-backed records. Damage is isolated, payloads restore from
+bundles in a fresh store, missing derived data can be recomputed, and undo retains
+references. The regression run passed 207 tests plus 27 damage/retry and 44
+retention/checkpoint checks; four modules passed scoped typing and changed-file
+Ruff is clean. Portable face identity rebinding after relocation and cost-check
+migration for the other analysis families remain pending.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain

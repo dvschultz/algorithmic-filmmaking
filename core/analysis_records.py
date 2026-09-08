@@ -60,6 +60,11 @@ def restore_artifact_projections(targets: list[Any], store: "ArtifactStore") -> 
                 payload = json.loads(store.read_bytes(record.artifact))
                 if not isinstance(payload, dict) or set(payload) != set(fields):
                     raise ArtifactUnavailable("Analysis payload fields do not match its operation")
+                if operation == "face_embeddings":
+                    from core.operations.face_records import face_result_value
+
+                    if face_result_value(payload["face_embeddings"]) != payload:
+                        raise ArtifactUnavailable("Face payload contains invalid or noncanonical values")
                 if "embedding_model" in fields and payload["embedding_model"] != getattr(target, "embedding_model", None):
                     other_vectors = {"embedding", "first_frame_embedding", "last_frame_embedding"} - set(fields)
                     if any(getattr(target, field, None) is not None for field in other_vectors):

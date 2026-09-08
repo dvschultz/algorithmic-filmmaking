@@ -174,6 +174,18 @@ def face_analysis_is_complete(clip: Clip, source: Source | None, *, sample_inter
         execution = saved_execution(record)
         model = data["model"]
         value = json.loads(snapshot.value_json)
+        if record.artifact is not None:
+            from hashlib import sha256
+            from core.artifacts import ArtifactStore
+
+            encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+            value_matches = (
+                record.artifact.media_type == "application/json"
+                and record.artifact.digest == sha256(encoded).hexdigest()
+                and ArtifactStore().available_fast(record.artifact)
+            )
+        else:
+            value_matches = record.value == value
         validate_face_frames(value, clip.start_frame, clip.end_frame, source.fps, sample_interval)
         return bool(
             media == snapshot.inputs
@@ -186,7 +198,7 @@ def face_analysis_is_complete(clip: Clip, source: Source | None, *, sample_inter
             and all(Path(item["path"]).parent == Path(target["directory"]) for item in execution["weight_files"])
             and face_runtime(execution, {"packages": target["packages"], "available_providers": model["available_providers"]}) == model
             and execution_inputs(snapshot, execution) == inputs
-            and record.value == value
+            and value_matches
         )
     except (ValueError, TypeError, KeyError, AttributeError, OSError):
         return False
