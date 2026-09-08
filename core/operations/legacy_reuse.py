@@ -16,9 +16,11 @@ from core.operations.contracts import ColorOutcome, ColorResult
 from core.operations.embeddings import EmbeddingOutcome, EmbeddingTask, embedding_identity
 from models.analysis_record import AnalysisIdentity, AnalysisRecord
 
-LEGACY_REUSE_OPERATIONS = ("colors", "embeddings", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots", "extract_text", "describe", "cinematography")
+LEGACY_REUSE_OPERATIONS = ("colors", "embeddings", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots", "extract_text", "describe", "cinematography", "transcribe")
 
 if TYPE_CHECKING:
+    from core.operations.transcription import TranscriptionOptions, TranscriptionOutcome, TranscriptionTask
+    from core.settings import Settings
     from core.operations.cinematography import CinematographyOptions, CinematographyOutcome, CinematographyTask
     from core.operations.description import DescriptionOptions, DescriptionOutcome, DescriptionTask
     from core.operations.scalars import ScalarOutcome, ScalarTask
@@ -61,6 +63,60 @@ def _accept(record_json: str | None, value: dict, identity: AnalysisIdentity, in
         input_json=json.dumps(inputs.to_dict(), sort_keys=True, separators=(",", ":")),
     )
     return json.dumps(accepted.to_dict(), sort_keys=True)
+
+
+def legacy_transcription_options(settings: "Settings | None" = None) -> "TranscriptionOptions":
+    """Capture requested transcript settings before queueing an acceptance."""
+    from core.settings import load_settings
+    from core.operations.transcription import TranscriptionOptions, resolve_transcription_options
+
+    settings = settings if settings is not None else load_settings()
+    return resolve_transcription_options(TranscriptionOptions(
+        model=settings.transcription_model, language=settings.transcription_language,
+        backend=settings.transcription_backend, cloud_model=settings.transcription_cloud_model,
+        segmentation_mode=settings.transcription_segmentation_mode,
+        segment_max_seconds=settings.transcription_segment_max_seconds,
+    ))
+
+
+def accept_legacy_transcription(tasks: "tuple[TranscriptionTask, ...]", options: "TranscriptionOptions", *, cancel_event: Event | None = None) -> "tuple[TranscriptionOutcome, ...]":
+    """Accept saved clip-relative segments without changing text or word timing."""
+    from core.analysis_records import AnalysisSnapshot
+    from core.jobs.media import FingerprintCancelled
+    from core.operations.transcription import TranscriptionOutcome, resolve_transcription_options
+    from core.operations.transcription_records import transcription_identity, transcription_runtime, transcription_segments_value
+    from core.transcription_models import TranscriptSegment
+
+    fingerprints = AnalysisFingerprints(cancel_event)
+    options = resolve_transcription_options(options)
+    runtime = transcription_runtime(options)
+    outcomes = []
+    for task in tasks:
+        try:
+            if cancel_event is not None and cancel_event.is_set():
+                raise FingerprintCancelled()
+            if task.error or task.analysis_json is None or task.source_path is None:
+                raise ValueError(task.error or "Transcription reuse requires readable source media")
+            if not isfinite(task.start_time) or not isfinite(task.end_time) or task.start_time < 0 or task.end_time <= task.start_time:
+                raise ValueError("Transcription reuse requires a valid source range")
+            snapshot = AnalysisSnapshot.from_json(task.analysis_json)
+            value = json.loads(snapshot.value_json)
+            if not isinstance(value["transcript"], list):
+                raise ValueError("No legacy transcript is available")
+            segments = tuple(TranscriptSegment.from_dict(item) for item in value["transcript"])
+            if transcription_segments_value(segments) != value:
+                raise ValueError("Legacy transcript is not canonical; recompute analysis")
+            duration = task.end_time - task.start_time
+            if any(segment.end_time > duration or any(word.start < segment.start_time or word.end > segment.end_time for word in segment.words or ()) for segment in segments):
+                raise ValueError("Legacy transcript timing lies outside its clip or segment")
+            identity = transcription_identity(snapshot, options, fingerprints, runtime)
+            record_json = _accept(json.dumps(snapshot.record.to_dict()) if snapshot.record else None, value, identity, snapshot.inputs)
+            outcomes.append(TranscriptionOutcome(task.clip_id, "skipped", segments, code="legacy_accepted", record_json=record_json))
+        except FingerprintCancelled:
+            outcomes.append(TranscriptionOutcome(task.clip_id, "unprocessed", code="cancelled"))
+        except (ValueError, OSError, TypeError, KeyError, AttributeError) as exc:
+            outcomes.append(TranscriptionOutcome(task.clip_id, "failed", message=str(exc)))
+    return tuple(outcomes)
 
 
 def accept_legacy_cinematography(tasks: "tuple[CinematographyTask, ...]", options: "CinematographyOptions", *, cancel_event: Event | None = None) -> "tuple[CinematographyOutcome, ...]":

@@ -8,7 +8,9 @@ from PySide6.QtCore import Signal
 
 from core.operations.colors import ColorApplication, color_request
 from core.operations.embeddings import EmbeddingApplication, embedding_task
-from core.operations.legacy_reuse import LEGACY_REUSE_OPERATIONS, accept_legacy_colors, accept_legacy_embeddings, accept_legacy_scalars, accept_legacy_visuals, accept_legacy_boundaries, accept_legacy_gaze, accept_legacy_shots, accept_legacy_ocr, accept_legacy_descriptions, accept_legacy_cinematography
+from core.operations.legacy_reuse import LEGACY_REUSE_OPERATIONS, accept_legacy_colors, accept_legacy_embeddings, accept_legacy_scalars, accept_legacy_visuals, accept_legacy_boundaries, accept_legacy_gaze, accept_legacy_shots, accept_legacy_ocr, accept_legacy_descriptions, accept_legacy_cinematography, accept_legacy_transcription, legacy_transcription_options
+from core.operations.transcription import TranscriptionApplication
+from core.operations.transcription_records import transcription_task
 from core.operations.cinematography import CinematographyApplication, cinematography_task, resolve_options as resolve_cinematography_options
 from core.operations.description import DescriptionApplication, description_task, resolve_options as resolve_description_options
 from core.operations.ocr import OcrApplication, OcrOptions, ocr_task, resolve_ocr_options
@@ -47,7 +49,7 @@ class LegacyReuseWorker(CancellableWorker):
         self.operation = operation
         self.request = color_request(project, ids, skip_existing=False) if operation == "colors" else None
         self.tasks = tuple(embedding_task(project.clips_by_id[cid], project.sources_by_id.get(project.clips_by_id[cid].source_id), skip_existing=False) for cid in ids) if operation == "embeddings" else ()
-        self.application: ColorApplication | EmbeddingApplication | ScalarBatchApplication | CinematographyApplication | DescriptionApplication | OcrApplication | ShotTypeApplication | GazeApplication | BoundaryEmbeddingApplication | ClassificationApplication | ObjectDetectionApplication
+        self.application: ColorApplication | EmbeddingApplication | ScalarBatchApplication | TranscriptionApplication | CinematographyApplication | DescriptionApplication | OcrApplication | ShotTypeApplication | GazeApplication | BoundaryEmbeddingApplication | ClassificationApplication | ObjectDetectionApplication
         self._compute: Callable[[], object]
         if self.request is not None:
             self.application = ColorApplication(project, self.request)
@@ -55,6 +57,11 @@ class LegacyReuseWorker(CancellableWorker):
         elif operation == "embeddings":
             self.application = EmbeddingApplication(project, self.tasks)
             self._compute = partial(accept_legacy_embeddings, self.tasks, cancel_event=self._cancel_event)
+        elif operation == "transcribe":
+            transcription_tasks = tuple(transcription_task(project.clips_by_id[cid], project.sources_by_id.get(project.clips_by_id[cid].source_id)) for cid in ids)
+            transcription_options = legacy_transcription_options(settings=settings)
+            self.application = TranscriptionApplication(project, transcription_tasks, transcription_options)
+            self._compute = partial(accept_legacy_transcription, transcription_tasks, transcription_options, cancel_event=self._cancel_event)
         elif operation == "cinematography":
             cinematography_tasks = tuple(cinematography_task(project.clips_by_id[cid], project.sources_by_id.get(project.clips_by_id[cid].source_id)) for cid in ids)
             cinematography_options = resolve_cinematography_options(settings=settings)

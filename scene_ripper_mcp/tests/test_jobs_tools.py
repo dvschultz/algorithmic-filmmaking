@@ -58,7 +58,7 @@ def lifespan_ctx(tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["colors", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots", "extract_text", "describe", "cinematography"])
+@pytest.mark.parametrize("operation", ["colors", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots", "extract_text", "describe", "cinematography", "transcribe"])
 async def test_explicit_legacy_reuse_job_saves_unknown_provenance(lifespan_ctx, tmp_path, operation):
     from core.project import Project
     from core.analysis_model_identity import DINOV2_TAG
@@ -71,6 +71,7 @@ async def test_explicit_legacy_reuse_job_saves_unknown_provenance(lifespan_ctx, 
     project.clips[0].object_labels = project.clips[0].detected_objects = []
     project.clips[0].person_count = 0
     project.clips[0].extracted_texts = []
+    project.clips[0].transcript = []
     project.clips[0].description = "A person walking"
     project.clips[0].shot_type = "wide shot"
     if operation == "cinematography":

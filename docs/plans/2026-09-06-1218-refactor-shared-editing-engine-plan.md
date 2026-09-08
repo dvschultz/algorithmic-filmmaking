@@ -495,6 +495,13 @@ cinematography/MCP/native GUI/import group passes, with scoped typing and lint
 clean. Transcription/alignment, faces, custom-query acceptance, and final
 verification remain open.
 
+Clip-transcription legacy acceptance now reaches all four surfaces, preserving
+word timings and separate alignment records while capturing current settings.
+Stored silence is accepted; missing transcripts and invalid ranges/timings are
+rejected. The 212-test legacy/transcription/MCP/native GUI/import group passes,
+with scoped typing and lint clean. Audio transcription, alignment, faces,
+custom-query acceptance, and final verification remain open.
+
 Custom queries now retain independent records through shared operations, direct
 headless calls, GUI worker delivery/recovery, and durable headless jobs. GUI reuse
 verifies saved records without duplicate history or local weight loading. Durable

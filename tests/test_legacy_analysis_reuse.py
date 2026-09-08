@@ -46,7 +46,7 @@ def test_verified_record_cannot_be_relabelled_as_legacy(tmp_path):
     assert project.clips[0].analysis_records["colors"] == previous
 
 
-@pytest.mark.parametrize("operation", ["colors", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots", "extract_text", "describe", "cinematography"])
+@pytest.mark.parametrize("operation", ["colors", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots", "extract_text", "describe", "cinematography", "transcribe"])
 def test_cli_reuse_requires_an_explicit_command_and_saves_unknown_provenance(tmp_path, operation):
     from click.testing import CliRunner
     from cli.commands.analyze import analyze
@@ -59,6 +59,7 @@ def test_cli_reuse_requires_an_explicit_command_and_saves_unknown_provenance(tmp
     project.clips[0].object_labels = project.clips[0].detected_objects = []
     project.clips[0].person_count = 0
     project.clips[0].extracted_texts = []
+    project.clips[0].transcript = []
     project.clips[0].description = "A person walking"
     project.clips[0].shot_type = "wide shot"
     if operation == "cinematography":
@@ -490,3 +491,65 @@ def test_invalid_legacy_cinematography_requires_recomputation(tmp_path, invalid)
     result = accept_legacy_analysis(project, "cinematography", cinematography_options=CinematographyOptions("cloud", "frame", "test", "local"))
     assert not result["accepted"] and len(result["failed"]) == 1
     assert "cinematography" not in clip.analysis_records
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_transcription_reuse_preserves_words_and_captures_settings(tmp_path, empty):
+    from core.settings import Settings
+    from core.operations.legacy_reuse import legacy_transcription_options
+    from core.operations.transcription import run_transcription
+    from core.operations.transcription_records import transcription_task
+    from core.transcription_models import TranscriptSegment, WordTimestamp
+    from ui.workers.legacy_reuse_worker import LegacyReuseWorker
+    from models.analysis_record import AnalysisRecord
+
+    project = project_with_thumbnails(tmp_path, 1)
+    clip = project.clips[0]
+    transcript = [] if empty else [TranscriptSegment(0.0, 0.1, "Hello", -0.2, words=[WordTimestamp(0.0, 0.1, "Hello", 0.8)])]
+    clip.transcript = transcript
+    alignment = AnalysisRecord.legacy({"transcript": [s.to_dict() for s in transcript]})
+    clip.analysis_records["align_words"] = alignment
+    settings = Settings(transcription_backend="groq", transcription_cloud_model="original-model")
+    worker = LegacyReuseWorker(project, "transcribe", [clip.id], settings=settings)
+    settings.transcription_cloud_model = "changed-model"
+    results = []
+    worker.result_ready.connect(results.append)
+    worker.run()
+    assert worker.application.apply(project, results[0][0])
+    record = clip.analysis_records["transcribe"]
+    assert record.provenance == "unknown" and record.legacy_reuse
+    assert clip.transcript is transcript
+    assert clip.analysis_records["align_words"] is alignment
+    assert not operation_is_complete_for_clip("transcribe", clip, source=project.sources[0], settings=settings)
+    settings.transcription_cloud_model = "original-model"
+    assert operation_is_complete_for_clip("transcribe", clip, source=project.sources[0], settings=settings)
+    with patch("core.operations.transcription._compute_task", side_effect=AssertionError("no inference")):
+        reused = run_transcription((transcription_task(clip, project.sources[0]),), legacy_transcription_options(settings))
+    assert reused[0].status == "skipped"
+    clip.end_frame -= 1
+    assert not operation_is_complete_for_clip("transcribe", clip, source=project.sources[0], settings=settings)
+
+
+@pytest.mark.parametrize("invalid", ["missing", "outside", "word", "negative", "confidence"])
+def test_invalid_legacy_transcript_requires_recomputation(tmp_path, invalid):
+    from core.operations.transcription import TranscriptionOptions
+    from core.spine.analysis_reuse import accept_legacy_analysis
+    from core.transcription_models import TranscriptSegment, WordTimestamp
+
+    project = project_with_thumbnails(tmp_path, 1)
+    clip = project.clips[0]
+    segment = TranscriptSegment(0.0, 0.1, "Hello")
+    clip.transcript = [segment]
+    if invalid == "missing":
+        clip.transcript = None
+    elif invalid == "outside":
+        segment.end_time = 10000
+    elif invalid == "word":
+        segment.words = [WordTimestamp(0.0, 0.2, "Hello")]
+    elif invalid == "negative":
+        segment.start_time = -1
+    else:
+        segment.confidence = True
+    result = accept_legacy_analysis(project, "transcribe", transcription_options=TranscriptionOptions(backend="groq", cloud_model="test"))
+    assert not result["accepted"] and len(result["failed"]) == 1
+    assert "transcribe" not in clip.analysis_records

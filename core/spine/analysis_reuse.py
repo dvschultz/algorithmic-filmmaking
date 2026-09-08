@@ -5,13 +5,14 @@ from threading import Event
 
 if TYPE_CHECKING:
     from core.operations.ocr import OcrOptions
+    from core.operations.transcription import TranscriptionOptions
     from core.operations.cinematography import CinematographyOptions
     from core.operations.description import DescriptionOptions
     from core.project import Project
     from core.operations.shots import ShotTypeOptions
 
 
-def accept_legacy_analysis(project: "Project", operation: str, clip_ids: list[str] | None = None, *, cancel_event: Event | None = None, shot_options: "ShotTypeOptions | None" = None, ocr_options: "OcrOptions | None" = None, description_options: "DescriptionOptions | None" = None, cinematography_options: "CinematographyOptions | None" = None) -> dict:
+def accept_legacy_analysis(project: "Project", operation: str, clip_ids: list[str] | None = None, *, cancel_event: Event | None = None, shot_options: "ShotTypeOptions | None" = None, ocr_options: "OcrOptions | None" = None, description_options: "DescriptionOptions | None" = None, cinematography_options: "CinematographyOptions | None" = None, transcription_options: "TranscriptionOptions | None" = None) -> dict:
     """Bind selected legacy values to current inputs, retaining unknown provenance.
 
     Performs media hashing; desktop callers must use the detached operation
@@ -19,13 +20,16 @@ def accept_legacy_analysis(project: "Project", operation: str, clip_ids: list[st
     """
     from core.operations.colors import ColorApplication, color_request
     from core.operations.embeddings import EmbeddingApplication, embedding_task
-    from core.operations.legacy_reuse import LEGACY_REUSE_OPERATIONS, accept_legacy_colors, accept_legacy_embeddings, accept_legacy_scalars, accept_legacy_visuals, accept_legacy_boundaries, accept_legacy_gaze, accept_legacy_shots, accept_legacy_ocr, accept_legacy_descriptions, accept_legacy_cinematography
+    from core.operations.legacy_reuse import LEGACY_REUSE_OPERATIONS, accept_legacy_colors, accept_legacy_embeddings, accept_legacy_scalars, accept_legacy_visuals, accept_legacy_boundaries, accept_legacy_gaze, accept_legacy_shots, accept_legacy_ocr, accept_legacy_descriptions, accept_legacy_cinematography, accept_legacy_transcription, legacy_transcription_options
     from core.operations.scalars import ScalarApplication, ScalarOperation, scalar_task
     from models.analysis_record import AnalysisRecord
 
     project.session.assert_owner()
     if operation not in LEGACY_REUSE_OPERATIONS:
         raise ValueError("Unsupported legacy reuse operation")
+    if operation == "transcribe":
+        from core.operations.transcription import resolve_transcription_options
+        transcription_options = resolve_transcription_options(transcription_options) if transcription_options is not None else legacy_transcription_options()
     if operation == "cinematography" and cinematography_options is None:
         from core.operations.cinematography import resolve_options as resolve_cinematography_options
         cinematography_options = resolve_cinematography_options()
@@ -51,6 +55,21 @@ def accept_legacy_analysis(project: "Project", operation: str, clip_ids: list[st
         previous = clip.analysis_records.get(operation)
         if previous is not None and not isinstance(previous, AnalysisRecord):
             result["failed"].append({"clip_id": cid, "message": "Unknown analysis record must be preserved; recompute analysis"})
+            continue
+        if operation == "transcribe":
+            from core.operations.transcription import TranscriptionApplication
+            from core.operations.transcription_records import transcription_task
+
+            assert transcription_options is not None
+            transcription_input = transcription_task(clip, project.sources_by_id.get(clip.source_id))
+            transcription_application = TranscriptionApplication(project, (transcription_input,), transcription_options)
+            transcription_result = accept_legacy_transcription((transcription_input,), transcription_options, cancel_event=cancel_event)[0]
+            if transcription_result.status == "unprocessed":
+                result["unprocessed"].append(cid)
+            elif transcription_result.has_result and transcription_application.apply(project, transcription_result):
+                result["accepted"].append(cid)
+            else:
+                result["failed"].append({"clip_id": cid, "message": transcription_result.message or "Target changed"})
             continue
         if operation == "cinematography":
             from core.operations.cinematography import CinematographyApplication, cinematography_task

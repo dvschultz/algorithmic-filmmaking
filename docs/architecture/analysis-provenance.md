@@ -1063,6 +1063,17 @@ tracked, inactive historical owners as described above.
   execution providers, which legacy vector fields do not retain. Face legacy
   acceptance remains unresolved; vector dimensions alone cannot establish model
   compatibility.
+- Clip-transcription legacy acceptance now reaches all four interfaces. It
+  captures backend/model/language/segmentation settings before queueing, validates
+  clip-relative segments and contained word timings, and preserves the saved
+  transcript and separate alignment record. Stored empty transcripts are valid;
+  missing values and invalid timings require recomputation. Accepted transcripts
+  retain unknown provenance and skip inference while settings/trim changes
+  invalidate completion. The 212-test legacy/native GUI/MCP/transcription/import
+  group passes, followed by seven targeted tests after explicit-option backend
+  normalization. Five scoped modules pass typing and scoped lint is clean.
+  Audio transcription, alignment, faces, custom-query acceptance, and the final
+  review/full-suite audit remain open.
 - Finish the remaining cross-consumer reuse/projection audit.
   Receipt pruning retains legacy rows rather than guessing absent ownership;
   existing rows are not migrated eagerly.
