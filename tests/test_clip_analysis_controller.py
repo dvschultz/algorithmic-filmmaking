@@ -10,10 +10,10 @@ import pytest
 @pytest.mark.parametrize("mode", ["completed", "aborted_early", "aborted_late", "aborted_combined"])
 def test_retired_controller_can_release_its_last_window_reference(mode):
     code = r'''
-import gc, sys
+import gc, sys, time
 from pathlib import Path
 from types import SimpleNamespace
-from PySide6.QtCore import QCoreApplication, QEvent, QObject
+from PySide6.QtCore import QCoreApplication, QEvent, QObject, QThread
 from core.project import Project
 from core.settings import Settings
 from models.clip import Clip, Source
@@ -35,6 +35,11 @@ def retire():
         clip.description = 'Existing description'
         controller = ClipAnalysisController(window, [clip], ['describe'])
         controller.start()
+        # Populated text now requires worker-side verification before completion.
+        deadline = time.monotonic() + 5
+        while not controller.finished and time.monotonic() < deadline:
+            app.processEvents()
+            QThread.msleep(1)
         assert controller.finished
     else:
         from ui.workers.standalone_analysis import start_standalone_analysis

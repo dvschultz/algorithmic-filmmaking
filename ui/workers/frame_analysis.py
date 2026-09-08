@@ -81,7 +81,7 @@ def create_frame_analysis_worker(
         worker = DescriptionWorker(
             **common, parallelism=settings.description_parallelism, options=options
         )
-        return worker, DescriptionApplication(project, worker.tasks)
+        return worker, DescriptionApplication(project, worker.tasks, worker.options)
     if operation == "cinematography":
         from ui.workers.cinematography_worker import CinematographyWorker
         from core.operations.cinematography import CinematographyApplication

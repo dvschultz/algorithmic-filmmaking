@@ -283,6 +283,18 @@ def compute_description(
         try:
             if snapshot is not None and not snapshot.inputs.unchanged():
                 raise ValueError("Description input media changed")
+            if snapshot is not None and resolve_tier(options.tier) == "local":
+                from core.analysis.description import _load_local_model
+
+                _load_local_model(options.model)
+                if cancel.is_set():
+                    return DescriptionOutcome(
+                        task.clip_id, "unprocessed", code="cancelled"
+                    )
+                if not snapshot.inputs.unchanged():
+                    raise ValueError(
+                        "Description input media changed during model loading"
+                    )
             description, model = describe_frame(
                 task.thumbnail_path,
                 tier=options.tier,

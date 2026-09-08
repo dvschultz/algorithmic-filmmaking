@@ -43,28 +43,43 @@ def setup(request, tmp_path, monkeypatch):
     return project, compute
 
 
-def worker_for(project):
+def worker_for(project, *, skip_existing=False):
     return DescriptionWorker(
         project.clips,
         sources=project.sources_by_id,
         tier="cloud",
         project=project,
-        skip_existing=False,
+        skip_existing=skip_existing,
         analysis_targets=[AnalysisTarget.from_frame(f) for f in project.frames] or None,
     )
 
 
-def run(project, *, apply=False, prepare=lambda: True, cancel=None, limit=None):
-    worker = worker_for(project)
+def run(
+    project,
+    *,
+    apply=False,
+    prepare=lambda: True,
+    cancel=None,
+    limit=None,
+    skip_existing=False,
+):
+    worker = worker_for(project, skip_existing=skip_existing)
     tasks = worker.tasks[:limit]
     application = DescriptionApplication(project, tasks)
 
     def deliver(outcome):
-        if apply and outcome.status == "succeeded":
+        if apply and outcome.can_apply:
             assert application.apply(project, outcome)
-            receipt = worker.cache.results[outcome.clip_id]
-            assert receipt.matches(outcome)
-            project.record_job_result(receipt.result_id, receipt.digest)
+            receipt = worker.cache.results.get(outcome.clip_id)
+            if receipt is not None:
+                assert receipt.matches(outcome)
+                project.record_job_result(receipt.result_id, receipt.digest)
+            else:
+                from dataclasses import asdict
+
+                assert worker.cache.transient_outcomes[outcome.clip_id] == asdict(
+                    outcome
+                )
 
     return worker.cache.run(tasks, cancel or Event(), prepare, deliver, lambda *_: None)
 
@@ -194,8 +209,11 @@ def test_unsaved_media_changed_during_model_load_prevents_provider_call(
 ):
     project, compute = setup
     worker = DescriptionWorker(
-        project.clips, sources=project.sources_by_id, tier="local"
+        project.clips,
+        sources=project.sources_by_id,
+        options=replace(OPTIONS, tier="local"),
     )
+    monkeypatch.setattr("core.analysis.description.is_mlx_vlm_available", lambda: False)
     monkeypatch.setattr("core.analysis.description.is_model_loaded", lambda *_: False)
     monkeypatch.setattr(
         "core.analysis.description._load_local_model",
@@ -219,3 +237,91 @@ def test_partial_cache_success_survives_preparation_failure(setup, monkeypatch):
     assert [outcome.status for outcome in worker.result] == ["succeeded", "failed"]
     assert worker.job_status == "failed"
     assert compute.call_count == 1
+
+
+def test_verified_gui_records_survive_missing_receipt_cache(setup, monkeypatch):
+    project, compute = setup
+    run(project, apply=True)
+    assert project.save()
+    reopened = Project.load(project.path)
+    monkeypatch.setattr(
+        "core.settings.load_settings",
+        lambda: SimpleNamespace(cache_dir=project.path.parent / "fresh-cache"),
+    )
+    outcomes = run(reopened, apply=True, skip_existing=True)
+    assert all(o.status == "skipped" and o.code == "valid_analysis" for o in outcomes)
+    assert compute.call_count == 2
+
+
+def test_legacy_gui_text_is_recomputed(setup):
+    project, compute = setup
+    for target in project.frames or project.clips:
+        target.description = "Legacy text"
+    outcomes = run(project, apply=True, skip_existing=True)
+    assert all(o.status == "succeeded" and o.record_json for o in outcomes)
+    assert compute.call_count == 2
+
+
+def test_gui_failure_retains_display_and_does_not_add_receipts(setup, monkeypatch):
+    project, compute = setup
+    run(project, apply=True)
+    receipts = dict(project.metadata.job_results)
+    compute.side_effect = RuntimeError("Provider rejected request")
+    monkeypatch.setattr(
+        "ui.workers.description_worker.resolve_options",
+        lambda *args: replace(OPTIONS, prompt="Changed prompt"),
+    )
+    outcomes = run(project, apply=True, skip_existing=True)
+    assert all(o.status == "failed" and o.record_json for o in outcomes)
+    assert project.metadata.job_results == receipts
+    assert all(
+        t.description == "Generated"
+        and t.analysis_records["describe"].state == "failed"
+        for t in project.frames or project.clips
+    )
+
+
+def test_checkpoint_requires_exact_analysis_record(setup):
+    project, _ = setup
+    run(project, apply=True)
+    for target in project.frames or project.clips:
+        target.analysis_records["describe"] = replace(
+            target.analysis_records["describe"], input_json="{}"
+        )
+    assert project.save()
+    store = JobStore(project.path.parent / "jobs.db")
+    assert not any(
+        store.get_result(rid)["committed"] for rid in project.metadata.job_results
+    )
+
+
+def test_runtime_change_invalidates_gui_receipt(setup, monkeypatch):
+    project, compute = setup
+    run(project)
+    monkeypatch.setattr(
+        "core.operations.description.model_runtime",
+        lambda *args: {"packages": {"test": "changed"}},
+    )
+    run(project)
+    assert compute.call_count == 4
+
+
+def test_verified_local_reuse_does_not_load_weights(setup, monkeypatch):
+    project, compute = setup
+    monkeypatch.setattr("core.analysis.description.is_mlx_vlm_available", lambda: False)
+    loader = Mock()
+    monkeypatch.setattr("core.analysis.description._load_local_model", loader)
+    options = replace(OPTIONS, tier="local")
+    worker = DescriptionWorker(
+        project.clips, sources=project.sources_by_id, options=options
+    )
+    application = DescriptionApplication(project, worker.tasks, options)
+    worker.run()
+    assert all(application.apply(project, outcome) for outcome in worker.result)
+    assert loader.call_count == 2
+    worker = DescriptionWorker(
+        project.clips, sources=project.sources_by_id, options=options
+    )
+    worker.run()
+    assert all(o.status == "skipped" for o in worker.result)
+    assert loader.call_count == compute.call_count == 2

@@ -75,3 +75,68 @@ with tempfile.TemporaryDirectory() as directory:
         env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_queued_verified_reuse_and_failure_delivery():
+    code = r"""
+import tempfile
+from pathlib import Path
+from dataclasses import asdict, replace
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
+from PySide6.QtCore import QCoreApplication, QObject, QThread, Signal
+from core.operations.description import DescriptionApplication, DescriptionOptions, description_task, run_description
+from tests.test_description_operations import project_with_thumbnails
+from ui.workers.description_delivery import DescriptionDelivery
+app = QCoreApplication([])
+class Worker(QThread):
+    outcome_ready = Signal(object)
+    def is_cancelled(self): return False
+    def run(self):
+        self.outcome_ready.emit(self.outcome)
+        self.outcome_ready.emit(self.outcome)
+with tempfile.TemporaryDirectory() as directory:
+    for mode in ('reuse', 'failure', 'tampered'):
+        window = QObject()
+        project = window.project = project_with_thumbnails(Path(directory), 1)
+        options = DescriptionOptions('cloud', model='test-model', input_mode='frame')
+        task = description_task(project.clips[0], project.sources[0])
+        with patch('core.analysis.description.describe_frame', return_value=('Generated', 'test-model')):
+            first = run_description((task,), options)[0]
+        assert DescriptionApplication(project, (task,), options).apply(project, first)
+        assert project.save(Path(directory) / 'project.json')
+        task = description_task(project.clips[0], project.sources[0])
+        if mode == 'failure':
+            options = replace(options, prompt='New prompt')
+            with patch('core.analysis.description.describe_frame', side_effect=RuntimeError('Invalid input')):
+                outcome = run_description((task,), options)[0]
+        else:
+            outcome = run_description((task,), options)[0]
+        worker = Worker()
+        worker.tasks = (task,)
+        worker.options = options
+        worker.outcome = outcome
+        worker.cache = SimpleNamespace(path=project.path.resolve(), results={}, transient_outcomes={task.clip_id: asdict(outcome)})
+        if mode == 'tampered': worker.cache.transient_outcomes[task.clip_id]['model'] = 'other'
+        window.description_worker = worker
+        window._on_description_ready = Mock()
+        window._on_description_error = Mock()
+        delivery = DescriptionDelivery(window, worker)
+        worker.start(); assert worker.wait(5000)
+        app.processEvents()
+        assert project.clips[0].description == 'Generated'
+        assert not project.metadata.job_results
+        if mode == 'reuse': window._on_description_ready.assert_called_once()
+        else: window._on_description_ready.assert_not_called()
+        if mode == 'failure': assert project.clips[0].analysis_records['describe'].state == 'failed'
+        if mode == 'tampered': window._on_description_error.assert_called_once()
+        else: window._on_description_error.assert_not_called()
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

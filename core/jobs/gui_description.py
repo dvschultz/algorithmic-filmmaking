@@ -7,13 +7,14 @@ from threading import Event
 from typing import Callable
 
 from core.jobs.commits import StaleJobResult
-from core.jobs.description import _runtime, _task_data
+from core.jobs.description import _task_data
 from core.jobs.gui_results import GuiResultJournal, GuiResultRequest
 from core.jobs.media import FingerprintCancelled, media_stamp
 from core.operations.description import (
     DescriptionOptions,
     DescriptionOutcome,
     DescriptionTask,
+    description_runtime,
     run_description,
 )
 
@@ -40,10 +41,11 @@ class GuiDescriptionCache(GuiResultJournal):
             media_stamps=media_stamps,
         )
         self.options = options
-        self.runtime = _runtime(options)
         self.previous_json = json.dumps(
             previous_descriptions, sort_keys=True, allow_nan=False
         )
+        self.transient_outcomes: dict[str, dict] = {}
+        self.tasks: dict[str, DescriptionTask] = {}
 
     def validate_media(self, request: GuiResultRequest) -> None:
         super().validate_media(request)
@@ -51,7 +53,8 @@ class GuiDescriptionCache(GuiResultJournal):
         source = Path(data["source_path"]) if data["source_path"] else None
         if (
             self.fingerprints.get(source) != data["source_media"]
-            or _runtime(self.options) != data["runtime"]
+            or description_runtime(self.tasks[request.clip_id], self.options)
+            != data["runtime"]
         ):
             raise StaleJobResult("Description source media or runtime changed")
 
@@ -65,7 +68,7 @@ class GuiDescriptionCache(GuiResultJournal):
     ) -> tuple[DescriptionOutcome, ...]:
         if not tasks:
             return ()
-        self.start(cancel)
+        self.tasks = {task.clip_id: task for task in tasks}
         previous = json.loads(self.previous_json)
         outcomes: dict[str, DescriptionOutcome] = {}
         pending = []
@@ -77,6 +80,7 @@ class GuiDescriptionCache(GuiResultJournal):
             progress(len(outcomes), len(tasks))
 
         try:
+            self.start(cancel, allow_missing_receipts=True)
             for task in tasks:
                 if cancel.is_set():
                     break
@@ -88,7 +92,7 @@ class GuiDescriptionCache(GuiResultJournal):
                     **_task_data(task),
                     "previous_description": previous[task.clip_id],
                     "source_media": self.fingerprints.get(task.source_path),
-                    "runtime": self.runtime,
+                    "runtime": description_runtime(task, self.options),
                 }
                 request, payload = self.prepare(task.clip_id, data, task.thumbnail_path)
                 requests[task.clip_id] = request
@@ -104,6 +108,8 @@ class GuiDescriptionCache(GuiResultJournal):
                     def record(outcome: DescriptionOutcome) -> None:
                         if outcome.status == "succeeded":
                             self.record(requests[outcome.clip_id], outcome)
+                        elif outcome.can_apply:
+                            self.transient_outcomes[outcome.clip_id] = asdict(outcome)
                         publish(outcome)
 
                     computed = run_description(
@@ -118,6 +124,9 @@ class GuiDescriptionCache(GuiResultJournal):
                     cancel.set()
         except FingerprintCancelled:
             cancel.set()
+        finally:
+            if hasattr(self, "store"):
+                self.store.close()
         return tuple(
             outcomes.get(
                 task.clip_id,

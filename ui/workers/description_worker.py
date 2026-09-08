@@ -28,6 +28,7 @@ from core.operations.description import (
     DescriptionTask,
     DescriptionOutcome,
     DescriptionOptions,
+    description_task,
     compute_description,
     run_description,
     resolve_options,
@@ -59,6 +60,7 @@ class DescriptionWorker(CancellableWorker):
 
     progress = Signal(int, int)  # current, total
     description_ready = Signal(str, str, str)  # clip_id, description, model_name
+    outcome_ready = Signal(object)
     error = Signal(str, str)  # clip_id, error_message (shadows base class)
     description_completed = Signal()
 
@@ -178,23 +180,12 @@ class DescriptionWorker(CancellableWorker):
         """Build immutable task list from clips."""
         tasks = []
         for clip in clips:
-            if skip_existing and clip.description is not None:
-                continue
             if not clip.thumbnail_path or not clip.thumbnail_path.exists():
                 logger.warning(f"Skipping clip {clip.id}: thumbnail not found")
                 continue
 
             source = sources.get(clip.source_id)
-            tasks.append(
-                DescriptionTask(
-                    clip_id=clip.id,
-                    thumbnail_path=clip.thumbnail_path,
-                    source_path=source.file_path if source else None,
-                    start_frame=clip.start_frame,
-                    end_frame=clip.end_frame,
-                    fps=source.fps if source else None,
-                )
-            )
+            tasks.append(description_task(clip, source, skip_existing=skip_existing))
         return tasks
 
     def _build_tasks_from_targets(
@@ -203,23 +194,11 @@ class DescriptionWorker(CancellableWorker):
         """Build immutable task list from AnalysisTarget objects."""
         tasks = []
         for target in targets:
-            if skip_existing and target.description is not None:
-                continue
             image_path = target.image_path
             if not image_path or not image_path.exists():
                 logger.warning(f"Skipping target {target.id}: image not found")
                 continue
-            tasks.append(
-                DescriptionTask(
-                    clip_id=target.id,
-                    thumbnail_path=image_path,
-                    source_path=target.video_path,
-                    start_frame=target.start_frame or 0,
-                    end_frame=target.end_frame or 0,
-                    fps=target.fps,
-                    target_type=target.target_type,
-                )
-            )
+            tasks.append(description_task(target, skip_existing=skip_existing))
         return tasks
 
     def _process_task(
@@ -242,20 +221,7 @@ class DescriptionWorker(CancellableWorker):
             media_stamp(path) != stamp for path, stamp in self._media_stamps.items()
         ):
             raise RuntimeError("Description media changed while queued")
-        if self._tier == "local":
-            try:
-                from core.analysis.description import is_model_loaded, _load_local_model
-
-                if not is_model_loaded(self.options.model):
-                    _load_local_model(self.options.model)
-            except Exception as exc:
-                if self.is_cancelled():
-                    return False
-                raise RuntimeError(f"Failed to load local VLM: {exc}") from exc
-        if any(
-            media_stamp(path) != stamp for path, stamp in self._media_stamps.items()
-        ):
-            raise RuntimeError("Description media changed during preparation")
+        # The shared operation verifies reuse before loading local model weights.
         return not self.is_cancelled()
 
     def run(self) -> None:
@@ -378,6 +344,8 @@ class DescriptionWorker(CancellableWorker):
                 self._log_complete()
 
     def _on_outcome(self, outcome: DescriptionOutcome) -> None:
+        if outcome.can_apply:
+            self.outcome_ready.emit(outcome)
         if outcome.status == "failed":
             message = outcome.message or outcome.code or "Description failed"
             self._log_error(message, outcome.clip_id)

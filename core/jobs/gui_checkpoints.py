@@ -284,6 +284,8 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
                 pending.append((result_id, receipt_digest))
             continue
         if identity["kind"] == "gui_describe":
+            if payload.get("record_json") is not None and clip.get("analysis_records", {}).get("describe") != json.loads(payload["record_json"]):
+                continue
             if (
                 clip.get("description") == payload["description"]
                 and clip.get("description_model") == payload["model"]

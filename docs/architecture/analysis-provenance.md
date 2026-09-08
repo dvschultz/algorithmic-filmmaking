@@ -221,9 +221,18 @@ request that fell back to frame input does not satisfy a later video request.
 Failures retain the displayed description while marking the record failed.
 Publication rejects changed media, prior values/records, and target/session bindings.
 
-GUI worker task construction/delivery, durable headless job receipts, completion
-projections, and saved-result checkpoints still need migration. Those paths retain
-their existing reuse rules; the description family is not yet complete.
+GUI workers and clip/frame delivery now carry the complete verified outcome.
+Combined analysis sends populated descriptions through worker verification.
+Successful computations are journaled before publication; verified reuse and
+failures use exact transient-outcome guards without inventing successful receipts.
+Saved records support reuse after the receipt cache is lost. Save checkpoints
+require the exact published analysis record as well as its displayed fields.
+Local model loading occurs after reuse verification and checks media again before
+inference, so a valid local description does not require loading model weights.
+
+Durable headless job receipts and completion projections still need migration.
+Those paths retain their existing reuse rules; the description family is not yet
+complete.
 
 ## Remaining U10 work
 

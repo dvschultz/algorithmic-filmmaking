@@ -1,6 +1,7 @@
 """Owner-thread description delivery scoped to a project and worker."""
 
 from typing import Any
+from dataclasses import asdict
 
 from PySide6.QtCore import Slot
 
@@ -24,12 +25,17 @@ class DescriptionDelivery(RetiringQObject):
         self.worker = worker
         self.worker_attribute = worker_attribute
         self._delivered: set[str] = set()
-        self.application = DescriptionApplication(window.project, worker.tasks)
+        self.application = DescriptionApplication(
+            window.project, worker.tasks, getattr(worker, "options", None)
+        )
         self.reply = getattr(window, "_dispatch_gui_reply", None)
         self.pipeline = pipeline
         self.run = getattr(window, "_analysis_run", None) if pipeline else None
         worker.finished.connect(self.retire)
-        worker.description_ready.connect(self.description)
+        if hasattr(worker, "outcome_ready"):
+            worker.outcome_ready.connect(self.receive)
+        else:
+            worker.description_ready.connect(self.description)
 
     def _current(self) -> bool:
         return (
@@ -49,19 +55,29 @@ class DescriptionDelivery(RetiringQObject):
 
     @Slot(str, str, str)
     def description(self, target_id: str, description: str, model: str) -> None:
+        self.receive(DescriptionOutcome(target_id, "succeeded", description, model))
+
+    @Slot(object)
+    def receive(self, outcome: DescriptionOutcome) -> None:
+        if not isinstance(outcome, DescriptionOutcome) or not outcome.can_apply:
+            return
+        target_id = outcome.clip_id
         if not self._current() or target_id in self._delivered:
             return
         self._delivered.add(target_id)
         try:
             project = self.window.project
             cache = getattr(self.worker, "cache", None)
-            outcome = DescriptionOutcome(target_id, "succeeded", description, model)
             receipt = None
             if cache is not None:
                 if project.path is None or project.path.resolve() != cache.path:
                     raise ValueError("Project save location changed during description")
-                receipt = cache.results[target_id]
-                if not receipt.matches(outcome):
+                receipt = cache.results.get(target_id)
+                if (receipt is not None and not receipt.matches(outcome)) or (
+                    receipt is None
+                    and getattr(cache, "transient_outcomes", {}).get(target_id)
+                    != asdict(outcome)
+                ):
                     raise ValueError(
                         "Queued description differs from its recorded result"
                     )
@@ -76,9 +92,11 @@ class DescriptionDelivery(RetiringQObject):
                 target_id, f"Could not apply description: {exc}"
             )
             return
-        if accepted:
-            self.window._on_description_ready(target_id, description, model)
-        else:
+        if accepted and outcome.has_result:
+            self.window._on_description_ready(
+                target_id, outcome.description, outcome.model
+            )
+        elif not accepted:
             self.window._on_description_error(
                 target_id,
                 "Description discarded because the target changed. Run description again.",
