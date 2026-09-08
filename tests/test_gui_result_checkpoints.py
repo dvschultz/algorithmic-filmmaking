@@ -214,7 +214,7 @@ def test_save_without_receipts_does_not_open_job_cache(tmp_path, monkeypatch):
     settings.assert_not_called()
 
 
-def test_pending_result_lookup_batches_ids_with_one_connection(tmp_path, monkeypatch):
+def test_pending_result_lookup_uses_bounded_batches(tmp_path, monkeypatch):
     store = JobStore(tmp_path / "jobs.db")
     ids = [f"{i:064x}" for i in range(502)]
     with store._connect() as connection:
@@ -228,4 +228,5 @@ def test_pending_result_lookup_batches_ids_with_one_connection(tmp_path, monkeyp
     monkeypatch.setattr(store, "_connect", connect)
     rows = store.get_pending_results(ids[:501] + ["unknown"])
     assert {row["result_id"] for row in rows} == set(ids[1:501])
-    connect.assert_called_once()
+    # Reader leases permit one connection per batch, never one per receipt.
+    assert 1 <= connect.call_count <= 2

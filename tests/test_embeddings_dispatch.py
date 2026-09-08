@@ -38,7 +38,10 @@ def test_factory_builds_shared_application_without_starting(tmp_path, operation)
         query="a flower",
     )
     assert not worker.isRunning()
-    assert application.project is project
+    if operation in ("brightness", "volume"):
+        assert application.applications[clip.id].project is project
+    else:
+        assert application.project is project
     assert "finished" not in type(worker).__dict__
     ids = (
         [target.target_id for target in worker.request.targets]

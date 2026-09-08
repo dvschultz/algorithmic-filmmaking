@@ -84,7 +84,7 @@ def test_audio_library_list_emits_transcribe_request(qapp, make_audio):
     assert emissions == ["a1"]
 
 
-def test_audio_library_list_disables_transcribe_when_already_transcribed(qapp, make_audio):
+def test_audio_library_list_keeps_legacy_transcription_available(qapp, make_audio):
     from core.transcription import TranscriptSegment
     from ui.widgets.audio_library_list import AudioLibraryList
 
@@ -95,8 +95,8 @@ def test_audio_library_list_disables_transcribe_when_already_transcribed(qapp, m
     widget.set_sources([a1])
 
     btn = widget._table.cellWidget(0, widget._COL_TRANSCRIBE)
-    assert btn.text() == "Transcribed"
-    assert btn.isEnabled() is False
+    assert btn.text() == "Transcribe"
+    assert btn.isEnabled() is True
 
 
 def test_audio_library_list_emits_selection(qapp, make_audio):

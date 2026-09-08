@@ -814,6 +814,27 @@ typing and changed-file Ruff pass.
 
 ## Remaining U10 work
 
+The full regression run collected 5,844 tests. Its first nine failures exposed
+stale test assumptions in picker source bindings, scalar application ownership,
+legacy audio transcription status, and receipt batching. Updated fixtures create
+verified scalar records (including zero brightness and no audio) and preserve
+the bounded-query check without requiring a single connection. The related
+108-test regression group passes, including the native controller callback
+subprocess test. This does not establish a passing full-suite result; that run
+is still in progress.
+
+Receipt-pruning audit: `ResultBatch.commit` refuses to recompute a missing
+receipt already named by a saved project. Audio/image import and frame extraction
+also require historical identities before filtering by operation. GUI and several
+headless analysis jobs derive forced-run generations from retained receipt rows.
+Consequently, simply deleting old committed payloads can break unrelated imports
+or reuse an earlier forced-run identity. Pruning must preserve these contracts
+(or migrate their consumers), retain uncommitted recovery receipts, and obtain
+independent project-writer ownership before reconciling saved references. Active
+queued jobs and legacy rows without runtime ownership also need protection.
+Reader leases and abandoned-save reconciliation are prerequisites already in
+place, not evidence that receipt pruning is implemented.
+
 - Migrate the other U7 analysis families to
   semantic reuse. Extend operation-owned failure records beyond object detection,
   OCR, ImageNet and shot classification, gaze, and boundary embeddings.

@@ -25,7 +25,7 @@ def test_dialog_disables_completed_operations_and_ignores_saved_checks(qapp, tmp
     from ui.dialogs.analysis_picker_dialog import AnalysisPickerDialog
 
     clip = make_test_clip("c1", dominant_colors=[(10, 20, 30)])
-    verify_clip_analysis(clip, tmp_path)
+    source = verify_clip_analysis(clip, tmp_path)
     settings = _Settings(selected=["colors", "shots"])
 
     dialog = AnalysisPickerDialog(
@@ -33,6 +33,7 @@ def test_dialog_disables_completed_operations_and_ignores_saved_checks(qapp, tmp
         scope_label="selected clips",
         settings=settings,
         clips=[clip],
+        sources_by_id={source.id: source},
     )
 
     colors_cb = dialog._checkboxes["colors"]
@@ -48,7 +49,7 @@ def test_dialog_select_all_skips_disabled_operations(qapp, tmp_path):
     from ui.dialogs.analysis_picker_dialog import AnalysisPickerDialog
 
     clip = make_test_clip("c1", dominant_colors=[(10, 20, 30)])
-    verify_clip_analysis(clip, tmp_path)
+    source = verify_clip_analysis(clip, tmp_path)
     settings = _Settings(selected=[])
 
     dialog = AnalysisPickerDialog(
@@ -56,6 +57,7 @@ def test_dialog_select_all_skips_disabled_operations(qapp, tmp_path):
         scope_label="selected clips",
         settings=settings,
         clips=[clip],
+        sources_by_id={source.id: source},
     )
 
     dialog._select_all()
@@ -67,7 +69,7 @@ def test_force_rerun_enables_completed_operations(qapp, tmp_path):
     from ui.dialogs.analysis_picker_dialog import AnalysisPickerDialog
 
     clip = make_test_clip("c1", dominant_colors=[(10, 20, 30)])
-    verify_clip_analysis(clip, tmp_path)
+    source = verify_clip_analysis(clip, tmp_path)
     settings = _Settings(selected=[])
 
     dialog = AnalysisPickerDialog(
@@ -75,6 +77,7 @@ def test_force_rerun_enables_completed_operations(qapp, tmp_path):
         scope_label="selected clips",
         settings=settings,
         clips=[clip],
+        sources_by_id={source.id: source},
     )
 
     colors_cb = dialog._checkboxes["colors"]
@@ -116,6 +119,9 @@ def test_dialog_run_disabled_when_every_operation_complete(qapp, tmp_path, monke
     from core.settings import Settings
     model_settings = Settings(description_model_tier="cloud", description_model_cloud="gpt-test", description_input_mode="frame", cinematography_tier="cloud", cinematography_model="gpt-test", cinematography_input_mode="frame")
     monkeypatch.setattr("core.settings.load_settings", lambda: model_settings)
+    for name in ("ffmpeg", "ffprobe"):
+        (tmp_path / name).write_bytes(name.encode())
+    monkeypatch.setattr("core.binary_resolver.find_binary", lambda name: str(tmp_path / name))
     source = verify_clip_analysis(clip, tmp_path, embeddings=True, objects=True, ocr=True, classify=True, shots=True, gaze=True, boundary=True, descriptions=True, cinematography=True, transcriptions=True)
     from unittest.mock import Mock
     from core.project import Project
@@ -124,7 +130,14 @@ def test_dialog_run_disabled_when_every_operation_complete(qapp, tmp_path, monke
     mock_face_execution(monkeypatch, tmp_path, Mock(return_value=clip.face_embeddings))
     monkeypatch.setattr("core.analysis.faces._load_insightface", Mock())
     monkeypatch.setattr("core.analysis.faces.unload_model", Mock())
-    assert face_embeddings(Project(sources=[source], clips=[clip]))["result"]["succeeded"]
+    project = Project(sources=[source], clips=[clip])
+    assert face_embeddings(project)["result"]["succeeded"]
+    from core.spine.analyze import analyze_scalars
+
+    monkeypatch.setattr("core.analysis.color.get_average_brightness", Mock(return_value=0.0))
+    monkeypatch.setattr("core.analysis.audio.extract_clip_volume", Mock(return_value=None))
+    for operation in ("brightness", "volume"):
+        assert analyze_scalars(project, operation=operation)["result"]["succeeded"]
 
     settings = _Settings(selected=["colors", "shots", "transcribe"])
     dialog = AnalysisPickerDialog(
