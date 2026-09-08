@@ -483,6 +483,13 @@ observers see the new words; transcription failure preserves existing alignment.
 The combined regression run passed 362 tests with scoped typing and Ruff clean.
 Detached project-free compatibility remains to audit.
 
+Face-provider work has started: failed model preparation no longer leaves a cached
+partial runtime, and extraction reports actual ONNX component paths and execution
+providers after fallback. Provider regression coverage passed 251 tests with five
+focused follow-ups. Face records, verified reuse, managed embeddings, and delivery
+surface migration remain unfinished; execution paths alone are not model content
+identities.
+
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain
 readable. Safe receipt pruning and abandoned-publication pin reconciliation remain.

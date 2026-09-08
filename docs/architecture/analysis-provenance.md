@@ -572,6 +572,17 @@ Detached project-free controller/worker compatibility remains a separate audit.
 
 ## Remaining U10 work
 
+Face-provider preparation now publishes the cached InsightFace model only after
+successful preparation, including accelerator-to-CPU fallback. A failed prepare
+leaves no partially initialized model for the next request. Image and clip
+extraction accept an execution callback reporting actual ONNX component paths and
+session providers before inference. Paths are not content identities: verified
+face records, worker-side weight fingerprints, managed embedding storage, and
+delivery/recovery migration remain unfinished. Provider regression coverage passed
+251 tests with five focused follow-ups; changed-file Ruff passed. Scoped typing
+still reports the pre-existing NumPy `tolist()` return-type issue in
+`average_embeddings`; the pre-existing result-list annotation issue was fixed.
+
 - Migrate the other U7 analysis families to
   semantic reuse. Extend operation-owned failure records beyond object detection,
   OCR, ImageNet and shot classification, gaze, and boundary embeddings.

@@ -9,6 +9,7 @@ import logging
 import sys
 import threading
 from pathlib import Path
+from typing import Any, Callable
 import colorsys
 import random
 
@@ -104,12 +105,12 @@ def _load_insightface():
                 pass
 
             try:
-                _model = FaceAnalysis(
+                candidate = FaceAnalysis(
                     name="buffalo_l",
                     root=str(insightface_dir),
                     providers=providers,
                 )
-                _model.prepare(ctx_id=0, det_size=(640, 640))
+                candidate.prepare(ctx_id=0, det_size=(640, 640))
             except Exception:
                 if providers != ["CPUExecutionProvider"]:
                     logger.warning(
@@ -117,12 +118,13 @@ def _load_insightface():
                         providers[0],
                     )
                     try:
-                        _model = FaceAnalysis(
+                        providers = ["CPUExecutionProvider"]
+                        candidate = FaceAnalysis(
                             name="buffalo_l",
                             root=str(insightface_dir),
                             providers=["CPUExecutionProvider"],
                         )
-                        _model.prepare(ctx_id=0, det_size=(640, 640))
+                        candidate.prepare(ctx_id=0, det_size=(640, 640))
                     except Exception as cpu_err:
                         from core.errors import ModelDownloadError
 
@@ -134,9 +136,32 @@ def _load_insightface():
 
                     raise
 
+            # A failed prepare must never become the next call's cached model.
+            _model = candidate
             logger.info("InsightFace model loaded (providers: %s)", providers)
 
     return _model
+
+
+def face_model_execution(model: Any) -> dict:
+    """Describe actual loaded components without loading or downloading models.
+
+    Component paths identify the weight files for worker-side fingerprinting;
+    they are not content hashes or sufficient proof of reusable results alone.
+    """
+    components = []
+    for task, component in sorted(model.models.items()):
+        components.append({
+            "task": task,
+            "path": str(Path(component.model_file).resolve()),
+            "providers": list(component.session.get_providers()),
+        })
+    return {
+        "backend": "insightface",
+        "model": "buffalo_l",
+        "detection_size": [640, 640],
+        "components": components,
+    }
 
 
 # Maximum pixel count to guard against OOM on huge images (8K = ~33M pixels)
@@ -165,7 +190,9 @@ def _format_face(face, frame_number: int | None = None) -> dict:
     return result
 
 
-def extract_faces_from_image(image_path: Path) -> list[dict]:
+def extract_faces_from_image(
+    image_path: Path, *, on_execution: Callable[[dict], None] | None = None
+) -> list[dict]:
     """Detect faces in a single image.
 
     Args:
@@ -191,6 +218,8 @@ def extract_faces_from_image(image_path: Path) -> list[dict]:
         logger.warning(f"Image too large ({w}x{h}), skipping: {image_path}")
         return []
 
+    if on_execution is not None:
+        on_execution(face_model_execution(model))
     faces = model.get(img)
     results = [_format_face(face) for face in faces]
 
@@ -204,6 +233,8 @@ def extract_faces_from_clip(
     end_frame: int,
     fps: float,
     sample_interval: float = 1.0,
+    *,
+    on_execution: Callable[[dict], None] | None = None,
 ) -> list[dict]:
     """Extract face embeddings from a video clip by sampling frames.
 
@@ -244,8 +275,10 @@ def extract_faces_from_clip(
         cap.release()
         raise ValueError(f"Could not open video: {source_path}")
 
-    results = []
+    results: list[dict] = []
     try:
+        if on_execution is not None:
+            on_execution(face_model_execution(model))
         for frame_pos in sample_positions:
             cap.set(cv2.CAP_PROP_POS_FRAMES, frame_pos)
             ret, frame = cap.read()
