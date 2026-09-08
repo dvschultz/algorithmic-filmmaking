@@ -162,7 +162,7 @@ def sanitize_traceback(exc: BaseException) -> str:
     return text
 
 
-def _row_to_jobrow(row: sqlite3.Row, persistence: str = "job_history") -> JobRow:
+def _row_to_jobrow(row: dict, persistence: str = "job_history") -> JobRow:
     return JobRow(
         id=row["id"],
         kind=row["kind"],
@@ -277,6 +277,10 @@ class JobStore:
                     conn.execute("ALTER TABLE jobs ADD COLUMN owner_id TEXT")
                 if "operation_json" not in columns:
                     conn.execute("ALTER TABLE jobs ADD COLUMN operation_json TEXT")
+                for column in ("input_artifact_json", "input_artifact_pin",
+                               "result_artifact_json", "result_artifact_pin"):
+                    if column not in columns:
+                        conn.execute(f"ALTER TABLE jobs ADD COLUMN {column} TEXT")
                 result_columns = {
                     row[1] for row in conn.execute("PRAGMA table_info(job_results)")
                 }
@@ -285,6 +289,31 @@ class JobStore:
                         conn.execute(f"ALTER TABLE job_results ADD COLUMN {column} TEXT")
 
     # --- Mutations ---
+
+    def _stage_job_body(self, fields: dict) -> tuple[dict, str | None, str | None]:
+        """Stage a group of logical JSON columns under one durable owner."""
+        from core.artifacts import ArtifactStore
+
+        data = json.dumps(fields, separators=(",", ":")).encode("utf-8")
+        if self.persistence != "job_history" or len(data) <= _RESULT_INLINE_BYTES:
+            return fields, None, None
+        artifacts = ArtifactStore(self.db_path.parent / "artifacts")
+        pin = artifacts.create_pin()
+        try:
+            ref = artifacts.put_bytes(data, pin=pin, media_type="application/json")
+        except BaseException:
+            artifacts.release_pin(pin)
+            raise
+        return dict.fromkeys(fields, ""), json.dumps(ref.to_dict()), pin
+
+    def _release_job_pins(self, pins: Sequence[str | None]) -> None:
+        from core.artifacts import ArtifactStore
+
+        owners = {pin for pin in pins if pin is not None}
+        if owners:
+            artifacts = ArtifactStore(self.db_path.parent / "artifacts")
+            for owner in owners:
+                artifacts.release_pin(owner)
 
     def insert(
         self,
@@ -322,23 +351,39 @@ class JobStore:
             persistence=self.persistence,
             operation_json=operation.to_json() if operation is not None else None,
         )
+        stored, reference, pin = self._stage_job_body(
+            {"args_json": row.args_json, "operation_json": row.operation_json}
+        )
+        try:
+            self._insert_job(row, owner_id, stored, reference, pin)
+        except sqlite3.IntegrityError:
+            # A rejected single INSERT cannot have published this new owner.
+            self._release_job_pins([pin])
+            raise
+        return row
+
+    def _insert_job(self, row: JobRow, owner_id: str | None, stored: dict,
+                    reference: str | None, pin: str | None) -> None:
+        # Other publication errors are uncertain; retain the staged owner.
         with self._connect() as conn:
+            conn.execute("PRAGMA synchronous=FULL")
             conn.execute(
                 """
                 INSERT INTO jobs (
                     id, kind, status, idempotency_key, args_json,
                     project_path, project_mtime_at_start, progress,
                     status_message, queue_position, blocking_job_id,
-                    created_at, updated_at, owner_id, operation_json
+                    created_at, updated_at, owner_id, operation_json,
+                    input_artifact_json, input_artifact_pin
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     row.id,
                     row.kind,
                     row.status,
                     row.idempotency_key,
-                    row.args_json,
+                    stored["args_json"],
                     row.project_path,
                     row.project_mtime_at_start,
                     row.progress,
@@ -348,10 +393,11 @@ class JobStore:
                     row.created_at,
                     row.updated_at,
                     owner_id,
-                    row.operation_json,
+                    stored["operation_json"],
+                    reference,
+                    pin,
                 ),
             )
-        return row
 
     def update_status(
         self,
@@ -384,9 +430,15 @@ class JobStore:
         if status_message is not None:
             sets.append("status_message = ?")
             params.append(status_message)
+        result_pin = None
         if result is not None:
+            stored, result_reference, result_pin = self._stage_job_body(
+                {"result_json": json.dumps(result, default=str)}
+            )
             sets.append("result_json = ?")
-            params.append(json.dumps(result, default=str))
+            params.append(stored["result_json"])
+            sets.extend(["result_artifact_json = ?", "result_artifact_pin = ?"])
+            params.extend([result_reference, result_pin])
         if error is not None:
             sets.append("error = ?")
             params.append(error)
@@ -407,22 +459,26 @@ class JobStore:
         params.extend(terminal_states)
         params.extend([STATUS_CANCELLING, status, STATUS_RUNNING])
         with self._connect() as conn:
-            cur = conn.execute(
-                f"UPDATE jobs SET {', '.join(sets)} WHERE id = ? "
-                f"AND status NOT IN ({','.join('?' for _ in terminal_states)}) "
-                "AND NOT (status = ? AND ? = ?)",
-                params,
-            )
-            if cur.rowcount == 0:
-                if (
-                    conn.execute(
-                        "SELECT 1 FROM jobs WHERE id = ?", (job_id,)
-                    ).fetchone()
-                    is None
-                ):
-                    raise JobNotFoundError(job_id)
-                return False
-            return True
+            conn.execute("PRAGMA synchronous=FULL")
+            with conn:
+                conn.execute("BEGIN IMMEDIATE")
+                previous = conn.execute(
+                    "SELECT result_artifact_pin FROM jobs WHERE id=?", (job_id,)
+                ).fetchone()
+                changed = conn.execute(
+                    f"UPDATE jobs SET {', '.join(sets)} WHERE id = ? "
+                    f"AND status NOT IN ({','.join('?' for _ in terminal_states)}) "
+                    "AND NOT (status = ? AND ? = ?)",
+                    params,
+                ).rowcount
+        if not changed:
+            self._release_job_pins([result_pin])
+            if previous is None:
+                raise JobNotFoundError(job_id)
+            return False
+        if result is not None and previous is not None:
+            self._release_job_pins([previous[0]])
+        return True
 
     def clear_queue_state(self, job_id: str) -> None:
         """Clear ``queue_position`` / ``blocking_job_id`` after a row leaves
@@ -441,9 +497,20 @@ class JobStore:
 
     def delete(self, job_id: str) -> bool:
         """Delete a job row by id. Returns True if a row was removed."""
+        return bool(self._delete_jobs("id = ?", [job_id]))
+
+    def _delete_jobs(self, predicate: str, params: Sequence) -> int:
         with self._connect() as conn:
-            cur = conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
-            return cur.rowcount > 0
+            conn.execute("PRAGMA synchronous=FULL")
+            with conn:
+                conn.execute("BEGIN IMMEDIATE")
+                rows = conn.execute(
+                    f"SELECT input_artifact_pin,result_artifact_pin FROM jobs WHERE {predicate}", params
+                ).fetchall()
+                deleted = conn.execute(f"DELETE FROM jobs WHERE {predicate}", params).rowcount
+        # A deletion must be durable before its payload owners can be released.
+        self._release_job_pins([pin for row in rows for pin in row])
+        return deleted
 
     def get_result(self, result_id: str) -> dict | None:
         with self._connect() as conn:
@@ -586,12 +653,63 @@ class JobStore:
 
     # --- Reads ---
 
-    def get(self, job_id: str) -> JobRow:
+    def _read_jobs(self, sql: str, params: Sequence = ()) -> list[JobRow]:
+        from core.artifacts import ArtifactStore
+        from models.analysis_record import ArtifactRef
+
+        artifacts = None
+        lease = None
         with self._connect() as conn:
-            row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
-        if row is None:
+            rows = [dict(row) for row in conn.execute(sql, params).fetchall()]
+            if any(row[f"{group}_artifact_json"] is not None
+                   for row in rows for group in ("input", "result")):
+                # Repeat under the writer lock, then acquire read ownership before
+                # a concurrent delete/replacement can retire the persisted pins.
+                # Staging releases artifact transactions before opening this DB;
+                # deletion releases pins only after closing it (no reverse order).
+                with conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    rows = [dict(row) for row in conn.execute(sql, params).fetchall()]
+                    try:
+                        refs = [ArtifactRef.from_dict(json.loads(row[f"{group}_artifact_json"]))
+                                for row in rows for group in ("input", "result")
+                                if row[f"{group}_artifact_json"] is not None]
+                    except (KeyError, TypeError, ValueError) as exc:
+                        raise StaleJobResult("Job history reference is corrupt") from exc
+                    if refs:
+                        artifacts = ArtifactStore(self.db_path.parent / "artifacts")
+                        lease = artifacts.create_pin(refs)
+        try:
+            for row in rows:
+                for group, fields in (("input", ("args_json", "operation_json")),
+                                      ("result", ("result_json",))):
+                    reference = row[f"{group}_artifact_json"]
+                    if reference is None:
+                        continue
+                    if not row[f"{group}_artifact_pin"] or any(row[field] != "" for field in fields):
+                        raise StaleJobResult("Conflicting job history storage metadata")
+                    try:
+                        assert artifacts is not None
+                        ref = ArtifactRef.from_dict(json.loads(reference))
+                        payload = json.loads(artifacts.read_bytes(ref))
+                        if not isinstance(payload, dict) or set(payload) != set(fields):
+                            raise ValueError("Unexpected job history fields")
+                        if any(not isinstance(value, str) and not (key == "operation_json" and value is None)
+                               for key, value in payload.items()):
+                            raise ValueError("Invalid job history JSON column")
+                        row.update(payload)
+                    except (KeyError, TypeError, ValueError, OSError) as exc:
+                        raise StaleJobResult("Job history payload is unavailable or corrupt") from exc
+            return [_row_to_jobrow(row, self.persistence) for row in rows]
+        finally:
+            if artifacts is not None and lease is not None:
+                artifacts.release_pin(lease)
+
+    def get(self, job_id: str) -> JobRow:
+        rows = self._read_jobs("SELECT * FROM jobs WHERE id = ?", [job_id])
+        if not rows:
             raise JobNotFoundError(job_id)
-        return _row_to_jobrow(row, self.persistence)
+        return rows[0]
 
     def find_by_idempotency(
         self,
@@ -599,8 +717,7 @@ class JobStore:
         project_path: Optional[str],
         idempotency_key: str,
     ) -> Optional[JobRow]:
-        with self._connect() as conn:
-            row = conn.execute(
+        rows = self._read_jobs(
                 """
                 SELECT * FROM jobs
                 WHERE kind = ?
@@ -608,8 +725,8 @@ class JobStore:
                   AND (project_path IS ? OR project_path = ?)
                 """,
                 (kind, idempotency_key, project_path, project_path),
-            ).fetchone()
-        return _row_to_jobrow(row, self.persistence) if row else None
+            )
+        return rows[0] if rows else None
 
     def list(
         self,
@@ -634,9 +751,7 @@ class JobStore:
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY created_at DESC"
-        with self._connect() as conn:
-            rows = conn.execute(sql, params).fetchall()
-        return [_row_to_jobrow(r, self.persistence) for r in rows]
+        return self._read_jobs(sql, params)
 
     # --- Boot sweep + pruning ---
 
@@ -698,14 +813,7 @@ class JobStore:
         if days < 0:
             raise ValueError("days must be >= 0")
         cutoff = time.time() - days * 86400
-        with self._connect() as conn:
-            cur = conn.execute(
-                """
-                DELETE FROM jobs
-                WHERE status IN ('completed', 'failed', 'cancelled', 'crashed')
-                  AND finished_at IS NOT NULL
-                  AND finished_at < ?
-                """,
-                (cutoff,),
-            )
-            return cur.rowcount
+        return self._delete_jobs(
+            "status IN ('completed', 'failed', 'cancelled', 'crashed') "
+            "AND finished_at IS NOT NULL AND finished_at < ?", [cutoff]
+        )

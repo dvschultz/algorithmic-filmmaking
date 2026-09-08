@@ -136,6 +136,18 @@ and restart: terminal-job deletion does not establish that a computed receipt is
 unreferenced by saved projects. Receipt pruning and reconciliation of abandoned
 publication pins remain to be implemented.
 
+New large job arguments and operation specifications share a managed input body;
+large final/intermediate results use a separate body. Job reads hydrate the
+original JSON columns without changing safe status projections. Readers acquire
+temporary ownership while the job row is locked, then load files outside the job
+transaction. This prevents deletion or result replacement from collecting a file
+mid-read. Successful history deletion and terminal-job pruning release these
+owners after committing the database change. Result replacement releases the old
+body, and rejected updates or duplicate inserts release their unpublished bodies.
+Computed receipts have separate owners and survive history pruning. Uncertain
+publication or deletion retains files conservatively; abandoned-pin reconciliation
+remains outstanding. Session-only histories remain entirely in memory.
+
 ## Remaining U10 work
 
 - Migrate the other U7 analysis families to
@@ -143,9 +155,9 @@ publication pins remain to be implemented.
   OCR, ImageNet and shot classification, gaze, and boundary embeddings.
 - Expose the explicit legacy-reuse decision through user and agent flows; the
   current record model supports the decision but the flows are not wired.
-- Move preview/prerender media and the remaining job-row arguments, operation
-  specifications, and final summaries into managed storage, with pins spanning
-  execution, playback, export, and recovery. Add safe computed-receipt pruning;
+- Move preview/prerender media into managed storage, with pins spanning
+  execution, playback, export, and recovery. Pin referenced artifacts consumed by
+  running jobs in addition to their serialized input bodies. Add safe computed-receipt pruning;
   existing inline receipts are not migrated eagerly.
 - Complete end-to-end retention and recovery coverage for those additional
   consumers. Abandoned save pins without a later replacement remain retained.
