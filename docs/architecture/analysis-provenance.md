@@ -1020,6 +1020,14 @@ tracked, inactive historical owners as described above.
   and that matching accepted records skip provider calls. The 171-test legacy/
   native GUI/MCP/shot/import group passes; five scoped modules pass typing and
   scoped lint is clean. Remaining families and final review stay open.
+- OCR acceptance now reaches CLI, MCP, desktop, and the built-in agent through
+  the existing OCR identity and application. Stored observations must validate
+  and fall within the clip range; an explicitly stored empty list is valid,
+  while missing results require recomputation. Accepted records preserve unknown
+  provenance and reuse before acquiring the inference lock. Desktop decisions
+  capture unsaved model settings, and MCP captures resolved options plus FFmpeg
+  input stamps. The 183-test legacy/native GUI/MCP/OCR/import group passes.
+  Remaining legacy families and the final review/full-suite run remain open.
 - Finish the remaining cross-consumer reuse/projection audit.
   Receipt pruning retains legacy rows rather than guessing absent ownership;
   existing rows are not migrated eagerly.

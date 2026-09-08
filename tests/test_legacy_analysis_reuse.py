@@ -46,7 +46,7 @@ def test_verified_record_cannot_be_relabelled_as_legacy(tmp_path):
     assert project.clips[0].analysis_records["colors"] == previous
 
 
-@pytest.mark.parametrize("operation", ["colors", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots"])
+@pytest.mark.parametrize("operation", ["colors", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots", "extract_text"])
 def test_cli_reuse_requires_an_explicit_command_and_saves_unknown_provenance(tmp_path, operation):
     from click.testing import CliRunner
     from cli.commands.analyze import analyze
@@ -58,6 +58,7 @@ def test_cli_reuse_requires_an_explicit_command_and_saves_unknown_provenance(tmp
     project.clips[0].average_brightness = project.clips[0].rms_volume = 0.0
     project.clips[0].object_labels = project.clips[0].detected_objects = []
     project.clips[0].person_count = 0
+    project.clips[0].extracted_texts = []
     project.clips[0].shot_type = "wide shot"
     project.clips[0].gaze_yaw = project.clips[0].gaze_pitch = 0.0
     project.clips[0].gaze_category = "at_camera"
@@ -313,3 +314,51 @@ def test_missing_or_unknown_shot_label_requires_recomputation(tmp_path, label):
     result = accept_legacy_analysis(project, "shots")
     assert not result["accepted"] and len(result["failed"]) == 1
     assert "shots" not in project.clips[0].analysis_records
+
+
+@pytest.mark.parametrize("value", ["text", "empty", "missing", "outside"])
+def test_ocr_legacy_reuse_validates_observations(tmp_path, value):
+    from core.settings import Settings
+    from core.spine.analysis_reuse import accept_legacy_analysis
+    from core.operations.ocr import OcrOptions, ocr_task, resolve_ocr_options, run_ocr
+    from models.clip import ExtractedText
+
+    project = project_with_thumbnails(tmp_path, 1)
+    clip = project.clips[0]
+    if value == "empty":
+        clip.extracted_texts = []
+    elif value in ("text", "outside"):
+        clip.extracted_texts = [ExtractedText(clip.start_frame if value == "text" else clip.end_frame, "SIGN", 0.9, "paddleocr")]
+    settings = Settings(description_model_cloud="original-model")
+    options = resolve_ocr_options(OcrOptions(), settings=settings)
+    result = accept_legacy_analysis(project, "extract_text", ocr_options=options)
+    if value in ("missing", "outside"):
+        assert not result["accepted"] and len(result["failed"]) == 1
+        assert "extract_text" not in clip.analysis_records
+        return
+    assert result["accepted"] == [clip.id]
+    assert clip.analysis_records["extract_text"].provenance == "unknown"
+    assert operation_is_complete_for_clip("extract_text", clip, source=project.sources[0], settings=settings)
+    with patch("core.operations.ocr._inference_lock") as lock:
+        lock.acquire.side_effect = AssertionError("no inference")
+        reused = run_ocr((ocr_task(clip, project.sources[0]),), options)
+    assert reused[0].status == "skipped"
+    settings.description_model_cloud = "changed-model"
+    assert not operation_is_complete_for_clip("extract_text", clip, source=project.sources[0], settings=settings)
+
+
+def test_ocr_worker_captures_unsaved_model_settings(tmp_path):
+    from core.settings import Settings
+    from ui.workers.legacy_reuse_worker import LegacyReuseWorker
+
+    project = project_with_thumbnails(tmp_path, 1)
+    clip = project.clips[0]
+    clip.extracted_texts = []
+    settings = Settings(description_model_cloud="original-model")
+    worker = LegacyReuseWorker(project, "extract_text", [clip.id], settings=settings)
+    settings.description_model_cloud = "changed-model"
+    results = []
+    worker.result_ready.connect(results.append)
+    worker.run()
+    assert worker.application.apply(project, results[0][0])
+    assert clip.analysis_records["extract_text"].identity.to_dict()["parameters"]["vlm_model"] == "original-model"

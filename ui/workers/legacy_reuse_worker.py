@@ -8,7 +8,8 @@ from PySide6.QtCore import Signal
 
 from core.operations.colors import ColorApplication, color_request
 from core.operations.embeddings import EmbeddingApplication, embedding_task
-from core.operations.legacy_reuse import LEGACY_REUSE_OPERATIONS, accept_legacy_colors, accept_legacy_embeddings, accept_legacy_scalars, accept_legacy_visuals, accept_legacy_boundaries, accept_legacy_gaze, accept_legacy_shots
+from core.operations.legacy_reuse import LEGACY_REUSE_OPERATIONS, accept_legacy_colors, accept_legacy_embeddings, accept_legacy_scalars, accept_legacy_visuals, accept_legacy_boundaries, accept_legacy_gaze, accept_legacy_shots, accept_legacy_ocr
+from core.operations.ocr import OcrApplication, OcrOptions, ocr_task, resolve_ocr_options
 from core.operations.shots import ShotTypeApplication, ShotTypeOptions, shot_task
 from core.settings import Settings
 from core.operations.gaze import GazeApplication, GazeOptions, gaze_task
@@ -44,7 +45,7 @@ class LegacyReuseWorker(CancellableWorker):
         self.operation = operation
         self.request = color_request(project, ids, skip_existing=False) if operation == "colors" else None
         self.tasks = tuple(embedding_task(project.clips_by_id[cid], project.sources_by_id.get(project.clips_by_id[cid].source_id), skip_existing=False) for cid in ids) if operation == "embeddings" else ()
-        self.application: ColorApplication | EmbeddingApplication | ScalarBatchApplication | ShotTypeApplication | GazeApplication | BoundaryEmbeddingApplication | ClassificationApplication | ObjectDetectionApplication
+        self.application: ColorApplication | EmbeddingApplication | ScalarBatchApplication | OcrApplication | ShotTypeApplication | GazeApplication | BoundaryEmbeddingApplication | ClassificationApplication | ObjectDetectionApplication
         self._compute: Callable[[], object]
         if self.request is not None:
             self.application = ColorApplication(project, self.request)
@@ -52,6 +53,11 @@ class LegacyReuseWorker(CancellableWorker):
         elif operation == "embeddings":
             self.application = EmbeddingApplication(project, self.tasks)
             self._compute = partial(accept_legacy_embeddings, self.tasks, cancel_event=self._cancel_event)
+        elif operation == "extract_text":
+            ocr_tasks = tuple(ocr_task(project.clips_by_id[cid], project.sources_by_id.get(project.clips_by_id[cid].source_id)) for cid in ids)
+            ocr_options = resolve_ocr_options(OcrOptions(), settings=settings)
+            self.application = OcrApplication(project, ocr_tasks, ocr_options)
+            self._compute = partial(accept_legacy_ocr, ocr_tasks, ocr_options, cancel_event=self._cancel_event)
         elif operation == "shots":
             shot_tasks = tuple(shot_task(project.clips_by_id[cid], project.sources_by_id.get(project.clips_by_id[cid].source_id)) for cid in ids)
             options = ShotTypeOptions.from_settings(settings=settings)

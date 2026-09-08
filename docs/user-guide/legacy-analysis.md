@@ -4,7 +4,7 @@ Older projects may contain analysis values without a record of the inputs or
 model that produced them. These values remain visible, but they do not count as
 completed analysis until you recompute them or explicitly accept reuse.
 
-For colors, brightness, volume, classification, object detection, gaze, shot types, and compatible
+For colors, brightness, volume, classification, object detection, gaze, shot types, OCR, and compatible
 DINO thumbnail or boundary embeddings, the CLI provides an explicit reuse command:
 
 ```sh
@@ -17,6 +17,7 @@ scene_ripper analyze accept-legacy project.json --operation detect_objects --cli
 scene_ripper analyze accept-legacy project.json --operation boundary_embeddings --clip-id CLIP_ID
 scene_ripper analyze accept-legacy project.json --operation gaze --clip-id CLIP_ID
 scene_ripper analyze accept-legacy project.json --operation shots --clip-id CLIP_ID
+scene_ripper analyze accept-legacy project.json --operation extract_text --clip-id CLIP_ID
 ```
 
 Omit `--clip-id` to process all clips. The command reports accepted and failed
@@ -42,6 +43,10 @@ Shot reuse requires a known label and readable thumbnail. It captures the
 configured backend/model when the request starts. The desktop uses its current
 settings, including unsaved settings changes. Acceptance does not establish the
 old label's confidence; changing the selected model invalidates completion.
+OCR accepts stored text observations or an explicitly stored empty list. Missing
+results and observations outside the clip range require recomputation. It binds
+the default three-keyframe OCR configuration and captures the selected fallback
+model from current settings before execution.
 
 An accepted value retains **unknown provenance**. Acceptance records your
 decision to use it with the current inputs; it does not establish how the old

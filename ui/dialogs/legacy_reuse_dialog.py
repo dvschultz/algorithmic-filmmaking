@@ -33,6 +33,7 @@ class LegacyReuseDialog(QDialog):
         self.operation.addItem("Thumbnail embeddings (compatible DINO model)", "embeddings")
         self.operation.addItem("Brightness (default five samples)", "brightness")
         self.operation.addItem("Volume", "volume")
+        self.operation.addItem("OCR text (current model, default sampling)", "extract_text")
         self.operation.addItem("Shot type (current settings)", "shots")
         self.operation.addItem("Gaze (default sampling)", "gaze")
         self.operation.addItem("Boundary embeddings (compatible DINO model)", "boundary_embeddings")

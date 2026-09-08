@@ -473,6 +473,13 @@ invented confidence and skip matching provider work. The 171-test legacy/shot/
 MCP/native GUI/import group passes, with scoped typing and lint clean. Remaining
 families and final verification stay open.
 
+OCR legacy acceptance now reaches all four surfaces using captured model
+settings and the normal OCR identity/application. Valid observations and stored
+empty results are accepted; missing results and out-of-range frames are rejected.
+Matching accepted records reuse without acquiring the inference lock. The
+183-test legacy/OCR/MCP/native GUI/import group passes. This checkpoint does not
+close remaining legacy families or the final review and full-suite verification.
+
 Custom queries now retain independent records through shared operations, direct
 headless calls, GUI worker delivery/recovery, and durable headless jobs. GUI reuse
 verifies saved records without duplicate history or local weight loading. Durable

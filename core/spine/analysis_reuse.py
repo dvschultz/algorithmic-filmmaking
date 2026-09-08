@@ -4,11 +4,12 @@ from typing import TYPE_CHECKING, cast
 from threading import Event
 
 if TYPE_CHECKING:
+    from core.operations.ocr import OcrOptions
     from core.project import Project
     from core.operations.shots import ShotTypeOptions
 
 
-def accept_legacy_analysis(project: "Project", operation: str, clip_ids: list[str] | None = None, *, cancel_event: Event | None = None, shot_options: "ShotTypeOptions | None" = None) -> dict:
+def accept_legacy_analysis(project: "Project", operation: str, clip_ids: list[str] | None = None, *, cancel_event: Event | None = None, shot_options: "ShotTypeOptions | None" = None, ocr_options: "OcrOptions | None" = None) -> dict:
     """Bind selected legacy values to current inputs, retaining unknown provenance.
 
     Performs media hashing; desktop callers must use the detached operation
@@ -16,7 +17,7 @@ def accept_legacy_analysis(project: "Project", operation: str, clip_ids: list[st
     """
     from core.operations.colors import ColorApplication, color_request
     from core.operations.embeddings import EmbeddingApplication, embedding_task
-    from core.operations.legacy_reuse import LEGACY_REUSE_OPERATIONS, accept_legacy_colors, accept_legacy_embeddings, accept_legacy_scalars, accept_legacy_visuals, accept_legacy_boundaries, accept_legacy_gaze, accept_legacy_shots
+    from core.operations.legacy_reuse import LEGACY_REUSE_OPERATIONS, accept_legacy_colors, accept_legacy_embeddings, accept_legacy_scalars, accept_legacy_visuals, accept_legacy_boundaries, accept_legacy_gaze, accept_legacy_shots, accept_legacy_ocr
     from core.operations.scalars import ScalarApplication, ScalarOperation, scalar_task
     from models.analysis_record import AnalysisRecord
 
@@ -26,6 +27,9 @@ def accept_legacy_analysis(project: "Project", operation: str, clip_ids: list[st
     if operation == "shots" and shot_options is None:
         from core.operations.shots import ShotTypeOptions
         shot_options = ShotTypeOptions.from_settings()
+    if operation == "extract_text":
+        from core.operations.ocr import OcrOptions, resolve_ocr_options
+        ocr_options = resolve_ocr_options(ocr_options or OcrOptions())
     ids = list(dict.fromkeys(clip_ids)) if clip_ids is not None else list(project.clips_by_id)
     result: dict = {"accepted": [], "failed": [], "unprocessed": [], "provenance": "unknown"}
     for index, cid in enumerate(ids):
@@ -39,6 +43,20 @@ def accept_legacy_analysis(project: "Project", operation: str, clip_ids: list[st
         previous = clip.analysis_records.get(operation)
         if previous is not None and not isinstance(previous, AnalysisRecord):
             result["failed"].append({"clip_id": cid, "message": "Unknown analysis record must be preserved; recompute analysis"})
+            continue
+        if operation == "extract_text":
+            from core.operations.ocr import OcrApplication, ocr_task
+
+            assert ocr_options is not None
+            ocr_input = ocr_task(clip, project.sources_by_id.get(clip.source_id))
+            ocr_application = OcrApplication(project, (ocr_input,), ocr_options)
+            ocr_result = accept_legacy_ocr((ocr_input,), ocr_options, cancel_event=cancel_event)[0]
+            if ocr_result.status == "unprocessed":
+                result["unprocessed"].append(cid)
+            elif ocr_result.has_result and ocr_application.apply(project, ocr_result):
+                result["accepted"].append(cid)
+            else:
+                result["failed"].append({"clip_id": cid, "message": ocr_result.message or "Target changed"})
             continue
         if operation == "shots":
             from core.operations.shots import ShotTypeApplication, shot_task

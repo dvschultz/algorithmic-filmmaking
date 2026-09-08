@@ -16,7 +16,7 @@ from core.operations.contracts import ColorOutcome, ColorResult
 from core.operations.embeddings import EmbeddingOutcome, EmbeddingTask, embedding_identity
 from models.analysis_record import AnalysisIdentity, AnalysisRecord
 
-LEGACY_REUSE_OPERATIONS = ("colors", "embeddings", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots")
+LEGACY_REUSE_OPERATIONS = ("colors", "embeddings", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots", "extract_text")
 
 if TYPE_CHECKING:
     from core.operations.scalars import ScalarOutcome, ScalarTask
@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from core.operations.boundary_embeddings import BoundaryEmbeddingOutcome, BoundaryEmbeddingTask
     from core.operations.gaze import GazeOutcome, GazeTask
     from core.operations.shots import ShotTypeOutcome, ShotTypeTask, ShotTypeOptions
+    from core.operations.ocr import OcrOutcome, OcrTask, OcrOptions
 
 
 def _accept(record_json: str | None, value: dict, identity: AnalysisIdentity, inputs: AnalysisInput) -> str:
@@ -302,4 +303,44 @@ def accept_legacy_shots(tasks: "tuple[ShotTypeTask, ...]", options: "ShotTypeOpt
             outcomes.append(ShotTypeOutcome(task.clip_id, "unprocessed", code="cancelled", target_type=task.target_type))
         except (ValueError, OSError, TypeError, KeyError) as exc:
             outcomes.append(ShotTypeOutcome(task.clip_id, "failed", message=str(exc), target_type=task.target_type))
+    return tuple(outcomes)
+
+
+def accept_legacy_ocr(tasks: "tuple[OcrTask, ...]", options: "OcrOptions", *, cancel_event: Event | None = None) -> "tuple[OcrOutcome, ...]":
+    """Accept valid saved OCR observations, including explicitly stored empties."""
+    from core.analysis_records import AnalysisSnapshot
+    from core.analysis_model_identity import ocr_runtime
+    from core.jobs.media import FingerprintCancelled
+    from core.operations.ocr import OcrOutcome, OcrText, ocr_identity
+
+    fingerprints = AnalysisFingerprints(cancel_event)
+    runtime = ocr_runtime()
+    outcomes = []
+    for task in tasks:
+        try:
+            if cancel_event is not None and cancel_event.is_set():
+                raise FingerprintCancelled()
+            if task.analysis_json is None or task.path is None:
+                raise ValueError("OCR reuse requires readable media")
+            if task.target_type == "clip" and (
+                isinstance(task.fps, bool) or not isfinite(task.fps) or task.fps <= 0
+                or type(task.start_frame) is not int or type(task.end_frame) is not int
+                or task.start_frame < 0 or task.end_frame <= task.start_frame
+            ):
+                raise ValueError("OCR reuse requires a valid source range")
+            snapshot = AnalysisSnapshot.from_json(task.analysis_json)
+            value = json.loads(snapshot.value_json)
+            raw = value["extracted_texts"]
+            if not isinstance(raw, list):
+                raise ValueError("No legacy OCR result is available")
+            texts = tuple(OcrText(**item) for item in raw)
+            if task.target_type == "clip" and any(not task.start_frame <= text.frame_number < task.end_frame for text in texts):
+                raise ValueError("Legacy OCR observation is outside the clip range")
+            identity = ocr_identity(snapshot, options, fingerprints, runtime)
+            record_json = _accept(json.dumps(snapshot.record.to_dict()) if snapshot.record else None, value, identity, snapshot.inputs)
+            outcomes.append(OcrOutcome(task.clip_id, "succeeded", target_type=task.target_type, texts=texts, record_json=record_json))
+        except FingerprintCancelled:
+            outcomes.append(OcrOutcome(task.clip_id, "unprocessed", target_type=task.target_type, code="cancelled"))
+        except (ValueError, OSError, TypeError, KeyError) as exc:
+            outcomes.append(OcrOutcome(task.clip_id, "failed", target_type=task.target_type, message=str(exc)))
     return tuple(outcomes)
