@@ -107,6 +107,7 @@ def test_closed_controller_has_no_unowned_qt_callbacks():
     "mode",
     [
         "success",
+        "native_exit_pending",
         "cancel",
         "project",
         "clip",
@@ -215,10 +216,16 @@ with patch.object(ColorAnalysisWorker, 'run', color_run), patch.object(Descripti
             assert worker.isRunning()
     finally:
         release.set(); assert worker.wait(5000)
+    if mode == 'native_exit_pending':
+        # QThread.finished can be delivered before the native thread is fully
+        # joined. The receiver must recheck rather than lose completion.
+        running_checks = iter([True])
+        native_is_running = worker.isRunning
+        worker.isRunning = lambda: next(running_checks, native_is_running())
     pump_until(lambda: bool(reports))
     assert not controller.workers and not window._active_clip_analyses
     project.save.assert_not_called()
-    if mode in ('success','duplicate','force'):
+    if mode in ('success','duplicate','force','native_exit_pending'):
         assert started == ['colors','describe']
         assert clip.dominant_colors == [(1,2,3)] and clip.description == 'A scene'
         assert reports[0]['succeeded'] == [clip.id]

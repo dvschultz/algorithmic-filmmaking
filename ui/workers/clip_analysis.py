@@ -81,6 +81,10 @@ class ClipAnalysisController(RetiringQObject):
         self._transcription_timer = QTimer(self)
         self._transcription_timer.setSingleShot(True)
         self._transcription_timer.timeout.connect(self._next_transcription)
+        self._pending_finishes: set[str] = set()
+        self._native_finish_timer = QTimer(self)
+        self._native_finish_timer.setInterval(10)
+        self._native_finish_timer.timeout.connect(self._finish_ready_workers)
 
     def is_current(self) -> bool:
         return (
@@ -357,9 +361,26 @@ class ClipAnalysisController(RetiringQObject):
         operation = self._operation_for_sender()
         if operation is None:
             return
-        worker = self.workers[operation]
-        if worker.isRunning():
-            return
+        self._pending_finishes.add(operation)
+        self._finish_ready_workers()
+
+    @Slot()
+    def _finish_ready_workers(self) -> None:
+        # finished can arrive before the native thread has completely exited.
+        # Keep ownership and recheck; dropping that signal strands the run.
+        for operation in tuple(self._pending_finishes):
+            worker = self.workers.get(operation)
+            if worker is not None and (worker.isRunning() or not worker.wait(0)):
+                continue
+            self._pending_finishes.discard(operation)
+            if worker is not None:
+                self._complete_worker(operation, worker)
+        if self._pending_finishes:
+            self._native_finish_timer.start()
+        else:
+            self._native_finish_timer.stop()
+
+    def _complete_worker(self, operation: str, worker: Any) -> None:
         if (
             self.is_current()
             and not self.plan.cancelled
@@ -395,6 +416,7 @@ class ClipAnalysisController(RetiringQObject):
         self.finished = True
         self._advance_timer.stop()
         self._transcription_timer.stop()
+        self._native_finish_timer.stop()
         analyzed_sources = set()
         for cid, clip in self.clips.items():
             if not self.is_current() or self.plan.cancelled:

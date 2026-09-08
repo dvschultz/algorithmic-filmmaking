@@ -489,6 +489,13 @@ class TestTranscriptionWorkerErrors:
     def test_emits_aggregated_error_summary(self, source, monkeypatch):
         from ui.workers.transcription_worker import TranscriptionWorker
 
+        # Storage admission has separate coverage. This test exercises provider
+        # error aggregation, independent of the user's configured model drive.
+        monkeypatch.setattr(
+            "core.transcription_storage.validate_transcription_disk_space",
+            lambda *_args, **_kwargs: None,
+        )
+
         clips = [make_test_clip("clip-1"), make_test_clip("clip-2")]
         worker = TranscriptionWorker(
             clips,

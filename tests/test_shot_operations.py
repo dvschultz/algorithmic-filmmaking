@@ -200,6 +200,12 @@ def test_cli_uses_shared_operation_and_preserves_saved_results(
     import inspect
     from click.testing import CliRunner
     from cli.main import cli, register_commands
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        "cli.commands.analyze.CLIConfig.load",
+        lambda: SimpleNamespace(cache_dir=tmp_path / "cache"),
+    )
 
     register_commands()
 
@@ -221,7 +227,7 @@ def test_cli_uses_shared_operation_and_preserves_saved_results(
         )
     )
     result = runner.invoke(cli, ["--json", "analyze", "shots", str(path)])
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 0, (result.stdout, result.stderr, result.exception)
     assert json.loads(result.stdout)["shot_types"] == {"wide": 1}
     assert json.loads(path.read_text())["clips"][0]["shot_type"] == "wide"
     provider.assert_called_once_with(task.thumbnail_path)
