@@ -431,6 +431,10 @@ verifies current inputs/settings in availability and MCP status, including silen
 clips, without probing media or loading models. Its regression run passed 249
 tests, with 34 focused follow-up tests. Standalone audio, alignment, and the
 remaining cross-consumer audit remain unfinished.
+Standalone audio's shared operation now supports verified whole-file records and
+guarded success/reuse/failure publication. Transcript and record publication is
+atomic for project observers. Its regression run passed 294 tests; GUI and durable
+audio consumers still use legacy tasks and remain to migrate.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain

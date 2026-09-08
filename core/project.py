@@ -1107,7 +1107,7 @@ class Project:
         """Look up an audio source by ID."""
         return self.audio_sources_by_id.get(audio_source_id)
 
-    def set_audio_transcript(self, audio_source_id: str, segments: list) -> None:
+    def set_audio_transcript(self, audio_source_id: str, segments: list, *, analysis_record: AnalysisRecord | None = None) -> None:
         """Publish an audio transcript, including a successful silent result."""
         from copy import deepcopy
 
@@ -1115,9 +1115,14 @@ class Project:
         audio = self.get_audio_source(audio_source_id)
         if audio is None:
             raise ValueError(f"Audio source not found: {audio_source_id}")
+        value = {"transcript": [segment.to_dict() for segment in segments]}
+        if analysis_record is not None and (
+            analysis_record.state != "succeeded" or analysis_record.value != value
+            or (analysis_record.identity is not None and analysis_record.identity.operation != "transcribe")
+        ):
+            raise ValueError("Audio transcript and analysis record do not match")
         audio.transcript = deepcopy(segments)
-        audio.analysis_records["transcribe"] = AnalysisRecord.legacy({"transcript": [segment.to_dict() for segment in audio.transcript]})
-        self.mark_dirty()
+        self.record_analysis("audio", audio_source_id, "transcribe", analysis_record or AnalysisRecord.legacy(value))
         self._notify_observers("audio_sources_changed", self._audio_sources)
 
     def add_clips(self, clips: list[Clip]) -> None:

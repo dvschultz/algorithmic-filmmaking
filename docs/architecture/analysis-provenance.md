@@ -431,6 +431,28 @@ The durable transcription regression run passed 273 tests including CLI, combine
 analysis recovery, and all MCP tests. Scoped job typing and changed-file Ruff
 passed. This does not complete the remaining transcription consumers or U10.
 
+## Standalone audio transcription checkpoint
+
+The shared audio operation can now capture verified tasks and publish success,
+reuse, and failure records. Identity includes whole-file content, audio metadata,
+actual backend/model, decoder or extraction path, package/binary identity, and
+transcription settings. Whole-file decoding is distinct from clip extraction.
+Verified empty transcripts can be reused; changes to media, metadata, settings,
+or displayed text invalidate reuse. Cancellation and stale delivery do not publish
+verification, and failed refreshes preserve the displayed transcript.
+
+`Project.set_audio_transcript()` accepts a matching record and publishes it with
+the transcript before notifying observers. It rejects mismatched records before
+mutation. Raw callers continue to create unknown-provenance values. The audio
+task factory retains its legacy default until GUI and durable jobs migrate;
+those consumers do not yet request or carry verified audio tasks.
+
+The regression run passed 294 tests including audio GUI, ownership, agent, project,
+and MCP coverage. Changed-file Ruff passed. Scoped operation typing is clean;
+the existing `Project.record_analysis()` mapping typing error was confirmed
+against the unchanged HEAD version. Audio GUI/job recovery and alignment remain
+unfinished, along with the broader U10 audit.
+
 ## Remaining U10 work
 
 - Migrate the other U7 analysis families to
