@@ -394,6 +394,7 @@ class ReferenceGuideDialog(QDialog):
             clips=all_clip_objects,
             tier_overrides=tier_overrides,
             override_required=required_ops,
+            sources_by_id={source.id: source for _, source in self.all_clips},
         )
         self.cost_panel.set_estimates(estimates)
 

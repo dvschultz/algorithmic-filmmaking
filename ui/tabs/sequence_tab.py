@@ -535,7 +535,8 @@ class SequenceTab(BaseTab):
         overrides = self._confirm_cost_panel.get_tier_overrides()
         clip_objects = [clip for clip, source in self._pending_clips]
         estimates = estimate_sequence_cost(
-            self._pending_algorithm, clip_objects, tier_overrides=overrides
+            self._pending_algorithm, clip_objects, tier_overrides=overrides,
+            sources_by_id={source.id: source for _, source in self._pending_clips},
         )
         self._confirm_cost_panel.set_estimates(estimates)
 
@@ -826,7 +827,10 @@ class SequenceTab(BaseTab):
 
         # Compute cost estimates for this algorithm
         clip_objects = [clip for clip, source in clips]
-        estimates = estimate_sequence_cost(algorithm, clip_objects)
+        estimates = estimate_sequence_cost(
+            algorithm, clip_objects,
+            sources_by_id={source.id: source for _, source in clips},
+        )
 
         if estimates or algorithm == "color":
             # Show gatekeeper with cost panel. Chromatics always uses this
@@ -868,6 +872,7 @@ class SequenceTab(BaseTab):
         estimates = estimate_sequence_cost(
             algo_lower,
             [clip for clip, _source in clips],
+            sources_by_id={source.id: source for _, source in clips},
         )
         dependency_warning = self._get_missing_local_dependency_warning(estimates)
         if dependency_warning:

@@ -8,6 +8,11 @@ a sequence.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Callable
+
+if TYPE_CHECKING:
+    from models.clip import Source
+    from core.settings import Settings
 
 
 @dataclass
@@ -79,7 +84,7 @@ OPERATION_LABELS: dict[str, str] = {
 }
 
 # Map operation key to a function that checks if a clip has that metadata
-METADATA_CHECKS: dict[str, callable] = {
+METADATA_CHECKS: dict[str, Callable[[Any], bool]] = {
     "colors": lambda clip: bool(clip.dominant_colors),
     "shots": lambda clip: bool(clip.shot_type) or bool(clip.cinematography),
     "extract_text": lambda clip: bool(clip.extracted_texts),
@@ -157,7 +162,7 @@ def _resolve_tier(operation: str, tier_overrides: dict[str, str] | None,
     return "cloud"
 
 
-def _get_parallelism(operation: str, tier: str, settings=None) -> int:
+def _get_parallelism(operation: str, tier: str, settings: Settings | None = None) -> int:
     """Get parallelism factor for wall-clock time calculation."""
     if settings is not None:
         if operation == "colors" and hasattr(settings, "color_analysis_parallelism"):
@@ -181,6 +186,9 @@ def estimate_sequence_cost(
     tier_overrides: dict[str, str] | None = None,
     settings=None,
     override_required: list[str] | None = None,
+    *,
+    sources_by_id: dict[str, Source] | None = None,
+    face_sample_interval: float = 1.0,
 ) -> list[OperationEstimate]:
     """Calculate cost estimates for a sequence algorithm.
 
@@ -192,6 +200,8 @@ def estimate_sequence_cost(
         override_required: Explicit list of required operations, bypassing
             the algorithm config lookup. Used by reference_guided where
             requirements depend on user-selected dimensions.
+        sources_by_id: Current sources for verified analysis completion checks.
+        face_sample_interval: Requested face sampling interval in seconds.
 
     Returns:
         List of OperationEstimate, one per required operation.
@@ -213,13 +223,24 @@ def estimate_sequence_cost(
     if total == 0:
         return []
 
-    estimates = []
+    estimates: list[OperationEstimate] = []
     for op_key in required:
         check = METADATA_CHECKS.get(op_key)
         if check is None:
             continue
 
-        needing = sum(1 for clip in clips if not check(clip))
+        if op_key == "face_embeddings":
+            from core.analysis_availability import face_analysis_is_complete
+            from core.operations.face_records import face_target_runtime
+
+            runtime = face_target_runtime()
+            sources = sources_by_id or {}
+            needing = sum(not face_analysis_is_complete(
+                clip, sources.get(clip.source_id),
+                sample_interval=face_sample_interval, runtime=runtime,
+            ) for clip in clips)
+        else:
+            needing = sum(1 for clip in clips if not check(clip))
         if needing == 0:
             continue
 

@@ -518,9 +518,13 @@ tests with scoped dialog typing and changed-file Ruff. Reference execution now
 requires verified model content matching all contributing reference images and
 clip results; owner delivery rechecks model stamps and packages without hashing.
 The follow-up regression run passed 124 tests with two modules passing scoped
-typing and changed-file Ruff clean. Its computed-receipt
-recovery, agent path, and source-aware cost
-gate remain pending, along with managed face embedding storage.
+typing and changed-file Ruff clean. Rose Hobart now has a shared estimate panel
+inside its configuration dialog, with source-aware verified completion and
+sampling-interval refresh. Verified empty results count as complete; stale and
+legacy face results remain pending. The 139-test regression run passed with two
+modules passing scoped typing and changed-file Ruff. Its computed-receipt
+recovery and agent path remain pending, along with managed face embedding storage
+and cost-check migration for the other analysis families.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain

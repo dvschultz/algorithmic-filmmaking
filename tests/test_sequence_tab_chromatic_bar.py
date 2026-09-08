@@ -93,7 +93,11 @@ def test_card_click_chromatic_flow_still_shows_confirm_when_estimates_empty(qapp
     from models.clip import Clip, Source
     from ui.tabs.sequence_tab import SequenceTab
 
-    monkeypatch.setattr("ui.tabs.sequence_tab.estimate_sequence_cost", lambda algorithm, clips: [])
+    def estimate(algorithm, clips, *, sources_by_id):
+        assert sources_by_id == {source.id: source}
+        return []
+
+    monkeypatch.setattr("ui.tabs.sequence_tab.estimate_sequence_cost", estimate)
 
     tab = SequenceTab()
     source = Source(id="src-1", file_path=Path("/tmp/test.mp4"), fps=24.0)

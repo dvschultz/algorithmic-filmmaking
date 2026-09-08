@@ -45,6 +45,7 @@ from core.operations.face_records import (
 from models.analysis_record import AnalysisRecord
 from ui.theme import theme, UISizes
 from ui.workers.base import CancellableWorker
+from ui.widgets.cost_estimate_panel import CostEstimatePanel
 
 if TYPE_CHECKING:
     from core.project import Project
@@ -530,8 +531,28 @@ class RoseHobartDialog(QDialog):
         sample_row.addStretch()
         layout.addLayout(sample_row)
 
+        self.cost_panel = CostEstimatePanel()
+        self.cost_panel.set_collapsed(True)
+        layout.addWidget(self.cost_panel)
+        self.sample_spin.valueChanged.connect(self._refresh_cost_estimate)
+        self._refresh_cost_estimate()
+
         layout.addStretch()
         return page
+
+    @Slot()
+    def _refresh_cost_estimate(self) -> None:
+        from core.cost_estimates import estimate_sequence_cost
+
+        self.cost_panel.set_estimates(
+            estimate_sequence_cost(
+                "rose_hobart",
+                self.clips,
+                override_required=["face_embeddings"],
+                sources_by_id=self.sources_by_id,
+                face_sample_interval=self.sample_spin.value(),
+            )
+        )
 
     def _create_progress_page(self) -> QWidget:
         """Create the progress page."""
@@ -815,6 +836,7 @@ class RoseHobartDialog(QDialog):
     @Slot(list)
     def _on_finished(self, sequence: list):
         """Handle generation completion."""
+        self._refresh_cost_estimate()
         if not sequence:
             # Zero matches — let user adjust sensitivity
             self.progress_label.setText("No clips matched the reference person.")
@@ -836,6 +858,7 @@ class RoseHobartDialog(QDialog):
     @Slot(str)
     def _on_error(self, message: str):
         """Handle generation error."""
+        self._refresh_cost_estimate()
         self.stack.setCurrentIndex(self.PAGE_CONFIG)
         self.generate_btn.setEnabled(True)
         self.generate_btn.setText("Generate")

@@ -658,7 +658,15 @@ package versions without hashing. Missing execution reports and model changes
 during extraction, between references, during clip analysis, or before publication
 reject matching. The regression run passed 124 tests with scoped typing for two
 modules and changed-file Ruff clean.
-Rose Hobart still needs computed-receipt recovery, agent-path migration, and a source-aware cost gate. Managed face
+Rose Hobart now displays the shared cost panel in its configuration dialog, where
+the requested sampling interval and current sources determine verified completion.
+Verified empty results need no repeat analysis; legacy, missing-source, changed
+media/model, and mismatched-sampling results remain pending. Sampling changes and
+generation completion refresh the estimate without hashing or loading models.
+Sequence-tab and reference-guide estimate calls also carry their current sources.
+The regression run passed 139 tests with two modules passing scoped typing and
+changed-file Ruff clean. Other analysis-family cost checks still need migration.
+Rose Hobart still needs computed-receipt recovery and agent-path migration. Managed face
 embedding storage also remains pending.
 
 ## Remaining U10 work
