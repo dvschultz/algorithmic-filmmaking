@@ -41,7 +41,7 @@ def test_legacy_colors_remain_available_for_verified_recomputation():
     disabled = compute_disabled_operations(
         [clip_a, clip_b], ["colors", "shots", "transcribe"]
     )
-    assert disabled == {"transcribe"}
+    assert disabled == set()
 
 
 def test_compute_disabled_operations_mixed_clips_keeps_option_enabled():

@@ -418,7 +418,15 @@ after save or checkpoint failure. Parallelism does not affect receipt identity.
 Manually edited managed transcripts still require force. The CLI now sends
 populated transcripts through verification, and generic analysis recomputes a
 transcript when the requested model differs. Public result fields remain stable.
-Standalone audio, alignment, and completion indicators remain to migrate.
+Clip transcription completion now checks the current source binding, range, media
+stamps, settings, runtime, and displayed value against its verified record. The
+picker and quick-run availability paths use that check, and MCP transcript status
+counts verified empty transcripts as complete. Confirmed no-audio records remain
+complete for unchanged inputs without re-running ffprobe. Completion does not
+load models or probe media. The completion regression run passed 249 tests, with
+34 focused follow-up tests and clean scoped typing/Ruff.
+Standalone audio, alignment, and the remaining cross-consumer audit still need
+migration or verification.
 The durable transcription regression run passed 273 tests including CLI, combined
 analysis recovery, and all MCP tests. Scoped job typing and changed-file Ruff
 passed. This does not complete the remaining transcription consumers or U10.

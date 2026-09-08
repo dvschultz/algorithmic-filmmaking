@@ -116,7 +116,7 @@ def test_dialog_run_disabled_when_every_operation_complete(qapp, tmp_path, monke
     from core.settings import Settings
     model_settings = Settings(description_model_tier="cloud", description_model_cloud="gpt-test", description_input_mode="frame", cinematography_tier="cloud", cinematography_model="gpt-test", cinematography_input_mode="frame")
     monkeypatch.setattr("core.settings.load_settings", lambda: model_settings)
-    source = verify_clip_analysis(clip, tmp_path, embeddings=True, objects=True, ocr=True, classify=True, shots=True, gaze=True, boundary=True, descriptions=True, cinematography=True)
+    source = verify_clip_analysis(clip, tmp_path, embeddings=True, objects=True, ocr=True, classify=True, shots=True, gaze=True, boundary=True, descriptions=True, cinematography=True, transcriptions=True)
 
     settings = _Settings(selected=["colors", "shots", "transcribe"])
     dialog = AnalysisPickerDialog(

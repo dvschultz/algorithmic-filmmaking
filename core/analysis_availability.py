@@ -63,6 +63,50 @@ def operation_has_result(op_key: str, clip) -> bool:
 
 def operation_is_complete_for_clip(op_key: str, clip, *, runtime: dict | None = None, source=None) -> bool:
     """Report reusable completion; existing fields alone do not prove provenance."""
+    if op_key == "transcribe":
+        import json
+        from core.analysis_records import AnalysisSnapshot, current_record
+        from core.operations.transcription import TranscriptionOptions, resolve_transcription_options
+        from core.operations.transcription_records import (
+            transcription_task, transcription_runtime, transcription_parameters, transcription_value,
+        )
+        from core.settings import load_settings
+
+        record = current_record(clip, op_key)
+        if record is None or record.identity is None or source is None:
+            return False
+        try:
+            settings = load_settings()
+            transcript_options = resolve_transcription_options(TranscriptionOptions(
+                model=settings.transcription_model, language=settings.transcription_language,
+                backend=settings.transcription_backend,
+                segmentation_mode=settings.transcription_segmentation_mode,
+                segment_max_seconds=settings.transcription_segment_max_seconds,
+            ))
+            transcript_task = transcription_task(clip, source)
+            if transcript_task.analysis_json is None:
+                return False
+            snapshot = AnalysisSnapshot.from_json(transcript_task.analysis_json)
+            if json.loads(record.input_json or "null") != snapshot.inputs.to_dict():
+                return False
+            data = record.identity.to_dict()
+            # A confirmed no-audio result remains valid for unchanged inputs.
+            # Re-running ffprobe belongs on the worker, never in UI availability.
+            probe_execution = {"backend": "audio-probe", "model": None, "input_mode": "no-audio"}
+            no_audio = data["model"].get("execution") == probe_execution
+            expected_runtime = runtime if runtime is not None else transcription_runtime(transcript_options, execution=probe_execution if no_audio else None)
+            return bool(
+                data["operation_version"] == 2 and data["schema_version"] == 1
+                and data["model"] == expected_runtime
+                and data["parameters"] == transcription_parameters(transcript_options)
+                and data["source_range"] == json.loads(snapshot.inputs.range_json)
+                and data["sampling"] == {"policy": "half-open-clip-audio/v1"}
+                and data["prompt_sha256"] is None
+                and record.value == transcription_value(clip)
+                and (not no_audio or clip.transcript == [])
+            )
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            return False
     if op_key == "cinematography":
         import json
         from hashlib import sha256

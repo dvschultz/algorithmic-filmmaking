@@ -316,13 +316,16 @@ async def get_analysis_status(
         # Count analysis types
         has_colors = sum(1 for c in clips if c.dominant_colors)
         has_shots = sum(1 for c in clips if c.shot_type)
-        has_transcripts = sum(1 for c in clips if c.transcript)
         has_classification = sum(1 for c in clips if c.object_labels)
         has_objects = sum(1 for c in clips if c.detected_objects)
         has_descriptions = sum(1 for c in clips if c.description)
         has_text = sum(1 for c in clips if c.extracted_texts)
         from core.analysis_availability import operation_is_complete_for_clip
 
+        has_transcripts = sum(
+            operation_is_complete_for_clip("transcribe", c, source=project.sources_by_id.get(c.source_id))
+            for c in clips
+        )
         has_cinematography = sum(
             operation_is_complete_for_clip("cinematography", c, source=project.sources_by_id.get(c.source_id))
             for c in clips

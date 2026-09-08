@@ -7,7 +7,7 @@ from core.project import Project
 from models.clip import Clip, Source
 
 
-def verify_clip_analysis(clip: Clip, directory: Path, *, embeddings: bool = False, objects: bool = False, ocr: bool = False, classify: bool = False, shots: bool = False, gaze: bool = False, boundary: bool = False, descriptions: bool = False, cinematography: bool = False) -> Source:
+def verify_clip_analysis(clip: Clip, directory: Path, *, embeddings: bool = False, objects: bool = False, ocr: bool = False, classify: bool = False, shots: bool = False, gaze: bool = False, boundary: bool = False, descriptions: bool = False, cinematography: bool = False, transcriptions: bool = False) -> Source:
     from core.spine.analyze import analyze_colors, embeddings as analyze_embeddings, detect_objects, extract_text, classify_content, analyze_shots, gaze as analyze_gaze, boundary_embeddings
 
     media = directory / f"{clip.id}.mp4"
@@ -51,4 +51,15 @@ def verify_clip_analysis(clip: Clip, directory: Path, *, embeddings: bool = Fals
 
         with patch("core.analysis.cinematography.analyze_cinematography", return_value=CinematographyAnalysis(shot_size="ELS", analysis_model="gpt-test")):
             analyze_cinematography(project)
+    if transcriptions:
+        from core.settings import load_settings
+        from core.operations.transcription import TranscriptionOptions, TranscriptionApplication, run_transcription
+        from core.operations.transcription_records import transcription_task
+
+        settings = load_settings()
+        options = TranscriptionOptions(model=settings.transcription_model, backend=settings.transcription_backend, language=settings.transcription_language, segmentation_mode=settings.transcription_segmentation_mode, segment_max_seconds=settings.transcription_segment_max_seconds)
+        task = transcription_task(clip, source, skip_existing=False)
+        with patch("core.transcription._has_audio_stream", return_value=True), patch("core.transcription.transcribe_clip", return_value=[]):
+            outcome = run_transcription((task,), options)[0]
+            assert TranscriptionApplication(project, (task,), options).apply(project, outcome)
     return source

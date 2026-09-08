@@ -426,8 +426,11 @@ and recover transcript records, verify semantic reuse, and save guarded failure
 records. Forced refreshes recover one batch without repeated inference. CLI and
 generic analysis routes verify populated transcripts against the requested model.
 The durable regression run passed 273 tests including CLI, combined recovery, and
-MCP coverage, with clean scoped job typing. Standalone audio, alignment, and
-completion indicators remain unfinished.
+MCP coverage, with clean scoped job typing. Clip transcription completion now
+verifies current inputs/settings in availability and MCP status, including silent
+clips, without probing media or loading models. Its regression run passed 249
+tests, with 34 focused follow-up tests. Standalone audio, alignment, and the
+remaining cross-consumer audit remain unfinished.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain
