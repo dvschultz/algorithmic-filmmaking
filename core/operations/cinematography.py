@@ -133,15 +133,28 @@ def cinematography_runtime(
     options: CinematographyOptions,
     *,
     execution: dict | None = None,
+    allow_imports: bool = True,
 ) -> dict:
     from core.analysis.cinematography import CINEMATOGRAPHY_SCHEMA
 
     if execution is None:
         if options.tier == "local":
-            from core.analysis.description import is_mlx_vlm_available
+            available: bool | None
+            if allow_imports:
+                from core.analysis.description import is_mlx_vlm_available
+
+                available = is_mlx_vlm_available()
+            else:
+                from core.analysis_model_identity import known_mlx_vlm_availability
+
+                available = known_mlx_vlm_availability()
+                if available is None:
+                    raise ValueError(
+                        "Cinematography backend requires worker verification"
+                    )
 
             execution = {
-                "backend": "mlx" if is_mlx_vlm_available() else "unavailable",
+                "backend": "mlx" if available else "unavailable",
                 "model": options.local_model,
                 "input_mode": "frame",
             }

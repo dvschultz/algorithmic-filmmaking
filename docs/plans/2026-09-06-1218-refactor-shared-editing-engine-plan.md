@@ -385,7 +385,7 @@ New paths below are proposed file ownership, not existing files. Large migration
 **Goal:** Make reuse and invalidation correct and storage reclaimable.
 
 **Implementation checkpoint:** In progress. Colors, thumbnail and boundary embeddings, object
-detection, OCR, ImageNet classification, shot classification, gaze, and descriptions now use verified
+detection, OCR, ImageNet classification, shot classification, gaze, descriptions, and cinematography now use verified
 records across their shared operations and delivery surfaces. Thumbnail and boundary embedding
 artifacts have manifest, live-project, undo, save, and bundle retention. Remaining
 work includes the other U7 analysis families, explicit legacy-reuse flows,
@@ -402,7 +402,9 @@ append new history. Cinematography shared operations and direct headless calls n
 retain verified records for actual frame/video execution. GUI delivery, recovery,
 and combined clip/frame pipelines now carry those records. Durable jobs verify reuse,
 retain failed-attempt records, and recover forced refreshes without repeated
-inference. Cinematography completion and availability checks remain to be migrated.
+inference. Cinematography completion and availability checks now validate current
+records and settings without probing VLM runtimes on the UI thread. Transcription
+and audio/alignment remain among the next analysis families to migrate.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain

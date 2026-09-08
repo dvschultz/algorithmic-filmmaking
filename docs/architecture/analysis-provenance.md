@@ -332,8 +332,15 @@ timestamps refreshes record bindings without inference. Failures preserve previo
 display values while saving failed verification state. Forced refreshes publish as
 one batch and recover from save/checkpoint failures without repeated inference;
 parallelism is excluded from receipt matching. A frame fallback does not satisfy a
-later video request. Completion/availability checks still need migration;
-cinematography and U10 remain incomplete.
+later video request.
+
+Completion checks now compare the current media/source binding, settings, runtime,
+prompt/schema, sampling, and both displayed values. The picker, quick-run menu, and
+MCP cinematography status use verified completion. Missing source context and an
+installed but unprobed local runtime cannot establish completion; UI checks do not
+probe or load VLM runtimes. Clip and frame completion use their actual input mode.
+The remaining cross-consumer and legacy-reuse audit still applies; U10 remains
+incomplete.
 
 ## Remaining U10 work
 

@@ -107,7 +107,6 @@ def test_dialog_run_disabled_when_every_operation_complete(qapp, tmp_path, monke
         description="desc",
     )
     clip.extracted_texts = []
-    clip.cinematography = object()
     clip.face_embeddings = [{"bbox": [0, 0, 50, 50], "embedding": [0.1] * 512, "confidence": 0.9}]
     clip.gaze_category = "at_camera"
     clip.embedding = [0.1] * 768  # DINOv2 visual embedding
@@ -115,9 +114,9 @@ def test_dialog_run_disabled_when_every_operation_complete(qapp, tmp_path, monke
     clip.last_frame_embedding = [0.2] * 768
     clip.custom_queries = [{"query": "test", "match": True, "confidence": 0.9, "model": "test"}]
     from core.settings import Settings
-    model_settings = Settings(description_model_tier="cloud", description_model_cloud="gpt-test", description_input_mode="frame")
+    model_settings = Settings(description_model_tier="cloud", description_model_cloud="gpt-test", description_input_mode="frame", cinematography_tier="cloud", cinematography_model="gpt-test", cinematography_input_mode="frame")
     monkeypatch.setattr("core.settings.load_settings", lambda: model_settings)
-    source = verify_clip_analysis(clip, tmp_path, embeddings=True, objects=True, ocr=True, classify=True, shots=True, gaze=True, boundary=True, descriptions=True)
+    source = verify_clip_analysis(clip, tmp_path, embeddings=True, objects=True, ocr=True, classify=True, shots=True, gaze=True, boundary=True, descriptions=True, cinematography=True)
 
     settings = _Settings(selected=["colors", "shots", "transcribe"])
     dialog = AnalysisPickerDialog(

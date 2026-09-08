@@ -63,6 +63,40 @@ def operation_has_result(op_key: str, clip) -> bool:
 
 def operation_is_complete_for_clip(op_key: str, clip, *, runtime: dict | None = None, source=None) -> bool:
     """Report reusable completion; existing fields alone do not prove provenance."""
+    if op_key == "cinematography":
+        import json
+        from hashlib import sha256
+        from core.analysis_records import AnalysisSnapshot, current_record
+        from core.operations.cinematography import (
+            cinematography_task, cinematography_runtime, cinematography_parameters,
+            cinematography_prompt, cinematography_value, resolve_options as resolve_cinematography,
+        )
+
+        record = current_record(clip, op_key)
+        if record is None or record.identity is None:
+            return False
+        try:
+            cinema_options = resolve_cinematography()
+            cinema_task = cinematography_task(clip, source)
+            if cinema_task.snapshot_json is None:
+                return False
+            snapshot = AnalysisSnapshot.from_json(cinema_task.snapshot_json)
+            if json.loads(record.input_json or "null") != snapshot.inputs.to_dict():
+                return False
+            expected_runtime = runtime if runtime is not None else cinematography_runtime(cinema_task, cinema_options, allow_imports=False)
+            execution = expected_runtime["execution"]
+            data = record.identity.to_dict()
+            return bool(
+                execution["backend"] != "unavailable"
+                and data["operation_version"] == 2 and data["schema_version"] == 1
+                and data["model"] == expected_runtime
+                and data["parameters"] == cinematography_parameters(cinema_options)
+                and data["sampling"] == {"policy": execution["input_mode"] + "/v1"}
+                and data["prompt_sha256"] == sha256(cinematography_prompt(execution).encode()).hexdigest()
+                and record.value == cinematography_value(clip)
+            )
+        except (OSError, ValueError, TypeError, KeyError):
+            return False
     if op_key == "describe":
         import json
         from hashlib import sha256

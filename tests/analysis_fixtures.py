@@ -7,7 +7,7 @@ from core.project import Project
 from models.clip import Clip, Source
 
 
-def verify_clip_analysis(clip: Clip, directory: Path, *, embeddings: bool = False, objects: bool = False, ocr: bool = False, classify: bool = False, shots: bool = False, gaze: bool = False, boundary: bool = False, descriptions: bool = False) -> Source:
+def verify_clip_analysis(clip: Clip, directory: Path, *, embeddings: bool = False, objects: bool = False, ocr: bool = False, classify: bool = False, shots: bool = False, gaze: bool = False, boundary: bool = False, descriptions: bool = False, cinematography: bool = False) -> Source:
     from core.spine.analyze import analyze_colors, embeddings as analyze_embeddings, detect_objects, extract_text, classify_content, analyze_shots, gaze as analyze_gaze, boundary_embeddings
 
     media = directory / f"{clip.id}.mp4"
@@ -32,7 +32,7 @@ def verify_clip_analysis(clip: Clip, directory: Path, *, embeddings: bool = Fals
         with patch("core.analysis.classification.classify_frame", return_value=[]):
             classify_content(project)
     if shots:
-        with patch("core.analysis.shots.classify_shot_type", return_value=("wide shot", 0.9)):
+        with patch("core.analysis.shots.classify_shot_type", return_value=("wide" if cinematography else "wide shot", 0.9)):
             analyze_shots(project)
     if gaze:
         with patch("core.analysis.gaze.extract_gaze_from_clip", return_value=None), patch("core.analysis.gaze.load_face_mesh"), patch("core.analysis.gaze.unload_model"):
@@ -45,4 +45,10 @@ def verify_clip_analysis(clip: Clip, directory: Path, *, embeddings: bool = Fals
 
         with patch("core.analysis.description.describe_frame", return_value=("Fixture description", "gpt-test")):
             describe(project)
+    if cinematography:
+        from core.spine.analyze import cinematography as analyze_cinematography
+        from models.cinematography import CinematographyAnalysis
+
+        with patch("core.analysis.cinematography.analyze_cinematography", return_value=CinematographyAnalysis(shot_size="ELS", analysis_model="gpt-test")):
+            analyze_cinematography(project)
     return source

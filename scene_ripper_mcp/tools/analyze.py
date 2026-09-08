@@ -3,7 +3,6 @@
 import asyncio
 import json
 import logging
-from pathlib import Path
 from typing import Annotated
 
 from mcp.server.fastmcp import Context
@@ -322,7 +321,12 @@ async def get_analysis_status(
         has_objects = sum(1 for c in clips if c.detected_objects)
         has_descriptions = sum(1 for c in clips if c.description)
         has_text = sum(1 for c in clips if c.extracted_texts)
-        has_cinematography = sum(1 for c in clips if c.cinematography)
+        from core.analysis_availability import operation_is_complete_for_clip
+
+        has_cinematography = sum(
+            operation_is_complete_for_clip("cinematography", c, source=project.sources_by_id.get(c.source_id))
+            for c in clips
+        )
         has_faces = sum(1 for c in clips if c.face_embeddings is not None)
         has_gaze = sum(1 for c in clips if c.gaze_category is not None)
         has_embeddings = sum(1 for c in clips if c.embedding is not None)
