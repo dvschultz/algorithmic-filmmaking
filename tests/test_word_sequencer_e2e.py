@@ -87,14 +87,33 @@ def _make_50_word_source() -> tuple[Clip, Source]:
     return clip, source
 
 
-def test_alphabetical_50_word_smoke(qapp):
+def test_alphabetical_50_word_smoke(qapp, tmp_path, monkeypatch):
     """The integration gate: 30-second seeded source → 50 SequenceClip entries."""
     from ui.dialogs.word_sequencer_dialog import WordSequencerDialog
 
     clip, source = _make_50_word_source()
+    from core.operations.transcription import (
+        TranscriptionApplication, TranscriptionOptions, run_transcription,
+    )
+    from core.operations.transcription_records import transcription_task
+    from core.project import Project
+    from core.settings import Settings
+
+    source.file_path = tmp_path / "source.mp4"
+    source.file_path.write_bytes(b"synthetic media; decoder is mocked")
+    settings = Settings(transcription_backend="faster-whisper")
+    monkeypatch.setattr("core.settings.load_settings", lambda: settings)
+    words = clip.transcript
+    monkeypatch.setattr("core.transcription._has_audio_stream", lambda _: True)
+    monkeypatch.setattr("core.transcription.transcribe_clip", lambda *args, **kwargs: words)
+    project = Project(sources=[source], clips=[clip])
+    task = transcription_task(clip, source, skip_existing=False)
+    options = TranscriptionOptions(backend="faster-whisper", model=settings.transcription_model)
+    outcome = run_transcription((task,), options)[0]
+    assert TranscriptionApplication(project, (task,), options).apply(project, outcome)
 
     captured: list = []
-    dialog = WordSequencerDialog(clips=[(clip, source)], project=None)
+    dialog = WordSequencerDialog(clips=[(clip, source)], project=project)
     dialog.sequence_ready.connect(captured.append)
 
     # Alphabetical mode is the default (index 0).

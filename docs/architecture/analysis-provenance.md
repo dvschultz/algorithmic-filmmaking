@@ -823,14 +823,20 @@ regressions fail when settings forwarding is disabled. The cost/completion group
 passes 107 tests and the operation/import-boundary group passes 136 tests; scoped
 typing for all six changed source modules and changed-file Ruff pass.
 
-The full regression run collected 5,844 tests. Its first nine failures exposed
+The full regression run completed with 5,831 passed, 11 failed, and 2 skipped
+in 751 seconds. Its first nine failures exposed
 stale test assumptions in picker source bindings, scalar application ownership,
 legacy audio transcription status, and receipt batching. Updated fixtures create
 verified scalar records (including zero brightness and no audio) and preserve
 the bounded-query check without requiring a single connection. The related
 108-test regression group passes, including the native controller callback
-subprocess test. This does not establish a passing full-suite result; that run
-is still in progress.
+subprocess test. The remaining two failures were fixtures in reference-guided
+brightness cost estimation and the word-sequencer smoke test. They now distinguish
+legacy projections from verified records, and the smoke constructs provenance
+through the shared transcription operation before generating its 50-cut timeline.
+Their regression groups pass 82 tests and 55 tests respectively (the latter has
+one optional render test skipped). All 11 reported failures have targeted passing
+coverage; a fresh full run is still required to establish a green suite.
 
 Receipt-pruning audit: `ResultBatch.commit` refuses to recompute a missing
 receipt already named by a saved project. Audio/image import and frame extraction
