@@ -11,6 +11,7 @@ from fractions import Fraction
 from models.media_time import (
     StillHold, TimelineRange, VideoRange, frame_boundary, frame_rate, rational,
 )
+from models.analysis_record import ArtifactRef
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,8 @@ class SequenceClip:
     vflip: bool = False  # Random vertical flip
     reverse: bool = False  # Random reverse playback
     prerendered_path: Optional[str] = None  # Path to pre-rendered clip with baked transforms
+    prerender_artifact: Optional[ArtifactRef] = None
+    _unreadable_prerender_artifact: object = field(default=None, repr=False)
     rationale: Optional[str] = None  # LLM-generated rationale for why this clip follows the previous (Free Association sequencer)
     source_rate: Optional[str] = None  # Exact frames/second, e.g. "30000/1001"
     timeline_rate: Optional[str] = None
@@ -153,7 +156,11 @@ class SequenceClip:
             data["vflip"] = True
         if self.reverse:
             data["reverse"] = True
-        if self.prerendered_path is not None:
+        if self.prerender_artifact is not None:
+            data["prerender_artifact"] = self.prerender_artifact.to_dict()
+        elif self._unreadable_prerender_artifact is not None:
+            data["prerender_artifact"] = deepcopy(self._unreadable_prerender_artifact)
+        elif self.prerendered_path is not None:
             if base_path:
                 try:
                     rel = Path(self.prerendered_path).relative_to(base_path)
@@ -175,6 +182,14 @@ class SequenceClip:
             base_path: Base directory to resolve relative prerendered_path against.
         """
         prerendered = data.get("prerendered_path")
+        artifact = None
+        unreadable_artifact = None
+        if data.get("prerender_artifact") is not None:
+            prerendered = None  # Resolve managed paths only after checksum verification.
+            try:
+                artifact = ArtifactRef.from_dict(data["prerender_artifact"])
+            except (ValueError, TypeError, KeyError):
+                unreadable_artifact = deepcopy(data["prerender_artifact"])
         if prerendered and base_path:
             p = Path(prerendered)
             if not p.is_absolute():
@@ -195,6 +210,8 @@ class SequenceClip:
             vflip=data.get("vflip", False),
             reverse=data.get("reverse", False),
             prerendered_path=prerendered,
+            prerender_artifact=artifact,
+            _unreadable_prerender_artifact=unreadable_artifact,
             rationale=data.get("rationale"),
             source_rate=data.get("source_rate"),
             timeline_rate=data.get("timeline_rate"),

@@ -18,6 +18,7 @@ from core.project_revision import ProjectFileRevision, ProjectRevisionConflict
 if TYPE_CHECKING:
     from core.project import Project
     from models.sequence import Sequence
+    from models.analysis_record import ArtifactRef
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +140,12 @@ class ProjectSession:
             for sequence in getattr(entry.command, "retained_sequences", ()):
                 retained[id(sequence)] = sequence
         return list(retained.values())
+
+    @property
+    def retained_artifact_references(self) -> tuple[ArtifactRef, ...]:
+        """Immutable media references from both sides of timeline edits."""
+        return tuple(ref for entry in (*self._undo, *self._redo)
+                     for ref in getattr(entry.command, "retained_artifact_references", ()))
 
     def record_external_change(self) -> None:
         """Keep legacy edits and analysis outside editorial undo history."""

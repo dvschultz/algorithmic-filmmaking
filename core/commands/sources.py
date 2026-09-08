@@ -11,6 +11,7 @@ from models.sequence import Sequence, SequenceClip, Track
 
 if TYPE_CHECKING:
     from core.project import Project
+    from models.analysis_record import ArtifactRef
 
 
 def _same_objects(actual: list, expected: tuple) -> bool:
@@ -51,6 +52,12 @@ class RemoveSources:
     @property
     def retained_analysis_targets(self) -> tuple[Clip | Frame, ...]:
         return self.before_clips + self.before_frames
+
+    @property
+    def retained_artifact_references(self) -> tuple[ArtifactRef, ...]:
+        return tuple({entry.prerender_artifact for edit in self.tracks
+                      for entry in (*edit.before, *edit.after)
+                      if entry.prerender_artifact is not None})
 
     def notification_events(self, *, undo: bool) -> list[tuple[str, Any]]:
         # The aggregate event projects a fully committed library; legacy source

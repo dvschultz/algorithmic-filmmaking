@@ -174,10 +174,22 @@ results. Legacy filename-only outputs are preserved without automatic reuse.
 Project saves copy managed prerenders instead of hard-linking them, preventing
 project-local edits from changing shared cache bytes.
 
-Prerender cache entries currently retain their own durable owners indefinitely.
-Sequence entries still serialize paths, so automatic eviction must wait for
-explicit sequence, undo, and export ownership and portable-reference integration.
-This is a production/reuse migration, not completion of prerender retention.
+Sequence entries now carry explicit prerender artifact references. Managed paths
+are read projections resolved after checksum verification; missing media keeps its
+reference and leaves the path unavailable. Malformed references remain opaque and
+round-trip without preventing the rest of the project from loading. Unregistered
+legacy prerenders retain their original path-based representation.
+
+Live projects retain references in every sequence, sequence collection history,
+timeline placement history, and reversible source removal. Trim/transform edits
+clear both the path and reference while retaining the previous pair for undo.
+Saved manifests retain media after projects close. Save snapshots and bundle
+exports acquire leases, and bundles restore prerenders into a fresh artifact store.
+Batch results retain produced files until sequence binding or explicit retirement;
+their worker pool prunes registered cache entries while those leases are active.
+Consumers of the low-level path-returning helper must use a retained batch or
+attach a reference before unrelated cache eviction. Ordinary project saving no
+longer duplicates managed prerenders into the legacy transformed-clips folder.
 
 ## Remaining U10 work
 
@@ -186,8 +198,8 @@ This is a production/reuse migration, not completion of prerender retention.
   OCR, ImageNet and shot classification, gaze, and boundary embeddings.
 - Expose the explicit legacy-reuse decision through user and agent flows; the
   current record model supports the decision but the flows are not wired.
-- Finish sequence-model references and lifetime ownership for managed transformed-clip
-  prerenders, including undo, export, recovery, and safe eviction. Pin referenced artifacts consumed by
+- Finish the cross-consumer reuse/projection audit, including legacy prerender playback.
+  Pin referenced artifacts consumed by
   running jobs in addition to their serialized input bodies. Add safe computed-receipt pruning;
   existing inline receipts are not migrated eagerly.
 - Complete end-to-end retention and recovery coverage for those additional

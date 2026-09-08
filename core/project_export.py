@@ -97,9 +97,10 @@ def export_project_bundle(
     cancel_check: Optional[Callable[[], bool]] = None,
 ) -> ExportResult:
     """Keep derived inputs alive for the entire portable bundle export."""
-    from core.artifacts import ArtifactLease, analysis_references
+    from core.artifacts import ArtifactLease, analysis_references, sequence_references
 
-    refs = analysis_references((*project.clips, *project.frames, *project.audio_sources))
+    refs = (analysis_references((*project.clips, *project.frames, *project.audio_sources))
+            + sequence_references(project.sequences))
     with ArtifactLease(refs, project.artifact_store.root if refs else None):
         return _export_project_bundle(project, dest_dir, include_videos, include_clips, progress_callback, cancel_check)
 

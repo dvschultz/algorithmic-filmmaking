@@ -19,6 +19,7 @@ from typing import Callable, Optional
 from core.binary_resolver import find_binary, get_subprocess_kwargs
 from core.media_cache import MediaCache, media_file_stamp
 from core.jobs.errors import StaleJobResult
+from core.artifacts import ArtifactLease
 from models.media_time import frame_rate
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,26 @@ class _PrerenderFingerprints:
         return value
 
 
+class PrerenderBatch(list):
+    """Batch output retains files until callers attach them to a project or retire it."""
+
+    def __init__(self, values: list, leases: list[ArtifactLease]) -> None:
+        super().__init__(values)
+        self._leases = leases
+
+    def close(self) -> None:
+        for lease in self._leases:
+            lease.close()
+        self._leases.clear()
+
+
+def cleanup_transform_cache(output_dir: Path | None = None, keep_latest: int = 5) -> None:
+    """Evict registered cache ownership; project, undo, and batch owners survive."""
+    output_dir = output_dir or get_transform_cache_dir()
+    if (output_dir / "media-cache.sqlite3").is_file():
+        MediaCache(output_dir, output_dir.parent / "artifacts").prune(keep_latest)
+
+
 def get_transform_cache_dir() -> Path:
     """Get the directory for cached pre-rendered clips."""
     from core.settings import load_settings
@@ -63,6 +84,7 @@ def prerender_clip(
     output_dir: Path,
     clip_id: str,
     _fingerprints: Optional[_PrerenderFingerprints] = None,
+    _leases: Optional[list[ArtifactLease]] = None,
 ) -> Optional[Path]:
     """Pre-render a single clip with baked transforms.
 
@@ -144,8 +166,8 @@ def prerender_clip(
             if (media_file_stamp(source_path) != before
                     or media_file_stamp(Path(ffmpeg_path)) != runtime_stamp):
                 raise ValueError("Inputs changed during cache verification")
-            # Cache ownership persists: sequence entries still carry paths. Do
-            # not evict these entries until model/undo owners can retain them.
+            if _leases is not None:
+                _leases.append(cached.lease)
             return cached.path
     except (OSError, ValueError, StaleJobResult):
         logger.error("Cannot verify pre-render inputs for clip %s", clip_id, exc_info=True)
@@ -191,7 +213,10 @@ def prerender_clip(
                 or media_file_stamp(Path(ffmpeg_path)) != runtime_stamp):
             logger.error("Inputs changed during pre-render for clip %s", clip_id)
             return None
-        return cache.publish("transformed-clips", key, output_path).path
+        rendered = cache.publish("transformed-clips", key, output_path)
+        if _leases is not None:
+            _leases.append(rendered.lease)
+        return rendered.path
     except subprocess.TimeoutExpired:
         logger.error("FFmpeg pre-render timed out for clip %s", clip_id)
         return None
@@ -208,6 +233,7 @@ def _process_single_clip(
     transforms: dict,
     output_dir: Path,
     fingerprints: _PrerenderFingerprints,
+    leases: list[ArtifactLease],
 ) -> Optional[Path]:
     """Process a single clip for use in the thread pool.
 
@@ -231,6 +257,7 @@ def _process_single_clip(
         output_dir=output_dir,
         clip_id=clip.id,
         _fingerprints=fingerprints,
+        _leases=leases,
     )
 
 
@@ -272,6 +299,7 @@ def prerender_batch(
     completed_count = 0
     counter_lock = Lock()
     fingerprints = _PrerenderFingerprints(cancel_event)
+    leases: list[ArtifactLease] = []
 
     def _on_done(idx: int, future: concurrent.futures.Future) -> None:
         """Callback invoked when a future completes; updates progress."""
@@ -290,7 +318,7 @@ def prerender_batch(
                 break
 
             future = executor.submit(
-                _process_single_clip, clip, source, transforms, output_dir, fingerprints,
+                _process_single_clip, clip, source, transforms, output_dir, fingerprints, leases,
             )
             future.add_done_callback(partial(_on_done, i))
             futures[future] = i
@@ -315,9 +343,16 @@ def prerender_batch(
                 prerendered = None
             results[idx] = (clip, source, prerendered)
 
+        # Keep cleanup I/O in the worker pool, with all produced results pinned
+        # across eviction and the handoff to the sequence-owning thread.
+        try:
+            executor.submit(cleanup_transform_cache, output_dir).result()
+        except Exception:
+            logger.warning("Prerender cache cleanup failed; retaining computed outputs", exc_info=True)
+
     # Report final progress
     if progress_cb:
         progress_cb(total, total)
 
     # Filter out None slots left by cancellation
-    return [r for r in results if r is not None]
+    return PrerenderBatch([r for r in results if r is not None], leases)

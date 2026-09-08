@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from fractions import Fraction
 
 from models.sequence import Sequence, SequenceClip, Track
+from models.analysis_record import ArtifactRef
 from models.media_time import frame_boundary, frame_rate
 from core.sequence_time import entry_duration, source_video_range
 
@@ -26,6 +27,7 @@ class Placement:
     vflip: bool
     reverse: bool
     prerendered_path: str | None
+    prerender_artifact: ArtifactRef | None
     timeline_start: str | None
     hold_duration: str | None
     source_presentation: tuple[str, str] | None
@@ -49,6 +51,7 @@ class Placement:
             clip.vflip,
             clip.reverse,
             clip.prerendered_path,
+            clip.prerender_artifact,
             clip.timeline_start if exact_start is None else str(exact_start),
             clip.hold_duration,
             clip.source_presentation,
@@ -91,6 +94,12 @@ class EditSequenceClips:
             for placement in (*edit.before, *edit.after)
             if placement.clip.source_id
         }
+
+    @property
+    def retained_artifact_references(self) -> tuple[ArtifactRef, ...]:
+        return tuple({placement.prerender_artifact
+                      for edit in self.tracks for placement in (*edit.before, *edit.after)
+                      if placement.prerender_artifact is not None})
 
     @classmethod
     def insert(
@@ -296,6 +305,7 @@ class EditSequenceClips:
             # Cached media already bakes in the source range and transforms.
             # Placement retains the previous reference for undo.
             candidate.prerendered_path = None
+            candidate.prerender_artifact = None
         desired = replace(Placement.capture(candidate), clip=target)
         original_index = next(
             i
@@ -388,6 +398,7 @@ class EditSequenceClips:
                     "vflip",
                     "reverse",
                     "prerendered_path",
+                    "prerender_artifact",
                     "timeline_start",
                     "hold_duration",
                     "source_presentation",

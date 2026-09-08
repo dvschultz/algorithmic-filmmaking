@@ -16,11 +16,14 @@ from pathlib import Path
 import sqlite3
 import stat
 import tempfile
-from typing import BinaryIO, Callable, Iterable, Iterator
+from typing import BinaryIO, Callable, Iterable, Iterator, TYPE_CHECKING
 from uuid import uuid4
 import weakref
 
 from models.analysis_record import ANALYSIS_FIELDS, AnalysisRecord, ArtifactRef
+
+if TYPE_CHECKING:
+    from models.sequence import Sequence, SequenceClip
 
 logger = logging.getLogger(__name__)
 _retired_pins: deque[tuple[Path, str]] = deque()
@@ -53,13 +56,14 @@ def document_references(document: object) -> tuple[ArtifactRef, ...]:
 
     def visit(value: object) -> None:
         if isinstance(value, dict):
-            artifact = value.get("artifact")
-            if isinstance(artifact, dict):
-                try:
-                    ref = ArtifactRef.from_dict(artifact)
-                    refs[ref.digest] = ref
-                except (ValueError, TypeError, KeyError):
-                    pass
+            for key in ("artifact", "prerender_artifact"):
+                artifact = value.get(key)
+                if isinstance(artifact, dict):
+                    try:
+                        ref = ArtifactRef.from_dict(artifact)
+                        refs[ref.digest] = ref
+                    except (ValueError, TypeError, KeyError):
+                        pass
             for child in value.values():
                 visit(child)
         elif isinstance(value, (list, tuple)):
@@ -83,6 +87,41 @@ def analysis_references(targets: Iterable[object]) -> tuple[ArtifactRef, ...]:
     return tuple(refs.values())
 
 
+def sequence_references(sequences: Iterable["Sequence | None"]) -> tuple[ArtifactRef, ...]:
+    return tuple({entry.prerender_artifact
+                  for sequence in sequences if sequence is not None
+                  for entry in sequence.get_all_clips()
+                  if entry.prerender_artifact is not None})
+
+
+def restore_prerender_projections(sequences: Iterable["Sequence | None"], store: "ArtifactStore | None" = None) -> None:
+    """Restore managed playback paths; keep missing references for recovery."""
+    for sequence in sequences:
+        if sequence is None:
+            continue
+        for entry in sequence.get_all_clips():
+            if entry.prerender_artifact is not None:
+                if store is None:
+                    store = ArtifactStore()
+                try:
+                    entry.prerendered_path = str(store.path_for(entry.prerender_artifact))
+                except (ArtifactUnavailable, OSError):
+                    entry.prerendered_path = None
+
+
+def bind_prerender_path(entry: "SequenceClip", path: Path | None, store: "ArtifactStore | None" = None) -> None:
+    """Attach registered content to an unpublished sequence draft without hashing on the GUI thread."""
+    entry.prerendered_path = str(path) if path is not None else None
+    entry.prerender_artifact = None
+    entry._unreadable_prerender_artifact = None
+    if path is not None:
+        store = store or ArtifactStore()
+        try:
+            entry.prerender_artifact = store.reference_for_path(path, media_type="video/mp4")
+        except (ArtifactUnavailable, OSError):
+            entry.prerendered_path = None
+
+
 class ArtifactLease:
     """An idempotent lifetime pin for detached worker inputs."""
 
@@ -98,7 +137,8 @@ class ArtifactLease:
     def for_snapshot(cls, snapshot: dict) -> "ArtifactLease":
         targets = (*snapshot.get("clips", ()), *snapshot.get("frames", ()), *snapshot.get("audio_sources", ()))
         root = snapshot.get("extra_data", {}).get("_artifact_store_root")
-        return cls(analysis_references(targets), Path(root) if root else None)
+        sequences = snapshot.get("extra_data", {}).get("_all_sequences", [snapshot.get("sequence")])
+        return cls(analysis_references(targets) + sequence_references(sequences), Path(root) if root else None)
 
     def close(self) -> None:
         if self._release is not None:
@@ -468,6 +508,19 @@ class ArtifactStore:
         """Verify a path; callers must pin it for the entire period of use."""
         with self._transaction() as db:
             return self._verify(db, ref)
+
+    def reference_for_path(self, path: Path, *, media_type: str = "application/octet-stream") -> ArtifactRef | None:
+        """Recognize unchanged registered content without rehashing on the owner thread."""
+        if path.parent.resolve() != self.objects.resolve():
+            return None
+        with self._transaction() as db:
+            row = db.execute("SELECT digest,size,stamp FROM objects WHERE filename=?", (path.name,)).fetchone()
+            if row is None:
+                return None
+            ref = ArtifactRef(row[0], row[1], media_type)
+            if not stat.S_ISREG(path.lstat().st_mode) or list(_stamp(path)) != json.loads(row[2]):
+                raise ArtifactUnavailable("Registered media changed before binding")
+            return ref
 
     def read_bytes(self, ref: ArtifactRef) -> bytes:
         with self._transaction() as db:

@@ -1,6 +1,7 @@
 """Sequence tab for timeline editing and playback with card-based sorting."""
 
 import logging
+from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -1749,7 +1750,13 @@ class SequenceTab(BaseTab):
                     seq_clip.hflip = transform_info.get("hflip", False)
                     seq_clip.vflip = transform_info.get("vflip", False)
                     seq_clip.reverse = transform_info.get("reverse", False)
-                    seq_clip.prerendered_path = transform_info.get("prerendered_path")
+                    from core.artifacts import bind_prerender_path
+
+                    prerendered = transform_info.get("prerendered_path")
+                    bind_prerender_path(
+                        seq_clip, Path(prerendered) if prerendered else None,
+                        self._project.artifact_store if self._project else None,
+                    )
 
             # Build (Clip, Source) list for timeline preview
             preview_clips = [(clip, source) for clip, source, _ in sequence_data]
@@ -2742,7 +2749,12 @@ class SequenceTab(BaseTab):
                     for seq_clip, (_, _, prerendered_path) in zip(
                         sequence.tracks[0].clips, rendered
                     ):
-                        seq_clip.prerendered_path = str(prerendered_path) if prerendered_path else None
+                        from core.artifacts import bind_prerender_path
+
+                        bind_prerender_path(
+                            seq_clip, Path(prerendered_path) if prerendered_path else None,
+                            self._project.artifact_store if self._project else None,
+                        )
 
             self.timeline._on_zoom_fit()
 

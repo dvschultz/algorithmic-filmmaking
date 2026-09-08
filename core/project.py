@@ -130,6 +130,8 @@ def _prepare_prerendered_clips(
             all_clips.extend(seq.get_all_clips())
 
     for clip in all_clips:
+        if clip.prerender_artifact is not None:
+            continue  # The manifest retains managed content directly.
         if not clip.prerendered_path:
             continue
         if clip.prerendered_path in mapping:
@@ -691,6 +693,9 @@ def load_project(
     from core.analysis_records import restore_project_artifacts
 
     restore_project_artifacts(filepath, data, [*clips, *frames, *audio_sources])
+    from core.artifacts import restore_prerender_projections
+
+    restore_prerender_projections([sequence])
     logger.info(
         f"Project loaded from {filepath}: "
         f"{len(sources)} sources, {len(clips)} clips, "
@@ -786,10 +791,12 @@ class Project:
 
     def retain_artifacts(self, additional: tuple["ArtifactRef", ...] = ()) -> None:
         """Pin current and undo-restorable analysis payloads before publication."""
-        from core.artifacts import analysis_references
+        from core.artifacts import analysis_references, sequence_references
 
         targets = (*self._clips, *self._frames, *self._audio_sources, *self.session.retained_analysis_targets)
-        refs = frozenset(analysis_references(targets) + additional)
+        refs = frozenset(analysis_references(targets) + additional
+                         + sequence_references(self.sequences + self.session.retained_sequences)
+                         + self.session.retained_artifact_references)
         if refs:
             if self._artifact_pin is None:
                 self._artifact_pin = self.artifact_store.create_pin(refs)
@@ -1766,6 +1773,9 @@ class Project:
                 frames=frames,
                 audio_sources=audio_sources,
             )
+        from core.artifacts import restore_prerender_projections
+
+        restore_prerender_projections(project.sequences)
         project._dirty = False
         return project
 
