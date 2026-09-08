@@ -561,5 +561,11 @@ class TranscriptionApplication:
             record = AnalysisRecord.legacy(value)
         project.record_analysis("clip", outcome.clip_id, "transcribe", record)
         if outcome.status == "succeeded":
+            # Replacing word timings invalidates their previous alignment
+            # verification before update_clips notifies project observers.
+            if "align_words" in clip.analysis_records:
+                project.record_analysis(
+                    "clip", outcome.clip_id, "align_words", AnalysisRecord.legacy(value)
+                )
             clip.transcript = list(deepcopy(outcome.segments))
         return True

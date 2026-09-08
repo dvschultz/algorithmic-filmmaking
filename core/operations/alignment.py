@@ -353,7 +353,10 @@ class AlignmentApplication:
         if task is not None and task.analysis_json is not None:
             return self._apply_verified(project, task, outcome)
         if (
-            task is None
+            project is not self.project
+            or project.session.session_id != self.session_id
+            or project.path != self.path
+            or task is None
             or task.skip_reason is not None
             or outcome.status != "succeeded"
         ):
@@ -361,6 +364,7 @@ class AlignmentApplication:
         clip = project.clips_by_id.get(outcome.clip_id)
         if (
             clip is None
+            or clip.analysis_records != self.targets[outcome.clip_id][2]
             or json.dumps(
                 [s.to_dict() for s in (clip.transcript or [])],
                 sort_keys=True,
@@ -369,20 +373,12 @@ class AlignmentApplication:
             != task.transcript_json
         ):
             return False
-        applied = self.application.apply(
+        return self.application.apply(
             project,
             TranscriptionOutcome(
                 outcome.clip_id, "succeeded", aligned_segments(task, outcome.words)
             ),
         )
-        if applied:
-            project.record_analysis(
-                "clip",
-                outcome.clip_id,
-                "align_words",
-                AnalysisRecord.legacy(transcription_value(clip)),
-            )
-        return applied
 
     def _apply_verified(
         self, project: Project, task: AlignmentTask, outcome: AlignmentOutcome

@@ -477,6 +477,12 @@ alignment, dialog, completion, and MCP regression run passed 300 tests.
 Project-free compatibility callers remain to audit or migrate, along with the
 broader U10 audit.
 
+The raw alignment application now rejects changed project paths and replaced
+records. Transcript replacement clears prior alignment verification before
+observers see the new words; transcription failure preserves existing alignment.
+The combined regression run passed 362 tests with scoped typing and Ruff clean.
+Detached project-free compatibility remains to audit.
+
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain
 readable. Safe receipt pruning and abandoned-publication pin reconciliation remain.

@@ -562,6 +562,14 @@ scoped completion/controller typing passed. The default type check follows
 imports and reported 697 errors in 107 other files; it is not a clean global gate.
 Project-free compatibility callers and the broader U10 audit remain unfinished.
 
+The raw `AlignmentApplication` compatibility path now rejects Save As and replaced
+analysis records. Successful transcript replacement, including raw alignment,
+clears existing alignment verification inside the publication guard before clip
+observers run. Failed transcription preserves the existing alignment record and
+words. The combined alignment/transcription, GUI recovery, completion, and MCP
+regression run passed 362 tests; scoped typing and changed-file Ruff passed.
+Detached project-free controller/worker compatibility remains a separate audit.
+
 ## Remaining U10 work
 
 - Migrate the other U7 analysis families to

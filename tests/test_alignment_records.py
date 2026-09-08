@@ -214,7 +214,7 @@ def test_altered_reuse_words_are_rejected(setup):
     assert not application.apply(project, replace(outcome, words=()))
 
 
-def test_raw_publication_clears_prior_alignment_verification(setup):
+def test_raw_publication_clears_prior_alignment_verification(setup, monkeypatch):
     from core.operations.alignment import AlignmentOutcome
 
     project, _ = setup
@@ -223,7 +223,68 @@ def test_raw_publication_clears_prior_alignment_verification(setup):
         project.clips, project.sources_by_id, skip_existing=False
     )
     words = tuple(project.clips[0].transcript[0].words)
+    seen = []
+    original = project.update_clips
+
+    def observe(clips):
+        record = clips[0].analysis_records["align_words"]
+        seen.append((record.provenance, record.value))
+        return original(clips)
+
+    monkeypatch.setattr(project, "update_clips", observe)
     assert AlignmentApplication(project, submitted).apply(
         project, AlignmentOutcome(project.clips[0].id, "succeeded", words)
     )
     assert project.clips[0].analysis_records["align_words"].provenance == "unknown"
+    assert seen == [("unknown", {"transcript": [s.to_dict() for s in project.clips[0].transcript]})]
+
+
+@pytest.mark.parametrize("change", ["record", "save_as"])
+def test_raw_publication_rejects_changed_owner_binding(setup, tmp_path, change):
+    from core.operations.alignment import AlignmentOutcome
+
+    project, _ = setup
+    execute(project)
+    submitted = snapshot_alignment_tasks(project.clips, project.sources_by_id, skip_existing=False)
+    application = AlignmentApplication(project, submitted)
+    clip = project.clips[0]
+    words = tuple(clip.transcript[0].words)
+    if change == "record":
+        clip.analysis_records["align_words"] = replace(clip.analysis_records["align_words"], state="failed")
+    else:
+        project.save(tmp_path / "different.sceneripper")
+    assert not application.apply(project, AlignmentOutcome(clip.id, "succeeded", words))
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_transcription_replacement_invalidates_alignment_before_notification(setup, monkeypatch, failed):
+    from core.operations.transcription import TranscriptionApplication, TranscriptionOptions, run_transcription
+    from core.operations.transcription_records import transcription_task
+
+    project, _ = setup
+    execute(project)
+    clip, source = project.clips[0], project.sources[0]
+    prior_record = clip.analysis_records["align_words"]
+    monkeypatch.setattr("core.transcription._has_audio_stream", lambda _: True)
+    monkeypatch.setattr("core.transcription.transcribe_clip", Mock(side_effect=RuntimeError("provider failed")) if failed else Mock(return_value=[]))
+    task = transcription_task(clip, source, skip_existing=False)
+    options = TranscriptionOptions(backend="faster-whisper")
+    application = TranscriptionApplication(project, (task,), options)
+    seen = []
+    original = project.update_clips
+
+    def observe(clips):
+        seen.append(clips[0].analysis_records["align_words"])
+        return original(clips)
+
+    monkeypatch.setattr(project, "update_clips", observe)
+    outcome = run_transcription((task,), options)[0]
+    assert application.apply(project, outcome)
+    if failed:
+        assert clip.analysis_records["align_words"] == prior_record
+        assert not seen
+    else:
+        assert clip.transcript == []
+        assert len(seen) == 1
+        assert seen[0].provenance == "unknown"
+        assert seen[0].value == {"transcript": []}
