@@ -33,6 +33,7 @@ class LegacyReuseDialog(QDialog):
         self.operation.addItem("Thumbnail embeddings (compatible DINO model)", "embeddings")
         self.operation.addItem("Brightness (default five samples)", "brightness")
         self.operation.addItem("Volume", "volume")
+        self.operation.addItem("Boundary embeddings (compatible DINO model)", "boundary_embeddings")
         self.operation.addItem("Classification (default settings)", "classify")
         self.operation.addItem("Object detection (default settings)", "detect_objects")
         self.operation.setMinimumHeight(UISizes.COMBO_BOX_MIN_HEIGHT)

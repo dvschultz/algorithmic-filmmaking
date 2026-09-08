@@ -991,6 +991,16 @@ tracked, inactive historical owners as described above.
   these operations. The 172-test legacy/native GUI/MCP/operation/import group
   passes; five scoped modules pass typing and scoped lint is clean. Remaining
   analysis families and final review are still open.
+
+- Boundary-embedding legacy acceptance now uses the existing boundary task,
+  pair validation, semantic identity, and owner application across CLI, MCP,
+  desktop, and built-in agent. Both endpoints must be valid nonzero DINO vectors
+  with a compatible recorded model and valid source range. Missing/invalid
+  endpoints are rejected without partial publication. Accepted records retain
+  unknown provenance, skip model acquisition on reuse, and invalidate on trim
+  changes. The 158-test legacy/native GUI/MCP/boundary/import group passes;
+  five scoped modules pass typing and scoped lint is clean. Other families and
+  final review remain outstanding.
 - Finish the remaining cross-consumer reuse/projection audit.
   Receipt pruning retains legacy rows rather than guessing absent ownership;
   existing rows are not migrated eagerly.

@@ -454,6 +454,12 @@ person counts are rejected. Their 172-test legacy/operation/MCP/native GUI/impor
 group passes, with scoped typing and lint clean. Other analysis families and
 final review remain outstanding.
 
+Boundary-embedding acceptance now uses the same shared boundary identities and
+pair validation across all four surfaces. It rejects incomplete/incompatible
+endpoint pairs, retains unknown provenance, and invalidates after trim edits.
+The 158-test legacy/boundary/MCP/native GUI/import group passes, with scoped
+typing and lint clean. Remaining families and final verification are still open.
+
 Custom queries now retain independent records through shared operations, direct
 headless calls, GUI worker delivery/recovery, and durable headless jobs. GUI reuse
 verifies saved records without duplicate history or local weight loading. Durable

@@ -15,7 +15,7 @@ def accept_legacy_analysis(project: "Project", operation: str, clip_ids: list[st
     """
     from core.operations.colors import ColorApplication, color_request
     from core.operations.embeddings import EmbeddingApplication, embedding_task
-    from core.operations.legacy_reuse import LEGACY_REUSE_OPERATIONS, accept_legacy_colors, accept_legacy_embeddings, accept_legacy_scalars, accept_legacy_visuals
+    from core.operations.legacy_reuse import LEGACY_REUSE_OPERATIONS, accept_legacy_colors, accept_legacy_embeddings, accept_legacy_scalars, accept_legacy_visuals, accept_legacy_boundaries
     from core.operations.scalars import ScalarApplication, ScalarOperation, scalar_task
     from models.analysis_record import AnalysisRecord
 
@@ -35,6 +35,19 @@ def accept_legacy_analysis(project: "Project", operation: str, clip_ids: list[st
         previous = clip.analysis_records.get(operation)
         if previous is not None and not isinstance(previous, AnalysisRecord):
             result["failed"].append({"clip_id": cid, "message": "Unknown analysis record must be preserved; recompute analysis"})
+            continue
+        if operation == "boundary_embeddings":
+            from core.operations.boundary_embeddings import BoundaryEmbeddingApplication, boundary_embedding_task
+
+            boundary_task = boundary_embedding_task(clip, project.sources_by_id.get(clip.source_id))
+            boundary_application = BoundaryEmbeddingApplication(project, (boundary_task,))
+            boundary = accept_legacy_boundaries((boundary_task,), cancel_event=cancel_event)[0]
+            if boundary.status == "unprocessed":
+                result["unprocessed"].append(cid)
+            elif boundary.status == "succeeded" and boundary_application.apply(project, boundary):
+                result["accepted"].append(cid)
+            else:
+                result["failed"].append({"clip_id": cid, "message": boundary.message or "Target changed"})
             continue
         if operation in ("classify", "detect_objects"):
             from core.operations.classification import ClassificationApplication, ClassificationOptions, ClassificationOutcome, classification_task

@@ -366,7 +366,7 @@ def _start_job(
 @mcp.tool()
 async def start_accept_legacy_analysis(
     project_path: Annotated[str, "Path to the project file"],
-    operation: Annotated[str, "Legacy operation: colors, embeddings, brightness, volume, classify, or detect_objects"],
+    operation: Annotated[str, "Legacy operation: colors, embeddings, boundary_embeddings, brightness, volume, classify, or detect_objects"],
     clip_ids: Annotated[Optional[list[str]], "Exact clip IDs; omitted means all clips"] = None,
     idempotency_key: Optional[str] = None,
     ctx: Context | None = None,

@@ -5,7 +5,7 @@ model that produced them. These values remain visible, but they do not count as
 completed analysis until you recompute them or explicitly accept reuse.
 
 For colors, brightness, volume, classification, object detection, and compatible
-DINO embeddings, the CLI provides an explicit reuse command:
+DINO thumbnail or boundary embeddings, the CLI provides an explicit reuse command:
 
 ```sh
 scene_ripper analyze accept-legacy project.json --operation colors --clip-id CLIP_ID
@@ -14,6 +14,7 @@ scene_ripper analyze accept-legacy project.json --operation brightness --clip-id
 scene_ripper analyze accept-legacy project.json --operation volume --clip-id CLIP_ID
 scene_ripper analyze accept-legacy project.json --operation classify --clip-id CLIP_ID
 scene_ripper analyze accept-legacy project.json --operation detect_objects --clip-id CLIP_ID
+scene_ripper analyze accept-legacy project.json --operation boundary_embeddings --clip-id CLIP_ID
 ```
 
 Omit `--clip-id` to process all clips. The command reports accepted and failed
@@ -29,6 +30,9 @@ Object detection requires valid detections and a matching person count. Empty
 label lists and empty detections with a zero person count can be accepted.
 Both operations bind their current default settings and require a readable
 thumbnail.
+Boundary reuse requires both endpoint vectors, a compatible recorded DINO model,
+and a valid source range. The pair is accepted together; a missing or invalid
+endpoint requires recomputation. Later trim changes invalidate the decision.
 
 An accepted value retains **unknown provenance**. Acceptance records your
 decision to use it with the current inputs; it does not establish how the old

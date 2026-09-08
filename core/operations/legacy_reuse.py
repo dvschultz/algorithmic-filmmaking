@@ -16,12 +16,13 @@ from core.operations.contracts import ColorOutcome, ColorResult
 from core.operations.embeddings import EmbeddingOutcome, EmbeddingTask, embedding_identity
 from models.analysis_record import AnalysisIdentity, AnalysisRecord
 
-LEGACY_REUSE_OPERATIONS = ("colors", "embeddings", "brightness", "volume", "classify", "detect_objects")
+LEGACY_REUSE_OPERATIONS = ("colors", "embeddings", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings")
 
 if TYPE_CHECKING:
     from core.operations.scalars import ScalarOutcome, ScalarTask
     from core.operations.classification import ClassificationOutcome, ClassificationTask
     from core.operations.object_detection import ObjectDetectionOutcome, ObjectDetectionTask
+    from core.operations.boundary_embeddings import BoundaryEmbeddingOutcome, BoundaryEmbeddingTask
 
 
 def _accept(record_json: str | None, value: dict, identity: AnalysisIdentity, inputs: AnalysisInput) -> str:
@@ -195,4 +196,42 @@ def accept_legacy_visuals(
             outcomes.append(ClassificationOutcome(task.clip_id, "unprocessed", code="cancelled") if classification else ObjectDetectionOutcome(task.clip_id, "unprocessed", code="cancelled"))
         except (ValueError, OSError, TypeError, KeyError, AttributeError) as exc:
             outcomes.append(ClassificationOutcome(task.clip_id, "failed", message=str(exc)) if classification else ObjectDetectionOutcome(task.clip_id, "failed", message=str(exc)))
+    return tuple(outcomes)
+
+
+def accept_legacy_boundaries(tasks: "tuple[BoundaryEmbeddingTask, ...]", *, cancel_event: Event | None = None) -> "tuple[BoundaryEmbeddingOutcome, ...]":
+    """Accept complete compatible endpoint pairs without decoding or inference."""
+    from core.analysis_records import AnalysisSnapshot
+    from core.analysis_model_identity import boundary_embedding_runtime
+    from core.jobs.media import FingerprintCancelled
+    from core.operations.boundary_embeddings import BoundaryEmbeddingOutcome, boundary_embedding_identity
+
+    fingerprints = AnalysisFingerprints(cancel_event)
+    runtime = boundary_embedding_runtime()
+    outcomes = []
+    for task in tasks:
+        try:
+            if cancel_event is not None and cancel_event.is_set():
+                raise FingerprintCancelled()
+            if (
+                task.analysis_json is None or task.source_path is None
+                or isinstance(task.fps, bool) or not isfinite(task.fps) or task.fps <= 0
+                or type(task.start_frame) is not int or type(task.end_frame) is not int
+                or task.start_frame < 0 or task.end_frame <= task.start_frame
+            ):
+                raise ValueError("Boundary reuse requires a valid source range")
+            snapshot = AnalysisSnapshot.from_json(task.analysis_json)
+            value = json.loads(snapshot.value_json)
+            outcome = BoundaryEmbeddingOutcome.from_dict({
+                "clip_id": task.clip_id, "status": "succeeded",
+                "first": value["first_frame_embedding"], "last": value["last_frame_embedding"],
+                "model": value["embedding_model"],
+            })
+            identity = boundary_embedding_identity(snapshot, fingerprints, runtime)
+            record_json = _accept(json.dumps(snapshot.record.to_dict()) if snapshot.record else None, value, identity, snapshot.inputs)
+            outcomes.append(replace(outcome, record_json=record_json))
+        except FingerprintCancelled:
+            outcomes.append(BoundaryEmbeddingOutcome(task.clip_id, "unprocessed", code="cancelled"))
+        except (ValueError, OSError, TypeError, KeyError) as exc:
+            outcomes.append(BoundaryEmbeddingOutcome(task.clip_id, "failed", message=str(exc)))
     return tuple(outcomes)

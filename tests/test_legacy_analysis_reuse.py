@@ -46,17 +46,21 @@ def test_verified_record_cannot_be_relabelled_as_legacy(tmp_path):
     assert project.clips[0].analysis_records["colors"] == previous
 
 
-@pytest.mark.parametrize("operation", ["colors", "brightness", "volume", "classify", "detect_objects"])
+@pytest.mark.parametrize("operation", ["colors", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings"])
 def test_cli_reuse_requires_an_explicit_command_and_saves_unknown_provenance(tmp_path, operation):
     from click.testing import CliRunner
     from cli.commands.analyze import analyze
     from core.project import Project
+    from core.analysis_model_identity import DINOV2_TAG
 
     project = project_with_thumbnails(tmp_path, 1)
     project.clips[0].dominant_colors = [(1, 2, 3)]
     project.clips[0].average_brightness = project.clips[0].rms_volume = 0.0
     project.clips[0].object_labels = project.clips[0].detected_objects = []
     project.clips[0].person_count = 0
+    project.clips[0].first_frame_embedding = [0.2] * 768
+    project.clips[0].last_frame_embedding = [0.3] * 768
+    project.clips[0].embedding_model = DINOV2_TAG
     path = tmp_path / "project.json"
     assert project.save(path)
     result = CliRunner().invoke(analyze, ["accept-legacy", str(path), "--operation", operation])
@@ -209,3 +213,37 @@ def test_inconsistent_legacy_detections_require_recomputation(tmp_path, count, c
     result = accept_legacy_analysis(project, "detect_objects")
     assert not result["accepted"] and len(result["failed"]) == 1
     assert "detect_objects" not in clip.analysis_records
+
+
+@pytest.mark.parametrize("invalid", [None, "first", "last", "model"])
+def test_boundary_pair_acceptance_and_reuse(tmp_path, invalid):
+    from core.analysis_model_identity import DINOV2_TAG
+    from core.spine.analysis_reuse import accept_legacy_analysis
+    from core.operations.boundary_embeddings import boundary_embedding_task, run_boundary_embeddings
+
+    project = project_with_thumbnails(tmp_path, 1)
+    clip = project.clips[0]
+    clip.first_frame_embedding, clip.last_frame_embedding = [0.2] * 768, [0.3] * 768
+    clip.embedding_model = DINOV2_TAG
+    if invalid == "first":
+        clip.first_frame_embedding = None
+    elif invalid == "last":
+        clip.last_frame_embedding = [0.0] * 768
+    elif invalid == "model":
+        clip.embedding_model = "unknown"
+    result = accept_legacy_analysis(project, "boundary_embeddings")
+    if invalid is not None:
+        assert not result["accepted"] and len(result["failed"]) == 1
+        assert "boundary_embeddings" not in clip.analysis_records
+        return
+    assert result["accepted"] == [clip.id]
+    assert clip.analysis_records["boundary_embeddings"].provenance == "unknown"
+    assert operation_is_complete_for_clip("boundary_embeddings", clip, source=project.sources[0])
+    # Reuse must return before acquiring the model for endpoint inference.
+    with patch("core.operations.embeddings._EmbeddingModelSession.acquire", side_effect=AssertionError("no inference")):
+        reused = run_boundary_embeddings((boundary_embedding_task(clip, project.sources[0]),))
+    assert reused[0].status == "skipped"
+    assert clip.first_frame_embedding == [0.2] * 768
+    assert clip.last_frame_embedding == [0.3] * 768
+    clip.end_frame -= 1
+    assert not operation_is_complete_for_clip("boundary_embeddings", clip, source=project.sources[0])
