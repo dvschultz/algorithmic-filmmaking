@@ -490,6 +490,12 @@ focused follow-ups. Face records, verified reuse, managed embeddings, and delive
 surface migration remain unfinished; execution paths alone are not model content
 identities.
 
+Face loading now fingerprints staged ONNX weights before opening sessions and
+rejects weight changes during initialization or cached reuse. Execution reports
+carry those content hashes, and repeated reports do not rehash files. The
+regression run passed 259 tests with changed-file Ruff clean. Saved face result
+verification, managed embedding storage, and delivery migration remain pending.
+
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain
 readable. Safe receipt pruning and abandoned-publication pin reconciliation remain.

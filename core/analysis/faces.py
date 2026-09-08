@@ -9,11 +9,14 @@ import logging
 import sys
 import threading
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, TYPE_CHECKING
 import colorsys
 import random
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from core.analysis.face_weights import FaceWeights
 
 logger = logging.getLogger(__name__)
 
@@ -69,12 +72,13 @@ def _load_insightface():
     global _model
 
     # Fast path: already loaded
-    if _model is not None:
+    if _model is not None and _model._scene_ripper_weights.unchanged():
         return _model
 
     with _model_lock:
         # Double-check after acquiring lock
-        if _model is None:
+        if _model is None or not _model._scene_ripper_weights.unchanged():
+            _model = None
             logger.info("Loading InsightFace model...")
 
 
@@ -91,6 +95,7 @@ def _load_insightface():
             cache_dir = _get_model_cache_dir()
             insightface_dir = cache_dir / "insightface"
             insightface_dir.mkdir(parents=True, exist_ok=True)
+            weights = _stage_face_weights(insightface_dir)
 
             # Detect execution providers (CUDA > CoreML > CPU)
             providers = ["CPUExecutionProvider"]
@@ -137,24 +142,41 @@ def _load_insightface():
                     raise
 
             # A failed prepare must never become the next call's cached model.
+            if not weights.unchanged():
+                raise ValueError("Face model weights changed during initialization")
+            candidate._scene_ripper_weights = weights
             _model = candidate
             logger.info("InsightFace model loaded (providers: %s)", providers)
 
     return _model
 
 
+def _stage_face_weights(root: Path) -> "FaceWeights":
+    """Use InsightFace's existing model download before fingerprinting weights."""
+    from insightface.utils import ensure_available
+    from core.analysis.face_weights import FaceWeights
+
+    directory = Path(ensure_available("models", "buffalo_l", root=str(root)))
+    return FaceWeights.capture(directory)
+
+
 def face_model_execution(model: Any) -> dict:
     """Describe actual loaded components without loading or downloading models.
 
-    Component paths identify the weight files for worker-side fingerprinting;
-    they are not content hashes or sufficient proof of reusable results alone.
+    Fingerprints are captured before ONNX sessions load. Changed files invalidate
+    this loaded runtime; callers must reload rather than fingerprint new files
+    while retaining old in-memory weights.
     """
     components = []
+    weights = getattr(model, "_scene_ripper_weights", None)
+    if weights is not None and not weights.unchanged():
+        raise ValueError("Face model weights changed after initialization")
     for task, component in sorted(model.models.items()):
         components.append({
             "task": task,
             "path": str(Path(component.model_file).resolve()),
             "providers": list(component.session.get_providers()),
+            "weights": weights.component(Path(component.model_file)) if weights is not None else None,
         })
     return {
         "backend": "insightface",

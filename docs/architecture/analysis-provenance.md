@@ -583,6 +583,16 @@ delivery/recovery migration remain unfinished. Provider regression coverage pass
 still reports the pre-existing NumPy `tolist()` return-type issue in
 `average_embeddings`; the pre-existing result-list annotation issue was fixed.
 
+Face model initialization now stages the existing InsightFace model download and
+hashes every ONNX file before constructing sessions. Added, removed, or changed
+files invalidate the loaded runtime; changes during initialization prevent its
+publication. Execution reports carry the selected components' pre-load SHA-256
+hashes and file stamps. Reports check metadata without repeating hashes, and
+components outside the captured pack are rejected. The regression run passed
+259 tests; changed-file Ruff passed. Scoped typing retains only the previously
+identified `average_embeddings` return-type issue. Binding these weight identities
+to saved face results and managed embedding artifacts is still pending.
+
 - Migrate the other U7 analysis families to
   semantic reuse. Extend operation-owned failure records beyond object detection,
   OCR, ImageNet and shot classification, gaze, and boundary embeddings.
