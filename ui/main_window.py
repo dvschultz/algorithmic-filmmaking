@@ -6655,7 +6655,11 @@ class MainWindow(QMainWindow):
         Returns:
             True if worker started, False otherwise
         """
-        if wait_type == "source_import":
+        if wait_type == "legacy_reuse":
+            from ui.workers.legacy_reuse_delivery import AgentLegacyReuse
+            return AgentLegacyReuse(self, tool_result["operation"], tool_result["clip_ids"]).start()
+
+        elif wait_type == "source_import":
             from ui.workers.source_import_delivery import AgentSourceImport
             AgentSourceImport(self).start([Path(path) for path in tool_result["file_paths"]])
             return True
@@ -8785,7 +8789,7 @@ class MainWindow(QMainWindow):
         analysis_workers += tuple(worker for controller in clip_analyses for worker in controller.workers.values())
         frame_worker = getattr(self, "_frame_extraction_worker", None)
         image_worker = getattr(self, "_image_import_worker", None)
-        active_workers = intention_workers + audio_workers + analysis_workers + tuple(getattr(self, "_active_thumbnail_workers", ())) + tuple(getattr(self, "_active_shot_workers", ())) + tuple(worker for worker in (frame_worker, image_worker) if worker is not None)
+        active_workers = intention_workers + audio_workers + analysis_workers + tuple(getattr(self, "_active_legacy_reuses", ())) + tuple(getattr(self, "_active_thumbnail_workers", ())) + tuple(getattr(self, "_active_shot_workers", ())) + tuple(worker for worker in (frame_worker, image_worker) if worker is not None)
         for worker in active_workers:
             worker.cancel()
         if any(worker.isRunning() for worker in active_workers):

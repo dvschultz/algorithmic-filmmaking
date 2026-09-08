@@ -37,6 +37,10 @@ and click **Reuse selected values**. Media checks run in the background. Cancel
 discards pending decisions; changed clips or a replaced project reject late
 results. Save the project to keep accepted decisions.
 
-The built-in desktop agent route and acceptance for other analysis operations
-are not available yet. Recompute those results through their usual analysis
-commands.
+The built-in desktop agent can use `accept_legacy_analysis` with `operation`
+and exact `clip_ids` after you explicitly request reuse. It waits for the media
+checks and reports accepted and failed IDs. Decisions remain unsaved until you
+save the project. Cancelling the request cancels its worker.
+
+Acceptance for other analysis operations is not available yet. Recompute those
+results through their usual analysis commands.

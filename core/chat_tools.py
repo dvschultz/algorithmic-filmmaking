@@ -67,6 +67,7 @@ TOOL_TIMEOUTS = {
     "describe_content_live": 600,   # 10 minutes for descriptions
     "transcribe_clips": 1200,       # 20 minutes
     "transcribe_audio_source": 1200,
+    "accept_legacy_analysis": 1200,
     "import_audio_source": 120,
     "import_frames": 1200,
     "extract_frames": 1200,
@@ -440,6 +441,20 @@ def transcribe_audio_source(main_window, audio_source_id: str) -> dict:
            for worker in main_window._active_audio_transcribes):
         return {"success": False, "error": "Audio transcription is already running"}
     return {"_wait_for_worker": "audio_transcription", "audio_source_id": audio_source_id}
+
+
+@tools.register(
+    description="Explicitly reuse legacy colors or compatible DINO embeddings for exact clip IDs. Only call when the user explicitly chooses legacy reuse. Provenance stays unknown; this does not verify how old values were computed. Returns after media checks and publication. Save the project to persist decisions.",
+    requires_project=True, modifies_gui_state=True, modifies_project_state=True,
+)
+def accept_legacy_analysis(main_window, operation: str, clip_ids: list[str]) -> dict:
+    """Route an explicit decision to detached computation and owner publication."""
+    if operation not in ("colors", "embeddings"):
+        return {"success": False, "error": "Operation must be colors or embeddings"}
+    ids = list(dict.fromkeys(clip_ids))
+    if not ids or any(cid not in main_window.project.clips_by_id for cid in ids):
+        return {"success": False, "error": "Specify existing clip IDs to reuse"}
+    return {"_wait_for_worker": "legacy_reuse", "operation": operation, "clip_ids": ids}
 
 
 @tools.register(

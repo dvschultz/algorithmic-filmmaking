@@ -962,8 +962,13 @@ tracked, inactive historical owners as described above.
   owner-thread publication and rejection after trim edits, project replacement,
   and cancellation; the dialog remains alive until its worker finishes. The 11
   focused desktop/shared tests and scoped worker/dialog typing and lint pass;
-  an offscreen rendered layout was inspected. The built-in desktop agent and
-  remaining analysis families still need this flow; the
+  an offscreen rendered layout was inspected. The built-in agent now uses an
+  explicit `accept_legacy_analysis` tool and the same detached worker. Publication
+  and replies are bound to its captured session/request; timeout, conversation
+  retirement, and shutdown cancel the associated worker. Native dispatch tests
+  cover both operations, changed inputs/project/request, and cancellation;
+  24 legacy/reply/cancellation tests pass, with scoped worker/delivery typing
+  and lint clean. Remaining analysis families still need this flow; the
   existing two-operation path is not completion of U10.
 - Finish the remaining cross-consumer reuse/projection audit.
   Receipt pruning retains legacy rows rather than guessing absent ownership;

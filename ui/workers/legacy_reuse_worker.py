@@ -8,6 +8,7 @@ from core.operations.legacy_reuse import accept_legacy_colors, accept_legacy_emb
 from core.project import Project
 from models.analysis_record import AnalysisRecord
 from ui.workers.base import CancellableWorker
+from ui.workers.gui_tool_reply import GuiToolReply
 
 
 class LegacyReuseWorker(CancellableWorker):
@@ -15,6 +16,7 @@ class LegacyReuseWorker(CancellableWorker):
 
     def __init__(self, project: Project, operation: str, clip_ids: list[str], parent=None) -> None:
         super().__init__(parent)
+        self.gui_tool_reply: GuiToolReply | None = None
         project.session.assert_owner()
         if operation not in ("colors", "embeddings"):
             raise ValueError("Legacy reuse supports colors and embeddings")

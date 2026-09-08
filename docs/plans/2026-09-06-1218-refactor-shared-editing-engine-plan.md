@@ -434,7 +434,10 @@ outstanding. MCP now exposes the same explicit choice as a cancellable
 99 focused job/legacy/import tests pass. The desktop Edit menu now provides a
 selection-scoped dialog with detached hashing and guarded owner publication;
 11 focused shared/native Qt tests pass, including cancellation and replaced
-project rejection. The built-in desktop agent still needs a route. See
+project rejection. The built-in desktop agent now routes explicit reuse through
+the same worker, with captured request/session ownership, cancellation, and
+shutdown tracking. Its 24-test legacy/reply/cancellation group passes. Other
+analysis families still need acceptance support. See
 [legacy analysis](../user-guide/legacy-analysis.md).
 
 Custom queries now retain independent records through shared operations, direct
