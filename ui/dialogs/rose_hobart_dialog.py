@@ -702,18 +702,19 @@ class RoseHobartDialog(QDialog):
     # ──────────────────────────────────────────────────────────
 
     def _on_generate(self) -> None:
-        """Start face matching."""
+        self.start_matching([w._image_path for w in self._ref_widgets if w.has_face])
+
+    def start_matching(
+        self, ref_paths: list[Path], *, sample_interval: float | None = None
+    ) -> bool:
+        """Start a verified run from user controls or a validated agent request."""
         if (
             self.worker is not None
             or self._ref_extract_worker is not None
             or self._closing
+            or not ref_paths
         ):
-            return
-        # Collect reference image paths (only those with faces)
-        ref_paths = [w._image_path for w in self._ref_widgets if w.has_face]
-        if not ref_paths:
-            return
-
+            return False
         # Build clip pairs
         clip_pairs = []
         for clip in self.clips:
@@ -723,7 +724,7 @@ class RoseHobartDialog(QDialog):
 
         if not clip_pairs:
             QMessageBox.warning(self, "No Clips", "No clips available for processing.")
-            return
+            return False
 
         # Switch to progress page
         self.stack.setCurrentIndex(self.PAGE_PROGRESS)
@@ -736,7 +737,9 @@ class RoseHobartDialog(QDialog):
             clips=clip_pairs,
             sensitivity_preset=self.sensitivity_combo.currentText(),
             ordering=self.ordering_combo.currentText(),
-            sample_interval=self.sample_spin.value(),
+            sample_interval=self.sample_spin.value()
+            if sample_interval is None
+            else sample_interval,
             parent=self,
             project=self.project,
         )
@@ -757,6 +760,7 @@ class RoseHobartDialog(QDialog):
         )
         self.worker.finished.connect(self._retire_workers)
         self.worker.start()
+        return True
 
     def _inputs_current(self) -> bool:
         if self._closing:

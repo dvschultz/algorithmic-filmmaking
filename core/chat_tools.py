@@ -4111,8 +4111,8 @@ def generate_reference_guided(
 
 @tools.register(
     description="Generate a Rose Hobart sequence filtering clips by a specific person's face. "
-                "Requires a reference image path. Use list_sorting_algorithms to check if "
-                "face_embeddings are available.",
+                "Provide 1-3 reference images. Missing or stale face analysis is computed "
+                "in the background before matching.",
     requires_project=True,
     modifies_gui_state=True,
     modifies_project_state=True
@@ -4125,6 +4125,7 @@ def generate_rose_hobart(
     sensitivity: str = "balanced",
     ordering: str = "original",
     sampling_interval: float = 1.0,
+    clip_ids: list[str] | None = None,
 ) -> dict:
     """Generate a Rose Hobart sequence filtering clips by a specific person's face.
 
@@ -4135,93 +4136,47 @@ def generate_rose_hobart(
         ordering: Result ordering - "original", "duration", "color", "brightness",
                  "confidence", or "random"
         sampling_interval: Seconds between frame samples (0.25-5.0, default 1.0)
+        clip_ids: Optional subset of clips; defaults to all enabled clips.
 
     Returns:
-        Dict with success status and matched clip count
+        Asynchronous dispatch marker; completion returns matched clip count.
     """
-    from core.analysis.faces import (
-        average_embeddings,
-        compare_faces,
-        extract_faces_from_image,
-        order_matched_clips,
-        SENSITIVITY_PRESETS,
-    )
+    from math import isfinite
 
-    # Support both singular and plural reference image params
     paths = reference_image_paths or ([reference_image_path] if reference_image_path else [])
-    if not paths:
-        return {"success": False, "error": "At least one reference image path is required"}
-
-    if sensitivity not in SENSITIVITY_PRESETS:
-        return {"success": False, "error": f"Invalid sensitivity: {sensitivity}. Use: strict, balanced, loose"}
-
-    valid_orderings = {"original", "duration", "color", "brightness", "confidence", "random"}
-    if ordering not in valid_orderings:
-        return {"success": False, "error": f"Invalid ordering: {ordering}. Use: {sorted(valid_orderings)}"}
-
-    # Extract reference faces from all provided images
-    ref_embeddings = []
-    for path_str in paths:
-        is_valid, err_msg, validated_path = validate_path(path_str, must_exist=True)
-        if not is_valid:
-            return {"success": False, "error": err_msg}
-        ref_faces = extract_faces_from_image(validated_path)
-        if ref_faces:
-            best = max(ref_faces, key=lambda f: f["confidence"])
-            ref_embeddings.append(best["embedding"])
-
-    if not ref_embeddings:
-        return {"success": False, "error": "No face detected in any reference image"}
-
-    if len(ref_embeddings) > 1:
-        ref_embeddings = [average_embeddings(ref_embeddings)]
-
-    threshold = SENSITIVITY_PRESETS[sensitivity]
-
-    # Match against clips
-    clips = project.clips
-    sources_by_id = project.sources_by_id
-    matched = []
-
-    for clip in clips:
-        if clip.disabled:
-            continue
-        source = sources_by_id.get(clip.source_id)
-        if not source:
-            continue
-
-        # Only use pre-computed face embeddings
-        clip_faces = clip.face_embeddings
-        if clip_faces is None:
-            continue  # Skip clips without pre-computed face embeddings
-
-        is_match, confidence = compare_faces(ref_embeddings, clip_faces, threshold)
-        if is_match:
-            matched.append((clip, source, confidence))
-
-    if not matched:
-        return {
-            "success": True,
-            "matched_count": 0,
-            "message": "No clips matched the reference person. Try 'loose' sensitivity.",
-        }
-
-    # Order using shared function
-    sequence_clips = order_matched_clips(matched, ordering)
-
-    if main_window and hasattr(main_window, 'sequence_tab'):
-        if not main_window.sequence_tab._apply_dialog_sequence(
-            [(clip, source) for clip, source, _confidence in sequence_clips], "rose_hobart", "Rose Hobart"
-        ):
-            return {"success": False, "error": "Could not commit the generated Rose Hobart sequence"}
-
-    return _add_sequence_summary_for_agent(project, {
-        "success": True,
-        "matched_count": len(matched),
-        "total_clips": len(clips),
+    if not isinstance(paths, list) or not 1 <= len(paths) <= 3:
+        return {"success": False, "error": "Provide 1-3 reference image paths"}
+    if sensitivity not in {"strict", "balanced", "loose"}:
+        return {"success": False, "error": "Use strict, balanced, or loose sensitivity"}
+    if ordering not in {"original", "duration", "color", "brightness", "confidence", "random"}:
+        return {"success": False, "error": "Invalid Rose Hobart ordering"}
+    if (isinstance(sampling_interval, bool) or not isinstance(sampling_interval, (int, float))
+            or not isfinite(sampling_interval) or not .25 <= sampling_interval <= 5.):
+        return {"success": False, "error": "Sampling interval must be between 0.25 and 5 seconds"}
+    if main_window is None or not hasattr(main_window, "sequence_tab"):
+        return {"success": False, "error": "Main window not available"}
+    validated = []
+    for path in paths:
+        if not isinstance(path, str):
+            return {"success": False, "error": "Reference image paths must be strings"}
+        valid, error, resolved = validate_path(path, must_exist=True)
+        if not valid:
+            return {"success": False, "error": error}
+        validated.append(str(resolved))
+    if clip_ids is not None and any(cid not in project.clips_by_id for cid in clip_ids):
+        return {"success": False, "error": "Unknown clip ID"}
+    selected = project.clips if clip_ids is None else [project.clips_by_id[cid] for cid in dict.fromkeys(clip_ids)]
+    clip_ids = [c.id for c in selected if not c.disabled and c.source_id in project.sources_by_id]
+    if not clip_ids:
+        return {"success": False, "error": "No enabled clips with available sources"}
+    return {
+        "_wait_for_worker": "rose_hobart",
+        "reference_image_paths": validated,
+        "clip_ids": clip_ids,
         "sensitivity": sensitivity,
         "ordering": ordering,
-    }, [(clip, source) for clip, source, _confidence in sequence_clips])
+        "sampling_interval": sampling_interval,
+    }
 
 
 @tools.register(

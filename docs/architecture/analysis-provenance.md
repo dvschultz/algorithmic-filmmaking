@@ -673,7 +673,17 @@ after recording, and initial model downloads recover without repeating clip
 inference. Regular face-analysis receipts also work in Rose Hobart. Reference
 images are still extracted on each attempt. The regression run passed 127 tests,
 with six recovery follow-ups, scoped dialog typing, and changed-file Ruff clean.
-Rose Hobart still needs agent-path migration. Managed face
+The GUI agent now dispatches Rose Hobart asynchronously through the same progress
+dialog and verified worker, including receipt recovery and owner publication.
+Dispatch validates 1-3 reference paths, sensitivity, ordering, sampling, and an
+optional clip subset without inference. Completion commits clip/source pairs and
+replies to the captured requester only after native exit. Expired replies,
+cancellation, project replacement, or sequence changes reject publication;
+startup failures retire the dialog. Exact requested sampling survives UI display
+rounding. The regression run passed 108 tests with two modules passing scoped
+typing and agent/dialog/tool Ruff clean. MainWindow still has the same six
+pre-existing unused-import Ruff findings, verified against the committed baseline.
+Managed face
 embedding storage also remains pending.
 
 ## Remaining U10 work

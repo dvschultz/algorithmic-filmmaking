@@ -6618,6 +6618,15 @@ class MainWindow(QMainWindow):
             clip_ids = tool_result.get("clip_ids", [])
             return self.start_agent_color_analysis(clip_ids)
 
+        elif wait_type == "rose_hobart":
+            from ui.workers.rose_hobart_agent import AgentRoseHobart
+
+            if getattr(self, "_rose_hobart_dialog", None) is not None:
+                return False
+            dialog = AgentRoseHobart(self, tool_result)
+            self._rose_hobart_dialog = dialog
+            return dialog.start()
+
         elif wait_type == "shot_analysis":
             clip_ids = tool_result.get("clip_ids", [])
             return self.start_agent_shot_analysis(clip_ids)

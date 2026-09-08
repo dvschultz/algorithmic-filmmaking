@@ -528,8 +528,14 @@ and explicit saves checkpoint them. Interrupted publication, cancellation after
 recording, and first model downloads recover without repeated clip inference,
 including receipts created by regular face analysis. References are re-extracted
 on each attempt. The regression run passed 127 tests plus six recovery follow-ups,
-with scoped dialog typing and changed-file Ruff clean. Its agent path remains
-pending, along with managed face embedding storage
+with scoped dialog typing and changed-file Ruff clean. The GUI agent now dispatches
+through this verified worker asynchronously, accepts an optional clip subset, and
+preserves the exact requested sample interval. Completion uses the actual
+clip/source pair contract and captured reply ownership; cancellation, expired
+replies, project/sequence changes, and startup failures are covered. The regression
+run passed 108 tests with two modules passing scoped typing and changed-module
+Ruff clean outside MainWindow's six verified baseline unused imports.
+Remaining work includes managed face embedding storage
 and cost-check migration for the other analysis families.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
