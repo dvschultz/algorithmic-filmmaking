@@ -39,6 +39,8 @@ def export_edl(project, output_path: Optional[str] = None) -> dict:
         sequence=project.sequence,
         sources=project.sources_by_id,
         config=config,
+        frames=project.frames_by_id,
+        clips={clip.id: (clip, project.sources_by_id[clip.source_id]) for clip in project.clips if clip.source_id in project.sources_by_id},
     )
 
     if success:
@@ -50,7 +52,7 @@ def export_edl(project, output_path: Optional[str] = None) -> dict:
                 f"Exported {len(project.sequence.get_all_clips())} clips to EDL"
             ),
         }
-    return {"success": False, "error": "Failed to write EDL file"}
+    return {"success": False, "error": config.error_message or "Failed to write EDL file"}
 
 
 def export_dataset(

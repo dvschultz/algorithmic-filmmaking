@@ -1,164 +1,92 @@
-"""EDL (Edit Decision List) export for NLE workflows."""
+"""CMX 3600 adapter for validated render plans."""
 
 import logging
-from dataclasses import dataclass
+import os
+import tempfile
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, TYPE_CHECKING
 
+from core.render_plan import compile_render_plan
 from models.clip import Source
+from models.frame import Frame
+from models.media_time import VideoRange, frame_rate
 from models.sequence import Sequence
-
-if TYPE_CHECKING:
-    from models.frame import Frame
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class EDLExportConfig:
-    """Configuration for EDL export."""
-
     output_path: Path
     title: str = "Scene Ripper Export"
+    error_message: str | None = field(default=None, init=False)
 
 
 def _sanitize_edl_string(value: str) -> str:
-    """Remove format-breaking characters from EDL field values."""
     return value.replace("\n", " ").replace("\r", " ")[:255]
 
 
 def frames_to_timecode(frames: int, fps: float) -> str:
-    """Convert frame number to SMPTE timecode string.
-
-    Args:
-        frames: Frame number to convert
-        fps: Frame rate
-
-    Returns:
-        Timecode string in HH:MM:SS:FF format (non-drop-frame)
-    """
-    total_seconds = frames / fps
-    hours = int(total_seconds // 3600)
-    minutes = int((total_seconds % 3600) // 60)
-    seconds = int(total_seconds % 60)
-    remaining_frames = int(frames % fps)
-
-    return f"{hours:02d}:{minutes:02d}:{seconds:02d}:{remaining_frames:02d}"
+    """Number frames at the nominal rate for non-drop timecode."""
+    nominal = round(frame_rate(fps))
+    if nominal < 1 or frames < 0:
+        raise ValueError("Invalid timecode frame or rate")
+    seconds, remainder = divmod(frames, nominal)
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}:{remainder:02d}"
 
 
 def export_edl(
     sequence: Sequence,
     sources: dict[str, Source],
     config: EDLExportConfig,
-    frames: Optional[dict[str, "Frame"]] = None,
+    frames: dict[str, Frame] | None = None,
+    *,
+    clips: dict[str, tuple] | None = None,
 ) -> bool:
-    """Export sequence as CMX 3600 EDL file.
-
-    Args:
-        sequence: The sequence to export
-        sources: Dict mapping source_id to Source
-        config: Export configuration
-        frames: Optional dict of frame_id -> Frame for frame-based entries
-
-    Returns:
-        True if export succeeded, False otherwise
-    """
-
-    from core.sequence_time import require_resolved_sequence
+    """Atomically publish a supported EDL; expose failures on the config."""
+    config.error_message = None
+    staged = None
     try:
-        require_resolved_sequence(sequence)
-    except ValueError as exc:
-        logger.error("EDL export preflight: %s", exc)
-        return False
-    lines = []
-
-    # Header
-    lines.append(f"TITLE: {_sanitize_edl_string(config.title)}")
-    lines.append("FCM: NON-DROP FRAME")
-    lines.append("")
-
-    # Get all clips sorted by timeline position
-    seq_clips = sequence.get_all_clips()
-
-    if not seq_clips:
-        return False
-
-    record_frame = 0  # Running record position
-
-    for i, seq_clip in enumerate(seq_clips):
-        fps = sequence.fps
-
-        if seq_clip.is_frame_entry:
-            # Frame-based entry
-            if not frames:
-                logger.warning(
-                    "Frame entry %s skipped: no frames dict provided",
-                    seq_clip.id,
-                )
+        plan = compile_render_plan(sequence, sources, clips, frames=frames)
+        plan.validate_edl()
+        lines = [f"TITLE: {_sanitize_edl_string(config.title)}", "FCM: NON-DROP FRAME", ""]
+        edit = 0
+        for segment in plan.segments:
+            if segment.kind == "gap":
                 continue
-            frame = frames.get(seq_clip.frame_id)
-            if not frame:
-                logger.warning(
-                    "Frame entry %s skipped: frame_id %s not found",
-                    seq_clip.id,
-                    seq_clip.frame_id,
-                )
-                continue
-
-            duration_frames = seq_clip.hold_frames
-            # Source timecodes: still image, so 00:00:00:00 to duration
-            src_in = frames_to_timecode(0, fps)
-            src_out = frames_to_timecode(duration_frames, fps)
-            clip_name = _sanitize_edl_string(frame.display_name())
-        else:
-            # Clip-based entry
-            source = sources.get(seq_clip.source_id)
-            if not source:
-                continue
-            fps = source.fps
-
-            duration_frames = seq_clip.out_point - seq_clip.in_point
-            src_in = frames_to_timecode(seq_clip.in_point, fps)
-            src_out = frames_to_timecode(seq_clip.out_point, fps)
-            clip_name = _sanitize_edl_string(source.filename)
-
-        # Record timecodes (position on timeline)
-        rec_in = frames_to_timecode(record_frame, sequence.fps)
-        rec_out = frames_to_timecode(record_frame + duration_frames, sequence.fps)
-        record_frame += duration_frames
-
-        # Edit number and reel name
-        # Reel identifies the source file — NLEs use this to match clips to media.
-        # CMX 3600 limits reel names to 8 characters; use stem truncated to fit.
-        edit_num = f"{i + 1:03d}"
-        reel = _sanitize_edl_string(
-            Path(clip_name).stem if not seq_clip.is_frame_entry else clip_name
-        )[:8].ljust(8)
-
-        # EDL event line
-        # Format: EDIT# REEL TRACK TRANS SRC_IN SRC_OUT REC_IN REC_OUT
-        event_line = (
-            f"{edit_num}  {reel} V     C        "
-            f"{src_in} {src_out} {rec_in} {rec_out}"
-        )
-        lines.append(event_line)
-
-        # Source/frame filename comment — full name for NLEs that read comments
-        lines.append(f"* FROM CLIP NAME: {clip_name}")
-        if not seq_clip.is_frame_entry:
-            source = sources.get(seq_clip.source_id)
-            if source and source.file_path:
-                lines.append(f"* SOURCE FILE: {source.file_path}")
-        lines.append("")
-
-    # Write to file
-    try:
-        output_path = config.output_path
-        if not output_path.suffix.lower() == ".edl":
-            output_path = output_path.with_suffix(".edl")
-
-        output_path.write_text("\n".join(lines), encoding="utf-8")
+            assert isinstance(segment.media, VideoRange) and segment.path is not None
+            edit += 1
+            name = _sanitize_edl_string(segment.path.name)
+            reel = _sanitize_edl_string(segment.path.stem)[:8].ljust(8)
+            source_rate = float(segment.media.rate)
+            src_in = frames_to_timecode(segment.media.start_frame, source_rate)
+            src_out = frames_to_timecode(segment.media.end_frame, source_rate)
+            rec_in = frames_to_timecode(segment.start_frame, float(plan.output_rate))
+            rec_out = frames_to_timecode(segment.end_frame, float(plan.output_rate))
+            lines.extend([
+                f"{edit:03d}  {reel} V     C        {src_in} {src_out} {rec_in} {rec_out}",
+                f"* FROM CLIP NAME: {name}",
+                f"* SOURCE FILE: {_sanitize_edl_string(str(segment.path))}", "",
+            ])
+        output = config.output_path
+        if output.suffix.lower() != ".edl":
+            output = output.with_suffix(".edl")
+        if any(segment.path is not None and segment.path.resolve() == output.resolve() for segment in plan.segments):
+            raise ValueError("EDL output must not overwrite source media")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=output.parent, prefix=".edl_", delete=False) as handle:
+            staged = Path(handle.name)
+            handle.write("\n".join(lines))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(staged, output)
         return True
-
-    except (OSError, IOError):
+    except (ValueError, OSError) as exc:
+        config.error_message = str(exc)
+        logger.error("EDL export failed: %s", exc)
         return False
+    finally:
+        if staged is not None:
+            staged.unlink(missing_ok=True)

@@ -1,11 +1,19 @@
 """Tests for chromatic color-bar export behavior."""
 
+import pytest
+
 from pathlib import Path
 from types import SimpleNamespace
 
 from core.sequence_export import ExportConfig, SequenceExporter
 from models.clip import Clip, Source
 from models.sequence import Sequence, SequenceClip
+
+
+@pytest.fixture(autouse=True)
+def audio_stream(monkeypatch):
+    monkeypatch.setattr(SequenceExporter, "_has_audio", lambda self, path: True)
+    monkeypatch.setattr(SequenceExporter, "_validate_output", lambda *args: None)
 
 
 def test_export_segment_includes_drawbox_filter_when_color_bar_enabled(monkeypatch, tmp_path):
@@ -36,7 +44,7 @@ def test_export_segment_includes_drawbox_filter_when_color_bar_enabled(monkeypat
 
     assert success is True
     vf = captured["cmd"][captured["cmd"].index("-vf") + 1]
-    assert "fps=30.0" in vf
+    assert "fps=30:" in vf
     assert "drawbox=" in vf
     assert "0xff0000@1.0" in vf
     assert "\\," in vf
@@ -57,18 +65,22 @@ def test_export_resolves_clip_color_and_falls_back_to_black(monkeypatch, tmp_pat
         config,
         bar_color=None,
         seq_clip=None,
+        **kwargs,
     ):
         bar_colors.append(bar_color)
         source_fps_values.append(source_fps)
         return True
 
     def fake_concat_segments(*, segment_paths, output_path, config):
+        output_path.write_bytes(b"encoded")
         return True
 
     monkeypatch.setattr(exporter, "_export_segment", fake_export_segment)
     monkeypatch.setattr(exporter, "_concat_segments", fake_concat_segments)
 
-    source = Source(id="src-1", file_path=Path("src.mp4"), fps=24.0)
+    source = Source(id="src-1", file_path=tmp_path / "src.mp4", fps=24.0)
+    source.file_path.write_bytes(b"media")
+    monkeypatch.setattr("core.media_timing.probe_video_timing", lambda *args: SimpleNamespace(frame_count=60, variable=False, rate=24, origin=0))
     clip_a = Clip(
         id="clip-a",
         source_id=source.id,
@@ -83,7 +95,7 @@ def test_export_resolves_clip_color_and_falls_back_to_black(monkeypatch, tmp_pat
         end_frame=60,
         dominant_colors=None,
     )
-    sequence = Sequence(fps=30.0)
+    sequence = Sequence(fps=24.0)
     sequence.tracks[0].clips = [
         SequenceClip(
             source_clip_id=clip_a.id,
@@ -123,7 +135,7 @@ def test_export_inserts_black_silent_segments_for_timeline_gaps(monkeypatch, tmp
     exporter = SequenceExporter(ffmpeg_path="ffmpeg")
     calls = []
 
-    def fake_export_gap_segment(output_path, duration_seconds, config):
+    def fake_export_gap_segment(output_path, duration_seconds, config, **kwargs):
         calls.append(("gap", duration_seconds))
         return True
 
@@ -137,18 +149,22 @@ def test_export_inserts_black_silent_segments_for_timeline_gaps(monkeypatch, tmp
         config,
         bar_color=None,
         seq_clip=None,
+        **kwargs,
     ):
         calls.append(("clip", start_frame, end_frame))
         return True
 
     def fake_concat_segments(*, segment_paths, output_path, config):
+        output_path.write_bytes(b"encoded")
         return True
 
     monkeypatch.setattr(exporter, "_export_gap_segment", fake_export_gap_segment)
     monkeypatch.setattr(exporter, "_export_segment", fake_export_segment)
     monkeypatch.setattr(exporter, "_concat_segments", fake_concat_segments)
 
-    source = Source(id="src-1", file_path=Path("src.mp4"), fps=30.0, width=1280, height=720)
+    source = Source(id="src-1", file_path=tmp_path / "src.mp4", fps=30.0, width=1280, height=720)
+    source.file_path.write_bytes(b"media")
+    monkeypatch.setattr("core.media_timing.probe_video_timing", lambda *args: SimpleNamespace(frame_count=30, variable=False, rate=30, origin=0))
     clip = Clip(id="clip-a", source_id=source.id, start_frame=0, end_frame=30)
     sequence = Sequence(fps=30.0)
     sequence.tracks[0].clips = [
@@ -200,29 +216,16 @@ def test_export_segment_uses_source_fps_for_trim_and_sequence_fps_for_output(
 
     assert success is True
     cmd = captured["cmd"]
-    # Double -ss: coarse seek (max(0, 2.0-5.0)=0.0) before -i, precise (2.0) after -i
-    ss_indices = [i for i, v in enumerate(cmd) if v == "-ss"]
-    assert len(ss_indices) == 2
-    assert cmd[ss_indices[0] + 1] == "0"  # coarse seek
-    assert cmd[ss_indices[1] + 1] == "2.0"  # precise seek
-    # Duration subtracts one frame (1/24s) to prevent audio bleed at cut boundaries
-    expected_duration = (96 - 48) / 24.0 - 1.0 / 24.0
-    assert cmd[cmd.index("-t") + 1] == str(expected_duration)
-    assert cmd[cmd.index("-vf") + 1] == "fps=30.0"
-    assert cmd[cmd.index("-pix_fmt") + 1] == "yuv420p"
-    # No -af when there's no reverse: output -ss + -t already cuts audio
-    # sample-accurately. Adding atrim=0:N here would silently strip audio
-    # because the precise -ss after -i shifts audio PTS past the atrim window.
-    assert "-af" not in cmd
+    vf = cmd[cmd.index("-vf") + 1]
+    assert "trim=start_frame=48:end_frame=96" in vf
+    assert "fps=30:" in vf
+    assert "trim=end_frame=60" in vf
+    assert "-ss" not in cmd
+    assert "atrim=start=2.0:end=4.0" in cmd[cmd.index("-af") + 1]
 
 
-def test_export_segment_omits_atrim_so_audio_survives_double_ss(monkeypatch, tmp_path):
-    """Regression: double -ss + atrim=0:duration silently produced silent
-    segments because output -ss shifts audio PTS past the atrim window.
-
-    The audio filter chain must NOT contain atrim/asetpts. If reverse is
-    not requested, -af should be absent entirely.
-    """
+def test_export_segment_trims_audio_in_absolute_source_coordinates(monkeypatch, tmp_path):
+    """Source audio and video selections share the original media origin."""
     exporter = SequenceExporter(ffmpeg_path="ffmpeg")
     captured = {}
 
@@ -244,13 +247,14 @@ def test_export_segment_omits_atrim_so_audio_survives_double_ss(monkeypatch, tmp
 
     cmd = captured["cmd"]
     cmd_str = " ".join(cmd)
-    assert "atrim" not in cmd_str
-    assert "asetpts" not in cmd_str
-    assert "-af" not in cmd
+    assert "atrim=start=10.0:end=11.0" in cmd_str
+    assert "asetpts=PTS-STARTPTS" in cmd_str
+    assert cmd.index("-ss") < cmd.index("-i")
+    assert "round((pts*TB" in cmd_str
 
 
 def test_export_segment_uses_areverse_only_when_reverse_requested(monkeypatch, tmp_path):
-    """When seq_clip.reverse is set, -af should be present with areverse only."""
+    """Reverse only the selected audio before padding the planned length."""
     exporter = SequenceExporter(ffmpeg_path="ffmpeg")
     captured = {}
 
@@ -281,4 +285,5 @@ def test_export_segment_uses_areverse_only_when_reverse_requested(monkeypatch, t
     cmd = captured["cmd"]
     assert "-af" in cmd
     af = cmd[cmd.index("-af") + 1]
-    assert af == "areverse"
+    assert af.split(",").count("areverse") == 1
+    assert af.index("atrim=start=") < af.index("areverse") < af.index("apad")

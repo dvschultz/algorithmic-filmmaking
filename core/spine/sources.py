@@ -6,7 +6,7 @@ and the MCP server. No PySide6, no main_window, no GUI state.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import Callable, TYPE_CHECKING
 from pathlib import Path
 import logging
 from threading import Event
@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def probe_source(path: Path | str) -> Source:
+def probe_source(path: Path | str, *, cancel_check: Callable[[], bool] | None = None) -> Source:
     """Read video metadata without touching a project; fall back to defaults.
 
     This is a blocking media probe. Background import adapters can prepare the
@@ -36,6 +36,12 @@ def probe_source(path: Path | str) -> Source:
         source.fps = info.get("fps", 30.0)
         source.width = info.get("width", 0)
         source.height = info.get("height", 0)
+        from core.media_timing import probe_video_timing
+        timing = probe_video_timing(path, cancel_check)
+        source.fps = float(timing.rate)
+        source.duration_seconds = float(timing.boundaries[-1])
+        source.variable_frame_rate = timing.variable
+        source.frame_timestamps = tuple(map(str, timing.boundaries)) if timing.variable else None
     except Exception as exc:
         logger.warning("Failed to extract metadata for %s: %s", path.name, exc)
     return source
@@ -45,7 +51,7 @@ def prepare_source_import(path: Path, cancel_event: Event) -> Source | None:
     """Prepare metadata and a source thumbnail without touching a project."""
     if cancel_event.is_set():
         return None
-    source = probe_source(path)
+    source = probe_source(path, cancel_check=cancel_event.is_set)
     if cancel_event.is_set():
         return None
     try:

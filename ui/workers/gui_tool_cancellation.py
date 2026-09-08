@@ -11,7 +11,10 @@ def cancel_gui_tool_work(
     """Cancel matching work, or all work owned by the retiring conversation."""
     if window._chat_worker is None:
         return
-    for controller in tuple(getattr(window, "_active_clip_analyses", ())):
+    controllers = tuple(getattr(window, "_active_clip_analyses", ())) + tuple(
+        getattr(window, "_active_source_imports", ())
+    )
+    for controller in controllers:
         reply = controller.reply
         if (
             isinstance(reply, GuiToolReply)

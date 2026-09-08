@@ -114,3 +114,23 @@ def test_guard_preserves_unrelated_edits_but_rejects_target_edits(tmp_path):
         guard.validate(project)
     with pytest.raises(StaleDetectionResult):
         guard.validate(Project.new(name="different session"))
+
+
+def test_detection_preserves_verified_timing_on_existing_source(tmp_path):
+    from core.operations.detection import DetectionApplication, DetectionGuard
+    from core.project import Project
+    from models.clip import Clip, Source
+
+    path = tmp_path / "variable.mp4"
+    path.write_bytes(b"source")
+    project = Project.new()
+    original = Source(file_path=path)
+    project.add_source(original)
+    application = DetectionApplication(project, DetectionGuard.capture(project, path))
+    detected = Source(file_path=path, fps=24, variable_frame_rate=True, frame_timestamps=("0", "1/24", "1/8"))
+    clip = Clip(source_id=detected.id, start_frame=0, end_frame=2)
+    assert application.apply(detected, [clip], still_current=lambda: True) is original
+    assert original.variable_frame_rate
+    assert original.frame_timestamps == detected.frame_timestamps
+    project.add_to_sequence([clip.id])
+    assert str(project.sequence.get_all_clips()[0].source_range.duration) == "1/8"

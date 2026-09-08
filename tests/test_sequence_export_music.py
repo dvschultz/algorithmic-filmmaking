@@ -37,8 +37,8 @@ def test_mux_audio_builds_correct_command():
     cmd = mock_run.call_args[0][0]
     assert cmd[0] == "/usr/bin/ffmpeg"
     assert "-map" in cmd
-    assert "0:v" in cmd
-    assert "1:a" in cmd
+    assert "0:v:0" in cmd
+    assert "1:a:0" in cmd
     assert "-c:v" in cmd
     assert "copy" in cmd
     assert "-shortest" in cmd
@@ -46,8 +46,8 @@ def test_mux_audio_builds_correct_command():
     assert "aac" in cmd
 
 
-def test_mux_audio_fallback_on_failure():
-    """_mux_audio copies video without audio on FFmpeg failure."""
+def test_mux_audio_does_not_publish_fallback_on_failure():
+    """A failed music mux must not masquerade as a successful export."""
     exporter = SequenceExporter.__new__(SequenceExporter)
     exporter.ffmpeg_path = "/usr/bin/ffmpeg"
 
@@ -68,8 +68,7 @@ def test_mux_audio_fallback_on_failure():
             )
 
         assert result is False  # Indicates mux failure
-        assert output.exists()  # Video still copied as fallback
-        assert output.read_bytes() == b"fake video data"
+        assert not output.exists()
 
 
 def test_export_skips_mux_when_music_path_missing():

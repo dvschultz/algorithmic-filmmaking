@@ -7,7 +7,7 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, TYPE_CHECKING
+from typing import Callable, Optional, TYPE_CHECKING
 
 from core.sequence_export import ExportConfig, SequenceExporter
 from core.settings import load_settings
@@ -76,6 +76,7 @@ def compute_sequence_preview_signature(
     """Compute a stable signature for the rendered preview's meaningful inputs."""
     settings = settings or SequencePreviewSettings()
     payload = {
+        "render_plan_version": 1,
         "preview_settings": {
             "width": settings.width,
             "height": settings.height,
@@ -95,7 +96,7 @@ def compute_sequence_preview_signature(
             ),
             "music_path": _path_fingerprint(
                 Path(sequence.music_path)
-                if getattr(sequence, "music_path", None)
+                if sequence.music_path
                 else None
             ),
             "clips": [
@@ -116,10 +117,13 @@ def render_sequence_preview(
     settings: SequencePreviewSettings | None = None,
     progress_callback=None,
     frames: Optional[dict[str, "Frame"]] = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> SequencePreviewRender:
     """Render a cached continuous preview for a sequence, or return an existing one."""
-    from core.sequence_time import require_resolved_sequence
-    require_resolved_sequence(sequence)
+    from core.render_plan import compile_render_plan
+    if cancel_check is not None and cancel_check():
+        raise RuntimeError("Sequence preview render cancelled")
+    plan = compile_render_plan(sequence, sources, clips, frames=frames)
     settings = settings or SequencePreviewSettings()
     signature = compute_sequence_preview_signature(
         sequence=sequence,
@@ -139,14 +143,6 @@ def render_sequence_preview(
         )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    music_path = None
-    raw_music = getattr(sequence, "music_path", None)
-    if raw_music:
-        candidate = Path(raw_music)
-        if candidate.exists():
-            music_path = candidate
-        else:
-            logger.warning("Sequence preview music file is missing: %s", raw_music)
 
     config = ExportConfig(
         output_path=output_path,
@@ -163,7 +159,8 @@ def render_sequence_preview(
             bool(getattr(sequence, "show_chromatic_color_bar", False))
             and sequence.algorithm == "color"
         ),
-        music_path=music_path,
+        music_path=plan.music_path,
+        cancel_check=cancel_check,
     )
 
     exporter = SequenceExporter()
@@ -176,7 +173,6 @@ def render_sequence_preview(
         frames=frames,
     )
     if not success:
-        output_path.unlink(missing_ok=True)
         raise RuntimeError("Sequence preview render failed")
 
     return SequencePreviewRender(
@@ -258,6 +254,8 @@ def _source_payload(source: Optional[Source]) -> dict | None:
         "fps": source.fps,
         "width": source.width,
         "height": source.height,
+        "variable_frame_rate": source.variable_frame_rate,
+        "frame_timestamps": source.frame_timestamps,
     }
 
 

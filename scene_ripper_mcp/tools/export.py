@@ -1,7 +1,9 @@
 """Export MCP tools for clips, sequences, EDL, and datasets."""
 
+import asyncio
 import json
 import logging
+from threading import Event
 from typing import Annotated, Optional
 
 from mcp.server.fastmcp import Context
@@ -188,12 +190,28 @@ async def export_sequence(
         if ctx:
             await ctx.report_progress(0.2, "Rendering sequence...")
 
-        success = do_export(
-            sequence=sequence,
-            sources=sources_dict,
-            clips=clips_dict,
-            output_path=out_path,
-        )
+        cancel = Event()
+        render = asyncio.create_task(asyncio.to_thread(
+            do_export, sequence=sequence, sources=sources_dict, clips=clips_dict,
+            output_path=out_path, frames=project.frames_by_id, cancel_check=cancel.is_set,
+        ))
+        try:
+            success = await asyncio.shield(render)
+        except asyncio.CancelledError as cancellation:
+            cancel.set()
+            # Retain ownership until the encoder has terminated and staging is
+            # cleaned. No worker may publish after cancellation returns.
+            import anyio
+            with anyio.CancelScope(shield=True):
+                try:
+                    while not render.done():
+                        try:
+                            await asyncio.shield(render)
+                        except asyncio.CancelledError:
+                            cancel.set()
+                    render.result()
+                finally:
+                    raise cancellation
 
         if ctx:
             await ctx.report_progress(1.0, "Complete")
@@ -278,7 +296,11 @@ async def export_edl(
             await ctx.report_progress(0.5, "Generating EDL...")
 
         config = EDLExportConfig(output_path=out_path, title=title)
-        success = do_export(sequence=sequence, sources=sources_dict, config=config)
+        success = do_export(
+            sequence=sequence, sources=sources_dict, config=config,
+            frames=project.frames_by_id,
+            clips={clip.id: (clip, sources_dict[clip.source_id]) for clip in project.clips if clip.source_id in sources_dict},
+        )
 
         if ctx:
             await ctx.report_progress(1.0, "Complete")
@@ -293,7 +315,7 @@ async def export_edl(
                 }
             )
         else:
-            return json.dumps({"success": False, "error": "EDL export failed"})
+            return json.dumps({"success": False, "error": config.error_message or "EDL export failed"})
     except Exception as e:
         logger.exception("EDL export failed")
         return json.dumps({"success": False, "error": str(e)})

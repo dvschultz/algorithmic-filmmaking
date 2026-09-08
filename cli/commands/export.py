@@ -330,7 +330,7 @@ def edl(
 
     # Load project
     try:
-        sources, clips_list, sequence, metadata, ui_state, _, _audio_sources = load_project(
+        sources, clips_list, sequence, metadata, ui_state, frames_list, _audio_sources = load_project(
             filepath=project_file,
             missing_source_callback=lambda path, sid: None,
         )
@@ -362,10 +362,12 @@ def edl(
         sequence=sequence,
         sources=sources_by_id,
         config=export_config,
+        clips={clip.id: (clip, sources_by_id[clip.source_id]) for clip in clips_list if clip.source_id in sources_by_id},
+        frames={frame.id: frame for frame in frames_list},
     )
 
     if not success:
-        exit_with(ExitCode.GENERAL_ERROR, "Failed to export EDL")
+        exit_with(ExitCode.GENERAL_ERROR, export_config.error_message or "Failed to export EDL")
 
     result = {
         "output": str(output),
@@ -433,7 +435,7 @@ def video(
 
     # Load project
     try:
-        sources, clips_list, sequence, metadata, ui_state, _, _audio_sources = load_project(
+        sources, clips_list, sequence, metadata, ui_state, frames_list, _audio_sources = load_project(
             filepath=project_file,
             missing_source_callback=lambda path, sid: None,
         )
@@ -501,6 +503,7 @@ def video(
         clips=clips_dict,
         config=export_config,
         progress_callback=progress,
+        frames={frame.id: frame for frame in frames_list},
     )
 
     if not success:

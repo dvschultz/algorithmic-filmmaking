@@ -9,6 +9,41 @@ from models.sequence import Sequence, SequenceClip
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 
+def test_scrub_uses_the_compiled_entry_at_a_rounded_cut(tmp_path):
+    from unittest.mock import Mock
+    from core.project import Project
+    from models.clip import Clip, Source
+    from ui.main_window import MainWindow
+
+    project = Project.new()
+    project.sequence = Sequence(fps=30)
+    lookup = {}
+    for name in ("first", "second"):
+        path = tmp_path / f"{name}.mp4"
+        path.write_bytes(b"media")
+        source = Source(file_path=path, fps=30)
+        clip = Clip(source_id=source.id, start_frame=0, end_frame=30)
+        project.add_source(source)
+        project.add_clips([clip])
+        project.add_to_sequence([clip.id])
+        lookup[clip.id] = (clip, source)
+    first, second = project.sequence.get_all_clips()
+    widget_selection = Mock(return_value=(first, *lookup[first.source_clip_id]))
+    window = SimpleNamespace(
+        _is_playing=False, _syncing_timeline_from_video=False,
+        _has_ready_sequence_preview=lambda: False,
+        _get_sequence_preview_inputs=lambda: (project.sequence, project.sources_by_id, lookup, {}),
+        sequence_tab=SimpleNamespace(
+            timeline=SimpleNamespace(get_clip_at_playhead=widget_selection), video_player=Mock(),
+        ),
+        _sequence_preview_source_id=None, _update_sequence_chromatic_bar=Mock(), status_bar=Mock(),
+    )
+    MainWindow._on_timeline_playhead_changed(window, 0.99)
+    assert window._preview_sync_clip is second
+    assert window.sequence_tab.video_player.load_video.call_args.args[0].name == "second.mp4"
+    widget_selection.assert_not_called()
+
+
 def _sequence_with_clip() -> Sequence:
     sequence = Sequence(id="seq-1", fps=24.0)
     sequence.tracks[0].clips = [

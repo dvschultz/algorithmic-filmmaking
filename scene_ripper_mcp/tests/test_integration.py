@@ -326,6 +326,46 @@ class TestExportTools:
             yield {"project_path": project_path, "output_dir": output_dir}
 
     @pytest.mark.asyncio
+    async def test_sequence_cancellation_waits_for_encoder_cleanup(self, export_project, monkeypatch):
+        import asyncio
+        from threading import Event
+        from scene_ripper_mcp.tools.export import export_sequence
+
+        started, cleaned, cancelled, release = Event(), Event(), Event(), Event()
+
+        def render(**kwargs):
+            import time
+
+            started.set()
+            deadline = time.monotonic() + 5
+            while not kwargs["cancel_check"]():
+                if time.monotonic() > deadline:
+                    raise AssertionError("Cancellation was not delivered to the encoder")
+                time.sleep(0.005)
+            cancelled.set()
+            assert release.wait(3)
+            cleaned.set()
+            return False
+
+        monkeypatch.setattr("core.sequence_export.export_sequence", render)
+        task = asyncio.create_task(export_sequence(
+            str(export_project["project_path"]), str(export_project["output_dir"] / "cancel.mp4"),
+        ))
+        assert await asyncio.to_thread(started.wait, 3)
+        task.cancel()
+        assert await asyncio.to_thread(cancelled.wait, 3)
+        try:
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done(), "Repeated cancellation abandoned the encoder"
+        finally:
+            release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert cleaned.is_set()
+        assert not (export_project["output_dir"] / "cancel.mp4").exists()
+
+    @pytest.mark.asyncio
     async def test_export_edl(self, export_project):
         """Export sequence as EDL."""
         from scene_ripper_mcp.tools.export import export_edl

@@ -207,9 +207,10 @@ def test_noop_on_overlapping_entries_preserves_stable_order():
         {"in_point": 20, "out_point": 40},
     ],
 )
-def test_trim_only_export_invalidates_cache_and_undo_redo_restore_it(tmp_path, changes):
+def test_trim_only_export_invalidates_cache_and_undo_redo_restore_it(tmp_path, changes, monkeypatch):
     from unittest.mock import Mock
     from core.sequence_export import ExportConfig, SequenceExporter
+    from types import SimpleNamespace
 
     project = _make_project_with_clips()
     project.add_to_sequence(["c0"])
@@ -220,20 +221,23 @@ def test_trim_only_export_invalidates_cache_and_undo_redo_restore_it(tmp_path, c
     clip.prerendered_path = str(cached)
     project.mark_clean()
     exporter = SequenceExporter(ffmpeg_path="ffmpeg")
+    monkeypatch.setattr("core.media_timing.probe_video_timing", lambda *args: SimpleNamespace(frame_count=1000, variable=False, rate=project.sources[0].fps, origin=0))
+    monkeypatch.setattr(exporter, "_validate_output", lambda *args: None)
+    monkeypatch.setattr(exporter, "_has_audio", lambda *args: False)
     exporter._export_segment = Mock(return_value=True)
-    exporter._export_prerendered_segment = Mock(return_value=True)
-    exporter._concat_segments = Mock(return_value=True)
+    exporter._concat_segments = Mock(side_effect=lambda **kwargs: (kwargs["output_path"].write_bytes(b"encoded"), True)[1])
+    for source in project.sources:
+        source.file_path = tmp_path / f"{source.id}.mp4"
+        source.file_path.write_bytes(b"source")
     config = ExportConfig(output_path=tmp_path / "out.mp4", width=640, height=480)
     clips = {c.id: (c, project.sources_by_id[c.source_id]) for c in project.clips}
 
     def export():
         exporter._export_segment.reset_mock()
-        exporter._export_prerendered_segment.reset_mock()
         assert exporter.export(project.sequence, project.sources_by_id, clips, config)
 
     assert update_sequence_clip(project, clip.id, **changes)["success"]
     export()
-    exporter._export_prerendered_segment.assert_not_called()
     exporter._export_segment.assert_called_once()
     assert exporter._export_segment.call_args.kwargs["start_frame"] == changes.get(
         "in_point", original_points[0]
@@ -247,13 +251,12 @@ def test_trim_only_export_invalidates_cache_and_undo_redo_restore_it(tmp_path, c
     assert (clip.in_point, clip.out_point) == original_points
     assert clip.prerendered_path == str(cached) and not project.is_dirty
     export()
-    exporter._export_prerendered_segment.assert_called_once()
-    exporter._export_segment.assert_not_called()
+    # Legacy prerenders lack verified provenance, even after undo restores the reference.
+    exporter._export_segment.assert_called_once()
 
     project.session.redo()
     assert clip.prerendered_path is None
     export()
-    exporter._export_prerendered_segment.assert_not_called()
     exporter._export_segment.assert_called_once()
     assert cached.exists()  # Undo retains the original media reference.
 

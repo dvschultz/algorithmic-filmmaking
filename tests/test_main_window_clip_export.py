@@ -313,7 +313,7 @@ def test_sequence_tab_edl_export_uses_selected_sequence_and_project_sources(
     )
     monkeypatch.setattr(
         "ui.main_window.export_edl",
-        lambda sequence, sources, config, frames=None: export_calls.append(
+        lambda sequence, sources, config, frames=None, clips=None: export_calls.append(
             (sequence, sources, config, frames)
         )
         or True,
@@ -336,6 +336,8 @@ def test_sequence_tab_edl_export_uses_selected_sequence_and_project_sources(
 def test_sequence_tab_batch_edl_export_writes_each_populated_sequence(
     tmp_path, source, monkeypatch
 ):
+    source.file_path = tmp_path / "video.mp4"
+    source.file_path.write_bytes(b"source")
     project = Project.new(name="EDL Project")
     project.add_source(source)
     clip_a = Clip(id="clip-a", source_id=source.id, start_frame=0, end_frame=30)
@@ -430,7 +432,7 @@ def test_file_menu_edl_export_prompts_for_sequence_before_export(
     monkeypatch.setattr("ui.main_window.QDesktopServices.openUrl", lambda *_args: None)
     monkeypatch.setattr(
         "ui.main_window.export_edl",
-        lambda sequence, sources, config, frames=None: export_calls.append(
+        lambda sequence, sources, config, frames=None, clips=None: export_calls.append(
             (sequence, sources, config, frames)
         )
         or True,

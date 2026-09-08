@@ -32,10 +32,9 @@ class SequencePreviewWorker(CancellableWorker):
         settings: Optional[SequencePreviewSettings] = None,
     ):
         super().__init__()
-        self.sequence = copy.deepcopy(sequence)
-        self.sources = dict(sources)
-        self.clips = dict(clips)
-        self.frames = dict(frames or {})
+        self.sequence, self.sources, self.clips, self.frames = copy.deepcopy(
+            (sequence, sources, clips, frames or {})
+        )
         self.cache_root = cache_root
         self.settings = settings or SequencePreviewSettings()
 
@@ -53,6 +52,7 @@ class SequencePreviewWorker(CancellableWorker):
                 cache_root=self.cache_root,
                 settings=self.settings,
                 progress_callback=lambda p, m: self.progress.emit(p, m),
+                cancel_check=self.is_cancelled,
             )
             if self.is_cancelled():
                 self._log_cancelled()

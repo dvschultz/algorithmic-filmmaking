@@ -110,7 +110,7 @@ class TestEDLExportFrameEntries:
     """EDL export with frame-based SequenceClips."""
 
     def test_frame_only_sequence(self, tmp_path):
-        """EDL with only frame entries produces correct timecodes and clip name."""
+        """CMX cannot describe a still hold without an external convention."""
         frame_path = tmp_path / "frame.png"
         _create_test_png(frame_path)
         frame = _make_frame("f1", frame_path, description="Sunset shot")
@@ -122,18 +122,15 @@ class TestEDLExportFrameEntries:
         config = EDLExportConfig(output_path=edl_path)
 
         result = export_edl(seq, {}, config, frames={"f1": frame})
-        assert result is True
-
-        content = edl_path.read_text()
-        assert "TITLE:" in content
-        # Frame 42 -> display_name = "Frame 42"
-        assert "Frame 42" in content
-        # Source timecodes should start at 00:00:00:00
-        assert "00:00:00:00" in content
+        assert result is False
+        assert "still hold" in config.error_message
+        assert not edl_path.exists()
 
     def test_mixed_clip_and_frame_sequence(self, tmp_path):
         """EDL with both clip and frame entries."""
         source = _make_source()
+        source.file_path = tmp_path / "video.mp4"
+        source.file_path.write_bytes(b"media")
         frame_path = tmp_path / "still.png"
         _create_test_png(frame_path)
         frame = _make_frame("f1", frame_path)
@@ -152,47 +149,33 @@ class TestEDLExportFrameEntries:
             config,
             frames={"f1": frame},
         )
-        assert result is True
+        assert result is False
+        assert "still hold" in config.error_message
+        assert not edl_path.exists()
 
-        content = edl_path.read_text()
-        clip_lines = [line for line in content.split("\n") if line.startswith("* FROM CLIP NAME:")]
-        # Two FROM CLIP NAME comments: one for video, one for frame
-        assert len(clip_lines) == 2
-        assert "video.mp4" in clip_lines[0]
-        assert "Frame 42" in clip_lines[1]
-        # Source file path comment for clip-based entries
-        source_lines = [line for line in content.split("\n") if line.startswith("* SOURCE FILE:")]
-        assert len(source_lines) == 1
-        assert "video.mp4" in source_lines[0]
-
-    def test_frame_entry_skipped_without_frames_dict(self, tmp_path):
-        """Frame entries are gracefully skipped when no frames dict provided."""
+    def test_frame_entry_rejected_without_frames_dict(self, tmp_path):
+        """Missing still references fail the complete export."""
         seq = Sequence(name="No Frames", fps=30.0)
         seq.tracks[0].clips = [_make_frame_seq_clip("f1")]
 
         edl_path = tmp_path / "skip.edl"
         config = EDLExportConfig(output_path=edl_path)
 
-        # File is written (header only) but the frame entry is skipped
-        result = export_edl(seq, {}, config, frames=None)
-        assert result is True
-        content = edl_path.read_text()
-        assert "TITLE:" in content
-        # No FROM CLIP NAME lines since all entries were skipped
-        assert "FROM CLIP NAME" not in content
+        assert export_edl(seq, {}, config, frames=None) is False
+        assert "reference missing" in config.error_message
+        assert not edl_path.exists()
 
-    def test_frame_entry_skipped_missing_frame_id(self, tmp_path):
-        """Frame entry with unknown frame_id is skipped."""
+    def test_frame_entry_rejected_missing_frame_id(self, tmp_path):
+        """An unknown still cannot silently disappear from an EDL."""
         seq = Sequence(name="Missing Frame", fps=30.0)
         seq.tracks[0].clips = [_make_frame_seq_clip("nonexistent")]
 
         edl_path = tmp_path / "missing.edl"
         config = EDLExportConfig(output_path=edl_path)
 
-        result = export_edl(seq, {}, config, frames={})
-        assert result is True
-        content = edl_path.read_text()
-        assert "FROM CLIP NAME" not in content
+        assert export_edl(seq, {}, config, frames={}) is False
+        assert "reference missing" in config.error_message
+        assert not edl_path.exists()
 
 
 # -- SRT export tests --------------------------------------------------------

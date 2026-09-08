@@ -153,6 +153,8 @@ class DetectionApplication:
                 current.fps = source.fps
                 current.width = source.width
                 current.height = source.height
+                current.variable_frame_rate = source.variable_frame_rate
+                current.frame_timestamps = source.frame_timestamps
                 current.analyzed = True
             # A source-added observer can cancel or replace the workflow.
             if not still_current():

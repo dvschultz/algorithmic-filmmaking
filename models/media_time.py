@@ -29,7 +29,9 @@ def frame_rate(value: Fraction | int | float | str) -> Fraction:
     return rate
 
 
-def frame_boundary(seconds: Fraction, rate: Fraction) -> int:
+def frame_boundary(
+    seconds: Fraction | int | float | str, rate: Fraction | int | float | str,
+) -> int:
     """Round one nonnegative timeline boundary, ties toward the later frame."""
     seconds, rate = rational(seconds), frame_rate(rate)
     if seconds < 0:

@@ -2828,25 +2828,7 @@ def import_video(main_window, path: str) -> dict:
                 "already_imported": True
             }
 
-    # Add to library (reuse existing method)
-    main_window._add_video_to_library(video_path)
-
-    # Find the newly added source
-    new_source = None
-    for source in main_window.project.sources:
-        if source.file_path == video_path:
-            new_source = source
-            break
-
-    if new_source:
-        return {
-            "success": True,
-            "source_id": new_source.id,
-            "filename": new_source.filename,
-            "message": f"Imported {new_source.filename}"
-        }
-    else:
-        return {"success": False, "error": "Failed to add video to library"}
+    return {"_wait_for_worker": "source_import", "file_paths": [str(video_path)]}
 
 
 @tools.register(
@@ -2925,6 +2907,12 @@ def import_folder(project, main_window, folder_path: str) -> dict:
 
     if not video_files:
         return {"success": False, "error": f"No video files found in {folder_path}"}
+
+    if main_window is not None:
+        return {
+            "_wait_for_worker": "source_import",
+            "file_paths": [str(path) for path in video_files],
+        }
 
     from core.spine.sources import find_source_by_path, add_source_if_missing, probe_source
 

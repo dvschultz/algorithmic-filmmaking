@@ -160,7 +160,8 @@ def test_preparation_cancellation_skips_thumbnail(tmp_path, monkeypatch):
     cancel = Event()
     path = tmp_path / "video.mp4"
 
-    def probe(path):
+    def probe(path, *, cancel_check=None):
+        assert cancel_check is not None
         cancel.set()
         return Source(file_path=path)
 

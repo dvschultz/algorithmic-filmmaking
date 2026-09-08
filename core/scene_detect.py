@@ -342,6 +342,16 @@ class SceneDetector:
     def __init__(self, config: Optional[DetectionConfig] = None):
         self.config = config or DetectionConfig()
 
+    @staticmethod
+    def _verify_source_timing(source: Source) -> None:
+        from core.media_timing import probe_video_timing
+
+        timing = probe_video_timing(source.file_path)
+        source.fps = float(timing.rate)
+        source.duration_seconds = float(timing.boundaries[-1])
+        source.variable_frame_rate = timing.variable
+        source.frame_timestamps = tuple(map(str, timing.boundaries)) if timing.variable else None
+
     def _resolve_luma_only(self, video_path: Path, source: Source) -> bool:
         """Determine whether to use luma-only detection.
 
@@ -403,6 +413,7 @@ class SceneDetector:
         )
 
         # Auto-detect grayscale and resolve luma_only
+        self._verify_source_timing(source)
         use_luma_only = self._resolve_luma_only(video_path, source)
 
         # Create detector based on config
@@ -483,6 +494,7 @@ class SceneDetector:
         )
 
         # Auto-detect grayscale and resolve luma_only
+        self._verify_source_timing(source)
         progress_callback(0.05, "Checking video color profile...")
         use_luma_only = self._resolve_luma_only(video_path, source)
 
@@ -613,6 +625,7 @@ class SceneDetector:
         )
 
         progress_callback(0.05, "Initializing text detector...")
+        self._verify_source_timing(source)
 
         config = karaoke_config or KaraokeDetectionConfig()
         detector = KaraokeTextDetector(config)

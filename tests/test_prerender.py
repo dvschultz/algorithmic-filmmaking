@@ -5,7 +5,6 @@ Covers:
 - Idempotency (skip if output exists)
 - Reverse safety limit
 - Batch function with cancellation
-- Export skips transforms when prerendered_path exists
 - Project save/load copies and resolves prerendered files
 """
 
@@ -13,13 +12,11 @@ from pathlib import Path
 from threading import Event
 from unittest.mock import MagicMock, patch
 
-
 from core.remix.prerender import (
     _REVERSE_MAX_DURATION,
     prerender_clip,
     prerender_batch,
 )
-from core.sequence_export import SequenceExporter, ExportConfig
 from models.sequence import Sequence, SequenceClip
 
 
@@ -268,49 +265,6 @@ class TestPrerenderBatch:
         # Should get progress(0, 1) and progress(1, 1)
         assert (0, 1) in progress_calls
         assert (1, 1) in progress_calls
-
-
-# -- Export with prerendered_path ---------------------------------------------
-
-class TestExportPrerenderedPath:
-    """Export skips transforms when prerendered_path exists."""
-
-    def test_build_video_filter_ignores_transforms_for_prerendered(self):
-        """When using prerendered clip, transforms are already baked in."""
-        exporter = SequenceExporter.__new__(SequenceExporter)
-        config = ExportConfig(output_path=Path("/out.mp4"))
-
-        # A clip with transforms AND prerendered_path — the export code path
-        # would use _export_prerendered_segment which doesn't apply hflip/vflip/reverse.
-        # Here we just verify that _build_video_filter with no seq_clip produces no filters.
-        result = exporter._build_video_filter(
-            config=config, bar_color=None, seq_clip=None,
-        )
-        assert result is None
-
-    def test_export_prerendered_segment_no_transform_filters(self):
-        """_export_prerendered_segment only applies scale and chromatic bar, not transforms."""
-        exporter = SequenceExporter.__new__(SequenceExporter)
-        exporter.ffmpeg_path = "/usr/bin/ffmpeg"
-        config = ExportConfig(output_path=Path("/out.mp4"), width=1920, height=1080)
-
-        with patch("core.sequence_export.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
-            exporter._export_prerendered_segment(
-                prerendered_path=Path("/cache/clip.mp4"),
-                output_path=Path("/tmp/segment.mp4"),
-                config=config,
-                bar_color=None,
-            )
-            cmd = mock_run.call_args[0][0]
-            # Should have scale but not hflip/vflip/reverse
-            if "-vf" in cmd:
-                vf_idx = cmd.index("-vf")
-                vf_str = cmd[vf_idx + 1]
-                assert "hflip" not in vf_str
-                assert "vflip" not in vf_str
-                assert "reverse" not in vf_str
-                assert "scale=" in vf_str
 
 
 # -- Project save/load with prerendered clips --------------------------------

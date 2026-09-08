@@ -131,6 +131,12 @@ class SourceImportQueue(QObject):
         if not self.pending:
             self.drained.emit()
 
+    def cancel_reply(self, reply: GuiToolReply) -> None:
+        """Cancel one agent request without dropping unrelated UI imports."""
+        self._queue = deque(request for request in self._queue if request.reply is not reply)
+        if self._worker is not None and self._worker.request.reply is reply:
+            self._worker.cancel()
+
     def cancel_pending(self) -> None:
         self._generation += 1
         self._queue.clear()

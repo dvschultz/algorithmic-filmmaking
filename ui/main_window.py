@@ -221,12 +221,16 @@ class SequenceExportWorker(QThread):
     export_completed = Signal(object)  # output path (Path) (renamed from 'finished' to avoid shadowing QThread.finished)
     error = Signal(str)
 
-    def __init__(self, sequence, sources, clips, config):
+    def __init__(self, sequence, sources, clips, config, frames=None):
         super().__init__()
         from copy import deepcopy
-        self.sequence, self.sources, self.clips, self.config = deepcopy(
-            (sequence, sources, clips, config)
+        self.sequence, self.sources, self.clips, self.config, self.frames = deepcopy(
+            (sequence, sources, clips, config, frames or {})
         )
+        self.config.cancel_check = self.isInterruptionRequested
+
+    def cancel(self):
+        self.requestInterruption()
 
     def run(self):
         try:
@@ -237,10 +241,11 @@ class SequenceExportWorker(QThread):
                 clips=self.clips,
                 config=self.config,
                 progress_callback=lambda p, m: self.progress.emit(p, m),
+                frames=self.frames,
             )
             if success:
                 self.export_completed.emit(self.config.output_path)
-            else:
+            elif not self.isInterruptionRequested():
                 self.error.emit("Export failed")
         except Exception as e:
             self.error.emit(str(e))
@@ -4964,7 +4969,24 @@ class MainWindow(QMainWindow):
             self.sequence_tab.video_player.seek_to(time_seconds)
             return
 
-        seq_clip, _, source = self.sequence_tab.timeline.get_clip_at_playhead()
+        from core.render_plan import compile_render_plan
+        from models.media_time import VideoRange, frame_boundary
+        sequence, sources, clips, frames = self._get_sequence_preview_inputs()
+        try:
+            plan = compile_render_plan(sequence, sources, clips, frames=frames)
+        except ValueError as exc:
+            self.sequence_tab.video_player.stop()
+            self.status_bar.showMessage(str(exc))
+            return
+        timeline_frame = frame_boundary(time_seconds, plan.output_rate)
+        segment = plan.segment_at_frame(timeline_frame)
+        if segment is not None and (segment.kind == "still" or segment.hflip or segment.vflip or segment.reverse):
+            self._sequence_preview_seek_after_render = True
+            self._start_sequence_preview_render(play_after_frame=None)
+            return
+
+        seq_clip = next((entry for entry in sequence.get_all_clips() if segment is not None and entry.id == segment.entry_id), None)
+        source = sources.get(segment.source_id) if segment is not None else None
         if not seq_clip or not source:
             # Fallback behavior when no sequence clip is under playhead.
             self._preview_sync_clip = None
@@ -4974,21 +4996,16 @@ class MainWindow(QMainWindow):
             self._pending_sequence_preview_clip_range = None
             self._pending_sequence_preview_seek_seconds = None
             self.sequence_tab.video_player.clear_clip_range()
-            self.sequence_tab.video_player.seek_to(time_seconds)
+            self.sequence_tab.video_player.stop()
             self._update_sequence_chromatic_bar(None)
             return
 
-        sequence = self.sequence_tab.timeline.get_sequence()
-        timeline_frame = int(time_seconds * sequence.fps)
-
-        try:
-            file_to_load, clip_start_seconds, clip_end_seconds, source_seconds = (
-                _resolve_playback_source(seq_clip, source, timeline_frame, sequence.fps)
-            )
-        except ValueError as exc:
-            self._stop_playback()
-            self.status_bar.showMessage(str(exc))
+        if segment is None or not isinstance(segment.media, VideoRange):
+            self.sequence_tab.video_player.stop()
             return
+        file_to_load = segment.path
+        clip_start_seconds, clip_end_seconds = float(segment.media.start), float(segment.media.end)
+        source_seconds = float(plan.source_seconds_at(timeline_frame))
 
         # Determine the source ID for tracking loaded sources
         preview_source_key = str(file_to_load)
@@ -5120,6 +5137,8 @@ class MainWindow(QMainWindow):
     def _get_sequence_preview_cache_entry(self):
         """Return (signature, path, settings) for the active sequence preview."""
         sequence, sources, clips, frames = self._get_sequence_preview_inputs()
+        from core.render_plan import compile_render_plan
+        compile_render_plan(sequence, sources, clips, frames=frames)
         settings = SequencePreviewSettings()
         signature = compute_sequence_preview_signature(
             sequence=sequence,
@@ -5180,6 +5199,13 @@ class MainWindow(QMainWindow):
         sequence, sources, clips, frames = self._get_sequence_preview_inputs()
         if not sequence.get_all_clips():
             QMessageBox.information(self, "Render Preview", "No clips in timeline to preview")
+            return
+
+        from core.render_plan import compile_render_plan
+        try:
+            compile_render_plan(sequence, sources, clips, frames=frames)
+        except ValueError as exc:
+            self._on_sequence_preview_error(str(exc))
             return
 
         signature, path, settings = self._get_sequence_preview_cache_entry()
@@ -5268,6 +5294,9 @@ class MainWindow(QMainWindow):
         self._sequence_preview_play_after_render_frame = None
         if play_after is not None:
             self._start_rendered_sequence_preview_playback(play_after)
+        elif getattr(self, "_sequence_preview_seek_after_render", False):
+            self._sequence_preview_seek_after_render = False
+            self._on_timeline_playhead_changed(self.sequence_tab.timeline.get_playhead_time())
 
     @Slot(str)
     def _on_sequence_preview_error(self, message: str):
@@ -6148,7 +6177,7 @@ class MainWindow(QMainWindow):
         self.progress_bar.setRange(0, 100)
         self.sequence_tab.timeline.export_btn.setEnabled(False)
 
-        self.export_worker = SequenceExportWorker(sequence, sources, clips, config)
+        self.export_worker = SequenceExportWorker(sequence, sources, clips, config, frames=self.project.frames_by_id)
         self._bind_export_worker("export_worker")
         self.export_worker.start()
 
@@ -6196,7 +6225,7 @@ class MainWindow(QMainWindow):
         self.progress_bar.setRange(0, 100)
         self.sequence_tab.timeline.export_btn.setEnabled(False)
 
-        self.export_worker = SequenceExportWorker(sequence, sources, clips, config)
+        self.export_worker = SequenceExportWorker(sequence, sources, clips, config, frames=self.project.frames_by_id)
         self._bind_export_worker("export_worker", reply=reply)
         self.export_worker.start()
         return True
@@ -6558,7 +6587,12 @@ class MainWindow(QMainWindow):
         Returns:
             True if worker started, False otherwise
         """
-        if wait_type == "color_analysis":
+        if wait_type == "source_import":
+            from ui.workers.source_import_delivery import AgentSourceImport
+            AgentSourceImport(self).start([Path(path) for path in tool_result["file_paths"]])
+            return True
+
+        elif wait_type == "color_analysis":
             clip_ids = tool_result.get("clip_ids", [])
             return self.start_agent_color_analysis(clip_ids)
 
@@ -7530,12 +7564,16 @@ class MainWindow(QMainWindow):
             output_path=output_path,
             title=sequence.name or "Scene Ripper Export",
         )
-        return export_edl(
+        success = export_edl(
             sequence,
             self._get_edl_sources(),
             config,
             frames=self._get_edl_frames(),
+            clips={clip.id: (clip, self.project.sources_by_id[clip.source_id]) for clip in self.project.clips if clip.source_id in self.project.sources_by_id},
         )
+        if not success and config.error_message:
+            QMessageBox.warning(self, "EDL Export", config.error_message)
+        return success
 
     def _unique_edl_output_path(self, output_dir: Path, filename: str) -> Path:
         """Avoid overwriting duplicate sequence names during batch EDL export."""

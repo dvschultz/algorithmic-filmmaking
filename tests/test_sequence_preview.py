@@ -1,5 +1,7 @@
 """Tests for cached continuous sequence previews."""
 
+import pytest
+
 from core.sequence_preview import (
     SequencePreviewSettings,
     compute_sequence_preview_signature,
@@ -156,3 +158,21 @@ def test_render_sequence_preview_returns_cache_hit(monkeypatch, tmp_path):
     assert result.path == cached_path
     assert result.from_cache is True
     assert called == []
+
+
+@pytest.mark.parametrize("invalid", ["overlap", "missing_music", "missing_clip"])
+def test_cache_hit_cannot_bypass_render_plan_validation(tmp_path, invalid):
+    sequence, sources, clips = _make_sequence_with_clips(tmp_path)
+    if invalid == "overlap":
+        sequence.tracks[0].clips[1].start_frame = 12
+    elif invalid == "missing_music":
+        sequence.music_path = str(tmp_path / "missing.wav")
+    else:
+        clips.pop("clip-a")
+    signature = compute_sequence_preview_signature(sequence, sources, clips)
+    cached = get_sequence_preview_path(sequence, signature, tmp_path)
+    cached.parent.mkdir(parents=True)
+    cached.write_bytes(b"cached but not valid for this edit")
+    with pytest.raises(ValueError):
+        render_sequence_preview(sequence, sources, clips, cache_root=tmp_path)
+    assert cached.exists()

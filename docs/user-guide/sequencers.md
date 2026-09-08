@@ -459,3 +459,13 @@ Same word-level slicing as Word Sequencer, but the order comes from a local LLM.
 - Latency scales with corpus size. ~1000 unique words takes around 30 seconds on `qwen3:8b`; much larger corpora can take several minutes. The dialog shows a progress indicator.
 - The vocabulary constraint is strict — the LLM cannot emit out-of-vocabulary words even if your prompt suggests them. If "rainstorm" is in your prompt but no clip says it, the model will choose a different word from your corpus.
 - Empty responses (LLM returned `None`) surface as an inline error so you can adjust the prompt and retry without dismissing the dialog.
+
+## Preview and export
+
+Preview and video export use the same edit decisions for source trims, mixed frame rates, reverse, flips, still holds, gaps, and music. Empty timeline gaps render as black with silence. Music replaces the source audio; a short music track is padded with silence to the end of the sequence.
+
+The app checks source timing before rendering and verifies the completed video's frame count before publishing it. A failed or cancelled render leaves an existing export intact. Overlapping clips or tracks require compositing and cannot currently be rendered. Reverse is limited to 15 seconds per entry; split longer selections first.
+
+Variable-rate imports retain their presentation timestamps. If an older source lacks that mapping, or the source file has changed, reimport it and rebuild affected sequence entries before rendering. Legacy entries with ambiguous trim coordinates must first be resolved through **Resolve legacy timing** in the sequence menu.
+
+CMX 3600 EDL export preserves timeline gaps and absolute source timecodes. It supports constant-rate video whose rate matches the timeline. It reports unsupported still holds, flips, reverse, variable-rate media, mixed source rates, subframe entries, and music instead of silently omitting them. Render a video when those features are needed.

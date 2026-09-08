@@ -40,26 +40,19 @@ def test_extract_clip_logs_ffmpeg_stderr_on_failure(monkeypatch, tmp_path, caplo
 def test_sequence_export_logs_concat_failure(monkeypatch, tmp_path, caplog):
     exporter = SequenceExporter(ffmpeg_path="ffmpeg")
 
-    source = SimpleNamespace(id="src-1", file_path=Path("source.mp4"), fps=30.0)
-    clip = SimpleNamespace(id="clip-1", start_frame=0, end_frame=30, dominant_colors=None)
-    seq_clip = SimpleNamespace(
-        id="seq-1",
-        is_frame_entry=False,
-        source_clip_id="clip-1",
-        start_frame=0,
-        end_frame=lambda: 30,
-        in_point=0,
-        out_point=30,
-        reverse=False,
-        hflip=False,
-        vflip=False,
-    )
-    sequence = SimpleNamespace(
-        fps=30.0,
-        get_all_clips=lambda: [seq_clip],
-    )
+    from models.clip import Clip, Source
+    from models.sequence import Sequence, SequenceClip
 
+    source = Source(id="src-1", file_path=tmp_path / "source.mp4", fps=30.0)
+    source.file_path.write_bytes(b"source")
+    clip = Clip(id="clip-1", source_id=source.id, start_frame=0, end_frame=30)
+    sequence = Sequence(fps=30.0)
+    sequence.tracks[0].clips = [SequenceClip(
+        source_clip_id=clip.id, source_id=source.id, in_point=0, out_point=30,
+    )]
     monkeypatch.setattr(exporter, "_export_segment", lambda **kwargs: True)
+    monkeypatch.setattr(exporter, "_has_audio", lambda *args: False)
+    monkeypatch.setattr("core.media_timing.probe_video_timing", lambda *args: SimpleNamespace(frame_count=30, variable=False, rate=30, origin=0))
     monkeypatch.setattr(exporter, "_concat_segments", lambda **kwargs: False)
 
     config = ExportConfig(output_path=tmp_path / "sequence.mp4", fps=30.0)
