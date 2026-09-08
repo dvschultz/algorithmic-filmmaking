@@ -287,7 +287,8 @@ async def get_analysis_status(
 ) -> str:
     """Check what analysis has been run on a project.
 
-    Returns counts of clips with colors, shot types, and transcripts.
+    Returns current verified completion counts, including valid empty results.
+    Custom-query counts cover clips with at least one current verified query.
 
     Args:
         project_path: Path to the project file
@@ -313,110 +314,56 @@ async def get_analysis_status(
 
         clips = project.clips
 
-        # Count analysis types
-        has_colors = sum(1 for c in clips if c.dominant_colors)
-        has_shots = sum(1 for c in clips if c.shot_type)
-        has_classification = sum(1 for c in clips if c.object_labels)
-        has_objects = sum(1 for c in clips if c.detected_objects)
-        has_descriptions = sum(1 for c in clips if c.description)
-        has_text = sum(1 for c in clips if c.extracted_texts)
-        from core.analysis_availability import operation_is_complete_for_clip
+        from core.analysis_availability import (
+            compute_operation_need_counts, custom_query_is_complete,
+            operation_is_complete_for_clip,
+        )
+        from core.analysis_model_identity import shot_runtime
+        from models.analysis_record import AnalysisRecord
+        from core.settings import load_settings
 
-        has_transcripts = sum(
-            operation_is_complete_for_clip("transcribe", c, source=project.sources_by_id.get(c.source_id))
-            for c in clips
-        )
-        has_cinematography = sum(
-            operation_is_complete_for_clip("cinematography", c, source=project.sources_by_id.get(c.source_id))
-            for c in clips
-        )
-        from core.operations.face_records import face_target_runtime
-        face_runtime = face_target_runtime()
-        has_faces = sum(operation_is_complete_for_clip("face_embeddings", c,
-            source=project.sources_by_id.get(c.source_id), runtime=face_runtime) for c in clips)
-        has_gaze = sum(1 for c in clips if c.gaze_category is not None)
-        has_embeddings = sum(1 for c in clips if c.embedding is not None)
-        has_custom_queries = sum(1 for c in clips if c.custom_queries)
+        operations = {
+            "brightness": "brightness", "volume": "volume", "colors": "colors",
+            "shots": "shots", "transcripts": "transcribe", "classification": "classify",
+            "objects": "detect_objects", "descriptions": "describe", "text": "extract_text",
+            "cinematography": "cinematography", "faces": "face_embeddings", "gaze": "gaze",
+            "embeddings": "embeddings", "boundary_embeddings": "boundary_embeddings",
+        }
+        sources = project.sources_by_id
+        settings = load_settings()
+        pending = compute_operation_need_counts(clips, operations.values(), sources_by_id=sources, settings=settings)
+        analysis: dict[str, dict] = {
+            name: {"analyzed": len(clips) - pending[operation], "pending": pending[operation]}
+            for name, operation in operations.items()
+        }
+        for name in ("brightness", "volume", "colors", "shots", "transcripts"):
+            analysis[name]["percentage"] = analysis[name]["analyzed"] / len(clips) * 100 if clips else 0
+
+        shot_types: dict[str, int] = {}
+        runtime = shot_runtime()
+        for clip in clips:
+            if clip.shot_type and operation_is_complete_for_clip("shots", clip, source=sources.get(clip.source_id), runtime=runtime, settings=settings):
+                shot_types[clip.shot_type] = shot_types.get(clip.shot_type, 0) + 1
+        analysis["shots"]["distribution"] = shot_types
+
+        queried = 0
+        for clip in clips:
+            for key, record in clip.analysis_records.items():
+                if not key.startswith("custom_query:") or not isinstance(record, AnalysisRecord) or record.identity is None:
+                    continue
+                query = record.identity.to_dict()["parameters"].get("query")
+                if isinstance(query, str) and custom_query_is_complete(clip, sources.get(clip.source_id), query, settings=settings):
+                    queried += 1
+                    break
+        analysis["custom_queries"] = {"analyzed": queried, "pending": len(clips) - queried}
         has_tags = sum(1 for c in clips if c.tags)
         has_notes = sum(1 for c in clips if c.notes)
-        from core.analysis_availability import compute_operation_need_counts
-
-        scalar_pending = compute_operation_need_counts(
-            clips, ("brightness", "volume"), sources_by_id=project.sources_by_id,
-        )
-
-        # Shot type distribution
-        shot_types: dict = {}
-        for c in clips:
-            if c.shot_type:
-                shot_types[c.shot_type] = shot_types.get(c.shot_type, 0) + 1
 
         return json.dumps(
             {
                 "success": True,
                 "total_clips": len(clips),
-                "analysis": {
-                    **{
-                        operation: {
-                            "analyzed": len(clips) - pending,
-                            "pending": pending,
-                            "percentage": ((len(clips) - pending) / len(clips) * 100) if clips else 0,
-                        }
-                        for operation, pending in scalar_pending.items()
-                    },
-                    "colors": {
-                        "analyzed": has_colors,
-                        "pending": len(clips) - has_colors,
-                        "percentage": (has_colors / len(clips) * 100) if clips else 0,
-                    },
-                    "shots": {
-                        "analyzed": has_shots,
-                        "pending": len(clips) - has_shots,
-                        "percentage": (has_shots / len(clips) * 100) if clips else 0,
-                        "distribution": shot_types,
-                    },
-                    "transcripts": {
-                        "analyzed": has_transcripts,
-                        "pending": len(clips) - has_transcripts,
-                        "percentage": (has_transcripts / len(clips) * 100) if clips else 0,
-                    },
-                    "classification": {
-                        "analyzed": has_classification,
-                        "pending": len(clips) - has_classification,
-                    },
-                    "objects": {
-                        "analyzed": has_objects,
-                        "pending": len(clips) - has_objects,
-                    },
-                    "descriptions": {
-                        "analyzed": has_descriptions,
-                        "pending": len(clips) - has_descriptions,
-                    },
-                    "text": {
-                        "analyzed": has_text,
-                        "pending": len(clips) - has_text,
-                    },
-                    "cinematography": {
-                        "analyzed": has_cinematography,
-                        "pending": len(clips) - has_cinematography,
-                    },
-                    "faces": {
-                        "analyzed": has_faces,
-                        "pending": len(clips) - has_faces,
-                    },
-                    "gaze": {
-                        "analyzed": has_gaze,
-                        "pending": len(clips) - has_gaze,
-                    },
-                    "embeddings": {
-                        "analyzed": has_embeddings,
-                        "pending": len(clips) - has_embeddings,
-                    },
-                    "custom_queries": {
-                        "analyzed": has_custom_queries,
-                        "pending": len(clips) - has_custom_queries,
-                    },
-                },
+                "analysis": analysis,
                 "metadata": {
                     "clips_with_tags": has_tags,
                     "clips_with_notes": has_notes,

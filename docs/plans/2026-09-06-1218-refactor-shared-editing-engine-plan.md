@@ -638,7 +638,13 @@ are wired. Batch leases protect the handoff from rendering to project ownership.
 Legacy prerender playback now routes transforms through the verified shared preview
 instead of trusting file existence; untransformed playback uses the original source.
 Seven regressions reproduced the old behavior and 100 playback/cache tests pass.
-The rest of the cross-consumer audit remains.
+MCP status now counts shared verified completion across all listed analyses,
+including boundary embeddings and per-query negative results. Legacy fields and
+stale/unreadable records remain pending; shot distributions include verified shots.
+Provider settings are captured once per status request. Its 178-test regression
+group passes; scoped core typing and changed-file Ruff pass, with four existing
+MCP Context-default typing errors unchanged. The rest of the cross-consumer audit
+remains.
 Description providers expose actual execution model/backend and input mode,
 including local model and cloud video-to-frame fallbacks. The shared operation
 and direct headless entry point use verified records and semantic reuse, including

@@ -395,6 +395,17 @@ receipt releases its managed payload ownership; normal artifact collection can
 then reclaim files that have no other owners. Source media and project documents
 are never deleted by this operation.
 
+## Analysis completion
+
+`get_analysis_status(project_path)` reports current verified completion, rather
+than whether a clip has an old value in a field. Valid empty results count as
+analyzed; legacy values and results invalidated by source, trim, settings, or
+missing artifacts count as pending. The response includes boundary embeddings.
+Shot distributions include only verified shots. `custom_queries` counts clips
+with at least one current verified query, including a verified negative answer;
+it does not mean every possible query has been evaluated. Tags and notes retain
+their ordinary metadata counts.
+
 ## Project-modification guard
 
 Every `start_*` that touches a project file captures the file's mtime at

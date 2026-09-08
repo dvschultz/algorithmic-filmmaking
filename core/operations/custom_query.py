@@ -20,6 +20,7 @@ from core.operations.contracts import OutcomeStatus
 from core.provider_errors import is_transient_provider_error
 
 if TYPE_CHECKING:
+    from core.settings import Settings
     from core.project import Project
 
 
@@ -92,7 +93,7 @@ def custom_query_task(
     )
 
 
-def custom_query_runtime(options: CustomQueryOptions) -> dict:
+def custom_query_runtime(options: CustomQueryOptions, *, allow_imports: bool = True) -> dict:
     from core.operations.description import (
         DescriptionOptions,
         DescriptionTask,
@@ -103,6 +104,7 @@ def custom_query_runtime(options: CustomQueryOptions) -> dict:
     runtime = description_runtime(
         DescriptionTask("", None, None, 0, 0, None),
         DescriptionOptions(tier, model=options.model, input_mode="frame"),
+        allow_imports=allow_imports,
     )
     return {
         **runtime,
@@ -172,11 +174,12 @@ class CustomQueryOutcome:
 
 
 def resolve_options(
-    tier: str | None = None, parallelism: int = 1
+    tier: str | None = None, parallelism: int = 1,
+    *, settings: "Settings | None" = None,
 ) -> CustomQueryOptions:
     from core.settings import load_settings
 
-    settings = load_settings()
+    settings = settings if settings is not None else load_settings()
     tier = tier or settings.description_model_tier
     # Preserve the custom-query legacy routing contract.
     tier = {"cpu": "local", "gpu": "cloud"}.get(tier, tier)

@@ -814,6 +814,18 @@ typing and changed-file Ruff pass.
 
 ## Remaining U10 work
 
+MCP analysis status now uses shared verified completion for all listed analysis
+families and includes boundary embeddings. Valid empty classification, detection,
+OCR, gaze, and query results count as complete; legacy fields and stale inputs do
+not. Shot distributions contain verified results only. Custom-query completion
+checks each query's exact parameters, prompt, source binding, runtime, and latest
+projected answer without media hashing or importing inference runtimes. Preserved
+unreadable/future records remain pending. Status captures provider settings once
+per request; user tags and notes retain ordinary metadata counts. The status,
+query, delivery/recovery, and import-boundary group passes 178 tests. Scoped core
+typing and changed-file Ruff pass; the MCP module retains four existing Context
+default-None typing errors.
+
 Receipt ownership is now recorded in the job database around atomic project
 saves. Incoming references receive a durable pending-save owner before file
 publication; successful publication replaces that path's saved references.

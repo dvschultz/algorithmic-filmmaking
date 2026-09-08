@@ -634,3 +634,43 @@ def clear_operation_results(clips: Iterable, op_keys: Iterable[str]) -> int:
             if clear_operation_result(clip, op_key):
                 cleared += 1
     return cleared
+
+
+def custom_query_is_complete(clip: Clip, source: Source | None, query: str, *, settings: Settings | None = None) -> bool:
+    """Verify one query (including a negative answer) without hashing or inference."""
+    import json
+    from hashlib import sha256
+    from core.analysis_records import AnalysisSnapshot, current_record
+    from core.analysis_model_identity import custom_query_prompt
+    from core.operations.custom_query import (
+        custom_query_record_key, custom_query_task, custom_query_runtime,
+        latest_query_result, resolve_options,
+    )
+
+    if not query.strip() or (source is not None and source.id != clip.source_id):
+        return False
+    query = query.strip()
+    key = custom_query_record_key(query)
+    record = current_record(clip, key)
+    if record is None or record.identity is None:
+        return False
+    try:
+        task = custom_query_task(clip, source, query)
+        if task.analysis_json is None:
+            return False
+        snapshot = AnalysisSnapshot.from_json(task.analysis_json)
+        options = resolve_options(settings=settings)
+        data = record.identity.to_dict()
+        return bool(
+            json.loads(record.input_json or "null") == snapshot.inputs.to_dict()
+            and data["operation"] == key
+            and data["operation_version"] == 2 and data["schema_version"] == 1
+            and data["model"] == custom_query_runtime(options, allow_imports=False)
+            and data["parameters"] == {"tier": options.tier, "model": options.model, "query": query}
+            and data["source_range"] == json.loads(snapshot.inputs.range_json)
+            and data["sampling"] == {"policy": "single-image/v1"}
+            and data["prompt_sha256"] == sha256(custom_query_prompt(query).encode()).hexdigest()
+            and record.value == {"result": latest_query_result(clip, query)}
+        )
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return False
