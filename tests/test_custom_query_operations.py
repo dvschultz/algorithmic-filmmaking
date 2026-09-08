@@ -15,6 +15,46 @@ from tests.test_description_operations import project_with_thumbnails
 from ui.workers.custom_query_worker import CustomQueryWorker
 
 
+@pytest.mark.parametrize(
+    "response",
+    [
+        ("false", 0.5, "model"),
+        (0, 0.5, "model"),
+        (True, True, "model"),
+        (True, float("nan"), "model"),
+        (False, float("inf"), "model"),
+        (False, -0.1, "model"),
+        (True, 1.1, "model"),
+        (True, "0.5", "model"),
+        (True, 0.5, ""),
+    ],
+)
+def test_invalid_provider_results_are_not_published(tmp_path, monkeypatch, response):
+    project = project_with_thumbnails(tmp_path, 1)
+    monkeypatch.setattr(
+        "core.analysis.custom_query.evaluate_custom_query", lambda **kwargs: response
+    )
+    result = custom_query(project, query="person", tier="cloud")["result"]
+    assert result["succeeded"] == []
+    assert len(result["failed"]) == 1
+    assert not project.clips[0].custom_queries
+
+
+def test_unparseable_provider_answer_is_failure_not_negative(tmp_path, monkeypatch):
+    from core.analysis.custom_query import _parse_yes_no_response
+
+    project = project_with_thumbnails(tmp_path, 1)
+
+    def provider(**kwargs):
+        match, confidence = _parse_yes_no_response("I'm not sure about that")
+        return match, confidence, "model"
+
+    monkeypatch.setattr("core.analysis.custom_query.evaluate_custom_query", provider)
+    result = custom_query(project, query="person", tier="cloud")["result"]
+    assert len(result["failed"]) == 1
+    assert not project.clips[0].custom_queries
+
+
 def test_gui_spine_share_options_and_trim_query(tmp_path, monkeypatch):
     project = project_with_thumbnails(tmp_path, 1)
     provider = Mock(return_value=(True, 0.875, "model"))

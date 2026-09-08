@@ -248,6 +248,20 @@ missing source context cannot establish completion. UI checks do not import VLM
 runtimes. An installed but unprobed local backend remains available for worker
 verification, and a source lookup refresh updates quick-run availability.
 
+## Custom-query validation checkpoint
+
+Custom queries now distinguish an explicit negative answer from an unparseable
+response. The provider parser requires a leading yes/no decision and validates
+explicit confidence percentages. The shared operation rejects invalid match,
+confidence, and model values before publication. Local fallback results report
+the actual Moondream model. GUI and durable receipt identities include the response
+parser version, preventing reuse of receipts from the earlier permissive parser.
+Existing saved query history remains intact.
+
+Per-query semantic records, failure records, history/reuse rules, and their delivery
+surfaces still need migration. These validation fixes do not complete the custom-query
+family or U10.
+
 ## Remaining U10 work
 
 - Migrate the other U7 analysis families to

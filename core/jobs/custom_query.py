@@ -52,10 +52,13 @@ def _target(project: Project, cid: str) -> dict:
 
 
 def _provenance(options: CustomQueryOptions) -> dict:
+    from core.analysis_model_identity import CUSTOM_QUERY_RESPONSE_SCHEMA
+
     tier = {"cpu": "local", "gpu": "cloud"}.get(options.tier, options.tier)
-    return _runtime(
-        DescriptionOptions(tier, model=options.model, input_mode="frame")
-    )
+    return {
+        **_runtime(DescriptionOptions(tier, model=options.model, input_mode="frame")),
+        "response_schema": CUSTOM_QUERY_RESPONSE_SCHEMA,
+    }
 
 
 def custom_query_job_spec(

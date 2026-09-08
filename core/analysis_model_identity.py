@@ -4,6 +4,7 @@ from core.analysis_records import model_runtime
 
 LOCAL_DESCRIPTION_FALLBACK = "vikhyatk/moondream2"
 MOONDREAM_REVISION = "2025-06-21"
+CUSTOM_QUERY_RESPONSE_SCHEMA = "yes-no-confidence/v2"
 
 
 def description_video_capable_model(model: str) -> bool:

@@ -4,6 +4,7 @@ from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, replace
 from copy import deepcopy
 from pathlib import Path
+from math import isfinite
 from threading import Event
 from typing import Callable, Literal, TYPE_CHECKING
 
@@ -89,6 +90,17 @@ def compute_custom_query(
             )
             if cancel.is_set():
                 return outcome("unprocessed", code="cancelled")
+            if type(match) is not bool:
+                raise ValueError("Custom query match must be a boolean")
+            if (
+                isinstance(confidence, bool)
+                or not isinstance(confidence, (int, float))
+                or not isfinite(confidence)
+                or not 0 <= confidence <= 1
+            ):
+                raise ValueError("Custom query confidence must be between 0 and 1")
+            if not isinstance(model, str) or not model.strip():
+                raise ValueError("Custom query model must be a nonempty string")
             return outcome("succeeded", match=match, confidence=confidence, model=model)
         except Exception as exc:
             if cancel.is_set():

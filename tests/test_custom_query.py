@@ -1,6 +1,6 @@
 """Tests for custom visual query evaluation."""
 
-
+import pytest
 from core.analysis.custom_query import _parse_yes_no_response, _build_query_prompt
 
 
@@ -57,10 +57,9 @@ class TestParseYesNoResponse:
         assert match is False
         assert conf == 0.05
 
-    def test_confidence_clamped_to_100(self):
-        match, conf = _parse_yes_no_response("YES\n150%")
-        assert match is True
-        assert conf == 1.0
+    def test_invalid_confidence_is_not_clamped(self):
+        with pytest.raises(ValueError):
+            _parse_yes_no_response("YES\n150%")
 
     def test_zero_confidence(self):
         match, conf = _parse_yes_no_response("NO\n0%")
@@ -73,20 +72,42 @@ class TestParseYesNoResponse:
         assert match is True
 
     def test_ambiguous_no_before_yes(self):
-        """When no appears before yes, treat as no match."""
-        match, conf = _parse_yes_no_response("I would say no, but yesterday I might have said yes")
-        assert match is False
+        with pytest.raises(ValueError):
+            _parse_yes_no_response(
+                "I would say no, but yesterday I might have said yes"
+            )
 
-    def test_malformed_response_returns_false(self):
-        # "not" contains "no" so parser treats as negative with default confidence
-        match, conf = _parse_yes_no_response("I'm not sure about that")
-        assert match is False
-        assert conf == 0.1
+    def test_malformed_response_is_not_a_negative_match(self):
+        with pytest.raises(ValueError):
+            _parse_yes_no_response("I'm not sure about that")
 
     def test_truly_unparseable_response(self):
-        match, conf = _parse_yes_no_response("42")
-        assert match is False
-        assert conf == 0.0
+        with pytest.raises(ValueError):
+            _parse_yes_no_response("42")
+
+    @pytest.mark.parametrize(
+        "response",
+        [
+            "",
+            "unknown",
+            "yesterday",
+            "not visible",
+            "YES\n-5%",
+            "NO\nNaN%",
+            "YES\n1e999%",
+        ],
+    )
+    def test_invalid_responses_raise(self, response):
+        with pytest.raises(ValueError):
+            _parse_yes_no_response(response)
+
+    def test_decimal_confidence(self):
+        assert _parse_yes_no_response("YES\n82.5%") == (True, 0.825)
+
+    @pytest.mark.parametrize("response", ["YES 1,000%", "YES 1/50%", "YES --5%"])
+    def test_malformed_number_is_not_parsed_as_a_valid_suffix(self, response):
+        with pytest.raises(ValueError):
+            _parse_yes_no_response(response)
 
     def test_whitespace_handling(self):
         match, conf = _parse_yes_no_response("  YES  \n  88%  ")
@@ -112,3 +133,15 @@ class TestBuildQueryPrompt:
     def test_prompt_asks_for_confidence(self):
         prompt = _build_query_prompt("person wearing a hat")
         assert "%" in prompt
+
+
+def test_local_query_reports_actual_fallback_model(tmp_path, monkeypatch):
+    from core.analysis.custom_query import evaluate_custom_query_local
+
+    monkeypatch.setattr("core.analysis.description.is_mlx_vlm_available", lambda: False)
+    monkeypatch.setattr(
+        "core.analysis.description.describe_frame_local", lambda *a, **kw: "NO\n10%"
+    )
+    assert evaluate_custom_query_local(
+        tmp_path / "image.jpg", "person", model_name="mlx-community/Qwen3-VL"
+    ) == (False, 0.1, "vikhyatk/moondream2")

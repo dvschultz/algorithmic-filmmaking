@@ -39,6 +39,43 @@ def run(setup, **kwargs):
     )["result"]
 
 
+def test_valid_negative_results_are_saved_but_invalid_results_are_not(setup):
+    path, _, provider = setup
+    provider.return_value = (False, 0.0, "model")
+    assert len(run(setup)["succeeded"]) == 2
+    saved = Project.load(path)
+    receipts = dict(saved.metadata.job_results)
+    assert all(c.custom_queries[0]["match"] is False for c in saved.clips)
+    provider.return_value = ("unknown", 0.5, "model")
+    assert len(run(setup)["failed"]) == 2
+    saved = Project.load(path)
+    assert saved.metadata.job_results == receipts
+    assert all(len(c.custom_queries) == 1 for c in saved.clips)
+
+
+def test_legacy_parser_receipt_is_not_reused(setup, monkeypatch):
+    from core.jobs.custom_query import _provenance
+
+    path, _, provider = setup
+
+    def legacy_runtime(options):
+        data = _provenance(options)
+        data.pop("response_schema")
+        return data
+
+    with monkeypatch.context() as old:
+        old.setattr("core.jobs.custom_query._provenance", legacy_runtime)
+        with patch(
+            "core.jobs.commits.save_with_mtime_check",
+            side_effect=RuntimeError("save failed"),
+        ):
+            with pytest.raises(RuntimeError):
+                run(setup)
+    assert len(run(setup)["succeeded"]) == 2
+    assert provider.call_count == 4
+    assert all(len(c.custom_queries) == 1 for c in Project.load(path).clips)
+
+
 def test_save_failure_reuses_results_without_duplicate_append(setup):
     path, store, provider = setup
     with patch(
