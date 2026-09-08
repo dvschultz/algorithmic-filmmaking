@@ -925,6 +925,8 @@ class SequenceTab(BaseTab):
         if worker is not None and worker is not self._sequence_worker:
             return
         worker = worker or self._sequence_worker
+        if isinstance(worker, SequenceWorker) and worker.is_cancelled():
+            return
         algorithm = getattr(worker, "_pending_algorithm", "") if worker else ""
         direction = getattr(worker, "_pending_direction", None) if worker else None
         algo_lower = algorithm.lower()
@@ -951,6 +953,18 @@ class SequenceTab(BaseTab):
                     or (clip.start_frame, clip.end_frame, source.file_path, source.fps) != (start, end, path, fps)
                 ):
                     raise ValueError("Sequence inputs changed while generation was running")
+            from core.jobs.sequence_scalars import SequenceScalarJob
+
+            if isinstance(prerequisite_job, SequenceScalarJob) and self._project is not None:
+                publication_project = self._project
+                prerequisite_job.publish(
+                    publication_project, worker._cancel_event,
+                    owner_current=lambda: self._project is publication_project and self._sequence_worker is worker,
+                )
+                sorted_clips = [
+                    (self._project.clips_by_id[clip.id], self._project.sources_by_id[source.id])
+                    for clip, source in sorted_clips
+                ]
             generated_sequence = self._create_and_activate_sequence(algo_lower, proposal=proposal)
             self.timeline.clear_timeline()
 
@@ -995,6 +1009,8 @@ class SequenceTab(BaseTab):
 
         except Exception as e:
             self._replace_sequence_index = None
+            if isinstance(worker, SequenceWorker) and worker.is_cancelled():
+                return
             logger.error(f"Error populating timeline: {e}")
             QMessageBox.critical(self, "Error", f"Failed to generate sequence: {e}")
 

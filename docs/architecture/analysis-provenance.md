@@ -745,9 +745,17 @@ saved record, value, source, range, FPS, and sampling still match. Occurrence
 delivery IDs resolve through their captured clip binding; verified black/no-audio
 results can checkpoint. Two positive checkpoint cases failed before this change;
 160 scalar, face-journal, and sequence-recovery tests now pass. The new helper
-passes scoped typing and changed-file Ruff is clean. GUI sequencing owner
-publication, standalone durable scalar jobs, and registered CLI/MCP/agent scalar
-routes remain pending.
+passes scoped typing and changed-file Ruff is clean. GUI sequencing now publishes
+scalar records on the project owner before committing the sequence, authenticates
+receipts, deduplicates repeated clip occurrences, and remaps output to current
+project models. It checks cancellation and current owner/project/inputs between
+publications; observer cancellation or owner replacement stops the remaining work.
+Cancelled queued results never create a sequence. Already published valid records
+remain available if cancellation interrupts a batch. The regression run passed
+258 tests; the final focused GUI/recovery run passed 72 tests. Scoped publication
+helper typing and changed-file Ruff pass. Two old generation test mocks were
+updated for the existing sources_by_id estimate argument. Standalone durable
+scalar jobs and registered CLI/MCP/agent scalar routes remain pending.
 
 ## Remaining U10 work
 

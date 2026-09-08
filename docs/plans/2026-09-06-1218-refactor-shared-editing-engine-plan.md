@@ -586,8 +586,15 @@ Scalar receipts now checkpoint on explicit save only when the exact saved
 record/value and current source/range/FPS/sampling match, including valid empty
 results and occurrence delivery IDs. Both positive cases failed before the change;
 160 scalar, face-journal, and sequence-recovery tests pass, with scoped helper
-typing and changed-file Ruff clean. GUI sequencing owner publication, standalone
-durable scalar jobs, and registered CLI/MCP/agent scalar surfaces remain pending.
+typing and changed-file Ruff clean. GUI sequencing owner publication is now wired:
+verified receipts and transient reuse records publish once per clip before the
+sequence commits, with current project models used in the timeline. Cancellation,
+owner replacement, and changed inputs stop remaining publication; queued cancelled
+results are discarded. Valid records already published before cancellation remain.
+The regression run passed 258 tests, with a final 72-test GUI/recovery follow-up;
+scoped publication helper typing and changed-file Ruff pass. Two old generation
+test mocks were updated for the existing sources_by_id estimate argument.
+Standalone durable scalar jobs and registered CLI/MCP/agent surfaces remain pending.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain

@@ -130,6 +130,120 @@ def test_scalar_save_checkpoints_occurrence_delivery_ids(saved):
         store.close()
 
 
+def test_sequence_scalar_publication_reuses_and_checkpoints(saved):
+    from copy import deepcopy
+    from core.jobs.sequence_scalars import SequenceScalarJob
+    from core.jobs.store import JobStore
+
+    project, operation, provider = saved
+    pairs = [(project.clips[0], project.sources[0])] * 2
+    job = SequenceScalarJob(pairs, operation=operation, project=project)
+    job.populate(deepcopy(pairs), Event())
+    assert not project.clips[0].analysis_records
+    job.publish(project, Event())
+    assert operation in project.clips[0].analysis_records
+    assert len(project.metadata.job_results) == 1
+    project.save()
+    store = JobStore(project.path.parent / "jobs.db")
+    try:
+        assert all(store.get_result(rid)["committed"] for rid in project.metadata.job_results)
+    finally:
+        store.close()
+    next_job = SequenceScalarJob(pairs, operation=operation, project=project)
+    next_job.populate(deepcopy(pairs), Event())
+    assert all(outcome.status == "skipped" for outcome in next_job.outcomes)
+    next_job.publish(project, Event())
+    assert provider.call_count == 2
+
+
+@pytest.mark.parametrize("change", ["cancel", "media", "range", "path", "receipt"])
+def test_sequence_scalar_publication_rejects_late_changes(saved, change, tmp_path):
+    from copy import deepcopy
+    from dataclasses import replace
+    from core.jobs.sequence_scalars import SequenceScalarJob
+    from core.jobs.commits import StaleJobResult
+
+    project, operation, _ = saved
+    clip, source = project.clips[0], project.sources[0]
+    pairs = [(clip, source)]
+    job = SequenceScalarJob(pairs, operation=operation, project=project)
+    job.populate(deepcopy(pairs), Event())
+    cancel = Event()
+    if change == "cancel":
+        cancel.set()
+    elif change == "media":
+        source.file_path.write_bytes(b"changed")
+    elif change == "range":
+        clip.end_frame += 1
+    elif change == "path":
+        project.path = tmp_path / "other.sceneripper"
+    else:
+        job.outcomes = (replace(job.outcomes[0], message="changed"),)
+    with pytest.raises(StaleJobResult):
+        job.publish(project, cancel)
+    assert not clip.analysis_records and not project.metadata.job_results
+
+
+@pytest.mark.parametrize("change", ["cancel", "owner"])
+def test_scalar_publication_stops_when_observer_cancels(saved, change):
+    from copy import deepcopy
+    from core.jobs.sequence_scalars import SequenceScalarJob
+    from core.jobs.commits import StaleJobResult
+    from models.clip import Clip
+
+    project, operation, _ = saved
+    second = Clip(source_id=project.sources[0].id, start_frame=60, end_frame=90)
+    project.add_clips([second])
+    pairs = [(clip, project.sources[0]) for clip in project.clips]
+    job = SequenceScalarJob(pairs, operation=operation, project=project)
+    job.populate(deepcopy(pairs), Event())
+    cancel = Event()
+    active = [True]
+
+    def observe(event, _):
+        if event == "clips_updated":
+            if change == "cancel":
+                cancel.set()
+            else:
+                active[0] = False
+
+    project.add_observer(observe)
+    with pytest.raises(StaleJobResult, match="interrupted"):
+        job.publish(project, cancel, owner_current=lambda: active[0])
+    assert operation in project.clips[0].analysis_records
+    assert operation not in second.analysis_records
+
+
+@pytest.mark.parametrize("cancellation", ["none", "late", "observer"])
+def test_gui_sequence_delivery_publishes_scalars_on_owner(saved, monkeypatch, cancellation):
+    from PySide6.QtWidgets import QApplication
+    from unittest.mock import Mock
+    from ui.tabs.sequence_tab import SequenceTab
+
+    app = QApplication.instance() or QApplication([])
+    project, operation, _ = saved
+    tab = SequenceTab()
+    tab.set_project(project)
+    errors = Mock()
+    monkeypatch.setattr("ui.tabs.sequence_tab.QMessageBox.critical", errors)
+    monkeypatch.setattr(tab.video_player, "load_video", Mock())
+    tab._apply_algorithm(operation, [(project.clips[0], project.sources[0])])
+    worker = tab._sequence_worker
+    assert worker is not None and worker.wait(3000)
+    assert not project.clips[0].analysis_records
+    if cancellation == "late":
+        worker.cancel()
+    elif cancellation == "observer":
+        project.add_observer(lambda event, _: worker.cancel() if event == "clips_updated" else None)
+    app.processEvents()
+    errors.assert_not_called()
+    assert (operation in project.clips[0].analysis_records) is (cancellation != "late")
+    assert bool(project.metadata.job_results) is (cancellation == "none")
+    assert project.session.can_undo is (cancellation == "none")
+    assert worker._pending_draft is None
+    tab.close()
+
+
 @pytest.mark.parametrize("change", ["media", "range", "value", "runtime"])
 def test_changed_inputs_do_not_recover_old_scalar(saved, change, tmp_path, monkeypatch):
     project, operation, provider = saved

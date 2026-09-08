@@ -269,7 +269,7 @@ def test_real_worker_delivers_on_owner_thread_and_releases_draft(
         return pairs
 
     monkeypatch.setattr("core.remix.generate_sequence", compute)
-    monkeypatch.setattr("ui.tabs.sequence_tab.estimate_sequence_cost", lambda *args: [])
+    monkeypatch.setattr("ui.tabs.sequence_tab.estimate_sequence_cost", lambda *args, **kwargs: [])
     errors = Mock()
     monkeypatch.setattr("ui.tabs.sequence_tab.QMessageBox.critical", errors)
     tab._apply_algorithm("shuffle", pairs)
