@@ -26,12 +26,9 @@ except ImportError:
 
 def _build_query_prompt(query: str) -> str:
     """Build a structured yes/no prompt for the VLM."""
-    return (
-        f"Does this image contain: {query}?\n\n"
-        "Answer with exactly YES or NO on the first line, "
-        "followed by a confidence percentage (0-100%) on the second line.\n"
-        "Example:\nYES\n85%"
-    )
+    from core.analysis_model_identity import custom_query_prompt
+
+    return custom_query_prompt(query)
 
 
 def _parse_yes_no_response(response: str) -> tuple[bool, float]:

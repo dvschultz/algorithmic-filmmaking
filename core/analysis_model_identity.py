@@ -7,6 +7,15 @@ MOONDREAM_REVISION = "2025-06-21"
 CUSTOM_QUERY_RESPONSE_SCHEMA = "yes-no-confidence/v2"
 
 
+def custom_query_prompt(query: str) -> str:
+    return (
+        f"Does this image contain: {query}?\n\n"
+        "Answer with exactly YES or NO on the first line, "
+        "followed by a confidence percentage (0-100%) on the second line.\n"
+        "Example:\nYES\n85%"
+    )
+
+
 def description_video_capable_model(model: str) -> bool:
     model_lower = model.lower()
     return "gemini" in model_lower or "qwen" in model_lower

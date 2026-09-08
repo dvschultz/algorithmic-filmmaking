@@ -418,9 +418,10 @@ checkpoints now carry and verify those records. Durable headless jobs also verif
 reuse, recover without old receipt rows, and publish operation-owned failures.
 Description completion indicators now verify default settings and current source
 bindings without importing inference runtimes on the UI thread.
-Custom-query validation now distinguishes malformed answers from valid negative
-matches and versions its parser in receipt identities. Per-query semantic and
-failure records remain unfinished.
+Custom-query validation distinguishes malformed answers from valid negative
+matches and versions its parser in receipt identities. The shared operation and
+direct headless entry point now own per-query semantic/failure records while
+preserving append history. GUI and durable job delivery remain unfinished.
 
 **Requirements:** R9, R12. **Dependencies:** U5, U6.
 

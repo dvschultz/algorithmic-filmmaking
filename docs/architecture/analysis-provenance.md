@@ -258,9 +258,20 @@ the actual Moondream model. GUI and durable receipt identities include the respo
 parser version, preventing reuse of receipts from the earlier permissive parser.
 Existing saved query history remains intact.
 
-Per-query semantic records, failure records, history/reuse rules, and their delivery
-surfaces still need migration. These validation fixes do not complete the custom-query
-family or U10.
+Shared custom-query operations and the direct headless entry point now keep one
+record per trimmed, case-sensitive query in the existing analysis-record map. The
+key is `custom_query:<sha256(query)>`; the identity also retains the query and full
+prompt digest, media content, range/frame rate, model/runtime, and parser version.
+Each record verifies the latest history entry for its own query. Other queries do
+not invalidate it. Verified reuse refreshes bindings without appending duplicate
+history; an explicit repeat request still computes and appends. Reuse remains
+opt-in, preserving the existing query-request contract.
+
+Failures update only that query's record and preserve all history. Invalidated
+media or settings require recomputation. Per-query records survive project save/load,
+while old aggregate query projections remain provenance-unknown. GUI workers,
+durable job receipts, and recovery/delivery surfaces still need to carry these
+records; the custom-query family and U10 remain incomplete.
 
 ## Remaining U10 work
 

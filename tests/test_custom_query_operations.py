@@ -203,12 +203,38 @@ def test_worker_keeps_model_snapshot(tmp_path, monkeypatch):
 
 
 def test_spine_skip_uses_trimmed_query(tmp_path, monkeypatch):
+    from core.operations.custom_query import resolve_options
+
     project = project_with_thumbnails(tmp_path, 1)
-    project.clips[0].custom_queries = [{"query": "person", "match": True}]
-    provider = Mock()
+    provider = Mock(return_value=(True, 0.9, resolve_options("cloud").model))
     monkeypatch.setattr("core.analysis.custom_query.evaluate_custom_query", provider)
+    custom_query(project, query="person", tier="cloud")
+    provider.reset_mock()
     result = custom_query(project, query=" person ", tier="cloud", skip_existing=True)
     assert result["result"]["skipped"] == [
-        {"clip_id": "c-0", "reason": "already_populated"}
+        {"clip_id": "c-0", "reason": "valid_analysis"}
     ]
     provider.assert_not_called()
+
+
+@pytest.mark.parametrize("tier", ["local", "cloud"])
+def test_unexpected_task_error_preserves_other_results(tmp_path, monkeypatch, tier):
+    from core.operations.custom_query import CustomQueryOutcome
+
+    project = project_with_thumbnails(tmp_path, 2)
+    tasks = tuple(
+        CustomQueryTask(c.id, c.thumbnail_path, "person") for c in project.clips
+    )
+
+    def compute(task, *args, **kwargs):
+        if task.clip_id == "c-0":
+            raise OSError("Cannot inspect media")
+        return CustomQueryOutcome(
+            task.clip_id, task.query, "succeeded", True, 0.9, "model"
+        )
+
+    monkeypatch.setattr("core.operations.custom_query.compute_custom_query", compute)
+    outcomes = run_custom_query(tasks, CustomQueryOptions(tier, "model"))
+    assert outcomes[0].status == "failed"
+    assert outcomes[0].message == "Cannot inspect media"
+    assert outcomes[1].status == "succeeded"

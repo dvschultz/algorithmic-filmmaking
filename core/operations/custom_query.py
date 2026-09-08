@@ -2,11 +2,19 @@
 
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, replace
+from hashlib import sha256
+import json
 from copy import deepcopy
 from pathlib import Path
 from math import isfinite
 from threading import Event
-from typing import Callable, Literal, TYPE_CHECKING
+from typing import Any, Callable, Literal, TYPE_CHECKING
+from core.analysis_records import AnalysisFingerprints, AnalysisSnapshot
+from core.analysis_model_identity import (
+    CUSTOM_QUERY_RESPONSE_SCHEMA,
+    custom_query_prompt,
+)
+from models.analysis_record import AnalysisIdentity, AnalysisRecord
 
 from core.operations.contracts import OutcomeStatus
 from core.provider_errors import is_transient_provider_error
@@ -22,6 +30,7 @@ class CustomQueryTask:
     query: str
     skip: bool = False
     target_type: Literal["clip", "frame"] = "clip"
+    analysis_json: str | None = None
 
 
 @dataclass(frozen=True)
@@ -29,6 +38,96 @@ class CustomQueryOptions:
     tier: str
     model: str
     parallelism: int = 1
+
+
+def custom_query_record_key(query: str) -> str:
+    """Keep independent verification state for each exact, trimmed query."""
+    return "custom_query:" + sha256(query.strip().encode()).hexdigest()
+
+
+def latest_query_result(target: Any, query: str) -> dict | None:
+    return next(
+        (
+            deepcopy(item)
+            for item in reversed(target.custom_queries or [])
+            if item.get("query") == query.strip()
+        ),
+        None,
+    )
+
+
+def custom_query_task(
+    target: Any,
+    source: Any,
+    query: str,
+    *,
+    image_path: Path | None = None,
+    skip_existing: bool = False,
+) -> CustomQueryTask:
+    query = query.strip()
+    image = image_path or target.thumbnail_path
+    files = {"image": image} if image is not None else {}
+    if source is not None:
+        files["video"] = source.file_path
+    snapshot = AnalysisSnapshot.capture(
+        target,
+        custom_query_record_key(query),
+        files,
+        {
+            "start_frame": target.start_frame,
+            "end_frame": target.end_frame,
+            "fps": source.fps if source else None,
+        },
+        {"result": latest_query_result(target, query)},
+    )
+    return CustomQueryTask(
+        target.id, image, query, skip_existing, analysis_json=snapshot.to_json()
+    )
+
+
+def custom_query_runtime(options: CustomQueryOptions) -> dict:
+    from core.operations.description import (
+        DescriptionOptions,
+        DescriptionTask,
+        description_runtime,
+    )
+
+    tier = {"cpu": "local", "gpu": "cloud"}.get(options.tier, options.tier)
+    runtime = description_runtime(
+        DescriptionTask("", None, None, 0, 0, None),
+        DescriptionOptions(tier, model=options.model, input_mode="frame"),
+    )
+    return {
+        **runtime,
+        "response_schema": CUSTOM_QUERY_RESPONSE_SCHEMA,
+        "max_tokens": 50
+        if tier == "cloud"
+        else 256
+        if runtime["execution"]["backend"] == "mlx"
+        else None,
+    }
+
+
+def custom_query_identity(
+    snapshot: AnalysisSnapshot,
+    query: str,
+    options: CustomQueryOptions,
+    fingerprints: AnalysisFingerprints,
+    runtime: dict,
+) -> AnalysisIdentity:
+    return fingerprints.identity(
+        snapshot.inputs,
+        operation=custom_query_record_key(query),
+        operation_version=2,
+        model=runtime,
+        parameters={
+            "tier": {"cpu": "local", "gpu": "cloud"}.get(options.tier, options.tier),
+            "model": options.model,
+            "query": query,
+        },
+        sampling={"policy": "single-image/v1"},
+        prompt=custom_query_prompt(query),
+    )
 
 
 @dataclass(frozen=True)
@@ -41,6 +140,28 @@ class CustomQueryOutcome:
     model: str | None = None
     code: str | None = None
     message: str | None = None
+    record_json: str | None = None
+
+    @property
+    def has_result(self) -> bool:
+        return self.status == "succeeded" or (
+            self.status == "skipped" and self.record_json is not None
+        )
+
+    @property
+    def can_apply(self) -> bool:
+        return self.has_result or (
+            self.status == "failed" and self.record_json is not None
+        )
+
+    @property
+    def value(self) -> dict:
+        return {
+            "query": self.query,
+            "match": self.match,
+            "confidence": round(self.confidence or 0.0, 4),
+            "model": self.model,
+        }
 
 
 def resolve_options(
@@ -62,7 +183,11 @@ def resolve_options(
 
 
 def compute_custom_query(
-    task: CustomQueryTask, options: CustomQueryOptions, cancel: Event
+    task: CustomQueryTask,
+    options: CustomQueryOptions,
+    cancel: Event,
+    *,
+    fingerprints: AnalysisFingerprints | None = None,
 ) -> CustomQueryOutcome:
     def outcome(status: OutcomeStatus, **kwargs) -> CustomQueryOutcome:
         return CustomQueryOutcome(task.clip_id, task.query, status, **kwargs)
@@ -71,17 +196,45 @@ def compute_custom_query(
         return outcome("unprocessed", code="cancelled")
     if not task.query.strip():
         return outcome("failed", code="missing_query", message="query is required")
-    if task.skip:
+    if task.skip and task.analysis_json is None:
         return outcome("skipped", code="already_populated")
     if task.thumbnail_path is None or not task.thumbnail_path.exists():
         return outcome("failed", code="thumbnail_missing")
     from core.analysis.custom_query import evaluate_custom_query
+
+    snapshot = None
+    runtime = None
+    fingerprints = fingerprints or AnalysisFingerprints(cancel)
+    try:
+        if task.analysis_json is not None:
+            snapshot = AnalysisSnapshot.from_json(task.analysis_json)
+            runtime = custom_query_runtime(options)
+            identity = custom_query_identity(
+                snapshot, task.query, options, fingerprints, runtime
+            )
+            reused = snapshot.reusable_record(identity) if task.skip else None
+            if reused is not None:
+                value = reused.value["result"]
+                return outcome(
+                    "skipped",
+                    match=value["match"],
+                    confidence=value["confidence"],
+                    model=value["model"],
+                    code="valid_analysis",
+                    record_json=json.dumps(reused.to_dict(), sort_keys=True),
+                )
+    except Exception as exc:
+        if cancel.is_set():
+            return outcome("unprocessed", code="cancelled")
+        return outcome("failed", code="stale_input", message=str(exc))
 
     delays = (2, 5, 10)
     for attempt in range(len(delays) + 1):
         if cancel.is_set():
             return outcome("unprocessed", code="cancelled")
         try:
+            if snapshot is not None and not snapshot.inputs.unchanged():
+                raise ValueError("Custom-query input media changed")
             match, confidence, model = evaluate_custom_query(
                 image_path=task.thumbnail_path,
                 query=task.query,
@@ -101,14 +254,55 @@ def compute_custom_query(
                 raise ValueError("Custom query confidence must be between 0 and 1")
             if not isinstance(model, str) or not model.strip():
                 raise ValueError("Custom query model must be a nonempty string")
-            return outcome("succeeded", match=match, confidence=confidence, model=model)
+            result = outcome(
+                "succeeded", match=match, confidence=confidence, model=model
+            )
+            if snapshot is not None and runtime is not None:
+                if custom_query_runtime(options) != runtime:
+                    raise ValueError("Custom-query runtime changed")
+                actual_runtime = {
+                    **runtime,
+                    "execution": {**runtime["execution"], "model": model},
+                }
+                identity = custom_query_identity(
+                    snapshot, task.query, options, fingerprints, actual_runtime
+                )
+                record = AnalysisRecord.success(
+                    identity,
+                    {"result": result.value},
+                    input_snapshot=snapshot.inputs.to_dict(),
+                )
+                result = replace(
+                    result, record_json=json.dumps(record.to_dict(), sort_keys=True)
+                )
+            return result
         except Exception as exc:
             if cancel.is_set():
                 return outcome("unprocessed", code="cancelled")
             if attempt < len(delays) and is_transient_provider_error(str(exc)):
                 cancel.wait(delays[attempt])
                 continue
-            return outcome("failed", code="custom_query_failed", message=str(exc))
+            record = None
+            if (
+                snapshot is not None
+                and runtime is not None
+                and snapshot.inputs.unchanged()
+            ):
+                identity = custom_query_identity(
+                    snapshot, task.query, options, fingerprints, runtime
+                )
+                record = replace(
+                    AnalysisRecord.failure(identity, str(exc)),
+                    input_json=json.dumps(snapshot.inputs.to_dict(), sort_keys=True),
+                )
+            return outcome(
+                "failed",
+                code="custom_query_failed",
+                message=str(exc),
+                record_json=json.dumps(record.to_dict(), sort_keys=True)
+                if record
+                else None,
+            )
     raise AssertionError("Retry loop must return")
 
 
@@ -119,12 +313,14 @@ def run_custom_query(
     cancel_event: Event | None = None,
     on_outcome: Callable[[CustomQueryOutcome], None] | None = None,
     progress: Callable[[int, int], None] | None = None,
+    fingerprints: AnalysisFingerprints | None = None,
 ) -> tuple[CustomQueryOutcome, ...]:
     """Bound cloud admission; keep local inference on the caller's worker thread."""
     options = replace(
         options, tier={"cpu": "local", "gpu": "cloud"}.get(options.tier, options.tier)
     )
     cancel = cancel_event or Event()
+    fingerprints = fingerprints or AnalysisFingerprints(cancel)
     outcomes: dict[int, CustomQueryOutcome] = {}
 
     def publish(index: int, outcome: CustomQueryOutcome) -> None:
@@ -140,7 +336,19 @@ def run_custom_query(
         for index, task in enumerate(tasks):
             if cancel.is_set():
                 break
-            publish(index, compute_custom_query(task, options, cancel))
+            try:
+                result = compute_custom_query(
+                    task, options, cancel, fingerprints=fingerprints
+                )
+            except Exception as exc:
+                result = CustomQueryOutcome(
+                    task.clip_id,
+                    task.query,
+                    "failed",
+                    code="custom_query_failed",
+                    message=str(exc),
+                )
+            publish(index, result)
     else:
         parallelism = min(max(1, options.parallelism), 5)
         with ThreadPoolExecutor(max_workers=parallelism) as pool:
@@ -154,7 +362,11 @@ def run_custom_query(
                 ):
                     pending[
                         pool.submit(
-                            compute_custom_query, tasks[next_index], options, cancel
+                            compute_custom_query,
+                            tasks[next_index],
+                            options,
+                            cancel,
+                            fingerprints=fingerprints,
                         )
                     ] = next_index
                     next_index += 1
@@ -192,9 +404,15 @@ def run_custom_query(
 class CustomQueryApplication:
     """Append once on the owner thread, only to unchanged clip inputs."""
 
-    def __init__(self, project: "Project", tasks: tuple[CustomQueryTask, ...]) -> None:
+    def __init__(
+        self,
+        project: "Project",
+        tasks: tuple[CustomQueryTask, ...],
+        options: CustomQueryOptions | None = None,
+    ) -> None:
         project.session.assert_owner()
         self.project = project
+        self.options = options
         self.session_id = project.session.session_id
         self.tasks = {task.clip_id: task for task in tasks}
         self.bindings = {task.clip_id: self._binding(project, task) for task in tasks}
@@ -228,6 +446,7 @@ class CustomQueryApplication:
                 source.fps if source else None,
                 media_stamp(source_path) if source_path else None,
                 deepcopy(clip.custom_queries),
+                clip.analysis_records.get(custom_query_record_key(task.query)),
             ),
         )
 
@@ -240,7 +459,7 @@ class CustomQueryApplication:
         if (
             project is not self.project
             or project.session.session_id != self.session_id
-            or not any(outcome.status == "succeeded" for outcome in outcomes)
+            or not any(outcome.can_apply for outcome in outcomes)
         ):
             return tuple(False for _ in outcomes)
 
@@ -251,10 +470,7 @@ class CustomQueryApplication:
                 task = self.tasks.get(outcome.clip_id)
                 expected = self.bindings.get(outcome.clip_id)
                 valid = False
-                if (
-                    outcome.status == "succeeded"
-                    and outcome.clip_id not in self.consumed
-                ):
+                if outcome.can_apply and outcome.clip_id not in self.consumed:
                     self.consumed.add(outcome.clip_id)
                     current = self._binding(project, task) if task else None
                     if (
@@ -267,14 +483,71 @@ class CustomQueryApplication:
                         and current[2] == expected[2]
                     ):
                         clip = current[0]
+                        key = custom_query_record_key(task.query)
+                        record = (
+                            AnalysisRecord.from_dict(json.loads(outcome.record_json))
+                            if outcome.record_json is not None
+                            else AnalysisRecord.legacy({"result": outcome.value})
+                        )
+                        if outcome.record_json is not None:
+                            snapshot = (
+                                AnalysisSnapshot.from_json(task.analysis_json)
+                                if task.analysis_json
+                                else None
+                            )
+                            prior = clip.analysis_records.get(key)
+                            if (
+                                snapshot is None
+                                or record.identity is None
+                                or record.identity.operation != key
+                                or record.identity.to_dict()["operation_version"] != 2
+                                or record.identity.to_dict()["parameters"].get("query")
+                                != task.query
+                                or record.identity.to_dict()["prompt_sha256"]
+                                != sha256(
+                                    custom_query_prompt(task.query).encode()
+                                ).hexdigest()
+                                or not snapshot.inputs.unchanged()
+                                or json.loads(record.input_json or "null")
+                                != snapshot.inputs.to_dict()
+                                or snapshot.record
+                                != (
+                                    prior if isinstance(prior, AnalysisRecord) else None
+                                )
+                                or json.loads(snapshot.value_json)
+                                != {"result": latest_query_result(clip, task.query)}
+                                or (
+                                    outcome.has_result
+                                    and (
+                                        record.state != "succeeded"
+                                        or record.value != {"result": outcome.value}
+                                    )
+                                )
+                                or (
+                                    outcome.status == "failed"
+                                    and record.state != "failed"
+                                )
+                            ):
+                                accepted.append(False)
+                                continue
+                            if self.options is not None and record.identity.to_dict()[
+                                "parameters"
+                            ] != {
+                                "tier": {"cpu": "local", "gpu": "cloud"}.get(
+                                    self.options.tier, self.options.tier
+                                ),
+                                "model": self.options.model,
+                                "query": task.query,
+                            }:
+                                accepted.append(False)
+                                continue
+                        project.record_analysis("clip", outcome.clip_id, key, record)
+                        if outcome.status != "succeeded":
+                            accepted.append(True)
+                            continue
                         clip.custom_queries = [
                             *(clip.custom_queries or []),
-                            {
-                                "query": outcome.query,
-                                "match": outcome.match,
-                                "confidence": round(outcome.confidence or 0.0, 4),
-                                "model": outcome.model,
-                            },
+                            outcome.value,
                         ]
                         updated.append(clip)
                         valid = True

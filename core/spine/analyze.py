@@ -734,7 +734,7 @@ def custom_query(
     cancel_event: Optional[threading.Event] = None,
 ) -> dict:
     """Evaluate a yes/no VLM visual query against clip thumbnails."""
-    from core.operations.custom_query import CustomQueryApplication, CustomQueryTask, resolve_options, run_custom_query
+    from core.operations.custom_query import CustomQueryApplication, custom_query_task, resolve_options, run_custom_query
 
     if not query or not query.strip():
         return {"success": False, "error": {"code": "missing_query", "message": "query is required"}}
@@ -746,19 +746,23 @@ def custom_query(
     total = len(clips)
 
     query = query.strip()
-    tasks = tuple(CustomQueryTask(
-        clip.id, _thumbnail_for_clip(clip), query,
-        skip=bool(skip_existing and clip.custom_queries and any(q.get("query") == query for q in clip.custom_queries)),
+    tasks = tuple(custom_query_task(
+        clip, project.sources_by_id.get(clip.source_id), query,
+        image_path=_thumbnail_for_clip(clip), skip_existing=skip_existing,
     ) for clip in clips)
 
     def report(current: int, count: int) -> None:
         if progress_callback is not None:
             progress_callback(current / count if count else 1.0, f"Custom query ({current}/{count})")
 
-    application = CustomQueryApplication(project, tasks)
-    outcomes = run_custom_query(tasks, resolve_options(tier), cancel_event=cancel_event, progress=report)
+    options = resolve_options(tier)
+    application = CustomQueryApplication(project, tasks, options)
+    outcomes = run_custom_query(tasks, options, cancel_event=cancel_event, progress=report)
     accepted = application.apply_batch(project, outcomes)
     for clip, outcome, applied in zip(clips, outcomes, accepted):
+        if outcome.can_apply and not applied:
+            failed.append({"clip_id": clip.id, "code": "stale_result"})
+            continue
         if outcome.status == "skipped":
             skipped.append({"clip_id": clip.id, "reason": outcome.code})
             continue
