@@ -132,5 +132,13 @@ The built-in agent can use `accept_legacy_audio_transcript` with an exact
 desktop settings and discard cancelled or stale results. Save the project to
 persist an accepted desktop decision.
 
-Acceptance for other analysis operations is not available yet. Recompute those
-results through their usual analysis commands.
+Legacy face results require recomputation. The old vector fields do not record
+the model-pack hashes or execution metadata needed to establish compatibility
+with newly computed reference faces. A 512-element vector alone is insufficient.
+This also applies to old empty face results, whose detector is unknown.
+
+Run `scene_ripper analyze faces project.json`, choose face analysis in the
+desktop, or use MCP's `start_detect_faces`. Existing values stay visible if
+recomputation fails; successful recomputation creates verified records that can
+subsequently be reused. Explicit acceptance does not relabel old face vectors
+as compatible with the current model.

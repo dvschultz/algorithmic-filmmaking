@@ -1124,6 +1124,18 @@ tracked, inactive historical owners as described above.
   worker modules pass typing, scoped lint is clean, and the confirmation dialog
   was visually checked. Faces and final review/full-suite verification remain
   open.
+- Face legacy policy is resolved as recomputation, using KTD11's explicit
+  reuse-or-recompute requirement. Old vector fields lack model-pack hashes and
+  component/provider execution, so dimensions cannot establish compatibility
+  with current reference vectors. Empty legacy face results also lack detector
+  identity. These remain visible but incomplete until verified recomputation;
+  failures preserve the old values. New tests exercise both empty and nonempty
+  legacy results through spine, CLI, GUI worker/journal, and MCP, proving a
+  provider call and resulting verified model components. The 74-test face policy,
+  record, completion, GUI, and durable-job group passes. This decision does not
+  waive face provenance: normal reuse still verifies source and model contents.
+  The final cross-consumer, retention/recovery, CE, and full-suite audits remain
+  open.
 - Finish the remaining cross-consumer reuse/projection audit.
   Receipt pruning retains legacy rows rather than guessing absent ownership;
   existing rows are not migrated eagerly.

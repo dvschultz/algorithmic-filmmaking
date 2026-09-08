@@ -536,6 +536,13 @@ agent/ownership/recovery/Collect group passes, with scoped typing/lint clean and
 the confirmation dialog visually checked. Faces and final verification remain
 open.
 
+Face legacy policy now explicitly uses KTD11's recomputation option: old vectors
+and empty face results lack the model execution identity required for compatible
+reuse. Successful recomputation produces verified model components; failures
+preserve old values. A 74-test group proves this through spine, CLI, GUI worker/
+journal, and MCP plus existing face completion/recovery coverage. The final
+cross-consumer, retention/recovery, CE, and full-suite audits remain open.
+
 Custom queries now retain independent records through shared operations, direct
 headless calls, GUI worker delivery/recovery, and durable headless jobs. GUI reuse
 verifies saved records without duplicate history or local weight loading. Durable
