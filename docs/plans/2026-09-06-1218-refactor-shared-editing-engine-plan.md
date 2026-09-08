@@ -389,7 +389,7 @@ detection, OCR, ImageNet classification, shot classification, and gaze now use v
 records across their shared operations and delivery surfaces. Thumbnail and boundary embedding
 artifacts have manifest, live-project, undo, save, and bundle retention. Remaining
 work includes the other U7 analysis families, explicit legacy-reuse flows,
-preview/prerender artifacts, execution pins for referenced inputs, and
+transformed-clip prerender artifacts, execution pins for referenced inputs, and
 the complete retention/recovery audit. See
 [analysis provenance](../architecture/analysis-provenance.md) for the implemented
 scope and its limitations. U10 is not complete.
@@ -400,6 +400,9 @@ readable. Safe receipt pruning and abandoned-publication pin reconciliation rema
 New large job arguments, operation specifications, and result bodies are managed
 too; history deletion/pruning and result replacement release their owners while
 protecting active readers and retaining independent computed receipts.
+Continuous previews now use verified managed media, staged publication, registered
+cache eviction, and consumer leases. Legacy unregistered previews are preserved
+without automatic reuse. Transformed-clip prerenders remain to be migrated.
 
 **Requirements:** R9, R12. **Dependencies:** U5, U6.
 

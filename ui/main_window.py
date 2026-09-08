@@ -4971,6 +4971,9 @@ class MainWindow(QMainWindow):
                 self._using_rendered_sequence_preview = True
                 self.sequence_tab.video_player.clear_clip_range()
                 self.sequence_tab.video_player.load_video(preview_path)
+                self.sequence_tab.video_player._sequence_preview_media_lease = getattr(
+                    self, "_rendered_sequence_preview_lease", None
+                )
             self.sequence_tab.video_player.seek_to(time_seconds)
             return
 
@@ -5164,10 +5167,14 @@ class MainWindow(QMainWindow):
             signature, path, settings = self._get_sequence_preview_cache_entry()
         except Exception:
             return False
-        if path.exists() and path.stat().st_size > 0:
-            self._rendered_sequence_preview_signature = signature
-            self._rendered_sequence_preview_path = path
-            self._rendered_sequence_preview_profile = settings.profile_label
+        ready_path = self._rendered_sequence_preview_path
+        from core.media_cache import media_file_stamp
+
+        if (signature == self._rendered_sequence_preview_signature
+                and getattr(self, "_rendered_sequence_preview_lease", None) is not None
+                and ready_path is not None
+                and getattr(self, "_rendered_sequence_preview_stamp", None) is not None
+                and media_file_stamp(ready_path) == self._rendered_sequence_preview_stamp):
             return True
         return False
 
@@ -5178,6 +5185,8 @@ class MainWindow(QMainWindow):
             return
         self._rendered_sequence_preview_path = None
         self._rendered_sequence_preview_signature = None
+        self._rendered_sequence_preview_lease = None
+        self._rendered_sequence_preview_stamp = None
         self._sequence_preview_play_after_render_frame = None
         self._using_rendered_sequence_preview = False
         if hasattr(self, "sequence_tab"):
@@ -5214,10 +5223,7 @@ class MainWindow(QMainWindow):
             return
 
         signature, path, settings = self._get_sequence_preview_cache_entry()
-        if path.exists() and path.stat().st_size > 0:
-            self._rendered_sequence_preview_signature = signature
-            self._rendered_sequence_preview_path = path
-            self._rendered_sequence_preview_profile = settings.profile_label
+        if self._has_ready_sequence_preview():
             self.sequence_tab.set_sequence_preview_status("Ready", settings.profile_label)
             if play_after_frame is not None:
                 self._start_rendered_sequence_preview_playback(play_after_frame)
@@ -5285,6 +5291,15 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("Sequence preview is stale after timeline changes", 3000)
             return
 
+        from core.sequence_preview import SequencePreviewRender
+
+        if isinstance(path, SequencePreviewRender):
+            self._rendered_sequence_preview_lease = path.lease
+            self._rendered_sequence_preview_stamp = path.file_stamp
+            path = path.path
+        else:
+            self._rendered_sequence_preview_lease = None
+            self._rendered_sequence_preview_stamp = None
         self._rendered_sequence_preview_path = Path(path)
         self._rendered_sequence_preview_signature = signature
         self._rendered_sequence_preview_profile = profile_label
@@ -5381,6 +5396,9 @@ class MainWindow(QMainWindow):
             self._sequence_preview_source_id = preview_key
             self.sequence_tab.video_player.clear_clip_range()
             self.sequence_tab.video_player.load_video(self._rendered_sequence_preview_path)
+            self.sequence_tab.video_player._sequence_preview_media_lease = getattr(
+                self, "_rendered_sequence_preview_lease", None
+            )
         self.sequence_tab.video_player.seek_to(start_seconds)
         self.sequence_tab.video_player.play()
 
@@ -8455,6 +8473,8 @@ class MainWindow(QMainWindow):
         self._detection_start_time = None
         self._rendered_sequence_preview_path = None
         self._rendered_sequence_preview_signature = None
+        self._rendered_sequence_preview_lease = None
+        self._rendered_sequence_preview_stamp = None
         self._sequence_preview_play_after_render_frame = None
         self._using_rendered_sequence_preview = False
         self._detection_current_progress = 0.0

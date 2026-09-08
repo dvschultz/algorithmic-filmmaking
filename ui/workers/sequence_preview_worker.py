@@ -20,7 +20,7 @@ class SequencePreviewWorker(CancellableWorker):
     """Render a continuous timeline preview in the background."""
 
     progress = Signal(float, str)
-    preview_completed = Signal(object, str, str, bool)  # path, signature, profile label, from cache
+    preview_completed = Signal(object, str, str, bool)  # leased result, signature, profile label, from cache
 
     def __init__(
         self,
@@ -59,7 +59,7 @@ class SequencePreviewWorker(CancellableWorker):
                 return
             cleanup_sequence_preview_cache(self.cache_root)
             self.preview_completed.emit(
-                result.path,
+                result,
                 result.signature,
                 result.profile_label,
                 result.from_cache,

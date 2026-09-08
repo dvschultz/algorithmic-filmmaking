@@ -135,18 +135,17 @@ def test_render_sequence_preview_uses_proxy_export_config(monkeypatch, tmp_path)
 
 def test_render_sequence_preview_returns_cache_hit(monkeypatch, tmp_path):
     sequence, sources, clips = _make_sequence_with_clips(tmp_path)
-    signature = compute_sequence_preview_signature(sequence, sources, clips)
-    cached_path = get_sequence_preview_path(sequence, signature, tmp_path / "cache")
-    cached_path.parent.mkdir(parents=True)
-    cached_path.write_bytes(b"cached")
     called = []
 
     class FakeExporter:
         def export(self, **kwargs):
             called.append(kwargs)
+            kwargs["config"].output_path.write_bytes(b"cached")
             return True
 
     monkeypatch.setattr("core.sequence_preview.SequenceExporter", FakeExporter)
+
+    first = render_sequence_preview(sequence, sources, clips, cache_root=tmp_path / "cache")
 
     result = render_sequence_preview(
         sequence=sequence,
@@ -155,9 +154,98 @@ def test_render_sequence_preview_returns_cache_hit(monkeypatch, tmp_path):
         cache_root=tmp_path / "cache",
     )
 
-    assert result.path == cached_path
+    assert result.path == first.path
     assert result.from_cache is True
-    assert called == []
+    assert len(called) == 1
+
+
+def test_unregistered_preview_is_preserved_but_not_reused(monkeypatch, tmp_path):
+    from core.sequence_preview import cleanup_sequence_preview_cache
+
+    sequence, sources, clips = _make_sequence_with_clips(tmp_path)
+    signature = compute_sequence_preview_signature(sequence, sources, clips)
+    legacy = get_sequence_preview_path(sequence, signature, tmp_path / "cache")
+    legacy.parent.mkdir(parents=True)
+    legacy.write_bytes(b"unverified")
+
+    class FakeExporter:
+        def export(self, **kwargs):
+            kwargs["config"].output_path.write_bytes(b"verified")
+            return True
+
+    monkeypatch.setattr("core.sequence_preview.SequenceExporter", FakeExporter)
+    result = render_sequence_preview(sequence, sources, clips, cache_root=tmp_path / "cache")
+    assert not result.from_cache and result.path.read_bytes() == b"verified"
+    cleanup_sequence_preview_cache(tmp_path / "cache", keep_latest=0)
+    assert legacy.read_bytes() == b"unverified"
+    assert result.path.read_bytes() == b"verified"
+
+
+def test_failed_preview_never_publishes_partial_render(monkeypatch, tmp_path):
+    sequence, sources, clips = _make_sequence_with_clips(tmp_path)
+    calls = []
+
+    class FakeExporter:
+        def export(self, **kwargs):
+            calls.append(1)
+            kwargs["config"].output_path.write_bytes(b"partial")
+            return False
+
+    monkeypatch.setattr("core.sequence_preview.SequenceExporter", FakeExporter)
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match="render failed"):
+            render_sequence_preview(sequence, sources, clips, cache_root=tmp_path / "cache")
+    assert len(calls) == 2
+    assert not list((tmp_path / "cache" / "sequence_previews").glob("render-*"))
+
+
+def test_corrupt_managed_preview_is_recomputed(monkeypatch, tmp_path):
+    sequence, sources, clips = _make_sequence_with_clips(tmp_path)
+    calls = []
+
+    class FakeExporter:
+        def export(self, **kwargs):
+            calls.append(1)
+            kwargs["config"].output_path.write_bytes(b"complete render")
+            return True
+
+    monkeypatch.setattr("core.sequence_preview.SequenceExporter", FakeExporter)
+    first = render_sequence_preview(sequence, sources, clips, cache_root=tmp_path / "cache")
+    first.path.write_bytes(b"corrupt")
+    second = render_sequence_preview(sequence, sources, clips, cache_root=tmp_path / "cache")
+    assert not second.from_cache and len(calls) == 2
+    assert second.path.read_bytes() == b"complete render"
+
+
+def test_source_edit_with_restored_mtime_invalidates_preview_signature(tmp_path):
+    import os
+
+    sequence, sources, clips = _make_sequence_with_clips(tmp_path)
+    source = next(iter(sources.values())).file_path
+    before = source.stat()
+    first = compute_sequence_preview_signature(sequence, sources, clips)
+    source.write_bytes(b"change")
+    os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert first != compute_sequence_preview_signature(sequence, sources, clips)
+
+
+def test_source_edit_during_render_is_not_published(monkeypatch, tmp_path):
+    import os
+
+    sequence, sources, clips = _make_sequence_with_clips(tmp_path)
+    source = next(iter(sources.values())).file_path
+    before = source.stat()
+
+    class FakeExporter:
+        def export(self, **kwargs):
+            kwargs["config"].output_path.write_bytes(b"stale render")
+            source.write_bytes(b"change")
+            os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns))
+            return True
+
+    monkeypatch.setattr("core.sequence_preview.SequenceExporter", FakeExporter)
+    with pytest.raises(RuntimeError, match="inputs changed"):
+        render_sequence_preview(sequence, sources, clips, cache_root=tmp_path / "cache")
 
 
 @pytest.mark.parametrize("invalid", ["overlap", "missing_music", "missing_clip"])

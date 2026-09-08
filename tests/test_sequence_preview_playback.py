@@ -9,6 +9,35 @@ from models.sequence import Sequence, SequenceClip
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 
+def test_preview_readiness_requires_retained_verified_and_unchanged_file(tmp_path):
+    from core.artifacts import ArtifactStore
+    from core.media_cache import MediaCache
+    from core.sequence_preview import SequencePreviewSettings
+    from ui.main_window import MainWindow
+
+    source = tmp_path / "render.mp4"
+    source.write_bytes(b"render")
+    cache = MediaCache(tmp_path / "cache", tmp_path / "artifacts")
+    result = cache.publish("seq", "key", source)
+    window = SimpleNamespace(
+        sequence_tab=SimpleNamespace(get_sequence=lambda: _sequence_with_clip()),
+        _get_sequence_preview_cache_entry=lambda: ("sig", source, SequencePreviewSettings()),
+        _rendered_sequence_preview_path=result.path,
+        _rendered_sequence_preview_signature="sig",
+        _rendered_sequence_preview_lease=result.lease,
+        _rendered_sequence_preview_stamp=result.stamp,
+    )
+    assert MainWindow._has_ready_sequence_preview(window)
+    cache.prune(0)
+    assert ArtifactStore(tmp_path / "artifacts").collect() == []
+    assert MainWindow._has_ready_sequence_preview(window)
+    result.path.write_bytes(b"bad")
+    assert not MainWindow._has_ready_sequence_preview(window)
+    window._rendered_sequence_preview_path = source
+    window._rendered_sequence_preview_lease = None
+    assert not MainWindow._has_ready_sequence_preview(window)
+
+
 def test_scrub_uses_the_compiled_entry_at_a_rounded_cut(tmp_path):
     from unittest.mock import Mock
     from core.project import Project

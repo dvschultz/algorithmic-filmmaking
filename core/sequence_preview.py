@@ -5,7 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import tempfile
 from pathlib import Path
 from typing import Callable, Optional, TYPE_CHECKING
 
@@ -13,6 +14,8 @@ from core.sequence_export import ExportConfig, SequenceExporter
 from core.settings import load_settings
 from models.sequence import Sequence
 from models.clip import Source
+from core.artifacts import ArtifactLease
+from core.media_cache import MediaCache
 
 if TYPE_CHECKING:
     from models.frame import Frame
@@ -43,6 +46,8 @@ class SequencePreviewRender:
     signature: str
     from_cache: bool
     profile_label: str
+    lease: ArtifactLease | None = field(default=None, compare=False, repr=False)
+    file_stamp: tuple[int, ...] | None = field(default=None, compare=False, repr=False)
 
 
 def get_sequence_preview_cache_dir(cache_root: Optional[Path] = None) -> Path:
@@ -51,6 +56,17 @@ def get_sequence_preview_cache_dir(cache_root: Optional[Path] = None) -> Path:
         settings = load_settings()
         cache_root = settings.thumbnail_cache_dir.parent
     return cache_root / "sequence_previews"
+
+
+def _preview_cache(cache_root: Path | None) -> MediaCache:
+    directory = get_sequence_preview_cache_dir(cache_root)
+    if cache_root is None:
+        from core.paths import get_artifact_store_dir
+
+        artifact_root = get_artifact_store_dir()
+    else:
+        artifact_root = cache_root / "artifacts"
+    return MediaCache(directory, artifact_root)
 
 
 def get_sequence_preview_path(
@@ -76,7 +92,7 @@ def compute_sequence_preview_signature(
     """Compute a stable signature for the rendered preview's meaningful inputs."""
     settings = settings or SequencePreviewSettings()
     payload = {
-        "render_plan_version": 1,
+        "render_plan_version": 2,
         "preview_settings": {
             "width": settings.width,
             "height": settings.height,
@@ -132,17 +148,40 @@ def render_sequence_preview(
         settings=settings,
         frames=frames,
     )
-    output_path = get_sequence_preview_path(sequence, signature, cache_root)
-    if output_path.exists() and output_path.stat().st_size > 0:
-        logger.info("Using cached sequence preview: %s", output_path)
+    # Hash content in the worker; the GUI signature stays a cheap change guard.
+    content = hashlib.sha256(signature.encode())
+    from core.binary_resolver import find_binary
+
+    binary = find_binary("ffmpeg")
+    content.update(json.dumps(_path_fingerprint(Path(binary) if binary else None), sort_keys=True).encode())
+    for path, _stamp in plan.media_stamps:
+        file_digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            while block := stream.read(1024 * 1024):
+                if cancel_check is not None and cancel_check():
+                    raise RuntimeError("Sequence preview render cancelled")
+                file_digest.update(block)
+        content.update(file_digest.digest())
+    plan.validate_media_unchanged()
+    if compute_sequence_preview_signature(sequence, sources, clips, settings, frames) != signature:
+        raise RuntimeError("Sequence preview inputs changed during fingerprinting")
+    cache = _preview_cache(cache_root)
+    cached = cache.get(sequence.id, content.hexdigest())
+    if cached is not None:
+        plan.validate_media_unchanged()
+        if compute_sequence_preview_signature(sequence, sources, clips, settings, frames) != signature:
+            raise RuntimeError("Sequence preview inputs changed during cache verification")
         return SequencePreviewRender(
-            path=output_path,
+            path=cached.path,
             signature=signature,
             from_cache=True,
             profile_label=settings.profile_label,
+            lease=cached.lease,
+            file_stamp=cached.stamp,
         )
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    staging = tempfile.TemporaryDirectory(prefix="render-", dir=cache.root)
+    output_path = Path(staging.name) / "preview.mp4"
 
     config = ExportConfig(
         output_path=output_path,
@@ -164,39 +203,43 @@ def render_sequence_preview(
     )
 
     exporter = SequenceExporter()
-    success = exporter.export(
-        sequence=sequence,
-        sources=sources,
-        clips=clips,
-        config=config,
-        progress_callback=progress_callback,
-        frames=frames,
-    )
-    if not success:
-        raise RuntimeError("Sequence preview render failed")
+    try:
+        success = exporter.export(
+            sequence=sequence,
+            sources=sources,
+            clips=clips,
+            config=config,
+            progress_callback=progress_callback,
+            frames=frames,
+        )
+        if not success:
+            raise RuntimeError("Sequence preview render failed")
+        if cancel_check is not None and cancel_check():
+            raise RuntimeError("Sequence preview render cancelled")
+        plan.validate_media_unchanged()
+        if compute_sequence_preview_signature(sequence, sources, clips, settings, frames) != signature:
+            raise RuntimeError("Sequence preview inputs changed during rendering")
+        cached = cache.publish(sequence.id, content.hexdigest(), output_path)
+    finally:
+        staging.cleanup()
 
     return SequencePreviewRender(
-        path=output_path,
+        path=cached.path,
         signature=signature,
         from_cache=False,
         profile_label=settings.profile_label,
+        lease=cached.lease,
+        file_stamp=cached.stamp,
     )
 
 
 def cleanup_sequence_preview_cache(cache_root: Optional[Path] = None, keep_latest: int = 5) -> None:
-    """Keep only the newest preview files per sequence cache directory."""
+    """Retire only registered previews; active consumers retain their files."""
     cache_dir = get_sequence_preview_cache_dir(cache_root)
     if not cache_dir.exists():
         return
 
-    for sequence_dir in (p for p in cache_dir.iterdir() if p.is_dir()):
-        previews = sorted(
-            sequence_dir.glob("*.mp4"),
-            key=lambda p: p.stat().st_mtime if p.exists() else 0,
-            reverse=True,
-        )
-        for old_preview in previews[max(0, keep_latest):]:
-            old_preview.unlink(missing_ok=True)
+    _preview_cache(cache_root).prune(keep_latest)
 
 
 def _sequence_clip_payload(seq_clip, sources, clips, frames):
@@ -269,6 +312,9 @@ def _path_fingerprint(path: Optional[Path]) -> dict | None:
             "path": str(p.resolve()),
             "size": stat.st_size,
             "mtime_ns": stat.st_mtime_ns,
+            "ctime_ns": stat.st_ctime_ns,
+            "device": stat.st_dev,
+            "inode": stat.st_ino,
         }
     except OSError:
         return {

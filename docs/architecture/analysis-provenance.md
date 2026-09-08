@@ -148,6 +148,22 @@ Computed receipts have separate owners and survive history pruning. Uncertain
 publication or deletion retains files conservatively; abandoned-pin reconciliation
 remains outstanding. Session-only histories remain entirely in memory.
 
+Continuous sequence previews now use a registered media cache. Worker-side
+identity includes source/music/still content, timeline settings, and the FFmpeg
+runtime stamp. Rendering uses a private staging directory and publishes only a
+successful, nonempty output after checking that the inputs stayed unchanged.
+Cache hits verify the managed payload; damaged output is recomputed. The UI
+accepts worker-verified results and checks input/output file stamps before reuse,
+instead of trusting a nonempty file at a predicted path.
+
+The preview cache retains its latest entries per sequence. Pruning releases only
+registered owners and uses managed collection; unknown and legacy MP4 files are
+preserved and do not qualify for automatic reuse. Reader leases bridge lookup,
+worker completion, active preview selection, and playback. The video player also
+retains its last preview lease until another preview replaces it or the player is
+destroyed, so invalidating the timeline does not remove a file still loaded by
+MPV. Uncertain cache publication remains conservatively retained.
+
 ## Remaining U10 work
 
 - Migrate the other U7 analysis families to
@@ -155,7 +171,7 @@ remains outstanding. Session-only histories remain entirely in memory.
   OCR, ImageNet and shot classification, gaze, and boundary embeddings.
 - Expose the explicit legacy-reuse decision through user and agent flows; the
   current record model supports the decision but the flows are not wired.
-- Move preview/prerender media into managed storage, with pins spanning
+- Move transformed-clip prerenders into managed storage, with pins spanning
   execution, playback, export, and recovery. Pin referenced artifacts consumed by
   running jobs in addition to their serialized input bodies. Add safe computed-receipt pruning;
   existing inline receipts are not migrated eagerly.
