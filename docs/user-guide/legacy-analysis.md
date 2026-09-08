@@ -4,7 +4,7 @@ Older projects may contain analysis values without a record of the inputs or
 model that produced them. These values remain visible, but they do not count as
 completed analysis until you recompute them or explicitly accept reuse.
 
-For colors, brightness, volume, classification, object detection, gaze, shot types, OCR, descriptions, cinematography, transcription, and compatible
+For colors, brightness, volume, classification, object detection, gaze, shot types, OCR, descriptions, cinematography, transcription, word alignment, and compatible
 DINO thumbnail or boundary embeddings, the CLI provides an explicit reuse command:
 
 ```sh
@@ -21,6 +21,7 @@ scene_ripper analyze accept-legacy project.json --operation extract_text --clip-
 scene_ripper analyze accept-legacy project.json --operation describe --clip-id CLIP_ID
 scene_ripper analyze accept-legacy project.json --operation cinematography --clip-id CLIP_ID
 scene_ripper analyze accept-legacy project.json --operation transcribe --clip-id CLIP_ID
+scene_ripper analyze accept-legacy project.json --operation align_words --clip-id CLIP_ID
 ```
 
 Omit `--clip-id` to process all clips. The command reports accepted and failed
@@ -67,6 +68,13 @@ An explicitly stored empty transcript can be accepted; missing transcripts and
 timings outside the clip or containing segment require recomputation. Acceptance
 captures current transcription settings and leaves separate word-alignment
 records unchanged. It does not establish that saved words were force-aligned.
+Word-alignment acceptance requires saved word timings for every spoken segment.
+It preserves their distribution and the separate transcription record. Empty
+transcripts are valid; missing transcripts, missing word timings, and timings
+outside the clip or containing segment require recomputation. Accepted records
+make no claim about which alignment model or fallback produced the words.
+Changes to media, editorial text, segment boundaries, or the current alignment
+runtime invalidate the decision.
 
 An accepted value retains **unknown provenance**. Acceptance records your
 decision to use it with the current inputs; it does not establish how the old

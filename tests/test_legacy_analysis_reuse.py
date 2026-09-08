@@ -46,7 +46,7 @@ def test_verified_record_cannot_be_relabelled_as_legacy(tmp_path):
     assert project.clips[0].analysis_records["colors"] == previous
 
 
-@pytest.mark.parametrize("operation", ["colors", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots", "extract_text", "describe", "cinematography", "transcribe"])
+@pytest.mark.parametrize("operation", ["colors", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots", "extract_text", "describe", "cinematography", "transcribe", "align_words"])
 def test_cli_reuse_requires_an_explicit_command_and_saves_unknown_provenance(tmp_path, operation):
     from click.testing import CliRunner
     from cli.commands.analyze import analyze
@@ -553,3 +553,62 @@ def test_invalid_legacy_transcript_requires_recomputation(tmp_path, invalid):
     result = accept_legacy_analysis(project, "transcribe", transcription_options=TranscriptionOptions(backend="groq", cloud_model="test"))
     assert not result["accepted"] and len(result["failed"]) == 1
     assert "transcribe" not in clip.analysis_records
+
+
+def test_alignment_acceptance_preserves_transcript_and_skips_inference(tmp_path):
+    from core.spine.analysis_reuse import accept_legacy_analysis
+    from core.operations.alignment import run_alignment, snapshot_alignment_tasks
+    from core.transcription_models import TranscriptSegment, WordTimestamp
+    from models.analysis_record import AnalysisRecord
+
+    project = project_with_thumbnails(tmp_path, 1)
+    clip = project.clips[0]
+    transcript = [TranscriptSegment(0.0, 0.1, "Hello", words=[WordTimestamp(0.0, 0.1, "Hello")])]
+    clip.transcript = transcript
+    previous = AnalysisRecord.legacy({"transcript": [s.to_dict() for s in transcript]})
+    clip.analysis_records["transcribe"] = previous
+    assert not operation_is_complete_for_clip("align_words", clip, source=project.sources[0])
+    assert accept_legacy_analysis(project, "align_words")["accepted"] == [clip.id]
+    record = clip.analysis_records["align_words"]
+    assert record.provenance == "unknown" and record.legacy_reuse
+    assert record.identity.to_dict()["model"]["execution"] == []
+    assert clip.transcript is transcript
+    assert clip.analysis_records["transcribe"] is previous
+    assert operation_is_complete_for_clip("align_words", clip, source=project.sources[0])
+    with patch("core.operations.alignment._compute_raw", side_effect=AssertionError("no inference")):
+        reused = run_alignment(snapshot_alignment_tasks([clip], project.sources_by_id, verified=True))
+    assert reused[0].status == "skipped"
+    clip.transcript[0].text = "Changed"
+    assert not operation_is_complete_for_clip("align_words", clip, source=project.sources[0])
+
+
+@pytest.mark.parametrize("invalid", ["missing", "words", "empty_words", "outside"])
+def test_alignment_acceptance_rejects_missing_or_invalid_timings(tmp_path, invalid):
+    from core.spine.analysis_reuse import accept_legacy_analysis
+    from core.transcription_models import TranscriptSegment, WordTimestamp
+
+    project = project_with_thumbnails(tmp_path, 1)
+    clip = project.clips[0]
+    segment = TranscriptSegment(0.0, 0.1, "Hello")
+    if invalid != "missing":
+        clip.transcript = [segment]
+    if invalid == "empty_words":
+        segment.words = []
+    elif invalid == "outside":
+        segment.words = [WordTimestamp(0.0, 0.2, "Hello")]
+    result = accept_legacy_analysis(project, "align_words")
+    assert not result["accepted"] and len(result["failed"]) == 1
+    assert "align_words" not in clip.analysis_records
+
+
+def test_verified_alignment_cannot_reuse_unknown_execution(tmp_path):
+    from dataclasses import replace
+    from core.spine.analysis_reuse import accept_legacy_analysis
+    from core.transcription_models import TranscriptSegment, WordTimestamp
+
+    project = project_with_thumbnails(tmp_path, 1)
+    clip = project.clips[0]
+    clip.transcript = [TranscriptSegment(0.0, 0.1, "Hello", words=[WordTimestamp(0.0, 0.1, "Hello")])]
+    assert accept_legacy_analysis(project, "align_words")["accepted"] == [clip.id]
+    clip.analysis_records["align_words"] = replace(clip.analysis_records["align_words"], provenance="verified", legacy_reuse=False)
+    assert not operation_is_complete_for_clip("align_words", clip, source=project.sources[0])

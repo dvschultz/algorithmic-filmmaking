@@ -99,6 +99,14 @@ def execution_is_current(runtime: dict) -> bool:
     return True
 
 
+def alignment_execution_reusable(record: AnalysisRecord | None, runtime: dict) -> bool:
+    """An explicit legacy decision carries no claim about prior execution."""
+    return execution_is_current(runtime) or bool(
+        record is not None and record.provenance == "unknown" and record.legacy_reuse
+        and runtime.get("execution") == []
+    )
+
+
 def alignment_snapshot(clip: Clip, source: Source) -> AnalysisSnapshot:
     from core.operations.transcription_records import transcription_value
 

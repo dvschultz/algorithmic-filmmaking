@@ -20,7 +20,7 @@ def accept_legacy_analysis(project: "Project", operation: str, clip_ids: list[st
     """
     from core.operations.colors import ColorApplication, color_request
     from core.operations.embeddings import EmbeddingApplication, embedding_task
-    from core.operations.legacy_reuse import LEGACY_REUSE_OPERATIONS, accept_legacy_colors, accept_legacy_embeddings, accept_legacy_scalars, accept_legacy_visuals, accept_legacy_boundaries, accept_legacy_gaze, accept_legacy_shots, accept_legacy_ocr, accept_legacy_descriptions, accept_legacy_cinematography, accept_legacy_transcription, legacy_transcription_options
+    from core.operations.legacy_reuse import LEGACY_REUSE_OPERATIONS, accept_legacy_colors, accept_legacy_embeddings, accept_legacy_scalars, accept_legacy_visuals, accept_legacy_boundaries, accept_legacy_gaze, accept_legacy_shots, accept_legacy_ocr, accept_legacy_descriptions, accept_legacy_cinematography, accept_legacy_transcription, legacy_transcription_options, accept_legacy_alignment
     from core.operations.scalars import ScalarApplication, ScalarOperation, scalar_task
     from models.analysis_record import AnalysisRecord
 
@@ -55,6 +55,19 @@ def accept_legacy_analysis(project: "Project", operation: str, clip_ids: list[st
         previous = clip.analysis_records.get(operation)
         if previous is not None and not isinstance(previous, AnalysisRecord):
             result["failed"].append({"clip_id": cid, "message": "Unknown analysis record must be preserved; recompute analysis"})
+            continue
+        if operation == "align_words":
+            from core.operations.alignment import AlignmentApplication, snapshot_alignment_tasks
+
+            alignment_tasks = snapshot_alignment_tasks([clip], project.sources_by_id, verified=True)
+            alignment_application = AlignmentApplication(project, alignment_tasks)
+            alignment_result = accept_legacy_alignment(alignment_tasks, cancel_event=cancel_event)[0]
+            if alignment_result.status == "unprocessed":
+                result["unprocessed"].append(cid)
+            elif alignment_result.has_result and alignment_application.apply(project, alignment_result):
+                result["accepted"].append(cid)
+            else:
+                result["failed"].append({"clip_id": cid, "message": alignment_result.message or "Target changed"})
             continue
         if operation == "transcribe":
             from core.operations.transcription import TranscriptionApplication

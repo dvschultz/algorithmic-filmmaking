@@ -22,7 +22,7 @@ owners = []
 tool = tools.get('accept_legacy_analysis')
 assert tool.modifies_gui_state and tool.modifies_project_state
 with TemporaryDirectory() as directory:
-    for operation in ('colors', 'embeddings', 'brightness', 'volume', 'classify', 'detect_objects', 'boundary_embeddings', 'gaze', 'shots', 'extract_text', 'describe', 'cinematography', 'transcribe'):
+    for operation in ('colors', 'embeddings', 'brightness', 'volume', 'classify', 'detect_objects', 'boundary_embeddings', 'gaze', 'shots', 'extract_text', 'describe', 'cinematography', 'transcribe', 'align_words'):
         for mode in ('current', 'reply', 'project', 'edit', 'cancel'):
             window = QObject(); owners.append(window)
             window.project = project_with_thumbnails(Path(directory), 1)

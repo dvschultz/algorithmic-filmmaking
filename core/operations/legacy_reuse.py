@@ -16,9 +16,10 @@ from core.operations.contracts import ColorOutcome, ColorResult
 from core.operations.embeddings import EmbeddingOutcome, EmbeddingTask, embedding_identity
 from models.analysis_record import AnalysisIdentity, AnalysisRecord
 
-LEGACY_REUSE_OPERATIONS = ("colors", "embeddings", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots", "extract_text", "describe", "cinematography", "transcribe")
+LEGACY_REUSE_OPERATIONS = ("colors", "embeddings", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots", "extract_text", "describe", "cinematography", "transcribe", "align_words")
 
 if TYPE_CHECKING:
+    from core.operations.alignment import AlignmentTask, AlignmentOutcome
     from core.operations.transcription import TranscriptionOptions, TranscriptionOutcome, TranscriptionTask
     from core.settings import Settings
     from core.operations.cinematography import CinematographyOptions, CinematographyOutcome, CinematographyTask
@@ -63,6 +64,48 @@ def _accept(record_json: str | None, value: dict, identity: AnalysisIdentity, in
         input_json=json.dumps(inputs.to_dict(), sort_keys=True, separators=(",", ":")),
     )
     return json.dumps(accepted.to_dict(), sort_keys=True)
+
+
+def accept_legacy_alignment(tasks: "tuple[AlignmentTask, ...]", *, cancel_event: Event | None = None) -> "tuple[AlignmentOutcome, ...]":
+    """Accept stored word timings without claiming CTC or fallback execution."""
+    from core.analysis_records import AnalysisSnapshot
+    from core.jobs.media import FingerprintCancelled
+    from core.operations.alignment import AlignmentOutcome
+    from core.operations.alignment_records import alignment_identity, alignment_runtime
+    from core.operations.transcription_records import transcription_segments_value
+    from core.transcription_models import TranscriptSegment
+
+    fingerprints = AnalysisFingerprints(cancel_event)
+    runtime = alignment_runtime()
+    outcomes = []
+    for task in tasks:
+        try:
+            if cancel_event is not None and cancel_event.is_set():
+                raise FingerprintCancelled()
+            target = task.target
+            if target.error or task.analysis_json is None or target.source_path is None:
+                raise ValueError(target.error or "Alignment reuse requires readable source media")
+            snapshot = AnalysisSnapshot.from_json(task.analysis_json)
+            value = json.loads(snapshot.value_json)
+            if not isinstance(value["transcript"], list) or value["transcript"] != json.loads(task.transcript_json):
+                raise ValueError("No consistent legacy transcript is available")
+            segments = tuple(TranscriptSegment.from_dict(item) for item in value["transcript"])
+            if transcription_segments_value(segments) != value:
+                raise ValueError("Legacy transcript is not canonical")
+            duration = target.end_time - target.start_time
+            if target.start_time < 0 or not isfinite(duration) or duration <= 0:
+                raise ValueError("Invalid alignment source range")
+            if any(segment.words is None or (segment.text.strip() and not segment.words) or segment.end_time > duration or any(word.start < segment.start_time or word.end > segment.end_time for word in segment.words or ()) for segment in segments):
+                raise ValueError("Legacy word timings are missing or outside their clip or segment")
+            identity = alignment_identity(snapshot, task.transcript_json, fingerprints, runtime)
+            record_json = _accept(json.dumps(snapshot.record.to_dict()) if snapshot.record else None, value, identity, snapshot.inputs)
+            words = tuple(word for segment in segments for word in segment.words or ())
+            outcomes.append(AlignmentOutcome(task.clip_id, "skipped", words, code="legacy_accepted", record_json=record_json))
+        except FingerprintCancelled:
+            outcomes.append(AlignmentOutcome(task.clip_id, "unprocessed", code="cancelled"))
+        except (ValueError, OSError, TypeError, KeyError, AttributeError) as exc:
+            outcomes.append(AlignmentOutcome(task.clip_id, "failed", message=str(exc)))
+    return tuple(outcomes)
 
 
 def legacy_transcription_options(settings: "Settings | None" = None) -> "TranscriptionOptions":

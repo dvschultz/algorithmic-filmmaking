@@ -25,6 +25,7 @@ from core.operations.alignment_records import (
     alignment_identity,
     alignment_parameters,
     execution_is_current,
+    alignment_execution_reusable,
     prior_execution,
 )
 from core.operations.transcription_records import (
@@ -181,7 +182,7 @@ def _compute(
         )
         reused = (
             snapshot.reusable_record(identity)
-            if task.skip_existing and execution_is_current(runtime)
+            if task.skip_existing and alignment_execution_reusable(snapshot.record, runtime)
             else None
         )
         if reused is not None:

@@ -124,7 +124,7 @@ def alignment_is_complete(clip: Clip, source: Source | None) -> bool:
     import json
     from core.analysis_records import current_record
     from core.operations.alignment_records import (
-        alignment_snapshot, alignment_runtime, alignment_parameters, execution_is_current,
+        alignment_snapshot, alignment_runtime, alignment_parameters, alignment_execution_reusable,
     )
     from core.operations.transcription_records import transcription_value
 
@@ -142,7 +142,7 @@ def alignment_is_complete(clip: Clip, source: Source | None) -> bool:
             and identity["parameters"] == alignment_parameters(json.dumps(transcription_value(clip)["transcript"], sort_keys=True))
             and identity["sampling"] == {"policy": "half-open-clip-audio/v1"}
             and identity["prompt_sha256"] is None
-            and execution_is_current(runtime)
+            and alignment_execution_reusable(record, runtime)
             and runtime == alignment_runtime(execution=runtime["execution"])
             and record.value == transcription_value(clip)
         )

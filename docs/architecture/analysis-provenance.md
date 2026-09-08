@@ -1074,6 +1074,17 @@ tracked, inactive historical owners as described above.
   normalization. Five scoped modules pass typing and scoped lint is clean.
   Audio transcription, alignment, faces, custom-query acceptance, and the final
   review/full-suite audit remain open.
+- Word-alignment acceptance now reaches all four interfaces through the normal
+  alignment snapshot and guarded application. Every spoken segment needs stored,
+  valid word timings within its segment/clip. Stored empty transcripts are valid;
+  missing transcripts or word data require recomputation. Accepted records bind
+  current alignment runtime and editorial text while retaining unknown provenance
+  and an empty execution history. Only explicit legacy decisions can reuse that
+  unknown history; verified records still require actual execution evidence.
+  Publication preserves both timing distribution and the separate transcription
+  record. The 262-test legacy/native GUI/MCP/alignment/recovery/import group
+  passes; eight scoped modules pass typing and scoped lint is clean. Audio
+  transcription, faces, custom-query acceptance, and the final audit remain open.
 - Finish the remaining cross-consumer reuse/projection audit.
   Receipt pruning retains legacy rows rather than guessing absent ownership;
   existing rows are not migrated eagerly.

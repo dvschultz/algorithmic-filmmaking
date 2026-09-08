@@ -366,7 +366,7 @@ def _start_job(
 @mcp.tool()
 async def start_accept_legacy_analysis(
     project_path: Annotated[str, "Path to the project file"],
-    operation: Annotated[str, "Legacy operation: colors, embeddings, boundary_embeddings, brightness, volume, classify, detect_objects, gaze, shots, extract_text, describe, cinematography, or transcribe"],
+    operation: Annotated[str, "Legacy operation: colors, embeddings, boundary_embeddings, brightness, volume, classify, detect_objects, gaze, shots, extract_text, describe, cinematography, transcribe, or align_words"],
     clip_ids: Annotated[Optional[list[str]], "Exact clip IDs; omitted means all clips"] = None,
     idempotency_key: Optional[str] = None,
     ctx: Context | None = None,
@@ -408,7 +408,7 @@ async def start_accept_legacy_analysis(
                     media_paths.add(source.file_path)
                 if operation in ("embeddings", "classify", "detect_objects", "shots", "describe", "cinematography") and clip.thumbnail_path is not None:
                     media_paths.add(clip.thumbnail_path)
-            if operation in ("volume", "extract_text", "describe", "cinematography", "transcribe"):
+            if operation in ("volume", "extract_text", "describe", "cinematography", "transcribe", "align_words"):
                 from core.binary_resolver import find_binary
                 for name in (("ffmpeg", "ffprobe") if operation in ("volume", "transcribe") else ("ffmpeg",)):
                     binary = find_binary(name)
