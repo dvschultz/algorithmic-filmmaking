@@ -46,7 +46,7 @@ def test_verified_record_cannot_be_relabelled_as_legacy(tmp_path):
     assert project.clips[0].analysis_records["colors"] == previous
 
 
-@pytest.mark.parametrize("operation", ["colors", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots", "extract_text", "describe"])
+@pytest.mark.parametrize("operation", ["colors", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots", "extract_text", "describe", "cinematography"])
 def test_cli_reuse_requires_an_explicit_command_and_saves_unknown_provenance(tmp_path, operation):
     from click.testing import CliRunner
     from cli.commands.analyze import analyze
@@ -61,6 +61,10 @@ def test_cli_reuse_requires_an_explicit_command_and_saves_unknown_provenance(tmp
     project.clips[0].extracted_texts = []
     project.clips[0].description = "A person walking"
     project.clips[0].shot_type = "wide shot"
+    if operation == "cinematography":
+        from models.cinematography import CinematographyAnalysis
+        project.clips[0].cinematography = CinematographyAnalysis()
+        project.clips[0].shot_type = "medium"
     project.clips[0].gaze_yaw = project.clips[0].gaze_pitch = 0.0
     project.clips[0].gaze_category = "at_camera"
     project.clips[0].first_frame_embedding = [0.2] * 768
@@ -426,3 +430,63 @@ def test_description_reuse_rejects_changed_legacy_metadata(tmp_path):
     result = accept_legacy_analysis(project, "describe", description_options=DescriptionOptions("cloud", model="test", input_mode="frame"))
     assert not result["accepted"]
     assert clip.analysis_records["describe"] is previous
+
+
+def test_cinematography_reuse_captures_settings_and_preserves_metadata(tmp_path):
+    from core.settings import Settings
+    from core.operations.cinematography import cinematography_task, resolve_options, run_cinematography
+    from models.cinematography import CinematographyAnalysis
+    from ui.workers.legacy_reuse_worker import LegacyReuseWorker
+
+    project = project_with_thumbnails(tmp_path, 1)
+    clip = project.clips[0]
+    analysis = CinematographyAnalysis(shot_size_confidence=0.0, analysis_model="legacy-model", analysis_mode="video")
+    clip.cinematography = analysis
+    clip.shot_type = analysis.get_simple_shot_type()
+    settings = Settings(cinematography_tier="cloud", cinematography_model="original-model", cinematography_input_mode="frame")
+    worker = LegacyReuseWorker(project, "cinematography", [clip.id], settings=settings)
+    settings.cinematography_model = "changed-model"
+    results = []
+    worker.result_ready.connect(results.append)
+    worker.run()
+    assert worker.application.apply(project, results[0][0])
+    record = clip.analysis_records["cinematography"]
+    assert record.provenance == "unknown" and record.legacy_reuse
+    assert record.identity.to_dict()["parameters"]["model"] == "original-model"
+    assert clip.cinematography is analysis
+    assert analysis.analysis_mode == "video" and analysis.analysis_model == "legacy-model"
+    assert not operation_is_complete_for_clip("cinematography", clip, source=project.sources[0], settings=settings)
+    settings.cinematography_model = "original-model"
+    assert operation_is_complete_for_clip("cinematography", clip, source=project.sources[0], settings=settings)
+    with patch("core.analysis.cinematography.analyze_cinematography", side_effect=AssertionError("no inference")):
+        reused = run_cinematography((cinematography_task(clip, project.sources[0]),), resolve_options(settings=settings))
+    assert reused[0].status == "skipped"
+    clip.end_frame -= 1
+    assert not operation_is_complete_for_clip("cinematography", clip, source=project.sources[0], settings=settings)
+
+
+@pytest.mark.parametrize("invalid", ["missing", "shot", "enum", "confidence", "boolean", "mode"])
+def test_invalid_legacy_cinematography_requires_recomputation(tmp_path, invalid):
+    from core.spine.analysis_reuse import accept_legacy_analysis
+    from core.operations.cinematography import CinematographyOptions
+    from models.cinematography import CinematographyAnalysis
+
+    project = project_with_thumbnails(tmp_path, 1)
+    clip = project.clips[0]
+    clip.cinematography = CinematographyAnalysis()
+    clip.shot_type = "medium"
+    if invalid == "missing":
+        clip.cinematography = None
+    elif invalid == "shot":
+        clip.shot_type = "wide"
+    elif invalid == "enum":
+        clip.cinematography.camera_angle = "invalid"
+    elif invalid == "confidence":
+        clip.cinematography.shot_size_confidence = 1.1
+    elif invalid == "boolean":
+        clip.cinematography.shot_size_confidence = True
+    else:
+        clip.cinematography.analysis_mode = "invalid"
+    result = accept_legacy_analysis(project, "cinematography", cinematography_options=CinematographyOptions("cloud", "frame", "test", "local"))
+    assert not result["accepted"] and len(result["failed"]) == 1
+    assert "cinematography" not in clip.analysis_records

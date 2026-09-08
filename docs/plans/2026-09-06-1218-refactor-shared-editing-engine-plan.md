@@ -488,6 +488,13 @@ The 177-test legacy/description/MCP/native GUI/import group plus a metadata
 mismatch regression pass. Remaining legacy families and final verification are
 still open.
 
+Cinematography legacy acceptance now reaches all four surfaces, validating
+saved observations and shot-projection agreement while preserving model/mode
+metadata. Current settings are captured before execution. The 197-test legacy/
+cinematography/MCP/native GUI/import group passes, with scoped typing and lint
+clean. Transcription/alignment, faces, custom-query acceptance, and final
+verification remain open.
+
 Custom queries now retain independent records through shared operations, direct
 headless calls, GUI worker delivery/recovery, and durable headless jobs. GUI reuse
 verifies saved records without duplicate history or local weight loading. Durable

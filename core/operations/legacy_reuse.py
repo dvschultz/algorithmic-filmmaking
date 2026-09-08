@@ -8,7 +8,7 @@ from dataclasses import replace
 import json
 from math import isfinite
 from threading import Event
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from core.analysis_records import AnalysisFingerprints, AnalysisInput
 from core.operations.colors import ColorRequest, color_identity
@@ -16,9 +16,10 @@ from core.operations.contracts import ColorOutcome, ColorResult
 from core.operations.embeddings import EmbeddingOutcome, EmbeddingTask, embedding_identity
 from models.analysis_record import AnalysisIdentity, AnalysisRecord
 
-LEGACY_REUSE_OPERATIONS = ("colors", "embeddings", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots", "extract_text", "describe")
+LEGACY_REUSE_OPERATIONS = ("colors", "embeddings", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots", "extract_text", "describe", "cinematography")
 
 if TYPE_CHECKING:
+    from core.operations.cinematography import CinematographyOptions, CinematographyOutcome, CinematographyTask
     from core.operations.description import DescriptionOptions, DescriptionOutcome, DescriptionTask
     from core.operations.scalars import ScalarOutcome, ScalarTask
     from core.operations.classification import ClassificationOutcome, ClassificationTask
@@ -41,6 +42,10 @@ def _accept(record_json: str | None, value: dict, identity: AnalysisIdentity, in
         previous = record.value
     if identity.operation == "describe" and isinstance(previous, dict):
         previous = {"description_model": None, "description_frames": None, **previous}
+    if identity.operation == "cinematography" and isinstance(previous, dict) and "shot_type" not in previous and isinstance(previous.get("cinematography"), dict):
+        from models.cinematography import CinematographyAnalysis
+
+        previous = {**previous, "shot_type": CinematographyAnalysis.from_dict(previous["cinematography"]).get_simple_shot_type()}
     if identity.operation == "colors" and isinstance(previous, dict):
         previous = {"dominant_colors": [
             [color["r"], color["g"], color["b"]] if isinstance(color, dict) else list(color)
@@ -56,6 +61,57 @@ def _accept(record_json: str | None, value: dict, identity: AnalysisIdentity, in
         input_json=json.dumps(inputs.to_dict(), sort_keys=True, separators=(",", ":")),
     )
     return json.dumps(accepted.to_dict(), sort_keys=True)
+
+
+def accept_legacy_cinematography(tasks: "tuple[CinematographyTask, ...]", options: "CinematographyOptions", *, cancel_event: Event | None = None) -> "tuple[CinematographyOutcome, ...]":
+    """Accept valid saved film-language observations without rewriting them."""
+    from core.analysis.cinematography import CINEMATOGRAPHY_SCHEMA
+    from core.analysis_records import AnalysisSnapshot
+    from core.jobs.media import FingerprintCancelled
+    from core.operations.cinematography import CinematographyOutcome, cinematography_identity, cinematography_runtime
+    from models.cinematography import CinematographyAnalysis
+
+    fingerprints = AnalysisFingerprints(cancel_event)
+    outcomes = []
+    for task in tasks:
+        try:
+            if cancel_event is not None and cancel_event.is_set():
+                raise FingerprintCancelled()
+            if task.snapshot_json is None or task.thumbnail_path is None or not task.thumbnail_path.is_file():
+                raise ValueError("Cinematography reuse requires a readable thumbnail")
+            snapshot = AnalysisSnapshot.from_json(task.snapshot_json)
+            value = json.loads(snapshot.value_json)
+            raw = value["cinematography"]
+            if not isinstance(raw, dict):
+                raise ValueError("No legacy cinematography result is available")
+            analysis = CinematographyAnalysis.from_dict(raw)
+            for field, schema in cast(dict[str, dict], CINEMATOGRAPHY_SCHEMA["properties"]).items():
+                if "enum" in schema and getattr(analysis, field) not in schema["enum"]:
+                    raise ValueError(f"Invalid legacy cinematography field: {field}")
+            confidence = analysis.shot_size_confidence
+            if isinstance(confidence, bool) or not isinstance(confidence, (int, float)) or not isfinite(confidence) or not 0 <= confidence <= 1:
+                raise ValueError("Invalid legacy cinematography confidence")
+            if analysis.analysis_mode not in ("frame", "video") or (
+                analysis.analysis_model is not None and (not isinstance(analysis.analysis_model, str) or not analysis.analysis_model.strip())
+            ):
+                raise ValueError("Invalid legacy cinematography metadata")
+            if raw != analysis.to_dict() or value["shot_type"] != analysis.get_simple_shot_type():
+                raise ValueError("Legacy cinematography and shot projection disagree; recompute analysis")
+            if task.target_type == "clip" and (
+                task.source_path is None or task.fps is None or isinstance(task.fps, bool)
+                or not isfinite(task.fps) or task.fps <= 0
+                or type(task.start_frame) is not int or type(task.end_frame) is not int
+                or task.start_frame < 0 or task.end_frame <= task.start_frame
+            ):
+                raise ValueError("Cinematography reuse requires a valid source range")
+            identity = cinematography_identity(snapshot, options, fingerprints, cinematography_runtime(task, options))
+            record_json = _accept(json.dumps(snapshot.record.to_dict()) if snapshot.record else None, value, identity, snapshot.inputs)
+            outcomes.append(CinematographyOutcome(task.clip_id, "skipped", json.dumps(raw, sort_keys=True), code="legacy_accepted", record_json=record_json))
+        except FingerprintCancelled:
+            outcomes.append(CinematographyOutcome(task.clip_id, "unprocessed", code="cancelled"))
+        except (ValueError, OSError, TypeError, KeyError) as exc:
+            outcomes.append(CinematographyOutcome(task.clip_id, "failed", message=str(exc)))
+    return tuple(outcomes)
 
 
 def accept_legacy_descriptions(tasks: "tuple[DescriptionTask, ...]", options: "DescriptionOptions", *, cancel_event: Event | None = None) -> "tuple[DescriptionOutcome, ...]":

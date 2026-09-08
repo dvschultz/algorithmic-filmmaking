@@ -1043,6 +1043,17 @@ tracked, inactive historical owners as described above.
   native GUI/MCP/description/import group and one additional metadata-mismatch
   regression pass, with scoped typing and lint clean. Other legacy families and
   the final review/full-suite run remain open.
+- Cinematography acceptance now reaches all four interfaces through the normal
+  snapshot, identity, and application. It validates saved categories, confidence,
+  model/mode metadata, source ranges, and agreement with the shot projection.
+  Legacy records that omitted the secondary shot projection compare using the
+  saved analysis's derived label; conflicting values remain rejected. Existing
+  analysis metadata is preserved while the reuse decision captures current
+  settings. The 197-test legacy/native GUI/MCP/cinematography/import group passes,
+  including settings capture, inference-free reuse, invalid values, and stale
+  publication. Five scoped modules pass typing and scoped lint is clean.
+  Transcription/alignment, faces, custom-query acceptance, and the final audit
+  remain open.
 - Finish the remaining cross-consumer reuse/projection audit.
   Receipt pruning retains legacy rows rather than guessing absent ownership;
   existing rows are not migrated eagerly.

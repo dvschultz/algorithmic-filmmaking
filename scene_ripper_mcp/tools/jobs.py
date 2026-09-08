@@ -366,7 +366,7 @@ def _start_job(
 @mcp.tool()
 async def start_accept_legacy_analysis(
     project_path: Annotated[str, "Path to the project file"],
-    operation: Annotated[str, "Legacy operation: colors, embeddings, boundary_embeddings, brightness, volume, classify, detect_objects, gaze, shots, extract_text, or describe"],
+    operation: Annotated[str, "Legacy operation: colors, embeddings, boundary_embeddings, brightness, volume, classify, detect_objects, gaze, shots, extract_text, describe, or cinematography"],
     clip_ids: Annotated[Optional[list[str]], "Exact clip IDs; omitted means all clips"] = None,
     idempotency_key: Optional[str] = None,
     ctx: Context | None = None,
@@ -406,9 +406,9 @@ async def start_accept_legacy_analysis(
                 source = project.sources_by_id.get(clip.source_id)
                 if source is not None:
                     media_paths.add(source.file_path)
-                if operation in ("embeddings", "classify", "detect_objects", "shots", "describe") and clip.thumbnail_path is not None:
+                if operation in ("embeddings", "classify", "detect_objects", "shots", "describe", "cinematography") and clip.thumbnail_path is not None:
                     media_paths.add(clip.thumbnail_path)
-            if operation in ("volume", "extract_text", "describe"):
+            if operation in ("volume", "extract_text", "describe", "cinematography"):
                 from core.binary_resolver import find_binary
                 for name in (("ffmpeg", "ffprobe") if operation == "volume" else ("ffmpeg",)):
                     binary = find_binary(name)
@@ -431,10 +431,12 @@ async def start_accept_legacy_analysis(
     ocr_options = await asyncio.to_thread(resolve_ocr_options, OcrOptions()) if operation == "extract_text" else None
     from core.operations.description import resolve_options as resolve_description_options
     description_options = await asyncio.to_thread(resolve_description_options) if operation == "describe" else None
+    from core.operations.cinematography import resolve_options as resolve_cinematography_options
+    cinematography_options = await asyncio.to_thread(resolve_cinematography_options) if operation == "cinematography" else None
     arguments = {"operation": operation, "clip_ids": ids}
     spec = OperationSpec.build(
         kind="accept_legacy_analysis", version=1, arguments=arguments,
-        inputs={"project_path": str(path), "project_revision": revision.digest, "media_stamps": stamps, "shot_options": asdict(shot_options) if shot_options else None, "ocr_options": asdict(ocr_options) if ocr_options else None, "description_options": asdict(description_options) if description_options else None},
+        inputs={"project_path": str(path), "project_revision": revision.digest, "media_stamps": stamps, "shot_options": asdict(shot_options) if shot_options else None, "ocr_options": asdict(ocr_options) if ocr_options else None, "description_options": asdict(description_options) if description_options else None, "cinematography_options": asdict(cinematography_options) if cinematography_options else None},
         persistence="job_history", input_revision=revision.digest,
     )
 
@@ -450,7 +452,7 @@ async def start_accept_legacy_analysis(
         project, mtime = load_with_mtime(path)
         try:
             revision.verify()
-            result = accept_legacy_analysis(project, operation, ids, cancel_event=cancel_event, shot_options=shot_options, ocr_options=ocr_options, description_options=description_options)
+            result = accept_legacy_analysis(project, operation, ids, cancel_event=cancel_event, shot_options=shot_options, ocr_options=ocr_options, description_options=description_options, cinematography_options=cinematography_options)
             if result["accepted"]:
                 save_with_mtime_check(project, path, mtime)
             progress_callback(1.0, "Legacy reuse decisions saved")

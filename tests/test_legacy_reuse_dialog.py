@@ -8,7 +8,7 @@ import sys
 import pytest
 
 
-@pytest.mark.parametrize("operation", ["colors", "embeddings", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots", "extract_text", "describe"])
+@pytest.mark.parametrize("operation", ["colors", "embeddings", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots", "extract_text", "describe", "cinematography"])
 def test_dialog_publication_and_cancellation(tmp_path, operation):
     code = r'''
 import sys
@@ -39,6 +39,10 @@ for mode in ('current', 'trim', 'project', 'cancel'):
     clip.extracted_texts = []
     clip.description = "A person walking"
     clip.shot_type = "wide shot"
+    if sys.argv[2] == "cinematography":
+        from models.cinematography import CinematographyAnalysis
+        clip.cinematography = CinematographyAnalysis()
+        clip.shot_type = "medium"
     clip.gaze_yaw = clip.gaze_pitch = 0.0
     clip.gaze_category = "at_camera"
     clip.first_frame_embedding = [0.2] * 768
