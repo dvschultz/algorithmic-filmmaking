@@ -944,8 +944,15 @@ tracked, inactive historical owners as described above.
 - Migrate the other U7 analysis families to
   semantic reuse. Extend operation-owned failure records beyond object detection,
   OCR, ImageNet and shot classification, gaze, and boundary embeddings.
-- Expose the explicit legacy-reuse decision through user and agent flows; the
-  current record model supports the decision but the flows are not wired.
+- Explicit legacy reuse now has detached worker computations and a shared spine
+  entry point for colors and compatible DINO thumbnail embeddings. The CLI
+  `analyze accept-legacy` exposes this deliberate decision and saves it while
+  retaining unknown provenance. Media hashing precedes normal guarded owner
+  publication; changed inputs, incompatible models, verified/failed records,
+  and unknown future records are rejected. The initial 88-test operation,
+  provenance, CLI, and import-boundary group passed, as did scoped typing and
+  lint. Desktop/agent controls and the remaining analysis families still need
+  this flow; the existing two-operation path is not completion of U10.
 - Finish the remaining cross-consumer reuse/projection audit.
   Receipt pruning retains legacy rows rather than guessing absent ownership;
   existing rows are not migrated eagerly.

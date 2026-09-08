@@ -417,6 +417,11 @@ spine, GUI, and durable delivery. The prior vector is preserved and no success
 receipt is created. Mixed batches journal successful vectors before failure
 publication. The 115 focused embedding/recovery/import tests pass. Explicit
 legacy-reuse flows and the final cross-consumer/recovery audit remain open.
+The initial colors/DINO path is now available through detached shared operations,
+the spine, and `analyze accept-legacy`. It preserves unknown provenance and
+binds explicitly accepted values to current media inputs. Its 88-test focused
+validation passed; desktop/agent controls and the other analysis families remain
+outstanding. See [legacy analysis](../user-guide/legacy-analysis.md).
 
 Custom queries now retain independent records through shared operations, direct
 headless calls, GUI worker delivery/recovery, and durable headless jobs. GUI reuse

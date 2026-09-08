@@ -31,6 +31,36 @@ def analyze() -> None:
     pass
 
 
+@analyze.command("accept-legacy")
+@click.argument("project_file", type=click.Path(exists=True, path_type=Path))
+@click.option("--operation", type=click.Choice(["colors", "embeddings"]), required=True)
+@click.option("--clip-id", "-c", "clip_ids", multiple=True, help="Exact clip ID (default: all clips)")
+@click.pass_context
+def accept_legacy(ctx: click.Context, project_file: Path, operation: str, clip_ids: tuple[str, ...]) -> None:
+    """Explicitly reuse old values for current inputs without recomputing them.
+
+    Provenance stays unknown: this decision does not verify how the old values
+    were computed. Changed inputs invalidate the decision. Embeddings require
+    a compatible recorded model; otherwise recompute them.
+    """
+    from core.project import Project
+    from core.spine.analysis_reuse import accept_legacy_analysis
+
+    path = own_project(ctx, project_file)
+    project = None
+    try:
+        project = Project.load(path)
+        result = accept_legacy_analysis(project, operation, list(clip_ids) or None)
+        if result["accepted"] and not project.save():
+            raise RuntimeError("Failed to save legacy reuse decisions")
+    except Exception as exc:
+        exit_with(ExitCode.GENERAL_ERROR, str(exc))
+    finally:
+        if project is not None:
+            project.close_writer()
+    output_result(result, as_json=(ctx.obj or {}).get("json", False))
+
+
 @analyze.command("scalars")
 @click.argument("project_file", type=click.Path(exists=True, path_type=Path))
 @click.option("--operation", "scalar_kind", type=click.Choice(["brightness", "volume"]), required=True)
