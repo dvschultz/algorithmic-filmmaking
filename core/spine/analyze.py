@@ -537,7 +537,7 @@ def cinematography(
     cancel_event: Optional[threading.Event] = None,
 ) -> dict:
     """Run rich cinematography analysis for clips."""
-    from core.operations.cinematography import CinematographyApplication, CinematographyTask, resolve_options, run_cinematography
+    from core.operations.cinematography import CinematographyApplication, cinematography_task, resolve_options, run_cinematography
 
     clips = _resolve_clip_ids(project, clip_ids)
     sources_by_id = project.sources_by_id
@@ -549,21 +549,20 @@ def cinematography(
     tasks = []
     for clip in clips:
         source = sources_by_id.get(clip.source_id)
-        tasks.append(CinematographyTask(
-            clip.id, _thumbnail_for_clip(clip),
-            source.file_path if source and source.file_path.exists() else None,
-            clip.start_frame, clip.end_frame, source.fps if source else None,
-            skip=skip_existing and clip.cinematography is not None,
-        ))
+        tasks.append(cinematography_task(clip, source, image_path=_thumbnail_for_clip(clip), skip_existing=skip_existing))
 
     def report(current: int, count: int, cid: str) -> None:
         if progress_callback is not None:
             progress_callback(current / count if count else 1.0, f"Cinematography ({current}/{count}): {cid}")
 
-    application = CinematographyApplication(project, tuple(tasks))
-    outcomes = run_cinematography(tuple(tasks), resolve_options(mode, model), cancel_event=cancel_event, progress=report)
+    options = resolve_options(mode, model)
+    application = CinematographyApplication(project, tuple(tasks), options)
+    outcomes = run_cinematography(tuple(tasks), options, cancel_event=cancel_event, progress=report)
     accepted = application.apply_batch(project, outcomes)
     for clip, outcome, applied in zip(clips, outcomes, accepted):
+        if outcome.can_apply and not applied:
+            failed.append({"clip_id": clip.id, "code": "stale_result"})
+            continue
         if outcome.status == "skipped":
             skipped.append({"clip_id": clip.id, "reason": outcome.code})
             continue

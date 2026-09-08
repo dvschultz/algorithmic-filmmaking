@@ -42,7 +42,10 @@ def test_gui_spine_share_provider_arguments(tmp_path, monkeypatch):
     )
     worker.run()
     result = cinematography(project, mode="video", model="selected")
-    assert provider.call_args_list[0] == provider.call_args_list[1]
+    gui_arguments = provider.call_args_list[0].kwargs
+    headless_arguments = dict(provider.call_args_list[1].kwargs)
+    assert callable(headless_arguments.pop("on_execution"))
+    assert gui_arguments == headless_arguments
     assert result["result"]["succeeded"] == [{"clip_id": "c-0", "shot_size": "CU"}]
     assert worker.result[0].analysis.shot_size == "CU"
 

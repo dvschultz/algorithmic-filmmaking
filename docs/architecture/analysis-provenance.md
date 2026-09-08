@@ -304,8 +304,21 @@ The provider can now report its actual model, backend, and input mode before
 inference. Video extraction fallback reports a subsequent frame attempt, including
 when that attempt fails. Authentication errors retain the video attempt and do
 not trigger fallback. Local execution reports the selected cinematography model
-after confirming MLX availability. Shared operation records, reuse checks, and
-GUI/headless delivery migration remain to be implemented for this family.
+after confirming MLX availability.
+
+The shared operation and direct headless entry point now record media content,
+clip range/frame rate, model and package identity, prompt/schema digests, sampling,
+and actual execution mode. A record verifies both the rich analysis and its derived
+shot type. Clip and frame tasks can reuse verified records; parallelism changes do
+not invalidate them, and local reuse does not enter inference. Video requests do
+not reuse a previous frame fallback. Failed attempts retain their actual execution
+path, replace verification state, and preserve the earlier display values.
+
+Owner-thread publication checks the prior record, displayed values, media stamps,
+editorial bindings, requested settings, and prompt digest. Legacy deliveries clear
+prior verification rather than implicitly carrying it forward. GUI workers,
+durable job receipts, completion checks, and their recovery/delivery surfaces
+still need migration; cinematography and U10 remain incomplete.
 
 ## Remaining U10 work
 
