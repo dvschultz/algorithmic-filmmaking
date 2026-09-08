@@ -54,7 +54,10 @@ def test_gui_and_spine_forward_same_inputs(tmp_path, monkeypatch):
     )
     worker.run()
     result = describe(project, tier="cloud", prompt="Action?")["result"]
-    assert calls[0] == calls[1]
+    assert calls[0][0] == calls[1][0]
+    assert {k: v for k, v in calls[0][1].items() if k != "on_execution"} == {
+        k: v for k, v in calls[1][1].items() if k != "on_execution"
+    }
     assert (
         worker.result[0].description
         == project.clips[0].description
@@ -130,7 +133,11 @@ def test_cancel_interrupts_retry_and_does_not_reinvoke_provider(tmp_path, monkey
 
 def test_spine_skip_missing_and_cancelled_results(tmp_path, monkeypatch):
     project = project_with_thumbnails(tmp_path)
-    project.clips[0].description = "Existing"
+    monkeypatch.setattr(
+        "core.analysis.description.describe_frame",
+        lambda *a, **kw: ("Existing", "model"),
+    )
+    describe(project, clip_ids=[project.clips[0].id], tier="cloud")
     project.clips[1].thumbnail_path = None
     cancel = Event()
 
@@ -140,7 +147,7 @@ def test_spine_skip_missing_and_cancelled_results(tmp_path, monkeypatch):
 
     monkeypatch.setattr("core.analysis.description.describe_frame", provider)
     result = describe(project, tier="cloud", cancel_event=cancel)["result"]
-    assert result["skipped"] == [{"clip_id": "c-0", "reason": "already_populated"}]
+    assert result["skipped"] == [{"clip_id": "c-0", "reason": "valid_analysis"}]
     assert result["failed"] == [{"clip_id": "c-1", "code": "thumbnail_missing"}]
     assert result["succeeded"] == []
     assert project.clips[2].description is None
@@ -152,7 +159,7 @@ def test_unexpected_task_failure_preserves_other_outcomes(tmp_path, monkeypatch)
     tasks = tuple(DescriptionTask(str(i), path, None, 0, 1, None) for i in range(2))
     from core.operations.description import DescriptionOutcome
 
-    def compute(task, options, cancel):
+    def compute(task, options, cancel, *, fingerprints=None):
         if task.clip_id == "0":
             raise OSError("Cannot inspect thumbnail")
         return DescriptionOutcome(task.clip_id, "succeeded", "Valid output", "model")

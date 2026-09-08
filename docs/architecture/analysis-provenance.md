@@ -211,9 +211,19 @@ loader and durable job runtime snapshot. Cloud video extraction failures report
 frame execution, and metadata is available before inference so failed attempts
 can retain their execution identity.
 
-This is preparation for the description migration. Description operations and
-receipts still need verified records, semantic reuse, and operation-owned failures;
-the callback alone does not change their reuse decisions.
+The shared description operation and direct headless entry point now use verified
+records. Their identity covers image/source contents, clip range and frame rate,
+prompt digest, requested model/input mode, actual provider execution, installed
+runtime versions, and video-extraction runtime when applicable. Parallelism is
+excluded. Relocating identical files reuses the value and refreshes its bindings;
+changed media, prompts, models, or read projections require computation. A video
+request that fell back to frame input does not satisfy a later video request.
+Failures retain the displayed description while marking the record failed.
+Publication rejects changed media, prior values/records, and target/session bindings.
+
+GUI worker task construction/delivery, durable headless job receipts, completion
+projections, and saved-result checkpoints still need migration. Those paths retain
+their existing reuse rules; the description family is not yet complete.
 
 ## Remaining U10 work
 

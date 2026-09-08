@@ -471,7 +471,7 @@ def describe(
     """Generate VLM descriptions for clip thumbnails/video snippets."""
     from core.operations.description import (
         DEFAULT_PROMPT,
-        DescriptionTask,
+        description_task,
         DescriptionApplication,
         resolve_options,
         run_description,
@@ -483,14 +483,9 @@ def describe(
     for clip in clips:
         source = sources_by_id.get(clip.source_id)
         tasks.append(
-            DescriptionTask(
-                clip.id,
-                _thumbnail_for_clip(clip),
-                source.file_path if source else None,
-                clip.start_frame,
-                clip.end_frame,
-                source.fps if source else None,
-                skip_existing and clip.description is not None,
+            description_task(
+                clip, source, image_path=_thumbnail_for_clip(clip),
+                skip_existing=skip_existing,
             )
         )
     total = len(clips)
@@ -501,16 +496,19 @@ def describe(
         if progress_callback is not None and count:
             progress_callback(current / count, f"Description ({current}/{count})")
 
-    application = DescriptionApplication(project, tuple(tasks))
+    options = resolve_options(tier, prompt or DEFAULT_PROMPT)
+    application = DescriptionApplication(project, tuple(tasks), options)
     outcomes = run_description(
         tuple(tasks),
-        resolve_options(tier, prompt or DEFAULT_PROMPT),
+        options,
         cancel_event=cancel_event,
         progress=progress,
     )
     accepted = application.apply_batch(project, outcomes)
     for clip, outcome, applied in zip(clips, outcomes, accepted):
-        if outcome.status == "skipped":
+        if outcome.can_apply and not applied:
+            failed.append({"clip_id": clip.id, "code": "stale_result"})
+        elif outcome.status == "skipped":
             skipped.append({"clip_id": clip.id, "reason": outcome.code})
         elif outcome.status == "failed":
             failure = {"clip_id": clip.id, "code": outcome.code}

@@ -41,6 +41,8 @@ class AnalysisTarget:
     analysis_records: dict[str, StoredAnalysisRecord] = field(default_factory=dict)
     source_id: Optional[str] = None
     frame_number: Optional[int] = None
+    description_model: Optional[str] = None
+    description_frames: Optional[int] = None
 
     @classmethod
     def from_clip(cls, clip: "Clip", source: "Optional[Source]") -> "AnalysisTarget":
@@ -61,6 +63,8 @@ class AnalysisTarget:
             dominant_colors=clip.dominant_colors,
             shot_type=clip.shot_type,
             description=clip.description,
+            description_model=clip.description_model,
+            description_frames=clip.description_frames,
             detected_objects=clip.detected_objects,
             object_labels=clip.object_labels,
             extracted_texts=clip.extracted_texts,
@@ -88,6 +92,7 @@ class AnalysisTarget:
             dominant_colors=frame.dominant_colors,
             shot_type=frame.shot_type,
             description=frame.description,
+            description_model=frame.description_model,
             detected_objects=frame.detected_objects,
             object_labels=frame.object_labels,
             extracted_texts=frame.extracted_texts,
