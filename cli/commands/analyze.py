@@ -63,6 +63,30 @@ def accept_legacy(ctx: click.Context, project_file: Path, operation: str, clip_i
     output_result(result, as_json=(ctx.obj or {}).get("json", False))
 
 
+@analyze.command("accept-legacy-audio")
+@click.argument("project_file", type=click.Path(exists=True, path_type=Path))
+@click.option("--audio-source-id", "audio_ids", multiple=True, help="Exact audio source ID (default: all audio sources)")
+@click.pass_context
+def accept_legacy_audio(ctx: click.Context, project_file: Path, audio_ids: tuple[str, ...]) -> None:
+    """Explicitly accept saved audio transcripts, retaining unknown provenance."""
+    from core.project import Project
+    from core.spine.analysis_reuse import accept_legacy_audio_transcripts
+
+    path = own_project(ctx, project_file)
+    project = None
+    try:
+        project = Project.load(path)
+        result = accept_legacy_audio_transcripts(project, list(audio_ids) or None)
+        if result["accepted"] and not project.save():
+            raise RuntimeError("Failed to save legacy audio reuse decisions")
+    except Exception as exc:
+        exit_with(ExitCode.GENERAL_ERROR, str(exc))
+    finally:
+        if project is not None:
+            project.close_writer()
+    output_result(result, as_json=(ctx.obj or {}).get("json", False))
+
+
 @analyze.command("scalars")
 @click.argument("project_file", type=click.Path(exists=True, path_type=Path))
 @click.option("--operation", "scalar_kind", type=click.Choice(["brightness", "volume"]), required=True)

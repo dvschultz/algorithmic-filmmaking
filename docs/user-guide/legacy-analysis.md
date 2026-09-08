@@ -107,5 +107,18 @@ and exact `clip_ids` after you explicitly request reuse. It waits for the media
 checks and reports accepted and failed IDs. Decisions remain unsaved until you
 save the project. Cancelling the request cancels its worker.
 
+Imported audio sources have a separate CLI command:
+
+```sh
+scene_ripper analyze accept-legacy-audio project.json --audio-source-id AUDIO_ID
+```
+
+Omit `--audio-source-id` to process all imported audio sources. This accepts
+stored whole-file transcripts, including explicitly stored silence, using current
+transcription settings. Missing transcripts, invalid durations, and timestamps
+outside the audio or containing segment require recomputation. Saved text and
+word timings remain unchanged, and provenance remains unknown. Audio acceptance
+is currently available through the CLI; desktop and MCP controls are still pending.
+
 Acceptance for other analysis operations is not available yet. Recompute those
 results through their usual analysis commands.

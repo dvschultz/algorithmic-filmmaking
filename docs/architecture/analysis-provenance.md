@@ -1095,6 +1095,15 @@ tracked, inactive historical owners as described above.
   history, settings capture, invalid answers, and stale publication. Five scoped
   modules pass typing, scoped lint is clean, and the dialog was visually checked
   with the new field. Audio transcription, faces, and final review remain open.
+- Whole-audio transcript acceptance now has a detached operation, spine owner
+  adapter, and `analyze accept-legacy-audio` CLI command. It preserves saved text
+  and word timings, accepts explicitly stored silence, and validates duration,
+  segment bounds, and contained word timing. The existing audio application
+  rejects changed audio, transcript, project path, and project session. Unsupported
+  records remain preserved. The 138-test audio/legacy/record/import group passes,
+  including save/load and inference-free reuse; scoped typing/lint are clean.
+  MCP and desktop/agent audio acceptance still need wiring. Faces and final
+  review/full-suite verification remain open.
 - Finish the remaining cross-consumer reuse/projection audit.
   Receipt pruning retains legacy rows rather than guessing absent ownership;
   existing rows are not migrated eagerly.

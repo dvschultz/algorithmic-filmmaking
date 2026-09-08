@@ -516,6 +516,11 @@ query/MCP/native GUI/import group passes, with scoped typing/lint clean and the
 desktop question field visually checked. Audio transcription, faces, and final
 verification remain open.
 
+Whole-audio legacy transcript acceptance now has detached/shared computation,
+guarded spine publication, and an explicit CLI command. Its 138-test audio/
+legacy/record/import group passes with scoped typing/lint clean. Desktop/agent
+and MCP audio acceptance, faces, and final verification remain open.
+
 Custom queries now retain independent records through shared operations, direct
 headless calls, GUI worker delivery/recovery, and durable headless jobs. GUI reuse
 verifies saved records without duplicate history or local weight loading. Durable

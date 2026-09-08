@@ -19,6 +19,7 @@ from models.analysis_record import AnalysisIdentity, AnalysisRecord
 LEGACY_REUSE_OPERATIONS = ("colors", "embeddings", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots", "extract_text", "describe", "cinematography", "transcribe", "align_words", "custom_query")
 
 if TYPE_CHECKING:
+    from core.operations.audio_transcription import AudioTranscriptionTask, AudioTranscriptionOutcome
     from core.operations.custom_query import CustomQueryTask, CustomQueryOutcome, CustomQueryOptions
     from core.operations.alignment import AlignmentTask, AlignmentOutcome
     from core.operations.transcription import TranscriptionOptions, TranscriptionOutcome, TranscriptionTask
@@ -65,6 +66,43 @@ def _accept(record_json: str | None, value: dict, identity: AnalysisIdentity, in
         input_json=json.dumps(inputs.to_dict(), sort_keys=True, separators=(",", ":")),
     )
     return json.dumps(accepted.to_dict(), sort_keys=True)
+
+
+def accept_legacy_audio_transcript(task: "AudioTranscriptionTask", options: "TranscriptionOptions", *, cancel_event: Event | None = None) -> "AudioTranscriptionOutcome":
+    """Bind a saved whole-file transcript without transcribing the audio again."""
+    from core.analysis_records import AnalysisSnapshot
+    from core.jobs.media import FingerprintCancelled
+    from core.operations.audio_transcription import AudioTranscriptionOutcome, audio_transcription_identity, audio_transcription_runtime
+    from core.operations.transcription import resolve_transcription_options
+    from core.operations.transcription_records import transcription_segments_value
+    from core.transcription_models import TranscriptSegment
+
+    try:
+        if cancel_event is not None and cancel_event.is_set():
+            raise FingerprintCancelled()
+        if task.analysis_json is None:
+            raise ValueError("Audio reuse requires captured project inputs")
+        snapshot = AnalysisSnapshot.from_json(task.analysis_json)
+        region = json.loads(snapshot.inputs.range_json)
+        duration = region["duration_seconds"]
+        if isinstance(duration, bool) or not isinstance(duration, (int, float)) or not isfinite(duration) or duration <= 0:
+            raise ValueError("Audio reuse requires a positive finite duration")
+        value = json.loads(snapshot.value_json)
+        if not isinstance(value["transcript"], list):
+            raise ValueError("No legacy audio transcript is available")
+        segments = tuple(TranscriptSegment.from_dict(item) for item in value["transcript"])
+        if transcription_segments_value(segments) != value:
+            raise ValueError("Legacy audio transcript is not canonical")
+        if any(segment.end_time > duration or any(word.start < segment.start_time or word.end > segment.end_time for word in segment.words or ()) for segment in segments):
+            raise ValueError("Legacy transcript timing lies outside its audio or segment")
+        options = resolve_transcription_options(options)
+        identity = audio_transcription_identity(snapshot, options, AnalysisFingerprints(cancel_event), audio_transcription_runtime(task, options))
+        record_json = _accept(json.dumps(snapshot.record.to_dict()) if snapshot.record else None, value, identity, snapshot.inputs)
+        return AudioTranscriptionOutcome(task.audio_source_id, "skipped", segments, record_json=record_json)
+    except FingerprintCancelled:
+        return AudioTranscriptionOutcome(task.audio_source_id, "unprocessed", message="Cancelled")
+    except (ValueError, OSError, TypeError, KeyError, AttributeError) as exc:
+        return AudioTranscriptionOutcome(task.audio_source_id, "failed", message=str(exc))
 
 
 def accept_legacy_queries(tasks: "tuple[CustomQueryTask, ...]", options: "CustomQueryOptions", *, cancel_event: Event | None = None) -> "tuple[CustomQueryOutcome, ...]":

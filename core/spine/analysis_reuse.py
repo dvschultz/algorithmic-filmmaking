@@ -13,6 +13,41 @@ if TYPE_CHECKING:
     from core.operations.shots import ShotTypeOptions
 
 
+def accept_legacy_audio_transcripts(project: "Project", audio_source_ids: list[str] | None = None, *, cancel_event: Event | None = None, options: "TranscriptionOptions | None" = None) -> dict:
+    """Accept exact audio-source transcripts under their normal owner guards."""
+    from core.operations.audio_transcription import AudioTranscriptionApplication, AudioTranscriptionTask
+    from core.operations.legacy_reuse import accept_legacy_audio_transcript, legacy_transcription_options
+    from core.operations.transcription import resolve_transcription_options
+    from models.analysis_record import AnalysisRecord
+
+    project.session.assert_owner()
+    options = resolve_transcription_options(options) if options is not None else legacy_transcription_options()
+    ids = list(dict.fromkeys(audio_source_ids)) if audio_source_ids is not None else [audio.id for audio in project.audio_sources]
+    result: dict = {"accepted": [], "failed": [], "unprocessed": [], "provenance": "unknown"}
+    for index, aid in enumerate(ids):
+        if cancel_event is not None and cancel_event.is_set():
+            result["unprocessed"].extend(ids[index:])
+            break
+        audio = project.get_audio_source(aid)
+        if audio is None:
+            result["failed"].append({"audio_source_id": aid, "message": "Audio source not found"})
+            continue
+        previous = audio.analysis_records.get("transcribe")
+        if previous is not None and not isinstance(previous, AnalysisRecord):
+            result["failed"].append({"audio_source_id": aid, "message": "Unknown analysis record must be preserved; recompute analysis"})
+            continue
+        task = AudioTranscriptionTask.from_audio(audio, verified=True)
+        application = AudioTranscriptionApplication(project, task, options)
+        outcome = accept_legacy_audio_transcript(task, options, cancel_event=cancel_event)
+        if outcome.status == "unprocessed":
+            result["unprocessed"].append(aid)
+        elif outcome.has_result and application.apply(project, outcome):
+            result["accepted"].append(aid)
+        else:
+            result["failed"].append({"audio_source_id": aid, "message": outcome.message or "Target changed"})
+    return result
+
+
 def accept_legacy_analysis(project: "Project", operation: str, clip_ids: list[str] | None = None, *, cancel_event: Event | None = None, shot_options: "ShotTypeOptions | None" = None, ocr_options: "OcrOptions | None" = None, description_options: "DescriptionOptions | None" = None, cinematography_options: "CinematographyOptions | None" = None, transcription_options: "TranscriptionOptions | None" = None, query: str | None = None, query_options: "CustomQueryOptions | None" = None) -> dict:
     """Bind selected legacy values to current inputs, retaining unknown provenance.
 
