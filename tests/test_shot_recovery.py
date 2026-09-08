@@ -103,7 +103,7 @@ def test_external_analysis_image_retry_preserves_display_thumbnail(setup):
     assert all(store.get_result(rid)["committed"] for rid in saved.metadata.job_results)
 
 
-def test_manual_shot_value_is_preserved(setup):
+def test_edited_shot_value_requires_verified_recomputation(setup):
     path, _, compute = setup
     run(setup)
     project = Project.load(path)
@@ -111,9 +111,9 @@ def test_manual_shot_value_is_preserved(setup):
     project.update_clips([project.clips[0]])
     assert project.save()
     result = run(setup)
-    assert result["skipped"][0]["reason"] == "already_populated"
-    assert Project.load(path).clips[0].shot_type == "manual"
-    assert compute.call_count == 2
+    assert result["succeeded"][0]["clip_id"] == project.clips[0].id
+    assert Project.load(path).clips[0].shot_type != "manual"
+    assert compute.call_count == 3
 
 
 @pytest.mark.parametrize("change", ["image", "source", "runtime", "project"])
@@ -256,16 +256,46 @@ def test_corrupt_receipt_refuses_recomputation(setup, column):
     assert compute.call_count == 2
 
 
-def test_missing_receipt_refuses_recomputation(setup):
+def test_verified_shot_outlives_job_cache(setup):
     path, _, compute = setup
     run(setup)
     empty = JobStore(path.parent / "empty.db")
     try:
-        with pytest.raises(StaleJobResult, match="missing"):
-            run((path, empty, compute))
+        assert len(run((path, empty, compute))["skipped"]) == 2
     finally:
         empty.close()
     assert compute.call_count == 2
+
+
+def test_cloud_fallback_records_actual_backend_and_retries_cloud(setup, monkeypatch):
+    path, _, local = setup
+    cloud = Mock(side_effect=RuntimeError("cloud unavailable"))
+    monkeypatch.setattr("core.analysis.shots_cloud.classify_shot_cloud", cloud)
+    options = ShotTypeOptions("cloud", "requested-model")
+    assert len(run(setup, options=options)["succeeded"]) == 2
+    records = [c.analysis_records["shots"] for c in Project.load(path).clips]
+    assert all(r.identity.to_dict()["model"]["backend"] == "local" for r in records)
+    cloud.side_effect = None
+    cloud.return_value = ("close-up", 0.95)
+    assert len(run(setup, options=options)["succeeded"]) == 2
+    assert len(run(setup, options=options)["skipped"]) == 2
+    assert cloud.call_count == 4 and local.call_count == 2
+    records = [c.analysis_records["shots"] for c in Project.load(path).clips]
+    assert all(r.identity.to_dict()["model"]["backend"] == "cloud" for r in records)
+
+
+def test_failed_refresh_is_saved_without_erasing_shot_label(setup):
+    path, _, compute = setup
+    run(setup)
+    compute.side_effect = RuntimeError("model failed")
+    assert len(run(setup, force=True)["failed"]) == 2
+    project = Project.load(path)
+    assert all(
+        c.shot_type == "wide" and c.analysis_records["shots"].state == "failed"
+        for c in project.clips
+    )
+    compute.side_effect = None
+    assert len(run(setup)["succeeded"]) == 2
 
 
 def test_invalid_pending_payload_is_not_accepted(setup):

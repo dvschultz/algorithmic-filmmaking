@@ -384,6 +384,16 @@ New paths below are proposed file ownership, not existing files. Large migration
 
 **Goal:** Make reuse and invalidation correct and storage reclaimable.
 
+**Implementation checkpoint:** In progress. Colors, thumbnail embeddings, object
+detection, OCR, ImageNet classification, and shot classification now use verified
+records across their shared operations and delivery surfaces. Thumbnail embedding
+artifacts have manifest, live-project, undo, save, and bundle retention. Remaining
+work includes the other U7 analysis families, explicit legacy-reuse flows,
+preview/prerender artifacts, durable job array payloads and execution pins, and
+the complete retention/recovery audit. See
+[analysis provenance](../architecture/analysis-provenance.md) for the implemented
+scope and its limitations. U10 is not complete.
+
 **Requirements:** R9, R12. **Dependencies:** U5, U6.
 
 **Files:** New `models/analysis_record.py`, `core/artifacts.py`, `tests/test_analysis_records.py`, `tests/test_artifact_store.py`; existing `models/clip.py`, `models/frame.py`, `core/analysis_availability.py`, `core/analysis_target.py`, `core/paths.py`, `core/project_migrations.py`, `core/sequence_preview.py`, `core/remix/prerender.py`.

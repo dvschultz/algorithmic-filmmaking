@@ -130,7 +130,7 @@ class TestColorWorkerTaskBuilding:
 # --- ShotTypeWorker ---
 
 class TestShotTypeWorkerTaskBuilding:
-    def test_skip_existing_skips_clips_with_shot_type(
+    def test_unverified_shot_types_are_submitted_for_recomputation(
         self, thumbnail_path, sources_by_id
     ):
         from ui.workers.shot_type_worker import ShotTypeWorker
@@ -143,8 +143,7 @@ class TestShotTypeWorkerTaskBuilding:
         worker = ShotTypeWorker(
             [clip_with, clip_without], sources_by_id, parallelism=1
         )
-        assert len(worker._tasks) == 1
-        assert worker._tasks[0].clip_id == "c2"
+        assert [task.clip_id for task in worker.tasks] == ["c1", "c2"]
 
     def test_skip_existing_false_includes_all(
         self, thumbnail_path, sources_by_id
@@ -206,6 +205,9 @@ class TestShotTypeWorkerErrors:
     ):
         from ui.workers.shot_type_worker import ShotTypeWorker
 
+        source_path = thumbnail_path.parent / "source.mp4"
+        source_path.write_bytes(b"source media")
+        sources_by_id["src-1"].file_path = source_path
         clips = [
             _make_clip_with_thumb("clip-1", thumbnail_path),
             _make_clip_with_thumb("clip-2", thumbnail_path),

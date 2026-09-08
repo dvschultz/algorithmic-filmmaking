@@ -7,6 +7,13 @@ from pathlib import Path
 from threading import Event
 from typing import Callable
 
+from core.analysis_records import (
+    AnalysisFingerprints,
+    AnalysisSnapshot,
+    recorded_image_path,
+)
+from models.analysis_record import AnalysisRecord
+
 from core.jobs.commits import ResultSpec, StaleJobResult, result_batch
 from core.jobs.media import FingerprintCancelled, MediaFingerprints, media_stamp
 from core.jobs.spec import OperationSpec
@@ -16,6 +23,8 @@ from core.operations.shots import (
     ShotTypeOptions,
     ShotTypeOutcome,
     ShotTypeTask,
+    shot_task,
+    shot_identity,
     run_shot_types,
 )
 from core.project import Project
@@ -23,21 +32,9 @@ from core.project_revision import ProjectFileRevision, ProjectRevisionConflict
 
 
 def _runtime() -> dict:
-    from importlib.metadata import PackageNotFoundError, version
-    from core.analysis.shots import _SIGLIP_MODEL_NAME, SHOT_TYPES, SHOT_TYPE_PROMPTS
+    from core.analysis_model_identity import shot_runtime
 
-    packages: dict[str, str | None] = {}
-    for package in ("torch", "transformers", "Pillow"):
-        try:
-            packages[package] = version(package)
-        except PackageNotFoundError:
-            packages[package] = None
-    return {
-        "model": _SIGLIP_MODEL_NAME,
-        "vocabulary": list(SHOT_TYPES),
-        "prompts": {key: list(prompts) for key, prompts in SHOT_TYPE_PROMPTS.items()},
-        "packages": packages,
-    }
+    return shot_runtime()
 
 
 def _ids(project: Project, clip_ids: list[str] | None) -> list[str]:
@@ -52,22 +49,25 @@ def _ids(project: Project, clip_ids: list[str] | None) -> list[str]:
 
 
 def _task(
-    project: Project, cid: str, thumbnails: dict[str, Path] | None = None
+    project: Project,
+    cid: str,
+    thumbnails: dict[str, Path] | None = None,
+    *,
+    force: bool = False,
 ) -> ShotTypeTask:
     clip = project.clips_by_id[cid]
     source = project.sources_by_id.get(clip.source_id)
-    return ShotTypeTask(
-        cid,
-        (thumbnails or {}).get(cid, clip.thumbnail_path),
-        source.file_path if source else None,
-        clip.start_frame,
-        clip.end_frame,
-        source.fps if source else None,
-    )
+    image = (thumbnails or {}).get(cid)
+    if image is None and not force:
+        image = recorded_image_path(clip, source, "shots")
+    return shot_task(clip, source, image_path=image, skip_existing=False)
 
 
 def _task_data(task: ShotTypeTask) -> dict:
     data = asdict(task)
+    data.pop("analysis_json")
+    data["skip"] = False
+    data["analysis_version"] = 2 if task.analysis_json is not None else 1
     data["thumbnail_path"] = str(task.thumbnail_path) if task.thumbnail_path else None
     data["source_path"] = str(task.source_path) if task.source_path else None
     # Result identities are compared with decoded JSON on recovery.
@@ -97,7 +97,7 @@ def shot_job_spec(
 ) -> OperationSpec:
     targets = []
     for cid in _ids(project, clip_ids):
-        task = _task(project, cid)
+        task = _task(project, cid, force=bool(arguments.get("force", False)))
         source = _source_data(project, cid)
         source_path = source["actual_source_path"]
         targets.append(
@@ -115,7 +115,7 @@ def shot_job_spec(
         revision = ProjectFileRevision.capture(project.path)
     return OperationSpec.build(
         kind="shots",
-        version=1,
+        version=2,
         arguments=arguments,
         inputs={
             "targets": targets,
@@ -164,7 +164,9 @@ def run_shot_job(
         atomic = bool(operation.arguments.get("atomic", atomic))
     thumbnails = dict(thumbnail_paths or {})
     runtime = _runtime()
-    fingerprint = MediaFingerprints(cancel).get
+    media_fingerprints = MediaFingerprints(cancel)
+    fingerprint = media_fingerprints.get
+    fingerprints = AnalysisFingerprints(cancel, media_fingerprints=media_fingerprints)
     with result_batch(store, path) as batch:
         project = batch.project
         if operation is not None:
@@ -187,7 +189,7 @@ def run_shot_job(
         for rid, digest in project.metadata.job_results.items():
             row = store.get_result(rid)
             if row is None:
-                raise StaleJobResult("Committed result payload is missing")
+                continue  # Verified project records survive job-cache removal.
             if sha256(row["spec_json"].encode()).hexdigest() != rid:
                 raise StaleJobResult("Committed result identity is corrupt")
             identity = json.loads(row["spec_json"])
@@ -209,7 +211,7 @@ def run_shot_job(
         def inputs(
             current: Project, cid: str, task: ShotTypeTask | None = None
         ) -> dict:
-            task = task or _task(current, cid, thumbnails)
+            task = task or _task(current, cid, thumbnails, force=force)
             display = current.clips_by_id[cid].thumbnail_path
             source = _source_data(current, cid)
             source_path = source["actual_source_path"]
@@ -224,7 +226,10 @@ def run_shot_job(
             }
 
         def decode(cid: str, payload: dict) -> ShotTypeOutcome:
-            if set(payload) != {"shot_type", "confidence"}:
+            if set(payload) not in (
+                {"shot_type", "confidence"},
+                {"shot_type", "confidence", "record_json"},
+            ):
                 raise StaleJobResult("Invalid recorded shot classification")
             outcome = ShotTypeOutcome(cid, "succeeded", **payload)
             if not outcome.valid_result():
@@ -232,7 +237,24 @@ def run_shot_job(
             return outcome
 
         def is_output(current: Project, cid: str, payload: dict) -> bool:
-            return current.clips_by_id[cid].shot_type == decode(cid, payload).shot_type
+            record = current.clips_by_id[cid].analysis_records.get("shots")
+            return (
+                isinstance(record, AnalysisRecord)
+                and record.to_dict() == json.loads(payload.get("record_json") or "null")
+                and current.clips_by_id[cid].shot_type == decode(cid, payload).shot_type
+            )
+
+        def stage_record(cid: str, record: AnalysisRecord, basis: dict) -> None:
+            batch.stage_analysis(
+                apply=lambda current: current.record_analysis(
+                    "clip", cid, "shots", record
+                ),
+                validate_input=lambda current: inputs(current, cid) == basis,
+                is_applied=lambda current: current.clips_by_id[
+                    cid
+                ].analysis_records.get("shots")
+                == record,
+            )
 
         result: dict = {
             "succeeded": [],
@@ -249,51 +271,36 @@ def run_shot_job(
                 break
             clip = project.clips_by_id[cid]
             existing = clip.shot_type is not None
-            if existing and not force and cid not in known:
-                result["skipped"].append(
-                    {"clip_id": cid, "reason": "already_populated"}
-                )
-                continue
             try:
-                # CLI retries do not regenerate images for populated targets. Recover
-                # the original analysis image only when its complete receipt still
-                # matches the current target, media, options, and saved output.
-                if (
-                    existing
-                    and not force
-                    and cid not in thumbnails
-                    and operation is None
-                ):
-                    for _, identity, payload in known.get(cid, []):
-                        if (
-                            identity["project_path"] != str(path)
-                            or identity["arguments"] != asdict(options)
-                            or not is_output(project, cid, payload)
-                        ):
-                            continue
-                        image = identity["inputs"]["basis"]["task"]["thumbnail_path"]
-                        if image is None:
-                            continue
-                        candidate_task = _task(project, cid, {cid: Path(image)})
-                        if (
-                            inputs(project, cid, candidate_task)
-                            == identity["inputs"]["basis"]
-                        ):
-                            thumbnails[cid] = Path(image)
-                            break
                 basis = inputs(project, cid)
                 if basis["runtime"] != runtime:
                     raise StaleJobResult("Shot classification runtime changed")
-                task = _task(project, cid, thumbnails)
-                identity_inputs: dict = {"basis": basis}
+                task = _task(project, cid, thumbnails, force=force)
+                assert task.analysis_json is not None
+                snapshot = AnalysisSnapshot.from_json(task.analysis_json)
+                semantic = (
+                    shot_identity(snapshot, options, fingerprints, runtime)
+                    if snapshot.inputs.unchanged()
+                    else None
+                )
+                reused = (
+                    snapshot.reusable_record(semantic)
+                    if semantic is not None and not force
+                    else None
+                )
+                prior_record = clip.analysis_records.get("shots")
+                identity_inputs: dict = {
+                    "basis": basis,
+                    "previous_shot_type": clip.shot_type,
+                    "previous_record": prior_record.to_dict() if prior_record else None,
+                }
                 if force:
                     identity_inputs["generation"] = len(known.get(cid, []))
-                    identity_inputs["previous_shot_type"] = clip.shot_type
                 arguments = asdict(options)
                 spec = ResultSpec.build(
                     path,
                     kind="shots",
-                    version=1,
+                    version=2,
                     target_id=cid,
                     arguments=arguments,
                     inputs=identity_inputs,
@@ -313,28 +320,39 @@ def run_shot_job(
                 if existing and not force:
                     matches = [
                         row
-                        for row, identity, payload in known[cid]
+                        for row, identity, payload in known.get(cid, [])
                         if identity["project_path"] == str(path)
                         and identity["inputs"]["basis"] == basis
                         and identity["arguments"] == arguments
                         and is_output(project, cid, payload)
+                        and (reused is not None or not row["committed"])
                     ]
-                    if not matches:
+                    if matches:
+                        specs = [ResultSpec(path, row["spec_json"]) for row in matches]
+                    elif reused is not None:
+                        if reused != prior_record:
+                            stage_record(cid, reused, basis)
                         result["skipped"].append(
-                            {"clip_id": cid, "reason": "already_populated"}
+                            {"clip_id": cid, "reason": "valid_analysis"}
                         )
                         continue
-                    specs = [ResultSpec(path, row["spec_json"]) for row in matches]
 
-                application = ShotTypeApplication(project, (task,))
+                application = ShotTypeApplication(project, (task,), options)
 
                 def compute(task=task):
-                    outcome = run_shot_types((task,), options, cancel_event=cancel)[0]
+                    outcome = run_shot_types(
+                        (task,),
+                        options,
+                        cancel_event=cancel,
+                        fingerprints=fingerprints,
+                        runtime=runtime,
+                    )[0]
                     if outcome.status != "succeeded":
                         raise _OutcomeError(outcome)
                     return {
                         "shot_type": outcome.shot_type,
                         "confidence": outcome.confidence,
+                        "record_json": outcome.record_json,
                     }
 
                 def apply(current, payload, cid=cid, application=application):
@@ -378,6 +396,10 @@ def run_shot_job(
                 break
             except _OutcomeError as exc:
                 outcome = exc.outcome
+                if inputs(project, cid) != basis:
+                    raise StaleJobResult(
+                        "stale_input: Shot classification inputs changed during computation"
+                    )
                 if atomic and outcome.code not in {
                     "thumbnail_missing",
                     "no_classification",
@@ -385,6 +407,12 @@ def run_shot_job(
                     raise RuntimeError(
                         outcome.message or outcome.code or "Shot classification failed"
                     ) from exc
+                if not atomic and outcome.can_apply and outcome.record_json is not None:
+                    stage_record(
+                        cid,
+                        AnalysisRecord.from_dict(json.loads(outcome.record_json)),
+                        basis,
+                    )
                 result[outcome.status].append(
                     {"clip_id": cid, "code": outcome.code, "message": outcome.message}
                 )

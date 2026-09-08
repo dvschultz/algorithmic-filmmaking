@@ -42,7 +42,7 @@ def create_clip_analysis_worker(
                 settings.shot_classifier_cloud_model,
             ),
         )
-        return worker, ShotTypeApplication(project, worker.tasks)
+        return worker, ShotTypeApplication(project, worker.tasks, worker.options)
     if operation == "classify":
         from ui.workers.classification_worker import ClassificationWorker
         from core.operations.classification import ClassificationApplication

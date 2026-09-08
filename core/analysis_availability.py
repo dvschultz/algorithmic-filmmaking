@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 # These operations verify complete input identities on the worker path.
-VERIFIED_ANALYSIS_OPERATIONS = frozenset({"colors", "embeddings", "detect_objects", "extract_text", "classify"})
+VERIFIED_ANALYSIS_OPERATIONS = frozenset({"colors", "embeddings", "detect_objects", "extract_text", "classify", "shots"})
 
 
 _ANALYSIS_RESULT_FIELDS: dict[str, tuple[str, ...]] = {
@@ -63,6 +63,28 @@ def operation_has_result(op_key: str, clip) -> bool:
 
 def operation_is_complete_for_clip(op_key: str, clip, *, runtime: dict | None = None) -> bool:
     """Report reusable completion; existing fields alone do not prove provenance."""
+    if op_key == "shots":
+        from dataclasses import asdict
+        from hashlib import sha256
+        import json
+        from core.analysis_records import current_record
+        from core.analysis_model_identity import SHOT_CLOUD_PROMPT, SHOT_TYPE_PROMPTS, shot_runtime
+        from core.operations.shots import ShotTypeOptions
+
+        record = current_record(clip, op_key)
+        if record is None or record.identity is None or not clip.shot_type:
+            return False
+        options = ShotTypeOptions.from_settings()
+        prompt = SHOT_CLOUD_PROMPT if options.tier == "cloud" else json.dumps(SHOT_TYPE_PROMPTS, sort_keys=True)
+        data = record.identity.to_dict()
+        return bool(
+            data["operation_version"] == 2 and data["schema_version"] == 1
+            and data["model"] == {"runtime": runtime if runtime is not None else shot_runtime(), "backend": options.tier, "cloud_model": options.cloud_model}
+            and data["parameters"] == asdict(options)
+            and data["sampling"] == {"policy": "single-image/v1", "local_ensemble": True}
+            and data["prompt_sha256"] == sha256(prompt.encode()).hexdigest()
+            and record.value == {"shot_type": clip.shot_type}
+        )
     if op_key == "classify":
         from core.analysis_records import current_record
         from core.analysis_model_identity import classification_runtime
@@ -158,7 +180,11 @@ def compute_operation_need_counts(clips: Iterable, op_keys: Iterable[str]) -> di
     counts: dict[str, int] = {}
     for op_key in op_keys:
         runtime = None
-        if op_key == "classify":
+        if op_key == "shots":
+            from core.analysis_model_identity import shot_runtime
+
+            runtime = shot_runtime()
+        elif op_key == "classify":
             from core.analysis_model_identity import classification_runtime
 
             runtime = classification_runtime()

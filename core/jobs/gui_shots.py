@@ -6,6 +6,8 @@ from pathlib import Path
 from threading import Event
 from typing import Callable, TYPE_CHECKING
 
+from core.analysis_records import AnalysisFingerprints
+
 from core.jobs.commits import StaleJobResult, canonical_json
 from core.jobs.gui_results import GuiResultJournal, GuiResultRequest, GuiResultReceipt
 from core.jobs.media import FingerprintCancelled, media_stamp
@@ -75,6 +77,14 @@ def saved_shot_matches(
         if kind == "frame"
         else Clip.from_dict(saved, path.parent)
     )
+    if (
+        outcome.record_json is not None
+        and (record := target.analysis_records.get("shots")) is not None
+    ):
+        if record.to_dict() != json.loads(outcome.record_json):
+            return False
+    elif outcome.record_json is not None:
+        return False
     source_data = sources.get(target.source_id or "")
     source = Source.from_dict(source_data, path.parent) if source_data else None
     actual = _target_snapshot(target, source)
@@ -117,6 +127,7 @@ class GuiShotCache:
         self.path = project.path.expanduser().resolve()
         self.options = options
         self.runtime = _runtime()
+        self.transient_outcomes: dict[tuple[str, str], dict] = {}
         previous_by_kind: dict[str, dict[str, dict]] = {
             kind: {} for kind in ("clip", "frame")
         }
@@ -144,8 +155,8 @@ class GuiShotCache:
             if targets
         }
 
-    def receipt(self, outcome: ShotTypeOutcome) -> GuiResultReceipt:
-        return self.journals[outcome.target_type].results[outcome.clip_id]
+    def receipt(self, outcome: ShotTypeOutcome) -> GuiResultReceipt | None:
+        return self.journals[outcome.target_type].results.get(outcome.clip_id)
 
     def run(
         self,
@@ -167,7 +178,8 @@ class GuiShotCache:
 
         try:
             for journal in self.journals.values():
-                journal.start(cancel)
+                journal.start(cancel, allow_missing_receipts=True)
+            fingerprints = AnalysisFingerprints(cancel)
             for task in tasks:
                 if cancel.is_set():
                     break
@@ -205,6 +217,10 @@ class GuiShotCache:
                             self.journals[outcome.target_type].record(
                                 requests[outcome.target_type, outcome.clip_id], outcome
                             )
+                        elif outcome.can_apply:
+                            self.transient_outcomes[
+                                outcome.target_type, outcome.clip_id
+                            ] = asdict(outcome)
                         publish(outcome)
 
                     for outcome in run_shot_types(
@@ -212,6 +228,8 @@ class GuiShotCache:
                         self.options,
                         cancel_event=cancel,
                         on_outcome=record,
+                        fingerprints=fingerprints,
+                        runtime=self.runtime,
                     ):
                         outcomes.setdefault(
                             (outcome.target_type, outcome.clip_id), outcome

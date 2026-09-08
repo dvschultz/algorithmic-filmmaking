@@ -51,7 +51,7 @@ def test_combined_embedding_reuse_refreshes_file_bindings(tmp_path, monkeypatch,
         window.project.close_writer()
 
 
-@pytest.mark.parametrize("operation", ["classify", "detect_objects"])
+@pytest.mark.parametrize("operation", ["classify", "detect_objects", "shots"])
 def test_frame_inference_uses_image_when_original_video_is_offline(
     tmp_path, monkeypatch, operation
 ):
@@ -60,6 +60,8 @@ def test_frame_inference_uses_image_when_original_video_is_offline(
     from tests.test_description_operations import project_with_thumbnails
     from ui.workers.classification_worker import ClassificationWorker
     from ui.workers.object_detection_worker import ObjectDetectionWorker
+    from ui.workers.shot_type_worker import ShotTypeWorker
+    from core.operations.shots import ShotTypeOptions
 
     project = project_with_thumbnails(tmp_path, 1)
     frame = Frame(
@@ -69,18 +71,28 @@ def test_frame_inference_uses_image_when_original_video_is_offline(
     )
     project.add_frames([frame])
     project.sources[0].file_path.unlink()
-    provider = Mock(return_value=[])
-    path = (
-        "core.analysis.classification.classify_frame"
-        if operation == "classify"
-        else "core.analysis.detection.detect_objects"
-    )
-    monkeypatch.setattr(path, provider)
-    worker_type = (
-        ClassificationWorker if operation == "classify" else ObjectDetectionWorker
+    provider = Mock(return_value=("wide", 0.9) if operation == "shots" else [])
+    paths = {
+        "classify": "core.analysis.classification.classify_frame",
+        "detect_objects": "core.analysis.detection.detect_objects",
+        "shots": "core.analysis.shots.classify_shot_type",
+    }
+    monkeypatch.setattr(paths[operation], provider)
+    worker_type = {
+        "classify": ClassificationWorker,
+        "detect_objects": ObjectDetectionWorker,
+        "shots": ShotTypeWorker,
+    }[operation]
+    extra = (
+        {"sources_by_id": project.sources_by_id, "options": ShotTypeOptions()}
+        if operation == "shots"
+        else {}
     )
     worker = worker_type(
-        [], project=project, analysis_targets=[AnalysisTarget.from_frame(frame)]
+        [],
+        project=project,
+        analysis_targets=[AnalysisTarget.from_frame(frame)],
+        **extra,
     )
     worker.run()
     assert worker.result[0].status == "succeeded"
@@ -158,7 +170,9 @@ def test_combined_controller_rechecks_requested_options(
 
 
 @pytest.mark.parametrize("kind", ["clip", "frame"])
-@pytest.mark.parametrize("operation", ["classify", "detect_objects", "extract_text"])
+@pytest.mark.parametrize(
+    "operation", ["classify", "detect_objects", "extract_text", "shots"]
+)
 def test_combined_controller_retains_failed_attempt(
     tmp_path, monkeypatch, kind, operation
 ):
@@ -183,12 +197,14 @@ def test_combined_controller_retains_failed_attempt(
     target.detected_objects = []
     target.person_count = 0
     target.extracted_texts = []
+    target.shot_type = "old shot"
     assert window.project.save(tmp_path / "project.json")
     provider = Mock(side_effect=RuntimeError("provider unavailable"))
     paths = {
         "classify": "core.analysis.classification.classify_frame",
         "detect_objects": "core.analysis.detection.detect_objects",
         "extract_text": "core.analysis.ocr.extract_text_from_" + kind,
+        "shots": "core.analysis.shots.classify_shot_type",
     }
     monkeypatch.setattr(paths[operation], provider)
     controller = (
@@ -208,6 +224,7 @@ def test_combined_controller_retains_failed_attempt(
         assert target.object_labels == ["old label"]
         assert target.detected_objects == [] and target.person_count == 0
         assert target.extracted_texts == []
+        assert target.shot_type == "old shot"
         assert not window.project.metadata.job_results
     finally:
         controller.cancel()

@@ -70,3 +70,80 @@ def embedding_runtime() -> dict:
             "packages"
         ],
     }
+
+
+# Shot type categories for zero-shot classification
+# Matches VideoMAE categories: LS, FS, MS, CS, ECS
+SHOT_TYPES = [
+    "wide shot",  # LS - Long Shot
+    "full shot",  # FS - Full Shot (full body visible)
+    "medium shot",  # MS - Medium Shot (waist up)
+    "close-up",  # CS - Close-up (head and shoulders)
+    "extreme close-up",  # ECS - Extreme Close-up (face detail)
+]
+
+# Detailed prompts for SigLIP 2 zero-shot classification
+# SigLIP uses sigmoid per-label (not softmax), so prompts should be
+# self-contained descriptions that work independently
+SHOT_TYPE_PROMPTS = {
+    "wide shot": [
+        "This is a photo of an establishing shot showing a vast landscape or cityscape.",
+        "This is a photo of a long shot where people appear very small in the environment.",
+        "This is a photo of a wide angle shot of a large space with tiny distant figures.",
+        "This is a photo of a panoramic view showing the entire location.",
+    ],
+    "full shot": [
+        "This is a photo of a shot showing one person's entire body from head to feet.",
+        "This is a photo of a single person standing with their full body visible in frame.",
+        "This is a photo of a full length portrait of someone from head to toe.",
+        "This is a photo of a shot framing one standing figure completely.",
+    ],
+    "medium shot": [
+        "This is a photo of a medium shot showing a person from the waist up to their head.",
+        "This is a photo of two or three people shown from the waist up in conversation.",
+        "This is a photo of a shot of people sitting at a table showing their upper bodies.",
+        "This is a photo of a cowboy shot showing someone from mid-thigh to head.",
+    ],
+    "close-up": [
+        "This is a photo of a close-up of a person's face filling most of the frame.",
+        "This is a photo of a head and shoulders shot focusing on facial expression.",
+        "This is a photo of a tight shot of someone's face showing emotion.",
+        "This is a photo of a portrait shot from the neck up.",
+    ],
+    "extreme close-up": [
+        "This is a photo of an extreme close-up showing only eyes filling the screen.",
+        "This is a photo of a shot of just lips or mouth in extreme detail.",
+        "This is a photo of a macro shot of a single facial feature like an eye.",
+        "This is a photo of an intense close-up where only part of a face is visible.",
+    ],
+}
+
+SIGLIP_NAME = "google/siglip2-base-patch16-224"
+# https://huggingface.co/google/siglip2-base-patch16-224/commit/75de2d55ec2d0b4efc50b3e9ad70dba96a7b2fa2
+SIGLIP_REVISION = "75de2d55ec2d0b4efc50b3e9ad70dba96a7b2fa2"
+SHOT_DEFAULT_CLOUD_MODEL = "gemini-3.1-flash-lite-preview"
+SHOT_CLOUD_PROMPT = (
+    "Classify this film frame into exactly one shot type. "
+    "Valid types: " + ", ".join(f'"{shot_type}"' for shot_type in SHOT_TYPES) + ".\n\n"
+    "Return ONLY a JSON object: "
+    '{"shot_type": "<type>", "confidence": <0.0-1.0>}'
+)
+
+
+def shot_runtime() -> dict:
+    return {
+        "model": SIGLIP_NAME,
+        "revision": SIGLIP_REVISION,
+        "vocabulary": list(SHOT_TYPES),
+        "prompts": {key: list(prompts) for key, prompts in SHOT_TYPE_PROMPTS.items()},
+        "cloud": {
+            "default_model": SHOT_DEFAULT_CLOUD_MODEL,
+            "prompt": SHOT_CLOUD_PROMPT,
+            "temperature": 0.0,
+            "max_tokens": 100,
+            "fallback": "local",
+        },
+        "packages": model_runtime(
+            "shots", ("torch", "transformers", "Pillow", "litellm")
+        )["packages"],
+    }

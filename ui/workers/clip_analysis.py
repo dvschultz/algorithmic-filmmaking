@@ -352,7 +352,7 @@ class ClipAnalysisController(RetiringQObject):
                         if operation == "extract_text"
                         else cache.results.get(cid)
                     )
-                    key = ("clip", cid) if operation == "extract_text" else cid
+                    key = ("clip", cid) if operation in ("extract_text", "shots") else cid
                     matches = (
                         receipt.matches(outcome)
                         if receipt is not None

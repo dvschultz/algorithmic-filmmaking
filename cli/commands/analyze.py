@@ -548,12 +548,16 @@ def shots(
     prepared = {}
     thumb_gen = None
     for clip in clips_to_analyze:
-        if clip.shot_type is not None and not force:
-            ready.append(clip.id)
-            continue
         source = sources_by_id.get(clip.source_id)
         if source is None or not source.file_path.exists():
             errors.append(f"Clip {clip.id[:8]}: source not found")
+            continue
+        from core.analysis_records import recorded_image_path
+
+        prior_image = recorded_image_path(clip, source, "shots") if not force else None
+        if prior_image is not None:
+            prepared[clip.id] = prior_image
+            ready.append(clip.id)
             continue
         if thumb_gen is None:
             try:

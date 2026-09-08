@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 
 from core.operations.shots import (
     ShotTypeTask,
+    shot_task,
     ShotTypeOptions,
     ShotTypeOutcome,
     run_shot_types,
@@ -35,11 +36,11 @@ logger = logging.getLogger(__name__)
 
 
 class ShotTypeWorker(CancellableWorker):
-    """Background worker for shot type classification using CLIP or VideoMAE.
+    """Background worker for local SigLIP or cloud vision shot classification.
 
     Supports tiered processing:
-    - CPU: CLIP zero-shot classification from thumbnails (free, local)
-    - Cloud: VideoMAE model on Replicate for video-based classification (paid)
+    - Local: pinned SigLIP zero-shot classification from thumbnails
+    - Cloud: configured vision model with local fallback
 
     Supports both Clip and Frame inputs via AnalysisTarget.
 
@@ -99,7 +100,7 @@ class ShotTypeWorker(CancellableWorker):
         self.operation = gui_job_operation(
             OperationSpec.build(
                 kind="shots",
-                version=1,
+                version=2,
                 arguments={
                     "targets": [[task.target_type, task.clip_id] for task in self.tasks]
                 },
@@ -134,25 +135,13 @@ class ShotTypeWorker(CancellableWorker):
         """Build immutable task list from clips."""
         tasks = []
         for clip in clips:
-            if skip_existing and clip.shot_type is not None:
-                continue
             if not clip.thumbnail_path or not clip.thumbnail_path.exists():
                 logger.warning(f"Skipping clip {clip.id}: thumbnail not found")
                 continue
 
             source = sources_by_id.get(clip.source_id)
-            source_path = source.file_path if source else None
-            fps = source.fps if source else None
-
             tasks.append(
-                ShotTypeTask(
-                    clip_id=clip.id,
-                    thumbnail_path=clip.thumbnail_path,
-                    source_path=source_path,
-                    start_frame=clip.start_frame,
-                    end_frame=clip.end_frame,
-                    fps=fps,
-                )
+                shot_task(clip, source, skip_existing=skip_existing)
             )
         return tasks
 
@@ -162,22 +151,12 @@ class ShotTypeWorker(CancellableWorker):
         """Build immutable task list from AnalysisTarget objects."""
         tasks = []
         for target in targets:
-            if skip_existing and target.shot_type is not None:
-                continue
             image_path = target.image_path
             if not image_path or not image_path.exists():
                 logger.warning(f"Skipping target {target.id}: image not found")
                 continue
             tasks.append(
-                ShotTypeTask(
-                    clip_id=target.id,
-                    thumbnail_path=image_path,
-                    source_path=target.video_path,
-                    start_frame=target.start_frame or 0,
-                    end_frame=target.end_frame or 0,
-                    fps=target.fps,
-                    target_type=target.target_type,
-                )
+                shot_task(target, skip_existing=skip_existing)
             )
         return tasks
 
@@ -207,8 +186,9 @@ class ShotTypeWorker(CancellableWorker):
             if kind == "progress":
                 self.progress.emit(*outcome)
                 return
-            if outcome.status == "succeeded":
+            if outcome.can_apply:
                 self.outcome_ready.emit(outcome)
+            if outcome.status == "succeeded":
                 self.shot_type_ready.emit(
                     outcome.clip_id, outcome.shot_type, outcome.confidence
                 )

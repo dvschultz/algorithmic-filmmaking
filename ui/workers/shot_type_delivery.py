@@ -1,6 +1,7 @@
 """Owner-thread shot publication bound to its launching context."""
 
 from typing import Any, Callable
+from dataclasses import asdict
 
 from PySide6.QtCore import Slot
 
@@ -25,7 +26,7 @@ class ShotTypeDelivery(RetiringQObject):
         self.window = window
         self.worker = worker
         self.worker_attribute = worker_attribute
-        self.application = ShotTypeApplication(window.project, worker.tasks)
+        self.application = ShotTypeApplication(window.project, worker.tasks, getattr(worker, "options", None))
         self.pipeline = pipeline
         self.run = getattr(window, "_analysis_run", None) if pipeline else None
         self.frame_run = getattr(window, "_frame_analysis_ops", None)
@@ -93,7 +94,7 @@ class ShotTypeDelivery(RetiringQObject):
             if not isinstance(outcome, ShotTypeOutcome):
                 raise ValueError("Invalid queued shot classification")
             key = outcome.target_type, outcome.clip_id
-            if key in self.delivered or outcome.status != "succeeded":
+            if key in self.delivered or not outcome.can_apply:
                 return
             self.delivered.add(key)
             cache = getattr(self.worker, "cache", None)
@@ -105,7 +106,8 @@ class ShotTypeDelivery(RetiringQObject):
                 ):
                     raise ValueError("Shot project save location changed")
                 receipt = cache.receipt(outcome)
-                if not receipt.matches(outcome):
+                matches = receipt.matches(outcome) if receipt is not None else getattr(cache, "transient_outcomes", {}).get(key) == asdict(outcome)
+                if not matches:
                     raise ValueError(
                         "Queued shot outcome differs from its recorded result"
                     )
@@ -117,7 +119,7 @@ class ShotTypeDelivery(RetiringQObject):
             return
         if accepted:
             # The model is already updated. Only clip results need these widgets.
-            if outcome.target_type == "clip":
+            if outcome.target_type == "clip" and outcome.status == "succeeded":
                 window._on_shot_type_ready(
                     outcome.clip_id, outcome.shot_type, outcome.confidence
                 )

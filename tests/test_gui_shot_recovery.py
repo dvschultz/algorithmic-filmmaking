@@ -97,6 +97,33 @@ def test_mixed_hits_only_compute_missing_targets(setup):
     assert compute.call_count == 2
 
 
+def test_verified_result_reuses_without_job_history_payload(setup):
+    project, compute = setup
+    run(project, apply=True)
+    assert project.save()
+    (project.path.parent / "jobs.db").unlink()
+    worker = ShotTypeWorker(
+        project.clips,
+        project.sources_by_id,
+        project=project,
+        analysis_targets=[AnalysisTarget.from_frame(f) for f in project.frames] or None,
+    )
+    application = ShotTypeApplication(project, worker.tasks, worker.options)
+    delivered = []
+
+    def deliver(outcome):
+        assert outcome.status == "skipped"
+        assert worker.cache.receipt(outcome) is None
+        assert application.apply(project, outcome)
+        delivered.append(outcome)
+
+    results = worker.cache.run(
+        worker.tasks, Event(), lambda: True, deliver, lambda *_: None
+    )
+    assert len(results) == len(delivered) == 2
+    assert compute.call_count == 2
+
+
 @pytest.mark.parametrize(
     "change", ["edit", "target", "save_as", "failed_save", "checkpoint"]
 )

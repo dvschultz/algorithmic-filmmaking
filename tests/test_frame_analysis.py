@@ -191,7 +191,8 @@ with patch('core.settings.load_settings', lambda: window.settings), \
     elif mode in ('duplicate', 'prepopulated'):
         assert result['succeeded'] == ['0'], result
         assert class_provider.call_count == 1
-        assert shot_provider.call_count == (0 if mode == 'prepopulated' else 1)
+        assert shot_provider.call_count == 1
+        assert project.frames[0].shot_type == 'wide'
     elif mode == 'restart':
         assert result['cancelled']
         assert project.frames[0].shot_type is None
@@ -202,8 +203,11 @@ with patch('core.settings.load_settings', lambda: window.settings), \
         if mode in ('cancel', 'project', 'session', 'path', 'reply'):
             assert result['cancelled']
             class_provider.assert_not_called()
-        if mode in ('all_failed', 'missing_image'):
+        if mode == 'missing_image':
             assert not project.is_dirty
+        if mode == 'all_failed':
+            assert project.is_dirty
+            assert all(frame.analysis_records['shots'].state == 'failed' for frame in project.frames)
         if mode == 'forged': assert project.frames[0].shot_type is None
 """
     result = subprocess.run(

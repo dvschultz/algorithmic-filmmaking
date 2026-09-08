@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import asdict, replace
 from typing import Any, TYPE_CHECKING
 
 from PySide6.QtCore import Slot
@@ -122,7 +122,7 @@ class IntentionAnalysisController(RetiringQObject):
                     parallelism=settings.local_model_parallelism,
                     project=self.project,
                 )
-                self.application = ShotTypeApplication(self.project, self.worker.tasks)
+                self.application = ShotTypeApplication(self.project, self.worker.tasks, self.worker.options)
             else:
                 from ui.workers.description_worker import DescriptionWorker
                 from core.operations.description import DescriptionApplication
@@ -197,7 +197,7 @@ class IntentionAnalysisController(RetiringQObject):
         for outcome in worker.result:
             if not self._current() or worker.is_cancelled():
                 return
-            if outcome.status != "succeeded" or not self._same_clip(outcome.clip_id):
+            if (outcome.status != "succeeded" and not getattr(outcome, "can_apply", False)) or not self._same_clip(outcome.clip_id):
                 continue
             receipt = None
             cache = worker.cache
@@ -212,7 +212,9 @@ class IntentionAnalysisController(RetiringQObject):
                     if self.operation == "shots"
                     else cache.results[outcome.clip_id]
                 )
-                if not receipt.matches(outcome):
+                key = (outcome.target_type, outcome.clip_id) if self.operation == "shots" else outcome.clip_id
+                matches = receipt.matches(outcome) if receipt is not None else getattr(cache, "transient_outcomes", {}).get(key) == asdict(outcome)
+                if not matches:
                     raise ValueError(
                         "Analysis outcome differs from its recorded result"
                     )
@@ -222,6 +224,8 @@ class IntentionAnalysisController(RetiringQObject):
                 self.project.record_job_result(receipt.result_id, receipt.digest)
             if not self._current():
                 return
+            if outcome.status != "succeeded":
+                continue
             if self.operation == "shots":
                 self.window._on_shot_type_ready(
                     outcome.clip_id, outcome.shot_type, outcome.confidence

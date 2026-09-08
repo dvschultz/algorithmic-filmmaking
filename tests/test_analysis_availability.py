@@ -8,6 +8,22 @@ from core.analysis_availability import (
 )
 
 
+def test_shot_completion_requires_the_recorded_prompt(tmp_path):
+    import json
+    from dataclasses import replace
+    from models.analysis_record import AnalysisIdentity
+    from tests.analysis_fixtures import verify_clip_analysis
+
+    clip = make_test_clip("shot")
+    verify_clip_analysis(clip, tmp_path, shots=True)
+    assert "shots" in compute_disabled_operations([clip], {"shots"})
+    record = clip.analysis_records["shots"]
+    identity = record.identity.to_dict()
+    identity["prompt_sha256"] = "0" * 64
+    clip.analysis_records["shots"] = replace(record, identity=AnalysisIdentity(json.dumps(identity)))
+    assert "shots" not in compute_disabled_operations([clip], {"shots"})
+
+
 def test_legacy_colors_remain_available_for_verified_recomputation():
     clip_a = make_test_clip(
         "c1",
@@ -25,7 +41,7 @@ def test_legacy_colors_remain_available_for_verified_recomputation():
     disabled = compute_disabled_operations(
         [clip_a, clip_b], ["colors", "shots", "transcribe"]
     )
-    assert disabled == {"shots", "transcribe"}
+    assert disabled == {"transcribe"}
 
 
 def test_compute_disabled_operations_mixed_clips_keeps_option_enabled():

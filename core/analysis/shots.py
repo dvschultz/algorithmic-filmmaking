@@ -8,61 +8,19 @@ Supports two tiers:
 import logging
 import threading
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from PIL import Image
+
+from core.analysis_model_identity import (
+    SHOT_TYPES, SHOT_TYPE_PROMPTS, SIGLIP_NAME as _SIGLIP_MODEL_NAME, SIGLIP_REVISION,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class ShotClassificationError(RuntimeError):
     """Raised when shot classification cannot complete."""
-
-# Shot type categories for zero-shot classification
-# Matches VideoMAE categories: LS, FS, MS, CS, ECS
-SHOT_TYPES = [
-    "wide shot",       # LS - Long Shot
-    "full shot",       # FS - Full Shot (full body visible)
-    "medium shot",     # MS - Medium Shot (waist up)
-    "close-up",        # CS - Close-up (head and shoulders)
-    "extreme close-up", # ECS - Extreme Close-up (face detail)
-]
-
-# Detailed prompts for SigLIP 2 zero-shot classification
-# SigLIP uses sigmoid per-label (not softmax), so prompts should be
-# self-contained descriptions that work independently
-SHOT_TYPE_PROMPTS = {
-    "wide shot": [
-        "This is a photo of an establishing shot showing a vast landscape or cityscape.",
-        "This is a photo of a long shot where people appear very small in the environment.",
-        "This is a photo of a wide angle shot of a large space with tiny distant figures.",
-        "This is a photo of a panoramic view showing the entire location.",
-    ],
-    "full shot": [
-        "This is a photo of a shot showing one person's entire body from head to feet.",
-        "This is a photo of a single person standing with their full body visible in frame.",
-        "This is a photo of a full length portrait of someone from head to toe.",
-        "This is a photo of a shot framing one standing figure completely.",
-    ],
-    "medium shot": [
-        "This is a photo of a medium shot showing a person from the waist up to their head.",
-        "This is a photo of two or three people shown from the waist up in conversation.",
-        "This is a photo of a shot of people sitting at a table showing their upper bodies.",
-        "This is a photo of a cowboy shot showing someone from mid-thigh to head.",
-    ],
-    "close-up": [
-        "This is a photo of a close-up of a person's face filling most of the frame.",
-        "This is a photo of a head and shoulders shot focusing on facial expression.",
-        "This is a photo of a tight shot of someone's face showing emotion.",
-        "This is a photo of a portrait shot from the neck up.",
-    ],
-    "extreme close-up": [
-        "This is a photo of an extreme close-up showing only eyes filling the screen.",
-        "This is a photo of a shot of just lips or mouth in extreme detail.",
-        "This is a photo of a macro shot of a single facial feature like an eye.",
-        "This is a photo of an intense close-up where only part of a face is visible.",
-    ],
-}
 
 # Human-readable display names
 SHOT_TYPE_DISPLAY = {
@@ -78,8 +36,6 @@ _model = None
 _processor = None
 _model_lock = threading.Lock()
 
-# SigLIP 2 model for zero-shot shot type classification
-_SIGLIP_MODEL_NAME = "google/siglip2-base-patch16-224"
 
 
 def _import_transformers_auto_components():
@@ -171,8 +127,8 @@ def load_classification_model():
 
             def _load_siglip():
                 return (
-                    AutoProcessor.from_pretrained(_SIGLIP_MODEL_NAME),
-                    AutoModel.from_pretrained(_SIGLIP_MODEL_NAME),
+                    AutoProcessor.from_pretrained(_SIGLIP_MODEL_NAME, revision=SIGLIP_REVISION),
+                    AutoModel.from_pretrained(_SIGLIP_MODEL_NAME, revision=SIGLIP_REVISION),
                 )
 
             try:
@@ -189,6 +145,7 @@ def load_classification_model():
                     from huggingface_hub import snapshot_download
                     local_dir = snapshot_download(
                         _SIGLIP_MODEL_NAME,
+                        revision=SIGLIP_REVISION,
                         allow_patterns=["*.json", "*.safetensors", "*.txt", "*.model"],
                     )
                     _processor = AutoProcessor.from_pretrained(local_dir, local_files_only=True)
@@ -334,6 +291,7 @@ def classify_shot_type_tiered(
     *,
     tier: Optional[str] = None,
     cloud_model: Optional[str] = None,
+    on_backend: Callable[[str], None] | None = None,
 ) -> tuple[str, float]:
     """Classify shot type using the configured tier (local or cloud).
 
@@ -370,6 +328,8 @@ def classify_shot_type_tiered(
                 image_path=image_path,
                 model=cloud_model,
             )
+            if on_backend is not None:
+                on_backend("cloud")
 
             if confidence < threshold:
                 return ("unknown", confidence)
@@ -378,10 +338,16 @@ def classify_shot_type_tiered(
 
         except ValueError as e:
             logger.warning(f"Cloud classification unavailable: {e}. Falling back to local.")
+            if on_backend is not None:
+                on_backend("local")
             return classify_shot_type(image_path, threshold, use_ensemble)
         except RuntimeError as e:
             logger.error(f"Cloud classification failed: {e}. Falling back to local.")
+            if on_backend is not None:
+                on_backend("local")
             return classify_shot_type(image_path, threshold, use_ensemble)
 
     # Local tier (default): use SigLIP 2
+    if on_backend is not None:
+        on_backend("local")
     return classify_shot_type(image_path, threshold, use_ensemble)

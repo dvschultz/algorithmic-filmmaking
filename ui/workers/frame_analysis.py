@@ -42,7 +42,7 @@ def create_frame_analysis_worker(
             parallelism=settings.local_model_parallelism,
             options=options,
         )
-        return worker, ShotTypeApplication(project, worker.tasks)
+        return worker, ShotTypeApplication(project, worker.tasks, worker.options)
     if operation == "classify":
         from ui.workers.classification_worker import ClassificationWorker
         from core.operations.classification import ClassificationApplication
@@ -330,7 +330,7 @@ class FrameAnalysisController(RetiringQObject):
                         if operation == "extract_text"
                         else cache.results.get(fid)
                     )
-                    key = ("frame", fid) if operation == "extract_text" else fid
+                    key = ("frame", fid) if operation in ("extract_text", "shots") else fid
                     matches = (
                         receipt.matches(outcome)
                         if receipt is not None

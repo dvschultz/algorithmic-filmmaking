@@ -218,7 +218,7 @@ def test_analyze_shots_happy_path(tmp_path):
         assert clip.shot_type == "close-up"
 
 
-def test_analyze_shots_skip_existing(tmp_path):
+def test_analyze_shots_recomputes_legacy_then_reuses_verified_results(tmp_path):
     project = _build_project(tmp_path, n_clips=2)
     fake_thumb = tmp_path / "thumb.png"
     fake_thumb.write_bytes(b"fake")
@@ -234,10 +234,12 @@ def test_analyze_shots_skip_existing(tmp_path):
 
     with patch("core.analysis.shots.classify_shot_type", side_effect=fake_classify):
         result = analyze_shots(project)
+        assert len(result["result"]["succeeded"]) == 2
+        result = analyze_shots(project)
 
-    assert len(result["result"]["skipped"]) == 1
-    assert len(result["result"]["succeeded"]) == 1
-    assert len(classify_calls) == 1
+    assert len(result["result"]["skipped"]) == 2
+    assert len(result["result"]["succeeded"]) == 0
+    assert len(classify_calls) == 2
 
 
 def test_analyze_shots_thumbnail_missing(tmp_path):

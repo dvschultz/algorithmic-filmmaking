@@ -32,8 +32,8 @@ def retire():
     window.project.add_source(source)
     window.project.add_clips([clip])
     if mode == 'completed':
-        clip.shot_type = 'wide'
-        controller = ClipAnalysisController(window, [clip], ['shots'])
+        clip.description = 'Existing description'
+        controller = ClipAnalysisController(window, [clip], ['describe'])
         controller.start()
         assert controller.finished
     else:

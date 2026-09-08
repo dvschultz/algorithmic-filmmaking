@@ -18,6 +18,49 @@ from models.clip import Clip, Source
 from models.frame import Frame
 
 
+def test_verified_shot_reuses_and_failed_refresh_remains_retryable(
+    tmp_path, monkeypatch
+):
+    from core.spine.analyze import analyze_shots
+    from tests.test_description_operations import project_with_thumbnails
+
+    project = project_with_thumbnails(tmp_path, 1)
+    provider = Mock(return_value=("wide shot", 0.9))
+    monkeypatch.setattr("core.analysis.shots.classify_shot_type", provider)
+    assert analyze_shots(project)["result"]["succeeded"]
+    assert project.clips[0].analysis_records["shots"].state == "succeeded"
+    assert analyze_shots(project)["result"]["skipped"]
+    assert provider.call_count == 1
+    provider.side_effect = RuntimeError("model failed")
+    assert analyze_shots(project, skip_existing=False)["result"]["failed"]
+    assert project.clips[0].shot_type == "wide shot"
+    assert project.clips[0].analysis_records["shots"].state == "failed"
+    provider.side_effect = None
+    assert analyze_shots(project)["result"]["succeeded"]
+    assert provider.call_count == 3
+
+
+@pytest.mark.parametrize("change", ["range", "source", "image", "projection"])
+def test_shot_input_changes_require_recomputation(tmp_path, monkeypatch, change):
+    from core.spine.analyze import analyze_shots
+    from tests.test_description_operations import project_with_thumbnails
+
+    project = project_with_thumbnails(tmp_path, 1)
+    provider = Mock(return_value=("wide shot", 0.9))
+    monkeypatch.setattr("core.analysis.shots.classify_shot_type", provider)
+    analyze_shots(project)
+    if change == "range":
+        project.clips[0].end_frame -= 1
+    elif change == "source":
+        project.sources[0].file_path.write_bytes(b"new video")
+    elif change == "image":
+        project.clips[0].thumbnail_path.write_bytes(b"new image")
+    else:
+        project.clips[0].shot_type = "edited"
+    assert analyze_shots(project)["result"]["succeeded"]
+    assert provider.call_count == 2
+
+
 @pytest.fixture
 def sample(tmp_path):
     image = tmp_path / "image.png"
@@ -191,6 +234,26 @@ def test_cloud_uses_captured_settings_without_local_preload(sample, monkeypatch)
     (result,) = run_shot_types((task,), ShotTypeOptions("cloud", "captured-model"))
     assert result.status == "succeeded"
     assert cloud.call_args.kwargs["model"] == "captured-model"
+
+
+def test_failed_local_fallback_records_the_backend_attempted(sample, monkeypatch):
+    import json
+    from core.operations.shots import shot_task
+
+    project, _, _ = sample
+    monkeypatch.setattr(
+        "core.analysis.shots_cloud.classify_shot_cloud",
+        Mock(side_effect=RuntimeError("cloud unavailable")),
+    )
+    monkeypatch.setattr(
+        "core.analysis.shots.classify_shot_type",
+        Mock(side_effect=RuntimeError("local unavailable")),
+    )
+    task = shot_task(project.clips[0], project.sources[0])
+    (result,) = run_shot_types((task,), ShotTypeOptions("cloud", "test-model"))
+    assert result.status == "failed"
+    record = json.loads(result.record_json)
+    assert record["identity"]["model"]["backend"] == "local"
 
 
 def test_cli_uses_shared_operation_and_preserves_saved_results(

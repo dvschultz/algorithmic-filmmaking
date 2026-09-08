@@ -17,10 +17,9 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-logger = logging.getLogger(__name__)
+from core.analysis_model_identity import SHOT_DEFAULT_CLOUD_MODEL as _DEFAULT_CLOUD_MODEL, SHOT_CLOUD_PROMPT
 
-# PINNED: Gemini model version; must exist in Gemini API
-_DEFAULT_CLOUD_MODEL = "gemini-3.1-flash-lite-preview"
+logger = logging.getLogger(__name__)
 
 # Shot type display names
 SHOT_TYPE_DISPLAY = {
@@ -121,8 +120,6 @@ def classify_shot_cloud(
     mime_type = {"jpg": "image/jpeg", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
                  ".png": "image/png", ".webp": "image/webp"}.get(suffix, "image/jpeg")
 
-    shot_types_str = ", ".join(f'"{st}"' for st in SHOT_TYPES)
-
     messages = [
         {
             "role": "user",
@@ -135,12 +132,7 @@ def classify_shot_cloud(
                 },
                 {
                     "type": "text",
-                    "text": (
-                        f"Classify this film frame into exactly one shot type. "
-                        f"Valid types: {shot_types_str}.\n\n"
-                        f"Return ONLY a JSON object: "
-                        f'{{\"shot_type\": \"<type>\", \"confidence\": <0.0-1.0>}}'
-                    ),
+                    "text": SHOT_CLOUD_PROMPT,
                 },
             ],
         }

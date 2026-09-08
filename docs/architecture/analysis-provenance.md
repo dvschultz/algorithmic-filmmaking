@@ -1,7 +1,7 @@
 # Analysis provenance and derived artifacts
 
 The U10 implementation covers color palettes, thumbnail DINOv2 embeddings,
-object detection, OCR, and classification across the desktop, shared spine, CLI, MCP jobs, and embedding
+object detection, OCR, ImageNet and shot classification across the desktop, shared spine, CLI, MCP jobs, and embedding
 prerequisites used by sequencing. This document describes that bounded scope.
 The complete U10 contract remains in the shared editing engine plan.
 
@@ -65,6 +65,15 @@ Reused embeddings publish refreshed input bindings without a new inference call.
 Frame classification depends on its image and can run with the original video
 offline.
 
+Shot classification records the pinned SigLIP revision, label vocabulary and
+prompts, requested cloud model, and the backend that actually produced the result.
+A local fallback remains visible but cannot satisfy a later cloud request.
+Verified results remain reusable after job-cache removal. Failed refreshes retain
+the displayed shot label and record the failed attempt for retry. Atomic shot
+jobs retain their all-or-nothing publication behavior; failed non-atomic jobs and
+GUI runs publish failure records without successful receipts. Frame inference
+uses its image even when the original source video is offline.
+
 ## Storage and ownership
 
 The configured cache directory contains `artifacts/`, with a SQLite reference
@@ -97,7 +106,7 @@ without stopping analysis of valid neighboring clips.
 
 - Migrate the other U7 analysis families, including boundary embeddings, to
   semantic reuse. Extend operation-owned failure records beyond object detection,
-  OCR, and classification.
+  OCR, ImageNet and shot classification.
 - Expose the explicit legacy-reuse decision through user and agent flows; the
   current record model supports the decision but the flows are not wired.
 - Move preview/prerender media and durable job array payloads into managed

@@ -116,10 +116,8 @@ def analyze_shots(
     thumbnails surface as ``thumbnail_missing`` failures (this op does
     not generate thumbnails — that's a separate concern).
     """
-    from pathlib import Path
-
     from core.operations.shots import (
-        ShotTypeTask, ShotTypeOptions, ShotTypeApplication, run_shot_types,
+        shot_task, ShotTypeOptions, ShotTypeApplication, run_shot_types,
     )
 
     clips = _resolve_clip_ids(project, clip_ids)
@@ -134,25 +132,26 @@ def analyze_shots(
     skipped: list[dict] = []
     total = len(clips)
     tasks = tuple(
-        ShotTypeTask(
-            clip.id, Path(clip.thumbnail_path) if clip.thumbnail_path else None,
-            source.file_path if (source := project.sources_by_id.get(clip.source_id)) else None,
-            clip.start_frame, clip.end_frame, source.fps if source else None,
-            skip=skip_existing and bool(clip.shot_type),
-        ) for clip in clips
+        shot_task(clip, project.sources_by_id.get(clip.source_id), skip_existing=skip_existing)
+        for clip in clips
     )
-    application = ShotTypeApplication(project, tasks)
+    options = ShotTypeOptions()
+    application = ShotTypeApplication(project, tasks, options)
 
     def report(current, count):
         if progress_callback is not None:
             progress_callback(current / count if count else 1.0,
                               f"Shot classification ({current}/{count})")
 
-    outcomes = run_shot_types(tasks, ShotTypeOptions(), cancel_event=cancel_event, progress=report)
+    outcomes = run_shot_types(tasks, options, cancel_event=cancel_event, progress=report)
     unprocessed = []
     for outcome in outcomes:
+        accepted = application.apply(project, outcome) if outcome.can_apply else False
+        if outcome.can_apply and not accepted:
+            failed.append({"clip_id": outcome.clip_id, "code": "stale_input"})
+            continue
         if outcome.status == "succeeded":
-            if application.apply(project, outcome):
+            if accepted:
                 succeeded.append({"clip_id": outcome.clip_id, "shot_type": outcome.shot_type})
             else:
                 failed.append({"clip_id": outcome.clip_id, "code": "stale_input"})
