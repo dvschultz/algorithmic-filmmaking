@@ -6,6 +6,26 @@ LOCAL_DESCRIPTION_FALLBACK = "vikhyatk/moondream2"
 MOONDREAM_REVISION = "2025-06-21"
 
 
+def description_video_capable_model(model: str) -> bool:
+    model_lower = model.lower()
+    return "gemini" in model_lower or "qwen" in model_lower
+
+
+def known_mlx_vlm_availability() -> bool | None:
+    """Return only backend availability known without importing inference code."""
+    import platform
+    import sys
+    from importlib.util import find_spec
+
+    if platform.system() != "Darwin" or platform.machine() != "arm64":
+        return False
+    if sys.modules.get("mlx_vlm") is not None:
+        return True
+    if find_spec("mlx_vlm") is None:
+        return False
+    return None
+
+
 def local_description_runtime(model: str, *, mlx: bool) -> dict:
     """Resolve the local model using the same fallback rule as its loader."""
     fallback = not mlx and ("mlx" in model.lower() or "qwen" in model.lower())

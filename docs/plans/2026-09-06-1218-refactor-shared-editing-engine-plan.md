@@ -385,7 +385,7 @@ New paths below are proposed file ownership, not existing files. Large migration
 **Goal:** Make reuse and invalidation correct and storage reclaimable.
 
 **Implementation checkpoint:** In progress. Colors, thumbnail and boundary embeddings, object
-detection, OCR, ImageNet classification, shot classification, and gaze now use verified
+detection, OCR, ImageNet classification, shot classification, gaze, and descriptions now use verified
 records across their shared operations and delivery surfaces. Thumbnail and boundary embedding
 artifacts have manifest, live-project, undo, save, and bundle retention. Remaining
 work includes the other U7 analysis families, explicit legacy-reuse flows,
@@ -416,7 +416,8 @@ and direct headless entry point use verified records and semantic reuse, includi
 failure publication. GUI workers, clip/frame delivery, combined analysis, and save
 checkpoints now carry and verify those records. Durable headless jobs also verify
 reuse, recover without old receipt rows, and publish operation-owned failures.
-Completion projections remain unfinished for descriptions.
+Description completion indicators now verify default settings and current source
+bindings without importing inference runtimes on the UI thread.
 
 **Requirements:** R9, R12. **Dependencies:** U5, U6.
 

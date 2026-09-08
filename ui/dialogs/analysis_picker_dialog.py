@@ -42,6 +42,7 @@ class AnalysisPickerDialog(QDialog):
         settings,
         parent=None,
         clips: list | None = None,
+        sources_by_id: dict | None = None,
     ):
         """Initialize the analysis picker dialog.
 
@@ -51,6 +52,7 @@ class AnalysisPickerDialog(QDialog):
             settings: Settings instance for persisting selection
             parent: Parent widget
             clips: Optional clip list used to disable already-complete operations
+            sources_by_id: Current sources used to validate description bindings
         """
         super().__init__(parent)
         self._clip_count = clip_count
@@ -59,7 +61,7 @@ class AnalysisPickerDialog(QDialog):
         self._clips = clips
         self._checkboxes: dict[str, QCheckBox] = {}
         self._disabled_ops = (
-            compute_disabled_operations(self._clips, [op.key for op in ANALYSIS_OPERATIONS])
+            compute_disabled_operations(self._clips, [op.key for op in ANALYSIS_OPERATIONS], sources_by_id=sources_by_id)
             if self._clips is not None
             else set()
         )

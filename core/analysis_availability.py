@@ -61,8 +61,42 @@ def operation_has_result(op_key: str, clip) -> bool:
     return False
 
 
-def operation_is_complete_for_clip(op_key: str, clip, *, runtime: dict | None = None) -> bool:
+def operation_is_complete_for_clip(op_key: str, clip, *, runtime: dict | None = None, source=None) -> bool:
     """Report reusable completion; existing fields alone do not prove provenance."""
+    if op_key == "describe":
+        import json
+        from hashlib import sha256
+        from core.analysis_records import AnalysisInput, current_record
+        from core.operations.description import description_task, description_runtime, resolve_options
+
+        record = current_record(clip, op_key)
+        if record is None or record.identity is None:
+            return False
+        try:
+            inputs = AnalysisInput.from_dict(json.loads(record.input_json or "null"))
+            files = {role: path for role, path, _ in inputs.files}
+            source_range = json.loads(inputs.range_json)
+            if "video" in files and (
+                source is None or source.id != clip.source_id
+                or source.file_path != files["video"] or source.fps != source_range.get("fps")
+            ):
+                return False
+            if source is not None and "video" not in files:
+                return False
+            description_options = resolve_options()
+            task = description_task(clip, source)
+            expected_runtime = runtime if runtime is not None else description_runtime(task, description_options, allow_imports=False)
+            data = record.identity.to_dict()
+            return bool(
+                data["operation_version"] == 2 and data["schema_version"] == 1
+                and data["model"] == expected_runtime
+                and data["parameters"] == {"tier": description_options.tier, "model": description_options.model, "input_mode": description_options.input_mode}
+                and data["sampling"] == {"policy": "description-input/v1"}
+                and data["prompt_sha256"] == sha256(description_options.prompt.encode()).hexdigest()
+                and record.value == {"description": clip.description, "description_model": clip.description_model, "description_frames": getattr(clip, "description_frames", None)}
+            )
+        except (OSError, ValueError, TypeError, KeyError):
+            return False
     if op_key == "boundary_embeddings":
         import json
         from hashlib import sha256
@@ -211,7 +245,7 @@ def operation_is_complete_for_clip(op_key: str, clip, *, runtime: dict | None = 
     return operation_has_result(op_key, clip)
 
 
-def compute_operation_need_counts(clips: Iterable, op_keys: Iterable[str]) -> dict[str, int]:
+def compute_operation_need_counts(clips: Iterable, op_keys: Iterable[str], *, sources_by_id: dict | None = None) -> dict[str, int]:
     """Count how many clips still need each operation."""
     clip_list = list(clips)
     counts: dict[str, int] = {}
@@ -250,14 +284,14 @@ def compute_operation_need_counts(clips: Iterable, op_keys: Iterable[str]) -> di
 
             runtime = embedding_runtime()
         counts[op_key] = sum(
-            1 for clip in clip_list if not operation_is_complete_for_clip(op_key, clip, runtime=runtime)
+            1 for clip in clip_list if not operation_is_complete_for_clip(op_key, clip, runtime=runtime, source=(sources_by_id or {}).get(getattr(clip, "source_id", None)))
         )
     return counts
 
 
-def compute_disabled_operations(clips: Iterable, op_keys: Iterable[str]) -> set[str]:
+def compute_disabled_operations(clips: Iterable, op_keys: Iterable[str], *, sources_by_id: dict | None = None) -> set[str]:
     """Return operations that are already complete for all clips in scope."""
-    counts = compute_operation_need_counts(clips, op_keys)
+    counts = compute_operation_need_counts(clips, op_keys, sources_by_id=sources_by_id)
     return {op_key for op_key, needing in counts.items() if needing == 0}
 
 

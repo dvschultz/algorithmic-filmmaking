@@ -241,8 +241,12 @@ computation share their full-content fingerprint cache across clips.
 CLI high-resolution analysis images remain separate from display thumbnails.
 Later jobs may select that recorded image while its source/range/frame-rate binding
 remains current, then verify its content and semantic identity before reuse.
-Completion projections still need migration; the description family is not yet
-complete.
+Description completion indicators now require the verified record, current default
+prompt/model/input mode, runtime metadata, displayed fields, and media bindings.
+The picker and quick-run menu pass current source lookups, including frame rate;
+missing source context cannot establish completion. UI checks do not import VLM
+runtimes. An installed but unprobed local backend remains available for worker
+verification, and a source lookup refresh updates quick-run availability.
 
 ## Remaining U10 work
 

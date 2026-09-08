@@ -62,7 +62,7 @@ def test_quick_run_disabled_when_no_operation_needed(analyze_tab, source, monkey
     clip = make_test_clip("c1")
     monkeypatch.setattr(
         "ui.tabs.analyze_tab.compute_disabled_operations",
-        lambda clips, op_keys: set(op_keys),
+        lambda clips, op_keys, **kwargs: set(op_keys),
     )
 
     analyze_tab.set_lookups({clip.id: clip}, {source.id: source})

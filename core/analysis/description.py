@@ -27,6 +27,7 @@ from core.analysis_model_identity import (
     LOCAL_DESCRIPTION_FALLBACK,
     MOONDREAM_REVISION as MOONDREAM_REVISION,
     local_description_runtime,
+    description_video_capable_model,
 )
 from core.settings import load_settings
 
@@ -202,8 +203,7 @@ def is_video_capable_model(model: str) -> bool:
     Returns:
         True if the model supports video input
     """
-    model_lower = model.lower()
-    return "gemini" in model_lower or "qwen" in model_lower
+    return description_video_capable_model(model)
 
 
 def extract_clip_segment(

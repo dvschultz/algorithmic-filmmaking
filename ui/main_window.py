@@ -3230,7 +3230,8 @@ class MainWindow(QMainWindow):
             return
 
         dialog = AnalysisPickerDialog(
-            len(clips), "selected clips", self.settings, self, clips=clips
+            len(clips), "selected clips", self.settings, self, clips=clips,
+            sources_by_id=self.project.sources_by_id,
         )
         if dialog.exec() == QDialog.Accepted:
             operations = dialog.selected_operations()
@@ -3274,7 +3275,8 @@ class MainWindow(QMainWindow):
         if not clips:
             return
         dialog = AnalysisPickerDialog(
-            len(clips), "clips in Analyze tab", self.settings, self, clips=clips
+            len(clips), "clips in Analyze tab", self.settings, self, clips=clips,
+            sources_by_id=self.project.sources_by_id,
         )
         if dialog.exec() == QDialog.Accepted:
             operations = dialog.selected_operations()

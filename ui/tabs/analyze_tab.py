@@ -272,7 +272,7 @@ class AnalyzeTab(BaseTab):
         """Enable/disable quick-run operations based on current clip metadata."""
         clips = self.get_clips()
         op_keys = [op.key for op in ANALYSIS_OPERATIONS]
-        self._disabled_quick_ops = compute_disabled_operations(clips, op_keys)
+        self._disabled_quick_ops = compute_disabled_operations(clips, op_keys, sources_by_id=self._sources_by_id)
 
         # Disable individual combo rows for operations that are already complete.
         model = self.quick_run_combo.model()
@@ -535,6 +535,7 @@ class AnalyzeTab(BaseTab):
         """
         self._clips_by_id = clips_by_id
         self._sources_by_id = sources_by_id
+        self._refresh_quick_run_availability()
 
     def add_clips(self, clip_ids: list[str], populate_browser: bool = True):
         """Add clips to the analysis tab (merge with deduplication).

@@ -108,17 +108,34 @@ def description_task(
     )
 
 
-def description_runtime(task: DescriptionTask, options: DescriptionOptions) -> dict:
-    """Resolve expected execution on the worker, without loading model weights."""
-    from core.analysis.description import is_mlx_vlm_available, is_video_capable_model
-    from core.analysis_model_identity import local_description_runtime
+def description_runtime(
+    task: DescriptionTask, options: DescriptionOptions, *, allow_imports: bool = True
+) -> dict:
+    """Resolve execution metadata without loading weights.
+
+    UI callers disable imports and defer unknown backend availability to a worker.
+    """
+    from core.analysis_model_identity import (
+        local_description_runtime,
+        description_video_capable_model,
+        known_mlx_vlm_availability,
+    )
 
     if options.model is None or options.input_mode is None:
         raise ValueError("Description options must be resolved before computation")
     packages: tuple[str, ...]
+    mlx: bool | None
     if resolve_tier(options.tier) == "local":
+        if allow_imports:
+            from core.analysis.description import is_mlx_vlm_available
+
+            mlx = is_mlx_vlm_available()
+        else:
+            mlx = known_mlx_vlm_availability()
+            if mlx is None:
+                raise ValueError("Description backend requires worker verification")
         execution = {
-            **local_description_runtime(options.model, mlx=is_mlx_vlm_available()),
+            **local_description_runtime(options.model, mlx=mlx),
             "input_mode": "frame",
         }
         packages = (
@@ -129,7 +146,7 @@ def description_runtime(task: DescriptionTask, options: DescriptionOptions) -> d
     else:
         video = (
             options.input_mode == "video"
-            and is_video_capable_model(options.model)
+            and description_video_capable_model(options.model)
             and task.source_path is not None
             and task.fps is not None
         )

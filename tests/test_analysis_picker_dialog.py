@@ -94,7 +94,7 @@ def test_force_rerun_enables_completed_operations(qapp, tmp_path):
     assert dialog._run_btn.isEnabled() is False
 
 
-def test_dialog_run_disabled_when_every_operation_complete(qapp, tmp_path):
+def test_dialog_run_disabled_when_every_operation_complete(qapp, tmp_path, monkeypatch):
     from ui.dialogs.analysis_picker_dialog import AnalysisPickerDialog
 
     clip = make_test_clip(
@@ -114,7 +114,10 @@ def test_dialog_run_disabled_when_every_operation_complete(qapp, tmp_path):
     clip.first_frame_embedding = [0.1] * 768
     clip.last_frame_embedding = [0.2] * 768
     clip.custom_queries = [{"query": "test", "match": True, "confidence": 0.9, "model": "test"}]
-    verify_clip_analysis(clip, tmp_path, embeddings=True, objects=True, ocr=True, classify=True, shots=True, gaze=True, boundary=True)
+    from core.settings import Settings
+    model_settings = Settings(description_model_tier="cloud", description_model_cloud="gpt-test", description_input_mode="frame")
+    monkeypatch.setattr("core.settings.load_settings", lambda: model_settings)
+    source = verify_clip_analysis(clip, tmp_path, embeddings=True, objects=True, ocr=True, classify=True, shots=True, gaze=True, boundary=True, descriptions=True)
 
     settings = _Settings(selected=["colors", "shots", "transcribe"])
     dialog = AnalysisPickerDialog(
@@ -122,6 +125,7 @@ def test_dialog_run_disabled_when_every_operation_complete(qapp, tmp_path):
         scope_label="selected clips",
         settings=settings,
         clips=[clip],
+        sources_by_id={source.id: source},
     )
 
     # custom_query never auto-completes (each query is unique), all others should be disabled

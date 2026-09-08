@@ -7,7 +7,7 @@ from core.project import Project
 from models.clip import Clip, Source
 
 
-def verify_clip_analysis(clip: Clip, directory: Path, *, embeddings: bool = False, objects: bool = False, ocr: bool = False, classify: bool = False, shots: bool = False, gaze: bool = False, boundary: bool = False) -> None:
+def verify_clip_analysis(clip: Clip, directory: Path, *, embeddings: bool = False, objects: bool = False, ocr: bool = False, classify: bool = False, shots: bool = False, gaze: bool = False, boundary: bool = False, descriptions: bool = False) -> Source:
     from core.spine.analyze import analyze_colors, embeddings as analyze_embeddings, detect_objects, extract_text, classify_content, analyze_shots, gaze as analyze_gaze, boundary_embeddings
 
     media = directory / f"{clip.id}.mp4"
@@ -40,3 +40,9 @@ def verify_clip_analysis(clip: Clip, directory: Path, *, embeddings: bool = Fals
     if boundary:
         with patch("core.analysis.embeddings.extract_boundary_embeddings", return_value=([0.1] * 768, [0.2] * 768)), patch("core.analysis.embeddings.unload_model"):
             boundary_embeddings(project)
+    if descriptions:
+        from core.spine.analyze import describe
+
+        with patch("core.analysis.description.describe_frame", return_value=("Fixture description", "gpt-test")):
+            describe(project)
+    return source
