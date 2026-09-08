@@ -175,6 +175,8 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
             outcome = OcrOutcome.from_dict(payload)
             if outcome.target_type != ("frame" if is_frame else "clip"):
                 raise StaleJobResult("Saved OCR target type changed")
+            if outcome.record_json is not None and clip.get("analysis_records", {}).get("extract_text") != json.loads(outcome.record_json):
+                continue
             if clip.get("extracted_texts") == [text.to_dict() for text in outcome.to_models()]:
                 pending.append((result_id, receipt_digest))
             continue

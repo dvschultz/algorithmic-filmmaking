@@ -5,6 +5,8 @@ import json
 from threading import Event
 from typing import Callable
 
+from core.analysis_records import AnalysisFingerprints
+
 from core.jobs.commits import StaleJobResult
 from core.jobs.gui_results import GuiResultJournal, GuiResultReceipt, GuiResultRequest
 from core.jobs.media import FingerprintCancelled, media_stamp
@@ -32,6 +34,7 @@ class GuiOcrCache:
         self.options = options
         self.runtime = _runtime()
         self.results: dict[tuple[str, str], GuiResultReceipt] = {}
+        self.transient_outcomes: dict[tuple[str, str], dict] = {}
         self.journals: dict[str, _OcrJournal] = {}
         self.previous: dict[tuple[str, str], str] = {}
         # Separate namespaces preserve clip/frame identity even when IDs collide.
@@ -69,10 +72,11 @@ class GuiOcrCache:
         progress: Callable[[int, int, str], None],
     ) -> tuple[OcrOutcome, ...]:
         outcomes: dict[tuple[str, str], OcrOutcome] = {}
+        fingerprints = AnalysisFingerprints(cancel)
         model_failed = False
         try:
             for journal in self.journals.values():
-                journal.start(cancel)
+                journal.start(cancel, allow_missing_receipts=True)
             for index, task in enumerate(tasks):
                 if cancel.is_set():
                     break
@@ -87,8 +91,14 @@ class GuiOcrCache:
                         task.target_type,
                         code="model_unavailable",
                     )
-                elif task.skip or task.path is None or not task.path.is_file():
-                    outcome = run_ocr((task,), self.options, cancel_event=cancel)[0]
+                elif task.path is None or not task.path.is_file():
+                    outcome = run_ocr(
+                        (task,),
+                        self.options,
+                        cancel_event=cancel,
+                        fingerprints=fingerprints,
+                        runtime=self.runtime,
+                    )[0]
                 else:
                     data = {
                         **_task_data(task),
@@ -100,7 +110,13 @@ class GuiOcrCache:
                     outcome = (
                         OcrOutcome.from_dict(payload)
                         if payload is not None
-                        else run_ocr((task,), self.options, cancel_event=cancel)[0]
+                        else run_ocr(
+                            (task,),
+                            self.options,
+                            cancel_event=cancel,
+                            fingerprints=fingerprints,
+                            runtime=self.runtime,
+                        )[0]
                     )
                     if (
                         outcome.clip_id != task.clip_id
@@ -110,6 +126,8 @@ class GuiOcrCache:
                     if outcome.status == "succeeded" and not cancel.is_set():
                         journal.record(request, outcome)
                         self.results[task.key] = journal.results[task.clip_id]
+                    elif outcome.can_apply and not cancel.is_set():
+                        self.transient_outcomes[task.key] = asdict(outcome)
                 if cancel.is_set():
                     break
                 model_failed = model_failed or outcome.code == "model_load_failed"

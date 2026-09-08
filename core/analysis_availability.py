@@ -60,6 +60,25 @@ def operation_has_result(op_key: str, clip) -> bool:
 
 def operation_is_complete_for_clip(op_key: str, clip, *, runtime: dict | None = None) -> bool:
     """Report reusable completion; existing fields alone do not prove provenance."""
+    if op_key == "extract_text":
+        from dataclasses import asdict
+        from hashlib import sha256
+        from core.analysis_records import current_record
+        from core.analysis_model_identity import OCR_PROMPT, ocr_runtime
+        from core.operations.ocr import OcrOptions, resolve_ocr_options
+
+        record = current_record(clip, op_key)
+        if record is None or record.identity is None or clip.extracted_texts is None:
+            return False
+        data = record.identity.to_dict()
+        return bool(
+            data["operation_version"] == 2 and data["schema_version"] == 1
+            and data["model"] == (runtime if runtime is not None else ocr_runtime())
+            and data["parameters"] == asdict(resolve_ocr_options(OcrOptions()))
+            and data["sampling"] == {"policy": "half-open-keyframes/v1"}
+            and data["prompt_sha256"] == sha256(OCR_PROMPT.encode()).hexdigest()
+            and record.value == {"extracted_texts": [text.to_dict() for text in clip.extracted_texts]}
+        )
     if op_key == "detect_objects":
         from core.analysis_records import current_record
         from core.analysis_model_identity import object_detection_runtime
@@ -121,7 +140,11 @@ def compute_operation_need_counts(clips: Iterable, op_keys: Iterable[str]) -> di
     counts: dict[str, int] = {}
     for op_key in op_keys:
         runtime = None
-        if op_key == "detect_objects":
+        if op_key == "extract_text":
+            from core.analysis_model_identity import ocr_runtime
+
+            runtime = ocr_runtime()
+        elif op_key == "detect_objects":
             from core.analysis_model_identity import object_detection_runtime
 
             runtime = object_detection_runtime()

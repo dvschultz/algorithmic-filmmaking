@@ -412,35 +412,40 @@ def extract_text(
     cancel_event: Optional[threading.Event] = None,
 ) -> dict:
     """Extract visible text from clips using OCR/VLM fallback."""
-    from core.operations.ocr import OcrTask, OcrOptions, OcrApplication, run_ocr
+    from core.operations.ocr import OcrTask, OcrOptions, OcrApplication, resolve_ocr_options, run_ocr
 
     clips = _resolve_clip_ids(project, clip_ids)
     tasks = tuple(
         OcrTask.from_clip(clip, project.sources_by_id.get(clip.source_id),
-                          skip=skip_existing and clip.extracted_texts is not None)
+                          skip=skip_existing)
         for clip in clips
     )
-    application = OcrApplication(project, tasks)
+    options = resolve_ocr_options(OcrOptions(min(max(1, num_keyframes), 5), use_vlm_fallback, vlm_model, vlm_only))
+    application = OcrApplication(project, tasks, options)
     succeeded: list[dict] = []
     failed: list[dict] = []
     skipped: list[dict] = []
 
     def deliver(outcome):
+        accepted = application.apply(project, outcome) if outcome.can_apply else False
+        if outcome.can_apply and not accepted:
+            failed.append({"clip_id": outcome.clip_id, "code": "target_changed"})
+            return
         if outcome.status == "skipped":
-            skipped.append({"clip_id": outcome.clip_id, "reason": "already_populated"})
+            skipped.append({"clip_id": outcome.clip_id, "reason": outcome.code})
         elif outcome.status == "failed":
             entry = {"clip_id": outcome.clip_id, "code": outcome.code}
             if outcome.message:
                 entry["message"] = outcome.message
             failed.append(entry)
         elif outcome.status == "succeeded":
-            if application.apply(project, outcome):
+            if accepted:
                 succeeded.append({"clip_id": outcome.clip_id, "text_count": len(outcome.texts)})
             else:
                 failed.append({"clip_id": outcome.clip_id, "code": "target_changed"})
 
     run_ocr(
-        tasks, OcrOptions(min(max(1, num_keyframes), 5), use_vlm_fallback, vlm_model, vlm_only),
+        tasks, options,
         cancel_event=cancel_event, on_outcome=deliver,
         progress=(lambda n, total, cid: progress_callback((n - 1) / total, f"Text extraction ({n}/{total}): {cid}"))
         if progress_callback else None,

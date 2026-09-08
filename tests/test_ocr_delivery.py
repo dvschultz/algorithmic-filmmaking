@@ -5,6 +5,57 @@ import subprocess
 import sys
 
 
+def test_worker_delivers_verified_empty_reuse_and_failure(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from PySide6.QtCore import QObject
+    from PySide6.QtWidgets import QApplication
+    from core.settings import Settings
+    from tests.test_description_operations import project_with_thumbnails
+    from ui.workers.text_extraction_worker import TextExtractionWorker
+    from ui.workers.ocr_delivery import OcrDelivery
+
+    app = QApplication.instance() or QApplication([])
+    window = QObject()
+    assert window.thread() == app.thread()
+    window.project = project_with_thumbnails(tmp_path, 1)
+    assert window.project.save(tmp_path / "project.json")
+    window._on_text_extraction_error = Mock()
+    window.analyze_tab = SimpleNamespace(update_clip_extracted_text=Mock())
+    monkeypatch.setattr(
+        "core.settings.load_settings", lambda: Settings(cache_dir=tmp_path / "cache")
+    )
+    provider = Mock(return_value=[])
+    monkeypatch.setattr("core.analysis.ocr.extract_text_from_clip", provider)
+    deliveries = []
+    try:
+        for attempt in ("compute", "reuse", "fail"):
+            if attempt == "fail":
+                provider.side_effect = RuntimeError("provider failed")
+            worker = TextExtractionWorker(
+                window.project.clips,
+                window.project.sources_by_id,
+                project=window.project,
+                skip_existing=attempt != "fail",
+            )
+            window.text_extraction_worker = worker
+            deliveries.append(OcrDelivery(window, worker))
+            worker.run()
+            record = window.project.clips[0].analysis_records["extract_text"]
+            assert record.state == ("failed" if attempt == "fail" else "succeeded")
+            assert (
+                worker.result[0].status
+                == {"compute": "succeeded", "reuse": "skipped", "fail": "failed"}[
+                    attempt
+                ]
+            )
+        assert provider.call_count == 2
+        assert window.project.clips[0].extracted_texts == []
+        window._on_text_extraction_error.assert_not_called()
+    finally:
+        window.project.close_writer()
+
+
 def test_queued_ocr_delivery_guards():
     code = r"""
 from pathlib import Path
@@ -190,7 +241,10 @@ with TemporaryDirectory() as directory:
                 else: assert original.clips[0].extracted_texts is None
 """
     result = subprocess.run(
-        [sys.executable, "-c", code], capture_output=True, text=True, timeout=30,
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        timeout=30,
         env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},
     )
     assert result.returncode == 0, result.stdout + result.stderr

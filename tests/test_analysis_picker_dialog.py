@@ -106,7 +106,7 @@ def test_dialog_run_disabled_when_every_operation_complete(qapp, tmp_path):
         detected_objects=[{"label": "car", "confidence": 0.9}],
         description="desc",
     )
-    clip.extracted_texts = [object()]
+    clip.extracted_texts = []
     clip.cinematography = object()
     clip.face_embeddings = [{"bbox": [0, 0, 50, 50], "embedding": [0.1] * 512, "confidence": 0.9}]
     clip.gaze_category = "at_camera"
@@ -114,7 +114,7 @@ def test_dialog_run_disabled_when_every_operation_complete(qapp, tmp_path):
     clip.first_frame_embedding = [0.1] * 768
     clip.last_frame_embedding = [0.2] * 768
     clip.custom_queries = [{"query": "test", "match": True, "confidence": 0.9, "model": "test"}]
-    verify_clip_analysis(clip, tmp_path, embeddings=True, objects=True)
+    verify_clip_analysis(clip, tmp_path, embeddings=True, objects=True, ocr=True)
 
     settings = _Settings(selected=["colors", "shots", "transcribe"])
     dialog = AnalysisPickerDialog(

@@ -125,9 +125,12 @@ def test_pipeline_skips_saved_empty_observations(setup):
     from core.settings import Settings
     from ui.workers.clip_analysis import ClipAnalysisController
 
-    project, _ = setup
-    for clip in project.clips:
-        clip.extracted_texts = []
+    from core.spine.analyze import extract_text
+
+    project, provider = setup
+    provider.side_effect = None
+    provider.return_value = []
+    extract_text(project)
     window = QObject()
     window.project = project
     window.settings = Settings()
@@ -264,13 +267,11 @@ def test_crash_after_completed_item_reuses_prefix(setup):
     assert provider.call_count == 3
 
 
-def test_missing_receipt_stops_before_inference(setup):
-    from core.jobs.commits import StaleJobResult
-
+def test_verified_record_survives_missing_receipt(setup):
     project, provider = setup
     run(project, apply=True)
     project.save()
     (project.path.parent / "jobs.db").unlink()
-    with pytest.raises(StaleJobResult, match="payload is missing"):
-        run(Project.load(project.path))
+    outcomes = run(Project.load(project.path))
+    assert all(o.status == "skipped" and o.code == "valid_analysis" for o in outcomes)
     assert provider.call_count == 2

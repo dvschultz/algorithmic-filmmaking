@@ -39,12 +39,20 @@ def test_compute_disabled_operations_mixed_clips_keeps_option_enabled():
     assert counts["colors"] == 2
 
 
-def test_extract_text_empty_list_is_a_completed_observation():
+def test_legacy_ocr_empty_list_needs_verification():
     clip = make_test_clip("clip-1")
     clip.extracted_texts = []
 
     disabled = compute_disabled_operations([clip], ["extract_text"])
-    assert disabled == {"extract_text"}
+    assert disabled == set()
+
+
+def test_verified_empty_ocr_is_complete(tmp_path):
+    from tests.analysis_fixtures import verify_clip_analysis
+
+    clip = make_test_clip("clip-1")
+    verify_clip_analysis(clip, tmp_path, ocr=True)
+    assert compute_disabled_operations([clip], ["extract_text"]) == {"extract_text"}
 
 
 def test_embedding_projection_alone_does_not_establish_completion():

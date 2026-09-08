@@ -6,7 +6,7 @@ from queue import Empty, Queue
 
 from PySide6.QtCore import Signal
 
-from core.operations.ocr import OcrTask, OcrOptions, OcrOutcome, run_ocr
+from core.operations.ocr import OcrOptions, OcrOutcome, ocr_task, run_ocr
 from core.jobs import JobRuntime
 from core.jobs.gui_ocr import GuiOcrCache
 from core.jobs.ocr import _runtime, _task_data, resolve_options
@@ -49,10 +49,12 @@ class TextExtractionWorker(CancellableWorker):
         *,
         project: "Project | None" = None,
         options: OcrOptions | None = None,
+        skip_existing: bool = True,
     ) -> None:
         super().__init__(parent)
-        self.options = options or resolve_options(
-            OcrOptions(
+        self.options = resolve_options(
+            options
+            or OcrOptions(
                 min(max(1, num_keyframes), 5),
                 use_vlm_fallback,
                 vlm_model,
@@ -62,21 +64,14 @@ class TextExtractionWorker(CancellableWorker):
         )
         if analysis_targets:
             self.tasks = tuple(
-                OcrTask(
-                    target.id,
-                    target.video_path
-                    if getattr(target, "target_type", "frame") == "clip"
-                    else target.image_path,
-                    getattr(target, "target_type", "frame"),
-                    getattr(target, "start_frame", None) or 0,
-                    getattr(target, "end_frame", None) or 0,
-                    getattr(target, "fps", None) or 0.0,
-                )
+                ocr_task(target, skip_existing=skip_existing)
                 for target in analysis_targets
             )
         else:
             self.tasks = tuple(
-                OcrTask.from_clip(clip, sources_by_id.get(clip.source_id))
+                ocr_task(
+                    clip, sources_by_id.get(clip.source_id), skip_existing=skip_existing
+                )
                 for clip in clips
             )
         self.result: tuple[OcrOutcome, ...] = ()
@@ -87,7 +82,7 @@ class TextExtractionWorker(CancellableWorker):
         self.operation = gui_job_operation(
             OperationSpec.build(
                 kind="ocr",
-                version=1,
+                version=2,
                 arguments={"targets": [list(task.key) for task in self.tasks]},
                 inputs={
                     "tasks": [_task_data(task) for task in self.tasks],
@@ -123,7 +118,7 @@ class TextExtractionWorker(CancellableWorker):
 
         def emit_outcome(outcome: OcrOutcome) -> None:
             self.outcome_ready.emit(outcome)
-            if outcome.status == "succeeded":
+            if outcome.has_result:
                 results[outcome.clip_id] = outcome.to_models()
                 self.clip_completed.emit(outcome.clip_id, outcome.to_models())
             elif outcome.status == "failed":

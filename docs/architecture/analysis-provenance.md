@@ -1,7 +1,7 @@
 # Analysis provenance and derived artifacts
 
 The U10 implementation covers color palettes, thumbnail DINOv2 embeddings,
-and object detection across the desktop, shared spine, CLI, MCP jobs, and embedding
+object detection, and OCR across the desktop, shared spine, CLI, MCP jobs, and embedding
 prerequisites used by sequencing. This document describes that bounded scope.
 The complete U10 contract remains in the shared editing engine plan.
 
@@ -44,6 +44,13 @@ record's source binding before handing the image to worker-side content checks.
 GUI delivery carries the entire immutable outcome, including the record, and
 checks it against the computation journal or the worker's exact transient result.
 
+OCR records clip video content and frame ranges (including FPS), or individual
+frame image content. Its identity includes resolved VLM options, the exact prompt,
+sampling policy, and local runtime versions. Empty text observations remain
+reusable after job-cache removal. Failed attempts retain the previous displayed
+text but invalidate automatic reuse; the next request can retry. GUI and saved
+jobs publish those failure records without creating successful job receipts.
+
 ## Storage and ownership
 
 The configured cache directory contains `artifacts/`, with a SQLite reference
@@ -75,7 +82,7 @@ without stopping analysis of valid neighboring clips.
 ## Remaining U10 work
 
 - Migrate the other U7 analysis families, including boundary embeddings, to
-  semantic reuse. Extend operation-owned failure records beyond object detection.
+  semantic reuse. Extend operation-owned failure records beyond object detection and OCR.
 - Expose the explicit legacy-reuse decision through user and agent flows; the
   current record model supports the decision but the flows are not wired.
 - Move preview/prerender media and durable job array payloads into managed

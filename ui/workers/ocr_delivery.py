@@ -25,7 +25,9 @@ class OcrDelivery(RetiringQObject):
         self.window = window
         self.worker = worker
         self.worker_attribute = worker_attribute
-        self.application = OcrApplication(window.project, worker.tasks)
+        self.application = OcrApplication(
+            window.project, worker.tasks, getattr(worker, "options", None)
+        )
         self.pipeline = pipeline
         self.run = getattr(window, "_analysis_run", None) if pipeline else None
         self.reply = getattr(window, "_dispatch_gui_reply", None)
@@ -72,11 +74,7 @@ class OcrDelivery(RetiringQObject):
             window._on_text_extraction_error("Invalid queued OCR result")
             return
         key = outcome.target_type, outcome.clip_id
-        if (
-            outcome.status != "succeeded"
-            or not self._is_current()
-            or key in self.delivered
-        ):
+        if not outcome.can_apply or not self._is_current() or key in self.delivered:
             return
         self.delivered.add(key)
         try:
@@ -89,8 +87,11 @@ class OcrDelivery(RetiringQObject):
                     or window.project.path.resolve() != cache.path
                 ):
                     raise ValueError("Project save location changed during OCR")
-                receipt = cache.results[key]
-                if not receipt.matches(outcome):
+                receipt = cache.results.get(key)
+                if (receipt is not None and not receipt.matches(outcome)) or (
+                    receipt is None
+                    and cache.transient_outcomes.get(key) != asdict(outcome)
+                ):
                     raise ValueError("Queued OCR differs from its recorded result")
             accepted = self.application.apply(window.project, outcome)
             if accepted and receipt is not None:
@@ -102,7 +103,7 @@ class OcrDelivery(RetiringQObject):
             window._on_text_extraction_error(
                 "OCR discarded because the target changed. Run analysis again."
             )
-        elif outcome.target_type == "clip":
+        elif outcome.has_result and outcome.target_type == "clip":
             window.analyze_tab.update_clip_extracted_text(
                 outcome.clip_id, outcome.to_models()
             )

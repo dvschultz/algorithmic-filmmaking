@@ -70,6 +70,131 @@ def test_valid_empty_observation_is_success(tmp_path, monkeypatch):
     assert project.clips[0].extracted_texts == []
 
 
+def test_verified_empty_ocr_reuses_without_provider(tmp_path, monkeypatch):
+    project = project_with_thumbnails(tmp_path, 1)
+    provider = Mock(return_value=[])
+    monkeypatch.setattr(ocr, "extract_text_from_clip", provider)
+    assert extract_text(project)["result"]["succeeded"]
+    record = project.clips[0].analysis_records["extract_text"]
+    assert record.state == "succeeded" and record.value == {"extracted_texts": []}
+    assert extract_text(project)["result"]["skipped"]
+    assert provider.call_count == 1
+
+
+def test_failed_ocr_attempt_preserves_projection_but_invalidates_reuse(
+    tmp_path, monkeypatch
+):
+    project = project_with_thumbnails(tmp_path, 1)
+    provider = Mock(return_value=[])
+    monkeypatch.setattr(ocr, "extract_text_from_clip", provider)
+    extract_text(project)
+    provider.side_effect = RuntimeError("provider unavailable")
+    assert extract_text(project, skip_existing=False)["result"]["failed"]
+    assert project.clips[0].extracted_texts == []
+    assert project.clips[0].analysis_records["extract_text"].state == "failed"
+    provider.side_effect = None
+    assert extract_text(project)["result"]["succeeded"]
+    assert provider.call_count == 3
+
+
+@pytest.mark.parametrize(
+    "change", ["range", "source", "parameters", "model", "projection"]
+)
+def test_ocr_identity_invalidates_changed_inputs(tmp_path, monkeypatch, change):
+    project = project_with_thumbnails(tmp_path, 1)
+    provider = Mock(return_value=[])
+    monkeypatch.setattr(ocr, "extract_text_from_clip", provider)
+    extract_text(project, vlm_model="first")
+    kwargs = {"vlm_model": "first"}
+    if change == "range":
+        project.clips[0].end_frame -= 1
+    elif change == "source":
+        project.sources[0].file_path.write_bytes(b"replacement video")
+    elif change == "parameters":
+        kwargs["num_keyframes"] = 1
+    elif change == "model":
+        kwargs["vlm_model"] = "second"
+    else:
+        project.clips[0].extracted_texts = [ExtractedText(0, "edited", 1.0, "vlm")]
+    assert extract_text(project, **kwargs)["result"]["succeeded"]
+    assert provider.call_count == 2
+
+
+def test_ocr_rebinds_identical_relocated_source_without_inference(
+    tmp_path, monkeypatch
+):
+    project = project_with_thumbnails(tmp_path, 1)
+    provider = Mock(return_value=[])
+    monkeypatch.setattr(ocr, "extract_text_from_clip", provider)
+    extract_text(project)
+    original = project.clips[0].analysis_records["extract_text"]
+    moved = tmp_path / "moved.mp4"
+    moved.write_bytes(project.sources[0].file_path.read_bytes())
+    project.sources[0].file_path = moved
+    assert extract_text(project)["result"]["skipped"]
+    current = project.clips[0].analysis_records["extract_text"]
+    assert current.identity == original.identity
+    assert current.input_json != original.input_json
+    assert provider.call_count == 1
+
+
+def test_ocr_runtime_change_recomputes(tmp_path, monkeypatch):
+    from core.analysis_model_identity import ocr_runtime
+
+    project = project_with_thumbnails(tmp_path, 1)
+    provider = Mock(return_value=[])
+    monkeypatch.setattr(ocr, "extract_text_from_clip", provider)
+    extract_text(project)
+    changed = {**ocr_runtime(), "algorithm": "next-version"}
+    monkeypatch.setattr("core.operations.ocr.ocr_runtime", lambda: changed)
+    assert extract_text(project)["result"]["succeeded"]
+    assert provider.call_count == 2
+
+
+def test_reuse_delivery_error_is_not_recorded_as_provider_failure(
+    tmp_path, monkeypatch
+):
+    from core.operations.ocr import OcrOptions, ocr_task, run_ocr
+
+    project = project_with_thumbnails(tmp_path, 1)
+    provider = Mock(return_value=[])
+    monkeypatch.setattr(ocr, "extract_text_from_clip", provider)
+    extract_text(project)
+    deliver = Mock(side_effect=RuntimeError("owner delivery failed"))
+    with pytest.raises(RuntimeError, match="owner delivery failed"):
+        run_ocr(
+            (ocr_task(project.clips[0], project.sources[0]),),
+            OcrOptions(),
+            on_outcome=deliver,
+        )
+    deliver.assert_called_once()
+    assert deliver.call_args.args[0].status == "skipped"
+    assert provider.call_count == 1
+
+
+def test_frame_ocr_empty_reuse_and_image_invalidation(tmp_path, monkeypatch):
+    from core.operations.ocr import OcrApplication, OcrOptions, ocr_task, run_ocr
+    from models.frame import Frame
+
+    project = project_with_thumbnails(tmp_path, 1)
+    frame = Frame(
+        id="frame", file_path=project.clips[0].thumbnail_path, frame_number=12
+    )
+    project.add_frames([frame])
+    provider = Mock(return_value=("", 0.0, "none"))
+    monkeypatch.setattr(ocr, "extract_text_from_frame", provider)
+    for attempt in ("compute", "reuse", "change"):
+        if attempt == "change":
+            frame.file_path.write_bytes(b"new frame")
+        task = ocr_task(frame)
+        application = OcrApplication(project, (task,))
+        outcome = run_ocr((task,), OcrOptions())[0]
+        assert outcome.status == ("skipped" if attempt == "reuse" else "succeeded")
+        assert application.apply(project, outcome)
+        assert frame.extracted_texts == []
+    assert provider.call_count == 2
+
+
 def test_provider_cannot_overwrite_concurrent_edit(tmp_path, monkeypatch):
     project = project_with_thumbnails(tmp_path, 1)
     edited = [ExtractedText(0, "EDIT", 1.0, "vlm")]

@@ -98,15 +98,42 @@ def test_force_refresh_reuses_failed_generation(setup):
     assert all(c.extracted_texts == [] for c in Project.load(path).clips)
 
 
-def test_manual_text_edit_is_preserved(setup):
+def test_manual_text_edit_requires_verified_recomputation(setup):
     path, _, provider = setup
     run(setup)
     project = Project.load(path)
     project.clips[0].extracted_texts[0].text = "EDIT"
     project.save()
     run(setup)
+    assert provider.call_count == 3
+    assert Project.load(path).clips[0].extracted_texts[0].text == "SIGN"
+
+
+def test_verified_ocr_survives_job_cache_removal(setup):
+    path, _, provider = setup
+    run(setup)
+    fresh = JobStore(path.parent / "fresh-jobs.db")
+    try:
+        result = run((path, fresh, provider))
+    finally:
+        fresh.close()
+    assert len(result["skipped"]) == 2
     assert provider.call_count == 2
-    assert Project.load(path).clips[0].extracted_texts[0].text == "EDIT"
+
+
+def test_saved_failure_invalidates_previous_success(setup):
+    path, _, provider = setup
+    run(setup)
+    provider.side_effect = RuntimeError("provider failed")
+    assert len(run(setup, force=True)["failed"]) == 2
+    project = Project.load(path)
+    assert all(
+        c.analysis_records["extract_text"].state == "failed" for c in project.clips
+    )
+    assert all(c.extracted_texts[0].text == "SIGN" for c in project.clips)
+    provider.side_effect = None
+    provider.return_value = []
+    assert len(run(setup)["succeeded"]) == 2
 
 
 def test_source_change_invalidates_uncommitted_cache(setup):

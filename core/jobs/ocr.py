@@ -7,6 +7,10 @@ from pathlib import Path
 from threading import Event
 from typing import Callable
 
+from core.analysis_records import AnalysisFingerprints, AnalysisSnapshot
+from core.analysis_model_identity import ocr_runtime
+from models.analysis_record import AnalysisRecord
+
 from core.jobs.commits import ResultSpec, StaleJobResult, result_batch
 from core.jobs.media import FingerprintCancelled, MediaFingerprints, media_stamp
 from core.jobs.spec import OperationSpec
@@ -16,6 +20,8 @@ from core.operations.ocr import (
     OcrOptions,
     OcrOutcome,
     OcrTask,
+    ocr_identity,
+    resolve_ocr_options,
     run_ocr,
 )
 from core.project import Project
@@ -23,38 +29,11 @@ from core.project_revision import ProjectRevisionConflict
 
 
 def _runtime() -> dict:
-    from importlib.metadata import PackageNotFoundError, version
-
-    packages: dict[str, str | None] = {}
-    for package in ("paddleocr", "paddlepaddle", "numpy", "Pillow", "litellm"):
-        try:
-            packages[package] = version(package)
-        except PackageNotFoundError:
-            packages[package] = None
-    from core.binary_resolver import find_binary
-
-    binary = find_binary("ffmpeg")
-    return {
-        "algorithm": "ocr-half-open-keyframes/v1",
-        "packages": packages,
-        "ffmpeg": str(binary) if binary else None,
-        "ffmpeg_stamp": list(media_stamp(Path(binary)) or ()) if binary else None,
-    }
+    return ocr_runtime()
 
 
 def resolve_options(options: OcrOptions) -> OcrOptions:
-    from dataclasses import replace
-
-    model = options.vlm_model
-    if options.use_vlm_fallback and not model:
-        from core.settings import load_settings
-
-        model = load_settings().description_model_cloud or "gemini-3-flash-preview"
-    return replace(
-        options,
-        vlm_model=model if options.use_vlm_fallback else None,
-        num_keyframes=min(max(1, options.num_keyframes), 5),
-    )
+    return resolve_ocr_options(options)
 
 
 def _ids(project: Project, clip_ids: list[str] | None) -> list[str]:
@@ -76,6 +55,9 @@ def _task(project: Project, cid: str) -> OcrTask:
 
 def _task_data(task: OcrTask) -> dict:
     data = asdict(task)
+    data.pop("analysis_json")
+    data["skip"] = False
+    data["analysis_version"] = 2 if task.analysis_json is not None else 1
     data["path"] = str(task.path) if task.path else None
     return data
 
@@ -119,7 +101,7 @@ def ocr_job_spec(
     revision = project.session.file_revision
     return OperationSpec.build(
         kind="ocr",
-        version=1,
+        version=2,
         arguments=arguments,
         inputs={
             "targets": targets,
@@ -158,7 +140,9 @@ def run_ocr_job(
         force = bool(operation.arguments.get("force", False))
     path = path.resolve()
     runtime = _runtime()
-    fingerprint = MediaFingerprints(cancel).get
+    media_fingerprints = MediaFingerprints(cancel)
+    fingerprint = media_fingerprints.get
+    fingerprints = AnalysisFingerprints(cancel, media_fingerprints=media_fingerprints)
     with result_batch(store, path) as batch:
         project = batch.project
         if operation is not None:
@@ -179,7 +163,7 @@ def run_ocr_job(
         for rid, digest in project.metadata.job_results.items():
             row = store.get_result(rid)
             if row is None:
-                raise StaleJobResult("Committed result payload is missing")
+                continue  # Verified project records can outlive the job cache.
             if sha256(row["spec_json"].encode()).hexdigest() != rid:
                 raise StaleJobResult("Committed result identity is corrupt")
             identity = json.loads(row["spec_json"])
@@ -205,10 +189,27 @@ def run_ocr_job(
             }
 
         def is_output(current: Project, cid: str, payload: dict) -> bool:
+            record = current.clips_by_id[cid].analysis_records.get("extract_text")
+            if payload.get("record_json") is not None and (
+                record is None or record.to_dict() != json.loads(payload["record_json"])
+            ):
+                return False
             existing = _values(current, cid)
             return existing == [
                 text.to_model().to_dict() for text in _outcome(cid, payload).texts
             ]
+
+        def stage_record(cid: str, record: AnalysisRecord, basis: dict) -> None:
+            batch.stage_analysis(
+                apply=lambda current: current.record_analysis(
+                    "clip", cid, "extract_text", record
+                ),
+                validate_input=lambda current: inputs(current, cid) == basis,
+                is_applied=lambda current: current.clips_by_id[
+                    cid
+                ].analysis_records.get("extract_text")
+                == record,
+            )
 
         result: dict = {
             "succeeded": [],
@@ -224,25 +225,38 @@ def run_ocr_job(
                 )
                 break
             existing = _values(project, cid) is not None
-            if existing and not force and cid not in known:
-                result["skipped"].append(
-                    {"clip_id": cid, "reason": "already_populated"}
-                )
-                continue
             try:
                 basis = inputs(project, cid)
                 if basis["runtime"] != runtime:
                     raise StaleJobResult("OCR runtime changed")
                 task = _task(project, cid)
-                identity_inputs: dict = {"basis": basis}
+                assert task.analysis_json is not None
+                snapshot = AnalysisSnapshot.from_json(task.analysis_json)
+                semantic = (
+                    ocr_identity(snapshot, options, fingerprints, runtime)
+                    if snapshot.inputs.unchanged()
+                    else None
+                )
+                reused = (
+                    snapshot.reusable_record(semantic)
+                    if semantic is not None and not force
+                    else None
+                )
+                prior_record = project.clips_by_id[cid].analysis_records.get(
+                    "extract_text"
+                )
+                identity_inputs: dict = {
+                    "basis": basis,
+                    "previous_record": prior_record.to_dict() if prior_record else None,
+                    "previous_texts": _values(project, cid),
+                }
                 if force:
                     identity_inputs["generation"] = len(known.get(cid, []))
-                    identity_inputs["previous_texts"] = _values(project, cid)
                 arguments = asdict(options)
                 spec = ResultSpec.build(
                     path,
                     kind="ocr",
-                    version=1,
+                    version=2,
                     target_id=cid,
                     arguments=arguments,
                     inputs=identity_inputs,
@@ -259,30 +273,34 @@ def run_ocr_job(
                         ):
                             specs = [ResultSpec(path, row["spec_json"])]
                             break
-                if cid in known and not force:
+                if existing and not force:
                     matches = [
                         row
-                        for row, identity, payload in known[cid]
+                        for row, identity, payload in known.get(cid, [])
                         if identity["project_path"] == str(path)
                         and identity["inputs"]["basis"] == basis
                         and identity["arguments"] == arguments
                         and is_output(project, cid, payload)
                     ]
-                    if not matches and existing:
-                        result["skipped"].append(
-                            {"clip_id": cid, "reason": "already_populated"}
-                        )
-                        continue
                     if matches:
                         specs = [ResultSpec(path, row["spec_json"]) for row in matches]
+                    elif reused is not None:
+                        if reused != prior_record:
+                            stage_record(cid, reused, basis)
+                        result["skipped"].append(
+                            {"clip_id": cid, "reason": "valid_analysis"}
+                        )
+                        continue
 
-                application = OcrApplication(project, (task,))
+                application = OcrApplication(project, (task,), options)
 
                 def compute(task=task):
                     outcome = run_ocr(
                         (task,),
                         options,
                         cancel_event=cancel,
+                        fingerprints=fingerprints,
+                        runtime=runtime,
                     )[0]
                     if outcome.status != "succeeded":
                         raise _OutcomeError(outcome)
@@ -325,6 +343,14 @@ def run_ocr_job(
                 break
             except _OutcomeError as exc:
                 outcome = exc.outcome
+                if inputs(project, cid) != basis:
+                    raise StaleJobResult("OCR inputs changed during computation")
+                if outcome.can_apply and outcome.record_json is not None:
+                    stage_record(
+                        cid,
+                        AnalysisRecord.from_dict(json.loads(outcome.record_json)),
+                        basis,
+                    )
                 result[outcome.status].append(
                     {"clip_id": cid, "code": outcome.code, "message": outcome.message}
                 )

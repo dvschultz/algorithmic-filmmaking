@@ -271,14 +271,9 @@ def _vlm_text_extraction(
 
     base64_image = encode_image_base64(frame_path)
 
-    prompt = """Extract ALL visible text from this image. Include:
-- Signs, labels, titles
-- Subtitles or captions
-- Text on documents or screens
-- Any other readable text
+    from core.analysis_model_identity import OCR_PROMPT
 
-Return ONLY the extracted text, one phrase per line. If no text is visible, return "NO_TEXT_FOUND".
-Do not add any commentary or descriptions."""
+    prompt = OCR_PROMPT
 
     messages = [
         {
