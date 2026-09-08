@@ -70,6 +70,14 @@ class SequenceExporter:
             True if export succeeded
         """
         all_clips = sequence.get_all_clips()
+        from core.sequence_time import require_resolved_sequence
+        try:
+            require_resolved_sequence(sequence)
+        except ValueError as exc:
+            logger.error("Sequence export preflight: %s", exc)
+            if progress_callback:
+                progress_callback(0, str(exc))
+            return False
         if not all_clips:
             return False
 

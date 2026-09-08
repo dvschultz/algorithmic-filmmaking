@@ -107,7 +107,8 @@ class TestApplyCassetteTapeSequence:
         assert tab.algorithm_dropdown.currentText() == "Cassette Tape"
         assert tab._current_algorithm == "cassette_tape"
 
-    def test_apply_with_zero_fps_falls_back_to_30(self, qapp):
+    @pytest.mark.parametrize("valid_first", [False, True])
+    def test_apply_with_zero_fps_preserves_existing_sequence(self, qapp, monkeypatch, valid_first):
         from ui.tabs.sequence_tab import SequenceTab
         tab = SequenceTab()
         # Source with fps=0 (corrupted metadata)
@@ -116,7 +117,16 @@ class TestApplyCassetteTapeSequence:
         tab.video_player = MagicMock()
         tab.timeline_preview = MagicMock()
         clip = _make_clip("c1")
-        # Should not raise (would divide-by-zero without the guard)
-        tab._apply_cassette_tape_sequence([(clip, bad_source, 0, 15)])
-        # Timeline fps was set to the fallback, not 0
-        assert tab.timeline.sequence.fps == 30.0
+        good_source = _make_source()
+        tab.timeline.add_clip(clip, good_source)
+        before = tab.timeline.sequence.to_dict()
+        error = MagicMock()
+        monkeypatch.setattr("ui.tabs.sequence_tab.QMessageBox.critical", error)
+
+        # An unknown source rate cannot be interpreted as 30 fps. Reject it
+        # before clearing the current sequence, and expose the error to the user.
+        payload = [(clip, good_source, 0, 15)] if valid_first else []
+        payload.append((clip, bad_source, 0, 15))
+        tab._apply_cassette_tape_sequence(payload)
+        error.assert_called_once()
+        assert tab.timeline.sequence.to_dict() == before

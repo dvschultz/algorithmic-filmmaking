@@ -32,11 +32,20 @@ def test_source_ms_to_timeline_seconds_with_in_point_offset():
         out_point=1200,    # 40s in source at 30fps
     )
 
-    # 32s source position => 60 frames into the sequence clip => timeline 15.0s at 24fps.
+    # Two elapsed source seconds remain two elapsed timeline seconds.
     timeline_seconds = _source_ms_to_timeline_seconds(
         seq_clip,
         position_ms=32000,
         source_fps=30.0,
         timeline_fps=24.0,
     )
-    assert timeline_seconds == 15.0
+    assert timeline_seconds == 14.5
+
+
+def test_explicit_mixed_rate_forward_mapping():
+    from models.sequence import SequenceClip
+    seq_clip = SequenceClip(
+        start_frame=300, in_point=900, out_point=1200,
+        source_rate="30", timeline_rate="24",
+    )
+    assert _timeline_frame_to_source_seconds(seq_clip, 360, 30) == 32.5

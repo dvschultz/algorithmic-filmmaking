@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from typing import Any
+from fractions import Fraction
 
 from core.project import Project
-from models.sequence import Sequence, SequenceClip, Track
+from core.sequence_time import timeline_end, video_entry
+from models.media_time import frame_rate
+from models.sequence import Sequence, Track
 
 
 def _sequence(project: Project, sequence_id: str) -> Sequence:
@@ -31,6 +34,13 @@ def get_timeline(project: Project, sequence_id: str) -> dict:
     return {"success": True, "sequence": _sequence(project, sequence_id).to_dict()}
 
 
+def resolve_legacy_timing(
+    project: Project, sequence_id: str, entry_id: str, convention: str,
+) -> dict:
+    entry = project.resolve_sequence_timing(sequence_id, entry_id, convention)
+    return {"success": True, "entry": entry.to_dict()}
+
+
 def insert_clips(
     project: Project,
     sequence_id: str,
@@ -49,6 +59,7 @@ def insert_clips(
     track = _track(sequence, track_index)
     if not clip_ids:
         raise ValueError("Provide at least one library clip ID")
+    append = start_frame is None
     if start_frame is None:
         start_frame = max((clip.end_frame() for clip in track.clips), default=0)
     if (
@@ -58,23 +69,19 @@ def insert_clips(
     ):
         raise ValueError("Start frame must be a nonnegative integer")
     entries = []
-    position = start_frame
+    position = timeline_end(track.clips, sequence.fps) if append else Fraction(start_frame) / frame_rate(sequence.fps)
     for clip_id in clip_ids:
         clip = project.clips_by_id.get(clip_id)
         if clip is None or clip.source_id not in project.sources_by_id:
             raise ValueError(f"Library clip or source not found: {clip_id}")
         if clip.disabled:
             raise ValueError(f"Library clip is disabled: {clip_id}")
-        entry = SequenceClip(
-            source_clip_id=clip.id,
-            source_id=clip.source_id,
-            track_index=track_index,
-            start_frame=position,
-            in_point=clip.start_frame,
-            out_point=clip.end_frame,
+        entry = video_entry(
+            clip, project.sources_by_id[clip.source_id],
+            timeline_fps=sequence.fps, start=position, track_index=track_index,
         )
         entries.append(entry)
-        position += entry.duration_frames
+        position = entry.timeline_range.end
     project.insert_sequence_clips(entries, sequence=sequence)
     return {"success": True, "added": [entry.id for entry in entries]}
 
@@ -205,23 +212,20 @@ def insert_legacy_clips(
         raise ValueError("Position must be a nonnegative frame")
     entries = []
     added = []
+    cursor = timeline_end(existing, sequence.fps) if position == "end" else Fraction(start) / frame_rate(sequence.fps)
     for clip_id in clip_ids:
         clip = project.clips_by_id.get(clip_id)
         if clip is None or clip.source_id not in project.sources_by_id or clip.disabled:
             continue
-        entry = SequenceClip(
-            source_clip_id=clip.id,
-            source_id=clip.source_id,
-            track_index=track_index,
-            start_frame=start,
-            in_point=clip.start_frame,
-            out_point=clip.end_frame,
+        entry = video_entry(
+            clip, project.sources_by_id[clip.source_id], timeline_fps=sequence.fps,
+            start=cursor, track_index=track_index,
         )
         entries.append(entry)
         added.append(
-            {"clip_id": clip_id, "sequence_clip_id": entry.id, "start_frame": start}
+            {"clip_id": clip_id, "sequence_clip_id": entry.id, "start_frame": entry.start_frame}
         )
-        start += entry.duration_frames
+        cursor = entry.timeline_range.end
     project.insert_sequence_clips(entries, sequence=sequence, create_tracks=True)
     return {
         "success": True,

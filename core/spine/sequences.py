@@ -120,7 +120,8 @@ def apply_generated_order(
     relative_ranges: list[tuple[int, int]] | None = None,
 ) -> Sequence:
     """Publish resolved algorithm output in one edit, with no provider calls."""
-    from models.sequence import SequenceClip
+    from fractions import Fraction
+    from core.sequence_time import video_entry
 
     if not entries:
         raise ValueError("Generated sequence has no clips")
@@ -133,7 +134,7 @@ def apply_generated_order(
         label = f"{name} #{suffix}"
         suffix += 1
     draft = SequenceDraft.prepare(project, algorithm, label)
-    position = 0
+    position = Fraction(0)
     for index, (clip, source) in enumerate(entries):
         if (
             project.clips_by_id.get(clip.id) is not clip
@@ -147,15 +148,12 @@ def apply_generated_order(
         )
         if start < 0 or end <= start or end > clip.duration_frames:
             raise ValueError("Generated range falls outside its source clip")
-        entry = SequenceClip(
-            source_clip_id=clip.id,
-            source_id=source.id,
-            start_frame=position,
-            in_point=clip.start_frame + start,
-            out_point=clip.start_frame + end,
+        entry = video_entry(
+            clip, source, timeline_fps=draft.sequence.fps,
+            start=position, relative_range=(start, end),
         )
         draft.sequence.tracks[0].add_clip(entry)
-        position += entry.duration_frames
+        position = entry.timeline_range.end
     return draft.commit(project)
 
 

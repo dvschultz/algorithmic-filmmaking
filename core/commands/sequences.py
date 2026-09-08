@@ -6,7 +6,8 @@ from dataclasses import dataclass
 from math import isfinite
 from typing import TYPE_CHECKING, Any
 
-from models.sequence import Sequence
+from models.sequence import Sequence, SequenceClip
+from core.sequence_time import TIMING_FIELDS, retimed_values
 
 if TYPE_CHECKING:
     from core.project import Project
@@ -128,6 +129,8 @@ class EditSequenceMetadata:
     before: dict[str, Any]
     after: dict[str, Any]
     label: str = "Edit sequence settings"
+    timing_before: tuple[tuple[SequenceClip, dict[str, Any]], ...] = ()
+    timing_after: tuple[tuple[SequenceClip, dict[str, Any]], ...] = ()
 
     @property
     def event_data(self) -> list[Sequence]:
@@ -164,12 +167,20 @@ class EditSequenceMetadata:
             raise ValueError("music_path must be a string or None")
         after = {k: v for k, v in changes.items() if getattr(sequence, k) != v}
         before = {k: getattr(sequence, k) for k in after}
+        timing_before: tuple[tuple[SequenceClip, dict[str, Any]], ...] = ()
+        timing_after: tuple[tuple[SequenceClip, dict[str, Any]], ...] = ()
+        if "fps" in after:
+            entries = sequence.get_all_clips()
+            timing_before = tuple((entry, {key: getattr(entry, key) for key in TIMING_FIELDS}) for entry in entries)
+            timing_after = tuple(zip(entries, retimed_values(sequence, after["fps"])))
         return cls(
             project.sequences,
             sequence,
             before,
             after,
-            "Rename sequence" if set(changes) == {"name"} else "Edit sequence settings",
+            timing_before=timing_before,
+            timing_after=timing_after,
+            label="Rename sequence" if set(changes) == {"name"} else "Edit sequence settings",
         )
 
     def apply(self, project: Project, *, undo: bool = False) -> list[Sequence]:
@@ -180,6 +191,19 @@ class EditSequenceMetadata:
             getattr(self.sequence, key) != value for key, value in expected.items()
         ):
             raise ValueError("Sequence settings changed since this edit")
+        expected_timing = self.timing_after if undo else self.timing_before
+        target_timing = self.timing_before if undo else self.timing_after
+        actual_entries = self.sequence.get_all_clips()
+        if expected_timing and (
+            len(actual_entries) != len(expected_timing) or any(
+                actual is not expected_entry or any(getattr(actual, key) != value for key, value in values.items())
+                for actual, (expected_entry, values) in zip(actual_entries, expected_timing)
+            )
+        ):
+            raise ValueError("Sequence timing changed since this frame-rate edit")
+        for entry, values in target_timing:
+            for key, value in values.items():
+                setattr(entry, key, value)
         for key, value in target.items():
             setattr(self.sequence, key, value)
         return [self.sequence] if target else []

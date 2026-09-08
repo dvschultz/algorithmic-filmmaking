@@ -64,6 +64,12 @@ def export_edl(
         True if export succeeded, False otherwise
     """
 
+    from core.sequence_time import require_resolved_sequence
+    try:
+        require_resolved_sequence(sequence)
+    except ValueError as exc:
+        logger.error("EDL export preflight: %s", exc)
+        return False
     lines = []
 
     # Header

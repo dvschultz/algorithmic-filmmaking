@@ -7,6 +7,8 @@ side-effect-free.
 
 from __future__ import annotations
 
+from copy import deepcopy
+
 
 def get_project_state(project) -> dict:
     """Return current project information."""
@@ -64,6 +66,9 @@ def get_sequence_state(project) -> dict:
                 "duration_seconds": round(seq_clip.duration_seconds(fps), 2),
                 "in_point": seq_clip.in_point,
                 "out_point": seq_clip.out_point,
+                "source_rate": seq_clip.source_rate,
+                "timeline_rate": seq_clip.timeline_rate,
+                "legacy_timing": deepcopy(seq_clip.legacy_timing),
                 "hflip": seq_clip.hflip,
                 "vflip": seq_clip.vflip,
                 "reverse": seq_clip.reverse,
@@ -85,6 +90,7 @@ def get_sequence_state(project) -> dict:
 
     return {
         "has_sequence": True,
+        "sequence_id": sequence.id,
         "name": sequence.name,
         "fps": fps,
         "clips": clips_data,

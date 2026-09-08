@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 VALID_EMBEDDING_DIMS = {512, 768}
 
 if TYPE_CHECKING:
+    from fractions import Fraction
     from core.transcription import TranscriptSegment
     from models.cinematography import CinematographyAnalysis
 
@@ -73,6 +74,23 @@ class Source:
     has_analysis: bool = False  # Has any analysis been run on this source's clips?
     thumbnail_path: Optional[Path] = None  # Thumbnail for library grid
     color_profile: Optional[str] = None  # "grayscale", "sepia", "mixed", "color"
+    variable_frame_rate: bool = False
+    frame_timestamps: Optional[tuple[str, ...]] = None  # Verified frame boundaries in seconds
+
+    @property
+    def presentation_boundaries(self) -> "tuple[Fraction, ...] | None":
+        """Validate a VFR map once per immutable timestamp tuple."""
+        from models.media_time import rational
+        raw = self.frame_timestamps
+        if raw is None:
+            return None
+        cached = getattr(self, "_presentation_cache", None)
+        if cached is None or cached[0] is not raw:
+            times = tuple(rational(value) for value in raw)
+            if len(times) < 2 or times[0] < 0 or any(b <= a for a, b in zip(times, times[1:])):
+                raise ValueError("VFR requires ordered presentation boundaries")
+            self._presentation_cache = (raw, times)
+        return self._presentation_cache[1]
 
     @property
     def analyzed(self) -> bool:
@@ -120,6 +138,10 @@ class Source:
         }
         if self.color_profile is not None:
             data["color_profile"] = self.color_profile
+        if self.variable_frame_rate:
+            data["variable_frame_rate"] = True
+        if self.frame_timestamps is not None:
+            data["frame_timestamps"] = list(self.frame_timestamps)
         # Store relative path if base_path provided, with absolute fallback
         if base_path:
             try:
@@ -169,6 +191,8 @@ class Source:
             file_path=file_path,
             duration_seconds=data.get("duration_seconds", 0.0),
             fps=data.get("fps", 30.0),
+            variable_frame_rate=data.get("variable_frame_rate", False),
+            frame_timestamps=tuple(data["frame_timestamps"]) if data.get("frame_timestamps") is not None else None,
             width=data.get("width", 0),
             height=data.get("height", 0),
             cut=data.get("cut", data.get("analyzed", False)),  # backward compat: old "analyzed" → cut

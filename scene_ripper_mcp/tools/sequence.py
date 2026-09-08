@@ -66,19 +66,21 @@ async def get_sequence(
             track_clips = []
             for seq_clip in track.clips:
                 source = sources_by_id.get(seq_clip.source_id)
-                fps = source.fps if source else 30.0
 
                 track_clips.append(
                     {
                         "id": seq_clip.id,
                         "source_clip_id": seq_clip.source_clip_id,
                         "source_name": source.filename if source else "Unknown",
-                        "timeline_start": seq_clip.start_time(fps),
+                        "timeline_start": seq_clip.start_time(sequence.fps),
                         "timeline_start_frame": seq_clip.start_frame,
-                        "duration": seq_clip.duration_seconds(fps),
+                        "duration": seq_clip.duration_seconds(sequence.fps),
                         "duration_frames": seq_clip.duration_frames,
                         "in_point": seq_clip.in_point,
                         "out_point": seq_clip.out_point,
+                        "source_rate": seq_clip.source_rate,
+                        "timeline_rate": seq_clip.timeline_rate,
+                        "legacy_timing": seq_clip.legacy_timing,
                     }
                 )
 
@@ -134,6 +136,21 @@ async def add_to_sequence(
     def operation(project):
         from core.spine.timeline import insert_legacy_clips
         return insert_legacy_clips(project, clip_ids, track_index=track_index, position=position)
+    return await _editorial_call(project_path, ctx, operation)
+
+
+@mcp.tool()
+async def resolve_sequence_timing(
+    project_path: Annotated[str, "Path to project file"],
+    sequence_id: Annotated[str, "Sequence ID"],
+    entry_id: Annotated[str, "Unresolved timeline entry ID"],
+    convention: Annotated[str, "source or clip-relative"],
+    ctx: Context = None,
+) -> str:
+    """Resolve preserved legacy trim coordinates; retain the original and undo."""
+    def operation(project):
+        from core.spine.timeline import resolve_legacy_timing
+        return resolve_legacy_timing(project, sequence_id, entry_id, convention)
     return await _editorial_call(project_path, ctx, operation)
 
 

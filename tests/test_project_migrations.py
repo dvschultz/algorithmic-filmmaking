@@ -5,6 +5,7 @@ import json
 import pytest
 
 from core.project import Project, ProjectMetadata, save_project
+from core.project_migrations import SCHEMA_VERSION
 
 
 def write_document(path, version="1.3"):
@@ -24,13 +25,13 @@ def test_legacy_upgrade_is_in_memory_until_save_and_keeps_backup(tmp_path):
     original = write_document(path)
     project = Project.load(path)
     assert path.read_bytes() == original
-    assert project.metadata.version == "1.5"
+    assert project.metadata.version == SCHEMA_VERSION
     assert project.sequence.id == "sequence-old"
     assert project.save()
     saved = json.loads(path.read_text())
-    assert saved["version"] == "1.5"
+    assert saved["version"] == SCHEMA_VERSION
     assert saved["sequences"][0]["id"] == "sequence-old"
-    backups = list(tmp_path.glob("old.sceneripper.pre-v1.5-*.bak"))
+    backups = list(tmp_path.glob(f"old.sceneripper.pre-v{SCHEMA_VERSION}-*.bak"))
     assert len(backups) == 1
     assert backups[0].read_bytes() == original
 

@@ -948,10 +948,8 @@ class SequenceTab(BaseTab):
             generated_sequence = self._create_and_activate_sequence(algo_lower, proposal=proposal)
             self.timeline.clear_timeline()
 
-            current_frame = 0
             for clip, source in sorted_clips:
-                self.timeline.add_clip(clip, source, track_index=0, start_frame=current_frame)
-                current_frame += clip.duration_frames
+                self.timeline.add_clip(clip, source, track_index=0)
                 self.clip_added.emit(clip, source)
 
             # Update preview
@@ -1083,10 +1081,8 @@ class SequenceTab(BaseTab):
             self.timeline.set_fps(first_source.fps)
             self.video_player.load_video(first_source.file_path)
 
-            current_frame = 0
             for clip, source in sequence_clips:
-                self.timeline.add_clip(clip, source, track_index=0, start_frame=current_frame)
-                current_frame += clip.duration_frames
+                self.timeline.add_clip(clip, source, track_index=0)
                 self.clip_added.emit(clip, source)
 
             self.timeline_preview.set_clips(sequence_clips, self._sources)
@@ -1341,27 +1337,32 @@ class SequenceTab(BaseTab):
 
         generated_sequence = None
         try:
-            from core.remix.cassette_tape import safe_fps
+            from fractions import Fraction
+            from core.sequence_time import video_entry
+            from models.media_time import frame_rate
+
+            # Validate every selection before replacing even a detached timeline.
+            # Invalid metadata must not silently acquire a guessed source rate.
+            timeline_rate = frame_rate(sequence_data[0][1].fps)
+            for clip, source, in_point, out_point in sequence_data:
+                video_entry(
+                    clip, source, timeline_fps=timeline_rate, start=Fraction(0),
+                    relative_range=(in_point, out_point),
+                )
 
             generated_sequence = self._create_and_activate_sequence(algorithm_key)
             self.timeline.clear_timeline()
 
             first_clip, first_source, _, _ = sequence_data[0]
-            self.timeline.set_fps(safe_fps(first_source))
+            self.timeline.set_fps(float(timeline_rate))
             self.video_player.load_video(first_source.file_path)
 
-            current_frame = 0
             for clip, source, in_point, out_point in sequence_data:
-                self.timeline.scene.add_clip_to_track(
-                    track_index=0,
-                    source_clip_id=clip.id,
-                    source_id=source.id,
-                    start_frame=current_frame,
+                self.timeline.add_clip(
+                    clip, source, track_index=0,
                     in_point=clip.start_frame + in_point,
                     out_point=clip.start_frame + out_point,
-                    thumbnail_path=str(clip.thumbnail_path) if clip.thumbnail_path else None,
                 )
-                current_frame += out_point - in_point
                 self.clip_added.emit(clip, source)
 
             preview_clips = [(clip, source) for clip, source, _, _ in sequence_data]
@@ -1513,9 +1514,8 @@ class SequenceTab(BaseTab):
 
                 for in_point, out_point in segments:
                     segment_duration = (out_point - in_point) / source.fps
-                    current_frame = round(current_time * fps)
                     self.timeline.add_clip(
-                        clip, source, track_index=0, start_frame=current_frame,
+                        clip, source, track_index=0,
                         in_point=in_point, out_point=out_point,
                     )
                     self.clip_added.emit(clip, source)
@@ -1620,10 +1620,7 @@ class SequenceTab(BaseTab):
             generated_sequence = self._create_and_activate_sequence(algorithm_key)
             self.timeline.clear_timeline()
 
-            # Pick the fps from the first source so the timeline has a
-            # canonical frame rate. Word sequences may mix sources but the
-            # SequenceClip frame coords are clip-relative; the timeline
-            # frame rate is decorative for word films.
+            # Source trims are absolute; the timeline has its own frame rate.
             first_clip = sequence_clips[0]
             first_source = sources_by_clip_id.get(first_clip.source_clip_id)
             if first_source is None:
@@ -1634,7 +1631,6 @@ class SequenceTab(BaseTab):
                 self.timeline.set_fps(fps)
                 self.video_player.load_video(first_source.file_path)
 
-            current_frame = 0
             preview_clips: list[tuple] = []
             clip_lookup = {
                 getattr(clip, "id", ""): clip for clip, _ in clips
@@ -1652,11 +1648,9 @@ class SequenceTab(BaseTab):
                     clip,
                     source,
                     track_index=0,
-                    start_frame=current_frame,
-                    in_point=clip.start_frame + seq_clip.in_point,
-                    out_point=clip.start_frame + seq_clip.out_point,
+                    in_point=seq_clip.in_point,
+                    out_point=seq_clip.out_point,
                 )
-                current_frame += duration
                 self.clip_added.emit(clip, source)
                 preview_clips.append((clip, source))
 
@@ -1742,10 +1736,8 @@ class SequenceTab(BaseTab):
             self.timeline.set_fps(first_source.fps)
             self.video_player.load_video(first_source.file_path)
 
-            current_frame = 0
             for clip, source, transform_info in sequence_data:
-                self.timeline.add_clip(clip, source, track_index=0, start_frame=current_frame)
-                current_frame += clip.duration_frames
+                self.timeline.add_clip(clip, source, track_index=0)
                 self.clip_added.emit(clip, source)
 
             # Set transform flags and prerendered_path on sequence clips
@@ -2175,6 +2167,11 @@ class SequenceTab(BaseTab):
 
         export_edl_action = menu.addAction(f"Export EDL for \"{seq.name}\"...")
         export_edl_action.setEnabled(bool(seq.get_all_clips()))
+        resolve_action = menu.addAction("Resolve legacy timing...")
+        resolve_action.setEnabled(not self._project.is_read_only and any(
+            entry.legacy_timing and entry.legacy_timing.get("status") == "unresolved"
+            for entry in seq.get_all_clips()
+        ))
         menu.addSeparator()
         rename_action = menu.addAction(f"Rename \"{seq.name}\"...")
         menu.addSeparator()
@@ -2186,10 +2183,63 @@ class SequenceTab(BaseTab):
 
         if action == export_edl_action:
             self.edl_export_requested.emit(index)
+        elif action == resolve_action:
+            self._resolve_legacy_timing(seq)
         elif action == rename_action:
             self._on_rename_sequence(index)
         elif action == delete_action:
             self._on_delete_sequence(index)
+
+    def _resolve_legacy_timing(self, sequence: "Sequence") -> None:
+        """Let the editor choose the interpretation of preserved legacy trims."""
+        project = self._project
+        if project is None or project.is_read_only:
+            return
+        entries = [entry for entry in sequence.get_all_clips() if (
+            entry.legacy_timing and entry.legacy_timing.get("status") == "unresolved"
+        )]
+        if not entries:
+            return
+        session_id = project.session.session_id
+        from core.sequence_time import sequence_source_input
+
+        def inputs(entry):
+            return entry.to_dict(), sequence_source_input(project, entry)
+
+        snapshots = [inputs(entry) for entry in entries]
+
+        def current(index):
+            return (
+                self._project is project and project.session.session_id == session_id
+                and any(item is sequence for item in project.sequences)
+                and any(item is entries[index] for item in sequence.get_all_clips())
+                and inputs(entries[index]) == snapshots[index]
+            )
+
+        labels = [f"{index + 1}. {entry.id}: {entry.in_point} to {entry.out_point}" for index, entry in enumerate(entries)]
+        selected, ok = QInputDialog.getItem(
+            self, "Resolve legacy timing", "Choose a timeline entry:", labels, 0, False,
+        )
+        if not ok or selected not in labels:
+            return
+        index = labels.index(selected)
+        if not current(index):
+            return
+        entry = entries[index]
+        options = ["Frames from the start of the source video", "Frames from the start of the library clip"]
+        choice, ok = QInputDialog.getItem(
+            self, "Interpret stored trim values",
+            "Where were these frame numbers measured from? The original values will be preserved.",
+            options, 0, False,
+        )
+        if not ok or not current(index):
+            return
+        try:
+            project.resolve_sequence_timing(
+                sequence.id, entry.id, "source" if choice == options[0] else "clip-relative",
+            )
+        except (ValueError, RuntimeError) as exc:
+            QMessageBox.warning(self, "Cannot resolve timing", str(exc))
 
     def _on_delete_sequence(self, index: int):
         """Delete a sequence by index. Confirm if populated (R7)."""
@@ -2638,10 +2688,8 @@ class SequenceTab(BaseTab):
             generated_sequence = self._create_and_activate_sequence(algorithm.lower(), proposal=proposal)
             self.timeline.clear_timeline()
 
-            current_frame = 0
             for clip, source in sorted_clips:
-                self.timeline.add_clip(clip, source, track_index=0, start_frame=current_frame)
-                current_frame += clip.duration_frames
+                self.timeline.add_clip(clip, source, track_index=0)
 
             # Update preview and dropdown
             self.timeline_preview.set_clips(sorted_clips, self._sources)
@@ -2794,10 +2842,8 @@ class SequenceTab(BaseTab):
             self.timeline.set_fps(first_source.fps)
             self.video_player.load_video(first_source.file_path)
 
-            current_frame = 0
             for clip, source in matched:
-                self.timeline.add_clip(clip, source, track_index=0, start_frame=current_frame)
-                current_frame += clip.duration_frames
+                self.timeline.add_clip(clip, source, track_index=0)
                 self.clip_added.emit(clip, source)
 
             self.timeline_preview.set_clips(matched, self._sources)
@@ -2911,10 +2957,8 @@ class SequenceTab(BaseTab):
                 self.timeline.set_fps(first_source.fps)
                 self.video_player.load_video(first_source.file_path)
 
-            current_frame = 0
             for clip, source in sorted_clips:
-                self.timeline.add_clip(clip, source, track_index=0, start_frame=current_frame)
-                current_frame += clip.duration_frames
+                self.timeline.add_clip(clip, source, track_index=0)
                 self.clip_added.emit(clip, source)
 
             # Update preview

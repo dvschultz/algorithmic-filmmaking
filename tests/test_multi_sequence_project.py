@@ -371,7 +371,8 @@ class TestSaveLoadRoundTrip:
         project_path, _ = saved_project_with_sequences
         with open(project_path, "r") as f:
             data = json.load(f)
-        assert data["version"] == "1.5"
+        from core.project_migrations import SCHEMA_VERSION
+        assert data["version"] == SCHEMA_VERSION
 
 
 class TestBackwardCompatLoad:

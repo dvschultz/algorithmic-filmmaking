@@ -212,9 +212,17 @@ class TimelineWidget(QWidget):
     def set_fps(self, fps: float) -> None:
         """Set the timeline frame rate."""
         changed = self.sequence.fps != fps
-        self.sequence.fps = fps
-        if changed and self.scene.project is not None:
-            self.scene.project.mark_dirty()
+        if changed:
+            if self.scene.project is not None and self.scene.uses_history:
+                self.scene.project.update_sequence_metadata(self.sequence, fps=fps)
+            else:
+                from core.sequence_time import retimed_values
+                values = retimed_values(self.sequence, fps)
+                for entry, timing in zip(self.sequence.get_all_clips(), values):
+                    for key, value in timing.items():
+                        setattr(entry, key, value)
+                self.sequence.fps = fps
+            self.scene.rebuild()
         if self._playhead:
             self._playhead.set_fps(fps)
 
@@ -243,16 +251,23 @@ class TimelineWidget(QWidget):
         self._clip_lookup[clip.id] = (clip, source)
 
         # Calculate start position if not specified
+        from fractions import Fraction
+        from core.sequence_time import timeline_end
+        from models.media_time import frame_boundary, frame_rate
+
+        exact_start = None
         if start_frame is None:
             # Place at end of existing clips on this track
             if track_index < len(self.sequence.tracks):
                 track = self.sequence.tracks[track_index]
+                exact_start = timeline_end(track.clips, self.sequence.fps)
                 if track.clips:
                     start_frame = max(c.end_frame() for c in track.clips)
                 else:
                     start_frame = 0
             else:
                 start_frame = 0
+            start_frame = frame_boundary(exact_start or Fraction(0), frame_rate(self.sequence.fps))
 
         # Get thumbnail path
         thumb_path = str(clip.thumbnail_path) if clip.thumbnail_path else None
@@ -266,6 +281,9 @@ class TimelineWidget(QWidget):
             in_point=in_point if in_point is not None else clip.start_frame,
             out_point=out_point if out_point is not None else clip.end_frame,
             thumbnail_path=thumb_path,
+            source_clip=clip,
+            source=source,
+            start_time=exact_start,
         )
 
         self._update_export_button()

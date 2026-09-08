@@ -118,6 +118,8 @@ def render_sequence_preview(
     frames: Optional[dict[str, "Frame"]] = None,
 ) -> SequencePreviewRender:
     """Render a cached continuous preview for a sequence, or return an existing one."""
+    from core.sequence_time import require_resolved_sequence
+    require_resolved_sequence(sequence)
     settings = settings or SequencePreviewSettings()
     signature = compute_sequence_preview_signature(
         sequence=sequence,
@@ -215,6 +217,14 @@ def _sequence_clip_payload(seq_clip, sources, clips, frames):
         "hflip": seq_clip.hflip,
         "vflip": seq_clip.vflip,
         "reverse": seq_clip.reverse,
+        "media_time": {
+            "source_rate": seq_clip.source_rate,
+            "timeline_rate": seq_clip.timeline_rate,
+            "timeline_start": seq_clip.timeline_start,
+            "source_presentation": seq_clip.source_presentation,
+            "hold_duration": seq_clip.hold_duration,
+            "legacy_timing": seq_clip.legacy_timing,
+        },
         "prerendered_path": _path_fingerprint(
             Path(seq_clip.prerendered_path) if seq_clip.prerendered_path else None
         ),

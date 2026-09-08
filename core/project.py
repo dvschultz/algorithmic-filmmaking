@@ -1236,13 +1236,13 @@ class Project:
             frame_ids: IDs of frames to add
             hold_frames: Number of timeline frames each frame occupies
         """
-        from models.sequence import SequenceClip
+        from core.sequence_time import still_entry
 
         if self.sequence is None:
             fps = self._sources[0].fps if self._sources else 30.0
             self.sequence = Sequence(name=self.metadata.name, fps=fps)
 
-        current_frame = self.sequence.duration_frames
+        position = self.sequence.duration_time
         entries = []
 
         for frame_id in frame_ids:
@@ -1251,15 +1251,12 @@ class Project:
                 logger.warning(f"Frame not found: {frame_id}")
                 continue
 
-            seq_clip = SequenceClip(
-                frame_id=frame.id,
-                source_id=frame.source_id or "",
-                track_index=0,
-                start_frame=current_frame,
+            seq_clip = still_entry(
+                frame, timeline_fps=self.sequence.fps, start=position,
                 hold_frames=hold_frames,
             )
             entries.append(seq_clip)
-            current_frame += seq_clip.duration_frames
+            position = seq_clip.timeline_range.end
 
         self.insert_sequence_clips(entries)
 
@@ -1271,7 +1268,7 @@ class Project:
         Args:
             clip_ids: IDs of clips to add to the sequence
         """
-        from models.sequence import SequenceClip
+        from core.sequence_time import video_entry
 
         if self.sequence is None:
             # Create sequence with FPS from first source
@@ -1279,7 +1276,7 @@ class Project:
             self.sequence = Sequence(name=self.metadata.name, fps=fps)
 
         # Get current end frame
-        current_frame = self.sequence.duration_frames
+        position = self.sequence.duration_time
         entries = []
 
         for clip_id in clip_ids:
@@ -1297,18 +1294,41 @@ class Project:
                 logger.warning(f"Source not found for clip: {clip_id}")
                 continue
 
-            seq_clip = SequenceClip(
-                source_clip_id=clip.id,
-                source_id=clip.source_id,
-                track_index=0,
-                start_frame=current_frame,
-                in_point=clip.start_frame,
-                out_point=clip.end_frame,
+            seq_clip = video_entry(
+                clip, source, timeline_fps=self.sequence.fps, start=position,
             )
             entries.append(seq_clip)
-            current_frame += seq_clip.duration_frames
+            position = seq_clip.timeline_range.end
 
         self.insert_sequence_clips(entries)
+
+    def resolve_sequence_timing(
+        self, sequence_id: str, entry_id: str, convention: str,
+    ) -> SequenceClip:
+        """Resolve an ambiguous legacy trim as one reversible editorial choice."""
+        from core.commands.sequence_time import ResolveSequenceTiming
+        from core.legacy_sequence_time import CoordinateConvention, convert_legacy_entry
+        from core.sequence_time import sequence_source_input
+        from typing import cast
+
+        self.session.assert_owner()
+        if convention not in ("source", "clip-relative"):
+            raise ValueError("Choose source or clip-relative coordinates")
+        sequence = next((s for s in self.sequences if s.id == sequence_id), None)
+        if sequence is None:
+            raise ValueError("Sequence not found")
+        entry = next((e for e in sequence.get_all_clips() if e.id == entry_id), None)
+        if entry is None or not entry.legacy_timing:
+            raise ValueError("Legacy sequence entry not found")
+        clip = self.clips_by_id.get(entry.source_clip_id)
+        source = self.sources_by_id.get(entry.source_id)
+        before = entry.to_dict()
+        after = convert_legacy_entry(
+            before, clip.to_dict() if clip else None, source.to_dict() if source else None,
+            sequence.fps, cast(CoordinateConvention, convention),
+        )
+        self.session.execute(ResolveSequenceTiming(sequence, entry, before, after, sequence_source_input(self, entry)))
+        return entry
 
     def insert_sequence_clips(
         self, clips: list[SequenceClip], *, sequence: Sequence | None = None,
@@ -1374,7 +1394,7 @@ class Project:
         target = sequence if sequence is not None else self.sequence
         if target is None:
             raise ValueError("No sequence exists")
-        return self.session.execute(EditSequenceClips.update(target, clip_id, changes))
+        return self.session.execute(EditSequenceClips.update(target, clip_id, changes, project=self))
 
     def _recalculate_sequence_positions(self) -> None:
         """Recalculate start_frame for all sequence clips after reorder/removal."""

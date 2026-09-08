@@ -23,6 +23,30 @@ def project() -> None:
     pass
 
 
+@project.command("resolve-timing")
+@click.argument("project_file", type=click.Path(exists=True, path_type=Path))
+@click.argument("sequence_id")
+@click.argument("entry_id")
+@click.option("--convention", required=True, type=click.Choice(["source", "clip-relative"]))
+@click.pass_context
+def resolve_timing(
+    ctx: click.Context, project_file: Path, sequence_id: str, entry_id: str, convention: str,
+) -> None:
+    """Resolve a legacy trim while preserving its original stored values."""
+    from core.project import Project, ProjectLoadError
+    from core.spine.timeline import resolve_legacy_timing
+
+    path = own_project(ctx, project_file)
+    try:
+        project_model = Project.load(path)
+        result = resolve_legacy_timing(project_model, sequence_id, entry_id, convention)
+        if not project_model.save():
+            exit_with(ExitCode.GENERAL_ERROR, "Failed to save resolved timing")
+    except (ValueError, ProjectLoadError, RuntimeError) as exc:
+        exit_with(ExitCode.VALIDATION_ERROR, str(exc))
+    output_result(result, as_json=(ctx.obj or {}).get("json", False))
+
+
 @project.command("info")
 @click.argument("project_file", type=click.Path(exists=True, path_type=Path))
 @click.pass_context
@@ -63,6 +87,14 @@ def info(ctx: click.Context, project_file: Path) -> None:
         "clip_count": len(proj.clips),
         "sequence_clips": len(proj.sequence.get_all_clips()) if proj.sequence else 0,
         "sequence_duration_seconds": proj.sequence.duration_seconds if proj.sequence else 0,
+        "unresolved_sequence_entries": [
+            {
+                "sequence_id": sequence.id, "entry_id": entry.id,
+                "diagnostic": entry.legacy_timing,
+            }
+            for sequence in proj.sequences for entry in sequence.get_all_clips()
+            if entry.legacy_timing and entry.legacy_timing.get("status") == "unresolved"
+        ],
     }
 
     # Add source details

@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Callable
+from fractions import Fraction
+from core.sequence_time import video_entry
+from models.media_time import frame_rate
 
 if TYPE_CHECKING:
     from core.project import Project
@@ -212,18 +215,24 @@ class TimelineScene(QGraphicsScene):
         in_point: int,
         out_point: int,
         thumbnail_path: str | None = None,
+        source_clip=None,
+        source=None,
+        start_time: Fraction | None = None,
     ) -> SequenceClip | None:
         """Add a new clip to a track."""
         if track_index < 0 or track_index >= len(self.sequence.tracks):
             return None
 
-        seq_clip = SequenceClip(
-            source_clip_id=source_clip_id,
-            source_id=source_id,
+        if self.project is not None:
+            source_clip = self.project.clips_by_id.get(source_clip_id)
+            source = self.project.sources_by_id.get(source_id)
+        if source_clip is None or source is None:
+            raise ValueError("Timeline insertion requires the library clip and source timebase")
+        seq_clip = video_entry(
+            source_clip, source, timeline_fps=self.sequence.fps,
+            start=start_time if start_time is not None else Fraction(start_frame) / frame_rate(self.sequence.fps),
+            relative_range=(in_point - source_clip.start_frame, out_point - source_clip.start_frame),
             track_index=track_index,
-            start_frame=start_frame,
-            in_point=in_point,
-            out_point=out_point,
         )
 
         if self.project is not None and self.uses_history:

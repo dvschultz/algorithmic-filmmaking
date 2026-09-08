@@ -2,6 +2,9 @@
 
 from pathlib import Path
 from dataclasses import replace
+from fractions import Fraction
+from math import floor
+from models.media_time import frame_rate, nearest_source_frame, source_frame_time
 
 from PySide6.QtWidgets import (
     QGraphicsRectItem,
@@ -203,8 +206,23 @@ class ClipItem(QGraphicsRectItem):
 
         delta_x = event.scenePos().x() - self._drag_start_pos.x()
         delta_frames = self._x_to_frame(delta_x)
+        rate = frame_rate(self.seq_clip.source_rate or self.fps)
+        timeline_rate = frame_rate(self.fps)
+        timestamps = None
+        if self._resizing and self.seq_clip.source_presentation is not None:
+            scene = self.scene()
+            project = getattr(scene, "project", None)
+            source = project.sources_by_id.get(self.seq_clip.source_id) if project is not None else None
+            if source is None and scene is not None and hasattr(scene.parent(), "get_sources_lookup"):
+                source = scene.parent().get_sources_lookup().get(self.seq_clip.source_id)
+            timestamps = getattr(source, "frame_timestamps", None)
+            if timestamps is None:
+                return
+        if self._resizing and self.seq_clip.legacy_timing and self.seq_clip.legacy_timing.get("status") == "unresolved":
+            return
 
         if self.seq_clip.is_frame_entry and self._resizing:
+            self.seq_clip.hold_duration = None
             if self._resizing == "left":
                 shift = max(-self._original_start_frame,
                             min(delta_frames, self._original_hold_frames - 1))
@@ -218,16 +236,16 @@ class ClipItem(QGraphicsRectItem):
 
         if self._resizing == "left":
             # Trim in-point: adjust start_frame and in_point
-            new_in = self._original_in_point + delta_frames
-            new_start = self._original_start_frame + delta_frames
+            original_time = source_frame_time(self._original_in_point, rate, timestamps)
+            new_in = nearest_source_frame(original_time + Fraction(delta_frames) / timeline_rate, rate, timestamps)
 
             # Clamp: can't trim past out_point or before 0
             min_in = 0
             max_in = self._original_out_point - 1  # At least 1 frame
 
             new_in = max(min_in, min(max_in, new_in))
-            frame_change = new_in - self._original_in_point
-            new_start = self._original_start_frame + frame_change
+            shift = (source_frame_time(new_in, rate, timestamps) - original_time) * timeline_rate
+            new_start = self._original_start_frame + floor(shift + Fraction(1, 2))
 
             if new_start >= 0:
                 self.seq_clip.in_point = new_in
@@ -235,7 +253,8 @@ class ClipItem(QGraphicsRectItem):
 
         elif self._resizing == "right":
             # Trim out-point
-            new_out = self._original_out_point + delta_frames
+            original_time = source_frame_time(self._original_out_point, rate, timestamps)
+            new_out = nearest_source_frame(original_time + Fraction(delta_frames) / timeline_rate, rate, timestamps)
 
             # Clamp: must be after in_point
             min_out = self.seq_clip.in_point + 1

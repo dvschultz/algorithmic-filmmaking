@@ -5,6 +5,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 import uuid
+from copy import deepcopy
+from fractions import Fraction
+
+from models.media_time import (
+    StillHold, TimelineRange, VideoRange, frame_boundary, frame_rate, rational,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -22,8 +28,8 @@ class SequenceClip:
     source_id: str = ""  # Reference to Source video
     track_index: int = 0
     start_frame: int = 0  # Position on timeline (in frames)
-    in_point: int = 0  # Trim start (frames into source clip)
-    out_point: int = 0  # Trim end (frames into source clip)
+    in_point: int = 0  # Absolute source-video frame, inclusive
+    out_point: int = 0  # Absolute source-video frame, exclusive
     frame_id: Optional[str] = None  # Reference to Frame (if frame-based)
     hold_frames: int = 1  # Number of timeline frames to hold (for frame entries)
     hflip: bool = False  # Random horizontal flip
@@ -31,6 +37,47 @@ class SequenceClip:
     reverse: bool = False  # Random reverse playback
     prerendered_path: Optional[str] = None  # Path to pre-rendered clip with baked transforms
     rationale: Optional[str] = None  # LLM-generated rationale for why this clip follows the previous (Free Association sequencer)
+    source_rate: Optional[str] = None  # Exact frames/second, e.g. "30000/1001"
+    timeline_rate: Optional[str] = None
+    timeline_start: Optional[str] = None  # Exact seconds before frame quantization
+    source_presentation: Optional[tuple[str, str]] = None  # VFR start/end seconds; map lives on Source
+    hold_duration: Optional[str] = None  # Exact still duration before quantization
+    legacy_timing: Optional[dict] = None  # Preserved raw entry and resolution diagnostic
+
+    @property
+    def source_range(self) -> VideoRange | StillHold:
+        if self.legacy_timing and self.legacy_timing.get("status") == "unresolved":
+            raise ValueError(f"Resolve legacy timing for sequence entry {self.id}")
+        if self.is_frame_entry:
+            if self.in_point or self.out_point:
+                raise ValueError("Still holds cannot have video trim coordinates")
+            rate = frame_rate(self.timeline_rate or 30)
+            if self.hold_duration is not None:
+                return StillHold(rational(self.hold_duration))
+            return StillHold(Fraction(self.hold_frames) / rate)
+        if self.source_rate is None:
+            raise ValueError(f"Source timebase is missing for sequence entry {self.id}")
+        presentation = (
+            (rational(self.source_presentation[0]), rational(self.source_presentation[1]))
+            if self.source_presentation is not None else None
+        )
+        return VideoRange(self.in_point, self.out_point, frame_rate(self.source_rate), presentation_range=presentation)
+
+    @property
+    def timeline_start_time(self) -> Fraction:
+        rate = frame_rate(self.timeline_rate or 30)
+        start = Fraction(self.start_frame) / rate
+        if self.timeline_start is not None:
+            exact = rational(self.timeline_start)
+            # Dragging an entry to another frame deliberately snaps its origin.
+            if frame_boundary(exact, rate) == self.start_frame:
+                start = exact
+        return start
+
+    @property
+    def timeline_range(self) -> TimelineRange:
+        start = self.timeline_start_time
+        return TimelineRange(start, start + self.source_range.duration)
 
     @property
     def is_frame_entry(self) -> bool:
@@ -41,15 +88,31 @@ class SequenceClip:
     def duration_frames(self) -> int:
         """Duration of this entry on the timeline."""
         if self.is_frame_entry:
+            if self.hold_duration is not None and self.timeline_rate is not None:
+                start, end = self.timeline_range.frames(frame_rate(self.timeline_rate))
+                return end - start
             return self.hold_frames
+        if self.source_rate is not None and self.timeline_rate is not None and not (
+            self.legacy_timing and self.legacy_timing.get("status") == "unresolved"
+        ):
+            start, end = self.timeline_range.frames(frame_rate(self.timeline_rate))
+            return end - start
         return self.out_point - self.in_point
 
     def start_time(self, fps: float) -> float:
         """Get start time on timeline in seconds."""
+        if self.timeline_rate is not None and not (
+            self.legacy_timing and self.legacy_timing.get("status") == "unresolved"
+        ):
+            return float(self.timeline_range.start)
         return self.start_frame / fps
 
     def duration_seconds(self, fps: float) -> float:
         """Get duration in seconds."""
+        if self.timeline_rate is not None and not (
+            self.legacy_timing and self.legacy_timing.get("status") == "unresolved"
+        ):
+            return float(self.source_range.duration)
         return self.duration_frames / fps
 
     def end_frame(self) -> int:
@@ -70,7 +133,16 @@ class SequenceClip:
             "start_frame": self.start_frame,
             "in_point": self.in_point,
             "out_point": self.out_point,
+            "media_time_version": 1,
+            "source_rate": self.source_rate,
+            "timeline_rate": self.timeline_rate,
+            "timeline_start": self.timeline_start,
+            "hold_duration": self.hold_duration,
         }
+        if self.source_presentation is not None:
+            data["source_presentation"] = list(self.source_presentation)
+        if self.legacy_timing is not None:
+            data["legacy_timing"] = deepcopy(self.legacy_timing)
         if self.frame_id is not None:
             data["frame_id"] = self.frame_id
         if self.hold_frames != 1:
@@ -124,6 +196,18 @@ class SequenceClip:
             reverse=data.get("reverse", False),
             prerendered_path=prerendered,
             rationale=data.get("rationale"),
+            source_rate=data.get("source_rate"),
+            timeline_rate=data.get("timeline_rate"),
+            timeline_start=data.get("timeline_start"),
+            hold_duration=data.get("hold_duration"),
+            source_presentation=(
+                (data["source_presentation"][0], data["source_presentation"][1])
+                if data.get("source_presentation") is not None else None
+            ),
+            legacy_timing=deepcopy(data.get("legacy_timing")) if data.get("media_time_version") == 1 else {
+                "status": "unresolved", "reason": "missing_coordinate_convention",
+                "original": deepcopy(data),
+            },
         )
 
 
@@ -209,9 +293,22 @@ class Sequence:
         return max_frame
 
     @property
+    def duration_time(self) -> Fraction:
+        """Exact timeline end before output-frame quantization."""
+        ends = []
+        for entry in self.get_all_clips():
+            if entry.timeline_rate is not None and not (
+                entry.legacy_timing and entry.legacy_timing.get("status") == "unresolved"
+            ):
+                ends.append(entry.timeline_range.end)
+            else:
+                ends.append(Fraction(entry.end_frame()) / frame_rate(self.fps))
+        return max(ends, default=Fraction(0))
+
+    @property
     def duration_seconds(self) -> float:
         """Total duration in seconds."""
-        return self.duration_frames / self.fps
+        return float(self.duration_time)
 
     def add_track(self, name: Optional[str] = None) -> Track:
         """Add a new track."""

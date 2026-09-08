@@ -920,8 +920,8 @@ def update_sequence_clip(
 
     Args:
         clip_id: ID of the sequence clip to update
-        in_point: New trim start (frames into source clip)
-        out_point: New trim end (frames into source clip)
+        in_point: Absolute source-video frame index, inclusive
+        out_point: Absolute source-video frame index, exclusive
         start_frame: New position on timeline (in frames)
         track_index: Move to a different track
         hold_frames: For frame entries, number of timeline frames to hold
@@ -1155,8 +1155,25 @@ def get_sequence_state(project) -> dict:
 
 
 @tools.register(
+    description="Resolve a legacy sequence entry's ambiguous trim coordinates. "
+                "Use get_sequence_state to inspect legacy_timing and stable IDs. "
+                "Choose convention 'source' or 'clip-relative'; original values are preserved.",
+    requires_project=True,
+    modifies_gui_state=True,
+    modifies_project_state=True,
+)
+def resolve_sequence_timing(project, sequence_id: str, entry_id: str, convention: str) -> dict:
+    """Resolve preserved coordinates through shared project history."""
+    from core.spine.timeline import resolve_legacy_timing
+    try:
+        return resolve_legacy_timing(project, sequence_id, entry_id, convention)
+    except (ValueError, RuntimeError) as exc:
+        return {"success": False, "error": str(exc)}
+
+
+@tools.register(
     description="Update sequence-level metadata such as name, fps, music path, or allow_repeats. "
-                "Does not affect the clips in the sequence.",
+                "Changing fps preserves media durations and requantizes timeline frame positions.",
     requires_project=True,
     modifies_gui_state=True,
     modifies_project_state=True

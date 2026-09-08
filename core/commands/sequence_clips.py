@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
+from fractions import Fraction
 
 from models.sequence import Sequence, SequenceClip, Track
+from models.media_time import frame_boundary, frame_rate
+from core.sequence_time import entry_duration, source_video_range
 
 if TYPE_CHECKING:
     from core.project import Project
@@ -23,20 +26,32 @@ class Placement:
     vflip: bool
     reverse: bool
     prerendered_path: str | None
+    timeline_start: str | None
+    hold_duration: str | None
+    source_presentation: tuple[str, str] | None
 
     @classmethod
-    def capture(cls, clip: SequenceClip, start: int | None = None) -> Placement:
+    def capture(
+        cls, clip: SequenceClip, start: int | None = None, *, exact_start: Fraction | None = None,
+    ) -> Placement:
+        hold_frames = clip.hold_frames
+        if exact_start is not None and clip.is_frame_entry and clip.hold_duration is not None:
+            rate = frame_rate(clip.timeline_rate or 30)
+            hold_frames = frame_boundary(exact_start + clip.source_range.duration, rate) - frame_boundary(exact_start, rate)
         return cls(
             clip,
             clip.start_frame if start is None else start,
             clip.in_point,
             clip.out_point,
-            clip.hold_frames,
+            hold_frames,
             clip.track_index,
             clip.hflip,
             clip.vflip,
             clip.reverse,
             clip.prerendered_path,
+            clip.timeline_start if exact_start is None else str(exact_start),
+            clip.hold_duration,
+            clip.source_presentation,
         )
 
     def matches(self, clip: SequenceClip) -> bool:
@@ -106,7 +121,7 @@ class EditSequenceClips:
             existing.add(clip.id)
             if not 0 <= clip.track_index < len(planned_tracks):
                 raise ValueError("Invalid sequence track")
-            if clip.start_frame < 0 or clip.duration_frames <= 0:
+            if clip.start_frame < 0 or entry_duration(clip, sequence.fps) <= 0:
                 raise ValueError(
                     "Sequence clips require a nonnegative start and positive duration"
                 )
@@ -149,15 +164,17 @@ class EditSequenceClips:
             removed.extend(deleted)
             before = tuple(Placement.capture(c) for c in track.clips)
             after = []
-            position = 0
+            position = Fraction(0)
             for clip in track.clips:
                 if clip.id not in ids:
                     after.append(
                         Placement.capture(
-                            clip, position if ripple else clip.start_frame
+                            clip,
+                            frame_boundary(position, frame_rate(sequence.fps)) if ripple else clip.start_frame,
+                            exact_start=position if ripple else None,
                         )
                     )
-                    position += clip.duration_frames
+                    position += entry_duration(clip, sequence.fps)
             edits.append(TrackEdit(track, index, before, tuple(after)))
         by_id = {clip.id: clip for clip in removed}
         removed = [
@@ -202,11 +219,13 @@ class EditSequenceClips:
         ordered = [lookup[cid] for cid in clip_ids]
         ordered.extend(c for c in track.clips if c.id not in requested)
         before = tuple(Placement.capture(c) for c in track.clips)
-        position = 0
+        position = Fraction(0)
         after = []
         for clip in ordered:
-            after.append(Placement.capture(clip, position))
-            position += clip.duration_frames
+            after.append(Placement.capture(
+                clip, frame_boundary(position, frame_rate(sequence.fps)), exact_start=position,
+            ))
+            position += entry_duration(clip, sequence.fps)
         edits = (
             (TrackEdit(track, track_index, before, tuple(after)),)
             if before != tuple(after)
@@ -222,7 +241,7 @@ class EditSequenceClips:
 
     @classmethod
     def update(
-        cls, sequence: Sequence, clip_id: str, changes: dict
+        cls, sequence: Sequence, clip_id: str, changes: dict, *, project: Project | None = None,
     ) -> EditSequenceClips:
         allowed = {
             "in_point",
@@ -246,10 +265,24 @@ class EditSequenceClips:
             elif not isinstance(value, int) or isinstance(value, bool):
                 raise ValueError(f"{key} must be an integer")
         candidate = replace(target, **changes)
+        if any(key in changes for key in ("in_point", "out_point")):
+            if target.legacy_timing and target.legacy_timing.get("status") == "unresolved":
+                raise ValueError("Resolve legacy timing before trimming this entry")
+            if target.source_presentation is not None:
+                source = project.sources_by_id.get(target.source_id) if project is not None else None
+                if source is None or source.frame_timestamps is None:
+                    raise ValueError("VFR trimming requires the source presentation timestamps")
+                media = source_video_range(source, candidate.in_point, candidate.out_point)
+                candidate.source_presentation = (str(media.start), str(media.end))
+        if "hold_frames" in changes and changes["hold_frames"] != target.hold_frames:
+            candidate.hold_duration = None
+        if "start_frame" in changes and changes["start_frame"] != target.start_frame:
+            candidate.timeline_start = None
         if (
             candidate.start_frame < 0
             or candidate.in_point < 0
-            or candidate.hold_frames < 1
+            or candidate.hold_frames < 0
+            or (candidate.is_frame_entry and entry_duration(candidate, sequence.fps) <= 0)
         ):
             raise ValueError("Invalid sequence clip position or duration")
         if not candidate.is_frame_entry and candidate.out_point <= candidate.in_point:
@@ -355,6 +388,9 @@ class EditSequenceClips:
                     "vflip",
                     "reverse",
                     "prerendered_path",
+                    "timeline_start",
+                    "hold_duration",
+                    "source_presentation",
                 ):
                     setattr(placement.clip, field, getattr(placement, field))
         if self.created_tracks and undo:

@@ -22,7 +22,6 @@ from PySide6.QtCore import Signal, Slot
 
 from core.remix import generate_sequence, assign_random_transforms
 from core.remix.prerender import prerender_batch, get_transform_cache_dir
-from models.sequence import SequenceClip
 from ui.theme import theme, Spacing, TypeScale
 from ui.workers.base import CancellableWorker
 
@@ -83,8 +82,11 @@ class DiceRollWorker(CancellableWorker):
                 "vflip": self._vflip,
                 "reverse": self._reverse,
             }
+            from fractions import Fraction
+            from core.sequence_time import video_entry
+
             temp_seq_clips = [
-                SequenceClip(source_clip_id=clip.id, source_id=source.id)
+                video_entry(clip, source, timeline_fps=source.fps, start=Fraction(0))
                 for clip, source in sorted_clips
             ]
             assign_random_transforms(temp_seq_clips, transform_options)

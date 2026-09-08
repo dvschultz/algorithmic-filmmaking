@@ -137,48 +137,41 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
-def _timeline_frame_to_source_seconds(seq_clip, timeline_frame: int, source_fps: float) -> float:
-    """Map timeline frame position to source-video seconds for a sequence clip."""
-    frame_in_clip = max(0, timeline_frame - seq_clip.start_frame)
-    source_frame = seq_clip.in_point + frame_in_clip
-    source_frame = max(seq_clip.in_point, min(source_frame, seq_clip.out_point))
-    return source_frame / source_fps
+def _timeline_frame_to_source_seconds(seq_clip, timeline_frame: int, source_fps: float, timeline_fps: float | None = None) -> float:
+    """Map timeline seconds into absolute source seconds without mixing rates."""
+    from fractions import Fraction
+    from core.sequence_time import playback_range, playback_start
+    from models.media_time import frame_rate
+
+    rate = frame_rate(timeline_fps or getattr(seq_clip, "timeline_rate", None) or source_fps)
+    media = playback_range(seq_clip, source_fps)
+    elapsed = Fraction(timeline_frame) / rate - playback_start(seq_clip, rate)
+    return float(media.start + max(Fraction(0), min(elapsed, media.duration)))
 
 
-def _resolve_playback_source(seq_clip, source, timeline_frame: int):
-    """Resolve the file and timing info for playing a sequence clip.
+def _resolve_playback_source(seq_clip, source, timeline_frame: int, timeline_fps: float | None = None):
+    """Resolve a source file and its explicit source/timeline playback range."""
+    from core.sequence_time import playback_range
 
-    Returns (file_to_load, clip_start_seconds, clip_end_seconds, source_seconds).
-    """
+    media = playback_range(seq_clip, source.fps)
+    source_seconds = _timeline_frame_to_source_seconds(seq_clip, timeline_frame, source.fps, timeline_fps)
     prerendered = getattr(seq_clip, "prerendered_path", None)
     if prerendered and Path(prerendered).exists():
-        file_to_load = Path(prerendered)
-        clip_start_seconds = 0.0
-        clip_end_seconds = (seq_clip.out_point - seq_clip.in_point) / source.fps
-        frame_in_clip = max(0, timeline_frame - seq_clip.start_frame)
-        source_seconds = frame_in_clip / source.fps
-    else:
-        file_to_load = source.file_path
-        source_seconds = _timeline_frame_to_source_seconds(seq_clip, timeline_frame, source.fps)
-        clip_start_seconds = seq_clip.in_point / source.fps
-        clip_end_seconds = seq_clip.out_point / source.fps
-    return file_to_load, clip_start_seconds, clip_end_seconds, source_seconds
+        return Path(prerendered), 0.0, float(media.duration), source_seconds - float(media.start)
+    return source.file_path, float(media.start), float(media.end), source_seconds
 
 
-def _source_ms_to_timeline_seconds(
-    seq_clip,
-    position_ms: int,
-    source_fps: float,
-    timeline_fps: float,
-) -> float:
-    """Map source-video playback position to timeline seconds for a sequence clip."""
-    source_frame = int((position_ms / 1000.0) * source_fps)
-    frame_offset = source_frame - seq_clip.in_point
-    timeline_frame = seq_clip.start_frame + frame_offset
-    min_frame = seq_clip.start_frame
-    max_frame = max(seq_clip.start_frame, seq_clip.end_frame() - 1)
-    timeline_frame = max(min_frame, min(timeline_frame, max_frame))
-    return timeline_frame / timeline_fps
+def _source_ms_to_timeline_seconds(seq_clip, position_ms: int, source_fps: float, timeline_fps: float) -> float:
+    """Map source playback seconds into the timeline's own timebase."""
+    from fractions import Fraction
+    from core.sequence_time import playback_range, playback_start
+    from models.media_time import frame_rate
+
+    rate = frame_rate(timeline_fps)
+    media = playback_range(seq_clip, source_fps)
+    elapsed = Fraction(position_ms, 1000) - media.start
+    elapsed = max(Fraction(0), min(elapsed, max(Fraction(0), media.duration - 1 / rate)))
+    return float(playback_start(seq_clip, rate) + elapsed)
 
 class SaveProjectWorker(QThread):
     """Background worker for saving a project without blocking the UI.
@@ -4988,9 +4981,14 @@ class MainWindow(QMainWindow):
         sequence = self.sequence_tab.timeline.get_sequence()
         timeline_frame = int(time_seconds * sequence.fps)
 
-        file_to_load, clip_start_seconds, clip_end_seconds, source_seconds = (
-            _resolve_playback_source(seq_clip, source, timeline_frame)
-        )
+        try:
+            file_to_load, clip_start_seconds, clip_end_seconds, source_seconds = (
+                _resolve_playback_source(seq_clip, source, timeline_frame, sequence.fps)
+            )
+        except ValueError as exc:
+            self._stop_playback()
+            self.status_bar.showMessage(str(exc))
+            return
 
         # Determine the source ID for tracking loaded sources
         preview_source_key = str(file_to_load)
@@ -5398,9 +5396,14 @@ class MainWindow(QMainWindow):
         self._preview_sync_clip = seq_clip
         self._update_sequence_chromatic_bar(seq_clip)
 
-        file_to_load, clip_start_seconds, clip_end_seconds, source_seconds = (
-            _resolve_playback_source(seq_clip, source, frame)
-        )
+        try:
+            file_to_load, clip_start_seconds, clip_end_seconds, source_seconds = (
+                _resolve_playback_source(seq_clip, source, frame, self.sequence_tab.timeline.get_sequence().fps)
+            )
+        except ValueError as exc:
+            self._stop_playback()
+            self.status_bar.showMessage(str(exc))
+            return
 
         preview_source_key = str(file_to_load)
         end_seconds = clip_end_seconds

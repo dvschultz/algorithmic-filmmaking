@@ -144,20 +144,22 @@ def instances_to_sequence_clips(
 
     Returns:
         ``list[SequenceClip]`` with ``in_point``/``out_point`` set per the
-        floor / ceil / clamp convention. ``start_frame`` and
-        ``track_index`` are left at their defaults; the caller assembles
-        the timeline.
+        floor / ceil / clamp convention, converted to absolute source frames.
+        Timeline positions retain exact elapsed time across mixed-rate sources.
 
     Raises:
         ValueError: source has missing or non-positive ``fps``.
     """
-    from models.sequence import SequenceClip
+    from fractions import Fraction
+    from core.sequence_time import video_entry
 
     by_clip_id: dict[str, tuple[Any, Any]] = {
         getattr(clip, "id", ""): (clip, source) for clip, source in clips
     }
 
     result: list[SequenceClip] = []
+    cursor = Fraction(0)
+    timeline_fps = None
     for inst in instances:
         # Drop zero-duration words silently (rare ASR artifact).
         if inst.end <= inst.start:
@@ -197,18 +199,15 @@ def instances_to_sequence_clips(
         if out_point <= in_point:
             continue
 
-        result.append(
-            SequenceClip(
-                source_clip_id=getattr(clip, "id", ""),
-                source_id=getattr(clip, "source_id", ""),
-                in_point=in_point,
-                out_point=out_point,
-                # Store the word's text on the SequenceClip's rationale so
-                # callers can reconstruct the sentence (LLM Composer review
-                # page reads this) and SRT export surfaces the per-cut word.
-                rationale=str(getattr(inst, "text", "")) or None,
-            )
+        if timeline_fps is None:
+            timeline_fps = fps
+        entry = video_entry(
+            clip, source, timeline_fps=timeline_fps, start=cursor,
+            relative_range=(in_point, out_point),
         )
+        entry.rationale = str(getattr(inst, "text", "")) or None
+        result.append(entry)
+        cursor = entry.timeline_range.end
 
     return result
 
