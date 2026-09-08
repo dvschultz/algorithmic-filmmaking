@@ -788,6 +788,12 @@ Twelve stale-source cases reproduced for gaze, boundary embeddings, and OCR;
 fixtures now supply their actual source bindings, including relocated project
 bundles and the Analyze tab. Scoped availability typing and changed-file Ruff pass.
 
+Boundary embedding completion now also requires the managed payload to remain
+available with its verified file stamp, matching thumbnail embeddings. In-memory
+vectors alone no longer make a deleted or modified payload look complete. Both
+boundary failure cases reproduced before the fix; 121 artifact, bundle, boundary,
+and cost regressions pass. Scoped availability typing and changed-file Ruff pass.
+
 ## Remaining U10 work
 
 - Migrate the other U7 analysis families to

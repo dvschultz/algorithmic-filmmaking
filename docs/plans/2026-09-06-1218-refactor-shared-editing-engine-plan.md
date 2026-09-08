@@ -650,6 +650,12 @@ direct headless entry point now own per-query semantic/failure records while
 preserving append history. GUI and durable job delivery now carry and verify those
 records as described above; the cross-consumer audit remains unfinished.
 
+Boundary embedding completion now checks managed payload availability as well as
+projection identity, so deleted/modified files require revalidation even while
+vectors remain in memory. Both failure cases reproduced; 121 artifact, bundle,
+boundary, and cost regression tests pass. Scoped availability typing and changed-file
+Ruff are clean. Receipt pruning and abandoned-pin reconciliation remain pending.
+
 **Requirements:** R9, R12. **Dependencies:** U5, U6.
 
 **Files:** New `models/analysis_record.py`, `core/artifacts.py`, `tests/test_analysis_records.py`, `tests/test_artifact_store.py`; existing `models/clip.py`, `models/frame.py`, `core/analysis_availability.py`, `core/analysis_target.py`, `core/paths.py`, `core/project_migrations.py`, `core/sequence_preview.py`, `core/remix/prerender.py`.

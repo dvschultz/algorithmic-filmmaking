@@ -411,8 +411,14 @@ def operation_is_complete_for_clip(op_key: str, clip, *, runtime: dict | None = 
             return False
         value = {"first_frame_embedding": clip.first_frame_embedding, "last_frame_embedding": clip.last_frame_embedding, "embedding_model": clip.embedding_model}
         if record.artifact is not None:
+            from core.artifacts import ArtifactStore
+
             encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
-            return record.artifact.media_type == "application/json" and record.artifact.digest == sha256(encoded).hexdigest()
+            return (
+                record.artifact.media_type == "application/json"
+                and record.artifact.digest == sha256(encoded).hexdigest()
+                and ArtifactStore().available_fast(record.artifact)
+            )
         return bool(record.value == value)
     if op_key == "gaze":
         from core.analysis_records import current_record
