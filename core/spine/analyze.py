@@ -254,7 +254,7 @@ def align_words(
         if unknown:
             raise ValueError(f"Unknown alignment clip IDs: {', '.join(unknown)}")
     clips = _resolve_clip_ids(project, clip_ids)
-    tasks = snapshot_alignment_tasks(clips, project.sources_by_id, skip_existing=skip_existing)
+    tasks = snapshot_alignment_tasks(clips, project.sources_by_id, skip_existing=skip_existing, verified=True)
     application = AlignmentApplication(project, tasks)
     missing: list[str] = []
     if any(task.skip_reason is None for task in tasks) and not _check_cancel(cancel_event):
@@ -282,11 +282,12 @@ def align_words(
         )
     output: dict = {"succeeded": [], "failed": [], "skipped": [], "unprocessed": [], "total_clips": len(tasks)}
     for outcome in outcomes:
+        applied = application.apply(project, outcome) if outcome.can_apply else False
+        if outcome.can_apply and not applied:
+            output["failed"].append({"clip_id": outcome.clip_id, "code": "stale_target", "message": "Alignment target changed during execution"})
+            continue
         if outcome.status == "succeeded":
-            if application.apply(project, outcome):
-                output["succeeded"].append({"clip_id": outcome.clip_id, "word_count": len(outcome.words)})
-            else:
-                output["failed"].append({"clip_id": outcome.clip_id, "code": "stale_target", "message": "Alignment target changed during execution"})
+            output["succeeded"].append({"clip_id": outcome.clip_id, "word_count": len(outcome.words)})
         elif outcome.status == "skipped":
             output["skipped"].append({"clip_id": outcome.clip_id, "reason": outcome.code})
         else:

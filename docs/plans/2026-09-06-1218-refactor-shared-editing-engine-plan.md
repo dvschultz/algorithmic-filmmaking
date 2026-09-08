@@ -450,8 +450,13 @@ refreshes audio rows after settings changes. These checks run no probes or
 inference. The completion regression run passed 277 tests, with 12 focused
 follow-ups and clean scoped typing. Alignment now reports loaded CTC model/revision
 and whole-clip/segment execution separately from approximate uniform fallback.
-Its provider regression run passed 257 tests. Alignment records, recovery, and
-completion checks remain to migrate, along with the broader U10 audit.
+Its provider regression run passed 257 tests. Shared alignment and the direct
+spine route now carry verified records binding media, editorial transcript, cached
+model revision, and actual execution; failed attempts preserve existing words.
+Empty word results reuse, changed inputs invalidate reuse, and late owner delivery
+is guarded. The shared regression run passed 271 tests, with 43 final focused tests
+and clean scoped typing. GUI/durable alignment recovery and completion checks
+remain to migrate, along with the broader U10 audit.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain

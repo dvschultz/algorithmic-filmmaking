@@ -493,8 +493,24 @@ default. Callers without callbacks retain their existing result API.
 The regression run passed 257 tests covering alignment, worker delivery/recovery,
 spine imports, and MCP. Changed-file Ruff passed. Scoped typing retains one
 pre-existing external-provider return typing error, confirmed against unchanged
-HEAD. Alignment operation records, GUI/durable recovery, and completion checks
-still need migration; execution reporting alone does not establish verified reuse.
+HEAD.
+
+The shared alignment operation and direct spine entry point now support version 2
+records. Identities bind full media content, clip range/FPS, editorial transcript
+fields (excluding output word positions), installed runtime, cached model revision,
+and actual execution events. CTC results without a verifiable model revision do
+not establish successful verified alignment. Valid empty word results reuse;
+changed text, language, words, media, or model revision invalidate reuse.
+
+Owner publication verifies the original clip/source, transcript, prior records,
+session, save path, and media stamps. Failed attempts retain existing words.
+Verified success publishes the alignment record with the transcript and clears
+the former transcription verification, since the transcript projection changed.
+Raw compatibility publication clears old alignment verification as well; GUI and
+durable alignment consumers still need migration from those raw tasks. The shared
+regression run passed 271 tests, with 43 final focused tests. Both changed shared
+operation modules pass scoped typing; changed-file Ruff passed. GUI/durable
+alignment recovery and completion checks remain unfinished.
 
 ## Remaining U10 work
 

@@ -46,10 +46,20 @@ def project(tmp_path, monkeypatch):
         return wav
 
     monkeypatch.setattr("core.analysis.alignment.extract_audio_to_wav", extract)
+    from core.analysis.alignment import ALIGNMENT_MODEL
+
     monkeypatch.setattr(
-        "core.analysis.alignment.align_words",
-        lambda *a, **k: [WordTimestamp(0, 1, "hello", 0.9)],
+        "core.operations.alignment_records.alignment_model_revision", lambda: "r1"
     )
+
+    def align(*a, **k):
+        if k.get("on_execution"):
+            k["on_execution"](
+                {"backend": "ctc", "model": ALIGNMENT_MODEL, "revision": "r1"}
+            )
+        return [WordTimestamp(0, 1, "hello", 0.9)]
+
+    monkeypatch.setattr("core.analysis.alignment.align_words", align)
     return project
 
 
