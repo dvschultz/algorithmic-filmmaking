@@ -134,3 +134,47 @@ def retain_loaded_receipts(path: Path, receipts: dict[str, str]) -> None:
                     db.executemany(f"INSERT OR IGNORE INTO {table} VALUES (?, ?)", ((canonical, rid) for rid in references))
     finally:
         store.close()
+
+
+def reconcile_receipt_manifests(store: "JobStore") -> int:
+    """Resolve abandoned saves from valid disk state under independent writers.
+
+    Missing, unsupported, invalid, busy, or concurrently changed documents keep
+    their old and pending owners. This does not acknowledge or delete results.
+    """
+    from core.project import _validate_project_structure
+    from core.project_lock import ProjectBusyError, ProjectWriter
+    from core.project_migrations import is_future_schema
+
+    with store._connect() as db:
+        paths = [row[0] for row in db.execute("SELECT DISTINCT project_path FROM receipt_pending_saves")]
+    reconciled = 0
+    for value in paths:
+        path = Path(value)
+        try:
+            # Never borrow a caller's active writer, even on the same thread.
+            with ProjectWriter(path):
+                encoded = path.read_bytes()
+                document = json.loads(encoded)
+                if (
+                    not isinstance(document, dict)
+                    or not isinstance(document.get("id"), str)
+                    or not document["id"]
+                    or _validate_project_structure(document)
+                    or is_future_schema(document["version"])
+                ):
+                    continue
+                references = document_receipts(document)
+                with store._connect() as db:
+                    db.execute("PRAGMA synchronous=FULL")
+                    with db:
+                        db.execute("BEGIN IMMEDIATE")
+                        if path.read_bytes() != encoded:
+                            continue
+                        db.execute("DELETE FROM receipt_manifests WHERE project_path=?", (value,))
+                        db.executemany("INSERT INTO receipt_manifests VALUES (?, ?)", ((value, rid) for rid in references))
+                        db.executemany("INSERT OR IGNORE INTO receipt_project_history VALUES (?, ?)", ((value, rid) for rid in references))
+                        reconciled += db.execute("DELETE FROM receipt_pending_saves WHERE project_path=?", (value,)).rowcount
+        except (ProjectBusyError, OSError, ValueError, TypeError, KeyError, AttributeError):
+            continue
+    return reconciled

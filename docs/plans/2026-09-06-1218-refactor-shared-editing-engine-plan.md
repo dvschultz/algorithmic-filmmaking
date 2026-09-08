@@ -666,7 +666,11 @@ references and records Save As/loaded-copy owners plus historical owner paths.
 Failed publication retains old and incoming references. Ordinary saves do not
 initialize job storage. The save/ownership group passes 90 tests and the job/recovery
 group passes 577; scoped retention/store typing and changed-file Ruff pass. Receipt
-reconciliation, legacy classification, and deletion remain open.
+reconciliation now checks supported saved documents under independent writer locks
+and rechecks exact bytes before replacing ownership and releasing pending saves.
+Unknown or active documents remain protected; computations are neither acknowledged
+nor deleted. Its 79-test regression group, scoped typing, and Ruff pass. Legacy
+classification and receipt deletion remain open.
 Collection now reconciles abandoned save pins against
 readable supported projects under an independent writer lock, with strict reference
 validation and a final document-content check. Manifest replacement and pin release

@@ -823,8 +823,14 @@ adds references. Historical path associations remain for future cleanup to check
 active project writers and their undo state. Ordinary saves and imported receipts
 without a local job cache do not create job storage. The ownership and save group
 passes 90 tests; job/history/recovery coverage passes 577 tests. Scoped retention
-and store typing and changed-file Ruff are clean. Pending-save reconciliation,
-legacy ownership classification, and receipt deletion are still to be implemented.
+and store typing and changed-file Ruff are clean. Pending receipt saves can now be
+reconciled against supported, valid project documents under independent writer
+locks, with a second exact-byte check before the ownership transaction commits.
+Busy, missing, malformed, future-version, or concurrently changed documents keep
+all protection. Reconciliation updates saved and historical references atomically
+and removes pending owners; it never checkpoints or deletes a computation. The
+reconciliation/save/artifact group passes 79 tests; scoped typing and Ruff pass.
+Legacy ownership classification and receipt deletion remain to be implemented.
 
 The next full-suite recheck finished with 5,851 passed, 1 failed, and 2 skipped in
 746 seconds. The remaining failure was an audio-agent test settings stub missing

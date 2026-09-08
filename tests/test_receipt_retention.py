@@ -134,3 +134,106 @@ def test_postpublication_index_failure_retains_pending_refs(saved, monkeypatch):
         path.write_text("saved")
     monkeypatch.setattr(store, "_connect", connect)
     assert {result for _, result in refs(store, "receipt_pending_refs")} == {rid}
+
+
+def abandon(store, path, rid):
+    with pytest.raises(OSError):
+        with retain_receipt_manifest(store, path, {"job_results": {rid: "d" * 64}}):
+            raise OSError("interrupted publication")
+
+
+def test_reconcile_retains_saved_refs_and_releases_only_pending_owners(saved):
+    from core.jobs.retention import reconcile_receipt_manifests
+
+    store, project, path, rid = saved
+    assert project.save(path)
+    incoming = "c" * 64
+    abandon(store, path, incoming)
+    project.close_writer()
+    assert reconcile_receipt_manifests(store) == 1
+    assert refs(store, "receipt_manifests") == {(str(path), rid)}
+    assert refs(store, "receipt_project_history") == {(str(path), rid), (str(path), incoming)}
+    assert refs(store, "receipt_pending_saves") == set()
+    assert refs(store, "receipt_pending_refs") == set()
+    assert store.get_result(rid)["committed"] == 0
+
+
+def test_reconcile_keeps_active_save_owned_even_on_same_thread(saved):
+    from core.jobs.retention import reconcile_receipt_manifests
+
+    store, project, path, rid = saved
+    assert project.save(path)
+    from core.project_lock import ProjectWriter
+
+    with ProjectWriter(path):
+        abandon(store, path, rid)
+        assert reconcile_receipt_manifests(store) == 0
+        assert len(refs(store, "receipt_pending_saves")) == 1
+    assert reconcile_receipt_manifests(store) == 1
+
+
+@pytest.mark.parametrize("state", ["missing", "json", "future", "receipts", "structure"])
+def test_reconcile_retains_uncertain_documents(saved, state):
+    from core.jobs.retention import reconcile_receipt_manifests
+
+    store, project, path, rid = saved
+    assert project.save(path)
+    abandon(store, path, rid)
+    project.close_writer()
+    document = json.loads(path.read_text())
+    if state == "missing":
+        path.unlink()
+    elif state == "json":
+        path.write_text("{")
+    else:
+        if state == "future":
+            document["version"] = "999.0"
+        elif state == "receipts":
+            document["job_results"] = {"malformed": "digest"}
+        else:
+            document["sources"] = "invalid"
+        path.write_text(json.dumps(document))
+    assert reconcile_receipt_manifests(store) == 0
+    assert refs(store, "receipt_manifests") == {(str(path), rid)}
+    assert len(refs(store, "receipt_pending_refs")) == 1
+
+
+def test_reconcile_uses_published_document_after_index_failure(saved):
+    from core.jobs.retention import reconcile_receipt_manifests
+
+    store, project, path, old = saved
+    assert project.save(path)
+    incoming = "c" * 64
+    abandon(store, path, incoming)
+    project.close_writer()
+    document = json.loads(path.read_text())
+    document["job_results"] = {incoming: "d" * 64}
+    path.write_text(json.dumps(document))
+    assert reconcile_receipt_manifests(store) == 1
+    assert refs(store, "receipt_manifests") == {(str(path), incoming)}
+    assert refs(store, "receipt_project_history") == {(str(path), old), (str(path), incoming)}
+
+
+def test_reconcile_rechecks_document_before_releasing_refs(saved, monkeypatch):
+    from pathlib import Path
+    from core.jobs.retention import reconcile_receipt_manifests
+
+    store, project, path, rid = saved
+    assert project.save(path)
+    abandon(store, path, rid)
+    project.close_writer()
+    read = Path.read_bytes
+    reads = 0
+
+    def changed(target):
+        nonlocal reads
+        data = read(target)
+        if target == path:
+            reads += 1
+            if reads == 2:
+                return data + b" "
+        return data
+
+    monkeypatch.setattr(Path, "read_bytes", changed)
+    assert reconcile_receipt_manifests(store) == 0
+    assert len(refs(store, "receipt_pending_refs")) == 1
