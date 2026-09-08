@@ -1001,6 +1001,15 @@ tracked, inactive historical owners as described above.
   changes. The 158-test legacy/native GUI/MCP/boundary/import group passes;
   five scoped modules pass typing and scoped lint is clean. Other families and
   final review remain outstanding.
+
+- Gaze acceptance now uses the existing gaze task, result validation, identity,
+  and application across CLI, MCP, desktop, and built-in agent. Both finite
+  angles and a known category are required; zero angles are valid. Legacy
+  missing fields cannot establish a no-gaze observation and require
+  recomputation. Accepted observations retain unknown provenance, reuse without
+  inference, and invalidate after trim edits. The 167-test legacy/native GUI/
+  MCP/gaze/import group passes; five scoped modules pass typing and scoped lint
+  is clean. Other analysis families and final review remain open.
 - Finish the remaining cross-consumer reuse/projection audit.
   Receipt pruning retains legacy rows rather than guessing absent ownership;
   existing rows are not migrated eagerly.

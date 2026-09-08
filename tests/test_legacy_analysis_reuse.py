@@ -46,7 +46,7 @@ def test_verified_record_cannot_be_relabelled_as_legacy(tmp_path):
     assert project.clips[0].analysis_records["colors"] == previous
 
 
-@pytest.mark.parametrize("operation", ["colors", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings"])
+@pytest.mark.parametrize("operation", ["colors", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze"])
 def test_cli_reuse_requires_an_explicit_command_and_saves_unknown_provenance(tmp_path, operation):
     from click.testing import CliRunner
     from cli.commands.analyze import analyze
@@ -58,6 +58,8 @@ def test_cli_reuse_requires_an_explicit_command_and_saves_unknown_provenance(tmp
     project.clips[0].average_brightness = project.clips[0].rms_volume = 0.0
     project.clips[0].object_labels = project.clips[0].detected_objects = []
     project.clips[0].person_count = 0
+    project.clips[0].gaze_yaw = project.clips[0].gaze_pitch = 0.0
+    project.clips[0].gaze_category = "at_camera"
     project.clips[0].first_frame_embedding = [0.2] * 768
     project.clips[0].last_frame_embedding = [0.3] * 768
     project.clips[0].embedding_model = DINOV2_TAG
@@ -247,3 +249,28 @@ def test_boundary_pair_acceptance_and_reuse(tmp_path, invalid):
     assert clip.last_frame_embedding == [0.3] * 768
     clip.end_frame -= 1
     assert not operation_is_complete_for_clip("boundary_embeddings", clip, source=project.sources[0])
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_gaze_requires_complete_observation_and_reuses_without_inference(tmp_path, missing):
+    from core.spine.analysis_reuse import accept_legacy_analysis
+    from core.operations.gaze import GazeOptions, gaze_task, run_gaze
+
+    project = project_with_thumbnails(tmp_path, 1)
+    clip = project.clips[0]
+    if not missing:
+        clip.gaze_yaw = clip.gaze_pitch = 0.0
+        clip.gaze_category = "at_camera"
+    result = accept_legacy_analysis(project, "gaze")
+    if missing:
+        assert not result["accepted"] and len(result["failed"]) == 1
+        assert "gaze" not in clip.analysis_records
+        return
+    assert result["accepted"] == [clip.id]
+    assert clip.analysis_records["gaze"].provenance == "unknown"
+    assert operation_is_complete_for_clip("gaze", clip, source=project.sources[0])
+    with patch("core.analysis.gaze.extract_gaze_from_clip", side_effect=AssertionError("no inference")):
+        reused = run_gaze((gaze_task(clip, project.sources[0]),), GazeOptions())
+    assert reused[0].status == "skipped"
+    clip.end_frame -= 1
+    assert not operation_is_complete_for_clip("gaze", clip, source=project.sources[0])

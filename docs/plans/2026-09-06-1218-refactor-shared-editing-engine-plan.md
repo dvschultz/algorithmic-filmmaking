@@ -460,6 +460,12 @@ endpoint pairs, retains unknown provenance, and invalidates after trim edits.
 The 158-test legacy/boundary/MCP/native GUI/import group passes, with scoped
 typing and lint clean. Remaining families and final verification are still open.
 
+Gaze acceptance now follows its existing result validation and identity across
+all four interfaces, preserving complete legacy observations and rejecting
+missing angles/categories. Zero angles remain valid; trim changes invalidate
+accepted records. The 167-test legacy/gaze/MCP/native GUI/import group passes,
+with scoped typing and lint clean. Other families and final review remain open.
+
 Custom queries now retain independent records through shared operations, direct
 headless calls, GUI worker delivery/recovery, and durable headless jobs. GUI reuse
 verifies saved records without duplicate history or local weight loading. Durable

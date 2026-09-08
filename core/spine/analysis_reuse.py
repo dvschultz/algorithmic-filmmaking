@@ -15,7 +15,7 @@ def accept_legacy_analysis(project: "Project", operation: str, clip_ids: list[st
     """
     from core.operations.colors import ColorApplication, color_request
     from core.operations.embeddings import EmbeddingApplication, embedding_task
-    from core.operations.legacy_reuse import LEGACY_REUSE_OPERATIONS, accept_legacy_colors, accept_legacy_embeddings, accept_legacy_scalars, accept_legacy_visuals, accept_legacy_boundaries
+    from core.operations.legacy_reuse import LEGACY_REUSE_OPERATIONS, accept_legacy_colors, accept_legacy_embeddings, accept_legacy_scalars, accept_legacy_visuals, accept_legacy_boundaries, accept_legacy_gaze
     from core.operations.scalars import ScalarApplication, ScalarOperation, scalar_task
     from models.analysis_record import AnalysisRecord
 
@@ -35,6 +35,19 @@ def accept_legacy_analysis(project: "Project", operation: str, clip_ids: list[st
         previous = clip.analysis_records.get(operation)
         if previous is not None and not isinstance(previous, AnalysisRecord):
             result["failed"].append({"clip_id": cid, "message": "Unknown analysis record must be preserved; recompute analysis"})
+            continue
+        if operation == "gaze":
+            from core.operations.gaze import GazeApplication, GazeOptions, gaze_task
+
+            gaze_input = gaze_task(clip, project.sources_by_id.get(clip.source_id))
+            gaze_application = GazeApplication(project, (gaze_input,), GazeOptions())
+            gaze_result = accept_legacy_gaze((gaze_input,), cancel_event=cancel_event)[0]
+            if gaze_result.status == "unprocessed":
+                result["unprocessed"].append(cid)
+            elif gaze_result.status == "succeeded" and gaze_application.apply(project, gaze_result):
+                result["accepted"].append(cid)
+            else:
+                result["failed"].append({"clip_id": cid, "message": gaze_result.message or "Target changed"})
             continue
         if operation == "boundary_embeddings":
             from core.operations.boundary_embeddings import BoundaryEmbeddingApplication, boundary_embedding_task

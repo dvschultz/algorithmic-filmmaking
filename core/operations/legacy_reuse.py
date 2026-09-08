@@ -16,13 +16,14 @@ from core.operations.contracts import ColorOutcome, ColorResult
 from core.operations.embeddings import EmbeddingOutcome, EmbeddingTask, embedding_identity
 from models.analysis_record import AnalysisIdentity, AnalysisRecord
 
-LEGACY_REUSE_OPERATIONS = ("colors", "embeddings", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings")
+LEGACY_REUSE_OPERATIONS = ("colors", "embeddings", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze")
 
 if TYPE_CHECKING:
     from core.operations.scalars import ScalarOutcome, ScalarTask
     from core.operations.classification import ClassificationOutcome, ClassificationTask
     from core.operations.object_detection import ObjectDetectionOutcome, ObjectDetectionTask
     from core.operations.boundary_embeddings import BoundaryEmbeddingOutcome, BoundaryEmbeddingTask
+    from core.operations.gaze import GazeOutcome, GazeTask
 
 
 def _accept(record_json: str | None, value: dict, identity: AnalysisIdentity, inputs: AnalysisInput) -> str:
@@ -234,4 +235,39 @@ def accept_legacy_boundaries(tasks: "tuple[BoundaryEmbeddingTask, ...]", *, canc
             outcomes.append(BoundaryEmbeddingOutcome(task.clip_id, "unprocessed", code="cancelled"))
         except (ValueError, OSError, TypeError, KeyError) as exc:
             outcomes.append(BoundaryEmbeddingOutcome(task.clip_id, "failed", message=str(exc)))
+    return tuple(outcomes)
+
+
+def accept_legacy_gaze(tasks: "tuple[GazeTask, ...]", *, cancel_event: Event | None = None) -> "tuple[GazeOutcome, ...]":
+    """Accept complete finite gaze observations without estimating missing angles."""
+    from core.analysis_records import AnalysisSnapshot
+    from core.analysis_model_identity import gaze_runtime
+    from core.jobs.media import FingerprintCancelled
+    from core.operations.gaze import GazeOptions, GazeOutcome, gaze_identity
+
+    fingerprints = AnalysisFingerprints(cancel_event)
+    runtime = gaze_runtime()
+    outcomes = []
+    for task in tasks:
+        try:
+            if cancel_event is not None and cancel_event.is_set():
+                raise FingerprintCancelled()
+            if (
+                task.analysis_json is None or task.source_path is None
+                or isinstance(task.fps, bool) or not isfinite(task.fps) or task.fps <= 0
+                or type(task.start_frame) is not int or type(task.end_frame) is not int
+                or task.start_frame < 0 or task.end_frame <= task.start_frame
+            ):
+                raise ValueError("Gaze reuse requires a valid source range")
+            snapshot = AnalysisSnapshot.from_json(task.analysis_json)
+            value = json.loads(snapshot.value_json)
+            # Legacy all-None fields cannot establish that no gaze was found.
+            outcome = GazeOutcome.from_result(task.clip_id, value)
+            identity = gaze_identity(snapshot, GazeOptions(), fingerprints, runtime)
+            record_json = _accept(json.dumps(snapshot.record.to_dict()) if snapshot.record else None, value, identity, snapshot.inputs)
+            outcomes.append(replace(outcome, record_json=record_json))
+        except FingerprintCancelled:
+            outcomes.append(GazeOutcome(task.clip_id, "unprocessed", code="cancelled"))
+        except (ValueError, OSError, TypeError, KeyError) as exc:
+            outcomes.append(GazeOutcome(task.clip_id, "failed", message=str(exc)))
     return tuple(outcomes)
