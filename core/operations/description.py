@@ -570,12 +570,15 @@ class DescriptionApplication:
                         and current[2] == expected[2]
                     ):
                         target = current[0]
+                        frame_count = (
+                            getattr(target, "description_frames", None)
+                            if outcome.status == "skipped"
+                            else (1 if task.target_type == "clip" else None)
+                        )
                         value = {
                             "description": outcome.description,
                             "description_model": outcome.model,
-                            "description_frames": 1
-                            if task.target_type == "clip"
-                            else None,
+                            "description_frames": frame_count,
                         }
                         record = (
                             AnalysisRecord.from_dict(json.loads(outcome.record_json))
@@ -650,7 +653,7 @@ class DescriptionApplication:
                         else:
                             target.description = outcome.description
                             target.description_model = outcome.model
-                            target.description_frames = 1
+                            target.description_frames = frame_count
                             clips.append(target)
                         valid = True
                 accepted.append(valid)

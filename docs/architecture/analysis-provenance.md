@@ -1028,6 +1028,12 @@ tracked, inactive historical owners as described above.
   capture unsaved model settings, and MCP captures resolved options plus FFmpeg
   input stamps. The 183-test legacy/native GUI/MCP/OCR/import group passes.
   Remaining legacy families and the final review/full-suite run remain open.
+- Description publication now preserves the saved frame count for reused
+  outcomes, including unknown counts. Previously it forced a count of one and
+  rejected matching records with any other count. Two regression cases fail
+  before the fix; 127 description operation, record, publication, completion,
+  delivery, and recovery tests pass afterward. Description legacy acceptance
+  still needs its interface wiring and validation.
 - Finish the remaining cross-consumer reuse/projection audit.
   Receipt pruning retains legacy rows rather than guessing absent ownership;
   existing rows are not migrated eagerly.

@@ -23,6 +23,37 @@ def project_with_thumbnails(tmp_path, count=3):
     return project
 
 
+@pytest.mark.parametrize("frame_count", [None, 3])
+def test_reused_description_preserves_saved_frame_count(tmp_path, frame_count):
+    import json
+    from core.analysis_records import AnalysisFingerprints, AnalysisSnapshot
+    from core.operations.description import (
+        DescriptionApplication, DescriptionOutcome, description_identity,
+        description_runtime, description_task,
+    )
+    from core.operations.legacy_reuse import _accept
+
+    project = project_with_thumbnails(tmp_path, 1)
+    clip = project.clips[0]
+    clip.description = "A person walking"
+    clip.description_model = "legacy-model"
+    clip.description_frames = frame_count
+    options = DescriptionOptions("cloud", model="current-model", input_mode="frame")
+    task = description_task(clip, project.sources[0])
+    snapshot = AnalysisSnapshot.from_json(task.analysis_json)
+    value = json.loads(snapshot.value_json)
+    identity = description_identity(snapshot, options, AnalysisFingerprints(), description_runtime(task, options))
+    record_json = _accept(None, value, identity, snapshot.inputs)
+    outcome = DescriptionOutcome(clip.id, "skipped", clip.description, clip.description_model, record_json=record_json)
+
+    assert DescriptionApplication(project, (task,), options).apply(project, outcome)
+    assert clip.description_frames == frame_count
+    assert clip.description_model == "legacy-model"
+    record = clip.analysis_records["describe"]
+    assert record.value == value
+    assert record.provenance == "unknown" and record.legacy_reuse
+
+
 @pytest.mark.parametrize("response", ["", "Error: provider failed"])
 def test_gui_and_spine_reject_invalid_provider_response(
     tmp_path, monkeypatch, response
