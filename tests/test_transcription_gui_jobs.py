@@ -53,6 +53,78 @@ def test_session_job_preserves_word_results_and_closes(worker, monkeypatch):
     assert worker._runtime is None
 
 
+@pytest.mark.parametrize("saved", [False, True])
+def test_worker_reuses_verified_project_without_preflight(tmp_path, monkeypatch, saved):
+    from types import SimpleNamespace
+    from core.operations.transcription import TranscriptionApplication
+
+    project = _build_project(tmp_path, 1)
+    if saved:
+        assert project.save(tmp_path / "project.json")
+    monkeypatch.setattr(
+        "core.settings.load_settings", lambda: SimpleNamespace(cache_dir=tmp_path)
+    )
+    monkeypatch.setattr("core.transcription._has_audio_stream", lambda _: True)
+    provider = Mock(return_value=[])
+    monkeypatch.setattr("core.transcription.transcribe_clip", provider)
+    first = TranscriptionWorker(
+        project.clips, project.sources[0], backend="faster-whisper", project=project
+    )
+    monkeypatch.setattr(first, "_prepare", lambda _: True)
+    first.run()
+    assert TranscriptionApplication(project, first.tasks, first._options).apply(
+        project, first.result[0]
+    )
+    second = TranscriptionWorker(
+        project.clips, project.sources[0], backend="faster-whisper", project=project
+    )
+    prepare = Mock(side_effect=AssertionError("reuse must not preload weights"))
+    monkeypatch.setattr(second, "_prepare", prepare)
+    delivered = []
+    second.outcome_ready.connect(delivered.append)
+    second.run()
+    assert second.result[0].status == "skipped"
+    assert delivered == list(second.result)
+    assert provider.call_count == 1
+    prepare.assert_not_called()
+
+
+def test_mlx_preload_and_inference_share_worker_thread(tmp_path, monkeypatch):
+    import threading
+    from types import SimpleNamespace
+
+    project = _build_project(tmp_path, 2)
+    monkeypatch.setattr(
+        "core.settings.load_settings",
+        lambda: SimpleNamespace(cache_dir=tmp_path, model_cache_dir=tmp_path),
+    )
+    monkeypatch.setattr("core.transcription._has_audio_stream", lambda _: True)
+    monkeypatch.setattr("core.transcription.is_mlx_whisper_available", lambda: True)
+    monkeypatch.setattr("core.binary_resolver.find_binary", lambda _: "/fake/ffmpeg")
+    monkeypatch.setattr(
+        "core.transcription_storage.validate_transcription_disk_space", lambda *_: None
+    )
+    loaded, inferred = [], []
+    monkeypatch.setattr(
+        "core.transcription.get_mlx_model",
+        lambda _: loaded.append(threading.get_ident()),
+    )
+
+    def transcribe(**kwargs):
+        inferred.append(threading.get_ident())
+        return []
+
+    monkeypatch.setattr("core.transcription.transcribe_clip", transcribe)
+    worker = TranscriptionWorker(
+        project.clips, project.sources[0], backend="mlx-whisper", project=project
+    )
+    worker.run()
+    assert worker.job_status == "completed"
+    assert len(loaded) == 1
+    assert inferred == loaded * 2
+    assert loaded[0] != threading.get_ident()
+
+
 def test_cancelled_before_start_records_unprocessed_targets(worker, monkeypatch):
     preload = Mock()
     monkeypatch.setattr("core.transcription.get_model", preload)

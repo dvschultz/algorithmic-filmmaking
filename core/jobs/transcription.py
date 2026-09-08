@@ -77,7 +77,7 @@ def transcription_operation_spec(
         targets.append(target)
     return OperationSpec.build(
         kind="transcribe",
-        version=1,
+        version=2 if any(task.analysis_json is not None for task in tasks) else 1,
         arguments=arguments,
         inputs={
             "targets": targets,

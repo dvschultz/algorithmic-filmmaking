@@ -307,6 +307,8 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
                 pending.append((result_id, receipt_digest))
             continue
         if identity["kind"] == "gui_transcribe":
+            if payload.get("record_json") is not None and clip.get("analysis_records", {}).get("transcribe") != json.loads(payload["record_json"]):
+                continue
             expected = [
                 TranscriptSegment.from_dict(s).to_dict() for s in payload["segments"]
             ]

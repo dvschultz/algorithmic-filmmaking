@@ -417,9 +417,12 @@ their options and match it during recovery. The subsequent regression run passed
 312 tests including MCP coverage. Shared clip transcription and the direct
 headless operation now retain verified success/reuse/failure records, including
 actual execution metadata and guarded publication. The migration regression run
-passed 357 tests, with 74 guard follow-up tests and 26 final record tests. GUI and
-durable-job record delivery, standalone audio, alignment, and completion indicators
-remain unfinished.
+passed 357 tests, with 74 guard follow-up tests and 26 final record tests. GUI
+workers/journals, queued delivery, save checkpoints, and the combined pipeline now
+carry verified transcript records. Reuse skips preflight/model loading; failures
+preserve the prior display. The GUI regression run passed 392 tests, with 11
+follow-up worker/delivery tests and clean scoped typing. Durable-job record delivery, standalone audio,
+alignment, and completion indicators remain unfinished.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain

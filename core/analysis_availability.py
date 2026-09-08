@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 # These operations verify complete input identities on the worker path.
-VERIFIED_ANALYSIS_OPERATIONS = frozenset({"colors", "embeddings", "boundary_embeddings", "detect_objects", "extract_text", "classify", "shots", "gaze", "describe", "cinematography"})
+VERIFIED_ANALYSIS_OPERATIONS = frozenset({"colors", "embeddings", "boundary_embeddings", "detect_objects", "extract_text", "classify", "shots", "gaze", "describe", "cinematography", "transcribe"})
 
 
 _ANALYSIS_RESULT_FIELDS: dict[str, tuple[str, ...]] = {

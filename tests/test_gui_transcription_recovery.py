@@ -49,9 +49,17 @@ def run(
     clips=None,
     apply=False,
     cancel=None,
+    verified=False,
 ):
     clips = project.clips if clips is None else clips
     tasks = snapshot_tasks(clips, project.sources_by_id, skip_existing=False)
+    if verified:
+        from core.operations.transcription_records import transcription_task
+
+        tasks = tuple(
+            transcription_task(clip, project.sources_by_id[clip.source_id])
+            for clip in clips
+        )
     cache = GuiTranscriptionCache(
         project.path,
         project.metadata.id,
@@ -66,14 +74,19 @@ def run(
         },
         media_stamps={s.file_path: media_stamp(s.file_path) for s in project.sources},
     )
-    application = TranscriptionApplication(project, tasks)
+    application = TranscriptionApplication(project, tasks, options)
 
     def deliver(outcome):
-        if apply and outcome.status == "succeeded":
+        if apply and outcome.can_apply:
             assert application.apply(project, outcome)
-            receipt = cache.results[outcome.clip_id]
-            assert receipt.matches(outcome)
-            project.record_job_result(receipt.result_id, receipt.digest)
+            receipt = cache.results.get(outcome.clip_id)
+            if receipt is not None:
+                assert receipt.matches(outcome)
+                project.record_job_result(receipt.result_id, receipt.digest)
+            else:
+                from dataclasses import asdict
+
+                assert cache.transient_outcomes[outcome.clip_id] == asdict(outcome)
 
     return cache.run(tasks, cancel or Event(), prepare, deliver, lambda *_: None)
 
@@ -164,9 +177,68 @@ def test_media_changed_during_preflight_prevents_inference(setup):
         project.sources[0].file_path.write_bytes(b"changed")
         return True
 
-    with pytest.raises(StaleJobResult, match="media changed"):
-        run(project, prepare=prepare)
+    assert all(outcome.status == "failed" for outcome in run(project, prepare=prepare))
     compute.assert_not_called()
+
+
+def test_verified_saved_records_skip_preflight_and_refresh_without_old_receipts(setup):
+    project, compute = setup
+    run(project, verified=True, apply=True)
+    assert project.save()
+    reopened = Project.load(project.path)
+    reopened.metadata.job_results["f" * 64] = "a" * 64
+    prepare = Mock(side_effect=AssertionError("verified reuse must not load weights"))
+    outcomes = run(reopened, verified=True, apply=True, prepare=prepare)
+    assert all(outcome.status == "skipped" for outcome in outcomes)
+    assert compute.call_count == 2
+    prepare.assert_not_called()
+
+
+def test_verified_recovery_excludes_parallelism(setup):
+    project, compute = setup
+    first = run(project, verified=True)
+    prepare = Mock(side_effect=AssertionError("receipt recovery must skip preflight"))
+    assert (
+        run(
+            project,
+            verified=True,
+            prepare=prepare,
+            options=replace(OPTIONS, parallelism=1),
+        )
+        == first
+    )
+    assert compute.call_count == 2
+
+
+def test_verified_failure_preserves_old_display_without_success_receipt(setup):
+    project, compute = setup
+    run(project, verified=True, apply=True)
+    previous = project.clips[0].transcript
+    receipts = dict(project.metadata.job_results)
+    compute.side_effect = RuntimeError("provider offline")
+    outcomes = run(
+        project, verified=True, apply=True, options=replace(OPTIONS, model="base")
+    )
+    assert all(outcome.status == "failed" for outcome in outcomes)
+    assert project.clips[0].transcript == previous
+    assert project.clips[0].analysis_records["transcribe"].state == "failed"
+    assert project.metadata.job_results == receipts
+
+
+def test_checkpoint_requires_matching_transcript_record(setup):
+    from core.jobs.store import JobStore
+    from models.analysis_record import AnalysisRecord
+
+    project, _ = setup
+    run(project, verified=True, apply=True)
+    project.clips[0].analysis_records["transcribe"] = AnalysisRecord.legacy(
+        {"transcript": []}
+    )
+    assert project.save()
+    store = JobStore(project.path.parent / "jobs.db")
+    rows = [store.get_result(result_id) for result_id in project.metadata.job_results]
+    assert sum(bool(row["committed"]) for row in rows) == 1
+    store.close()
 
 
 def test_journal_rejects_failed_output_before_recording(setup):

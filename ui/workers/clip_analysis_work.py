@@ -100,7 +100,7 @@ def create_clip_analysis_worker(
             segmentation_mode=settings.transcription_segmentation_mode,
             segment_max_seconds=settings.transcription_segment_max_seconds,
         )
-        return worker, TranscriptionApplication(project, worker.tasks)
+        return worker, TranscriptionApplication(project, worker.tasks, worker._options)
     if operation == "face_embeddings":
         from ui.workers.face_detection_worker import FaceDetectionWorker
         from core.operations.faces import FaceApplication

@@ -392,9 +392,22 @@ during computation discard the result.
 The migration regression run passed 357 tests including MCP coverage, with 74
 follow-up tests after guard refinements and 26 final record tests including shared
 hashing and binding refresh. Scoped operation typing and changed-file Ruff passed.
-GUI workers/journals and durable jobs still use the legacy task path and do not yet
-carry verified transcript records. Their existing field-presence skip behavior,
-standalone audio, alignment, and completion indicators remain to migrate.
+GUI clip workers and journals now carry verified transcript records, including
+the combined analysis pipeline. Existing transcripts are queued for verification;
+preflight and model loading run only after a reuse miss. One preflight serves the
+batch, and MLX preload/inference remain on the same worker thread. Journals verify
+runtime identity, exclude parallelism from recovery matching, tolerate missing old
+receipts, and close their stores on all exit paths. Queued object outcomes retain
+records; reuse and failures have exact transient-delivery guards without success
+receipts. Delivery rejects cancellation, replaced requests, changed inputs, and
+modified payloads. Save checkpoints require the exact transcript record.
+The GUI regression run passed 392 tests including MCP and combined-pipeline
+coverage; 11 follow-up worker/delivery tests passed, including MLX thread affinity.
+Scoped typing passed for six migrated modules, and changed-file Ruff passed.
+
+Durable headless jobs still use the legacy task path and do not yet carry verified
+transcript records. Their existing field-presence skip behavior, standalone audio,
+alignment, and completion indicators remain to migrate.
 
 ## Remaining U10 work
 

@@ -82,3 +82,67 @@ with tempfile.TemporaryDirectory() as directory:
         timeout=20,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_verified_transient_delivery_rejects_cancelled_or_modified_outcomes():
+    code = r"""
+import tempfile
+from dataclasses import asdict, replace
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
+from PySide6.QtCore import QCoreApplication, QObject, Signal
+from core.operations.transcription import TranscriptionApplication, TranscriptionOptions, run_transcription
+from core.operations.transcription_records import transcription_task
+from tests.test_spine_analyze import _build_project
+from ui.workers.transcription_delivery import TranscriptionDelivery
+app = QCoreApplication([])
+class Worker(QObject):
+    finished = Signal()
+    progress = Signal(int, int)
+    status = Signal(str)
+    error = Signal(str)
+    job_started = Signal(str, str)
+    outcome_ready = Signal(object)
+    def is_cancelled(self): return self.cancelled
+with tempfile.TemporaryDirectory() as directory:
+    path = Path(directory)
+    for mode in ('reuse', 'failure', 'tampered', 'cancelled', 'changed'):
+        project = _build_project(path, 1)
+        project.path = path / 'project.json'
+        options = TranscriptionOptions(backend='faster-whisper')
+        with patch('core.transcription._has_audio_stream', return_value=True), patch('core.transcription.transcribe_clip', return_value=[]):
+            first = transcription_task(project.clips[0], project.sources[0])
+            result = run_transcription((first,), options)[0]
+            assert TranscriptionApplication(project, (first,), options).apply(project, result)
+            task = transcription_task(project.clips[0], project.sources[0], skip_existing=mode != 'failure')
+            with patch('core.transcription.transcribe_clip', side_effect=RuntimeError('offline')):
+                outcome = run_transcription((task,), options)[0]
+        worker = Worker(); worker.tasks = (task,); worker._options = options; worker.cancelled = mode == 'cancelled'
+        worker.cache = SimpleNamespace(path=project.path.resolve(), results={}, transient_outcomes={outcome.clip_id: asdict(outcome)})
+        window = QObject(); window.project = project; window.transcription_worker = worker
+        window.status_bar = Mock(); window._on_transcription_progress = Mock(); window._on_transcription_error = Mock(); window._on_transcript_ready = Mock()
+        delivery = TranscriptionDelivery(window, worker)
+        if mode == 'tampered': outcome = replace(outcome, record_json='{}')
+        if mode == 'changed': project.clips[0].end_frame += 1
+        worker.outcome_ready.emit(outcome); worker.outcome_ready.emit(outcome)
+        if mode == 'reuse':
+            window._on_transcript_ready.assert_called_once()
+            window._on_transcription_error.assert_not_called()
+        elif mode == 'failure':
+            assert project.clips[0].analysis_records['transcribe'].state == 'failed'
+            assert project.clips[0].transcript == []
+            window._on_transcript_ready.assert_not_called()
+        else:
+            window._on_transcript_ready.assert_not_called()
+            assert project.clips[0].analysis_records['transcribe'].state == 'succeeded'
+        assert not project.metadata.job_results
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        env={**os.environ, "QT_QPA_PLATFORM": "offscreen", "HF_HUB_OFFLINE": "1"},
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

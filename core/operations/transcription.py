@@ -8,7 +8,7 @@ from dataclasses import dataclass, replace
 import json
 from math import isfinite
 from pathlib import Path
-from threading import Event
+from threading import Event, Lock
 from typing import TYPE_CHECKING, Any, Callable
 
 from core.operations.contracts import OutcomeStatus
@@ -120,6 +120,7 @@ def _compute_task(
     task: TranscriptionTask,
     options: TranscriptionOptions,
     on_execution: Callable[[dict[str, str | None]], None] | None = None,
+    prepare: Callable[[], bool] | None = None,
 ) -> TranscriptionOutcome:
     from core.transcription_models import (
         FFmpegNotFoundError,
@@ -143,6 +144,13 @@ def _compute_task(
     try:
         from core.transcription import transcribe_clip
 
+        if prepare is not None and not prepare():
+            return TranscriptionOutcome(task.clip_id, "unprocessed", code="cancelled")
+        if task.analysis_json is not None:
+            from core.analysis_records import AnalysisSnapshot
+
+            if not AnalysisSnapshot.from_json(task.analysis_json).inputs.unchanged():
+                return TranscriptionOutcome(task.clip_id, "failed", code="stale_input")
         options = resolve_transcription_options(options)
         segments = transcribe_clip(
             source_path=task.source_path,
@@ -183,10 +191,11 @@ def compute_task(
     options: TranscriptionOptions,
     *,
     fingerprints: AnalysisFingerprints | None = None,
+    prepare: Callable[[], bool] | None = None,
 ) -> TranscriptionOutcome:
     """Verify detached records before inference and retain failed execution state."""
     if task.analysis_json is None:
-        return _compute_task(task, options)
+        return _compute_task(task, options, prepare=prepare)
     if (
         task.error is not None
         or task.source_path is None
@@ -246,7 +255,14 @@ def compute_task(
             execution = dict(value)
             execution_runtime = transcription_runtime(options, execution=execution)
 
-        outcome = _compute_task(replace(task, skip=False), options, report)
+        outcome = _compute_task(
+            replace(task, skip=False),
+            options,
+            report,
+            prepare if runtime["execution"]["backend"] != "audio-probe" else None,
+        )
+        if outcome.status == "unprocessed":
+            return outcome
         if outcome.status == "succeeded":
             try:
                 transcription_segments_value(outcome.segments)
@@ -296,6 +312,8 @@ def run_transcription(
     cancel_event: Event | None = None,
     on_outcome: Callable[[TranscriptionOutcome], None] | None = None,
     progress: Callable[[int, int], None] | None = None,
+    prepare: Callable[[], bool] | None = None,
+    fingerprints: AnalysisFingerprints | None = None,
 ) -> tuple[TranscriptionOutcome, ...]:
     """Run a bounded batch; callbacks run on the caller, results keep input order."""
     if not tasks:
@@ -307,7 +325,24 @@ def run_transcription(
     cancelled = cancel_event or Event()
     from core.analysis_records import AnalysisFingerprints
 
-    fingerprints = AnalysisFingerprints(cancelled)
+    fingerprints = fingerprints or AnalysisFingerprints(cancelled)
+    preparation_lock = Lock()
+    prepared: bool | None = None
+    preparation_error: Exception | None = None
+
+    def prepare_once() -> bool:
+        nonlocal prepared, preparation_error
+        with preparation_lock:
+            if preparation_error is not None:
+                raise preparation_error
+            if prepared is None:
+                try:
+                    prepared = not cancelled.is_set() and (prepare is None or prepare())
+                except Exception as exc:
+                    preparation_error = exc
+                    raise
+            return prepared
+
     outcomes: dict[int, TranscriptionOutcome] = {}
     next_index = 0
     halted = False
@@ -326,6 +361,7 @@ def run_transcription(
                         tasks[next_index],
                         options,
                         fingerprints=fingerprints,
+                        prepare=prepare_once,
                     )
                 ] = next_index
                 next_index += 1

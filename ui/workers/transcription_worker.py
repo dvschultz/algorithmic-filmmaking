@@ -25,9 +25,9 @@ from core.operations.transcription import (
     TranscriptionOutcome,
     TranscriptionTask,
     run_transcription,
-    snapshot_tasks,
     resolve_transcription_options,
 )
+from core.operations.transcription_records import transcription_task
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +57,7 @@ class TranscriptionWorker(CancellableWorker):
     progress = Signal(int, int)  # current, total
     status = Signal(str)
     transcript_ready = Signal(str, list)  # clip_id, segments
+    outcome_ready = Signal(object)
     transcription_completed = Signal()
     job_started = Signal(str, str)
 
@@ -91,13 +92,8 @@ class TranscriptionWorker(CancellableWorker):
             1 if self._backend == "mlx-whisper" else requested_parallelism
         )
         self._tasks = tuple(
-            task
-            for task in snapshot_tasks(
-                clips,
-                {source.id: source},
-                skip_existing=skip_existing,
-            )
-            if not task.skip
+            transcription_task(clip, source, skip_existing=skip_existing)
+            for clip in clips
         )
         self._options = resolve_transcription_options(
             TranscriptionOptions(
@@ -264,12 +260,25 @@ class TranscriptionWorker(CancellableWorker):
                 self.progress.emit(*args)
             elif kind == "transcript":
                 self.transcript_ready.emit(*args)
+            elif kind == "outcome":
+                self.outcome_ready.emit(*args)
 
         def compute(progress, cancel):
             try:
+                preparation_error = None
+
+                def prepare():
+                    nonlocal preparation_error
+                    try:
+                        return self._prepare(events)
+                    except Exception as exc:
+                        preparation_error = str(exc)
+                        raise
 
                 def deliver(outcome):
-                    if outcome.status == "succeeded":
+                    if outcome.can_apply:
+                        events.put(("outcome", (outcome,)))
+                    if outcome.has_result:
                         events.put(
                             ("transcript", (outcome.clip_id, list(outcome.segments)))
                         )
@@ -285,16 +294,9 @@ class TranscriptionWorker(CancellableWorker):
                     outcomes = self.cache.run(
                         self._tasks,
                         cancel,
-                        lambda: self._prepare(events),
+                        prepare,
                         deliver,
                         report,
-                    )
-                elif not self._prepare(events):
-                    outcomes = tuple(
-                        TranscriptionOutcome(
-                            task.clip_id, "unprocessed", code="cancelled"
-                        )
-                        for task in self._tasks
                     )
                 else:
                     outcomes = run_transcription(
@@ -303,8 +305,12 @@ class TranscriptionWorker(CancellableWorker):
                         cancel_event=cancel,
                         on_outcome=deliver,
                         progress=report,
+                        prepare=prepare,
                     )
-                return {"outcomes": [asdict(outcome) for outcome in outcomes]}
+                result = {"outcomes": [asdict(outcome) for outcome in outcomes]}
+                if preparation_error is not None:
+                    result.update(success=False, error=preparation_error)
+                return result
             except Exception as exc:
                 return {"success": False, "error": str(exc)}
 

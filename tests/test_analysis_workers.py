@@ -8,7 +8,7 @@ These tests validate that workers correctly:
 """
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import pytest
 
 from tests.conftest import make_test_clip
@@ -383,7 +383,7 @@ class TestObjectDetectionWorkerErrors:
 # --- TranscriptionWorker ---
 
 class TestTranscriptionWorkerTaskBuilding:
-    def test_skip_existing_skips_clips_with_transcript(self, source):
+    def test_skip_existing_queues_clips_for_verification(self, source):
         from ui.workers.transcription_worker import TranscriptionWorker
 
         clip_with = make_test_clip(
@@ -397,8 +397,8 @@ class TestTranscriptionWorkerTaskBuilding:
             skip_existing=True,
             backend="faster-whisper",
         )
-        assert len(worker._tasks) == 1
-        assert worker._tasks[0].clip_id == "c2"
+        assert [task.clip_id for task in worker._tasks] == ["c1", "c2"]
+        assert all(task.skip and task.analysis_json for task in worker._tasks)
 
     def test_skip_existing_false_includes_all(self, source):
         from ui.workers.transcription_worker import TranscriptionWorker
@@ -458,9 +458,12 @@ class TestTranscriptionWorkerTaskBuilding:
 
 
 class TestTranscriptionWorkerErrors:
-    def test_missing_ffmpeg_emits_single_batch_error(self, source, monkeypatch):
+    def test_missing_ffmpeg_emits_single_batch_error(self, source, monkeypatch, tmp_path):
         from ui.workers.transcription_worker import TranscriptionWorker
 
+        source.file_path = tmp_path / "video.mp4"
+        source.file_path.write_bytes(b"media")
+        monkeypatch.setattr("core.transcription._has_audio_stream", lambda _: True)
         clips = [make_test_clip("clip-1"), make_test_clip("clip-2")]
         worker = TranscriptionWorker(
             clips,
@@ -488,9 +491,12 @@ class TestTranscriptionWorkerErrors:
         assert len(errors) == 1
         assert "FFmpeg is required for transcription" in errors[0]
 
-    def test_emits_aggregated_error_summary(self, source, monkeypatch):
+    def test_emits_aggregated_error_summary(self, source, monkeypatch, tmp_path):
         from ui.workers.transcription_worker import TranscriptionWorker
 
+        source.file_path = tmp_path / "video.mp4"
+        source.file_path.write_bytes(b"media")
+        monkeypatch.setattr("core.transcription._has_audio_stream", lambda _: True)
         # Storage admission has separate coverage. This test exercises provider
         # error aggregation, independent of the user's configured model drive.
         monkeypatch.setattr(
@@ -509,10 +515,9 @@ class TestTranscriptionWorkerErrors:
 
         monkeypatch.setattr("core.binary_resolver.find_binary", lambda _name: "/usr/bin/ffmpeg")
         monkeypatch.setattr("core.transcription.get_model", lambda *_args, **_kwargs: object())
-        from core.operations.transcription import TranscriptionOutcome
         monkeypatch.setattr(
-            "core.operations.transcription.compute_task",
-            lambda task, options: TranscriptionOutcome(task.clip_id, "failed", message="audio extraction failed"),
+            "core.transcription.transcribe_clip",
+            Mock(side_effect=RuntimeError("audio extraction failed")),
         )
 
         errors = []
@@ -532,6 +537,9 @@ class TestTranscriptionWorkerErrors:
     def test_low_disk_space_aborts_before_model_load(self, source, monkeypatch, tmp_path):
         from ui.workers.transcription_worker import TranscriptionWorker
 
+        source.file_path = tmp_path / "video.mp4"
+        source.file_path.write_bytes(b"media")
+        monkeypatch.setattr("core.transcription._has_audio_stream", lambda _: True)
         clips = [make_test_clip("clip-1")]
         worker = TranscriptionWorker(
             clips,
@@ -567,6 +575,9 @@ class TestTranscriptionWorkerErrors:
     def test_status_signal_reports_model_load_and_elapsed_time(self, source, monkeypatch, tmp_path):
         from ui.workers.transcription_worker import TranscriptionWorker
 
+        source.file_path = tmp_path / "video.mp4"
+        source.file_path.write_bytes(b"media")
+        monkeypatch.setattr("core.transcription._has_audio_stream", lambda _: True)
         clips = [make_test_clip("clip-1")]
         worker = TranscriptionWorker(
             clips,
@@ -580,8 +591,7 @@ class TestTranscriptionWorkerErrors:
         monkeypatch.setattr("core.binary_resolver.find_binary", lambda _name: "/usr/bin/ffmpeg")
         monkeypatch.setattr("core.transcription_storage.validate_transcription_disk_space", lambda *_args, **_kwargs: None)
         monkeypatch.setattr("core.transcription.get_model", lambda *_args, **_kwargs: object())
-        from core.operations.transcription import TranscriptionOutcome
-        monkeypatch.setattr("core.operations.transcription.compute_task", lambda task, options: TranscriptionOutcome(task.clip_id, "succeeded"))
+        monkeypatch.setattr("core.transcription.transcribe_clip", lambda **kwargs: [])
 
         statuses = []
         completed = []
