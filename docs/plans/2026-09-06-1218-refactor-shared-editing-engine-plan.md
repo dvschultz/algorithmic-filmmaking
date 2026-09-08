@@ -397,6 +397,14 @@ replace the final full-suite and code-review gates.
 
 **Goal:** Make reuse and invalidation correct and storage reclaimable.
 
+**2026-09-08 full-suite checkpoint:** The run started at `52cab7a` completed
+with 5,942 passed, two skipped, and one failed test. The failure was
+`test_queued_model_is_resolved_once`: its settings stub omitted `cache_dir`,
+which save-time receipt retention requires. The fixture now uses `Settings`
+with a temporary cache; 35 OCR recovery/receipt-retention tests pass. The full
+run predates the new legacy-reuse flows and independent mixed-rate test, so
+another full run is still required after the final implementation/review.
+
 **Implementation checkpoint:** In progress. Colors, thumbnail and boundary embeddings, object
 detection, OCR, ImageNet classification, shot classification, gaze, descriptions, and cinematography now use verified
 records across their shared operations and delivery surfaces. Thumbnail and boundary embedding

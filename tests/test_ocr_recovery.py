@@ -171,18 +171,18 @@ def test_cancel_keeps_completed_prefix(setup):
 
 def test_queued_model_is_resolved_once(setup, monkeypatch):
     path, store, provider = setup
-    from types import SimpleNamespace
+    from core.settings import Settings
 
     monkeypatch.setattr(
         "core.settings.load_settings",
-        lambda: SimpleNamespace(description_model_cloud="original"),
+        lambda: Settings(description_model_cloud="original", cache_dir=path.parent),
     )
     spec = ocr_job_spec(
         Project.load(path), None, OcrOptions(), arguments={"clip_ids": None}
     )
     monkeypatch.setattr(
         "core.settings.load_settings",
-        lambda: SimpleNamespace(description_model_cloud="changed"),
+        lambda: Settings(description_model_cloud="changed", cache_dir=path.parent),
     )
     run_ocr_job(store, path, None, lambda *_: None, Event(), operation=spec)
     assert all(
