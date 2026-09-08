@@ -427,10 +427,12 @@ def get_audio_source(project, audio_source_id: str) -> dict:
 )
 def transcribe_audio_source(main_window, audio_source_id: str) -> dict:
     """Start transcription in the existing Collect worker and await its result."""
+    from core.analysis_availability import audio_transcription_is_complete
+
     audio = main_window.project.get_audio_source(audio_source_id)
     if audio is None:
         return {"success": False, "error": f"Unknown audio source: {audio_source_id}"}
-    if audio.transcript is not None:
+    if audio_transcription_is_complete(audio, settings=main_window.settings):
         return {"success": True, "result": {"audio_source_id": audio_source_id,
                 "status": "skipped", "segment_count": len(audio.transcript)}}
     if any(worker.session_id == main_window.project.session.session_id

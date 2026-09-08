@@ -10,6 +10,8 @@ from __future__ import annotations
 
 def list_audio_sources(project) -> dict:
     """List all imported audio sources in the project."""
+    from core.analysis_availability import audio_transcription_is_complete
+
     audio_sources = []
     for a in project.audio_sources:
         audio_sources.append(
@@ -20,7 +22,7 @@ def list_audio_sources(project) -> dict:
                 "duration_str": a.duration_str,
                 "sample_rate": a.sample_rate,
                 "channels": a.channels,
-                "transcribed": a.transcript is not None,
+                "transcribed": audio_transcription_is_complete(a),
                 "transcript_segment_count": len(a.transcript) if a.transcript else 0,
             }
         )

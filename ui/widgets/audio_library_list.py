@@ -80,10 +80,13 @@ class AudioLibraryList(QWidget):
         duration_item = QTableWidgetItem(audio.duration_str)
         self._table.setItem(row, self._COL_DURATION, duration_item)
 
-        transcribe_btn = QPushButton("Transcribed" if audio.transcript is not None else "Transcribe")
-        if audio.transcript is not None:
-            transcribe_btn.setEnabled(False)
-            transcribe_btn.setToolTip(f"{len(audio.transcript)} segments")
+        from core.analysis_availability import audio_transcription_is_complete
+
+        complete = audio_transcription_is_complete(audio)
+        transcribe_btn = QPushButton("Transcribed" if complete else "Transcribe")
+        if complete:
+            # Keep verification available if media or settings change after render.
+            transcribe_btn.setToolTip(f"{len(audio.transcript or [])} segments. Click to verify with current settings.")
         else:
             transcribe_btn.setToolTip("Run Whisper on this audio source")
         transcribe_btn.clicked.connect(

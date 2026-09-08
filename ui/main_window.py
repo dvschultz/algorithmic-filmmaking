@@ -1389,6 +1389,7 @@ class MainWindow(QMainWindow):
             self.settings = dialog.get_settings()
             save_settings(self.settings)
             self._apply_settings()
+            self.collect_tab.set_audio_sources(self.project.audio_sources)
             self.status_bar.showMessage("Settings saved")
             logger.info("Settings updated and saved")
 

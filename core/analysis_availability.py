@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.settings import Settings
+    from models.audio_source import AudioSource
 
 # These operations verify complete input identities on the worker path.
 VERIFIED_ANALYSIS_OPERATIONS = frozenset({"colors", "embeddings", "boundary_embeddings", "detect_objects", "extract_text", "classify", "shots", "gaze", "describe", "cinematography", "transcribe"})
@@ -59,6 +64,51 @@ def operation_has_result(op_key: str, clip) -> bool:
         # Each custom query is unique — never auto-skip, always allow rerun
         return False
     return False
+
+
+def audio_transcription_is_complete(audio: AudioSource, *, settings: Settings | None = None) -> bool:
+    """Check current audio completion without media hashing, probes, or inference."""
+    import json
+    from core.analysis_records import AnalysisSnapshot, current_record
+    from core.operations.audio_transcription import AudioTranscriptionTask, audio_transcription_runtime
+    from core.operations.transcription import TranscriptionOptions, resolve_transcription_options
+    from core.operations.transcription_records import transcription_parameters, transcription_value
+    from core.settings import load_settings
+
+    record = current_record(audio, "transcribe")
+    if record is None or record.identity is None:
+        return False
+    try:
+        configured = settings if settings is not None else load_settings()
+        options = resolve_transcription_options(TranscriptionOptions(
+            model=configured.transcription_model,
+            language=configured.transcription_language,
+            backend=configured.transcription_backend,
+            segmentation_mode=configured.transcription_segmentation_mode,
+            segment_max_seconds=configured.transcription_segment_max_seconds,
+        ))
+        task = AudioTranscriptionTask.from_audio(audio, verified=True)
+        if task.analysis_json is None:
+            return False
+        snapshot = AnalysisSnapshot.from_json(task.analysis_json)
+        if json.loads(record.input_json or "null") != snapshot.inputs.to_dict():
+            return False
+        data = record.identity.to_dict()
+        probe_execution = {"backend": "audio-probe", "model": None, "input_mode": "no-audio"}
+        no_audio = data["model"].get("execution") == probe_execution
+        runtime = audio_transcription_runtime(task, options, execution=probe_execution if no_audio else None)
+        return bool(
+            data["operation_version"] == 2 and data["schema_version"] == 1
+            and data["model"] == runtime
+            and data["parameters"] == transcription_parameters(options)
+            and data["source_range"] == json.loads(snapshot.inputs.range_json)
+            and data["sampling"] == {"policy": "whole-audio-file/v1"}
+            and data["prompt_sha256"] is None
+            and record.value == transcription_value(audio)
+            and (not no_audio or audio.transcript == [])
+        )
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return False
 
 
 def operation_is_complete_for_clip(op_key: str, clip, *, runtime: dict | None = None, source=None) -> bool:

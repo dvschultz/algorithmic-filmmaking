@@ -133,13 +133,13 @@ def test_close_waits_for_audio_worker_before_tearing_down_window(monkeypatch):
     event.accept.assert_not_called()
 
 
-def test_silent_audio_is_complete_on_card_and_agent_surfaces(tmp_path):
+def test_legacy_silent_audio_remains_available_but_requires_verification(tmp_path):
     from core.spine.audio_sources import get_audio_source, list_audio_sources
 
     audio = AudioSource(id="silent", file_path=tmp_path / "silent.wav", transcript=[])
     project = Project.new()
     project.add_audio_source(audio)
-    assert list_audio_sources(project)["audio_sources"][0]["transcribed"] is True
+    assert list_audio_sources(project)["audio_sources"][0]["transcribed"] is False
     assert get_audio_source(project, audio.id)["audio_source"]["transcript"] == []
     code = r"""
 from pathlib import Path
@@ -150,7 +150,7 @@ app = QApplication([])
 row = AudioLibraryList()
 row.set_sources([AudioSource(file_path=Path('silent.wav'), transcript=[])])
 buttons = row.findChildren(QPushButton)
-assert any(b.text() == 'Transcribed' and not b.isEnabled() for b in buttons)
+assert any(b.text() == 'Transcribe' and b.isEnabled() for b in buttons)
 """
     result = subprocess.run(
         [sys.executable, "-c", code],

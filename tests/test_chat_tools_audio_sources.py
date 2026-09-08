@@ -64,7 +64,7 @@ class TestListAudioSources:
         result = list_audio_sources(project)
         record = result["audio_sources"][0]
 
-        assert record["transcribed"] is True
+        assert record["transcribed"] is False  # Legacy text remains readable, pending verification.
         assert record["transcript_segment_count"] == 2
 
 

@@ -470,8 +470,16 @@ receipt, while a successful refresh advances the generation. Missing historical
 receipt rows do not invalidate an independently verified project record, but
 present corrupt rows still fail validation. Cancellation during reuse does not
 report success. The durable regression run passed 308 tests, plus 31 focused
-follow-ups; scoped typing and changed-file Ruff passed. Audio completion surfaces,
-alignment, and the broader U10 audit remain unfinished.
+follow-ups; scoped typing and changed-file Ruff passed.
+
+Audio completion now checks the current record's input binding, whole-file range,
+runtime, settings, and displayed transcript without hashing media, probing, or
+running inference. Confirmed silence remains complete. The shared audio listing's
+`transcribed` flag and the GUI agent's immediate skip use this predicate; legacy
+transcripts remain readable but pending verification. Audio rows use the same
+predicate, keep verification clickable, and refresh after settings changes. The
+completion regression run passed 277 tests, with 12 focused follow-ups and clean
+scoped typing. Alignment and the broader U10 audit remain unfinished.
 
 ## Remaining U10 work
 

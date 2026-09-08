@@ -443,7 +443,12 @@ without replacing displayed text, and recover exact transcript/record pairs afte
 save or checkpoint failures. Missing old receipts no longer invalidate verified
 project records; edited managed transcripts require force. The durable regression
 run passed 308 tests, with 31 focused follow-ups and clean scoped typing. Audio
-completion surfaces and alignment remain.
+completion surfaces now use current record, input, runtime, and settings checks.
+The audio list and agent no longer treat legacy transcript presence as completion;
+verified silence remains complete. The GUI keeps verification available and
+refreshes audio rows after settings changes. These checks run no probes or
+inference. The completion regression run passed 277 tests, with 12 focused
+follow-ups and clean scoped typing. Alignment and the broader U10 audit remain.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain
