@@ -1010,6 +1010,16 @@ tracked, inactive historical owners as described above.
   inference, and invalidate after trim edits. The 167-test legacy/native GUI/
   MCP/gaze/import group passes; five scoped modules pass typing and scoped lint
   is clean. Other analysis families and final review remain open.
+
+- Shot-type acceptance now uses existing shot identities and applications across
+  all four interfaces. It requires a known label and readable thumbnail, uses
+  the normal reuse outcome without inventing confidence, and captures backend/
+  model options before execution. Desktop worker constructors receive current
+  window settings; MCP persists captured options in the submitted operation
+  metadata. Tests verify that changed settings cannot relabel a queued decision,
+  and that matching accepted records skip provider calls. The 171-test legacy/
+  native GUI/MCP/shot/import group passes; five scoped modules pass typing and
+  scoped lint is clean. Remaining families and final review stay open.
 - Finish the remaining cross-consumer reuse/projection audit.
   Receipt pruning retains legacy rows rather than guessing absent ownership;
   existing rows are not migrated eagerly.

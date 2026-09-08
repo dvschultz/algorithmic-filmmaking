@@ -466,6 +466,13 @@ missing angles/categories. Zero angles remain valid; trim changes invalidate
 accepted records. The 167-test legacy/gaze/MCP/native GUI/import group passes,
 with scoped typing and lint clean. Other families and final review remain open.
 
+Shot-type acceptance now reaches all four surfaces using known labels and
+captured backend/model settings. Desktop paths include current unsaved settings;
+MCP operation metadata retains the captured options. Accepted labels carry no
+invented confidence and skip matching provider work. The 171-test legacy/shot/
+MCP/native GUI/import group passes, with scoped typing and lint clean. Remaining
+families and final verification stay open.
+
 Custom queries now retain independent records through shared operations, direct
 headless calls, GUI worker delivery/recovery, and durable headless jobs. GUI reuse
 verifies saved records without duplicate history or local weight loading. Durable

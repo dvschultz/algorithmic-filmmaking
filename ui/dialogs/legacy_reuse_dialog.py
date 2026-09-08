@@ -33,6 +33,7 @@ class LegacyReuseDialog(QDialog):
         self.operation.addItem("Thumbnail embeddings (compatible DINO model)", "embeddings")
         self.operation.addItem("Brightness (default five samples)", "brightness")
         self.operation.addItem("Volume", "volume")
+        self.operation.addItem("Shot type (current settings)", "shots")
         self.operation.addItem("Gaze (default sampling)", "gaze")
         self.operation.addItem("Boundary embeddings (compatible DINO model)", "boundary_embeddings")
         self.operation.addItem("Classification (default settings)", "classify")
@@ -60,7 +61,7 @@ class LegacyReuseDialog(QDialog):
             self.status.setText("Project changed. Close this dialog and select clips again.")
             return
         try:
-            worker = LegacyReuseWorker(self.project, self.operation.currentData(), self.clip_ids, self)
+            worker = LegacyReuseWorker(self.project, self.operation.currentData(), self.clip_ids, self, settings=getattr(self.owner, "settings", None))
         except (ValueError, RuntimeError) as exc:
             self.status.setText(str(exc))
             return

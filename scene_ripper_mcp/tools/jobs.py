@@ -366,7 +366,7 @@ def _start_job(
 @mcp.tool()
 async def start_accept_legacy_analysis(
     project_path: Annotated[str, "Path to the project file"],
-    operation: Annotated[str, "Legacy operation: colors, embeddings, boundary_embeddings, brightness, volume, classify, detect_objects, or gaze"],
+    operation: Annotated[str, "Legacy operation: colors, embeddings, boundary_embeddings, brightness, volume, classify, detect_objects, gaze, or shots"],
     clip_ids: Annotated[Optional[list[str]], "Exact clip IDs; omitted means all clips"] = None,
     idempotency_key: Optional[str] = None,
     ctx: Context | None = None,
@@ -406,7 +406,7 @@ async def start_accept_legacy_analysis(
                 source = project.sources_by_id.get(clip.source_id)
                 if source is not None:
                     media_paths.add(source.file_path)
-                if operation in ("embeddings", "classify", "detect_objects") and clip.thumbnail_path is not None:
+                if operation in ("embeddings", "classify", "detect_objects", "shots") and clip.thumbnail_path is not None:
                     media_paths.add(clip.thumbnail_path)
             if operation == "volume":
                 from core.binary_resolver import find_binary
@@ -424,10 +424,13 @@ async def start_accept_legacy_analysis(
         revision, stamps = await asyncio.to_thread(capture_inputs)
     except Exception as exc:
         return json.dumps(_wrap_error(exc))
+    from dataclasses import asdict
+    from core.operations.shots import ShotTypeOptions
+    shot_options = await asyncio.to_thread(ShotTypeOptions.from_settings) if operation == "shots" else None
     arguments = {"operation": operation, "clip_ids": ids}
     spec = OperationSpec.build(
         kind="accept_legacy_analysis", version=1, arguments=arguments,
-        inputs={"project_path": str(path), "project_revision": revision.digest, "media_stamps": stamps},
+        inputs={"project_path": str(path), "project_revision": revision.digest, "media_stamps": stamps, "shot_options": asdict(shot_options) if shot_options else None},
         persistence="job_history", input_revision=revision.digest,
     )
 
@@ -443,7 +446,7 @@ async def start_accept_legacy_analysis(
         project, mtime = load_with_mtime(path)
         try:
             revision.verify()
-            result = accept_legacy_analysis(project, operation, ids, cancel_event=cancel_event)
+            result = accept_legacy_analysis(project, operation, ids, cancel_event=cancel_event, shot_options=shot_options)
             if result["accepted"]:
                 save_with_mtime_check(project, path, mtime)
             progress_callback(1.0, "Legacy reuse decisions saved")

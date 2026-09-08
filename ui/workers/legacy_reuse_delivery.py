@@ -15,7 +15,7 @@ class AgentLegacyReuse(RetiringQObject):
         self.window = window
         self.project = window.project
         self.reply = getattr(window, "_dispatch_gui_reply", None)
-        self.worker = LegacyReuseWorker(self.project, operation, clip_ids, window)
+        self.worker = LegacyReuseWorker(self.project, operation, clip_ids, window, settings=getattr(window, "settings", None))
         self.worker.gui_tool_reply = self.reply
         self.result: dict | None = None
         self.worker.result_ready.connect(self.apply_result)

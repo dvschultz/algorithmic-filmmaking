@@ -16,7 +16,7 @@ from core.operations.contracts import ColorOutcome, ColorResult
 from core.operations.embeddings import EmbeddingOutcome, EmbeddingTask, embedding_identity
 from models.analysis_record import AnalysisIdentity, AnalysisRecord
 
-LEGACY_REUSE_OPERATIONS = ("colors", "embeddings", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze")
+LEGACY_REUSE_OPERATIONS = ("colors", "embeddings", "brightness", "volume", "classify", "detect_objects", "boundary_embeddings", "gaze", "shots")
 
 if TYPE_CHECKING:
     from core.operations.scalars import ScalarOutcome, ScalarTask
@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from core.operations.object_detection import ObjectDetectionOutcome, ObjectDetectionTask
     from core.operations.boundary_embeddings import BoundaryEmbeddingOutcome, BoundaryEmbeddingTask
     from core.operations.gaze import GazeOutcome, GazeTask
+    from core.operations.shots import ShotTypeOutcome, ShotTypeTask, ShotTypeOptions
 
 
 def _accept(record_json: str | None, value: dict, identity: AnalysisIdentity, inputs: AnalysisInput) -> str:
@@ -270,4 +271,35 @@ def accept_legacy_gaze(tasks: "tuple[GazeTask, ...]", *, cancel_event: Event | N
             outcomes.append(GazeOutcome(task.clip_id, "unprocessed", code="cancelled"))
         except (ValueError, OSError, TypeError, KeyError) as exc:
             outcomes.append(GazeOutcome(task.clip_id, "failed", message=str(exc)))
+    return tuple(outcomes)
+
+
+def accept_legacy_shots(tasks: "tuple[ShotTypeTask, ...]", options: "ShotTypeOptions", *, cancel_event: Event | None = None) -> "tuple[ShotTypeOutcome, ...]":
+    """Bind saved shot labels to explicitly captured backend/model settings."""
+    from core.analysis_records import AnalysisSnapshot
+    from core.analysis_model_identity import SHOT_TYPE_PROMPTS, shot_runtime
+    from core.jobs.media import FingerprintCancelled
+    from core.operations.shots import ShotTypeOutcome, shot_identity
+
+    fingerprints = AnalysisFingerprints(cancel_event)
+    runtime = shot_runtime()
+    outcomes = []
+    for task in tasks:
+        try:
+            if cancel_event is not None and cancel_event.is_set():
+                raise FingerprintCancelled()
+            if task.analysis_json is None or task.thumbnail_path is None or not task.thumbnail_path.is_file():
+                raise ValueError("Shot reuse requires a readable thumbnail")
+            snapshot = AnalysisSnapshot.from_json(task.analysis_json)
+            value = json.loads(snapshot.value_json)
+            label = value["shot_type"]
+            if not isinstance(label, str) or label not in SHOT_TYPE_PROMPTS:
+                raise ValueError("A known legacy shot label is required")
+            identity = shot_identity(snapshot, options, fingerprints, runtime)
+            record_json = _accept(json.dumps(snapshot.record.to_dict()) if snapshot.record else None, value, identity, snapshot.inputs)
+            outcomes.append(ShotTypeOutcome(task.clip_id, "skipped", shot_type=label, code="legacy_accepted", target_type=task.target_type, record_json=record_json))
+        except FingerprintCancelled:
+            outcomes.append(ShotTypeOutcome(task.clip_id, "unprocessed", code="cancelled", target_type=task.target_type))
+        except (ValueError, OSError, TypeError, KeyError) as exc:
+            outcomes.append(ShotTypeOutcome(task.clip_id, "failed", message=str(exc), target_type=task.target_type))
     return tuple(outcomes)
