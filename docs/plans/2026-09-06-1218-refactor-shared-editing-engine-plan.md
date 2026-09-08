@@ -380,6 +380,19 @@ New paths below are proposed file ownership, not existing files. Large migration
 
 **Verification:** Decode rendered test media and inspect frame identities, durations, and audio alignment; mocked FFmpeg argument tests alone are insufficient.
 
+**2026-09-08 verification checkpoint:** The media-time, legacy migration and
+resolution, render-plan, playback mapping, preview playback, and actual decoded
+media suite passed: 82 tests, no skips. The mixed-rate preview/export test now
+uses distinct source-image IDs and an independent expected frame list for
+24/25/30/30000/1001 inputs trimmed from source frame 240. Its cumulative output
+cuts are 0, 29, 56, 79, 102 at 30 fps; both outputs decode to that exact list.
+Other decoded tests verify transforms, stills/gaps, audio alignment, VFR mapping,
+one-frame upsampling, and atomic publication/cancellation. Constructor inspection
+found production `SequenceClip(...)` construction only in `core/sequence_time.py`;
+export, preview, EDL, and GUI playback preparation reference the shared compiler.
+This scoped verification does not close the remaining U10 legacy-reuse work or
+replace the final full-suite and code-review gates.
+
 ### U10. Add analysis provenance and managed artifacts
 
 **Goal:** Make reuse and invalidation correct and storage reclaimable.

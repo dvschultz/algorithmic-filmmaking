@@ -20,15 +20,15 @@ def ffmpeg():
     return binary
 
 
-def make_numbered_video(ffmpeg: str, path: Path, rate: int = 24, count: int = 24) -> Source:
+def make_numbered_video(ffmpeg: str, path: Path, rate: float = 24, count: int = 24, *, id_offset: int = 0) -> Source:
     from PIL import Image, ImageDraw
     payload = bytearray()
     for index in range(count):
         image = Image.new("RGB", (64, 64), "black")
         draw = ImageDraw.Draw(image)
         for bit in range(12):
-            draw.rectangle((bit * 5, 0, bit * 5 + 4, 20), fill="white" if index & (1 << bit) else "black")
-        draw.text((5, 40), str(index), fill="white")
+            draw.rectangle((bit * 5, 0, bit * 5 + 4, 20), fill="white" if (index + id_offset) & (1 << bit) else "black")
+        draw.text((5, 40), str(index + id_offset), fill="white")
         payload.extend(image.tobytes())
     subprocess.run([
         ffmpeg, "-v", "error", "-f", "rawvideo", "-pix_fmt", "rgb24",
@@ -261,6 +261,51 @@ def test_mixed_rates_match_compiled_frame_mapping(ffmpeg, tmp_path):
     expected = [plan.source_frame_at(frame) for frame in range(plan.frame_count)]
     assert decoded_ids(ffmpeg, output) == expected
     assert plan.frame_count == round(float(project.sequence.duration_time) * 30)
+
+
+def test_mixed_rate_preview_and_export_match_independent_frame_oracle(ffmpeg, tmp_path):
+    from core.sequence_preview import SequencePreviewSettings, render_sequence_preview
+
+    project = Project.new()
+    project.sequence = Sequence(fps=30)
+    lookup = {}
+    for index, rate in enumerate((24, 25, 30, 30000 / 1001)):
+        source = make_numbered_video(
+            ffmpeg, tmp_path / f"source-{index}.mp4", rate=rate,
+            count=264, id_offset=index * 512,
+        )
+        project.add_source(source)
+        clip = Clip(source_id=source.id, start_frame=240, end_frame=263)
+        project.add_clips([clip])
+        project.add_to_sequence([clip.id])
+        lookup[clip.id] = (clip, source)
+
+    # Each clip selects 23 frames. Exact cumulative cut positions at 30 fps
+    # round to 0, 29, 56, 79, 102; source images change at the nearest global
+    # output boundary (half ties advance). Distinct source IDs catch wrong
+    # clip selection as well as wrong frame selection. No compiler calls
+    # determine this oracle.
+    expected = (
+        [240, 241, 241, 242, 243, 244, 245, 245, 246, 247, 248, 249, 249,
+         250, 251, 252, 253, 253, 254, 255, 256, 257, 257, 258, 259, 260,
+         261, 261, 262]
+        + [752, 753, 754, 755, 755, 756, 757, 758, 759, 760, 760, 761,
+           762, 763, 764, 765, 765, 766, 767, 768, 769, 770, 770, 771,
+           772, 773, 774]
+        + list(range(1264, 1287)) + list(range(1776, 1799))
+    )
+    output = tmp_path / "mixed-export.mp4"
+    assert SequenceExporter(ffmpeg).export(
+        project.sequence, project.sources_by_id, lookup,
+        ExportConfig(output_path=output, fps=30, width=64, height=64, crf=0),
+    )
+    preview = render_sequence_preview(
+        project.sequence, project.sources_by_id, lookup,
+        cache_root=tmp_path / "cache",
+        settings=SequencePreviewSettings(width=64, height=64, crf=0),
+    )
+    assert decoded_ids(ffmpeg, output) == expected
+    assert decoded_ids(ffmpeg, preview.path) == expected
 
 
 def test_vfr_import_records_verified_mapping_and_export_uses_it(ffmpeg, tmp_path):
