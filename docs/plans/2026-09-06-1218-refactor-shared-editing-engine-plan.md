@@ -568,8 +568,14 @@ verify cached values before sorting, retain successful no-audio results, reject
 failed prerequisites, and discard cancelled batches. A final batch check rejects
 media changed after an earlier clip finished. Six pre-fix regression cases failed;
 the resulting regression run passed 172 tests, with scoped helper typing and
-changed-file Ruff clean. GUI publication, durable recovery, registered CLI/MCP/agent
-surfaces, and completion/cost integration remain pending.
+changed-file Ruff clean. Scalar completion and cost checks now verify current
+source/binary stamps, paths, ranges, FPS, sampling, runtime, and projections without
+hashing media or importing inference runtimes. Valid black/no-audio measurements
+count as complete; legacy and failed records require analysis. Clearing a scalar
+result removes its record too. Twenty pre-fix completion/cost cases failed; the
+resulting regression run passed 213 tests, with both changed core modules passing
+scoped typing and changed-file Ruff clean. GUI publication, durable recovery, and
+registered CLI/MCP/agent surfaces remain pending.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain

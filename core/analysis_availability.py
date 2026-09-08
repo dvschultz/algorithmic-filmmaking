@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from core.settings import Settings
@@ -11,10 +11,12 @@ if TYPE_CHECKING:
     from models.clip import Clip, Source
 
 # These operations verify complete input identities on the worker path.
-VERIFIED_ANALYSIS_OPERATIONS = frozenset({"colors", "embeddings", "boundary_embeddings", "detect_objects", "extract_text", "classify", "shots", "gaze", "describe", "cinematography", "transcribe", "face_embeddings"})
+VERIFIED_ANALYSIS_OPERATIONS = frozenset({"colors", "embeddings", "boundary_embeddings", "detect_objects", "extract_text", "classify", "shots", "gaze", "describe", "cinematography", "transcribe", "face_embeddings", "brightness", "volume"})
 
 
 _ANALYSIS_RESULT_FIELDS: dict[str, tuple[str, ...]] = {
+    "brightness": ("average_brightness",),
+    "volume": ("rms_volume",),
     "colors": ("dominant_colors",),
     "shots": ("shot_type",),
     "classify": ("object_labels",),
@@ -37,6 +39,10 @@ _ANALYSIS_RESULT_FIELDS: dict[str, tuple[str, ...]] = {
 
 def operation_has_result(op_key: str, clip) -> bool:
     """Include legacy field projections when filtering or displaying results."""
+    if op_key == "brightness":
+        return clip.average_brightness is not None
+    if op_key == "volume":
+        return clip.rms_volume is not None
     if op_key == "colors":
         return clip.dominant_colors is not None
     if op_key == "shots":
@@ -204,8 +210,51 @@ def face_analysis_is_complete(clip: Clip, source: Source | None, *, sample_inter
         return False
 
 
+def scalar_analysis_is_complete(
+    clip: Clip,
+    source: Source | None,
+    operation: str,
+    *,
+    num_samples: int = 5,
+    runtime: dict | None = None,
+) -> bool:
+    """Check scalar provenance using stamps, without hashing or media probes."""
+    import json
+    from core.analysis_records import AnalysisSnapshot, current_record
+    from core.operations.scalars import (
+        FIELDS, ScalarOperation, scalar_task, scalar_runtime, scalar_parameters, scalar_sampling,
+        scalar_value,
+    )
+
+    if operation not in ("brightness", "volume"):
+        return False
+    scalar_operation = cast(ScalarOperation, operation)
+    record = current_record(clip, operation)
+    if record is None or record.identity is None or source is None:
+        return False
+    try:
+        task = scalar_task(clip, source, scalar_operation, num_samples=num_samples)
+        snapshot = AnalysisSnapshot.from_json(task.snapshot_json)
+        data = record.identity.to_dict()
+        return bool(
+            json.loads(record.input_json or "null") == snapshot.inputs.to_dict()
+            and data["operation_version"] == 1 and data["schema_version"] == 1
+            and data["model"] == (runtime if runtime is not None else scalar_runtime(scalar_operation))
+            and data["parameters"] == scalar_parameters(task)
+            and data["sampling"] == scalar_sampling(scalar_operation)
+            and data["source_range"] == json.loads(snapshot.inputs.range_json)
+            and data["prompt_sha256"] is None
+            and set(data["sources"]) == {role for role, _, _ in snapshot.inputs.files}
+            and record.value == scalar_value(scalar_operation, getattr(clip, FIELDS[operation]))
+        )
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return False
+
+
 def operation_is_complete_for_clip(op_key: str, clip, *, runtime: dict | None = None, source=None) -> bool:
     """Report reusable completion; existing fields alone do not prove provenance."""
+    if op_key in ("brightness", "volume"):
+        return scalar_analysis_is_complete(clip, source, op_key, runtime=runtime)
     if op_key == "face_embeddings":
         return face_analysis_is_complete(clip, source, runtime=runtime)
     if op_key == "align_words":
@@ -476,7 +525,11 @@ def compute_operation_need_counts(clips: Iterable, op_keys: Iterable[str], *, so
     counts: dict[str, int] = {}
     for op_key in op_keys:
         runtime = None
-        if op_key == "face_embeddings":
+        if op_key in ("brightness", "volume"):
+            from core.operations.scalars import ScalarOperation, scalar_runtime
+
+            runtime = scalar_runtime(cast(ScalarOperation, op_key))
+        elif op_key == "face_embeddings":
             from core.operations.face_records import face_target_runtime
 
             runtime = face_target_runtime()

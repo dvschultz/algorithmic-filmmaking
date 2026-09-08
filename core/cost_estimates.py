@@ -239,6 +239,12 @@ def estimate_sequence_cost(
                 clip, sources.get(clip.source_id),
                 sample_interval=face_sample_interval, runtime=runtime,
             ) for clip in clips)
+        elif op_key in ("brightness", "volume"):
+            from core.analysis_availability import compute_operation_need_counts
+
+            needing = compute_operation_need_counts(
+                clips, [op_key], sources_by_id=sources_by_id,
+            )[op_key]
         else:
             needing = sum(1 for clip in clips if not check(clip))
         if needing == 0:

@@ -726,8 +726,13 @@ results (including no audio) reuse. Failure aborts sorting, cancellation discard
 the batch, and a final check rejects media changed after an earlier task finished.
 Project models remain untouched. Existing ordering/exclusion policies are preserved.
 The sequencing regression run passed 172 tests; scoped helper typing and changed-file
-Ruff pass. GUI publication, durable recovery, registered CLI/MCP/agent surfaces,
-and completion/cost checks remain pending.
+Ruff pass. Scalar completion and cost estimates now check current provenance,
+including source/binary stamps, sampling, runtime, and projections, without media
+hashing or inference. Verified black/no-audio results count as complete; failed,
+legacy, or stale results do not. Clearing results removes their records. The
+completion/cost regression run passed 213 tests, and both changed core modules
+pass scoped typing with changed-file Ruff clean. GUI publication, durable recovery,
+and registered CLI/MCP/agent surfaces remain pending.
 
 ## Remaining U10 work
 
