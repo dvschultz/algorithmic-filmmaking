@@ -25,11 +25,16 @@ GUI-agnostic spine.
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any, Optional, TYPE_CHECKING
 
 from PySide6.QtCore import QObject, Qt, Signal, Slot
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from core.project import Project
+    from core.operations.alignment import AlignmentApplication
+    from ui.workers.forced_alignment_worker import ForcedAlignmentWorker
 
 
 __all__ = [
@@ -65,6 +70,7 @@ def _language_is_supported(language: str) -> bool:
     heavy optional alignment runtime.
     """
     from core.analysis.alignment import is_language_supported
+
     return bool(is_language_supported(language))
 
 
@@ -136,7 +142,8 @@ def format_source_row(
     """Format the shared word-source picker row label."""
     filename = (
         getattr(source, "filename", None)
-        or str(getattr(source, "file_path", "")) or "unknown"
+        or str(getattr(source, "file_path", ""))
+        or "unknown"
     )
     duration = getattr(source, "duration_seconds", None)
     if duration is None:
@@ -229,12 +236,10 @@ def partition_clips_for_sequencing(
 class WordAlignmentController(QObject):
     """Run forced alignment over a list of clips and emit lifecycle signals.
 
-    Both word dialogs need exactly the same alignment-handling logic: spin
-    up a ``ForcedAlignmentWorker``, route per-clip ``clip_aligned`` payloads
-    back onto transcript segments via
-    ``core.analysis.alignment.distribute_words_to_segments``, expose
-    progress / error / completion signals to the dialog, and support
-    cancellation.
+    Both word dialogs pass their project so verified outcomes publish through
+    the shared owner guard and GUI recovery receipts. The project-free path
+    remains available for detached legacy callers. Progress, errors, and native
+    thread completion are scoped to the current worker.
 
     The controller owns the worker's lifetime. The dialog connects to
     ``progress``, ``error``, and ``completed`` and remains responsible for
@@ -256,7 +261,13 @@ class WordAlignmentController(QObject):
     error = Signal(str)
     completed = Signal()
 
-    def __init__(self, dialog_clips: list[tuple[Any, Any]], parent: QObject = None):
+    def __init__(
+        self,
+        dialog_clips: list[tuple[Any, Any]],
+        parent: QObject | None = None,
+        *,
+        project: Project | None = None,
+    ):
         """
         Args:
             dialog_clips: The dialog's full ``[(Clip, Source), ...]`` set.
@@ -265,15 +276,19 @@ class WordAlignmentController(QObject):
                 clip's transcript). Workers can't carry the project model
                 themselves, so each dialog passes in its known selection.
             parent: Qt parent (typically the dialog).
+            project: Owner of the clips for verified publication and recovery.
         """
         super().__init__(parent)
         self._dialog_clips = list(dialog_clips or [])
-        self._worker = None
+        self._project = project
+        self._application: AlignmentApplication | None = None
+        self._worker: ForcedAlignmentWorker | None = None
         self._finished_handled = False
+        self._delivered: set[str] = set()
 
     def is_running(self) -> bool:
         worker = self._worker
-        return worker is not None and worker.isRunning()
+        return worker is not None
 
     def start(
         self,
@@ -290,26 +305,49 @@ class WordAlignmentController(QObject):
         """
         from ui.workers.forced_alignment_worker import ForcedAlignmentWorker
 
+        if self._worker is not None:
+            self.error.emit("Word alignment is already running")
+            return
         self._finished_handled = False
+        self._delivered.clear()
 
         worker = ForcedAlignmentWorker(
             clips=pending_clips,
             sources_by_id=sources_by_id,
             skip_existing=True,
             parent=self,
+            **({"project": self._project} if self._project is not None else {}),
         )
-        worker.progress.connect(self._on_worker_progress, Qt.UniqueConnection)
-        worker.clip_aligned.connect(self._on_worker_clip_aligned, Qt.UniqueConnection)
-        worker.alignment_completed.connect(
-            self._on_worker_completed, Qt.UniqueConnection,
+        worker.progress.connect(
+            self._on_worker_progress, Qt.ConnectionType.UniqueConnection
         )
-        worker.error.connect(self._on_worker_error, Qt.UniqueConnection)
+        if self._project is not None:
+            from core.operations.alignment import AlignmentApplication
+
+            self._application = AlignmentApplication(self._project, worker.tasks)
+            worker.outcome_ready.connect(
+                self._on_worker_outcome, Qt.ConnectionType.UniqueConnection
+            )
+        else:
+            worker.clip_aligned.connect(
+                self._on_worker_clip_aligned, Qt.ConnectionType.UniqueConnection
+            )
+        completion = (
+            worker.finished
+            if hasattr(worker, "finished")
+            else worker.alignment_completed
+        )
+        completion.connect(
+            self._on_worker_completed,
+            Qt.ConnectionType.UniqueConnection,
+        )
+        worker.error.connect(self._on_worker_error, Qt.ConnectionType.UniqueConnection)
         self._worker = worker
         worker.start()
 
     def cancel(self) -> None:
         worker = self._worker
-        if worker is not None and worker.isRunning():
+        if worker is not None:
             worker.cancel()
 
     def wait(self, msecs: int = 50) -> None:
@@ -325,11 +363,52 @@ class WordAlignmentController(QObject):
 
     @Slot(int, int)
     def _on_worker_progress(self, current: int, total: int) -> None:
-        self.progress.emit(current, total)
+        if self._current():
+            self.progress.emit(current, total)
+
+    def _current(self) -> bool:
+        worker = self._worker
+        parent = self.parent()
+        return (
+            worker is not None
+            and self.sender() is worker
+            and not getattr(worker, "is_cancelled", lambda: False)()
+            and (
+                self._project is None
+                or getattr(parent, "_project", self._project) is self._project
+            )
+        )
+
+    @Slot(object)
+    def _on_worker_outcome(self, outcome) -> None:
+        from core.operations.alignment import AlignmentOutcome
+        from ui.workers.alignment_delivery import apply_alignment_outcome
+
+        if (
+            self._project is None
+            or self._application is None
+            or not self._current()
+            or not isinstance(outcome, AlignmentOutcome)
+            or not outcome.can_apply
+            or outcome.clip_id in self._delivered
+        ):
+            return
+        self._delivered.add(outcome.clip_id)
+        try:
+            if not apply_alignment_outcome(
+                self._project, self._worker, self._application, outcome
+            ):
+                self.error.emit(
+                    "Word alignment discarded because the project or transcript changed"
+                )
+        except Exception as exc:
+            self.error.emit(f"Could not apply word alignment: {exc}")
 
     @Slot(str, list)
     def _on_worker_clip_aligned(self, clip_id: str, words: list) -> None:
         """Find the matching clip and distribute words onto its segments."""
+        if not self._current():
+            return
         clip = None
         for c, _ in self._dialog_clips:
             if getattr(c, "id", None) == clip_id:
@@ -345,17 +424,26 @@ class WordAlignmentController(QObject):
         # The actual distribute logic lives in core.analysis.alignment so the
         # analyze-tab path and both dialogs share one implementation.
         from core.analysis.alignment import distribute_words_to_segments
+
         distribute_words_to_segments(list(clip.transcript), words)
 
     @Slot(str)
     def _on_worker_error(self, message: str) -> None:
-        self.error.emit(message)
+        if self._current():
+            self.error.emit(message)
 
     @Slot()
     def _on_worker_completed(self) -> None:
-        if self._finished_handled:
+        if (
+            self._worker is None
+            or self._finished_handled
+            or self.sender() is not self._worker
+        ):
             return
         self._finished_handled = True
-        self.wait(50)
+        worker = self._worker
         self._worker = None
+        self._application = None
+        if worker is not None:
+            worker.deleteLater()
         self.completed.emit()

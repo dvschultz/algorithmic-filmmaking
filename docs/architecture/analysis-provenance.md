@@ -521,9 +521,18 @@ Queued runtime changes reject execution; first model loading records the resulti
 cached revision so restart recovery does not repeat inference. Late cancellation
 and altered queued receipts reject publication. The regression run passed 246
 tests, with 16 focused GUI follow-ups and clean scoped typing for five changed
-modules. The standalone word-source picker still uses the compatibility worker
-path; its publication and completion checks, durable alignment recovery, and the
-broader U10 audit remain unfinished.
+modules.
+
+Both mounted word-source picker dialogs now pass their project into the alignment
+controller. The controller shares receipt authentication with Analyze-tab
+delivery, publishes through `AlignmentApplication`, rejects duplicate/late
+outcomes, and retains the worker until native thread completion. Closing or
+rejecting a dialog cancels alignment and defers destruction until completion.
+Dialogs no longer mark the project dirty merely because a worker completed.
+The regression run passed 252 tests, with 33 dialog and 14 final delivery
+follow-ups. Controller/delivery scoped typing and changed-file Ruff passed.
+Project-free compatibility callers still use raw publication; alignment completion
+badges, durable alignment recovery, and the broader U10 audit remain unfinished.
 
 ## Remaining U10 work
 

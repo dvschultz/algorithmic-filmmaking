@@ -460,9 +460,13 @@ through queued delivery and recovery, authenticates transient reuse/failure,
 checks saved records before acknowledgement, and skips preparation on reuse.
 First model loading updates recovery identity without repeating inference on
 restart. The GUI regression run passed 246 tests, with 16 focused follow-ups and
-clean scoped typing. The standalone word-source picker compatibility path,
-durable alignment recovery, and completion checks remain to migrate, along with
-the broader U10 audit.
+clean scoped typing. Both mounted word-source picker dialogs now pass their
+project for guarded record/receipt publication and retain the worker through
+native completion, including deferred close/reject after cancellation. Their
+regression run passed 252 tests, with 33 dialog and 14 final delivery follow-ups
+and clean scoped controller/delivery typing. Project-free compatibility callers,
+durable alignment recovery, and completion checks remain to audit or migrate,
+along with the broader U10 audit.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain

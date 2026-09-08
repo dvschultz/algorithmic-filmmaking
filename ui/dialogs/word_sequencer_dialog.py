@@ -677,6 +677,8 @@ class WordSequencerDialog(QDialog):
 
     def _start_alignment(self, pending_clips: list) -> None:
         """Spawn a ``WordAlignmentController`` over the pending clips."""
+        if self._alignment_ctrl is not None and self._alignment_ctrl.is_running():
+            return
         self._pending_after_alignment = True
 
         # Record that we've now attempted alignment on these — if alignment
@@ -699,7 +701,7 @@ class WordSequencerDialog(QDialog):
         )
         self._progress_bar.setValue(0)
 
-        ctrl = WordAlignmentController(self._clips, parent=self)
+        ctrl = WordAlignmentController(self._clips, parent=self, project=self._project)
         ctrl.progress.connect(self._on_alignment_progress, Qt.UniqueConnection)
         ctrl.completed.connect(self._on_alignment_completed, Qt.UniqueConnection)
         ctrl.error.connect(self._on_alignment_error, Qt.UniqueConnection)
@@ -719,16 +721,17 @@ class WordSequencerDialog(QDialog):
 
     @Slot()
     def _on_alignment_completed(self) -> None:
+        if getattr(self, "_reject_after_alignment", False):
+            self._reject_after_alignment = False
+            self._alignment_ctrl = None
+            self.reject()
+            return
         # Refresh per-source status caches so the picker would render
         # correctly if the user backs out and re-opens the dialog.
         for source_id, src_clips in self._clips_by_source_id.items():
             self._source_status[source_id] = classify_source_alignment(src_clips)
 
         self._alignment_ctrl = None
-        # The controller mutated Clip.transcript[*].words in place; mark the
-        # project dirty so the new alignment data survives save.
-        if self._project is not None:
-            self._project.mark_dirty()
         # The clips' word data has changed — invalidate the inventory
         # cache so the next ``_refresh_validation`` rebuilds.
         self._invalidate_inventory_cache()
@@ -755,9 +758,23 @@ class WordSequencerDialog(QDialog):
 
     # --------------------------------------------------------- Lifecycle
 
+    def reject(self) -> None:
+        ctrl = self._alignment_ctrl
+        if ctrl is not None and ctrl.is_running():
+            self._reject_after_alignment = True
+            self._pending_after_alignment = False
+            ctrl.cancel()
+            return
+        super().reject()
+
     def closeEvent(self, event) -> None:  # noqa: D401 - Qt override
         ctrl = self._alignment_ctrl
         if ctrl is not None and ctrl.is_running():
+            self._reject_after_alignment = True
+            self._pending_after_alignment = False
             ctrl.cancel()
             ctrl.wait(2000)
+            if ctrl.is_running():
+                event.ignore()
+                return
         super().closeEvent(event)

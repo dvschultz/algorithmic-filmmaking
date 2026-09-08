@@ -1,11 +1,44 @@
 """Owner-thread alignment publication scoped to one tab run and project."""
 
+from __future__ import annotations
+
 from PySide6.QtCore import Slot
 from dataclasses import asdict
+from typing import Any, TYPE_CHECKING
 
 from ui.workers.qt_lifetime import RetiringQObject
 
 from core.operations.alignment import AlignmentApplication, AlignmentOutcome
+
+if TYPE_CHECKING:
+    from core.project import Project
+
+
+def apply_alignment_outcome(
+    project: Project,
+    worker: Any,
+    application: AlignmentApplication,
+    outcome: AlignmentOutcome,
+) -> bool:
+    """Authenticate a GUI receipt or transient outcome before owner publication."""
+    cache = getattr(worker, "cache", None)
+    if cache is not None and (
+        project.path is None or project.path.resolve() != cache.path
+    ):
+        raise ValueError("Project save location changed during alignment")
+    receipt = cache.results.get(outcome.clip_id) if cache is not None else None
+    if cache is not None and (
+        (receipt is not None and not receipt.matches(outcome))
+        or (
+            receipt is None
+            and cache.transient_outcomes.get(outcome.clip_id) != asdict(outcome)
+        )
+    ):
+        raise ValueError("Queued alignment output differs from its recorded result")
+    applied = application.apply(project, outcome)
+    if applied and receipt is not None:
+        project.record_job_result(receipt.result_id, receipt.digest)
+    return applied
 
 
 class AlignmentDelivery(RetiringQObject):
@@ -58,32 +91,10 @@ class AlignmentDelivery(RetiringQObject):
         if not self._current() or clip_id in self._delivered:
             return
         self._delivered.add(clip_id)
-        cache = getattr(self.worker, "cache", None)
-        if cache is not None and (
-            self.project.path is None or self.project.path.resolve() != cache.path
-        ):
-            self.error(
-                "Alignment result discarded because the project save location changed."
-            )
-            return
         try:
-            receipt = cache.results.get(clip_id) if cache is not None else None
-            if cache is not None and (
-                (receipt is not None and not receipt.matches(outcome))
-                or (
-                    receipt is None
-                    and cache.transient_outcomes.get(clip_id) != asdict(outcome)
-                )
-            ):
-                raise ValueError(
-                    "Queued alignment output differs from its recorded result"
-                )
-            applied = self.application.apply(
-                self.project,
-                outcome,
+            applied = apply_alignment_outcome(
+                self.project, self.worker, self.application, outcome
             )
-            if applied and receipt is not None:
-                self.project.record_job_result(receipt.result_id, receipt.digest)
         except Exception as exc:
             self.error(f"Could not apply word alignment: {exc}")
             return
