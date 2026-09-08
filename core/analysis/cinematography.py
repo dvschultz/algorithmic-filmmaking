@@ -21,7 +21,7 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from core.settings import load_settings, get_gemini_api_key
 from core.analysis.description import extract_clip_segment, encode_image_base64, encode_video_base64
@@ -750,6 +750,7 @@ def analyze_cinematography_video(
 def analyze_cinematography_local(
     image_path: Path,
     *, model: Optional[str] = None,
+    on_execution: Optional[Callable[[dict], None]] = None,
 ) -> CinematographyAnalysis:
     """Analyze cinematography using a local VLM (mlx-vlm).
 
@@ -758,6 +759,8 @@ def analyze_cinematography_local(
 
     Args:
         image_path: Path to the image/thumbnail file
+        model: Local model selected for this request
+        on_execution: Report the model and input mode before inference
 
     Returns:
         CinematographyAnalysis with all fields populated
@@ -780,6 +783,8 @@ def analyze_cinematography_local(
     prompt = CINEMATOGRAPHY_PROMPT_FRAME + "\n\nRespond with ONLY a JSON object, no other text."
 
     try:
+        if on_execution is not None:
+            on_execution({"backend": "mlx", "model": local_model, "input_mode": "frame"})
         response_text = describe_frame_local(image_path, prompt, model_name=local_model)
 
         # Parse and validate response
@@ -832,6 +837,7 @@ def analyze_cinematography(
     model: Optional[str] = None,
     *, tier: Optional[str] = None,
     local_model: Optional[str] = None,
+    on_execution: Optional[Callable[[dict], None]] = None,
 ) -> CinematographyAnalysis:
     """Analyze cinematography for a clip.
 
@@ -846,6 +852,8 @@ def analyze_cinematography(
         fps: Video frame rate (optional, for video mode)
         mode: "frame" or "video" (default: from settings)
         model: VLM model to use (default: from settings)
+        on_execution: Report each attempted execution path, including frame
+            fallback after video extraction fails
 
     Returns:
         CinematographyAnalysis with all fields populated
@@ -863,20 +871,24 @@ def analyze_cinematography(
 
     # Local tier: use mlx-vlm for frame-only analysis
     if tier == "local":
+        if on_execution is not None:
+            return analyze_cinematography_local(
+                thumbnail_path, model=local_model, on_execution=on_execution
+            )
         return analyze_cinematography_local(thumbnail_path, model=local_model)
 
     # Cloud tier: check if video mode is possible
-    can_use_video = (
+    if (
         mode == "video"
         and source_path is not None
         and start_frame is not None
         and end_frame is not None
         and fps is not None
         and source_path.exists()
-    )
-
-    if can_use_video:
+    ):
         try:
+            if on_execution is not None:
+                on_execution({"backend": "cloud", "model": model, "input_mode": "video"})
             return analyze_cinematography_video(
                 source_path=source_path,
                 start_frame=start_frame,
@@ -895,4 +907,6 @@ def analyze_cinematography(
                 raise
 
     # Use frame mode (cloud)
+    if on_execution is not None:
+        on_execution({"backend": "cloud", "model": model, "input_mode": "frame"})
     return analyze_cinematography_frame(thumbnail_path, model=model)

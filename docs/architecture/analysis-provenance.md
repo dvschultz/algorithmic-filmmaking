@@ -298,6 +298,15 @@ query operation with `skip_existing=True`. Public job results keep their existin
 query-answer fields. The remaining cross-consumer and legacy-reuse audit applies
 to custom queries as well; U10 remains incomplete.
 
+## Cinematography execution checkpoint
+
+The provider can now report its actual model, backend, and input mode before
+inference. Video extraction fallback reports a subsequent frame attempt, including
+when that attempt fails. Authentication errors retain the video attempt and do
+not trigger fallback. Local execution reports the selected cinematography model
+after confirming MLX availability. Shared operation records, reuse checks, and
+GUI/headless delivery migration remain to be implemented for this family.
+
 ## Remaining U10 work
 
 - Migrate the other U7 analysis families to
