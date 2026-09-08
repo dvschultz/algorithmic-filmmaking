@@ -609,7 +609,21 @@ receipt IDs and digests remain unchanged.
 
 The combined face, GUI recovery, spine, and MCP regression run passed 308 tests;
 four changed operation/job modules passed scoped typing and changed-file Ruff.
-GUI and durable-job face record delivery, completion checks, and managed face
+Project-backed GUI workers now capture verified face tasks and emit complete
+outcomes. Owner delivery authenticates receipts or transient reuse/failure records,
+rejects duplicate and late signals, and publishes through the shared guard.
+The combined analysis launcher also passes the operation options into that guard.
+Project-free workers and version 1 journals retain raw compatibility coverage.
+
+GUI journals capture model-pack file bindings without hashing or loading weights
+on the owner thread. Queued model changes reject computation; initial download can
+populate an absent pack, and the resulting receipt identity permits restart
+recovery without repeated inference. Semantic reuse avoids preparation and works
+without old receipt rows. Save checkpoints require the exact face record alongside
+the projected faces. Failed outcomes preserve displayed faces; cancelled queued
+outcomes do not publish. The combined regression run passed 318 tests, with 11
+delivery follow-ups, five changed modules passing scoped typing, and changed-file
+Ruff clean. Durable headless face records, completion checks, and managed face
 embedding storage remain unfinished.
 
 ## Remaining U10 work

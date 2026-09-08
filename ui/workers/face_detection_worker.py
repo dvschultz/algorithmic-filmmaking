@@ -14,7 +14,14 @@ from ui.workers.job_adapter import (
     close_gui_job_runtime,
 )
 from PySide6.QtCore import Signal
-from core.operations.faces import FaceOptions, FaceTask, FaceOutcome, run_faces
+from core.operations.faces import (
+    FaceOptions,
+    FaceTask,
+    FaceOutcome,
+    run_faces,
+    face_task,
+)
+from core.operations.face_records import face_target_runtime, face_target_matches
 from ui.workers.base import CancellableWorker, summarize_clip_errors
 
 if TYPE_CHECKING:
@@ -27,6 +34,7 @@ class FaceDetectionWorker(CancellableWorker):
 
     progress = Signal(int, int)
     faces_ready = Signal(str, list)
+    outcome_ready = Signal(object)
     detection_completed = Signal()
 
     def __init__(
@@ -42,7 +50,9 @@ class FaceDetectionWorker(CancellableWorker):
         super().__init__(parent)
         self.options = FaceOptions(sample_interval)
         self.tasks = tuple(
-            FaceTask(
+            face_task(c, sources_by_id.get(c.source_id), skip_existing=skip_existing)
+            if project is not None
+            else FaceTask(
                 c.id,
                 c.source_id,
                 sources_by_id[c.source_id].file_path
@@ -56,22 +66,26 @@ class FaceDetectionWorker(CancellableWorker):
             for c in clips
         )
         self.result: tuple[FaceOutcome, ...] = ()
+        self._target_runtime = face_target_runtime() if project is not None else None
 
         previous = {c.id: c.face_embeddings for c in clips}
         self._media_stamps = {
             task.source_path: media_stamp(task.source_path)
             for task in self.tasks
-            if task.source_path is not None and not task.skip
+            if task.source_path is not None
+            and (task.analysis_json is not None or not task.skip)
         }
         self.operation = gui_job_operation(
             OperationSpec.build(
                 kind="faces",
-                version=1,
+                version=2 if project is not None else 1,
                 arguments={"clip_ids": [task.clip_id for task in self.tasks]},
                 inputs={
                     "tasks": [_task_data(task) for task in self.tasks],
                     "options": asdict(self.options),
-                    "runtime": _runtime(),
+                    "runtime": self._target_runtime
+                    if project is not None
+                    else _runtime(),
                     "previous": previous,
                 },
                 persistence="session_only",
@@ -95,6 +109,7 @@ class FaceDetectionWorker(CancellableWorker):
                 options=self.options,
                 previous_results=previous,
                 media_stamps=self._media_stamps,
+                verified=True,
             )
 
     def cancel(self) -> None:
@@ -103,6 +118,10 @@ class FaceDetectionWorker(CancellableWorker):
             self._runtime.cancel(self.task_id)
 
     def _prepare(self) -> bool:
+        if self._target_runtime is not None and not face_target_matches(
+            self._target_runtime, face_target_runtime()
+        ):
+            raise RuntimeError("Face model weights or runtime changed while queued")
         if any(
             media_stamp(path) != stamp for path, stamp in self._media_stamps.items()
         ):
@@ -118,15 +137,23 @@ class FaceDetectionWorker(CancellableWorker):
         errors: list[tuple[str, str]] = []
 
         def emit(event):
+            if self.is_cancelled():
+                return
             kind, value = event
             if kind == "progress":
                 self.progress.emit(*value)
-            elif value.status == "succeeded":
-                self.faces_ready.emit(value.clip_id, value.face_dicts())
-            elif value.status == "failed":
-                errors.append(
-                    (value.clip_id, value.message or value.code or "Analysis failed")
-                )
+            else:
+                if value.can_apply:
+                    self.outcome_ready.emit(value)
+                if value.has_result:
+                    self.faces_ready.emit(value.clip_id, value.face_dicts())
+                elif value.status == "failed":
+                    errors.append(
+                        (
+                            value.clip_id,
+                            value.message or value.code or "Analysis failed",
+                        )
+                    )
 
         def compute(progress, cancel):
             collected = {}
@@ -147,18 +174,14 @@ class FaceDetectionWorker(CancellableWorker):
                     outcomes = self.cache.run(
                         self.tasks, cancel, self._prepare, deliver, report
                     )
-                elif self._prepare():
+                else:
                     outcomes = run_faces(
                         self.tasks,
                         self.options,
                         cancel_event=cancel,
                         on_outcome=deliver,
                         progress=report,
-                    )
-                else:
-                    outcomes = tuple(
-                        FaceOutcome(task.clip_id, "unprocessed", code="cancelled")
-                        for task in self.tasks
+                        prepare=self._prepare,
                     )
                 return {"outcomes": [asdict(outcome) for outcome in outcomes]}
             except Exception as exc:

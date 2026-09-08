@@ -63,6 +63,31 @@ def face_environment() -> dict:
     }
 
 
+def face_target_runtime() -> dict:
+    """Capture queued model-file bindings without loading or hashing weights."""
+    from core.analysis.faces import _get_model_cache_dir
+    from core.jobs.media import media_stamp
+
+    directory = (
+        _get_model_cache_dir() / "insightface" / "models" / "buffalo_l"
+    ).resolve()
+    return {
+        "packages": face_packages(),
+        "directory": str(directory),
+        "files": [
+            {"path": str(path), "stamp": list(media_stamp(path) or ())}
+            for path in sorted(directory.glob("*.onnx"))
+        ],
+    }
+
+
+def face_target_matches(expected: dict, current: dict) -> bool:
+    """Only the initial download may populate an absent model pack."""
+    if not expected["files"]:
+        current = {**current, "files": []}
+    return current == expected
+
+
 def face_parameters(interval: float) -> dict:
     if isinstance(interval, bool) or not isfinite(interval) or interval <= 0:
         raise ValueError("Invalid face sampling interval")

@@ -270,6 +270,7 @@ def run_faces(
     progress: Callable[[int, int], None] | None = None,
     model_session: _FaceModelSession | None = None,
     fingerprints: AnalysisFingerprints | None = None,
+    prepare: Callable[[], bool] | None = None,
 ) -> tuple[FaceOutcome, ...]:
     """Verify semantic reuse and retain owned failures before model publication."""
     cancel = cancel_event or Event()
@@ -279,11 +280,17 @@ def run_faces(
     try:
         for task in tasks:
             if task.analysis_json is None:
-                outcome = _run_raw_faces(
-                    (task,), options, cancel_event=cancel, model_session=session
-                )[0]
+                if prepare is not None and not prepare():
+                    cancel.set()
+                    outcome = FaceOutcome(task.clip_id, "unprocessed", code="cancelled")
+                else:
+                    outcome = _run_raw_faces(
+                        (task,), options, cancel_event=cancel, model_session=session
+                    )[0]
             else:
-                outcome = _verified_face(task, options, cancel, session, fingerprints)
+                outcome = _verified_face(
+                    task, options, cancel, session, fingerprints, prepare
+                )
             if cancel.is_set():
                 outcome = FaceOutcome(task.clip_id, "unprocessed", code="cancelled")
             outcomes.append(outcome)
@@ -304,6 +311,7 @@ def _verified_face(
     cancel: Event,
     session: _FaceModelSession,
     fingerprints: AnalysisFingerprints,
+    prepare: Callable[[], bool] | None = None,
 ) -> FaceOutcome:
     snapshot = None
     identity = None
@@ -379,6 +387,12 @@ def _verified_face(
                     )
             except (ValueError, TypeError, KeyError, AttributeError, OSError):
                 pass
+        if prepare is not None:
+            if not prepare():
+                cancel.set()
+                return FaceOutcome(task.clip_id, "unprocessed", code="cancelled")
+            if not snapshot.inputs.unchanged() or face_environment() != environment:
+                return FaceOutcome(task.clip_id, "failed", code="stale_input")
         events: list[dict] = []
         outcome = _run_raw_faces(
             (replace(task, skip=False),),

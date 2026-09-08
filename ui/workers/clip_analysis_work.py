@@ -106,7 +106,7 @@ def create_clip_analysis_worker(
         from core.operations.faces import FaceApplication
 
         worker = FaceDetectionWorker(**common, sources_by_id=sources)
-        return worker, FaceApplication(project, worker.tasks)
+        return worker, FaceApplication(project, worker.tasks, worker.options)
     if operation == "gaze":
         from ui.workers.gaze_worker import GazeAnalysisWorker
         from core.operations.gaze import GazeApplication

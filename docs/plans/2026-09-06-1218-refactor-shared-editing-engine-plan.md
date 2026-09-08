@@ -491,8 +491,14 @@ reuse without model loading. Guarded publication rejects stale or cancelled outp
 and preserves existing faces on failure. Raw compatibility keeps its existing
 precision and task identities; older GUI receipt shapes retain authenticated IDs
 and digests. The combined regression run passed 308 tests, with four operation/job
-modules passing scoped typing and changed-file Ruff. GUI/durable face delivery,
-completion checks, and managed embedding storage remain pending.
+modules passing scoped typing and changed-file Ruff. Project-backed GUI workers,
+owner delivery, and recovery now carry those verified records. Queued weight
+changes reject execution; first model download and interrupted publication recover
+without repeated inference. Semantic reuse skips preparation, and saved checkpoints
+require matching records and faces. The GUI regression run passed 318 tests with
+11 delivery follow-ups, five modules passing scoped typing, and changed-file Ruff
+clean. Durable headless face records, completion checks, and managed embedding
+storage remain pending.
 
 New computed-result receipt bodies above 16 KiB now use managed artifacts with
 durable retention and transparent recovery reads. Existing inline receipts remain

@@ -32,9 +32,18 @@ def setup(tmp_path, monkeypatch):
 
 
 def worker_for(project, **kwargs):
-    return FaceDetectionWorker(
-        project.clips, project.sources_by_id, project=project, **kwargs
+    """Keep coverage of version-1 journals and raw compatibility outcomes."""
+    from core.jobs.gui_faces import GuiFaceCache
+
+    worker = FaceDetectionWorker(project.clips, project.sources_by_id, **kwargs)
+    worker.cache = GuiFaceCache(
+        project.path, project.metadata.id,
+        {task.clip_id: task.source_id for task in worker.tasks},
+        project.metadata.job_results, options=worker.options,
+        previous_results={clip.id: clip.face_embeddings for clip in project.clips},
+        media_stamps=worker._media_stamps,
     )
+    return worker
 
 
 def run(project, *, apply=False, cancel=None, prepare=lambda: True):

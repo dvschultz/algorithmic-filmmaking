@@ -10,23 +10,46 @@ from core.jobs.faces import _runtime, _task_data
 from core.jobs.commits import StaleJobResult
 from core.jobs.gui_results import GuiResultJournal, GuiResultRequest
 from core.jobs.media import FingerprintCancelled
+from core.analysis_records import AnalysisFingerprints, AnalysisInput
+from core.operations.face_records import (
+    face_target_runtime,
+    face_target_matches,
+    face_packages,
+)
 from core.operations.faces import (
     FaceOptions,
     FaceOutcome,
     FaceTask,
     run_faces,
+    face_model_session,
 )
 
 
 class GuiFaceCache(GuiResultJournal):
     def _accept(self, request: GuiResultRequest, row: dict) -> dict:
         payload = super()._accept(request, row)
+        if self.verified:
+            from models.analysis_record import AnalysisRecord
+
+            record = AnalysisRecord.from_dict(
+                json.loads(payload.get("record_json") or "null")
+            )
+            if (
+                record.identity is None
+                or record.state != "succeeded"
+                or record.identity.to_dict()["model"]["packages"] != face_packages()
+                or not AnalysisInput.from_dict(
+                    json.loads(record.input_json or "null")
+                ).unchanged()
+            ):
+                raise StaleJobResult("Cached face record no longer matches its inputs")
         if "record_json" not in payload:
             # The base authenticates the original receipt first. Normalize only
             # its comparison shape; keep its original result ID and digest.
             payload = {**payload, "record_json": None}
             self.results[request.clip_id] = replace(
-                self.results[request.clip_id], payload_json=json.dumps(payload, sort_keys=True)
+                self.results[request.clip_id],
+                payload_json=json.dumps(payload, sort_keys=True),
             )
         return payload
 
@@ -40,6 +63,7 @@ class GuiFaceCache(GuiResultJournal):
         options: FaceOptions,
         previous_results: dict,
         media_stamps: dict[Path, tuple[int, ...] | None],
+        verified: bool = False,
     ) -> None:
         super().__init__(
             path,
@@ -51,7 +75,9 @@ class GuiFaceCache(GuiResultJournal):
             media_stamps=media_stamps,
         )
         self.options = options
-        self.runtime = _runtime()
+        self.verified = verified
+        self.runtime = face_target_runtime() if verified else _runtime()
+        self.transient_outcomes: dict[str, dict] = {}
         self.previous_json = json.dumps(
             previous_results, sort_keys=True, allow_nan=False
         )
@@ -59,7 +85,12 @@ class GuiFaceCache(GuiResultJournal):
     def validate_media(self, request: GuiResultRequest) -> None:
         super().validate_media(request)
         data = json.loads(request.spec.identity_json)["inputs"]["task"]
-        if _runtime() != data["runtime"]:
+        valid = (
+            face_target_matches(data["runtime"], face_target_runtime())
+            if self.verified
+            else _runtime() == data["runtime"]
+        )
+        if not valid:
             raise StaleJobResult("Face source media or runtime changed")
 
     def run(
@@ -72,6 +103,8 @@ class GuiFaceCache(GuiResultJournal):
     ) -> tuple[FaceOutcome, ...]:
         if not tasks:
             return ()
+        if self.verified:
+            return self._run_verified(tasks, cancel, prepare, deliver, progress)
         previous = json.loads(self.previous_json)
         outcomes: dict[str, FaceOutcome] = {}
         pending = []
@@ -140,3 +173,73 @@ class GuiFaceCache(GuiResultJournal):
             )
             for task in tasks
         )
+
+    def _run_verified(
+        self, tasks, cancel, prepare, deliver, progress
+    ) -> tuple[FaceOutcome, ...]:
+        outcomes = []
+        try:
+            self.start(cancel, allow_missing_receipts=True)
+            fingerprints = AnalysisFingerprints(
+                cancel, media_fingerprints=self.fingerprints
+            )
+            with face_model_session() as session:
+                for index, task in enumerate(tasks):
+                    if cancel.is_set():
+                        break
+                    data = {
+                        **_task_data(task),
+                        "runtime": self.runtime,
+                        "record_version": 2,
+                    }
+                    request, payload = self.prepare(
+                        task.clip_id, data, task.source_path
+                    )
+                    if payload is None:
+                        self.validate_media(request)
+
+                        def prepare_current() -> bool:
+                            self.validate_media(request)
+                            if not prepare():
+                                return False
+                            self.validate_media(request)
+                            return True
+
+                        outcome = run_faces(
+                            (task,),
+                            self.options,
+                            cancel_event=cancel,
+                            fingerprints=fingerprints,
+                            model_session=session,
+                            prepare=prepare_current,
+                        )[0]
+                        if cancel.is_set():
+                            break
+                        if outcome.status == "succeeded":
+                            self.validate_media(request)
+                            # First initialization may download a model pack.
+                            self.runtime = face_target_runtime()
+                            data["runtime"] = self.runtime
+                            request, _ = self.prepare(
+                                task.clip_id, data, task.source_path
+                            )
+                            payload = self.record(request, outcome)
+                        elif outcome.can_apply:
+                            self.transient_outcomes[task.clip_id] = asdict(outcome)
+                    if cancel.is_set():
+                        break
+                    if payload is not None:
+                        outcome = FaceOutcome.from_dict(payload)
+                    outcomes.append(outcome)
+                    deliver(outcome)
+                    progress(index + 1, len(tasks))
+        except FingerprintCancelled:
+            cancel.set()
+        finally:
+            if hasattr(self, "store"):
+                self.store.close()
+        outcomes.extend(
+            FaceOutcome(t.clip_id, "unprocessed", code="cancelled")
+            for t in tasks[len(outcomes) :]
+        )
+        return tuple(outcomes)

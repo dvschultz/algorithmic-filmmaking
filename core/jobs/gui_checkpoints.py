@@ -242,6 +242,8 @@ def checkpoint_saved_gui_results(path: Path, snapshot: dict) -> int:
             from core.jobs.faces import _saved_faces
             from core.operations.faces import FaceOutcome
 
+            if payload.get("record_json") is not None and clip.get("analysis_records", {}).get("face_embeddings") != json.loads(payload["record_json"]):
+                continue
             expected = _saved_faces(FaceOutcome.from_dict(payload).face_dicts())
             if clip.get("face_embeddings") == expected:
                 pending.append((result_id, receipt_digest))

@@ -25,11 +25,11 @@ class Worker(QThread):
         super().__init__(); self.tasks=(task,); self.cancelled=False
     def is_cancelled(self): return self.cancelled
     def run(self):
-        self.faces_ready.emit('c-0', [])
-        self.faces_ready.emit('c-0', [])
+        self.faces_ready.emit('c-0', getattr(self, 'detections', []))
+        self.faces_ready.emit('c-0', getattr(self, 'detections', []))
 window = QObject()
 with TemporaryDirectory() as root:
-    for mode in ('current', 'worker', 'project', 'session', 'edit', 'cancel', 'pipeline', 'reply', 'receipt', 'tampered', 'save_as'):
+    for mode in ('current', 'worker', 'project', 'session', 'edit', 'cancel', 'pipeline', 'reply', 'receipt', 'tampered', 'save_as', 'malformed'):
         project=project_with_thumbnails(Path(root),1)
         clip=project.clips[0]; source=project.sources[0]
         worker=Worker(FaceTask(clip.id,clip.source_id,source.file_path,clip.start_frame,clip.end_frame,source.fps))
@@ -50,10 +50,11 @@ with TemporaryDirectory() as root:
         if mode=='cancel': worker.cancelled=True
         if mode=='pipeline': window._analysis_run=object()
         if mode=='reply': reply.is_current=lambda _:False
+        if mode=='malformed': worker.detections=[{'bad': True}]
         worker.start(); assert worker.wait(5000); app.processEvents()
         assert clip.face_embeddings == ([] if mode in ('current', 'receipt') else [{'manual': True}] if mode=='edit' else None)
         assert bool(project.metadata.job_results) == (mode=='receipt')
-        if mode in ('edit', 'tampered', 'save_as'): window._on_face_detection_error.assert_called_once()
+        if mode in ('edit', 'tampered', 'save_as', 'malformed'): window._on_face_detection_error.assert_called_once()
         else: window._on_face_detection_error.assert_not_called()
 """
     result = subprocess.run(
